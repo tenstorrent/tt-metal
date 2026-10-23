@@ -8,14 +8,19 @@ power, its energy per activation, and its energy per FLOP.
 * `updated` (default): the full SwiGLU block — `matmul_ffn_gate` and `matmul_ffn_up`,
   `silu`, `gate_mul` on two distinct tensors, and both residual adds (14 ops);
 * `legacy`: the 12 ops the published p100a results measured. That list has no gate projection
-  and no second residual add, and `gate_mul` squares one tensor, so its sum is not a full block.
-  Use it to reproduce the published numbers.
+  and no second residual add, and `residual_add` and `gate_mul` use one tensor as both
+  operands, so its sum is not a full block. Use it to reproduce the published numbers.
+
+Updated mode also sizes every op's batch before the first interval, so the idle gaps, where
+`parser.py` measures the baseline, hold only one allocation and one warm-up call. Legacy sizes
+each op in the gap before it, as the published run did.
 
 **tt-ember itself is not modified.** `auto.py` drives any executable given as `--app-exe` and
 parses its stdout, so `ttnn_ops_workload.py` is just a workload that happens to print the
 summary rows `parser.py` expects. `preview_op_breakdown.py` only reads tt-ember's output.
 
-The paper's Blackhole **p100a** results are not committed here. This document is written so the
+"The paper" here is the Wormhole n300 vs Blackhole p100a energy paper by Turkmanović and
+Cvetković (not yet published). Its Blackhole **p100a** results are not committed here. This document is written so the
 same measurement can be reproduced, on p100a or on Wormhole **n150**, and the two compared.
 
 ---
@@ -80,8 +85,9 @@ python3 -c "import ttnn; print(len(dir(ttnn)))"   # expect several hundred attri
 ```
 
 That venv also carries numpy/matplotlib, so it can serve as tt-ember's `--tt-venv-activate`
-too. **Activate it before invoking `auto.py`**, because the workload script is launched by
-`auto.py` with an inherited environment and resolves `python3` from `PATH`.
+too. `auto.py` sources it before it starts the workload, so the workload gets `python3` from that
+venv. **Activate it in your shell as well**: the parser and `preview_op_breakdown.py` run with
+the calling shell's Python and need its numpy and matplotlib.
 
 ---
 
@@ -166,8 +172,10 @@ so when reporting.
 
 **Batches differ between boards.** Each op's batch is sized from its timing on that board. That
 leaves FLOPs per activation unchanged, but the projection weights are shared across the batch,
-so bytes per activation (and pJ/byte) of the four projection matmuls fall as the batch grows.
-For identical batches on both boards, pass `--batch N` in `--app-args`.
+so bytes per activation (and pJ/byte) of the projection matmuls (four in legacy, five with the
+gate projection in updated mode) fall as the batch grows.
+For identical batches on both boards, pass `--batch N` in `--app-args`; the run stops if an op
+does not fit at that batch, rather than running it at a smaller one.
 
 ---
 
@@ -213,9 +221,10 @@ on p100a: a 41 us call reads about 24% low, and the effect vanishes once a call 
 ten samples. This is exactly why the script batches each op to about 1.5 ms per call; the cap
 (`--max-batch`) and device memory can keep it shorter. **Check the `# DONE` lines: any op well
 under ~1 ms per call is probably reading low.** On the p100a run (legacy mode, where the batch
-is extrapolated once from a batch-1 timing) `rms_norm` and `residual_add` only reached ~700 us at
-batch 32, so they may still be slightly understated; they are under 1% of the energy, so it
-does not matter there. Updated mode re-sizes the batch from the timing at the chosen batch.
+is extrapolated once from a batch-1 timing) `rms_norm_in` (batch 32), `rms_norm_post` (35) and
+`residual_add` (21) only reached ~700 us, so they may still be slightly understated; they are
+under 1% of the energy, so it does not matter there. Updated mode re-sizes the batch from the
+timing at the chosen batch, and stops at the last batch that fit once one runs out of memory.
 
 **Current is quantised to 1 A**, but this is not a limitation: averaged over ~30,000 samples
 per interval the standard error is about 0.002 A. Quantisation is not what limits accuracy.

@@ -25,16 +25,18 @@ run on a batch chosen so one call takes about --target-call-ms (capped by --max-
 device memory), which lengthens the call without changing the FLOPs per activation. The batch
 is chosen per op, since call durations across a block span more than an order of magnitude;
 --batch fixes it instead, so two boards can run identical batches. The projection weights are
-shared across the batch, so for those four matmuls bytes per activation (and pJ/byte) do
-depend on the batch.
+shared across the batch, so for the projection matmuls (four in legacy mode, five with the gate
+projection in updated mode) bytes per activation (and pJ/byte) do depend on the batch.
 
 LONG_MATMUL_MODE (see tools/tt-ember/README.md) selects the op list and the batch sizing:
 
   * updated (default): the full SwiGLU block -- gate and up projections, silu(gate) * up, and
-    both residual adds, with distinct operands -- and the batch is refined from the timing at
-    the chosen batch;
+    both residual adds, with distinct operands. Every op's batch is sized before the first
+    interval and refined from the timing at the chosen batch, so the idle gaps (where parser.py
+    measures the baseline) hold only one allocation and one warm-up call;
   * legacy: the 12 ops the published Table 4 measured (no gate projection, no second residual
-    add, gate_mul squares one tensor), with the batch extrapolated once from a batch-1 timing.
+    add; residual_add and gate_mul reuse one tensor as both operands), with the batch
+    extrapolated once from a batch-1 timing taken in the gap before each op.
 
 The workload always runs on device 0.
 """
@@ -62,8 +64,8 @@ try:
 except ImportError as e:
     sys.stderr.write(
         f"Could not import ttnn ({e}).\n"
-        "This must run under the tt-metal python venv -- create it with ./create_venv.sh and\n"
-        "activate it before invoking tt-ember, so auto.py inherits it (see README.md).\n"
+        "This must run under the tt-metal python venv -- create it with ./create_venv.sh and pass\n"
+        "its activate script to auto.py as --tt-venv-activate (see README.md).\n"
     )
     raise SystemExit(2)
 
@@ -90,6 +92,13 @@ FLOPS_PER_ELEM = {"add": 1, "mul": 1, "silu": 4, "rms_norm": 4, "softmax": 5}
 # moves more than this.
 BF16 = 2
 
+# Updated mode re-sizes each op's batch up to this many times from the timing at the batch.
+MAX_BATCH_REFINEMENTS = 2
+
+
+def make_tensor(device, *shape):
+    return ttnn.from_torch(torch.randn(*shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
 
 def make_factories(device, seq, hidden, ffn, heads, legacy=False):
     """One Llama-style decoder block, decomposed into the ops it is made of. legacy=True gives
@@ -101,17 +110,22 @@ def make_factories(device, seq, hidden, ffn, heads, legacy=False):
     head_dim = hidden // heads
 
     def T(*shape):
-        return ttnn.from_torch(torch.randn(*shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        return make_tensor(device, *shape)
+
+    def linear(k, n):
+        """A projection: activations [b, seq, k] times a weight [k, n] shared across the batch."""
+
+        def factory(b):
+            x, w = T(b, 1, seq, k), T(1, 1, k, n)
+            by = (b * seq * k + k * n + b * seq * n) * BF16
+            return (lambda: ttnn.matmul(x, w)), b * 2 * seq * k * n, by
+
+        return factory
 
     def norm(b):
         x = T(b, 1, seq, hidden)
         n = b * seq * hidden
         return (lambda: ttnn.rms_norm(x)), n * FLOPS_PER_ELEM["rms_norm"], 2 * n * BF16
-
-    def qkv(b):
-        x, w = T(b, 1, seq, hidden), T(1, 1, hidden, 3 * hidden)
-        by = (b * seq * hidden + hidden * 3 * hidden + b * seq * 3 * hidden) * BF16
-        return (lambda: ttnn.matmul(x, w)), b * 2 * seq * hidden * 3 * hidden, by
 
     def qk(b):
         q, k_t = T(b, heads, seq, head_dim), T(b, heads, head_dim, seq)
@@ -128,21 +142,11 @@ def make_factories(device, seq, hidden, ffn, heads, legacy=False):
         by = (b * heads * seq * seq + 2 * b * heads * seq * head_dim) * BF16
         return (lambda: ttnn.matmul(sc, v)), b * 2 * heads * seq * seq * head_dim, by
 
-    def out_proj(b):
-        x, w = T(b, 1, seq, hidden), T(1, 1, hidden, hidden)
-        by = (2 * b * seq * hidden + hidden * hidden) * BF16
-        return (lambda: ttnn.matmul(x, w)), b * 2 * seq * hidden * hidden, by
-
     def res_add(b):
         x = T(b, 1, seq, hidden)
         y = x if legacy else T(b, 1, seq, hidden)
         n = b * seq * hidden
         return (lambda: ttnn.add(x, y)), n * FLOPS_PER_ELEM["add"], 3 * n * BF16
-
-    def ffn_up(b):
-        x, w = T(b, 1, seq, hidden), T(1, 1, hidden, ffn)
-        by = (b * seq * hidden + hidden * ffn + b * seq * ffn) * BF16
-        return (lambda: ttnn.matmul(x, w)), b * 2 * seq * hidden * ffn, by
 
     def act(b):
         h = T(b, 1, seq, ffn)
@@ -155,10 +159,10 @@ def make_factories(device, seq, hidden, ffn, heads, legacy=False):
         n = b * seq * ffn
         return (lambda: ttnn.multiply(h, g)), n * FLOPS_PER_ELEM["mul"], 3 * n * BF16
 
-    def ffn_dn(b):
-        h, w = T(b, 1, seq, ffn), T(1, 1, ffn, hidden)
-        by = (b * seq * ffn + ffn * hidden + b * seq * hidden) * BF16
-        return (lambda: ttnn.matmul(h, w)), b * 2 * seq * ffn * hidden, by
+    qkv = linear(hidden, 3 * hidden)
+    out_proj = linear(hidden, hidden)
+    ffn_up = linear(hidden, ffn)
+    ffn_dn = linear(ffn, hidden)
 
     if legacy:
         return [
@@ -238,6 +242,54 @@ def is_out_of_memory(e: Exception) -> bool:
     return "memory" in text or "alloc" in text
 
 
+def refuse_profiler():
+    # The device profiler adds work to every kernel, and auto.py would hand its CSV to the parser,
+    # which expects long_matmul's markers. probe_op_core_grids.py is the profiler pass.
+    if os.environ.get("TT_METAL_DEVICE_PROFILER", "0") not in ("", "0"):
+        raise SystemExit("Unset TT_METAL_DEVICE_PROFILER for power runs; probe_op_core_grids.py is the profiler pass.")
+
+
+def size_batch(name, factory, device, args, legacy):
+    """Pick an op's batch. Returns (batch, seconds per call at that batch, seconds per call at
+    batch 1). --batch fixes the batch (an op it does not fit is an error, not a smaller batch)."""
+    fn1, _, _ = factory(1)
+    t1 = time_call(fn1, device)
+    del fn1
+    target_s = args.target_call_ms / 1000.0
+    batch = args.batch or max(1, min(args.max_batch, int(round(target_s / t1))))
+    refinements = 0 if (legacy or args.batch) else MAX_BATCH_REFINEMENTS
+    last_ok = None  # (batch, seconds per call) of the largest batch known to fit
+    while True:
+        fn = None
+        try:
+            fn, _, _ = factory(batch)
+            per_call = time_call(fn, device)
+        except Exception as e:
+            fn = None  # free this batch's tensors before allocating another
+            if not is_out_of_memory(e):
+                raise
+            if args.batch:
+                raise SystemExit(f"{name}: --batch {args.batch} does not fit in device memory") from e
+            if last_ok is not None:
+                # A refined batch did not fit: keep the last one that did, and stop refining.
+                batch, per_call = last_ok
+                print(f"# NOTE {name}: refined batch does not fit, keeping batch={batch}", flush=True)
+                break
+            if batch == 1:
+                raise
+            batch = max(1, batch // 2)
+            print(f"# NOTE {name}: retrying at batch={batch} ({str(e)[:60]})", flush=True)
+            continue
+        del fn
+        last_ok = (batch, per_call)
+        better = max(1, min(args.max_batch, int(round(batch * target_s / per_call))))
+        if refinements == 0 or better == batch:
+            break
+        refinements -= 1
+        batch = better
+    return batch, per_call, t1
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seq", type=int, default=1024)
@@ -272,43 +324,22 @@ def main():
         flush=True,
     )
 
+    refuse_profiler()
     device = ttnn.open_device(device_id=0)
     rows = []
     try:
         factories = make_factories(device, args.seq, args.hidden, args.ffn, args.heads, legacy)
+        # Updated mode sizes every op up front, so the gaps between intervals stay idle.
+        sizes = {} if legacy else {name: size_batch(name, f, device, args, legacy) for name, f in factories}
         for idx, (name, factory) in enumerate(factories, start=1):
             if idx > 1:
                 time.sleep(args.pause_seconds)
-
-            # The batch-1 call time, printed for reference and used to size the batch.
-            fn1, _, _ = factory(1)
-            t1 = time_call(fn1, device)
-            del fn1
-            target_s = args.target_call_ms / 1000.0
-            batch = args.batch or max(1, min(args.max_batch, int(round(target_s / t1))))
-
-            # Updated mode re-sizes the batch from the timing at the chosen batch (dispatch
-            # overhead makes the batch-1 extrapolation undershoot); legacy sizes it once.
-            refinements = 0 if (legacy or args.batch) else 2
-            fn = None
-            while True:
-                try:
-                    fn, flops, nbytes = factory(batch)
-                    per_call = time_call(fn, device)
-                except Exception as e:
-                    fn = None  # free this batch's tensors before allocating a smaller one
-                    if batch == 1 or not is_out_of_memory(e):
-                        raise
-                    batch = max(1, batch // 2)
-                    refinements = 0
-                    print(f"# NOTE {name}: retrying at batch={batch} ({str(e)[:60]})", flush=True)
-                    continue
-                better = max(1, min(args.max_batch, int(round(batch * target_s / per_call))))
-                if refinements == 0 or better == batch:
-                    break
-                refinements -= 1
-                batch = better
-                fn = None
+            if legacy:
+                sizes[name] = size_batch(name, factory, device, args, legacy)
+            batch, per_call, t1 = sizes[name]
+            fn, flops, nbytes = factory(batch)
+            fn()  # warm-up: program compile and cache
+            ttnn.synchronize_device(device)
 
             iters = max(1, int(args.target_seconds / per_call))
             print(
