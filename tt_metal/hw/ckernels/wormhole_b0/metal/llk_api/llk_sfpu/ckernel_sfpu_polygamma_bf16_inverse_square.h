@@ -7,6 +7,8 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
+// The core records through the window helper; it is included here, outside namespace sfpi.
+#include "ckernel_sfpu_polygamma_bf16_replay_window.h"
 #include "ckernel_sfpu_polygamma_bf16_inverse_square_core.h"
 namespace ckernel::sfpu::bf16::polygamma {
 template <class Config>
