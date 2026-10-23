@@ -253,6 +253,7 @@ class ModelOptimizations:
         else:
             if (
                 base_model_name.startswith("Llama-3")
+                or base_model_name.startswith("Llama-Krikri")
                 or base_model_name.startswith("Mistral-7B")
                 or base_model_name.startswith("Phi-3-mini")
                 or base_model_name.startswith("phi-4")
@@ -457,14 +458,14 @@ def parse_optimizations(string):
 
         return string[open_brace + 1 : close_brace].strip()
 
-    precision_dict = extract_config(precision_start, "precision_cfg") if precision_start != -1 else {}
-    fidelity_dict = extract_config(fidelity_start, "fidelity_cfg") if fidelity_start != -1 else {}
+    precision_dict = extract_config(precision_start, "precision_cfg") if precision_start != -1 else ""
+    fidelity_dict = extract_config(fidelity_start, "fidelity_cfg") if fidelity_start != -1 else ""
 
     # Create ModelOptimizations instance with the parsed configs
     settings = {"TensorPrecision": {}, "OpFidelity": {}}
 
     # Parse precision config
-    for pair in precision_dict.split(","):
+    for pair in precision_dict.split(",") if precision_dict else []:
         if ":" not in pair:
             raise ValueError("Invalid format - missing ':' separator")
         key, value = pair.split(":")
@@ -477,7 +478,7 @@ def parse_optimizations(string):
         settings["TensorPrecision"][key] = PrecisionSetting(value)
 
     # Parse fidelity config
-    for pair in fidelity_dict.split(","):
+    for pair in fidelity_dict.split(",") if fidelity_dict else []:
         if ":" not in pair:
             raise ValueError("Invalid format - missing ':' separator")
         key, value = pair.split(":")
@@ -773,7 +774,16 @@ class ModelArgs:
 
         if (
             self.base_model_name
-            in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-27b", "gemma-3-4b", "Phi-4", "Qwen2.5-3B"]
+            in [
+                "Llama-3.1-8B",
+                "Llama-Krikri-8B",
+                "Llama-3.2-11B",
+                "Mistral-7B",
+                "gemma-3-27b",
+                "gemma-3-4b",
+                "Phi-4",
+                "Qwen2.5-3B",
+            ]
             and self.device_name == "N150"
         ) or (
             self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B", "olmOCR-2-7B", "Phi-4"]
@@ -1461,8 +1471,10 @@ class ModelArgs:
                 # a measured fit, not an assertion that 4 is throughput-optimal.
                 in0_block_w=(
                     4
-                    if self.device_name in ("N150", "P100")
-                    and self.base_model_name == "Llama-3.1-8B"
+                    if (
+                        (self.device_name == "N150" and self.base_model_name in ("Llama-3.1-8B", "Llama-Krikri-8B"))
+                        or (self.device_name == "P100" and self.base_model_name == "Llama-3.1-8B")
+                    )
                     and seq_len >= self.prefill_len_cutoff
                     else None
                 ),
@@ -3843,8 +3855,9 @@ class ModelArgs:
         Raises:
             AssertionError: If it's not possible to find such a grid configuration.
         """
-        max_rows = 8 if is_wormhole_b0() else 10
-        max_cols = 8 if is_wormhole_b0() else 12
+        # Harvested Blackhole boards (p150b: 11 columns) have a smaller grid than 10x12.
+        max_rows = 8 if is_wormhole_b0() else min(10, self.max_grid_size.y)
+        max_cols = 8 if is_wormhole_b0() else min(12, self.max_grid_size.x)
         max_cores = max_rows * max_cols
 
         # Find all possible numbers of cores that divide N and are less than or equal to max_cores

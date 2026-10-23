@@ -4,6 +4,7 @@ set(HW_JIT_API_HEADERS
     inc/experimental/blaze_rt_arg.h
     inc/api/alignment.h
     inc/api/compile_time_args.h
+    inc/api/tile_constants.h
     inc/api/remote_circular_buffer.h
     inc/api/semaphore.h
     inc/api/socket_api.h
@@ -283,6 +284,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/debug/fw_debug.h
     inc/internal/debug/noc_zero_guard.h
     inc/internal/debug/sanitize.h
+    inc/internal/debug/shared_noc_cmd_buf.h
     inc/internal/debug/stack_usage.h
     inc/internal/debug/watcher_common.h
     inc/internal/ethernet/dataflow_api.h
