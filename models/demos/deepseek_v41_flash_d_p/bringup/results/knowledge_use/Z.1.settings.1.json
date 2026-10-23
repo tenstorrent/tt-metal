@@ -1,0 +1,26 @@
+{
+ "used": [],
+ "wrong": [],
+ "missing": [
+  "no framework doc says how hooks.settings() is called; added it as a plain function"
+ ],
+ "contradicted": [],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "Z.1",
+  "role": "settings",
+  "attempt": 1,
+  "agent": "settings-audit",
+  "t": "2026-10-23T06:13:20",
+  "head": "4624cab5d42",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/Z.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/Z.1_contract.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/Z.1.settings.1.json"
+  ]
+ }
+}
