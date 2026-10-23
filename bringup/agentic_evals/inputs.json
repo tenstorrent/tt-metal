@@ -25,9 +25,31 @@
     "dispatch_inputs": {
       "workflow": "agentic",
       "impl-of-model": "default",
-      "run-full-evals": false
+      "run-full-evals": false,
+      "run-ai-summary": false,
+      "create-issue-comment": false
     },
-    "_dispatch_note": "Inputs are passed through to the workflow_dispatch block of manual-tt-shield-dispatch.yml. 'workflow' there selects the suite kind (release|benchmarks|evals|agentic|spec_tests); set run-full-evals true only for a scored full suite, since it disables --ci-mode.",
+    "_dispatch_note": "All stage-12 samples and iterative arms dispatch through tenstorrent/tt-agentic-bringup-qb2/manual-tt-shield-dispatch.yml. 'workflow' there selects the suite kind (release|benchmarks|evals|agentic|spec_tests); use agentic for the ordinary arms and set run-full-evals true only for a scored full suite, since it disables --ci-mode. Register the exact run id before launching another arm.",
+    "final_release": {
+      "repo": "tenstorrent/tt-shield",
+      "workflow": "on-dispatch.yml",
+      "workflow_ref": "main",
+      "dispatch_inputs": {
+        "runner-label": "bh-qb-ge",
+        "device-type": "p300x2",
+        "workflow": "release",
+        "run-full-evals": false,
+        "run-ai-summary": false,
+        "create-issue-comment": false
+      },
+      "policy": "Use this direct tt-shield dispatch only once, after exploration and combined validation are complete. Never use direct tt-shield dispatch for stage-12 samples or iterative arms."
+    },
+    "monitoring": {
+      "registration_timeout_minutes": 5,
+      "runner_start_timeout_minutes": 10,
+      "poll_interval_seconds": 60,
+      "policy": "For every iterative dispatch, identify the exact owned tt-agentic-bringup-qb2 wrapper run by workflow ref, creation time, and run title. Inspect its jobs through the GitHub API: the hardware job must request bh-qb-ge and should land on the QB2 runner pool (known runner names use the 120-qb2 prefix). If the hardware job is not created, requests a different label, or remains queued without a runner past the start timeout, cancel only that owned run, inspect the wrapper input mapping and available pool, repair the inputs or workflow ref, and redispatch. Do not fall back to direct tt-shield during iteration. Count queued and in_progress runs against max_parallel. Re-dispatch infrastructure failures, but score model crashes, loops, malformed output, and model timeouts as measurements. Poll through completion and collect artifacts before accepting an arm."
+    },
     "publish": {
       "_note": "The dispatch takes refs, not repositories, so it clones the canonical upstreams. A fork is not reachable; push the branch to the upstream repo and dispatch the resulting SHA.",
       "tt_metal": {
@@ -35,10 +57,10 @@
         "branch": "mvasiljevic/qwen38-27b-bringup-exp26",
         "base": "18b718f8cc9c9f15ecec754e28489d1dc915dd81",
         "include": [
-          "models/autoports/qwen38_27b/"
+          "models/autoports/qwen_qwen3_8_27b/"
         ],
         "exclude": [
-          "models/autoports/qwen38_27b/doc/",
+          "models/autoports/qwen_qwen3_8_27b/doc/",
           "**/*.csv",
           "**/perf-reports/",
           "**/profiler/",
