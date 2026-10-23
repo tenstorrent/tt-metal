@@ -482,3 +482,21 @@ def test_binary_relational_with_sub_device_id(device):
         assert passing, "gt with sub_device_id failed"
     finally:
         teardown_sub_device(device, sub_device_manager)
+
+
+@pytest.mark.parametrize(
+    "op_fn, torch_fn",
+    [(ttnn.bitwise_and, torch.bitwise_and), (ttnn.bitwise_or, torch.bitwise_or), (ttnn.bitwise_xor, torch.bitwise_xor)],
+)
+@skip_for_slow_dispatch()
+def test_bitwise_uint32_scalar_above_int32_max_with_sub_device_id(device, op_fn, torch_fn):
+    sub_device_manager = setup_sub_device(device)
+    try:
+        torch_a = torch.linspace(0, 4294967295, 4096, dtype=torch.float64).to(dtype=torch.uint32).reshape(1, 1, 64, 64)
+        tt_a = ttnn.from_torch(torch_a, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+
+        result = op_fn(tt_a, 3000000001, sub_device_id=ttnn.SubDeviceId(0))
+
+        assert torch.equal(torch_fn(torch_a, 3000000001), ttnn.to_torch(result, dtype=torch.uint32))
+    finally:
+        teardown_sub_device(device, sub_device_manager)
