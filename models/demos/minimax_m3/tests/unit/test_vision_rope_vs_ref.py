@@ -11,7 +11,7 @@ the golden `rope.cos`/`rope.sin` (captured from the HF rotary module).
 It also self-checks `apply_rope_ref` against an inline HF-style application.
 
 Run:
-    pytest models/demos/minimax_m3_vl/tests/minimax_m3_vl/test_rope3d.py -q
+    pytest models/demos/minimax_m3/tests/unit/test_vision_rope_vs_ref.py -q
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ import pytest
 import torch
 from loguru import logger
 
-from models.demos.minimax_m3_vl.tt.rope import apply_rope_ref, rope_cos_sin
+from models.demos.minimax_m3.tt.vision.rope import apply_rope_ref, rope_cos_sin
 
 
 @torch.no_grad()

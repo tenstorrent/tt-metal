@@ -10,7 +10,7 @@ patch-embed output equals the golden `pre_layrnorm.in`.
 
 Run:
     MESH_DEVICE=N150 TT_METAL_LOGGER_LEVEL=FATAL \
-        pytest models/demos/minimax_m3_vl/tests/minimax_m3_vl/test_patch_embed.py -q
+        pytest models/demos/minimax_m3/tests/unit/test_vision_patch_embed_vs_ref.py -q
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.minimax_m3_vl.tt.patch_embed import M3VLPatchEmbed
+from models.demos.minimax_m3.tt.vision.patch_embed import M3VLPatchEmbed
 
 
 @torch.no_grad()

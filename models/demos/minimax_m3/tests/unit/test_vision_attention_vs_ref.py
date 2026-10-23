@@ -9,7 +9,7 @@ cos/sin are computed host-side from `image_grid_thw`.
 
 Run:
     MESH_DEVICE=N150 TT_METAL_LOGGER_LEVEL=FATAL \
-        pytest models/demos/minimax_m3_vl/tests/minimax_m3_vl/test_attention.py -q
+        pytest models/demos/minimax_m3/tests/unit/test_vision_attention_vs_ref.py -q
 """
 from __future__ import annotations
 
@@ -21,8 +21,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.minimax_m3_vl.tt.attention import M3VLAttention
-from models.demos.minimax_m3_vl.tt.rope import rope_cos_sin_padded
+from models.demos.minimax_m3.tt.vision.attention import M3VLAttention
+from models.demos.minimax_m3.tt.vision.rope import rope_cos_sin_padded
 
 
 @torch.no_grad()

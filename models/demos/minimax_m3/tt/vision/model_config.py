@@ -28,7 +28,7 @@ DEFAULT_SNAPSHOT_DIR = os.environ.get(
 )
 DEFAULT_GOLDENS_DIR = os.environ.get(
     "MINIMAX_M3_GOLDENS",
-    os.path.join(os.path.dirname(__file__), "..", "tests", "goldens"),
+    os.path.join(os.path.dirname(__file__), "..", "..", "tests", "goldens"),
 )
 
 

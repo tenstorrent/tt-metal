@@ -30,7 +30,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.minimax_m3_vl.tt.common import hifi4_compute_config, mesh_mapper
+from models.demos.minimax_m3.tt.vision.common import hifi4_compute_config, mesh_mapper
 
 PATCH_SIZE = 14
 IN_CHANNELS = 3
