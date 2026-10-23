@@ -11,8 +11,9 @@ tile, ``N = (hq + 2 hkv) * D`` laid out ``[q heads | k heads | v heads]``), ``gq
 shard ``[32, D]`` with the heads on the rows: the layout ``nlp_create_qkv_heads_decode`` emits, so SDPA and
 ``paged_update_cache`` take them unchanged).
 
-One work unit per core = (user, tensor): 3 B cores (3 at batch 1, 96 at batch 32), so a batch-1 step spreads the
-three tensors over three cores instead of one (the per-user form of ``qkv_norm_rope`` ran all three on one core,
+One work unit per core = (user, tensor) when the grid holds 3 B cores (3 at batch 1, 96 at batch 32 on Blackhole),
+else one user per core with its three tensors in sequence (32 cores at batch 32 on an 8x8 grid; ``grid.py``
+plans it from the device grid), so a batch-1 step spreads the three tensors over three cores instead of one (the per-user form of ``qkv_norm_rope`` ran all three on one core,
 ~70 us vs ~46 us for the composite chain at batch 1). The reader gathers the user's row of every head's column
 tiles of its tensor into head-row tiles; the compute is the v2 compute of ``custom_ops/qkv_norm_rope`` for one
 tensor (``x^2`` on the FPU, FPU row reduce, ``rsqrt(sum / D + eps)`` on the SFPU, ``x * inv * gamma``, NeoX RoPE
@@ -28,6 +29,7 @@ from pathlib import Path
 import torch
 
 import ttnn
+from models.demos.gemma4.custom_ops.grid import compute_grid, core_range_set, plan_qkv_heads_units, row_major_cores
 
 KERNEL_DIR = Path(__file__).resolve().parent / "kernels"
 TILE = 32
@@ -36,8 +38,8 @@ TILE = 32
 def heads_sharded_memory_config(device, batch: int, head_dim: int):
     """The L1 height-sharded config of the decode head tensors: one user per core (row-major core order, as
     ``nlp_create_qkv_heads_decode``), shard ``[32, head_dim]``."""
-    grid = device.compute_with_storage_grid_size()
-    core_grid = ttnn.num_cores_to_corerangeset(batch, grid, True)
+    gx, gy = compute_grid(device)
+    core_grid = ttnn.num_cores_to_corerangeset(batch, ttnn.CoreCoord(gx, gy), True)
     return ttnn.create_sharded_memory_config(
         shape=(TILE, head_dim),
         core_grid=core_grid,
@@ -103,11 +105,10 @@ class QkvHeadsNormRope:
             ttnn.allocate_tensor_on_device(ttnn.Shape([1, B, h, D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, mem)
             for h in (hq, hkv, hkv)
         ]
-        grid = device.compute_with_storage_grid_size()
-        n_units = 3 * B
-        assert n_units <= grid.x * grid.y, f"{n_units} units for {grid.x * grid.y} cores"
-        cores = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(n_units)]  # row-major, as the shards
-        core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+        grid = compute_grid(device)
+        n_cores, per_core = plan_qkv_heads_units(grid, B)  # (user, tensor) per core, or a user's three tensors
+        cores = row_major_cores(grid, n_cores)  # row-major, as the shards (shard core of user u = cores[u])
+        core_set = core_range_set(cores)
         shard_noc = [device.worker_core_from_logical_core(cores[u]) for u in range(B)]
         tile_bytes = TILE * TILE * 2
         f32_tile = TILE * TILE * 4
@@ -141,14 +142,15 @@ class QkvHeadsNormRope:
             eps_bits, inv_d_bits, cls.CB_N,
         ]  # fmt: skip
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        out_addrs = [o.buffer_address() for o in outs]
         for i, core in enumerate(cores):
-            u, t = i // 3, i % 3
+            u, t0 = (i // 3, i % 3) if per_core == 1 else (i, 0)
             reader_rt[core.x][core.y] = [
                 x.buffer_address(), gq.buffer_address(), gk.buffer_address(), cos.buffer_address(),
-                sin.buffer_address(), u, t,
+                sin.buffer_address(), u, t0, per_core,
             ]  # fmt: skip
-            writer_rt[core.x][core.y] = [outs[t].buffer_address(), shard_noc[u].x, shard_noc[u].y]
-            compute_rt[core.x][core.y] = [t]
+            writer_rt[core.x][core.y] = [shard_noc[u].x, shard_noc[u].y, t0, per_core] + out_addrs
+            compute_rt[core.x][core.y] = [t0, per_core]
         compute_cfg = ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, dst_full_sync_en=True
         )

@@ -18,6 +18,7 @@ from pathlib import Path
 import torch
 
 import ttnn
+from models.demos.gemma4.custom_ops.grid import compute_grid, core_range_set, plan_concat_heads_units, row_major_cores
 
 KERNEL_DIR = Path(__file__).resolve().parent / "kernels"
 TILE = 32
@@ -57,20 +58,14 @@ class ConcatHeadsDecode:
                 and (num_heads * D) % shard_w == 0
             ), f"width-sharded output must hold whole column tiles of one row tile: {out_mem}"
         out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, B, num_heads * D]), x.dtype, x.layout, device, out_mem)
-        grid = device.compute_with_storage_grid_size()
-        n_grid = grid.x * grid.y
+        grid = compute_grid(device)
         if heads_per_unit is None:
-            heads_per_unit = int(os.environ.get("GEMMA4_CONCAT_HEADS_PER_UNIT", "0")) or next(
-                hg for hg in range(1, num_heads + 1) if cols * ((num_heads + hg - 1) // hg) <= n_grid
-            )
-        heads_per_unit = max(1, min(num_heads, heads_per_unit))
-        groups = (num_heads + heads_per_unit - 1) // heads_per_unit
-        n_units = cols * groups  # unit id = c * groups + g: column tile c, heads g*hg .. min(H, (g+1)*hg)
-        n_cores = min(n_units, n_grid)
-        per = [(n_units // n_cores) + (1 if i < n_units % n_cores else 0) for i in range(n_cores)]
+            heads_per_unit = int(os.environ.get("GEMMA4_CONCAT_HEADS_PER_UNIT", "0")) or None
+        n_cores, heads_per_unit, groups, per = plan_concat_heads_units(grid, num_heads, cols, heads_per_unit)
+        # unit id = c * groups + g: column tile c, heads g*hg .. min(H, (g+1)*hg)
         starts = [sum(per[:i]) for i in range(n_cores)]
-        cores = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(n_cores)]
-        core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+        cores = row_major_cores(grid, n_cores)
+        core_set = core_range_set(cores)
         tile_bytes = TILE * TILE * 2
 
         def cb(idx, pages):

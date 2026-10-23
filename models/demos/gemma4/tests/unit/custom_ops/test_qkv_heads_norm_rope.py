@@ -50,8 +50,15 @@ def _cos_sin(B, D, seed=0):
         "12b_tp4_global",
     ],
 )
+@pytest.mark.parametrize("grid", [None, "8x8"], ids=["device_grid", "grid8x8"])
 @pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
-def test_qkv_heads_norm_rope_matches_chain(mesh_device, device_params, B, hq, hkv, D):
+def test_qkv_heads_norm_rope_matches_chain(mesh_device, device_params, B, hq, hkv, D, grid, monkeypatch):
+    """``grid8x8``: the Wormhole-sized split (GEMMA4_TEST_GRID=8x8: at B=32 one user per core with its three
+    tensors in sequence instead of 96 (user, tensor) cores) on the same chip."""
+    if grid is not None:
+        if B not in (32, 8):
+            pytest.skip("the 8x8 split only differs at B >= 22")
+        monkeypatch.setenv("GEMMA4_TEST_GRID", grid)
     torch.manual_seed(0)
     N = (hq + 2 * hkv) * D
     x = (torch.randn(1, 1, B, N) * 3).to(torch.bfloat16)
@@ -70,6 +77,11 @@ def test_qkv_heads_norm_rope_matches_chain(mesh_device, device_params, B, hq, hk
     q_s, k_s, v_s = ttnn.experimental.nlp_create_qkv_heads_decode(
         tx, num_heads=hq, num_kv_heads=hkv, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
     )
+    if grid is not None:  # the chain's shards sit on the device grid; move them to the capped grid's cores
+        from models.demos.gemma4.custom_ops.qkv_heads_norm_rope.op import heads_sharded_memory_config
+
+        mem = heads_sharded_memory_config(mesh_device, B, D)
+        q_s, k_s, v_s = (ttnn.to_memory_config(t, mem) for t in (q_s, k_s, v_s))
     ref = [ttnn.to_torch(t).float() for t in QkvNormRope.op(q_s, k_s, v_s, tgq, tgk, tcos, tsin, EPS)]
     outs = QkvHeadsNormRope.op(tx, hq, hkv, D, tgq, tgk, tcos, tsin, EPS)
     got = [ttnn.to_torch(t).float() for t in outs]

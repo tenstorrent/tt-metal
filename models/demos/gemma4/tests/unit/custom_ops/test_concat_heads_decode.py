@@ -12,6 +12,7 @@ from models.demos.gemma4.tt.attention.operations import concat_heads
 SINGLE_CHIP = [pytest.param(1, {"fabric_config": ttnn.FabricConfig.DISABLED}, id="single-chip")]
 
 
+@pytest.mark.parametrize("grid", [None, "8x8"], ids=["device_grid", "grid8x8"])
 @pytest.mark.parametrize("hg", [None, 1, 2, 99], ids=["hg_auto", "hg1", "hg2", "hg_all"])
 @pytest.mark.parametrize(
     "B, H, D",
@@ -33,7 +34,11 @@ SINGLE_CHIP = [pytest.param(1, {"fabric_config": ttnn.FabricConfig.DISABLED}, id
     ],
 )
 @pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
-def test_concat_heads_decode_matches_composite(mesh_device, device_params, B, H, D, hg):
+def test_concat_heads_decode_matches_composite(mesh_device, device_params, B, H, D, hg, grid, monkeypatch):
+    if grid is not None:
+        if hg is not None or (B, H, D) not in ((32, 8, 256), (32, 8, 512)):
+            pytest.skip("one 8x8 case per shape family")
+        monkeypatch.setenv("GEMMA4_TEST_GRID", grid)  # the Wormhole-sized unit split on the same chip
     torch.manual_seed(0)
     x = torch.randn(1, B, 32, D).to(torch.bfloat16)  # heads padded to 32 rows (rows >= H: padding)
     golden = ConcatHeadsDecode.golden(x.float(), H)

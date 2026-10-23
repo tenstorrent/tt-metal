@@ -368,7 +368,7 @@ class DramShardedLinear:
         (the DRAM-sharded kernel; the 1D decode path reads interleaved rows)."""
         return self._decode_1d is None
 
-    def _decode_sharded_rows(self, x_sh, out_mc, compute_kernel_config, m_rows):
+    def _decode_sharded_rows(self, x_sh, out_mc, compute_kernel_config, m_rows, keep_sharded=False):
         """Decode on an activation that is already width-sharded in ``act_memory_config`` (no reshard program)."""
         out = ttnn.linear(
             x_sh,
@@ -378,13 +378,18 @@ class DramShardedLinear:
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
         x_sh.deallocate(True)
+        if keep_sharded:
+            return out
         out = ttnn.to_memory_config(out, out_mc)
         if m_rows < TILE_SIZE:
             n_out = int(out.shape[-1])
             out = ttnn.reshape(out, ttnn.Shape([1, 1, m_rows, n_out]), ttnn.Shape([1, 1, TILE_SIZE, n_out]))
         return out
 
-    def __call__(self, x, compute_kernel_config=None, out_memory_config=None):
+    def __call__(self, x, compute_kernel_config=None, out_memory_config=None, keep_sharded=False, rows=None):
+        """``keep_sharded``: a decode (one row tile) result is returned in the kernel's L1 width-sharded output
+        layout (no sharded -> interleaved copy; the consumer reads the shards). ``rows``: the logical row count of
+        the result when the input is a width-sharded one-row-tile activation (its logical rows are the tile)."""
         out_mc = out_memory_config if out_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
         # Prefill with batch>1 reshapes activations to [B, 1, S, K] (see
         # DecoderLayer). Row count for the matmul is the product of all leading
@@ -398,7 +403,9 @@ class DramShardedLinear:
         for d in orig_leading:
             M *= d
         if x.is_sharded() and M <= TILE_SIZE and self._decode_1d is None and x.memory_config() == self._act_memcfg:
-            return self._decode_sharded_rows(x, out_mc, compute_kernel_config, M)
+            return self._decode_sharded_rows(
+                x, out_mc, compute_kernel_config, M if rows is None else int(rows), keep_sharded=keep_sharded
+            )
         flat_shape = [1, 1, M, n_in]
         x_work = x if x_shape == flat_shape else ttnn.reshape(x, flat_shape)
 
@@ -455,6 +462,8 @@ class DramShardedLinear:
                     memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 )
                 x_sh.deallocate(True)
+                if keep_sharded:
+                    return out  # the kernel's L1 width-sharded form (one row tile; the consumer reads the shards)
                 out = ttnn.to_memory_config(out, out_mc)
             if row_view:
                 n_out = int(out.shape[-1])

@@ -35,8 +35,13 @@ def _dev(t, device, mem=ttnn.DRAM_MEMORY_CONFIG):
     ],
     ids=["31b_b32", "31b_b1", "12b_b32", "12b_b1", "31b_scalar_l1", "12b_b8_scalar", "26b_b32"],
 )
+@pytest.mark.parametrize("grid", [None, "8x8"], ids=["device_grid", "grid8x8"])
 @pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
-def test_fused_norm_chain_matches_two_programs(mesh_device, device_params, R, W, scalar, mem):
+def test_fused_norm_chain_matches_two_programs(mesh_device, device_params, R, W, scalar, mem, grid, monkeypatch):
+    if grid is not None:
+        if (R, W) not in ((32, 5376), (32, 3840)):
+            pytest.skip("one 8x8 case per width")
+        monkeypatch.setenv("GEMMA4_TEST_GRID", grid)  # the Wormhole-sized core split on the same chip
     torch.manual_seed(0)
     x = (torch.randn(1, 1, R, W) * 4).to(torch.bfloat16)
     res = (torch.randn(1, 1, R, W) * 3).to(torch.bfloat16)

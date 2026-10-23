@@ -23,7 +23,7 @@ from pathlib import Path
 import torch
 
 import ttnn
-from models.demos.gemma4.custom_ops.fused_norm_decode import FusedNormDecode
+from models.demos.gemma4.custom_ops.grid import compute_grid, core_range_set, plan_norm_cores, row_major_cores
 
 KERNEL_DIR = Path(__file__).resolve().parent / "kernels"
 TILE = 32
@@ -53,7 +53,9 @@ class FusedNormChainDecode:
         return h, y
 
     @classmethod
-    def op(cls, x, residual, g1, g2, eps: float, scalar: float = 1.0):
+    def op(cls, x, residual, g1, g2, eps: float, scalar: float = 1.0, y_memory_config=None):
+        """``y_memory_config``: ``None`` (x's memory config) or an L1 WIDTH_SHARDED one-row-tile layout of whole
+        column tiles (the DRAM-sharded gate_up matmul's activation layout) for ``y``."""
         assert (
             x.layout == ttnn.TILE_LAYOUT and x.dtype == ttnn.bfloat16 and not x.is_sharded()
         ), "x: bf16 TILE interleaved"
@@ -67,15 +69,25 @@ class FusedNormChainDecode:
         for g in (g1, g2):
             assert g.layout == ttnn.TILE_LAYOUT and tuple(int(v) for v in g.shape) == (1, 1, TILE, W), g.shape
         cols_t = W // TILE
-        N = FusedNormDecode.num_cores(cols_t, 1)
+        device = x.device()
+        grid = compute_grid(device)
+        N = plan_norm_cores(grid, cols_t, 1)
         per = cols_t // N
         RT = (N + TILE - 1) // TILE
-        device = x.device()
-        outs = [ttnn.allocate_tensor_on_device(x.shape, x.dtype, x.layout, device, x.memory_config()) for _ in range(2)]
-        grid = device.compute_with_storage_grid_size()
-        assert N <= grid.x * grid.y
-        cores = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(N)]
-        core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+        ym = y_memory_config
+        if ym is not None and ym.is_sharded():
+            assert (
+                ym.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+                and int(ym.shard_spec.shape[0]) == TILE
+                and int(ym.shard_spec.shape[1]) % TILE == 0
+                and W % int(ym.shard_spec.shape[1]) == 0
+            ), f"sharded y must hold whole column tiles of one row tile: {ym}"
+        outs = [
+            ttnn.allocate_tensor_on_device(x.shape, x.dtype, x.layout, device, x.memory_config()),
+            ttnn.allocate_tensor_on_device(x.shape, x.dtype, x.layout, device, x.memory_config() if ym is None else ym),
+        ]
+        cores = row_major_cores(grid, N)
+        core_set = core_range_set(cores)
         noc = [device.worker_core_from_logical_core(c) for c in cores]
         tile_bytes = TILE * TILE * 2
         f32_tile = TILE * TILE * 4
