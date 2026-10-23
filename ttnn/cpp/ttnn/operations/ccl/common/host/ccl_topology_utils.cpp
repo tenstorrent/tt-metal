@@ -704,6 +704,18 @@ tt::tt_metal::TensorTopology union_topology(
                 return std::holds_alternative<Replicate>(placement);
             })) {
             same_rank.push_back(operand);
+            continue;
+        }
+        // The labels are formatted only when debug logging is on: this runs on every launch of the fused ops.
+        if (tt::LoggerRegistry::instance().get(tt::LogOp)->should_log(spdlog::level::debug)) {
+            log_debug(
+                tt::LogOp,
+                "union_topology leaves out the operand label {}: it is sharded with distribution rank {}, and the "
+                "result keeps the first operand's rank {} ({})",
+                describe(operand.get()),
+                operand.get().distribution_shape().dims(),
+                rank,
+                describe(primary));
         }
     }
     auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(same_rank);
