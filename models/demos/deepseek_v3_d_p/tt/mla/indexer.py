@@ -159,9 +159,7 @@ class TtIndexerBase:
         return True
 
     @classmethod
-    def build_ttnn_cache(
-        cls, idx_host, cache_path, mesh_device, config, layer_idx, sp_axis: int = 0, tp_axis: int = 1
-    ) -> None:
+    def build_ttnn_cache(cls, idx_host, cache_path, mesh_device, config, layer_idx, sp_axis: int, tp_axis: int) -> None:
         """Write the indexer tensorbins to disk (device=None, no device copy)."""
         cls._convert_and_cache_weights(
             idx_host, mesh_device, config, layer_idx, sp_axis, tp_axis, cache_path=cache_path, device=None
@@ -169,7 +167,7 @@ class TtIndexerBase:
 
     @classmethod
     def _convert_and_cache_weights(
-        cls, idx_host, mesh_device, config, layer_idx, sp_axis: int = 0, tp_axis: int = 1, cache_path=None, device=None
+        cls, idx_host, mesh_device, config, layer_idx, sp_axis: int, tp_axis: int, cache_path=None, device=None
     ):
         """Indexer weights → device (or cache). Mirrors dense MLA's converter:
         - host tensors present: transpose/shard/replicate and (optionally) write the cache;
@@ -1137,7 +1135,7 @@ class TtCsaIndexer(TtIndexerBase):
 
     @classmethod
     def _convert_and_cache_weights(
-        cls, idx_host, mesh_device, config, layer_idx, sp_axis: int = 0, tp_axis: int = 1, cache_path=None, device=None
+        cls, idx_host, mesh_device, config, layer_idx, sp_axis: int, tp_axis: int, cache_path=None, device=None
     ):
         index_n_heads = config.index_n_heads
         index_head_dim = config.index_head_dim
