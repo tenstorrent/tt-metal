@@ -550,13 +550,15 @@ class HeadSE3:
                     self.router.attach_mcast(prog)
                 prog.kernels = k0 + k1
                 r, c = coord
-                md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = prog
                 base = self.eng.base  # (which CBs the arena backs: _rebind's - a freed buffer reports no address)
                 on = [
                     i
                     for i, cb in enumerate(prog.cbs)
                     if cb.has_buffer() and base in (cb.buffer_address(), cb.buffer_address() - cb.address_offset)
                 ]
+                # (its structural hash once: a cached descriptor is not re-hashed - kernel sources and all - each call)
+                prog.custom_program_hash = ttnn.compute_program_descriptor_hash(prog)
+                md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = prog
                 progs.append((coord, prog, on))
             self.state.update(key=key, desc=md, progs=progs, arena=self.eng.arena)
         io = [x, w, y, self.eng.arena]
