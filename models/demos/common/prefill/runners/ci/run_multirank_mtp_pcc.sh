@@ -21,7 +21,8 @@ CHUNK_SIZE=5120
 WARMUP_CHUNKS=10
 GOLDEN_LEN=56320
 MAX_SEQ_LEN=${GOLDEN_LEN}
-PCC_THRESHOLD=0.85
+# Scaled-FP8 KV cache trunk floor, same as run_multirank_pcc.sh's glm53 floor.
+PCC_THRESHOLD=0.83
 # The MTP levels are decoder blocks chained on the trunk output, so their KV inherits the trunk error
 # and adds one block's worth per level. GLM-5.3 drifts ~0.03/level against its own CPU reference
 # (test_mtp.py L4: KVPE 0.874 vs GLM-5.2 0.903), which puts 7 levels at ~0.83 while the trunk itself
@@ -50,6 +51,8 @@ if [ -n "${PREFILL_NUM_USERS:-}" ]; then
   RUNNER_NUM_USERS=${PREFILL_NUM_USERS}
 fi
 RUNNER_NUM_USERS_EXPORT="${RUNNER_NUM_USERS:+export PREFILL_NUM_USERS=${RUNNER_NUM_USERS}; }"
+# Every rank has to allocate the same KVPE format.
+RUNNER_NUM_USERS_EXPORT+="${PREFILL_SCALED_FP8_KV_CACHE:+export PREFILL_SCALED_FP8_KV_CACHE=${PREFILL_SCALED_FP8_KV_CACHE}; }"
 
 MANIFEST="${MANIFEST_DIR}/${MODEL}_${VARIANT}.json"
 [ -f "${MANIFEST}" ] || { echo "no manifest ${MODEL}_${VARIANT}.json in ${MANIFEST_DIR}" >&2; exit 2; }

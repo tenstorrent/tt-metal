@@ -26,6 +26,10 @@ class FDMeshCQTestAccessor;
 
 #include "trace/trace_node.hpp"
 
+namespace tt::tt_metal {
+class Device;
+}  // namespace tt::tt_metal
+
 namespace tt::tt_metal::distributed {
 
 class SubDeviceSetupCacheTestAccessor;
@@ -68,7 +72,7 @@ private:
         bool notify_host,
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
     void write_program_commands_to_devices(
-        const std::vector<IDevice*>& devices,
+        const std::vector<Device*>& devices,
         ProgramCommandSequence& program_cmd_seq,
         bool stall_first,
         bool stall_before_program);
@@ -106,7 +110,7 @@ private:
     // Value keys avoid retaining manager pointers/IDs after removal. Device-specific command bytes
     // live with this CQ and runtime context. Include device order to handle mesh reshaping.
     struct SubDeviceSetupCommands {
-        std::vector<IDevice*> devices;
+        std::vector<Device*> devices;
         std::vector<uint32_t> workers;
         std::vector<std::pair<CoreRangeSet, uint32_t>> core_mapping;
         bool reset_launch_msg_state;

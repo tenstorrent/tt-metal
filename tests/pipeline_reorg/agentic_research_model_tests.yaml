@@ -8,6 +8,8 @@
     work="$PWD/generated/llama31_8b_qb2"
     results="$PWD/generated/test_reports/llama31_8b_qb2"
     mkdir -p "$work" "$results" generated/test_logs
+    # tt-metal owns ttnn; tt-transformers pins it, so resolve nothing.
+    uv pip install --no-deps -r "$model_dir/requirements.txt"
     export TT_LLAMA_TEXT_VER=llama31_8b_qb2 MESH_DEVICE=P300x2
     export TT_METAL_CACHE="$work/tt-cache"
     export LLAMA_MODEL_PATH
