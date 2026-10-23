@@ -63,7 +63,7 @@ ALWI void matmul_block_math_dynamic_throttle(
 #ifndef ARCH_QUASAR
     // Dynamic throttling is only available on Blackhole architecture
     // Check firmware-controlled throttle enable flag (even = no throttle, odd = throttle)
-    volatile std::uint32_t mm_throttle_en = *(throttle_ptr) % 2;
+    const std::uint32_t mm_throttle_en = *(throttle_ptr) % 2;
     if (mm_throttle_en) {
         if (throttled_mop_status != 1) {
             MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE_MAX, false, true, in1_order>(
