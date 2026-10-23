@@ -337,6 +337,30 @@ def test_slice_rm(device, n, c, h, w):
     assert_equal(torch_output_tensor, activation_pyt_padded_out)
 
 
+@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG], ids=["l1", "dram"])
+def test_slice_rm_sub_core_grids_read_window(device, memory_config):
+    """The same slice as test_slice_rm on 56 cores. The two core groups of the work split get different stick
+    counts, but the reader-writer buffer is sized for one read window; a core that used a window from its own
+    stick count ran past the end of the buffer and returned wrong rows."""
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < 8 or grid.y < 7:
+        pytest.skip("needs an 8x7 worker grid")
+    sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))})
+    n, c, h, w = 16, 128, 128, 16
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+    tt_output = ttnn.slice(
+        tt_input, (0, 0, 2, 0), (n, 115, 115, w), memory_config=memory_config, sub_core_grids=sub_core_grids
+    )
+    assert_equal(torch_input_tensor[:, :115, 2:115, :], ttnn.to_torch(tt_output))
+
+
 def slice_test(
     input_layout,
     input_tensor_shape,
