@@ -479,6 +479,13 @@ const std::unordered_map<tt::tt_metal::CoreCoord, int32_t>& Cluster::get_virtual
     return this->virtual_routing_to_profiler_flat_id_.at(this->get_board_type(chip_id));
 }
 
+IpVariant Cluster::get_quasar_ip_variant() const {
+    return this->get_soc_desc(*this->driver_->get_target_device_ids().begin())
+        .get_arch_descriptor()
+        .get_ip_variant()
+        .value_or(IpVariant::GRENDEL);
+}
+
 void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     std::unique_ptr<tt::umd::Cluster> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
