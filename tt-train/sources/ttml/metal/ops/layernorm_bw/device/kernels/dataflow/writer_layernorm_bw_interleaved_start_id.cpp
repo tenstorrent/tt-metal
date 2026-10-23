@@ -13,6 +13,29 @@ constexpr uint32_t cb_dbeta_components = tt::CBIndex::c_11;   // dbeta component
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
+// Which outputs to write. A skipped output has no CB and placeholder accessor args.
+#ifdef COMPUTE_GRAD_INPUT
+constexpr bool compute_grad_input = true;
+#else
+constexpr bool compute_grad_input = false;
+#endif
+
+#ifdef COMPUTE_GRAD_GAMMA
+constexpr bool compute_grad_gamma = true;
+#else
+constexpr bool compute_grad_gamma = false;
+#endif
+
+#ifdef COMPUTE_GRAD_BETA
+constexpr bool compute_grad_beta = true;
+#else
+constexpr bool compute_grad_beta = false;
+#endif
+
+// All outputs share a data format; take the tile size from an output CB that exists.
+constexpr uint32_t cb_tile_size_idx =
+    compute_grad_input ? cb_dx_idx : (compute_grad_gamma ? cb_dgamma_components : cb_dbeta_components);
+
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
     uint32_t dx_output_addr = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -21,8 +44,7 @@ void kernel_main() {
     uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
 
-    const uint32_t tile_bytes = get_tile_size(cb_dx_idx);
-    const uint32_t tile_bytes_dgamma = get_tile_size(cb_dgamma_components);
+    const uint32_t tile_bytes = get_tile_size(cb_tile_size_idx);
     constexpr auto dx_args = TensorAccessorArgs<2>();
     constexpr auto dgamma_args = TensorAccessorArgs<dx_args.next_compile_time_args_offset()>();
     constexpr auto dbeta_args = TensorAccessorArgs<dgamma_args.next_compile_time_args_offset()>();
@@ -46,26 +68,38 @@ void kernel_main() {
             uint32_t start_idx = (r * Wt) + c;
 
             // Write dx, dgamma_components, and dbeta_components blocks
-            write_tiles_by_row</* UseBarrier = */ false>(
-                cb_dx_idx, dx_output_addr_generator, start_idx, current_block_size, tile_bytes, block_size);
-            write_tiles_by_row</* UseBarrier = */ false>(
-                cb_dgamma_components,
-                dgamma_output_addr_generator,
-                start_idx,
-                current_block_size,
-                tile_bytes_dgamma,
-                block_size);
-            write_tiles_by_row(
-                cb_dbeta_components,
-                dbeta_output_addr_generator,
-                start_idx,
-                current_block_size,
-                tile_bytes_dgamma,
-                block_size);
-            // UseBarrier=true above calls noc_async_write_barrier() and pops cb_dbeta_components
-            // Must manually pop the first two buffers that used UseBarrier=false
-            cb_pop_front(cb_dx_idx, block_size);
-            cb_pop_front(cb_dgamma_components, block_size);
+            if constexpr (compute_grad_input) {
+                write_tiles_by_row</* UseBarrier = */ false>(
+                    cb_dx_idx, dx_output_addr_generator, start_idx, current_block_size, tile_bytes, block_size);
+            }
+            if constexpr (compute_grad_gamma) {
+                write_tiles_by_row</* UseBarrier = */ false>(
+                    cb_dgamma_components,
+                    dgamma_output_addr_generator,
+                    start_idx,
+                    current_block_size,
+                    tile_bytes,
+                    block_size);
+            }
+            if constexpr (compute_grad_beta) {
+                write_tiles_by_row</* UseBarrier = */ false>(
+                    cb_dbeta_components,
+                    dbeta_output_addr_generator,
+                    start_idx,
+                    current_block_size,
+                    tile_bytes,
+                    block_size);
+            }
+            noc_async_write_barrier();
+            if constexpr (compute_grad_input) {
+                cb_pop_front(cb_dx_idx, block_size);
+            }
+            if constexpr (compute_grad_gamma) {
+                cb_pop_front(cb_dgamma_components, block_size);
+            }
+            if constexpr (compute_grad_beta) {
+                cb_pop_front(cb_dbeta_components, block_size);
+            }
         }
     }
 }
