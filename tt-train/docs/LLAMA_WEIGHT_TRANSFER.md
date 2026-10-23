@@ -11,10 +11,10 @@ Reference for two related dict formats:
    This same dict is also the wire format consumed by the cross-rank
    [`WeightBridge`](../sources/ttml/ttml/trainers/grpo_trainer/remote_rollout/weight_bridge.py),
    which ships it from a ttml rank to a tt-transformers rank over MPI.
-   It is what the remote-rollout GRPO BoolQ example
-   ([`tt-train/sources/examples/grpo_remote_rollout/boolq/`](../sources/examples/grpo_remote_rollout/boolq/))
-   uses to push the freshly-updated policy to the inference worker on
-   every training step.
+   It is what the GRPO BoolQ example
+   ([`tt-train/sources/examples/grpo/boolq/`](../sources/examples/grpo/boolq/))
+   uses to push the freshly-updated policy to the inference worker every
+   `weight_sync_every` optimizer steps.
 
 The structural rules apply to every Llama 3 / 3.1 / 3.2 / 3.3 decoder
 (only counts and dims change). The full key listing in §2.3 is for
@@ -244,7 +244,7 @@ finally:
 ```
 
 Cross-rank, via the `WeightBridge` (one process per rank, separate
-meshes; the BoolQ GRPO example uses this path on every step):
+meshes; the BoolQ GRPO example uses this path every `weight_sync_every` steps):
 
 ```python
 # ttml rank
@@ -255,8 +255,8 @@ client.send_weights(weights_ref_hf_dict(ttml_model), version=step)
 ttt_model.update_weights(received_hf_dict, hf_rope=False)
 ```
 
-End-to-end smoke tests:
-- Cross-rank ttml -> TTT transfer: [`weight_transfer/test_weight_transfer.py`](../tests/python/remote_rollout/weight_transfer/test_weight_transfer.py).
+End-to-end smoke tests (run under tt-run, not in CI):
+- Cross-rank ttml -> TTT transfer: [`weight_transfer/test_weight_transfer.py`](../tests/python/remote_rollout/weight_transfer/test_weight_transfer.py) (currently skipped; the skip reason is in the file).
 - `HostWeightBridge` alone: [`weight_bridge/test_weight_bridge.py`](../tests/python/remote_rollout/weight_bridge/test_weight_bridge.py).
 
 ---
