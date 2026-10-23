@@ -4,8 +4,6 @@
 
 from __future__ import annotations
 
-from contextlib import nullcontext
-
 import torch
 
 import ttnn
@@ -19,7 +17,6 @@ from ....parallel.manager import CCLManager
 from ....utils.matmul import get_matmul_config, get_matmul_core_grid
 from ....utils.tensor import from_torch, pad_single
 from ....utils.tracing import StateTensor, traced_function
-from .time_dispatch import DispatchTimer, timed_block_index
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from .transformer_block_minimax_h3 import MODALITY_NUM, MiniMaxH3TransformerBlock, onehot_identity
 
@@ -230,7 +227,6 @@ class MiniMaxH3Transformer3DModel(Module):
         if dynamic_length and kv_gather_capacity is not None:
             norm_row_capacity = kv_gather_capacity // parallel_config.sequence_parallel.factor
         self._temb_state = StateTensor()
-        self._timestep_idx_state: dict[int, StateTensor] = {}
         self._eye_states: dict[int, StateTensor] = {}
         # The source table `forward` gathers rows from, `[text | cond video | cond audio | audio | video]`
         # at the arena caps, is one persistent ROW_MAJOR buffer written in place (`slice_write`), not rebuilt
@@ -523,10 +519,8 @@ class MiniMaxH3Transformer3DModel(Module):
         temb = self._temb_state.value
 
         adaln_idx = as_indices(adaln_indices)
-        # A trace bakes the buffer, so traced forwards keep one state per padded length; untraced ones rebind.
-        ts_state = self._timestep_idx_state.setdefault(pad_to if traced else 0, StateTensor())
-        ts_state.update(as_indices(timestep_indices), traced=traced)
-        timestep_idx = ts_state.value
+        # Read eagerly by `norm_out` after the traced block loop, so it needs no per-trace state.
+        timestep_idx = as_indices(timestep_indices)
 
         # Identity table of the one-hot gathers, refreshed from the host every forward like the rest of the
         # per-forward state: a trace captured earlier may overwrite long-lived device buffers on replay.
@@ -598,19 +592,17 @@ class MiniMaxH3Transformer3DModel(Module):
     ) -> ttnn.Tensor:
         onehot = self.transformer_blocks[0].onehot_table(adaln_indices, temb.shape[2], eye)
         tilerow = self.transformer_blocks[0].tilerow_tables(adaln_tile_map, adaln_expanded_indices, temb.shape[2], eye)
-        timed = timed_block_index()
-        for i, block in enumerate(self.transformer_blocks):
-            with DispatchTimer(f"block {i}") if i == timed else nullcontext():
-                hidden = block(
-                    hidden,
-                    logical_n,
-                    temb=temb,
-                    adaln_indices=adaln_indices,
-                    rope_cos=rope_cos,
-                    rope_sin=rope_sin,
-                    onehot=onehot,
-                    tilerow=tilerow,
-                )
+        for block in self.transformer_blocks:
+            hidden = block(
+                hidden,
+                logical_n,
+                temb=temb,
+                adaln_indices=adaln_indices,
+                rope_cos=rope_cos,
+                rope_sin=rope_sin,
+                onehot=onehot,
+                tilerow=tilerow,
+            )
         ttnn.deallocate(onehot)
         if tilerow is not None:
             ttnn.deallocate(tilerow[1])

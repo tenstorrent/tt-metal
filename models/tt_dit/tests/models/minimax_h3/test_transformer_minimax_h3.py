@@ -207,6 +207,7 @@ def _prepare_tt_inputs(
     rope_theta: float,
     B: int = 1,
     prompt_cap: int | None = None,
+    index_dtype: ttnn.DataType = ttnn.uint32,  # as the pipeline uploads; int32 exercises the device typecast
 ) -> SimpleNamespace:
     """Build packed metadata, rope tables, random host inputs and the TT forward kwargs -- inputs only, no model, no asserts."""
     sp_factor = tuple(mesh_device.shape)[sp_axis]
@@ -263,7 +264,7 @@ def _prepare_tt_inputs(
         return from_torch(
             pad_rows(arr).to(torch.int32).reshape(1, 1, 1, padded_len),
             device=mesh_device,
-            dtype=ttnn.int32,
+            dtype=index_dtype,
             layout=ttnn.Layout.ROW_MAJOR,
             mesh_axes=[..., None, sp_axis],
         )
@@ -272,7 +273,7 @@ def _prepare_tt_inputs(
         return from_torch(
             arr.to(torch.int32).reshape(1, 1, 1, -1),
             device=mesh_device,
-            dtype=ttnn.int32,
+            dtype=index_dtype,
             layout=ttnn.Layout.ROW_MAJOR,
             mesh_axes=[..., None, None],
         )
@@ -372,22 +373,42 @@ def _prepare_tt_inputs(
 
 @GALAXY_RING
 @pytest.mark.parametrize(
-    ("num_text", "num_audio", "num_video", "grid", "cond_spec", "weights", "prompt_cap"),
+    ("num_text", "num_audio", "num_video", "grid", "cond_spec", "weights", "prompt_cap", "index_dtype"),
     [
-        pytest.param(512, 256, 1280, (8, 8), (), "random", None, id="small_s2048"),
+        pytest.param(512, 256, 1280, (8, 8), (), "random", None, ttnn.uint32, id="small_s2048"),
+        # int32 indices take the model's typecast fallback instead of the pipeline's uint32 upload
+        pytest.param(512, 256, 1280, (8, 8), (), "random", None, ttnn.int32, id="small_s2048_int32_indices"),
         # the transformer pads the prompt to its cap and fences the pad rows off with windows
-        pytest.param(500, 256, 1280, (8, 8), (), "random", 1024, id="small_s2048_prompt_cap"),
+        pytest.param(500, 256, 1280, (8, 8), (), "random", 1024, ttnn.uint32, id="small_s2048_prompt_cap"),
         pytest.param(
-            512, 256, 1344, (8, 8), (), "random", None, id="unaligned_s2112"
+            512, 256, 1344, (8, 8), (), "random", None, ttnn.uint32, id="unaligned_s2112"
         ),  # multiple of TILE, not SP*TILE: tail padding
         pytest.param(
-            512, 414, 37296, (24, 42), (), "random", None, id="prod_768p_5s"
+            512, 414, 37296, (24, 42), (), "random", None, ttnn.uint32, id="prod_768p_5s"
         ),  # 37296 == 16 mod 32: ROW_MAJOR assembly
         # skipped unless MINIMAX_H3_MODEL_PATH is set
-        pytest.param(512, 414, 37296, (24, 42), (), "checkpoint", None, id="prod_768p_5s_real_weights"),
-        pytest.param(512, 414, 37296, (24, 42), (("video", 1008, (24, 42)),), "random", None, id="prod_768p_5s_fl2va"),
+        pytest.param(512, 414, 37296, (24, 42), (), "checkpoint", None, ttnn.uint32, id="prod_768p_5s_real_weights"),
         pytest.param(
-            512, 414, 37296, (24, 42), (("video", 2016, (24, 42)),), "random", None, id="prod_768p_5s_fl2va_first_last"
+            512,
+            414,
+            37296,
+            (24, 42),
+            (("video", 1008, (24, 42)),),
+            "random",
+            None,
+            ttnn.uint32,
+            id="prod_768p_5s_fl2va",
+        ),
+        pytest.param(
+            512,
+            414,
+            37296,
+            (24, 42),
+            (("video", 2016, (24, 42)),),
+            "random",
+            None,
+            ttnn.uint32,
+            id="prod_768p_5s_fl2va_first_last",
         ),
         # production residues at reduced lengths; image ref on its OWN 64x64 grid, standalone audio block LAST
         pytest.param(
@@ -398,6 +419,7 @@ def _prepare_tt_inputs(
             (("video", 4096, (64, 64)), ("video", 1008, (24, 42)), ("audio", 414, None)),
             "random",
             None,
+            ttnn.uint32,
             id="ref2va_interleaved_audio_last",
         ),
     ],
@@ -414,6 +436,7 @@ def test_minimax_h3_transformer(
     cond_spec: tuple[tuple[str, int, tuple[int, int] | None], ...],
     weights: str,
     prompt_cap: int | None,
+    index_dtype: ttnn.DataType,
     is_fsdp: bool,
     topology: ttnn.Topology,
     reset_seeds,
@@ -485,6 +508,7 @@ def test_minimax_h3_transformer(
         rope_freq_dim=ROPE_FREQ_DIM,
         rope_theta=ROPE_THETA,
         prompt_cap=prompt_cap,
+        index_dtype=index_dtype,
     )
 
     logger.info("Running torch model")
@@ -1241,7 +1265,7 @@ def test_minimax_h3_transformer_block_perf(
     tt_adaln = from_torch(
         adaln_indices.to(torch.int32).reshape(1, 1, 1, padded_len),
         device=mesh_device,
-        dtype=ttnn.int32,
+        dtype=ttnn.uint32,
         layout=ttnn.Layout.ROW_MAJOR,
         mesh_axes=[..., None, sp_axis],
     )
