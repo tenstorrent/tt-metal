@@ -1237,6 +1237,7 @@ class TT_CCL:
                 # topology, mirroring the working decode no-prefetch path.
                 B = input_tensor_mesh.shape[1]
                 seqlen = B * input_tensor_mesh.shape[-2]
+                assert seqlen % batch_size == 0, f"prefill rows {seqlen} do not split over batch_size={batch_size}"
                 # The ring kernels choose each chunk's ring direction, and so its summation order, from
                 # the chunk's tile index inside a (batch, channel) unit. One unit per user gives every
                 # user the same order, so a batched-prefill user's result does not depend on its slot.
