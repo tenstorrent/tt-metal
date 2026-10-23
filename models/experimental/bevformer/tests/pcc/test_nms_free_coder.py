@@ -31,7 +31,7 @@ SCORE_RTOL = 4 * torch.finfo(torch.float32).eps
 LOGITS = {
     # Spread evenly over [-4, 4].
     "spread": torch.linspace(-4.0, 4.0, NUM_SCORES),
-    # A trained head's shape: a few confident (query, class) pairs and a dense band of
+    # A detection head's shape: a few confident (query, class) pairs and a dense band of
     # background ones the top-k boundary falls into. The whole band rounds to one bfloat16
     # value, -7.96875, so bfloat16 ties it unless the coder shifts it by its pivot first.
     "background": torch.cat(

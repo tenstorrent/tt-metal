@@ -8,8 +8,7 @@ Feature Pyramid Network (FPN) neck in PyTorch.
 This module implements the image neck of BEVFormer-base, which turns the backbone's C3,
 C4 and C5 (512, 1024 and 2048 channels) into four 256-channel levels for the encoder's
 spatial cross-attention. It is the reference the TTNN neck in ``tt/tt_fpn.py`` is checked
-against. The ``img_neck`` weights of the BEVFormer-base checkpoint load into it with no
-key changes.
+against. Parameter names follow upstream's ``img_neck``.
 
 The FPN performs:
 1. A 1x1 lateral conv on every input level
@@ -74,8 +73,8 @@ class FPN(nn.Module):
             (the last lateral) or ``"on_output"`` (the last output).
         relu_before_extra_convs (bool): Apply ReLU before every extra conv after the first.
 
-    ``init_cfg`` is accepted for config compatibility only: weights come from a checkpoint
-    or from the tests' initializers.
+    ``init_cfg`` is accepted for config compatibility only: weights come from the tests'
+    initializers.
 
     Returns:
         tuple[torch.Tensor]: ``num_outs`` (N, out_channels, H, W) tensors, finest first.
