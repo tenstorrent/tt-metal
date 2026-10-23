@@ -112,9 +112,43 @@ FORCE_INLINE void process_q_chunk(uint32_t item) {
         reconfig_data_format(cb_query, cb_key);
         pack_reconfig_data_format(cb_attention_weights);
 
-#ifdef CAUSAL_MASK
+#ifdef USE_ATTN_MASK
+        // Arbitrary mask: one score tile at a time, mask applied while it is still in DST.
+        constexpr uint32_t matmul_accum_reg = 0U;
+        cb_wait_front(cb_attn_mask, score_tiles);
+        cb_reserve_back(cb_attention_weights, score_tiles);
+        for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+            for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
+                // apply_mask_on_reg's SFPU inits clobber the FPU matmul state: re-init per tile.
+                matmul_init(cb_query, cb_key, /* transpose */ 1);
+                tile_regs_acquire();
+                for (uint32_t tile_idx = 0; tile_idx < qWt; ++tile_idx) {
+                    matmul_tiles(
+                        cb_query,
+                        cb_key,
+                        /* Q tile */ r * qWt + tile_idx,
+                        /* K tile, col-major */
+                        tile_idx * Sk_chunk_t + n,
+                        /* dst */ matmul_accum_reg);
+                }
+                apply_mask_on_reg(
+                    matmul_accum_reg,
+                    cb_attn_mask,
+                    minus_one_bits,
+                    custom_inf_bits,
+                    /* mask_tile_idx */ r * Sk_chunk_t + n);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile</* out_of_order */ true>(
+                    matmul_accum_reg, cb_attention_weights, /* offset */ r * Sk_chunk_t + n);
+                tile_regs_release();
+            }
+        }
+        cb_push_back(cb_attention_weights, score_tiles);
+        cb_pop_front(cb_attn_mask, score_tiles);
+#else
         // S = Q @ K^T, one qk_block_h x qk_block_w rectangle of score tiles per DST pass, packed to its
-        // row-major slot. The causal mask is added afterwards by the packer (see below).
+        // row-major slot. For a causal mask, the mask is added afterwards by the packer (see below).
         matmul_block_init(
             cb_query,
             cb_key,
@@ -157,6 +191,7 @@ FORCE_INLINE void process_q_chunk(uint32_t item) {
         }
         cb_push_back(cb_attention_weights, score_tiles);
 
+#ifdef CAUSAL_MASK
         if (k_step >= first_masked_step) {
             // Add the causal mask onto the scores already in L1. The CB holds exactly one step, so
             // pop + reserve lands on the same slots; with L1-accumulate on, pack_tile adds to the
@@ -189,46 +224,6 @@ FORCE_INLINE void process_q_chunk(uint32_t item) {
 
             cb_push_back(cb_attention_weights, score_tiles);
         }
-#else
-        // Arbitrary / no mask: one score tile at a time, mask applied while it is still in DST.
-        constexpr uint32_t matmul_accum_reg = 0U;
-#ifdef USE_ATTN_MASK
-        cb_wait_front(cb_attn_mask, score_tiles);
-#endif
-        cb_reserve_back(cb_attention_weights, score_tiles);
-        for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-            for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
-                // apply_mask_on_reg's SFPU inits clobber the FPU matmul state: re-init per tile.
-                matmul_init(cb_query, cb_key, /* transpose */ 1);
-                tile_regs_acquire();
-                for (uint32_t tile_idx = 0; tile_idx < qWt; ++tile_idx) {
-                    matmul_tiles(
-                        cb_query,
-                        cb_key,
-                        /* Q tile */ r * qWt + tile_idx,
-                        /* K tile, col-major */
-                        tile_idx * Sk_chunk_t + n,
-                        /* dst */ matmul_accum_reg);
-                }
-#ifdef USE_ATTN_MASK
-                apply_mask_on_reg(
-                    matmul_accum_reg,
-                    cb_attn_mask,
-                    minus_one_bits,
-                    custom_inf_bits,
-                    /* mask_tile_idx */ r * Sk_chunk_t + n);
-#endif
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile</* out_of_order */ true>(
-                    matmul_accum_reg, cb_attention_weights, /* offset */ r * Sk_chunk_t + n);
-                tile_regs_release();
-            }
-        }
-        cb_push_back(cb_attention_weights, score_tiles);
-
-#ifdef USE_ATTN_MASK
-        cb_pop_front(cb_attn_mask, score_tiles);
 #endif
 #endif
 
