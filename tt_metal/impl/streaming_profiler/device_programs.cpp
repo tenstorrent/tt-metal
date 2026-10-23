@@ -415,10 +415,34 @@ void DevicePrograms::enumerate_worker_grid(DeviceCtx& ctx) {
             zero_profiler_control(cluster, chip, producer.virt, producer.control_vector_l1);
         }
     }
+    // Fast dispatch's Tensix cores lie outside the compute grid, and their kernels publish too. Those kernels are
+    // already running, so their control blocks keep the lane state the relays and decoder resume from. Their heads
+    // move up to their tails, as the relays' own copies do when they launch, so what they published before the capture
+    // doesn't count as unread when it closes. They publish only for commands, and none run while the capture boots.
+    dispatch_core_manager& dispatch = mc_->get_dispatch_core_manager();
+    if (dispatch.get_dispatch_core_type() == CoreType::WORKER) {
+        for (const CoreCoord& logical : dispatch.get_all_logical_dispatch_cores(chip)) {
+            const Producer& producer = add_producer(
+                ctx, locate_core(cluster, chip, logical, CoreType::WORKER), CoreType::WORKER, control_vector_l1_);
+            std::array<uint32_t, kLanesPerTile> tails{};
+            const tt_cxy_pair core(chip, producer.virt);
+            cluster.read_core(
+                tails.data(),
+                sizeof(tails),
+                core,
+                producer.control_vector_l1 + kernel_profiler::SPSC_RING_TAIL_0 * sizeof(uint32_t));
+            cluster.write_core(
+                tails.data(),
+                sizeof(tails),
+                core,
+                producer.control_vector_l1 + kernel_profiler::SPSC_RING_HEAD_0 * sizeof(uint32_t));
+        }
+    }
     ctx.worker_count = static_cast<uint32_t>(ctx.producers.size());
 
-    // Every Tensix core's armed flag is cleared, because a dispatch core's ring is never drained and its L1 survives
-    // re-init, so an armed flag left from an earlier capture would block it on a full ring and hang close.
+    // Every Tensix core's armed flag is cleared, because a core whose ring no relay drains keeps its L1 across re-init,
+    // so an armed flag left from an earlier capture would block it on a full ring and hang close. start() arms the
+    // producers.
     const CoreCoord tensix_grid = cluster.get_soc_desc(chip).get_grid_size(CoreType::TENSIX);
     for (uint32_t ly = 0; ly < tensix_grid.y; ly++) {
         for (uint32_t lx = 0; lx < tensix_grid.x; lx++) {
