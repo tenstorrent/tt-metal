@@ -19,7 +19,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert import (
     _ISL_ALLOCATED_TOKENS,
     _ISL_EXHAUSTIVE_MODELS,
-    _ISL_EXHAUSTIVE_SWEEP,
+    _ISL_PERF_SWEEP,
     SINGLE_EXPERT_MODELS,
     run_single_routed_expert,
 )
@@ -44,8 +44,13 @@ _LOW_ISL_MARGIN = 0.08
 # Device duration in ns per (model, active), x_rm layout: ONE sweep on a BH p150b (2026-09-15),
 # each case a median of _ITERS dispatches. Recalibrate on the perf runner (DDR-speed dependent):
 # each case logs an "RT-CAL" line in this dict's format, so one run regenerates the table.
+# The 32/64/96 entries in this file's tables are the midpoint of three sweeps on a BH p150b
+# (2026-10-23), a later calibration than the rest of each table.
 _EXPECTED_NS: dict[tuple[str, int], int] = {
     ("kimi_k2_7", 0): 3_128,
+    ("kimi_k2_7", 32): 124_388,
+    ("kimi_k2_7", 64): 124_685,
+    ("kimi_k2_7", 96): 125_802,
     ("kimi_k2_7", 128): 119_261,
     ("kimi_k2_7", 256): 123_408,
     ("kimi_k2_7", 512): 161_361,
@@ -55,6 +60,9 @@ _EXPECTED_NS: dict[tuple[str, int], int] = {
     ("kimi_k2_7", 4096): 1_151_677,
     ("kimi_k2_7", 5120): 1_435_744,
     ("glm_53", 0): 3_093,
+    ("glm_53", 32): 102_876,
+    ("glm_53", 64): 103_164,
+    ("glm_53", 96): 104_517,
     ("glm_53", 128): 105_461,
     ("glm_53", 256): 108_710,
     ("glm_53", 512): 143_111,
@@ -75,6 +83,9 @@ _EXPECTED_NS: dict[tuple[str, int], int] = {
 # entries are the thin ones -- which is what _LOW_ISL_MARGIN is there to absorb.
 _NDSHARD_EXPECTED_NS: dict[tuple[str, int], int] = {
     ("kimi_k2_7", 0): 3_028,
+    ("kimi_k2_7", 32): 98_635,
+    ("kimi_k2_7", 64): 96_267,
+    ("kimi_k2_7", 96): 98_188,
     ("kimi_k2_7", 128): 103_905,
     ("kimi_k2_7", 256): 111_867,
     ("kimi_k2_7", 512): 156_073,
@@ -84,6 +95,9 @@ _NDSHARD_EXPECTED_NS: dict[tuple[str, int], int] = {
     ("kimi_k2_7", 4096): 1_148_860,
     ("kimi_k2_7", 5120): 1_437_110,
     ("glm_53", 0): 3_076,
+    ("glm_53", 32): 85_933,
+    ("glm_53", 64): 86_604,
+    ("glm_53", 96): 87_061,
     ("glm_53", 128): 91_694,
     ("glm_53", 256): 98_510,
     ("glm_53", 512): 138_469,
@@ -104,6 +118,9 @@ _NDSHARD_EXPECTED_NS: dict[tuple[str, int], int] = {
 # not the midpoint of three.
 _K3_SITU_EXPECTED_NS: dict[int, int] = {
     0: 3_099,
+    32: 106_384,
+    64: 106_519,
+    96: 107_468,
     128: 108_502,
     256: 109_698,
     512: 153_084,
@@ -117,6 +134,9 @@ _K3_SITU_EXPECTED_NS: dict[int, int] = {
 # Kimi K3 SiTU-GLU counterpart of _NDSHARD_EXPECTED_NS: 1.16x at 128, 1.14x at 256, flat from 1024.
 _K3_SITU_NDSHARD_EXPECTED_NS: dict[int, int] = {
     0: 3_106,
+    32: 96_072,
+    64: 95_444,
+    96: 96_913,
     128: 93_428,
     256: 96_435,
     512: 147_440,
@@ -160,7 +180,7 @@ def _perf_params():
     for name, config, _extended in SINGLE_EXPERT_MODELS:
         if name not in _ISL_EXHAUSTIVE_MODELS:
             continue
-        for active in _ISL_EXHAUSTIVE_SWEEP:
+        for active in _ISL_PERF_SWEEP:
             params.append(
                 pytest.param(
                     name,
@@ -222,7 +242,7 @@ def test_single_routed_expert_perf(
 
 @pytest.mark.parametrize(
     "active_tokens, margin",
-    [pytest.param(active, _margin_for_k3(active), id=f"k3-isl-{active}-perf") for active in _ISL_EXHAUSTIVE_SWEEP],
+    [pytest.param(active, _margin_for_k3(active), id=f"k3-isl-{active}-perf") for active in _ISL_PERF_SWEEP],
 )
 @pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
 @pytest.mark.requires_host_iommu
