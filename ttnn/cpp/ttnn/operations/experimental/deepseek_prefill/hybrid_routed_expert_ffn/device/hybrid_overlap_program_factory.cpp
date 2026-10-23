@@ -50,6 +50,9 @@ combine::CombineFabric2dInputs combine_inputs(const HybridRoutedExpertFfnInputs&
 
 namespace {
 
+// Where routed_expert_common_args leaves room for expert_offsets' base; the unified reader reads it there.
+constexpr uint32_t kFarRunCommonSlot = 5;
+
 // The unified reader's view of where combine's walks open: expert_offsets' row for the ring chip diametrically
 // opposite this one, which both of combine's walk directions take first. Appended past every other argument.
 // The reader is the merged one when the fused pass runs and the unified half's own when it does not (threshold 0),
@@ -66,13 +69,18 @@ void append_far_run(tt::tt_metal::ProgramDescriptor& desc, tt::tt_metal::Buffer*
     }
     for (auto& [core, args] : reader->runtime_args) {
         args.resize(base, 0);
-        args.push_back(static_cast<uint32_t>(expert_offsets->address()));
+        args.push_back(0u);  // the base is common runtime arg kFarRunCommonSlot, below
         args.push_back(static_cast<uint32_t>(expert_offsets->aligned_page_size()));
         args.push_back(dg_far);
-        // The address is re-patched on every program-cache hit: the tensor may live elsewhere next call.
-        reader->buffer_bindings.push_back(
-            tt::tt_metal::BufferBinding{.core = core, .arg_idx = base, .buffer = expert_offsets});
     }
+    // One copy for every core, as the routed expert's other buffer bases (routed_expert_common_args), and re-patched
+    // on every program-cache hit: the tensor may live elsewhere next call.
+    TT_FATAL(
+        reader->common_runtime_args.size() > kFarRunCommonSlot && reader->common_runtime_args[kFarRunCommonSlot] == 0,
+        "hybrid routed expert: the reader's common runtime args carry no free expert_offsets slot");
+    reader->common_runtime_args[kFarRunCommonSlot] = static_cast<uint32_t>(expert_offsets->address());
+    reader->common_buffer_bindings.push_back(
+        tt::tt_metal::CommonBufferBinding{.arg_idx = kFarRunCommonSlot, .buffer = expert_offsets});
     reader->defines.emplace_back("URE_FAR_RT_BASE", std::to_string(base));
 }
 

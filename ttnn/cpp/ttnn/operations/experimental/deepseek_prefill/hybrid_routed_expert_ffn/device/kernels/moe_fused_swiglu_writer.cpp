@@ -128,9 +128,12 @@ constexpr uint32_t cb_mailbox_writer = CT(CB_MAILBOX_WRITER);
 
 constexpr uint32_t RT_PEERS = 17;  // KGROUPS (vx, vy) pairs — the whole column, in row order
 constexpr uint32_t RT_HRECT = RT_PEERS + 2 * KGROUPS;
-// Per-expert weight bases, role-major: EXPERTS_PER_CHIP W_up addresses then EXPERTS_PER_CHIP
-// W_down addresses. Appended AFTER the mcast rectangle, so none of the offsets above moved.
-constexpr uint32_t RT_WEIGHTS = RT_HRECT + 4;
+// Buffer bases are COMMON runtime args both halves share: [4] output, and from [6] the per-expert weight bases,
+// role-major with EXPERTS_PER_CHIP addresses per role (gate, up, down, ...); see moe_fused_swiglu_reader.cpp.
+constexpr uint32_t CRT_OUT = 4;
+constexpr uint32_t CRT_WEIGHTS = 6;
+constexpr uint32_t CRT_UP = CRT_WEIGHTS + 1 * EXPERTS_PER_CHIP;
+constexpr uint32_t CRT_DOWN = CRT_WEIGHTS + 2 * EXPERTS_PER_CHIP;
 constexpr bool kHMcastPosted = (H_MCAST_POSTED != 0);
 
 inline bool h_round_on_writer(uint32_t r) { return ((H_ROUND_NOC1_MASK >> r) & 1u) != 0; }
@@ -218,7 +221,7 @@ void kernel_main() {
     CircularBuffer h_buf(cb_h);
     CircularBuffer mailbox_buf(cb_mailbox_writer);
     (void)get_arg_val<uint32_t>(0);  // retained runtime slot for cache-compatible argument layout
-    const uint32_t out_addr = get_arg_val<uint32_t>(2);
+    const uint32_t out_addr = get_common_arg_val<uint32_t>(CRT_OUT);
     const uint32_t kr = get_arg_val<uint32_t>(4);
     const uint32_t kstart = get_arg_val<uint32_t>(5);
     const uint32_t hstart = get_arg_val<uint32_t>(6);
@@ -278,9 +281,8 @@ void kernel_main() {
     // selecting token rows and the weight-residency gate.
     uint32_t gb = 0;
     for (uint32_t local_expert_id = 0; local_expert_id < EXPERTS_PER_CHIP; ++local_expert_id) {
-        const auto wu_acc = TensorAccessor(wu_args, get_arg_val<uint32_t>(RT_WEIGHTS + local_expert_id), W_TILE);
-        const auto wd_acc =
-            TensorAccessor(wd_args, get_arg_val<uint32_t>(RT_WEIGHTS + EXPERTS_PER_CHIP + local_expert_id), W_TILE);
+        const auto wu_acc = TensorAccessor(wu_args, get_common_arg_val<uint32_t>(CRT_UP + local_expert_id), W_TILE);
+        const auto wd_acc = TensorAccessor(wd_args, get_common_arg_val<uint32_t>(CRT_DOWN + local_expert_id), W_TILE);
         // The reader owns the device-resident count read and publishes it to the
         // program-local aliased mailbox CB. The FIFO event makes the raw payload
         // read safe even when L1 contains bytes from an earlier program.

@@ -210,9 +210,19 @@ constexpr bool HMCAST_ACTIVE = get_compile_time_arg_val(CT_HMCAST + 0) != 0;
 // h's descriptor has a rotating sender list of the whole grid.  The grouped
 // rectangle follows that list; only the rectangles are used by this raw path.
 constexpr uint32_t RT_HGROUP_RECT = RT_HMCAST + 4 + 2 * HGROUPS * KGROUPS;
-// Per-expert weight bases, role-major: EXPERTS_PER_CHIP W_gate addresses then EXPERTS_PER_CHIP
-// W_down addresses. Appended AFTER every mcast block, so none of the offsets above moved.
-constexpr uint32_t RT_WEIGHTS = RT_HGROUP_RECT + 4;
+// Every buffer base this kernel reads is a COMMON runtime arg, one block shared by every dataflow kernel of both
+// halves (host: routed_expert_common_args): [0] x, [1] counts, [2] global_expert_idx_table, [3] start
+// (expert_region_offsets), [4] output, [5] expert_offsets (overlap only), then from [6] the per-expert weight and
+// bias bases, role-major with EXPERTS_PER_CHIP per role: gate, up, down, gate_bias, up_bias, down_bias. Common
+// because every core reads the same addresses; get_common_arg_val is not rebased by hybrid_arg_shims.hpp, so the
+// merged kernel's one block serves both halves. The per-core slots the addresses used to take stay, zeroed.
+constexpr uint32_t CRT_X = 0;
+constexpr uint32_t CRT_COUNTS = 1;
+constexpr uint32_t CRT_IDX = 2;
+constexpr uint32_t CRT_START = 3;
+constexpr uint32_t CRT_WEIGHTS = 6;
+constexpr uint32_t CRT_GATE = CRT_WEIGHTS + 0 * EXPERTS_PER_CHIP;
+constexpr uint32_t CRT_DOWN = CRT_WEIGHTS + 2 * EXPERTS_PER_CHIP;
 
 // POSTED drops the `ndest` payload write-acks and changes nothing else: the VALID flag stays
 // non-posted and LINKED on the same VC, so it cannot overtake the payload. Keep 0 reachable — if
@@ -299,7 +309,7 @@ constexpr uint32_t cb_down_bias = get_compile_time_arg_val(BIAS_CB_OFFSET + 2);
 constexpr auto gate_bias_args = TensorAccessorArgs<BIAS_CB_OFFSET + 3>();
 constexpr auto up_bias_args = TensorAccessorArgs<gate_bias_args.next_compile_time_args_offset()>();
 constexpr auto down_bias_args = TensorAccessorArgs<up_bias_args.next_compile_time_args_offset()>();
-constexpr uint32_t RT_BIAS = RT_WEIGHTS + 2 * EXPERTS_PER_CHIP;
+constexpr uint32_t CRT_BIAS = CRT_WEIGHTS + 3 * EXPERTS_PER_CHIP;
 #endif
 
 // Three `WeightRuns` bindings, because the three tensors this kernel touches can have DIFFERENT
@@ -328,9 +338,9 @@ void kernel_main() {
     // noc_index explicitly, so every transaction this kernel issues rides one NoC.
     Noc noc;
     (void)get_arg_val<uint32_t>(0);  // retained runtime slot for cache-compatible argument layout
-    const uint32_t x_addr = get_arg_val<uint32_t>(1);
-    const uint32_t counts_addr = get_arg_val<uint32_t>(4);
-    const uint32_t idx_addr = get_arg_val<uint32_t>(5);
+    const uint32_t x_addr = get_common_arg_val<uint32_t>(CRT_X);
+    const uint32_t counts_addr = get_common_arg_val<uint32_t>(CRT_COUNTS);
+    const uint32_t idx_addr = get_common_arg_val<uint32_t>(CRT_IDX);
     const uint32_t kr_rows = get_arg_val<uint32_t>(6);  // real K tiles this grid ROW owns
     const uint32_t kstart = get_arg_val<uint32_t>(7);   // first emb tile index this row owns
     const uint32_t hstart = get_arg_val<uint32_t>(8);   // first hidden linear index this COLUMN owns
@@ -345,7 +355,7 @@ void kernel_main() {
     const uint32_t my_row = get_arg_val<uint32_t>(15);
     // `start` (= expert_region_offsets) base. Present in every dispatch (the host stands `counts`
     // in when the caller passes no offsets tensor) and read only when NEED_START.
-    const uint32_t start_addr = get_arg_val<uint32_t>(16);
+    const uint32_t start_addr = get_common_arg_val<uint32_t>(CRT_START);
     // Column `x`'s reduce root is row `x % KGROUPS` — the core that injects this column's h into
     // the phase-2 all-gather. Derived, not passed: one rule, three kernels.
     const bool is_root = (my_row == my_col % KGROUPS);
@@ -437,9 +447,8 @@ void kernel_main() {
     // `block_idx` stays expert-relative — it selects token rows and the residency gate.
     uint32_t gb = 0;
     for (uint32_t local_expert_id = 0; local_expert_id < EXPERTS_PER_CHIP; ++local_expert_id) {
-        const auto wg_acc = TensorAccessor(wg_args, get_arg_val<uint32_t>(RT_WEIGHTS + local_expert_id), W_TILE);
-        const auto wd_acc =
-            TensorAccessor(wd_args, get_arg_val<uint32_t>(RT_WEIGHTS + EXPERTS_PER_CHIP + local_expert_id), W_TILE);
+        const auto wg_acc = TensorAccessor(wg_args, get_common_arg_val<uint32_t>(CRT_GATE + local_expert_id), W_TILE);
+        const auto wd_acc = TensorAccessor(wd_args, get_common_arg_val<uint32_t>(CRT_DOWN + local_expert_id), W_TILE);
 #ifdef FUSE_BIAS
         // This expert's bias windows, fetched once. Gate/up take the COLUMN's whole HN_PAD window
         // rather than a per-core slice: after the reduce-scatter a core's gate/up slice is a flat
@@ -452,11 +461,17 @@ void kernel_main() {
             const uint32_t gbias_tile = get_tile_size(cb_gate_bias);
             const uint32_t dbias_tile = get_tile_size(cb_down_bias);
             const auto gb_acc = TensorAccessor(
-                gate_bias_args, get_arg_val<uint32_t>(RT_BIAS + 0 * EXPERTS_PER_CHIP + local_expert_id), gbias_tile);
+                gate_bias_args,
+                get_common_arg_val<uint32_t>(CRT_BIAS + 0 * EXPERTS_PER_CHIP + local_expert_id),
+                gbias_tile);
             const auto ub_acc = TensorAccessor(
-                up_bias_args, get_arg_val<uint32_t>(RT_BIAS + 1 * EXPERTS_PER_CHIP + local_expert_id), gbias_tile);
+                up_bias_args,
+                get_common_arg_val<uint32_t>(CRT_BIAS + 1 * EXPERTS_PER_CHIP + local_expert_id),
+                gbias_tile);
             const auto db_acc = TensorAccessor(
-                down_bias_args, get_arg_val<uint32_t>(RT_BIAS + 2 * EXPERTS_PER_CHIP + local_expert_id), dbias_tile);
+                down_bias_args,
+                get_common_arg_val<uint32_t>(CRT_BIAS + 2 * EXPERTS_PER_CHIP + local_expert_id),
+                dbias_tile);
 
             cb_reserve_back(cb_gate_bias, HN_PAD);
             cb_reserve_back(cb_up_bias, HN_PAD);
