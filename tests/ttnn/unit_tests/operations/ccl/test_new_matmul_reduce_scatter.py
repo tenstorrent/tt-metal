@@ -280,7 +280,7 @@ def run_reduce_scatter_impl(
         # so the matmul reads [Replicate, Shard(3)] (the K-split partial sums are stacked by the composer below). The
         # reduce_scatter of that matmul over the whole mesh is the collapsed {N}, [Shard(rs_scatter_dim)] that
         # ConcatMeshToTensor(dim=3) composes.
-        # TODO: K is split across the devices, so each device holds a partial sum of the whole matmul output and
+        # TODO(#62347): K is split across the devices, so each device holds a partial sum of the whole matmul output and
         # [Replicate, Shard(3)] does not describe it; no TensorTopology placement can express a partial sum yet. Assert
         # that placement, and compare without the torch.sum over the chunks below, once one exists.
         assert [repr(p) for p in tt_mm_out_tensor.tensor_topology().placements()] == [
