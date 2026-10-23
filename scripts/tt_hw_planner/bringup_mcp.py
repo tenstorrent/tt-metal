@@ -318,9 +318,34 @@ def _pending_shard_component(comps: list[str]) -> str | None:
     return None
 
 
+def _pipeline_wired_stubs() -> set[str] | None:
+    """Discover which stubs the pipeline actually imports, by scanning the pipeline source for
+    ``load_stub("name")`` calls and ``from ..._stubs import name`` statements. Returns None when
+    no pipeline exists or the scan finds nothing (caller should treat as 'no filter')."""
+    pipeline = _DEMO_DIR / "tt" / "pipeline.py"
+    if not pipeline.is_file():
+        return None
+    try:
+        import re
+
+        src = pipeline.read_text(encoding="utf-8")
+        found: set[str] = set()
+        for m in re.finditer(r'load_stub\(\s*["\']([^"\']+)["\']', src):
+            found.add(m.group(1))
+        for m in re.finditer(r"from\s+\S*_stubs\S*\s+import\s+(.+)", src):
+            for item in m.group(1).split(","):
+                name = item.split("as")[0].strip().split()[0] if item.strip() else ""
+                if name and name.isidentifier():
+                    found.add(name)
+        return found if found else None
+    except Exception:
+        return None
+
+
 def _declared_components() -> list[str]:
     """The gate's universe: components DECLARED in bringup_status.json (status
-    NEW/ADAPT/REUSE), minus the legitimately-excluded set (no_emit).
+    NEW/ADAPT/REUSE), minus the legitimately-excluded set (no_emit), filtered
+    to only those the pipeline actually wires (when a pipeline exists).
 
     This is deliberately NOT keyed off which per-component PCC test files happen
     to exist on disk. Keying the universe off emitted test files let a declared
@@ -328,7 +353,11 @@ def _declared_components() -> list[str]:
     post-scaffold addition) slip out of the universe entirely — so it was never
     attempted AND did not block can_stop (the gate reported "all graduated" over
     a component it never saw). Enumerating the DECLARED set closes that hole:
-    the missing-test state is handled below (auto-emit) instead of vanishing."""
+    the missing-test state is handled below (auto-emit) instead of vanishing.
+
+    When the pipeline exists and references specific stubs, declared components
+    that are NOT wired into the pipeline are excluded — they are dead code that
+    would never run at inference time and should not block graduation."""
     data = _status_doc()
     if not data:
         return []
@@ -338,12 +367,15 @@ def _declared_components() -> list[str]:
         no_emit = set(load_no_emit_tests(_MODEL_ID).keys())
     except Exception:
         no_emit = set()
+    wired = _pipeline_wired_stubs()
     out: list[str] = []
     for c in data.get("components", []) or []:
         if c.get("status") not in ("NEW", "ADAPT", "REUSE"):
             continue
         name = str(c.get("name", "")).strip()
         if name and name not in no_emit:
+            if wired is not None and name not in wired:
+                continue
             out.append(name)
     return sorted(set(out))
 
