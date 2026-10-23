@@ -3024,3 +3024,18 @@ not affected: its buffer is written once at load (tt/indexer.py _kbuf). The hy4 
 write (other models' tests; latent, they pass). No op change.
 Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate O.1 --spec
 models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml --check`.
+
+## Z.1 settings audit attempt 1 (2026-10-23)
+
+Audit result: tt/settings.py (Settings("DS41_"), 25 switches, env names unchanged) already held every environment read
+of tt/ and bringup/hooks.py; settings_lint: 0 violations. Added `hooks.settings()` returning `settings.all()`.
+Switches (default; before: earlier tasks moved them into the table, e.g. P.13/P.18/P.20/P.22): DEVICE_MODEL device,
+MATMUL_FIDELITY HiFi2, FP32_ACC needed, DENSE_WEIGHTS, ATTN_FIDELITY, FP32_WEIGHT_ROUND, ATTN_O_SUM, ATTN_GLUE,
+ROPE_IMPL, NORM_IMPL, GLUE_FOLD, STATIC_TABLES, BF16_ACTIVATIONS, ROUTER_IMPL, ROUTER_SOFTPLUS, INDEXER_GLUE,
+EXPERTS_IMPL, EXPERTS_PRECISION, COMBINE_ACC, COMBINE_PLANNER, FFN_NORM_DTYPE, EXPERTS_SUM, RESIDUAL_MIX, MHC_FUSED,
+HC_SINKHORN, CCL_IMPL, HC_TP_SUM (values: see tt/settings.py).
+Left as literals (not switches): HiFi4 + fp32 DEST in tt/norm.py (the rms_norm fork's own exact setting) and tt/rope.py
+(the only exact bf16 data move through the FPU); LoFi for EXPERTS_PRECISION=glm is derived from that setting.
+Forks: mhc_pre_ttnn / rms_norm_ttnn env reads are marked `diagnostic`; flat_routed_expert_ttnn's ~60 MIMO_FL_* reads
+are pre-existing fork knobs (F106, not converted here; the model's tuned values come from the fork defaults). Listed for the
+owner: converting them to op arguments is a separate task.

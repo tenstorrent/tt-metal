@@ -1,0 +1,12 @@
+{
+ "task": "Z.1",
+ "t": "2026-10-23T06:13:05",
+ "run": "all",
+ "results": {
+  "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_cache_starts.py": true,
+  "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py": true,
+  "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py": true,
+  "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py": true,
+  "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py": true
+ }
+}
