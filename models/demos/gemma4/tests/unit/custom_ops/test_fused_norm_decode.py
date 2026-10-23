@@ -60,6 +60,12 @@ CASES = {
     "three_outputs_router_b1": (1, 2816, 3, [True, True, True], [1.0, 1.0, 2816**-0.5], False, False, "dram", 22),
     "residual_scalar_b1": (1, 2816, 1, [True], [0.7265625], True, False, "dram", 22),
     "two_inputs_b1": (1, 2816, 1, [True], [1.0], False, True, "dram", 22),
+    # prefill rows (one N-core exchange group per row tile): the 128-token layer tail's four forms on 4 x 22 cores
+    "prefill_r128_residual": (128, 2816, 1, [True], [1.0], True, False, "dram", 22),
+    "prefill_r128_two_outputs": (128, 2816, 2, [True, True], [1.0, 1.0], False, False, "dram", 22),
+    "prefill_r128_two_inputs": (128, 2816, 1, [True], [1.0], False, True, "dram", 22),
+    "prefill_r128_residual_scalar": (128, 2816, 1, [True], [0.7265625], True, False, "dram", 22),
+    "prefill_r64_l1": (64, 2816, 1, [True], [1.0], False, False, "l1", 22),
 }
 
 

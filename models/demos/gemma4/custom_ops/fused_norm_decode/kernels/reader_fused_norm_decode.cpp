@@ -7,7 +7,8 @@
 // semaphore for the next replay.
 // compile-time args: [cb_x0, cb_x1, cb_g0, cb_g1, cb_g2, cb_res, cb_scaler, cb_recv, cb_stage, per, N, RT, NIN,
 //                     NOUT, has_res, gmask, sem_id] + TensorAccessorArgs(x0, x1, g0, g1, g2, res)
-// runtime args: [x0_addr, x1_addr, g0_addr, g1_addr, g2_addr, res_addr, c0]
+// runtime args: [x0_addr, x1_addr, g0_addr, g1_addr, g2_addr, res_addr, c0, gc0]  (c0 = first tile of this
+// core's columns in x / residual, incl. the row-tile offset; gc0 = the same columns in the one-row-tile gammas)
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
@@ -20,6 +21,7 @@ void kernel_main() {
     const uint32_t g2_addr = get_arg_val<uint32_t>(4);
     const uint32_t res_addr = get_arg_val<uint32_t>(5);
     const uint32_t c0 = get_arg_val<uint32_t>(6);
+    const uint32_t gc0 = get_arg_val<uint32_t>(7);
     constexpr uint32_t cb_x0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_x1 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_g0 = get_compile_time_arg_val(2);
@@ -55,34 +57,34 @@ void kernel_main() {
     for (uint32_t i = 0; i < NIN * RT * f32_tile_words; ++i) {
         recv[i] = 0;
     }
-    auto read_tiles = [&](auto& acc, CircularBuffer& cb) {
+    auto read_tiles = [&](auto& acc, CircularBuffer& cb, uint32_t first) {
         cb.reserve_back(per);
         const uint32_t base = get_write_ptr(cb.get_cb_id());
         for (uint32_t c = 0; c < per; ++c) {
-            noc_async_read(acc.get_noc_addr(c0 + c), base + c * tile_bytes, tile_bytes);
+            noc_async_read(acc.get_noc_addr(first + c), base + c * tile_bytes, tile_bytes);
         }
     };
     const auto s_x0 = TensorAccessor(x0_args, x0_addr, tile_bytes);
-    read_tiles(s_x0, cx0);
+    read_tiles(s_x0, cx0, c0);
     if constexpr (NIN == 2) {
         const auto s_x1 = TensorAccessor(x1_args, x1_addr, tile_bytes);
-        read_tiles(s_x1, cx1);
+        read_tiles(s_x1, cx1, c0);
     }
     if constexpr ((gmask & 1) != 0) {
         const auto s_g0 = TensorAccessor(g0_args, g0_addr, tile_bytes);
-        read_tiles(s_g0, cg0);
+        read_tiles(s_g0, cg0, gc0);
     }
     if constexpr ((gmask & 2) != 0 && n_gamma > 1) {
         const auto s_g1 = TensorAccessor(g1_args, g1_addr, tile_bytes);
-        read_tiles(s_g1, cg1);
+        read_tiles(s_g1, cg1, gc0);
     }
     if constexpr ((gmask & 4) != 0 && n_gamma > 2) {
         const auto s_g2 = TensorAccessor(g2_args, g2_addr, tile_bytes);
-        read_tiles(s_g2, cg2);
+        read_tiles(s_g2, cg2, gc0);
     }
     if constexpr (has_res) {
         const auto s_res = TensorAccessor(res_args, res_addr, tile_bytes);
-        read_tiles(s_res, cr);
+        read_tiles(s_res, cr, c0);
     }
     // unit scaler for the FPU row reduce: bf16 1.0 in the first row of every face, zeros elsewhere
     cs.reserve_back(1);

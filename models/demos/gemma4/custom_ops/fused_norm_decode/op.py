@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """``FusedNormDecode``: the decode-row RMSNorm family of a Gemma 4 layer as one multi-core program.
 
-``x`` is ``[1, 1, R, W]`` (bf16, TILE, DRAM or L1 interleaved, ``R <= 32`` rows on one row tile, ``W`` a multiple
-of 32). ``out_o = (norm(x) * gamma_o [+ norm(x2) * gamma2] [+ residual]) * scalar_o`` with ``norm(x) = x *
+``x`` is ``[1, 1, R, W]`` (bf16, TILE, DRAM or L1 interleaved, ``W`` a multiple of 32; ``R <= 32`` decode rows on
+one row tile, or tile-padded prefill rows: every row tile gets its own ``N``-core exchange group, so a 128-row
+call runs the same kernels on ``4 N`` cores). ``out_o = (norm(x) * gamma_o [+ norm(x2) * gamma2] [+ residual]) * scalar_o`` with ``norm(x) = x *
 rsqrt(mean(x^2) + eps)`` (the layer applies its scalar after the residual add). Forms:
 
 * one to three outputs from one input (``gammas = [g0, g1, g2]``, each a ``[1, 1, 32, W]`` bf16 TILE tensor with
@@ -97,11 +98,12 @@ class FusedNormDecode:
             x.layout == ttnn.TILE_LAYOUT and x.dtype == ttnn.bfloat16 and not x.is_sharded()
         ), "x: bf16 TILE interleaved"
         shape = [int(v) for v in x.shape]
-        assert (
-            len(shape) == 4 and shape[0] == 1 and shape[1] == 1 and shape[2] <= TILE
-        ), f"x must be [1,1,<=32,W], got {shape}"
+        assert len(shape) == 4 and shape[0] == 1 and shape[1] == 1, f"x must be [1,1,R,W], got {shape}"
         W = shape[3]
-        assert W % TILE == 0 and x.padded_shape[-2] == TILE, f"width {W} must be a multiple of 32 on one row tile"
+        # one row tile (decode rows) or, on prefill rows, RT_IN row tiles: one N-core exchange group per row tile
+        RT_IN = (shape[2] + TILE - 1) // TILE
+        assert x.padded_shape[-2] == RT_IN * TILE, f"rows {shape[2]} must be tile-padded"
+        assert W % TILE == 0, f"width {W} must be a multiple of 32"
         gammas = list(gammas)
         nout = len(gammas)
         assert 1 <= nout <= 3, "one to three outputs"
@@ -127,8 +129,8 @@ class FusedNormDecode:
             ttnn.allocate_tensor_on_device(x.shape, x.dtype, x.layout, device, x.memory_config()) for _ in range(nout)
         ]
         grid = device.compute_with_storage_grid_size()
-        assert N <= grid.x * grid.y
-        cores = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(N)]
+        assert N * RT_IN <= grid.x * grid.y, f"{RT_IN} row tiles x {N} cores exceed the {grid.x}x{grid.y} grid"
+        cores = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(N * RT_IN)]  # group t = cores[t*N:(t+1)*N]
         core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
         noc = [device.worker_core_from_logical_core(c) for c in cores]
         tile_bytes = TILE * TILE * 2
@@ -177,18 +179,21 @@ class FusedNormDecode:
                       cls.CB_PART, cls.CB_RECV, cls.CB_INV, cls.CB_OUT0, cls.CB_OUT1, cls.CB_OUT2] + common + [
                       _f32_bits(eps), _f32_bits(1.0 / W)] + [_f32_bits(s) for s in (scalars + [1.0, 1.0])[:3]]  # fmt: skip
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        coords = []
-        for c in noc:
-            coords += [c.x, c.y]
-        for i, core in enumerate(cores):
-            reader_rt[core.x][core.y] = [
-                x.buffer_address(), x1_t.buffer_address(), g_t[0].buffer_address(), g_t[1].buffer_address(),
-                g_t[2].buffer_address(), res_t.buffer_address(), i * per,
-            ]  # fmt: skip
-            writer_rt[core.x][core.y] = [
-                out_t[0].buffer_address(), out_t[1].buffer_address(), out_t[2].buffer_address(), i * per, i
-            ] + coords  # fmt: skip
-            compute_rt[core.x][core.y] = [0]
+        for t in range(RT_IN):
+            coords = []
+            for c in noc[t * N : (t + 1) * N]:  # the exchange stays within the row tile's group
+                coords += [c.x, c.y]
+            for i in range(N):
+                core = cores[t * N + i]
+                c0 = t * cols_t + i * per  # tile index in the [RT_IN, cols_t] tile grid of x / residual / outputs
+                reader_rt[core.x][core.y] = [
+                    x.buffer_address(), x1_t.buffer_address(), g_t[0].buffer_address(), g_t[1].buffer_address(),
+                    g_t[2].buffer_address(), res_t.buffer_address(), c0, i * per,
+                ]  # fmt: skip
+                writer_rt[core.x][core.y] = [
+                    out_t[0].buffer_address(), out_t[1].buffer_address(), out_t[2].buffer_address(), c0, i
+                ] + coords  # fmt: skip
+                compute_rt[core.x][core.y] = [0]
         compute_cfg = ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, dst_full_sync_en=True
         )

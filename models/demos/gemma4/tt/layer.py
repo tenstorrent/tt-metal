@@ -279,6 +279,69 @@ class Gemma4DecoderLayer:
         hidden.deallocate(True)
         return out
 
+    def _fused_prefill_layer_norms_ok(self, attn_output, batch_size):
+        """GEMMA4_LAYER_NORM_FUSED_PREFILL=1 on prefill rows: the fused norm op (GEMMA4_NORM_FUSED=2 gammas) on
+        ``[1, 1, R, W]`` rows with R a multiple of 32 small enough for one exchange group per row tile on the grid;
+        the MoE block itself stays on its prefill path (the router norms its own input)."""
+        if decode_flag("GEMMA4_LAYER_NORM_FUSED_PREFILL") != "1" or decode_flag("GEMMA4_NORM_FUSED") != "2":
+            return False
+        if isinstance(attn_output, torch.Tensor) or batch_size != 1 or self.hidden_size_per_layer_input:
+            return False
+        if getattr(self.post_attention_layernorm, "tt_weight_full", None) is None:
+            return False
+        shape = [int(v) for v in attn_output.shape]
+        if len(shape) != 4 or shape[0] != 1 or shape[1] != 1 or shape[2] % 32 or shape[3] != self.hidden_size:
+            return False
+        if attn_output.is_sharded() or attn_output.layout != ttnn.TILE_LAYOUT:
+            return False
+        rows_t = shape[2] // 32
+        grid = attn_output.device().compute_with_storage_grid_size()
+        n_cores = FusedNormDecode.num_cores(self.hidden_size // 32, 1)
+        return (
+            rows_t * n_cores <= grid.x * grid.y
+            and rows_t * FusedNormDecode.num_cores(self.hidden_size // 32, 2) <= grid.x * grid.y
+        )
+
+    def _forward_tail_fused_prefill(self, residual, attn_output):
+        """The layer after attention on prefill rows: four fused norm programs (post_attention + residual;
+        pre_feedforward and pre_feedforward_2 from one exchange; post_feedforward_1(mlp) + post_feedforward_2(experts);
+        post_feedforward + residual, times the layer scalar) around the shared MLP and the MoE block's prefill path:
+        7 norms + 3 adds + 1 mul -> 4 programs (+ the router's own norm inside the MoE block)."""
+        eps = self.post_attention_layernorm.eps
+        hidden = FusedNormDecode.op(
+            attn_output, [self.post_attention_layernorm.tt_weight_full], eps, residual=residual
+        )[0]
+        residual.deallocate(True)
+        attn_output.deallocate(True)
+        normed, expert_input = FusedNormDecode.op(
+            hidden,
+            [self.pre_feedforward_layernorm.tt_weight_full, self.pre_feedforward_layernorm_2.tt_weight_full],
+            eps,
+        )
+        mlp_output = self.shared_mlp(normed)
+        normed.deallocate(True)
+        if self.enable_moe_block:
+            expert_output = self.moe(hidden, expert_input)
+            expert_input.deallocate(True)
+            summed = FusedNormDecode.op(
+                mlp_output,
+                [self.post_feedforward_layernorm_1.tt_weight_full],
+                eps,
+                x2=expert_output,
+                gamma2=self.post_feedforward_layernorm_2.tt_weight_full,
+            )[0]
+            mlp_output.deallocate(True)
+            expert_output.deallocate(True)
+        else:
+            expert_input.deallocate(True)
+            summed = mlp_output
+        out = FusedNormDecode.op(
+            summed, [self.post_feedforward_layernorm.tt_weight_full], eps, residual=hidden, scalars=[self.layer_scalar]
+        )[0]
+        summed.deallocate(True)
+        hidden.deallocate(True)
+        return out
+
     def _forward_tail_fused(self, residual, attn_output):
         """The layer after attention as five fused norm programs (see the module docstring)."""
         eps = self.post_attention_layernorm.eps
@@ -415,6 +478,9 @@ class Gemma4DecoderLayer:
             and self._fused_dense_layer_norms_ok(attn_output)
         ):
             return self._forward_tail_fused_dense(residual, attn_output)
+
+        if not is_decode and self._fused_prefill_layer_norms_ok(attn_output, batch_size):
+            return self._forward_tail_fused_prefill(residual, attn_output)
 
         if isinstance(attn_output, torch.Tensor):
             hidden_states = residual
