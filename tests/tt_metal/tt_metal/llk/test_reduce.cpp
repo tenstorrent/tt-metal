@@ -42,7 +42,7 @@
 #include "test_golden_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <impl/context/metal_context.hpp>
@@ -925,8 +925,8 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWTinyTiles) {
 // results via ELWADDDI (not op_mmul), which reads MxFp4_2x SrcA as zero.
 // Disabled due to hang: tenstorrent/tt-metal#59923
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixComputeReduceColumnMxFp4X2) {
-    if (MetalContext::instance().rtoptions().get_quasar_arch_variant() == "quasar_4row") {
-        GTEST_SKIP() << "MxFp4_2x register formats do not exist on the 4-row Quasar variant";
+    if (MetalContext::instance().get_cluster().get_quasar_ip_variant() == tt::IpVariant::TRINITY) {
+        GTEST_SKIP() << "MxFp4_2x register formats do not exist on Trinity";
     }
     ReduceConfig test_config = {
         .shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},

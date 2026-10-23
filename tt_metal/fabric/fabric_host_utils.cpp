@@ -10,7 +10,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt_stl/assert.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <vector>
 #include <algorithm>
@@ -18,12 +18,14 @@
 #include <cstring>
 #include <stdexcept>
 #include <unordered_map>
+#include <set>
 #include <filesystem>
 #include <fstream>
 #include <fmt/format.h>
 #include <yaml-cpp/yaml.h>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "dispatch/kernel_config/relay_mux.hpp"
 
 namespace tt::tt_fabric {
 
@@ -149,6 +151,64 @@ std::vector<uint32_t> get_forwarding_link_indices(
 
     return get_forwarding_link_indices_in_direction(
         control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
+}
+
+std::map<ChipId, std::set<chan_id_t>> get_remote_transfer_dispatch_channels(
+    const ControlPlane& control_plane, const tt::Cluster& cluster) {
+    std::map<ChipId, std::set<chan_id_t>> dispatch_chans_per_mmio_chip;
+    if (cluster.arch() != tt::ARCH::WORMHOLE_B0 || cluster.is_galaxy_cluster()) {
+        return dispatch_chans_per_mmio_chip;
+    }
+    // Only chips this host's fabric mesh uses. The mesh can be smaller than the physical cluster, and looking up a chip
+    // outside it is fatal on silicon.
+    std::unordered_map<ChipId, FabricNodeId> local_fabric_nodes;
+    for (const auto& [fabric_node, physical_chip] :
+         control_plane.get_topology_mapper().get_local_logical_mesh_chip_id_to_physical_chip_id_mapping()) {
+        local_fabric_nodes.emplace(physical_chip, fabric_node);
+    }
+    for (const auto mmio_chip : cluster.mmio_chip_ids()) {
+        const auto mmio_node_it = local_fabric_nodes.find(mmio_chip);
+        if (mmio_node_it == local_fabric_nodes.end()) {
+            continue;
+        }
+        const auto mmio_node = mmio_node_it->second;
+        std::set<chan_id_t> dispatch_chans;
+        for (const auto remote_chip : cluster.get_devices_controlled_by_mmio_device(mmio_chip)) {
+            const auto remote_node_it = local_fabric_nodes.find(remote_chip);
+            if (remote_chip == mmio_chip || remote_node_it == local_fabric_nodes.end()) {
+                continue;
+            }
+            const auto remote_node = remote_node_it->second;
+            const auto direction = control_plane.get_forwarding_direction(mmio_node, remote_node);
+            if (!direction.has_value()) {
+                continue;
+            }
+            const auto neighbors = control_plane.get_chip_neighbors(mmio_node, *direction);
+            const auto same_mesh = neighbors.find(remote_node.mesh_id);
+            if (same_mesh == neighbors.end() ||
+                std::find(same_mesh->second.begin(), same_mesh->second.end(), remote_node.chip_id) ==
+                    same_mesh->second.end()) {
+                continue;  // only remote chips one hop away
+            }
+            if (get_forwarding_link_indices(control_plane, mmio_node, remote_node).empty()) {
+                continue;
+            }
+            // The link FabricBuilder::discover_channels configures for dispatch. Galaxy is excluded above, and the
+            // device argument is only read on Galaxy.
+            const auto dispatch_link_idx = tt::tt_metal::RelayMux::get_dispatch_link_index(
+                control_plane, /*is_galaxy_cluster=*/false, mmio_node, remote_node, /*device=*/nullptr);
+            for (const auto eth_chan :
+                 control_plane.get_active_fabric_eth_routing_planes_in_direction(mmio_node, *direction)) {
+                if (control_plane.get_routing_plane_id(mmio_node, eth_chan) == dispatch_link_idx) {
+                    dispatch_chans.insert(eth_chan);
+                }
+            }
+        }
+        if (!dispatch_chans.empty()) {
+            dispatch_chans_per_mmio_chip.emplace(mmio_chip, std::move(dispatch_chans));
+        }
+    }
+    return dispatch_chans_per_mmio_chip;
 }
 
 void serialize_mesh_coordinates_to_file(

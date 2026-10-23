@@ -115,7 +115,7 @@ class K3Attention(Protocol):
     """GLOBAL model layer index — what names weights and what taps report."""
 
     writes_kv: bool
-    """Whether this layer fills a KV slab, and so whether the block owes a pad-zero and an ack."""
+    """Whether this layer fills a KV slab, and so whether the block owes a pad-zero."""
 
     def forward(self, normed: ttnn.Tensor, ctx: K3AttnContext) -> ttnn.Tensor:
         """`[1, 1, T_local, emb/tp]` in, the same out. Ownership of the return passes to the caller."""
@@ -136,6 +136,9 @@ class TtK3MlaAttention(LightweightModule):
 
     def __init__(self, mla):
         self._mla = mla
+
+    def set_tp_shard_kv(self, tp_shard_kv: Optional[bool]):
+        self._mla.set_tp_shard_kv(tp_shard_kv)
 
     @property
     def layer_idx(self) -> int:
@@ -276,6 +279,7 @@ def build_attention(
     kv_only: bool = False,
     is_balanced: bool = False,
     first_layer_idx: int = 0,
+    tp_shard_kv: Optional[bool] = None,
 ) -> K3Attention:
     """The one place the hybrid schedule turns into a module.
 
@@ -313,6 +317,7 @@ def build_attention(
                 layer_num=schedule.num_mla_layers,
                 kv_only=kv_only,
                 first_layer_idx=first_layer_idx,
+                tp_shard_kv=tp_shard_kv,
             )
         )
 

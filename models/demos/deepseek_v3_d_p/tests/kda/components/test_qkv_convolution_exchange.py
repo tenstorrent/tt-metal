@@ -326,15 +326,34 @@ def test_qkv_convolution_exchange_matches_single_sequence(
 _PERF_CALLS_PER_TRACE = 20
 _PERF_SAMPLES = 7
 _PERF_MARGIN = 0.05
-# LoudBox's production SP2xTP4 call.
-_PERF_REFERENCE_US = 351.8
+# Galaxy SP8xTP4's per-chip call, 640 rows and 24 heads with the projection and Q, K and V in L1, on the SP ring
+# each system's KDA layer perf gate runs: SP8xTP1 on LoudBox's 8 chips and SP4xTP1 on QuietBox's 4.
+_GALAXY_PER_CHIP = _kimi_k3(640, 4, ttnn.L1_MEMORY_CONFIG)
+
+
+def _ring_perf_case(shape: tuple[int, int], sp_axis: int, case_id: str, reference_us: float):
+    return pytest.param(
+        shape,
+        sp_axis,
+        fabric_1d_device_params(fabric_config=ttnn.FabricConfig.FABRIC_1D_RING),
+        _GALAXY_PER_CHIP,
+        reference_us,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=shape, topology="ring"),
+        id=case_id,
+    )
+
+
+_PERF_CASES = [
+    _ring_perf_case((8, 1), 0, "loudbox-SP8xTP1-ring", 70.3),
+    _ring_perf_case((4, 1), 0, "quietbox-SP4xTP1-ring", 71.5),
+]
 
 
 @pytest.mark.parametrize(
-    "mesh_device,sp_axis,device_params,geometry", [_LOUDBOX], indirect=["mesh_device", "device_params"]
+    "mesh_device,sp_axis,device_params,geometry,reference_us", _PERF_CASES, indirect=["mesh_device", "device_params"]
 )
 def test_qkv_convolution_exchange_kimi_k3_perf(
-    mesh_device: ttnn.MeshDevice, sp_axis: int, device_params: dict, geometry: _Geometry
+    mesh_device: ttnn.MeshDevice, sp_axis: int, device_params: dict, geometry: _Geometry, reference_us: float
 ) -> None:
     exchange = _Exchange(mesh_device, sp_axis, geometry)
     capacity = exchange.sp_size * geometry.local_rows
@@ -364,10 +383,10 @@ def test_qkv_convolution_exchange_kimi_k3_perf(
             ttnn.release_trace(mesh_device, trace)
         median_us = statistics.median(samples_us)
         logger.info(f"qkv_causal_conv1d_silu_with_carry Kimi-K3 perf: {median_us:.1f} us per call, {samples_us}")
-        lower, upper = _PERF_REFERENCE_US * (1 - _PERF_MARGIN), _PERF_REFERENCE_US * (1 + _PERF_MARGIN)
+        lower, upper = reference_us * (1 - _PERF_MARGIN), reference_us * (1 + _PERF_MARGIN)
         assert lower <= median_us <= upper, (
             f"{median_us:.1f} us per call outside [{lower:.1f}, {upper:.1f}] "
-            f"(reference {_PERF_REFERENCE_US} us, margin +/- {_PERF_MARGIN * 100:.0f}%)"
+            f"(reference {reference_us} us, margin +/- {_PERF_MARGIN * 100:.0f}%)"
         )
     finally:
         for tensor in (actual_start, actual_end):

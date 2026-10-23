@@ -302,6 +302,19 @@ void MetalContext::initialize(
     // Set internal routing for active ethernet cores, this is required for our FW to run
     if (has_flag(get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
         !get_cluster().is_mock_or_emulated()) {
+        // Only Wormhole non-Galaxy clusters reach remote chips through UMD ethernet gateways.
+        if (tt_fabric::is_tt_fabric_config(get_fabric_config()) && get_cluster().arch() == tt::ARCH::WORMHOLE_B0 &&
+            !get_cluster().is_galaxy_cluster()) {
+            // The channel lookup reads the fabric routing tables. A control plane rebuilt after SetFabricConfig (e.g.
+            // by initialize_control_plane()) has none until DeviceManager configures fabric, so configure it here.
+            this->initialize_fabric_config();
+            // Pin UMD's remote-transfer cores here, before the watcher attaches and firmware launches: UMD does not
+            // lock its core list against concurrent remote transfers.
+            for (const auto& [mmio_chip, eth_chans] :
+                 tt_fabric::get_remote_transfer_dispatch_channels(this->get_control_plane(), get_cluster())) {
+                get_cluster().configure_ethernet_cores_for_remote_transfers(mmio_chip, eth_chans);
+            }
+        }
         get_cluster().set_internal_routing_info_for_ethernet_cores(this->get_control_plane(), true);
     }
 

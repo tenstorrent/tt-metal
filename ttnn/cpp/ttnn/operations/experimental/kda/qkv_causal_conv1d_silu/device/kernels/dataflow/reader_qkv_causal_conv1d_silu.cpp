@@ -12,11 +12,13 @@
 #include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/dataflow/qkv_conv_dataflow.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/hostdevcommon/qkv_causal_conv1d_silu_layout.hpp"
 #include "api/dataflow/dataflow_api.h"
+#include "api/tile_constants.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "api/scratchpad.h"
 #include "api/semaphore.h"
+#include "internal/local_mem/address_access.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -59,7 +61,8 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
 
     constexpr uint32_t block_row_bytes = block_ct * tile_row_bytes;
     constexpr ReaderScratch layout{block_ct};
-    const uint32_t scratch_base = scratch.get_base_address();
+    // Raw: base + offset_of() arithmetic below feeds the self-loopback reads via local(); no handle form yet.
+    const uint32_t scratch_base = local_mem::detail::AddressAccess::address(scratch.local_mem());
     const uint32_t base = align_up(scratch_base, read_alignment);
     const uint32_t staging = base + layout.staging();
     const uint32_t rows = base + layout.rows();
