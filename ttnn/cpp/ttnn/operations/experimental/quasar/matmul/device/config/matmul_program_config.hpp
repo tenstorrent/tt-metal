@@ -26,7 +26,8 @@ MatmulProgramConfig create_simple_matmul_program_config(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const tt::tt_metal::CoreCoord& compute_with_storage_grid_size,
     const tt::tt_metal::MemoryConfig& mem_config,
-    tt::tt_metal::DataType output_dtype);
+    tt::tt_metal::DataType output_dtype,
+    const std::optional<tt::tt_metal::Tile>& output_tile = std::nullopt);
 
 MatmulProgramConfig get_program_config(
     const Tensor& input_tensor_a,

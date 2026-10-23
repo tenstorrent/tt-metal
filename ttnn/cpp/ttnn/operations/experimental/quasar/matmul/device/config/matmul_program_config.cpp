@@ -898,7 +898,8 @@ inline MatmulProgramConfig generate_matmul_program_config(
     const std::optional<const CoreCoord> user_core_coord,
     const std::optional<unary::UnaryWithParam>& user_fused_activation,
     const bool user_run_batched,
-    const tt::tt_metal::DataType output_dtype) {
+    const tt::tt_metal::DataType output_dtype,
+    const std::optional<tt::tt_metal::Tile>& output_tile) {
     // For sharded A, derive config from the tensor's shard_spec (not user core_grid).
     if (input_tensor_a.is_sharded()) {
         bool bmm = user_run_batched;
@@ -940,7 +941,8 @@ inline MatmulProgramConfig generate_matmul_program_config(
         compute_kernel_config,
         compute_with_storage_grid_size,
         mem_config,
-        output_dtype);
+        output_dtype,
+        output_tile);
 }
 
 /***************************************************************************************/
@@ -1008,7 +1010,8 @@ MatmulProgramConfig get_program_config(
         attributes.user_core_coord,
         attributes.user_fused_activation,
         attributes.user_run_batched,
-        attributes.output_dtype.value_or(input_tensor_a.dtype()));
+        attributes.output_dtype.value_or(input_tensor_a.dtype()),
+        attributes.output_tile);
     log_debug(tt::LogOp, "Auto generated program config: {}", config);
 
     // Quasar: a single DFB's TRISC ring extent (entry_size * capacity, in 16-byte L1 units) must fit in
@@ -1130,7 +1133,8 @@ MatmulProgramConfig create_simple_matmul_program_config(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const CoreCoord& compute_with_storage_grid_size,
     const tt::tt_metal::MemoryConfig& mem_config,
-    const tt::tt_metal::DataType output_dtype) {
+    const tt::tt_metal::DataType output_dtype,
+    const std::optional<tt::tt_metal::Tile>& output_tile) {
     using namespace tt::tt_metal;
     const auto& a_shape_padded = utilities::get_matmul_tensor_padded_shape(input_tensor_a, transpose_a);
     const auto& b_shape_padded = utilities::get_matmul_tensor_padded_shape(input_tensor_b, transpose_b);
@@ -1202,8 +1206,25 @@ MatmulProgramConfig create_simple_matmul_program_config(
     per_core_N = per_core_M;
     // get_per_core_factor() sizes blocks from L1 capacity only (>= 1); cap them to the output's tile extent so a
     // block-sharded output shard (per_core * tile) never exceeds the output.
-    per_core_M = std::min(per_core_M, Mt_per_batch);
-    per_core_N = std::min(per_core_N, Nt);
+    // A is never L1-sharded here: generate_matmul_program_config routes sharded A to get_matmul_program_config, and
+    // the create_matmul_program_config fallback only runs for unsharded A. B can be L1-sharded though, and the
+    // validator then requires per_core_N to equal its shard width, so only cap N when B is not.
+    uint32_t capped_per_core_M = std::min(per_core_M, Mt_per_batch);
+    // With a fused batch, per-batch blocks can need more block rows than the grid has (many small batches).
+    // Fall back to capping against the fused M, which keeps the pre-clamp block count.
+    if (fuse_batch_for_sharded_output and (Mt - 1) / capped_per_core_M + 1 > num_cores_y) {
+        capped_per_core_M = std::min(per_core_M, Mt);
+    }
+    per_core_M = capped_per_core_M;
+    const bool b_is_l1_sharded =
+        input_tensor_b.memory_config().is_sharded() && input_tensor_b.memory_config().buffer_type() != BufferType::DRAM;
+    if (not b_is_l1_sharded) {
+        // compute_output_specs requires per_core_N % (output tile width / in1 tile width) == 0, so cap against the
+        // output-aligned extent rather than Nt itself (the padded output shard covers that extent).
+        const uint32_t output_tile_width_ratio =
+            output_tile.has_value() ? std::max(output_tile->get_tile_shape()[1] / in1_tile.get_width(), 1u) : 1u;
+        per_core_N = std::min(per_core_N, tt::round_up(Nt, output_tile_width_ratio));
+    }
 
     // Calculate number of blocks along x and y; tensor dims are padded up to 512
     num_blocks_y = (Mt - 1) / per_core_M + 1;
