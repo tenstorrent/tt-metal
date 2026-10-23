@@ -1,0 +1,457 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-License-Identifier: Apache-2.0
+
+"""TiRex-2 layers in stock TTNN ops (round 0: op-level sLSTM loop, chunkwise mLSTM from matmuls).
+
+Shapes: ``B`` device rows (multiple of 32), ``T`` padded sequence (320), ``T_real`` = 285 tokens.
+"""
+
+from __future__ import annotations
+
+import torch
+
+from models.experimental.tirex2_forecast.reference import dataflow as df
+from models.experimental.tirex2_forecast.tt.common import Precision, bmm, exact_config, upload
+from models.experimental.tirex2_forecast.tt.weights import TtFFN, TtMLSTM, TtResidualBlock, TtSLSTM, TtVariate
+
+MASK_NEG = -1e9
+
+# Per-shape device constants (zeros / ones), created once outside any trace and never freed by ``free``.
+_CONSTS: dict = {}
+_CONST_IDS: set = set()
+
+
+def const(device, value: float, shape, dtype=None):
+    import ttnn
+
+    dtype = ttnn.float32 if dtype is None else dtype
+    key = (id(device), float(value), tuple(shape), str(dtype))
+    if key not in _CONSTS:
+        t = upload(device, torch.full(tuple(shape), float(value)), dtype=dtype)
+        _CONSTS[key] = t
+        _CONST_IDS.add(id(t))
+    return _CONSTS[key]
+
+
+def free(*tensors):
+    import ttnn
+
+    for t in tensors:
+        if t is not None and id(t) not in _CONST_IDS:
+            ttnn.deallocate(t)
+
+
+def linear(x, w, precision: Precision, bias=None, activation=None, dtype=None, config=None):
+    import ttnn
+
+    return ttnn.linear(
+        x,
+        w,
+        bias=bias,
+        activation=activation,
+        dtype=ttnn.bfloat16 if dtype is None else dtype,
+        compute_kernel_config=precision.matmul_config() if config is None else config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def rms_norm(x, eps: float):
+    """Gain-free RMSNorm (gains are folded into the next linear)."""
+    import ttnn
+
+    return ttnn.rms_norm(x, epsilon=eps, compute_kernel_config=exact_config(), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+def residual_block(x, w: TtResidualBlock, precision: Precision):
+    """``W_o silu(W_h x + b_h) + W_r x + (b_o + b_r)``."""
+    import ttnn
+
+    h = linear(x, w.w_hidden, precision, bias=w.b_hidden, activation="silu")
+    out = linear(h, w.w_out, precision, bias=w.b_out)
+    free(h)
+    res = linear(x, w.w_res, precision)
+    y = ttnn.add(out, res)
+    free(out, res)
+    return y
+
+
+def ffn_residual(x, w: TtFFN, precision: Precision):
+    """``x + W_down(silu(W_gate xn) * W_up xn)`` with ``xn`` the gain-free RMSNorm of ``x``."""
+    import ttnn
+
+    xn = rms_norm(x, df.NORM_EPS)
+    gate = linear(xn, w.w_gate, precision, activation="silu")
+    up = linear(xn, w.w_up, precision)
+    free(xn)
+    h = ttnn.multiply(gate, up)
+    free(gate, up)
+    y = linear(h, w.w_down, precision)
+    free(h)
+    out = ttnn.add(x, y)
+    free(y)
+    return out
+
+
+# ------------------------------------------------------------------------------------------------- mLSTM
+
+
+class MLSTMConsts:
+    """Per-device constants of the chunkwise mLSTM (causal mask)."""
+
+    def __init__(self, device, chunk: int):
+        import ttnn
+
+        mask = torch.zeros(chunk, chunk)
+        mask[~torch.ones(chunk, chunk, dtype=torch.bool).tril()] = MASK_NEG
+        self.chunk = chunk
+        self.mask = upload(device, mask.reshape(1, 1, chunk, chunk), dtype=ttnn.float32)
+
+
+def mlstm_chunkwise(device, q, k, v, g, consts: MLSTMConsts, eps: float = df.MLSTM_EPS):
+    """Stabilized chunkwise mLSTM (see ``reference/dataflow.mlstm_chunkwise``).
+
+    ``q [B, H, T, 64]`` (pre-scaled by 1/8), ``k [B, H, T, 64]``, ``v [B, H, T, 128]`` bf16;
+    ``g [B, H, T, 32]`` fp32 with col 0 = capped input gate, col 1 = capped forget gate. -> ``h [B, H, T, 128]``
+    fp32. The chunk-local terms are batched over (row, head, chunk); only the state carry loops over chunks.
+    """
+    import ttnn
+
+    B, H, T, DK = tuple(q.shape)
+    DV = v.shape[-1]
+    L = consts.chunk
+    NC = T // L
+    BH, N = B * H, B * H * T // L
+    f32 = ttnn.float32
+    qc = ttnn.reshape(q, (N, 1, L, DK))
+    kc = ttnn.reshape(k, (N, 1, L, DK))
+    vc = ttnn.reshape(v, (N, 1, L, DV))
+    gc = ttnn.reshape(g, (N, 1, L, g.shape[-1]))
+    i_col = ttnn.slice(gc, (0, 0, 0, 0), (N, 1, L, 1))
+    f_col = ttnn.slice(gc, (0, 0, 0, 1), (N, 1, L, 2))
+    sig = ttnn.sigmoid(f_col)
+    lf = ttnn.log(sig)  # f is soft-capped to [-15, 15]: log(sigmoid) is exact enough in fp32
+    free(sig, f_col)
+    b_col = ttnn.cumsum(lf, dim=2)  # inclusive cumsum of log forget gates inside each chunk
+    free(lf)
+    b_row = ttnn.transpose(b_col, -2, -1)
+    i_row = ttnn.transpose(i_col, -2, -1)
+    free(i_col)
+    u_row = ttnn.subtract(i_row, b_row)  # i_s - b_s
+    free(i_row, b_row)
+    D = ttnn.add(b_col, u_row)  # b_t - b_s + i_s
+    D_masked = ttnn.add(D, consts.mask)
+    free(D)
+    rmax = ttnn.max(D_masked, dim=-1, keepdim=True)  # [N, 1, L, 1]
+    g_last = ttnn.slice(b_col, (0, 0, L - 1, 0), (N, 1, L, 1))  # total log forget of each chunk
+    a_row = ttnn.add(u_row, g_last)  # g - b_s + i_s: log weight of token s at the chunk end
+    free(u_row)
+    amax = ttnn.max(a_row, dim=-1, keepdim=True)  # [N, 1, 1, 1]
+    a_rel = ttnn.subtract(a_row, amax)
+    wa = ttnn.exp(a_rel)
+    free(a_row, a_rel)
+    kT = ttnn.transpose(kc, -2, -1)  # [N, 1, DK, L]
+    kw = ttnn.multiply(kT, wa, dtype=f32)
+    free(kT, wa)
+    dC = bmm(device, kw, vc)  # [N, 1, DK, DV]: chunk-local state, stabilized by amax
+    dn = ttnn.sum(kw, dim=-1, keepdim=True)  # [N, 1, DK, 1]
+    free(kw)
+
+    # carry the states across chunks: C_{c+1} = exp(g + m - m') C_c + exp(amax - m') dC_c
+    g4 = ttnn.reshape(g_last, (BH, NC, 1, 1))
+    a4 = ttnn.reshape(amax, (BH, NC, 1, 1))
+    dC4 = ttnn.reshape(dC, (BH, NC, DK, DV))
+    dn4 = ttnn.reshape(dn, (BH, NC, DK, 1))
+    m = const(device, 0.0, (BH, 1, 1, 1))
+    C = const(device, 0.0, (BH, 1, DK, DV))
+    n = const(device, 0.0, (BH, 1, DK, 1))
+    Cs, ns, ms = [C], [n], [m]
+    for c in range(NC - 1):  # the state after the last chunk is never read
+        sl = lambda t, d1, d2: ttnn.slice(t, (0, c, 0, 0), (BH, c + 1, d1, d2))
+        gk, ak = sl(g4, 1, 1), sl(a4, 1, 1)
+        gm = ttnn.add(gk, m)
+        m_next = ttnn.maximum(gm, ak)
+        decay = ttnn.exp(ttnn.subtract(gm, m_next))
+        scale = ttnn.exp(ttnn.subtract(ak, m_next))
+        dCk, dnk = sl(dC4, DK, DV), sl(dn4, DK, 1)
+        C = ttnn.add(ttnn.multiply(C, decay), ttnn.multiply(dCk, scale))
+        n = ttnn.add(ttnn.multiply(n, decay), ttnn.multiply(dnk, scale))
+        free(gk, ak, gm, decay, scale, dCk, dnk)
+        m = m_next
+        Cs.append(C)
+        ns.append(n)
+        ms.append(m)
+    free(dC, dn, g_last, amax)
+    C_all = ttnn.reshape(ttnn.concat(Cs, dim=1), (N, 1, DK, DV))
+    n_all = ttnn.reshape(ttnn.concat(ns, dim=1), (N, 1, DK, 1))
+    m_all = ttnn.reshape(ttnn.concat(ms, dim=1), (N, 1, 1, 1))
+    free(*Cs, *ns, *ms)
+
+    # outputs: intra-chunk weights exp(D - m_t) * (q . k) plus the decayed inter-chunk state
+    S = bmm(device, qc, kc, transpose_b=True)  # [N, 1, L, L]
+    mb = ttnn.add(b_col, m_all)  # b_t + m_prev
+    m_t = ttnn.maximum(mb, rmax)
+    free(b_col, rmax)
+    Dm = ttnn.subtract(D_masked, m_t)
+    free(D_masked)
+    W = ttnn.multiply(ttnn.exp(Dm), S)
+    free(Dm, S)
+    inter = ttnn.exp(ttnn.subtract(mb, m_t))  # [N, 1, L, 1]
+    free(mb)
+    qC = bmm(device, qc, C_all)
+    WV = bmm(device, W, vc)
+    num = ttnn.add(ttnn.multiply(qC, inter), WV)
+    free(qC, WV, C_all)
+    qn = bmm(device, qc, n_all)  # [N, 1, L, 1]
+    Wsum = ttnn.sum(W, dim=-1, keepdim=True)
+    free(W, n_all, m_all)
+    den = ttnn.add(ttnn.multiply(qn, inter), Wsum)
+    free(qn, Wsum, inter)
+    floor = ttnn.exp(ttnn.neg(m_t))
+    den = ttnn.add(ttnn.maximum(ttnn.abs(den), floor), eps)
+    free(floor, m_t)
+    h = ttnn.divide(num, den)
+    free(num, den)
+    return ttnn.reshape(h, (B, H, T, DV))
+
+
+def _keep(debug, name, t):
+    if debug is not None:
+        import ttnn
+
+        debug[name] = ttnn.to_torch(t).float()
+
+
+def mlstm_layer(device, x, w: TtMLSTM, precision: Precision, consts: MLSTMConsts, debug: dict | None = None):
+    """``x + mLSTM(RMSNorm(x))`` (time mixer only; the FFN follows). ``debug`` (tests) collects host copies."""
+    import ttnn
+
+    xn = rms_norm(x, df.NORM_EPS)
+    _keep(debug, "xn", xn)
+    qkv = linear(xn, w.w_qkv, precision)  # [B, 1, T, 1536]
+    q128, k128, v = ttnn.experimental.nlp_create_qkv_heads(qkv, num_heads=4, num_kv_heads=4, transpose_k_heads=False)
+    free(qkv)
+    B, H, T, _ = tuple(q128.shape)
+    q = ttnn.slice(q128, (0, 0, 0, 0), (B, H, T, df.QK_DIM))
+    k = ttnn.slice(k128, (0, 0, 0, 0), (B, H, T, df.QK_DIM))
+    free(q128, k128)
+    for nm, t in (("q", q), ("k", k), ("v", v)):
+        _keep(debug, nm, t)
+    gates = [
+        linear(xn, w.w_gates[h], precision, bias=w.b_gates[h], dtype=ttnn.float32, config=exact_config())
+        for h in range(df.HEADS)
+    ]
+    o = linear(xn, w.w_o, precision)
+    free(xn)
+    g = ttnn.concat(gates, dim=1)  # [B, 4, T, 32]
+    free(*gates)
+    gt = ttnn.tanh(g)
+    free(g)
+    g = ttnn.multiply(gt, df.GATE_CAP)  # 15 tanh(x / 15) (the 1/15 is in the weights)
+    free(gt)
+    _keep(debug, "g", g)
+    h = mlstm_chunkwise(device, q, k, v, g, consts)
+    free(q, k, v, g)
+    _keep(debug, "h", h)
+    hn = ttnn.layer_norm(h, epsilon=df.NORM_EPS, compute_kernel_config=exact_config())  # per head (128)
+    free(h)
+    _keep(debug, "hn", hn)
+    hm = ttnn.experimental.nlp_concat_heads(hn)  # [B, 1, T, 512]
+    free(hn)
+    so = ttnn.sigmoid(o)
+    free(o)
+    gated = ttnn.multiply(hm, so, dtype=ttnn.bfloat16)
+    free(hm, so)
+    y = linear(gated, w.w_out, precision)
+    free(gated)
+    _keep(debug, "y", y)
+    out = ttnn.add(x, y)
+    free(y)
+    return out
+
+
+# ------------------------------------------------------------------------------------------------- sLSTM
+
+
+def log_sigmoid(x):
+    """``log(sigmoid(max(x, -80)))``: ``ttnn.log_sigmoid`` is off by up to 2e-2 in fp32; this is ~5e-7."""
+    import ttnn
+
+    xc = ttnn.maximum(x, -80.0)
+    s = ttnn.sigmoid(xc)
+    free(xc)
+    out = ttnn.log(s)
+    free(s)
+    return out
+
+
+def slstm_recurrence(device, WxT, r, steps: int, record: list | None = None, step_hook=None):
+    """sLSTM time loop. ``WxT [T, 1, B, 2048]`` fp32 (bias folded), columns (gate i f z o, head, d).
+
+    Returns the list of per-step ``y [1, 1, B, 512]`` fp32 and the last ``(c, n, m)``. ``record`` (tests
+    only) collects host copies of ``(y, c, n, m)`` after every step; ``step_hook(t)`` (profiling) runs after
+    every step, e.g. to drain the device profiler buffers.
+    """
+    import ttnn
+
+    T, _, B, G = tuple(WxT.shape)
+    D = G // 4
+    f32 = ttnn.float32
+    ys = []
+    y_bf = c = n = m = None
+    for t in range(steps):
+        wx = ttnn.slice(WxT, (t, 0, 0, 0), (t + 1, 1, B, G))
+        if t == 0:
+            pre = wx
+        else:
+            ry = ttnn.matmul(y_bf, r, dtype=f32, compute_kernel_config=exact_config())
+            pre = ttnn.add(ry, wx)
+            free(ry, wx)
+        pi, pf, pz, po = (ttnn.slice(pre, (0, 0, 0, j * D), (1, 1, B, (j + 1) * D)) for j in range(4))
+        free(pre)
+        tz = ttnn.tanh(pz)
+        so = ttnn.sigmoid(po)
+        free(pz, po)
+        if t == 0:
+            # n == 0 everywhere before the first step: m = pre_i, i = 1, c = tanh(z), n = 1
+            free(pf)
+            m, c = pi, tz
+            n = const(device, 1.0, (1, 1, B, D))
+            y = ttnn.multiply(so, c)
+        else:
+            lf = log_sigmoid(pf)
+            lfm = ttnn.add(lf, m)
+            free(pf, lf)
+            m_new = ttnn.maximum(pi, lfm)
+            ig = ttnn.exp(ttnn.subtract(pi, m_new))
+            fg = ttnn.exp(ttnn.subtract(lfm, m_new))
+            free(pi, lfm, m)
+            fc = ttnn.multiply(fg, c)
+            iz = ttnn.multiply(ig, tz)
+            free(c, tz)
+            c = ttnn.add(fc, iz)
+            free(fc, iz)
+            fn = ttnn.multiply(fg, n)
+            free(n, fg)
+            nn = ttnn.add(fn, ig)
+            free(fn, ig)
+            n = ttnn.maximum(nn, 1.0)
+            free(nn)
+            oc = ttnn.multiply(so, c)
+            y = ttnn.divide(oc, n)
+            free(oc)
+            m = m_new
+        free(so)
+        if record is not None:
+            record.append(tuple(ttnn.to_torch(t).float()[0, 0] for t in (y, c, n, m)))
+        if y_bf is not None:
+            free(y_bf)
+        y_bf = ttnn.typecast(y, ttnn.bfloat16)
+        ys.append(y)
+        if step_hook is not None:
+            step_hook(t)
+    free(y_bf)
+    return ys, (c, n, m)
+
+
+def head_layer_norm(device, y, w_gnorm, head_mean, eps: float = df.NORM_EPS):
+    """Per-head (128) LayerNorm of ``y [..., 512]`` fp32 via a block-averaging matmul, times ``w_gnorm``."""
+    import ttnn
+
+    cfg = exact_config()
+    mu = ttnn.matmul(y, head_mean, dtype=ttnn.float32, compute_kernel_config=cfg)
+    cy = ttnn.subtract(y, mu)
+    free(mu)
+    sq = ttnn.multiply(cy, cy)
+    var = ttnn.matmul(sq, head_mean, dtype=ttnn.float32, compute_kernel_config=cfg)
+    free(sq)
+    inv = ttnn.rsqrt(ttnn.add(var, eps))
+    free(var)
+    z = ttnn.multiply(cy, inv)
+    free(cy, inv)
+    out = ttnn.multiply(z, w_gnorm, dtype=ttnn.bfloat16)
+    free(z)
+    return out
+
+
+def slstm_layer(
+    device, x, w: TtSLSTM, precision: Precision, head_mean, steps: int, debug: dict | None = None, step_hook=None
+):
+    """``x + GroupNorm(sLSTM(RMSNorm(x)))``; the recurrence runs time-major. ``debug`` (tests) collects host copies."""
+    import ttnn
+
+    B, _, T, _ = tuple(x.shape)
+    xn = rms_norm(x, df.NORM_EPS)
+    xT = ttnn.transpose(xn, 0, 2)  # [T, 1, B, 512]
+    free(xn)
+    wx = linear(xT, w.w_in, precision, dtype=ttnn.float32, config=precision.gate_config())
+    free(xT)
+    WxT = ttnn.add(wx, w.bias)  # fp32 gate bias
+    free(wx)
+    ys, (c, n, m) = slstm_recurrence(device, WxT, w.r, steps, step_hook=step_hook)
+    free(WxT, c, n, m)
+    if steps < T:
+        ys.append(const(device, 0.0, (T - steps, 1, B, ys[0].shape[-1])))
+    Y = ttnn.concat(ys, dim=0)  # [T, 1, B, 512] fp32
+    free(*ys)
+    yn = head_layer_norm(device, Y, w.w_gnorm, head_mean)
+    free(Y)
+    y = ttnn.transpose(yn, 0, 2)  # [B, 1, T, 512]
+    free(yn)
+    _keep(debug, "y", y)
+    out = ttnn.add(x, y)
+    free(y)
+    return out
+
+
+# ---------------------------------------------------------------------------------------- variate mixer
+
+
+def variate_block(device, x, w: TtVariate, precision: Precision, vmask, keep, debug: dict | None = None):
+    """Attention across rows (variates) at every token, inside 32-row blocks that hold whole groups.
+
+    ``vmask [1, nb * 4, 32, 32]`` (0 / -1e9: same group, covariate queries never read target keys),
+    ``keep [1, nb, 32, 1]`` (1 for rows of groups with more than one row; others pass through unchanged).
+    """
+    import ttnn
+
+    B, _, T, Dm = tuple(x.shape)
+    nb = B // 32
+    xT = ttnn.transpose(x, 0, 2)  # [T, 1, B, 512]
+    xb = ttnn.reshape(xT, (T * nb, 1, 32, Dm))
+    xn = rms_norm(xb, df.NORM_EPS)
+    qkv = linear(xn, w.w_qkv, precision)
+    free(xn)
+    q, k, v = ttnn.experimental.nlp_create_qkv_heads(qkv, num_heads=4, num_kv_heads=4, transpose_k_heads=False)
+    free(qkv)
+    s = bmm(device, q, k, transpose_b=True)  # [T * nb, 4, 32, 32]
+    free(q, k)
+    sm = ttnn.add(ttnn.reshape(s, (T, nb * 4, 32, 32)), vmask)
+    free(s)
+    p = ttnn.softmax(sm, dim=-1)
+    free(sm)
+    a = bmm(device, ttnn.reshape(p, (T * nb, 4, 32, 32)), v, dtype=ttnn.bfloat16)
+    free(p, v)
+    am = ttnn.experimental.nlp_concat_heads(a)  # [T * nb, 1, 32, 512]
+    free(a)
+    o = linear(am, w.w_o, precision)
+    free(am)
+    y = ttnn.add(xb, o)
+    if debug is not None:
+        _keep(debug, "attn", ttnn.reshape(o, (T, 1, B, Dm)))
+    free(o)
+    yn = rms_norm(y, df.NORM_EPS)
+    hdn = linear(yn, w.w_wi, precision, activation="silu")
+    free(yn)
+    f = linear(hdn, w.w_wo, precision)
+    free(hdn)
+    y2 = ttnn.add(y, f)
+    free(y, f)
+    delta = ttnn.subtract(y2, xb)
+    free(y2)
+    kept = ttnn.multiply(ttnn.reshape(delta, (T, nb, 32, Dm)), keep)
+    free(delta)
+    out_t = ttnn.add(ttnn.reshape(kept, (T, 1, B, Dm)), xT)
+    free(kept, xT)
+    out = ttnn.transpose(out_t, 0, 2)
+    free(out_t)
+    return out
