@@ -17,9 +17,13 @@ CREATE_PGM_EXAMPLES_EXE("${PROFILER_EXAMPLES_SRCS}" "profiler")
 # looks for it, not under the profiler/ subdirectory CREATE_PGM_EXAMPLES_EXE uses.
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_streaming_profiler_zones)
 
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/streaming_profiler_external)
+
 add_custom_target(
     profiler_examples
     DEPENDS
         ${PROGRAMMING_EXAMPLES_TEST_TARGETS}
         test_streaming_profiler_zones
+        metal_example_external_process
+        metal_example_metal_process
 )
