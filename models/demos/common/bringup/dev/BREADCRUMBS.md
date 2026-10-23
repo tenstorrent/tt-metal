@@ -1944,3 +1944,10 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - testing/fork_capture.py: VOLATILE_KWARGS (extra_key) are recorded but left out of `sig`; the pre-F179 signature is kept
   as `sig_full`, and testing/fork_cases.py counts a call covered by either, so existing cases still match. Selftest
   test_a_volatile_cache_key_does_not_change_a_calls_signature.
+
+## F180: the attempt and A/B histories live beside state.json, uncommitted (2026-10-23)
+- DeepSeek-V4.1 Z.1: the gate passed, the commit was refused: state.json 504 KB > the repo's 500 KB hook (agent_runs
+  137 KB, ab 85 KB grow with every attempt and pick).
+- core/ledger.py: SIDE_KEYS (agent_runs, ab) are saved to bringup/history_state.json (kept out of git through the
+  clone's info/exclude; ignored by the agent path check); state() merges them back, so every reader is unchanged.
+  Selftest test_attempt_and_ab_histories_live_beside_state_json.

@@ -212,8 +212,41 @@ class Ledger:
             finally:
                 fcntl.flock(f, fcntl.LOCK_UN)
 
+    # F180: the per-task histories that grow with every attempt / pick live beside state.json, uncommitted (the repo's
+    # 500 KB hook refused DeepSeek-V4.1's state.json at Z.1: agent_runs 137 KB, ab 85 KB); state() merges them back
+    SIDE_KEYS = ("agent_runs", "ab")
+
+    @property
+    def side_path(self) -> Path:
+        return self.dir / "history_state.json"
+
+    def _exclude_side(self) -> None:
+        """F180: keep history_state.json out of git (the clone's own info/exclude: no tracked file changes)."""
+        import subprocess
+
+        try:
+            ex = subprocess.run(
+                ["git", "rev-parse", "--git-path", "info/exclude"], cwd=self.dir, capture_output=True, text=True
+            ).stdout.strip()
+        except OSError:
+            return
+        if not ex:
+            return
+        p = Path(ex) if Path(ex).is_absolute() else self.dir / ex
+        line = "**/bringup/history_state.json"
+        text = p.read_text() if p.exists() else ""
+        if line not in text.split("\n"):
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text + ("" if text.endswith("\n") or not text else "\n") + line + "\n")
+
     def state(self) -> dict:
-        return json.loads(self.state_path.read_text()) if self.state_path.exists() else {}
+        state = json.loads(self.state_path.read_text()) if self.state_path.exists() else {}
+        side = json.loads(self.side_path.read_text()) if self.side_path.exists() else {}
+        for tid, extra in side.items():
+            if isinstance(state.get(tid), dict):
+                for k, v in extra.items():
+                    state[tid].setdefault(k, v)
+        return state
 
     def _save_state(self, state: dict) -> None:
         from models.demos.common.bringup.core.gate import state_metrics
@@ -225,6 +258,16 @@ class Ledger:
         for tid, e in state.items():  # F129: older entries kept every metric; trim them on the next save
             if isinstance(e, dict) and e.get("metrics") and tid in tasks:
                 e["metrics"] = state_metrics(tasks[tid].get("gate", {}).get("metrics") or {}, e["metrics"])
+        side = {}
+        for tid, e in state.items():  # F180
+            if isinstance(e, dict):
+                moved = {k: e.pop(k) for k in self.SIDE_KEYS if k in e}
+                if moved:
+                    side[tid] = moved
+        self._exclude_side()
+        stmp = self.side_path.with_suffix(".tmp")
+        stmp.write_text(json.dumps(side, sort_keys=True) + "\n")
+        stmp.replace(self.side_path)
         tmp = self.state_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(state, indent=1, sort_keys=True) + "\n")
         tmp.replace(self.state_path)
