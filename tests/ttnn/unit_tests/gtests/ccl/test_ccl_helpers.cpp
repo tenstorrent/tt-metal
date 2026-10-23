@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -21,6 +22,10 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/shared_with_host/snake_ring.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.hpp"
+#include "ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
+#include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-umd/types/xy_pair.hpp>
 #include <tt-umd/types/arch.hpp>
 #include "common/tt_backend_api_types.hpp"
@@ -1943,4 +1948,144 @@ TEST(CclTopologyUtils, UncollapseJudgesASubRangeLabelOnADeviceTensorByItsShape) 
         topo::all_broadcast_output_topology(nd_label(MeshShape(1, 4), row_placements, all), 1, mesh, kRank);
     ASSERT_TRUE(broadcast.has_value());
     EXPECT_EQ(*broadcast, nd_label(MeshShape(1, 4), {TopoReplicate{}, TopoReplicate{}}, all));
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The fused all-gather + matmul ops label every output they create: their compute_output_topologies hook returns one
+// label per output compute_output_specs gives, for each attribute that changes the output count (FSDP, chunks, and
+// explicit chunk widths, which take precedence over chunks). The hooks count from the attributes, so these tests pin
+// that count against the specs on device tensors carrying real mesh labels.
+// ---------------------------------------------------------------------------------------------------------------------
+
+namespace {
+
+using FusedAllGatherMatmulHookTest = tt::tt_metal::GenericMeshDeviceFixture;
+
+// A bf16 tile-layout tensor of `shape` placed on `mesh` by `mapper`.
+ttnn::Tensor mesh_tensor(
+    tt::tt_metal::distributed::MeshDevice& mesh,
+    const ttnn::Shape& shape,
+    const ttnn::distributed::TensorToMesh& mapper) {
+    const tt::tt_metal::TensorSpec spec(
+        shape,
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            tt::tt_metal::MemoryConfig{}));
+    return ttnn::distributed::distribute_tensor(
+        ttnn::Tensor::from_vector(std::vector<float>(shape.volume(), 1.0F), spec), mapper, mesh);
+}
+
+}  // namespace
+
+TEST_F(FusedAllGatherMatmulHookTest, AllGatherMinimalMatmulAsyncLabelsEveryOutput) {
+    using ttnn::experimental::prim::AllGatherMinimalMatmulAsyncInputs;
+    using ttnn::experimental::prim::AllGatherMinimalMatmulAsyncOp;
+    using ttnn::experimental::prim::AllGatherMinimalMatmulAsyncParams;
+    auto& mesh = *mesh_device_;
+    const MeshShape& shape = mesh.shape();
+    if (mesh.num_devices() < 2 || shape.dims() != 2) {
+        GTEST_SKIP() << "needs a 2-D mesh with more than one device";
+    }
+    // The activation gathers its last dim along the axis with more devices, the weight its K dim along the other.
+    const uint32_t cluster_axis = shape[1] > 1 ? 1 : 0;
+    const uint32_t fsdp_axis = 1 - cluster_axis;
+    const auto num_devices = static_cast<uint32_t>(mesh.num_devices());
+    const ttnn::Tensor input = mesh_tensor(
+        mesh, ttnn::Shape{1, 1, 32, 32 * num_devices}, *ttnn::distributed::shard_tensor_to_mesh_mapper(mesh, 3));
+    const ttnn::Tensor weight =
+        mesh_tensor(mesh, ttnn::Shape{1, 1, 32, 96}, *ttnn::distributed::replicate_tensor_to_mesh_mapper(mesh));
+    const std::optional<tt::tt_metal::GlobalSemaphore> no_barrier;
+
+    struct Case {
+        int32_t chunks;
+        std::vector<uint32_t> chunk_sizes;
+        bool fsdp;
+    };
+    for (const auto& c : std::vector<Case>{
+             {1, {}, false},
+             {3, {}, false},
+             {2, {64, 32}, false},
+             {1, {32, 32, 32}, false},
+             {1, {}, true},
+             {3, {}, true},
+             {2, {64, 32}, true}}) {
+        const AllGatherMinimalMatmulAsyncParams params(
+            /*config=*/std::nullopt,
+            /*fused_activation=*/std::nullopt,
+            /*output_mem_config=*/std::nullopt,
+            /*output_dtype=*/std::nullopt,
+            ttnn::DeviceComputeKernelConfig{},
+            /*num_links=*/1,
+            /*ring_size=*/shape[cluster_axis],
+            ttnn::ccl::Topology::Linear,
+            /*semaphore=*/{},
+            cluster_axis,
+            no_barrier,
+            /*using_persistent_buffers=*/false,
+            /*force_transpose=*/false,
+            /*num_workers_per_link=*/1,
+            /*num_buffers_per_channel=*/1,
+            /*fused_ternary_scalar=*/std::nullopt,
+            c.chunks,
+            /*dim=*/-1,
+            c.fsdp ? std::optional<uint32_t>(fsdp_axis) : std::nullopt,
+            /*fsdp_ring_size=*/c.fsdp ? shape[fsdp_axis] : 1,
+            /*fsdp_semaphore=*/{},
+            /*using_persistent_weight_buffer=*/false,
+            ttnn::ccl::Topology::Linear,
+            /*fuse_swiglu=*/false,
+            c.chunk_sizes);
+        const AllGatherMinimalMatmulAsyncInputs args{.input_tensor = input, .weight_tensor = weight};
+        EXPECT_EQ(
+            AllGatherMinimalMatmulAsyncOp::compute_output_topologies(params, args).size(),
+            AllGatherMinimalMatmulAsyncOp::compute_output_specs(params, args).size())
+            << "chunks " << c.chunks << ", " << c.chunk_sizes.size() << " explicit chunk widths, fsdp " << c.fsdp;
+    }
+}
+
+TEST_F(FusedAllGatherMatmulHookTest, StridedAllGatherMinimalMatmulAsyncLabelsEveryOutput) {
+    using ttnn::experimental::prim::MinimalMatmulParams;
+    using ttnn::experimental::prim::StridedAllGatherAsync;
+    using ttnn::experimental::prim::StridedAllGatherAsyncParams;
+    using ttnn::experimental::prim::StridedAllGatherMinimalMatmulAsync;
+    using ttnn::experimental::prim::StridedAllGatherMinimalMatmulAsyncInputs;
+    using ttnn::experimental::prim::StridedAllGatherMinimalMatmulAsyncParams;
+    auto& mesh = *mesh_device_;
+    const MeshShape& shape = mesh.shape();
+    if (mesh.num_devices() < 2 || shape.dims() != 2) {
+        GTEST_SKIP() << "needs a 2-D mesh with more than one device";
+    }
+    const uint32_t cluster_axis = shape[1] > 1 ? 1 : 0;
+    const auto num_devices = static_cast<uint32_t>(mesh.num_devices());
+    const ttnn::Tensor input = mesh_tensor(
+        mesh, ttnn::Shape{1, 1, 32, 32 * num_devices}, *ttnn::distributed::shard_tensor_to_mesh_mapper(mesh, 3));
+    const ttnn::Tensor weight =
+        mesh_tensor(mesh, ttnn::Shape{1, 1, 32, 96}, *ttnn::distributed::replicate_tensor_to_mesh_mapper(mesh));
+
+    for (const int32_t chunks : {1, 2, 3}) {
+        const StridedAllGatherMinimalMatmulAsyncParams params{
+            StridedAllGatherAsyncParams{
+                /*dim=*/3,
+                /*num_links=*/1,
+                /*ring_size=*/shape[cluster_axis],
+                tt::tt_metal::MemoryConfig{},
+                ttnn::ccl::Topology::Linear,
+                /*semaphore=*/{},
+                cluster_axis,
+                /*num_workers_per_link=*/std::nullopt,
+                /*num_buffers_per_channel=*/std::nullopt,
+                /*mm_cores_y=*/std::nullopt,
+                /*mm_block_ht=*/std::nullopt,
+                /*mm_block_wt=*/std::nullopt},
+            MinimalMatmulParams{.chunks = chunks},
+            /*all_gather_core_grid_offset=*/CoreCoord{0, 0},
+            /*read_local_slice_from_input=*/false,
+            StridedAllGatherAsync{}};
+        const StridedAllGatherMinimalMatmulAsyncInputs args{input, weight, /*persistent_output_buffer=*/std::nullopt};
+        EXPECT_EQ(
+            StridedAllGatherMinimalMatmulAsync::compute_output_topologies(params, args).size(),
+            StridedAllGatherMinimalMatmulAsync::compute_output_specs(params, args).size())
+            << "chunks " << chunks;
+    }
 }

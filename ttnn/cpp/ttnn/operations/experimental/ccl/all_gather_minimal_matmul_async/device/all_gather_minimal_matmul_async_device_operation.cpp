@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_gather_minimal_matmul_async_device_operation.hpp"
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -436,8 +437,9 @@ std::vector<tt::tt_metal::TensorTopology> AllGatherMinimalMatmulAsyncOp::compute
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     using tt::tt_metal::TensorTopology;
     // Slots follow compute_output_specs: [0] the activation gather buffer (the caller's persistent buffer when given),
-    // [1] with FSDP the gathered weight buffer, then one matmul chunk per remaining spec. A gather buffer carries its
-    // tensor's label with Replicate on the gather axis (`cluster_axis` for the activation's last dim,
+    // [1] with FSDP the gathered weight buffer, then one matmul chunk per width resolve_chunk_sizes gives (the explicit
+    // chunk_sizes when given, else `chunks` of them), so the count follows from the attributes. A gather buffer carries
+    // its tensor's label with Replicate on the gather axis (`cluster_axis` for the activation's last dim,
     // `fsdp_cluster_axis` for the weight's K dim). Every chunk is a column slice of the matmul of the gathered
     // activation by the (gathered) weight, so it takes the union label of {gathered activation, (gathered) weight,
     // bias, the fused addcmul's two ternary operands when present}, as launch() would give a plain matmul: the addcmul
@@ -467,16 +469,15 @@ std::vector<tt::tt_metal::TensorTopology> AllGatherMinimalMatmulAsyncOp::compute
     const TensorTopology matmul_topology = ttnn::operations::ccl::common::union_topology(
         operands, tensor_args.input_tensor.tensor_topology().mesh_coords());
 
-    const size_t num_outputs = compute_output_specs(attributes, tensor_args).size();
+    const size_t num_chunks = attributes.chunk_sizes.empty() ? static_cast<size_t>(std::max(attributes.chunks, 0))
+                                                             : attributes.chunk_sizes.size();
     std::vector<TensorTopology> topologies;
-    topologies.reserve(num_outputs);
+    topologies.reserve(1 + (fsdp_fused ? 1 : 0) + num_chunks);
     topologies.push_back(activation_topology);
     if (fsdp_fused) {
         topologies.push_back(weight_topology);
     }
-    while (topologies.size() < num_outputs) {
-        topologies.push_back(matmul_topology);
-    }
+    topologies.insert(topologies.end(), num_chunks, matmul_topology);
     return topologies;
 }
 

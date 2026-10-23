@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.hpp"
 
@@ -132,11 +134,11 @@ std::vector<tt::tt_metal::TensorTopology> StridedAllGatherMinimalMatmulAsync::co
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     using tt::tt_metal::TensorTopology;
     // [0] the all_gather output, StridedAllGatherAsync's label over the attributes and inputs it is created from (the
-    // input's own label when there is no honest gather label); then one matmul chunk per entry compute_output_specs
-    // adds after it. Every chunk is a column slice of the same matmul of the gathered activation by the weight, so
-    // each takes the union label of {gathered activation, weight, bias, the fused addcmul's two ternary operands when
-    // present}, as launch() would give a plain matmul: the addcmul, fused_ternary_input_a + scalar * matmul *
-    // fused_ternary_input_b, is elementwise on the result, so a ternary operand sharded on an axis the result
+    // input's own label when there is no honest gather label); then the minimal matmul's `chunks` outputs, as
+    // compute_output_specs adds them. Every chunk is a column slice of the same matmul of the gathered activation by
+    // the weight, so each takes the union label of {gathered activation, weight, bias, the fused addcmul's two ternary
+    // operands when present}, as launch() would give a plain matmul: the addcmul, fused_ternary_input_a + scalar *
+    // matmul * fused_ternary_input_b, is elementwise on the result, so a ternary operand sharded on an axis the result
     // replicates makes the chunk Shard there.
     const auto gathered = StridedAllGatherAsync::compute_output_topologies(
         attributes.strided_all_gather_async_struct,
@@ -153,13 +155,11 @@ std::vector<tt::tt_metal::TensorTopology> StridedAllGatherMinimalMatmulAsync::co
     const TensorTopology matmul_topology = ttnn::operations::ccl::common::union_topology(
         operands, tensor_args.input_tensor.tensor_topology().mesh_coords());
 
-    const size_t num_outputs = compute_output_specs(attributes, tensor_args).size();
+    const auto num_chunks = static_cast<size_t>(std::max(attributes.matmul_struct.chunks, 0));
     std::vector<TensorTopology> topologies;
-    topologies.reserve(num_outputs);
+    topologies.reserve(1 + num_chunks);
     topologies.push_back(gathered.front());
-    while (topologies.size() < num_outputs) {
-        topologies.push_back(matmul_topology);
-    }
+    topologies.insert(topologies.end(), num_chunks, matmul_topology);
     return topologies;
 }
 
