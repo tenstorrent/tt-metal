@@ -28,7 +28,8 @@ constexpr std::uint32_t bias_offset     = indices_offset + dst_tile_offset;
 constexpr std::uint32_t interm_offset   = bias_offset + dst_tile_offset;
 
 // Counterpart of _init_sfpu_config_reg(): set LaneConfig.ENABLE_DEST_INDEX so an SFPSWAP on LREG0-3 also swaps
-// the companion lanes in LREG4-7 (the idx|score concat follows the bias keys). Any SFPU init clears it again.
+// the companion lanes in LREG4-7 (the idx|score concat follows the bias keys). _init_sfpu_config_reg() (the
+// LLK-level SFPU init) clears it again; op-level inits do not, hence the explicit clears in the tails.
 // SFPCONFIG with instr_mod1 = 1 writes imm16_math itself (not an LREG) to config_dest; 0xF is LaneConfig and
 // bit 2 of it is ENABLE_DEST_INDEX.
 inline void _gmg_enable_index_tracking()
@@ -443,7 +444,7 @@ inline void _generalized_moe_gate_top8(std::uint32_t eps, std::uint32_t scale, s
  * @note Resets the Dst RWC counter at entry (TTI_SETRWC SET_D): a preceding FPU MOP (e.g. copy4rows) leaves
  *       it advanced by +64/tile, which would bias the SFPLOAD offsets — so run this after any such MOP.
  *       Reads bias(mode 0)/indices(LO16)/scores(HI16) at the read columns and writes the same convention at
- *       the store columns; clobbers LREG0-7. Enables SFPU index tracking at entry (an SFPU init clears it,
+ *       the store columns; clobbers LREG0-7. Enables SFPU index tracking at entry (_init_sfpu_config_reg() clears it,
  *       and the idx|score concat in LREG4-7 follows the bias swaps only while it is on) and leaves it on at
  *       exit. @ref _gmg_merge16_to_run is the full-16 (two-run) variant.
  */

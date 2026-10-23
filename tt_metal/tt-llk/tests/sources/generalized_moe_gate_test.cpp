@@ -222,8 +222,7 @@ static inline void gmg_sanitize_scratch()
     constexpr int IDS_LO        = IDS_TILE * DREG_PER_TILE;           // 32 (even cols of IDS row 0)
     constexpr int IDS_HI        = IDS_LO + 1;                         // 33 (odd  cols)
     constexpr int NUM_DREG      = NUM_DEST_TILES * DREG_PER_TILE;     // 128
-    // The answer is the top-8: cols 0..7 of a row are lanes 0..3 of each even/odd row-half. vConstTileId
-    // is 2 * lane, so the masks below compare it against 2 * ANSWER_LANES; everything past it is residue.
+    // Top-8 answer = lanes 0..3 of each even/odd row-half; vConstTileId is 2 * lane.
     constexpr int ANSWER_LANES         = 4;
     constexpr int ANSWER_TILE_ID_LIMIT = 2 * ANSWER_LANES;
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -246,9 +245,7 @@ static inline void gmg_sanitize_scratch()
         v_endif;
         sfpi::dst_reg[dreg] = v;
     }
-    // The id rows hold raw uint16 words and go through the 16-bit integer layout: a float round trip
-    // reads the word's low byte as a bf16 exponent and stores an exponent of zero as zero, which would
-    // erase an id such as 256 here and hide the same defect in the kernel under test.
+    // Id rows go through the U16 layout: a float round trip would store an id with a zero low byte (256) as 0.
     for (const int dreg : {IDS_LO, IDS_HI})
     {
         sfpi::vUInt v = sfpi::dst_reg[dreg].mode<sfpi::DataLayout::U16>();

@@ -410,24 +410,17 @@ def test_generalized_moe_gate(topk, softmax, approx):
     _assert_gate_output(faces, golden, topk, **_weight_tolerance(approx))
 
 
-# The >256-expert path uploads GLOBAL ids (block b carries b*256 + i), and finalize_ungrouped's topk-6
-# rank mask rewrites the rank 4-7 id row in place to zero ranks 6 and 7. Every id in the 0..255 face
-# except 0 has a nonzero low byte, so that mask never meets the id it has to carry through raw: one
-# whose low byte is zero -- 256, 512, ... A float round trip reads a DEST word's low byte as a bf16
-# exponent and stores an exponent of zero as zero, which routes the token to expert 0 with expert
-# 256's weight. topk=8 has no mask and topk=4 drops the whole half, so only topk=6 reaches it;
-# expert 256 is placed at each of the two kept ranks the mask rewrites.
+# Expert 256 (block 1, position 0) has a zero low byte, which a float round trip stores as id 0; only the
+# topk-6 rank mask rewrites the kept ranks 4 and 5 in place, so it is placed at each of them.
 @parametrize(rank=[4, 5])
 def test_generalized_moe_gate_topk_mask_keeps_block_ids(rank):
     rank = _one(rank)
-    topk = 6  # the only topk whose rank mask rewrites the kept ranks 4 and 5
-    block_id_base = 256  # block 1's expert-id base: the >256 path uploads b*256 + i
+    topk = 6
+    block_id_base = 256
     payload, _, keys = _gate_stimuli(seed=41)
-    # Block 1's ids: flat position i is expert block_id_base + i, so position 0 is expert 256.
     ids = _ids_face() + block_id_base
 
-    # Put expert 256's key at `rank` by swapping it with the key that sits there, and rebuild the
-    # bias so the FPU's payload+bias still lands exactly on the intended key (see _gate_stimuli).
+    # Swap expert 256's key to `rank`; rebuild the bias so payload+bias still lands on the keys.
     flat = keys.reshape(-1).to(torch.float32)
     holder = int(flat.argsort(descending=True)[rank])
     flat[[0, holder]] = flat[[holder, 0]]
@@ -1346,15 +1339,9 @@ def test_generalized_moe_gate_merge4_top8():
         stored_elsewhere, other_lo, other_hi
     ), "the store pair did not move the run"
 
-    # A merge may drop a candidate but never invent one, and every key it keeps has to come back
-    # with the id and score that arrived with it. The idx|score concat rides in LREG4-7 and follows
-    # the key swaps only while SFPU index tracking is on; a merge that never turned it on (the
-    # harness's topk_init clears it) stores its keys merged over a concat still in load order, so
-    # every stored pair is from the window and on the wrong key. Keys are distinct, so each stored
-    # key names exactly one companion pair.
-    #
-    # Only rows 0-7 are in read_base 0's window, so restricting the source to those makes this a
-    # claim about the window too: a candidate from outside it is as invented as one from nowhere.
+    # A merge may drop candidates but never invent one, and each kept key must bring its own id and
+    # score (the LREG4-7 concat follows the key swaps only with index tracking on); keys are distinct
+    # and only rows 0-7 are in read_base 0's window.
     companion = {
         float(keys[r, c]): (int(ids[r, c]), float(scores[r, c]))
         for r in range(8)
