@@ -136,7 +136,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const std::optional<ttnn::Tensor>& eye,
     const std::optional<ttnn::Tensor>& tril,
     const std::optional<ttnn::Tensor>& ones,
-    const std::optional<ttnn::Tensor>& masks) {
+    const std::optional<ttnn::Tensor>& masks,
+    std::optional<uint32_t> num_key_heads) {
     TT_FATAL(!use_qk_l2norm, "chunk_gated_delta_rule: use_qk_l2norm not yet supported; pre-normalize q/k on host");
     ttnn::prim::validate_gdn_chunk_size(chunk_size);
 
@@ -147,16 +148,43 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const uint32_t T = qs[1];
     // Flat q/k/v: rank-3 inputs are FLAT token-major tensors — the model adapter (fused_chunk.py) skips
     // the head-split relayout. Head counts can't be read off a flat width, so: HV comes from beta [B,T,HV];
-    // for the flat q/k path we assume per-head K==V (true for GDN: linear_key_head_dim==value_head_dim),
-    // so K=V and H = q_flat_width / K. The prep reader tile-addresses q/k/v out of the flat grids.
+    // for the flat q/k path K==V is assumed (true for GDN: linear_key_head_dim==value_head_dim) unless the
+    // caller passes num_key_heads, in which case H = num_key_heads and K = q_flat_width / H (K != V works).
+    // Without num_key_heads, K=V and H = q_flat_width / K. The prep reader tile-addresses q/k/v out of the
+    // flat grids.
     const bool flat_v = (vs.rank() == 3);
     const bool flat_qk = (qs.rank() == 3);
     const uint32_t HV = flat_v ? beta_in.logical_shape()[2] : vs[2];
     const uint32_t V = flat_v ? (vs[2] / HV) : vs[3];
-    const uint32_t K = flat_qk ? V : qs[3];
-    const uint32_t H = flat_qk ? (qs[2] / K) : qs[2];
+    uint32_t K = 0;
+    uint32_t H = 0;
     if (flat_qk) {
-        TT_FATAL(qs[2] == H * K, "flat q width {} != H*K ({}*{}); flat q/k path assumes K==V", qs[2], H, K);
+        if (num_key_heads.has_value()) {
+            H = *num_key_heads;
+            TT_FATAL(
+                H > 0 && qs[2] % H == 0,
+                "flat q width ({}) must be divisible by num_key_heads ({}) (and num_key_heads > 0)",
+                qs[2],
+                H);
+            K = qs[2] / H;
+        } else {
+            K = V;
+            H = qs[2] / K;
+        }
+        TT_FATAL(
+            qs[2] == H * K,
+            "flat q width {} != H*K ({}*{}); without num_key_heads the flat q/k path assumes K==V",
+            qs[2],
+            H,
+            K);
+    } else {
+        K = qs[3];
+        H = qs[2];
+        TT_FATAL(
+            !num_key_heads.has_value() || *num_key_heads == qs[2],
+            "num_key_heads ({}) must equal q's head count ({}) for rank-4 q/k",
+            num_key_heads.value_or(0),
+            qs[2]);
     }
     TT_FATAL(HV % H == 0, "HV ({}) must be divisible by H ({})", HV, H);
     const uint32_t G = HV / H;

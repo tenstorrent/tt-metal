@@ -17,7 +17,7 @@
 #ifdef UNTILIZE_OUT
 #include "api/compute/pack_untilize.h"
 #endif
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
@@ -335,7 +335,7 @@ void kernel_main() {
 #endif
 #endif
 #ifdef FUSE_GAMMA
-            constexpr uint32_t dfb_outg_id = do_beta ? dfb_fusion_id : dfb_out_id;
+            constexpr auto dfb_outg_id = do_beta ? dfb_fusion_id : dfb_out_id;
             auto& dfb_outg = do_beta ? dfb_fusion : dfb_out;
             if constexpr (!do_beta) {
                 pack_reconfig_data_format(dfb_out_id);

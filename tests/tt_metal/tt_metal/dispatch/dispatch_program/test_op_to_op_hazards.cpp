@@ -608,7 +608,18 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEn
 
     // DRAM interleaved unless the path needs otherwise: LocalTensorAccessor needs L1, ShardView a sharded tensor.
     const std::vector<std::string> dram_names = {
-        "view", "iter", "state", "zero", "legacy_r", "legacy_w", "wrap", "escape", "unused"};
+        "view",
+        "iter",
+        "bank_r",
+        "bank_state",
+        "bank_w",
+        "state",
+        "zero",
+        "legacy_r",
+        "legacy_w",
+        "wrap",
+        "escape",
+        "unused"};
     std::vector<MeshTensor> tensors;
     std::vector<std::pair<std::string, const MeshTensor*>> bound;
     tensors.reserve(dram_names.size() + 3);
@@ -673,8 +684,11 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEn
     // Typed endpoints and paths are exact; the binding-erasing / address-escaping ones are both read and written.
     EXPECT_EQ(
         names(rw.reads),
-        (std::set<std::string_view>{"view", "iter", "shard_iter", "shard", "legacy_r", "wrap", "escape", "local"}));
-    EXPECT_EQ(names(rw.writes), (std::set<std::string_view>{"state", "zero", "legacy_w", "wrap", "escape", "local"}));
+        (std::set<std::string_view>{
+            "view", "iter", "shard_iter", "shard", "bank_r", "bank_state", "legacy_r", "wrap", "escape", "local"}));
+    EXPECT_EQ(
+        names(rw.writes),
+        (std::set<std::string_view>{"bank_w", "state", "zero", "legacy_w", "wrap", "escape", "local"}));
 }
 
 // Every public raw-address API family, independently: each FAMILY_* build of hazard_raw_family_coverage.cpp

@@ -10,6 +10,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail {
 
@@ -39,9 +40,15 @@ struct RingStridedReduceScatterMeshWorkloadFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
+}  // namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail
+
+// Defined in namespace ttnn (strided_reduce_scatter_async_program.cpp). The detail factory calls these.
+namespace ttnn {
+
 // Builder function for ring topology - creates program artifacts
-StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_program_artifacts(
-    tt::tt_metal::Program& program,
+operations::experimental::ccl::strided_reduce_scatter_async::detail::StridedReduceScatterProgramArtifacts
+build_ring_strided_reduce_scatter_async_program_artifacts(
+    tt::tt_metal::ProgramDescriptor& program,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
@@ -103,4 +110,4 @@ void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
     const std::optional<const Tensor>& addcmul_a = std::nullopt,
     const std::optional<const Tensor>& addcmul_b = std::nullopt);
 
-}  // namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail
+}  // namespace ttnn
