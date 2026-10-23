@@ -359,7 +359,7 @@ def test_demo_vision(mesh_device, prompt_file, use_trace, max_generated_tokens, 
     # Prompt length, not max_seq_len: the text-demo targets are keyed on the text
     # sequence, and a vision TTFT must not be checked against those.
     report_e2e_metrics(
-        "qwen3.6-27b",
+        model.args.base_model_name,
         {
             "prefill_time_to_first_token": perf["ttft"],
             "decode_t/s": perf["decode_tok_s"],

@@ -29,7 +29,7 @@ import torch
 import ttnn
 
 # TP tests default to the 27B variant; single-device unit tests setdefault 9B.
-_DEFAULT_HF_MODEL = "Qwen/Qwen3.6-27B"
+_DEFAULT_HF_MODEL = "Qwen/Qwen3.8-27B"
 _PCC_THRESHOLDS_PATH = os.path.join(os.path.dirname(__file__), "pcc_thresholds.json")
 
 # Prefill length buckets gated by --max-prefill (see conftest). Lengths above the

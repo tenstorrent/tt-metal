@@ -236,7 +236,7 @@ def _build(mesh_device):
         max_batch_size=WIDTH,
         max_seq_len=CTX,
         n_layers=N_LAYERS,
-        hf_model=os.environ.get("HF_MODEL", "Qwen/Qwen3.6-27B"),
+        hf_model=os.environ.get("HF_MODEL", "Qwen/Qwen3.8-27B"),
     )
     gen = Qwen36ForCausalLM([model], [model.args], mesh_device)
     num_blocks = WIDTH * BPU

@@ -21,7 +21,7 @@ from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.blackhole.qwen36.tests.test_factory import parametrize_mesh_tp
+from models.demos.blackhole.qwen36.tests.test_factory import model_path, parametrize_mesh_tp
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
 N_LAYERS = 8
@@ -568,7 +568,7 @@ def test_tp8_device_logprobs_complete_full_decode_warmup(monkeypatch):
 
 def _build(mesh_device, bmax):
     model = Qwen36Model.from_pretrained(
-        mesh_device, max_batch_size=bmax, max_seq_len=CTX, n_layers=N_LAYERS, hf_model="Qwen/Qwen3.6-27B"
+        mesh_device, max_batch_size=bmax, max_seq_len=CTX, n_layers=N_LAYERS, hf_model=model_path()
     )
     num_blocks = bmax * BPU
     kv_shape = (num_blocks, model.args.n_local_kv_heads, BLOCK, model.args.head_dim)
@@ -839,7 +839,7 @@ def test_decode_width_scaling_traced(mesh_device, n_layers, reset_seeds, ensure_
     BMAX = 8
     ITERS = 50
     model = Qwen36Model.from_pretrained(
-        mesh_device, max_batch_size=BMAX, max_seq_len=CTX, n_layers=n_layers, hf_model="Qwen/Qwen3.6-27B"
+        mesh_device, max_batch_size=BMAX, max_seq_len=CTX, n_layers=n_layers, hf_model=model_path()
     )
     num_blocks = BMAX * BPU
     kv_shape = (num_blocks, model.args.n_local_kv_heads, BLOCK, model.args.head_dim)
@@ -938,7 +938,7 @@ def test_decode_capacity_width1_traced(mesh_device, reset_seeds, ensure_gc):
         max_seq_len=max_seq_len,
         n_layers=n_layers,
         layer_indices=layer_indices,
-        hf_model="Qwen/Qwen3.6-27B",
+        hf_model=model_path(),
     )
     assert model.sampling is not None, "on-device logits require the sampling module"
     sampler_batch = model.sampling.tt_sampling.max_batch_size
@@ -1042,7 +1042,7 @@ def test_decode_step_host_overhead(mesh_device, reset_seeds, ensure_gc):
 
     BMAX, ITERS, WIDTH = 8, 50, 1
     model = Qwen36Model.from_pretrained(
-        mesh_device, max_batch_size=BMAX, max_seq_len=CTX, n_layers=None, hf_model="Qwen/Qwen3.6-27B"
+        mesh_device, max_batch_size=BMAX, max_seq_len=CTX, n_layers=None, hf_model=model_path()
     )
     num_blocks = BMAX * BPU
     kv_shape = (num_blocks, model.args.n_local_kv_heads, BLOCK, model.args.head_dim)
@@ -1106,7 +1106,7 @@ def test_bucketed_on_device_sampling_traces(mesh_device, reset_seeds, ensure_gc)
 
     BMAX = 8
     model = Qwen36Model.from_pretrained(
-        mesh_device, max_batch_size=BMAX, max_seq_len=CTX, n_layers=N_LAYERS, hf_model="Qwen/Qwen3.6-27B"
+        mesh_device, max_batch_size=BMAX, max_seq_len=CTX, n_layers=N_LAYERS, hf_model=model_path()
     )
     if model.sampling is None:
         pytest.skip("on-device sampling unsupported on this mesh/vocab; nothing to verify")
@@ -1207,7 +1207,7 @@ def test_all_buckets_fit_trace_region(mesh_device, reset_seeds, ensure_gc):
 
     BMAX = 8
     model = Qwen36Model.from_pretrained(
-        mesh_device, max_batch_size=BMAX, max_seq_len=CTX, n_layers=None, hf_model="Qwen/Qwen3.6-27B"
+        mesh_device, max_batch_size=BMAX, max_seq_len=CTX, n_layers=None, hf_model=model_path()
     )
     num_blocks = BMAX * BPU
     kv_shape = (num_blocks, model.args.n_local_kv_heads, BLOCK, model.args.head_dim)
