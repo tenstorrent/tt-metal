@@ -207,3 +207,38 @@ def test_max_h_axis_split(device, dtype, fast_and_approximate_mode, shape):
         torch.testing.assert_close(output, torch_ref, rtol=2**-10, atol=0)
     else:
         assert_equal(torch_ref, output)
+
+
+def test_max_int32_all_int32_min_slice_unaligned(device):
+    """An all-INT32_MIN row/col on an unaligned dim must not lose to the tile padding.
+
+    int32 max used to pad with INT32_MIN + 1, so a slice that was all
+    INT32_MIN came back as INT32_MIN + 1 (the padding won). Tile aligned shapes never
+    hit this since there is no padding to speak of, hence the 5x37.
+    """
+    torch.manual_seed(0)
+
+    int32_min = torch.iinfo(torch.int32).min
+    torch_input = torch.randint(-1000, 1000, (5, 37), dtype=torch.int32)
+    torch_input[0, :] = int32_min  # all-min row
+    torch_input[:, 3] = int32_min  # all-min col
+
+    for dim in (-1, -2):
+        torch_ref, _ = torch.max(torch_input, dim=dim)
+
+        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+        output = ttnn.to_torch(ttnn.max(tt_input, dim=dim))
+
+        assert_equal(torch_ref, output)
+
+    # and the full reduce of an all INT32_MIN tensor
+    all_min = torch.full((5, 37), int32_min, dtype=torch.int32)
+    tt_input = ttnn.from_torch(all_min, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.to_torch(ttnn.max(tt_input))
+    assert output.item() == int32_min
+
+    # row major input goes thru the tilize pad instead, make sure it holds there too
+    rm_ref, _ = torch.max(torch_input, dim=-1)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output = ttnn.to_torch(ttnn.max(tt_input, dim=-1))
+    assert_equal(rm_ref, output)
