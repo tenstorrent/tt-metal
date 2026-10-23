@@ -611,7 +611,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 90
+      timeout: 20
       tier: 2
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
@@ -2050,7 +2050,7 @@
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      timeout: 45
+      timeout: 20
       tier: 1
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
