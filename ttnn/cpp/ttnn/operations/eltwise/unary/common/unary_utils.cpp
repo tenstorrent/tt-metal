@@ -718,7 +718,7 @@ tt::tt_metal::CoreRangeSet get_worker_grid(
         device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front()));
 }
 
-tt::tt_metal::ShardSpec generate_output_shard_spec(
+std::optional<tt::tt_metal::ShardSpec> generate_output_shard_spec(
     const Tensor& input_tensor,
     const ttnn::Shape& padded_out_shape,
     tt::tt_metal::TensorMemoryLayout memory_layout,
@@ -743,6 +743,11 @@ tt::tt_metal::ShardSpec generate_output_shard_spec(
             compute_grid_size,
             memory_layout,
             ttnn::operations::data_movement::common::RmPageAlignmentMode::Lenient);
+        if (memory_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED &&
+            !ttnn::operations::data_movement::common::rm_shard_page_valid(
+                spec, output_element_size_bytes, static_cast<uint64_t>(padded_out_shape[-1]))) {
+            return std::nullopt;
+        }
     }
     log_debug(tt::LogOp, "Unary: Generated shard spec over {} populated cores", spec.grid.num_cores());
     return spec;
