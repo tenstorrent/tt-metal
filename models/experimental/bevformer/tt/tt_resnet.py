@@ -46,7 +46,7 @@ class TTModulatedDeformConv2dPack:
         # conv_offset emits the offsets in grid units, in the device DCN's (x, y) order (see
         # model_preprocessing), then the mask logits. Its output is bfloat16 whatever the
         # input dtype, since the offsets set the sampling positions.
-        # Trained offsets reach tens of pixels, and accumulating in a bfloat16 destination
+        # Offsets can reach tens of pixels, and accumulating in a bfloat16 destination
         # register errs by up to a few of them, so the register is fp32. The partial sums conv2d
         # writes back between reduction blocks stay bfloat16 (packer_l1_acc is off): fp32 partial
         # sums gain no accuracy here.
@@ -307,8 +307,8 @@ class TTResNet:
         )
 
         # The max pool emits a bfloat16 ROW_MAJOR tensor and every layer emits bfloat16 TILE.
-        # Activations stay bfloat16: the trained backbone has outlier channels that bfloat8_b's
-        # shared block exponent flattens.
+        # Activations stay bfloat16: outlier channels lose their neighbours to bfloat8_b's shared
+        # block exponent.
         layer_input_dtype = ttnn.bfloat16
         layer_input_layout = ttnn.ROW_MAJOR_LAYOUT
         self.output_dtypes = []

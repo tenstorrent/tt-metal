@@ -26,9 +26,8 @@ Per frame:
 without a previous BEV); ``can_bus[-2]`` is the absolute heading in radians.
 
 The decoder half of upstream's ``PerceptionTransformer`` (``decoder`` and ``reference_points``) is
-the head's, see ``reference/head.py``. Parameter names follow the checkpoint's
-``pts_bbox_head.transformer``: ``encoder``, ``level_embeds``, ``cams_embeds`` and ``can_bus_mlp``
-load unchanged. Upstream's defaults are kept: CAN bus, camera embeddings and the previous BEV's
+the head's, see ``reference/head.py``. Parameter names follow upstream's
+``pts_bbox_head.transformer``: ``encoder``, ``level_embeds``, ``cams_embeds`` and ``can_bus_mlp``. Upstream's defaults are kept: CAN bus, camera embeddings and the previous BEV's
 rotation are on, ``can_bus_norm`` is on.
 """
 

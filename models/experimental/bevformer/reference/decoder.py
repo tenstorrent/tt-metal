@@ -10,8 +10,7 @@ object queries against the encoder's BEV features (50x50 for BEVFormer-tiny, 200
 BEVFormer-base, same decoder otherwise) and returns every layer's queries and 3D reference
 points for the classification and regression branches. It is the reference the TTNN
 decoder in ``tt/tt_decoder.py`` is checked against. Parameter names follow mmcv's modules,
-so the ``pts_bbox_head.transformer.decoder`` weights of a BEVFormer checkpoint load into
-it with that prefix stripped.
+as upstream's ``pts_bbox_head.transformer.decoder`` names them.
 
 Each of the six layers performs, in the sequence-first ``(num_query, bs, embed_dims)``
 layout:
@@ -86,8 +85,7 @@ class MultiheadAttention(nn.Module):
     mmcv's ``MultiheadAttention`` reduced to the decoder's self-attention.
 
     ``query_pos`` is added to the query and key but not to the value, and the input is added
-    back as the residual. The ``nn.MultiheadAttention`` is named ``attn``, as in mmcv, so
-    checkpoint keys match.
+    back as the residual. The ``nn.MultiheadAttention`` is named ``attn``, as in mmcv.
     """
 
     def __init__(self, embed_dims, num_heads):
@@ -116,7 +114,7 @@ class DetrTransformerDecoderLayer(nn.Module):
         num_points (int): Sampling points per head of the cross-attention.
 
     ``attentions``, ``ffns`` and ``norms`` are named and ordered as in mmcv's
-    ``BaseTransformerLayer``, so checkpoint keys match.
+    ``BaseTransformerLayer``.
     """
 
     def __init__(self, embed_dims, num_heads, feedforward_channels, num_points):
