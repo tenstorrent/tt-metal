@@ -270,20 +270,8 @@ TEST_F(QkvCausalConv1dSiluTest, ProgramCacheHitReadsNewBuffers) {
 // Invalid work splits are rejected by validation before anything is launched.
 TEST_F(QkvCausalConv1dSiluTest, RejectsInvalidWorkSplit) {
     using namespace ttml;
-    auto* device = &autograd::ctx().get_device();
     const auto run = [&](const Shape& s, uint32_t chunk, uint32_t splits) {
-        const auto p = random_problem(s, 3);
-        auto input = core::from_xtensor(p.x, device, ttnn::Layout::ROW_MAJOR);
-        auto history = core::from_xtensor(p.h, device, ttnn::Layout::ROW_MAJOR);
-        std::array<ttnn::Tensor, 4> taps;
-        for (size_t j = 0; j < 4; ++j) {
-            taps[j] = core::from_xtensor(p.taps[j], device);
-        }
-        auto grad_q = core::from_xtensor(slice_cols(p.grad_y, 0, s.Q), device);
-        auto grad_k = core::from_xtensor(slice_cols(p.grad_y, s.Q, s.Q + s.K), device);
-        auto grad_v = core::from_xtensor(slice_cols(p.grad_y, s.Q + s.K, s.C()), device);
-        metal::qkv_causal_conv1d_silu_bw(
-            grad_q, grad_k, grad_v, input, history, taps[0], taps[1], taps[2], taps[3], s.Q, s.K, s.V, chunk, splits);
+        run_metal_bw(s, random_problem(s, 3), chunk, splits);
     };
     EXPECT_THROW(run({64, 128, 64, 64}, 96, 1), std::runtime_error);      // 96 does not divide C = 256
     EXPECT_THROW(run({64, 128, 64, 64}, 64, 3), std::runtime_error);      // T = 64 has only 2 tile rows
@@ -458,31 +446,21 @@ TEST_F(QkvCausalConv1dSiluTest, RankFour) {
 // A preallocated grad_input is written in place.
 TEST_F(QkvCausalConv1dSiluTest, PreallocatedGradInput) {
     using namespace ttml;
-    auto* device = &autograd::ctx().get_device();
     const Shape s{64, 96, 64, 32};
     const auto p = random_problem(s, 5);
     const auto ref = reference(s, p);
-    auto input = core::from_xtensor(p.x, device, ttnn::Layout::ROW_MAJOR);
-    auto history = core::from_xtensor(p.h, device, ttnn::Layout::ROW_MAJOR);
-    std::array<ttnn::Tensor, 4> taps;
-    for (size_t j = 0; j < 4; ++j) {
-        taps[j] = core::from_xtensor(p.taps[j], device);
-    }
-    auto grad_q = core::from_xtensor(slice_cols(p.grad_y, 0, s.Q), device);
-    auto grad_k = core::from_xtensor(slice_cols(p.grad_y, s.Q, s.Q + s.K), device);
-    auto grad_v = core::from_xtensor(slice_cols(p.grad_y, s.Q + s.K, s.C()), device);
-    auto preallocated = core::zeros_like(input);
-    preallocated = ttnn::to_layout(preallocated, ttnn::Layout::TILE);
+    const auto d = make_inputs(s, p);
+    auto preallocated = ttnn::to_layout(core::zeros_like(d.input), ttnn::Layout::TILE);
     const auto [grad_input, g0, g1, g2, g3] = metal::qkv_causal_conv1d_silu_bw(
-        grad_q,
-        grad_k,
-        grad_v,
-        input,
-        history,
-        taps[0],
-        taps[1],
-        taps[2],
-        taps[3],
+        d.grad_q,
+        d.grad_k,
+        d.grad_v,
+        d.input,
+        d.history,
+        d.taps[0],
+        d.taps[1],
+        d.taps[2],
+        d.taps[3],
         s.Q,
         s.K,
         s.V,
@@ -504,25 +482,17 @@ TEST_F(QkvCausalConv1dSiluTest, FrozenTaps) {
     p.grad_y = ref.y;
     ref = reference(s, p);
     {
-        auto input = core::from_xtensor(p.x, device, ttnn::Layout::ROW_MAJOR);
-        auto history = core::from_xtensor(p.h, device, ttnn::Layout::ROW_MAJOR);
-        std::array<ttnn::Tensor, 4> taps;
-        for (size_t j = 0; j < 4; ++j) {
-            taps[j] = core::from_xtensor(p.taps[j], device);
-        }
-        auto grad_q = core::from_xtensor(slice_cols(p.grad_y, 0, s.Q), device);
-        auto grad_k = core::from_xtensor(slice_cols(p.grad_y, s.Q, s.Q + s.K), device);
-        auto grad_v = core::from_xtensor(slice_cols(p.grad_y, s.Q + s.K, s.C()), device);
+        const auto d = make_inputs(s, p);
         const auto [grad_input, g0, g1, g2, g3] = metal::qkv_causal_conv1d_silu_bw(
-            grad_q,
-            grad_k,
-            grad_v,
-            input,
-            history,
-            taps[0],
-            taps[1],
-            taps[2],
-            taps[3],
+            d.grad_q,
+            d.grad_k,
+            d.grad_v,
+            d.input,
+            d.history,
+            d.taps[0],
+            d.taps[1],
+            d.taps[2],
+            d.taps[3],
             s.Q,
             s.K,
             s.V,
