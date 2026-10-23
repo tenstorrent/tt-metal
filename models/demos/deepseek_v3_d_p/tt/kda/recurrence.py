@@ -418,7 +418,7 @@ def _scan_local_grouped_chunks(
 
 
 def _partition_prefix(
-    summary: AffineTransform,
+    summaries: ttnn.Tensor,
     initial_state: ttnn.Tensor,
     *,
     groups_per_head: int,
@@ -429,8 +429,7 @@ def _partition_prefix(
     compute_config: _RecurrenceComputeConfig,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     a, b = ttnn.experimental.kda.reduce_affine_transforms(
-        summary.a,
-        summary.b,
+        summaries,
         groups_per_head,
         local_rows=local_rows,
         actual_start=actual_start,
@@ -498,11 +497,8 @@ def _scan_sp_grouped_chunks(
             compute_kernel_config=compute_config.preparation,
             tail=True,
         )
-        head, tail = (_unpack_summary(summaries, slot, memory) for slot in (0, 1))
-        ttnn.deallocate(summaries)
-        head_a, head_b, tail_a, tail_b = head.a, head.b, tail.a, tail.b
         local_entry_state, prefix_final_state = _partition_prefix(
-            AffineTransform(head_a, head_b),
+            summaries,
             initial_state,
             groups_per_head=groups,
             local_rows=geometry.local_rows,
@@ -512,14 +508,16 @@ def _scan_sp_grouped_chunks(
             compute_config=compute_config,
         )
         # The chronological prefix ends where the split tail begins, supplying its seed.
+        head, tail = (_unpack_summary(summaries, slot, memory) for slot in (0, 1))
+        ttnn.deallocate(summaries)
         group_entry_states = ttnn.experimental.kda.affine_exclusive_scan(
-            head_a,
-            head_b,
+            head.a,
+            head.b,
             local_entry_state,
             groups,
             local_rows=geometry.local_rows,
-            tail_a=tail_a,
-            tail_b=tail_b,
+            tail_a=tail.a,
+            tail_b=tail.b,
             tail_entry_states=prefix_final_state,
             actual_start=actual_start,
             actual_end=actual_end,

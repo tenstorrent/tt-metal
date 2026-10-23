@@ -17,16 +17,28 @@
 FORCE_INLINE uint32_t worker_x(uint32_t worker) { return get_common_vararg(2 * worker); }
 FORCE_INLINE uint32_t worker_y(uint32_t worker) { return get_common_vararg(2 * worker + 1); }
 
-template <typename Accessor, typename DFB>
-FORCE_INLINE void issue_tensor_block_read(
-    Noc& noc, const Accessor& accessor, DFB& buffer, uint32_t page, uint32_t tiles) {
-    for (uint32_t tile = 0; tile < tiles; tile++) {
-        noc.async_read(
-            accessor,
-            buffer,
-            buffer.get_entry_size(),
-            {.page_id = page + tile},
-            {.offset_bytes = tile * buffer.get_entry_size()});
+// Split one transform's [A | B] rows of slot 0 of the packed summaries into its A and B buffers.
+template <uint32_t Kt, uint32_t Vt, typename Accessor, typename DFB>
+FORCE_INLINE void issue_summary_read(Noc& noc, const Accessor& summaries, DFB& a, DFB& b, uint32_t transform) {
+    const uint32_t tile_bytes = a.get_entry_size();
+    for (uint32_t row = 0; row < Kt; ++row) {
+        const uint32_t row_page = (transform * Kt + row) * (Kt + Vt);
+        for (uint32_t column = 0; column < Kt; ++column) {
+            noc.async_read(
+                summaries,
+                a,
+                tile_bytes,
+                {.page_id = row_page + column},
+                {.offset_bytes = (row * Kt + column) * tile_bytes});
+        }
+        for (uint32_t column = 0; column < Vt; ++column) {
+            noc.async_read(
+                summaries,
+                b,
+                tile_bytes,
+                {.page_id = row_page + Kt + column},
+                {.offset_bytes = (row * Vt + column) * tile_bytes});
+        }
     }
 }
 
@@ -135,8 +147,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     constexpr uint32_t a_tiles = Kt * Kt;
     constexpr uint32_t b_tiles = Kt * Vt;
 
-    const auto a_accessor = TensorAccessor(tensor::a);
-    const auto b_accessor = TensorAccessor(tensor::b);
+    const auto summaries_accessor = TensorAccessor(tensor::summaries);
     const auto output_a_accessor = TensorAccessor(tensor::output_a);
     const auto output_b_accessor = TensorAccessor(tensor::output_b);
     DataflowBuffer initial_a(dfb::initial_a);
@@ -183,8 +194,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
 
     initial_a.reserve_back(a_tiles);
     initial_b.reserve_back(b_tiles);
-    issue_tensor_block_read(noc, a_accessor, initial_a, worker_index * a_tiles, a_tiles);
-    issue_tensor_block_read(noc, b_accessor, initial_b, worker_index * b_tiles, b_tiles);
+    issue_summary_read<Kt, Vt>(noc, summaries_accessor, initial_a, initial_b, worker_index);
     noc.async_read_barrier();
     initial_a.push_back(a_tiles);
     initial_b.push_back(b_tiles);

@@ -18,11 +18,13 @@ void bind_reduce_affine_transforms(nb::module_& mod) {
         Compose ordered group-level affine state transitions into one transition
         per batch-head.
 
-        Each input pair represents one group of chunks for one batch-head:
+        Each transform represents one group of chunks for one batch-head:
 
             F_g(S) = A_g @ S + B_g
 
-        The leading dimension is flattened batch-head-group order:
+        It is read from slot 0 (head transforms) of packed summaries, as produced
+        by ``summarize_chunk_recurrence``, whose transform index is flattened
+        batch-head-group order:
 
             index = batch_head * groups_per_head + group
 
@@ -33,9 +35,9 @@ void bind_reduce_affine_transforms(nb::module_& mod) {
 
         On the rank containing both the chronological beginning and end of the
         sequence, only the head groups are composed. Other ranks compose all
-        groups. If the head ends inside a group, that group's input must contain
-        its head-only summary, as produced by ``summarize_chunk_recurrence``.
-        The separated tail is handled later in the recurrence pipeline.
+        groups. If the head ends inside a group, that group's slot-0 transform
+        must be its head-only summary. A tail slot, when present, is not read;
+        the separated tail is handled later in the recurrence pipeline.
 
         Optional ``actual_end`` is a replicated UINT32 row-major scalar, with
         the same lifetime as ``actual_start``. It defines a nonempty interval within
@@ -46,14 +48,12 @@ void bind_reduce_affine_transforms(nb::module_& mod) {
         Bounds are caller preconditions and are not read back on the host.
 
         Args:
-            a (ttnn.Tensor): Group multipliers ``[B*H*G, K, K]``. Each leading
-                entry represents one batch-head-group. Must be a TILE-layout
-                FLOAT32 or BFLOAT16 device tensor.
-            b (ttnn.Tensor): Group offsets ``[B*H*G, K, V]``. Must have the same
-                dtype, device, and leading dimension as ``a``.
+            summaries (ttnn.Tensor): Packed group transforms ``[S, B*H*G, K, K+V]``
+                with ``S`` 1 or 2: ``K`` rows of ``[A | B]`` per transform. Must be
+                a TILE-layout FLOAT32 or BFLOAT16 device tensor.
             groups_per_head (int): Number of consecutive groups ``G`` belonging
-                to each batch-head. Must be positive and divide the leading
-                dimension.
+                to each batch-head. Must be positive and divide the transform
+                count ``B*H*G`` (dimension 1).
 
         Keyword Args:
             actual_start (ttnn.Tensor): Replicated UINT32 row-major scalar
@@ -78,13 +78,12 @@ void bind_reduce_affine_transforms(nb::module_& mod) {
                     S_after = A @ S_before + B
 
         Note:
-            ``K`` and ``V`` must be positive and tile-aligned, and each ``A_g``
-            must be square. Inputs may be interleaved or height-sharded and are
-            not modified. Output memory must be interleaved.
+            ``K`` and ``V`` must be positive and tile-aligned. ``summaries`` may be
+            interleaved, height-sharded or ND-sharded and is not modified. Output
+            memory must be interleaved.
         )doc",
         &ttnn::experimental::kda::reduce_affine_transforms,
-        nb::arg("a").noconvert(),
-        nb::arg("b").noconvert(),
+        nb::arg("summaries").noconvert(),
         nb::arg("groups_per_head"),
         nb::kw_only(),
         nb::arg("actual_start").noconvert(),

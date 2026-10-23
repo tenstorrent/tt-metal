@@ -116,6 +116,7 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
     } else {
         TT_FATAL(!in.group_entry_states.has_value(), "{}: group_entry_states is not accepted", operation_name);
         TT_FATAL(K == V, "{}: K must equal V", operation_name);
+        check_summary_memory_layout(attrs.output_mem_config, operation_name, "memory_config");
         // The summary publishes one tile row of a core's value block per destination-register packet.
         const auto distribution = kda_factory_detail::distribute_value_blocks(
             in.v_beta.device()->compute_with_storage_grid_size(), BH, V / tt::constants::TILE_WIDTH);

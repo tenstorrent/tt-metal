@@ -321,13 +321,12 @@ def test_sp_payload_contracts(mesh_device, expect_error):
     for kwargs in ({"actual_start": actual_start}, {"tail_entry_states": seed}):
         with expect_error(TypeError, "incompatible function arguments"):
             ttnn.experimental.kda.recurrent_chunk_scan(*inputs, seed, **kwargs)
-    a, b, tail_a, tail_b = split_summaries(
-        ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, actual_start=actual_start, tail=True)
-    )
+    summaries = ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, actual_start=actual_start, tail=True)
+    a, b, tail_a, tail_b = split_summaries(summaries)
     with expect_error(TypeError, "incompatible function arguments"):
         ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, actual_start=None)
     with expect_error(TypeError, "incompatible function arguments"):
-        ttnn.experimental.kda.reduce_affine_transforms(a, b, 1, actual_start=None, local_rows=128)
+        ttnn.experimental.kda.reduce_affine_transforms(summaries, 1, actual_start=None, local_rows=128)
     for missing in ("actual_start", "tail_a", "tail_b", "tail_entry_states"):
         kwargs = dict(actual_start=actual_start, tail_a=a, tail_b=b, tail_entry_states=seed)
         del kwargs[missing]

@@ -462,7 +462,7 @@ def test_summarize_chunk_recurrence_production_performance(zero_actual_start, de
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for recurrence-summary performance checks")
     _, inputs = _production_protocol(device, seed=117)
-    output_memory = group_summary_nd_sharded(device, 2, case.batch_heads, case.dim)
+    output_memory = group_summary_nd_sharded(device, 2, case.batch_heads, case.dim, case.dim)
     compute_config = _production_compute_config(device)
 
     def run() -> ttnn.Tensor:
@@ -510,7 +510,7 @@ def test_summarize_chunk_recurrence_nd_sharded_l1_output(zero_actual_start, devi
     # An unsplit rank has no tail segment, so every tail slot holds the identity.
     tail = pack_summary(torch.eye(dim), torch.zeros(dim, dim)).expand(batch_heads, -1, -1)
     inputs = device_protocol(host_inputs, device)
-    output_memory = group_summary_nd_sharded(device, 2, batch_heads, dim)
+    output_memory = group_summary_nd_sharded(device, 2, batch_heads, dim, dim)
 
     first = assert_runtime_contract(
         device,
@@ -530,6 +530,52 @@ def test_summarize_chunk_recurrence_nd_sharded_l1_output(zero_actual_start, devi
     host = ttnn.to_torch(first[0])
     assert_bit_identical(tail.bfloat16(), host[1], name="ND-sharded tail identity")
     assert_summary_reconstructs_state(host_inputs, *unpack_summary(host[0]), nrmse_threshold=0.003)
+
+
+def test_summarize_chunk_recurrence_height_sharded_l1_output(zero_actual_start, device: ttnn.Device) -> None:
+    """A height-sharded output holds one [K, 2K] transform per core, slot-major."""
+    batch_heads, num_chunks, dim = 4, 2, 32
+    host_inputs = host_protocol(batch_heads, num_chunks, dim, dim, seed=813)
+    inputs = device_protocol(host_inputs, device)
+    cores = ttnn.num_cores_to_corerangeset(2 * batch_heads, device.compute_with_storage_grid_size(), row_wise=True)
+    output_memory = ttnn.create_sharded_memory_config(
+        (dim, 2 * dim),
+        core_grid=cores,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    summaries = run_summary(inputs, memory_config=output_memory, actual_start=zero_actual_start, tail=True)
+    assert summaries.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    host = ttnn.to_torch(summaries)
+    identity = pack_summary(torch.eye(dim), torch.zeros(dim, dim)).expand(batch_heads, -1, -1)
+    assert_accurate(
+        _packed_oracle(host_inputs)[0],
+        host[0].float(),
+        name="height-sharded head slot",
+        pcc_threshold=0.999,
+        nrmse_threshold=0.004,
+    )
+    assert_bit_identical(identity.bfloat16(), host[1], name="height-sharded tail identity")
+
+
+@pytest.mark.parametrize(
+    "memory_layout",
+    [ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.TensorMemoryLayout.BLOCK_SHARDED],
+    ids=["width_sharded", "block_sharded"],
+)
+def test_summarize_chunk_recurrence_rejects_unsupported_output_sharding(
+    zero_actual_start, device: ttnn.Device, expect_error: Callable, memory_layout: ttnn.TensorMemoryLayout
+) -> None:
+    inputs = device_protocol(host_protocol(2, 2, 32, 32), device)
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        [64, 64],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    unsupported = ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, shard_spec)
+    with expect_error(RuntimeError, "memory_config must use interleaved, height-sharded or ND-sharded memory"):
+        run_summary(inputs, memory_config=unsupported, actual_start=zero_actual_start)
 
 
 @pytest.mark.parametrize("host_index", range(7))

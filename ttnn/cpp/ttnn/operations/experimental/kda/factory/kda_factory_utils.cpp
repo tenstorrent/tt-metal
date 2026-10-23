@@ -4,9 +4,11 @@
 #include "kda_factory_utils.hpp"
 
 #include <algorithm>
+#include <array>
 #include <enchantum/enchantum.hpp>
 #include <set>
 
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
@@ -108,6 +110,42 @@ void check_output_interleaved(const tt::tt_metal::MemoryConfig& memory_config, s
         "{}: output memory layout must be INTERLEAVED, got {}",
         operation_name,
         enchantum::to_string(memory_config.memory_layout()));
+}
+
+void check_summary_memory_layout(
+    const tt::tt_metal::MemoryConfig& memory_config, std::string_view operation_name, std::string_view tensor_name) {
+    const auto memory_layout = memory_config.memory_layout();
+    TT_FATAL(
+        memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED ||
+            memory_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
+            memory_layout == tt::tt_metal::TensorMemoryLayout::ND_SHARDED,
+        "{}: {} must use interleaved, height-sharded or ND-sharded memory, got {}",
+        operation_name,
+        tensor_name,
+        enchantum::to_string(memory_layout));
+}
+
+PackedSummaryShape check_packed_summaries(const Tensor& summaries, std::string_view operation_name) {
+    constexpr std::array accepted_dtypes = {tt::tt_metal::DataType::FLOAT32, tt::tt_metal::DataType::BFLOAT16};
+    check_allocated_device_tensor(summaries, operation_name, "summaries");
+    check_layout(summaries, tt::tt_metal::Layout::TILE, operation_name, "summaries");
+    check_dtype_in(summaries, accepted_dtypes, "FLOAT32 or BFLOAT16", operation_name, "summaries");
+    check_summary_memory_layout(summaries.memory_config(), operation_name, "summaries");
+    const auto& shape = summaries.logical_shape();
+    TT_FATAL(shape.rank() == 4, "{}: summaries must be rank 4 [S, N, K, K+V]", operation_name);
+    TT_FATAL(shape[0] == 1 || shape[0] == 2, "{}: summaries must hold 1 or 2 slots, got {}", operation_name, shape[0]);
+    TT_FATAL(shape[1] > 0, "{}: summaries must hold at least one transform", operation_name);
+    const uint32_t key_dim = shape[2];
+    TT_FATAL(
+        key_dim > 0 && shape[3] > key_dim && key_dim % tt::constants::TILE_WIDTH == 0 &&
+            shape[3] % tt::constants::TILE_WIDTH == 0,
+        "{}: summary rows must be [A | B] with positive, tile-aligned K and V",
+        operation_name);
+    return {
+        .slots = static_cast<uint32_t>(shape[0]),
+        .transforms = static_cast<uint32_t>(shape[1]),
+        .key_dim = key_dim,
+        .value_dim = static_cast<uint32_t>(shape[3]) - key_dim};
 }
 
 void check_compute_config(const DeviceComputeKernelConfig& config, std::string_view operation_name) {

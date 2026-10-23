@@ -302,13 +302,15 @@ def one_core_height_sharded(shape: tuple[int, int]) -> ttnn.MemoryConfig:
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
 
-def group_summary_nd_sharded(device: ttnn.Device, slots: int, batch_heads: int, dim: int) -> ttnn.MemoryConfig:
-    """L1 ND shards of one group-head's [slots, 1, K, 2K] summary rows, one per core in row-major order."""
-    cores = ttnn.num_cores_to_corerangeset(batch_heads, device.compute_with_storage_grid_size(), row_wise=True)
+def group_summary_nd_sharded(
+    device: ttnn.Device, slots: int, transforms: int, key_dim: int, value_dim: int
+) -> ttnn.MemoryConfig:
+    """L1 ND shards of one transform's [slots, 1, K, K+V] summary rows, one per core in row-major order."""
+    cores = ttnn.num_cores_to_corerangeset(transforms, device.compute_with_storage_grid_size(), row_wise=True)
     return ttnn.MemoryConfig(
         buffer_type=ttnn.BufferType.L1,
         nd_shard_spec=ttnn.NdShardSpec(
-            shard_shape=[slots, 1, dim, 2 * dim],
+            shard_shape=[slots, 1, key_dim, key_dim + value_dim],
             grid=cores,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),

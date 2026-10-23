@@ -163,8 +163,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 sequence. Native mesh coordinates supply each device's rank.
             groups_per_head (int, optional): Groups folded into the leading
                 dimension. Defaults to 1.
-            memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
-                Defaults to DRAM.
+            memory_config (ttnn.MemoryConfig, optional): Output memory configuration:
+                interleaved, height-sharded or ND-sharded. Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
                 Compute-kernel configuration.
 
