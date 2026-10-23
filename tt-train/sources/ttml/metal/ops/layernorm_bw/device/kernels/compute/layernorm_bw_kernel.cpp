@@ -48,6 +48,25 @@ constexpr bool do_mask_w = true;
 constexpr bool do_mask_w = false;
 #endif
 
+// Which outputs to produce. Gamma and the two row sums are only needed for dx.
+#ifdef COMPUTE_GRAD_INPUT
+constexpr bool compute_grad_input = true;
+#else
+constexpr bool compute_grad_input = false;
+#endif
+
+#ifdef COMPUTE_GRAD_GAMMA
+constexpr bool compute_grad_gamma = true;
+#else
+constexpr bool compute_grad_gamma = false;
+#endif
+
+#ifdef COMPUTE_GRAD_BETA
+constexpr bool compute_grad_beta = true;
+#else
+constexpr bool compute_grad_beta = false;
+#endif
+
 // Compute x_hat = (input - mean) * rstd
 // input is in cb_input_idx, mean is in cb_mean_idx (broadcasted), rstd is in cb_rstd_idx (broadcasted)
 // result is stored in cb_x_hat_idx
@@ -489,7 +508,9 @@ void kernel_main() {
     }
     cb_wait_front(cb_scaler_idx, onetile);
 
-    compute_kernel_hw_startup(cb_x_hat_idx, cb_gamma_idx, cb_dx_idx);
+    // cb_gamma and cb_dx only exist when dx is requested, so start up with CBs that are always created and share
+    // their data formats.
+    compute_kernel_hw_startup(cb_x_hat_idx, cb_dL_out_idx, cb_rstd_bcast_idx);
     copy_init(cb_x_hat_idx);
     reconfig_data_format(cb_scaler_idx, cb_scaled_dy_gamma_sum_idx);
 
@@ -529,16 +550,18 @@ void kernel_main() {
 
         cb_wait_front(cb_dL_out_idx, Wt);
         // If everything fits in L1, wait for gamma only once as its shared across all rows
-        if (row == 0) {
+        if (compute_grad_input && row == 0) {
             cb_wait_front(cb_gamma_idx, Wt);
         }
 #endif
 
-        compute_dy_gamma_sum(row);
-        cb_wait_front(cb_scaled_dy_gamma_sum_idx, onetile);
+        if constexpr (compute_grad_input) {
+            compute_dy_gamma_sum(row);
+            cb_wait_front(cb_scaled_dy_gamma_sum_idx, onetile);
 
-        compute_dy_gamma_xnorm_sum(row);
-        cb_wait_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
+            compute_dy_gamma_xnorm_sum(row);
+            cb_wait_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
+        }
 
         // Process each block of tiles in the row
         for (uint32_t col = 0; col < Wt; col += block_size) {
@@ -553,9 +576,11 @@ void kernel_main() {
             cb_wait_front(cb_x_hat_idx, block_size);
 
             cb_wait_front(cb_dL_out_idx, block_size);
-            cb_wait_front(cb_gamma_idx, block_size);
+            if constexpr (compute_grad_input) {
+                cb_wait_front(cb_gamma_idx, block_size);
+            }
 #endif
-            {
+            if constexpr (compute_grad_input) {
                 uint32_t dx_register;
                 tile_regs_acquire();
 
@@ -574,7 +599,7 @@ void kernel_main() {
 
             reconfig_data_format(cb_dL_out_idx, cb_dL_out_idx);
             // Compute dgamma_components
-            {
+            if constexpr (compute_grad_gamma) {
                 uint32_t dgamma_register;
                 tile_regs_acquire();
 
@@ -592,7 +617,7 @@ void kernel_main() {
             }
 
             // Compute dbeta_components
-            {
+            if constexpr (compute_grad_beta) {
                 uint32_t dbeta_register;
                 tile_regs_acquire();
 
@@ -609,7 +634,9 @@ void kernel_main() {
                 pack_and_push_block(cb_dbeta_components, block_size);
             }
 #ifndef EVERYTHING_FITS_IN_L1
-            cb_pop_front(cb_gamma_idx, block_size);
+            if constexpr (compute_grad_input) {
+                cb_pop_front(cb_gamma_idx, block_size);
+            }
             cb_pop_front(cb_dL_out_idx, block_size);
             cb_pop_front(cb_x_hat_idx, block_size);
             cb_pop_front(cb_input_idx, block_size);
@@ -619,8 +646,10 @@ void kernel_main() {
         // Pop the row-level tensors
         cb_pop_front(cb_rstd_bcast_idx, onetile);
         cb_pop_front(cb_mean_bcast_idx, onetile);
-        cb_pop_front(cb_scaled_dy_gamma_sum_idx, onetile);
-        cb_pop_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
+        if constexpr (compute_grad_input) {
+            cb_pop_front(cb_scaled_dy_gamma_sum_idx, onetile);
+            cb_pop_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
+        }
 #ifdef EVERYTHING_FITS_IN_L1
         // Pop per-row data
         cb_pop_front(cb_dL_out_idx, Wt);
@@ -628,7 +657,7 @@ void kernel_main() {
         cb_pop_front(cb_input_idx, Wt);
 
         // Pop gamma only on the last row (since it's shared across all rows)
-        if (row == num_rows_per_core - 1) {
+        if (compute_grad_input && row == num_rows_per_core - 1) {
             cb_pop_front(cb_gamma_idx, Wt);
         }
 #endif

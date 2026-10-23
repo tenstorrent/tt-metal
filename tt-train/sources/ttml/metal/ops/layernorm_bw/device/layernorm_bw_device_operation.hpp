@@ -40,6 +40,9 @@ ttml::metal::ops::layernorm_bw::device::LayerNormBackwardDeviceOperation::tensor
     const ttnn::Tensor& dL_dout_tensor,
     const std::optional<ttnn::Tensor>& preallocated_dx = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_dgamma_components = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_dbeta_components = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_dbeta_components = std::nullopt,
+    bool compute_grad_input = true,
+    bool compute_grad_gamma = true,
+    bool compute_grad_beta = true);
 
 }  // namespace ttnn::prim
