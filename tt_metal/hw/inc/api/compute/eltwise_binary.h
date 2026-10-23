@@ -413,6 +413,12 @@ namespace detail {
 template <EltwiseBinaryType eltwise_binary_type, EltwiseBinaryReuseDestType reuse_dest, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void binary_reuse_dest_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
 #ifndef ARCH_QUASAR
+    if constexpr (reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA) {
+        reconfig_data_format_srcb(in_cb_id);
+    } else {
+        reconfig_data_format_srca(in_cb_id);
+    }
+    binary_reuse_dest_init<eltwise_binary_type, reuse_dest>(in_cb_id, __builtin_LINE());
     UNPACK(constexpr bool acc_to_dest = true);
 #else
     UNPACK(constexpr bool acc_to_dest = false);
