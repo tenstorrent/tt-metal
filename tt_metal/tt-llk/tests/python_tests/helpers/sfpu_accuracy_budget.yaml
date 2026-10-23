@@ -2245,7 +2245,9 @@ Log:
   - {in: Float32, out: Float32, dest: "Yes", max_ulp: 2, measured: 1, run: 2026-10-20}
 
 
-Log10:  # Wormhole in the craq-sim simulator (30e35f9b, bit-exact SFPU model), not silicon; measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-15, except where a row says otherwise
+# Exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b and strided Float32 sweep.
+# Each row carries its own measured figure and run date.
+Log10:  # Wormhole in the craq-sim simulator (30e35f9b, bit-exact SFPU model), not silicon
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance, measured: 16793, run: 2026-10-15}  # max 16793 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance, measured: 16793, run: 2026-10-15}  # max 16793 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, dest: "Yes", max_ulp: 5, measured: 4, run: 2026-10-15}  # max 4 ULP
