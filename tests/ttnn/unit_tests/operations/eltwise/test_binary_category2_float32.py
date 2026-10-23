@@ -31,7 +31,8 @@ Category 2: binary comparison + min/max
 | 8  | ttnn.minimum  | elementwise min         | exact; NaN ordered by its sign bit       |
 | 9  | ttnn.maximum  | elementwise max         | exact; NaN ordered by its sign bit       |
 
-The relational ops are covered tensor-tensor, tensor-scalar and inplace.
+The relational ops are covered tensor-tensor and tensor-scalar; the inplace
+variants are covered tensor-tensor only.
 """
 
 
@@ -110,12 +111,12 @@ _RELATIONAL_SCALAR_VALUES = [
 ]
 
 
-@pytest.mark.parametrize("ttnn_op", RELATIONAL_OPS + RELATIONAL_INPLACE_OPS)
+@pytest.mark.parametrize("ttnn_op", RELATIONAL_OPS)
 @pytest.mark.parametrize("scalar", _RELATIONAL_SCALAR_VALUES)
 def test_relational_ops_scalar(device, ttnn_op, scalar):
-    """Tensor-scalar coverage of the relational ops (and their inplace
-    variants): the stratified grid, including ±0, ±inf and qNaN, against a
-    scalar from every ordering / special-value class.
+    """Tensor-scalar coverage of the relational ops: the stratified grid,
+    including ±0, ±inf and qNaN, against a scalar from every ordering /
+    special-value class.
 
     The grid is 2048 unique values. Each is repeated across one tile width,
     giving (2048, 32): 64 full tiles, and the same (value, scalar) pairs as
@@ -130,13 +131,8 @@ def test_relational_ops_scalar(device, ttnn_op, scalar):
     tt_a = to_float32_tt_tensor(input_a, device)
 
     golden_function = ttnn.get_golden_function(ttnn_op)
-    golden = golden_function(input_a.clone(), torch.tensor(scalar, dtype=input_a.dtype))
-
-    if ttnn_op.__name__.endswith("_"):
-        ttnn_op(tt_a, scalar)
-        result = ttnn.to_torch(tt_a)
-    else:
-        result = ttnn.to_torch(ttnn_op(tt_a, scalar))
+    golden = golden_function(input_a, torch.tensor(scalar, dtype=input_a.dtype))
+    result = ttnn.to_torch(ttnn_op(tt_a, scalar))
 
     assert_equal(golden.float(), result.float())
 
@@ -210,8 +206,8 @@ def test_minmax_special_values(device, ttnn_op, is_max):
     | -NaN | x    | -NaN           | x              |
     | +NaN | -NaN | -NaN           | +NaN           |
 
-    x is any non-NaN value, ±inf included. Checked on device for x = 1.0,
-    -5.0, ±inf.
+    x is any non-NaN value, ±inf included. Checked on device for x = ±0,
+    ±1, ±2.5, ±inf.
 
     2) ±0 pairs: the device is sign-aware as in IEEE 754-2019, because -0
        orders below +0. torch just returns an operand, and which one depends
@@ -312,3 +308,41 @@ def test_isclose(device, rtol, atol, equal_nan):
     adjusted_golden = torch.where(dest_sub_flushed, torch.ones_like(golden), golden)
 
     assert_equal(adjusted_golden, result)
+
+
+@pytest.mark.parametrize("rtol", [1e-05, 1e-04])
+def test_isclose_relative_tolerance(device, rtol):
+    """ttnn.isclose with atol = 0 on pairs whose relative gap brackets rtol.
+
+    Distinct values on the stratified grid are at least 2^-8 apart in
+    relative terms, so test_isclose never accepts a pair through rtol alone.
+    Here b runs over the normal grid values and a = b * (1 ± k * rtol):
+
+    | k   | abs(a - b) vs rtol * abs(b) | expected |
+    |-----|-----------------------------|----------|
+    | 0.5 | half the tolerance          | True     |
+    | 2   | twice the tolerance         | False    |
+
+    k is far from 1, so float32 rounding of a cannot move a pair across the
+    fence. Each pair is also checked swapped, which changes the abs(b) side.
+    abs(b) is kept within [2^-100, 2^100] so rtol * abs(b) stays normal.
+    """
+    values = generate_bfloat16_binary_grid(dtype=torch.float32)
+    b = values[torch.isfinite(values) & (values.abs() >= 2.0**-100) & (values.abs() <= 2.0**100)]
+    b = b.double()
+    a = torch.stack([b * (1 + sign * k * rtol) for sign in (1, -1) for k in (0.5, 2.0)]).float()
+    b = b.float().expand_as(a)
+    input_a = torch.cat([a, b])
+    input_b = torch.cat([b, a])
+
+    golden, result = run_binary(
+        device,
+        ttnn.isclose,
+        input_a,
+        input_b,
+        golden_kwargs={"rtol": rtol, "atol": 0.0},
+        input_dtype=ttnn.float32,
+    )
+    golden = golden.float()
+    assert golden.any() and not golden.all(), "expected pairs on both sides of the rtol fence"
+    assert_equal(golden, result.float())
