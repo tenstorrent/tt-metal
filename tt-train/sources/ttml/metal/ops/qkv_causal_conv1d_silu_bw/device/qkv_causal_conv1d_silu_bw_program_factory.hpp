@@ -32,7 +32,9 @@ inline std::vector<QkvCausalConv1dSiluBackwardDataflowBuffer> qkv_conv_bw_datafl
     const auto bf16 = input_format;
     constexpr auto fp32 = tt::DataFormat::Float32;
     std::vector<QkvCausalConv1dSiluBackwardDataflowBuffer> buffers{
-        {"x_shifted_rm", 8 * channel_tiles_per_block, bf16},    // x window copied 4x, each one row lower, row-major, x2
+        // x window copied 4x, each one row lower, row-major; x2 so the reader builds the next step's copies while
+        // compute tilizes these
+        {"x_shifted_rm", 8 * channel_tiles_per_block, bf16},
         {"x_shifted_tile", 4 * channel_tiles_per_block, bf16},  // the same 4 copies as tiles
         {"weights", 8 * channel_tiles_per_block, bf16},         // taps [4][channel_tiles_per_block], x2 to prefetch
         {"grad_out", 2 * channel_tiles_per_block, bf16},
@@ -44,9 +46,9 @@ inline std::vector<QkvCausalConv1dSiluBackwardDataflowBuffer> qkv_conv_bw_datafl
         {"sigmoid", channel_tiles_per_block, fp32},
         {"grad_preact_tile", channel_tiles_per_block, bf16},
         {"grad_preact_rm", 2 * channel_tiles_per_block, bf16},
-        {"grad_preact_shifted_rm",
-         8 * channel_tiles_per_block,
-         bf16},  // 4 shifted row-major copies of the grad_preact window, x2
+        // 4 shifted row-major copies of the grad_preact window; x2 because compute consumes them one step behind
+        // the writer (see the compute kernel)
+        {"grad_preact_shifted_rm", 8 * channel_tiles_per_block, bf16},
         {"grad_preact_shifted_tile", 4 * channel_tiles_per_block, bf16},
         {"output", 2 * channel_tiles_per_block, bf16},
         {"ones", 1, bf16},
