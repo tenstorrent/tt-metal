@@ -1160,7 +1160,7 @@ PERF_TEST_SCHEMAS = {
         }
     },
     "perf_eltwise_unary_sfpu_campaign": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "approx_mode",
             "clamp_negative",
@@ -1174,6 +1174,7 @@ PERF_TEST_SCHEMAS = {
             "formats.sfpu_dst",
             "formats.sfpu_src",
             "fresh_cpp_impl",
+            "fused_sort",
             "iterations",
             "loop_factor",
             "marker",
