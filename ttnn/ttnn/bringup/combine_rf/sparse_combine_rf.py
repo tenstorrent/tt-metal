@@ -37,6 +37,7 @@ from .combine_plan import link_of
 from .sparse_combine_l1 import _ACC_COMPUTE, _ACC_WRITER, _PORT_READER, TILE, route
 
 CB_INJ, CB_ROW, CB_META, CB_TAB, CB_ACC, CB_OUT, CB_W = 0, 1, 2, 3, 4, 5, 6
+DISP_CBS = dict(rows=24, meta=25, plan=26, stage=27, dbg=28)  # (the dispatch phase's, on the port cores)
 PIECE_MAX = 7168  # row bytes per fabric packet at most (default; piece_max): wider rows go as P equal pieces (64-B multiples), each
 # with its own 32-byte trailer, so a 7232 B fabric payload (more router slots) serves every model's rows; pieces sit
 # PS apart (64-byte aligned for the DRAM reads)
@@ -1357,6 +1358,7 @@ def sparse_combine_rf_prepare(
     probes=None,
     shared_rows=None,
     barrier=None,
+    dispatch=None,
     piggyback_credits=True,
     pool_slots=None,
     local_keep=8,
@@ -1388,7 +1390,10 @@ def sparse_combine_rf_prepare(
     ((r, (c + j) % C) / ((r + j) % R, c); block 0: mine, not sent): every chip sends its group-mates their blocks before
     the flat's rows, into the same accumulators with weight 1 (the split shared expert's reduce-scatter, on the
     combine's rings and credits; static counts on top of the plan's; the accumulators add block 0, the own tokens'
-    partial, from DRAM). barrier (with l1): dict(tensor=) - a persistent L1
+    partial, from DRAM). dispatch (with l1, a port per link): dict(sems, relays, words, ready_off) - the sparse 2D dispatch
+    (sparse_all_gather_2d.dispatch_phase) runs first in this program's port kernels, on these ports and their fabric
+    connections: build(.., disp=dict(output, plan, manifest)) - its readers then count in on the flat op's x relays'
+    ready words (the flat layout's x_ready). barrier (with l1): dict(tensor=) - a persistent L1
     tensor of >= 8 B per core on every core (zeros at creation, never rewritten by the caller): the program starts with
     a cross-chip barrier, so the caller may zero the arena right before it (no other sync in between).
     piggyback_credits: rows carry their link class's consumed counts back to the chip they go to (standalone credit
@@ -1742,15 +1747,61 @@ def sparse_combine_rf_prepare(
         assert int(arena_t.buffer_address()) == area, "the arena moved: the kernels bake its address"
         mesh_desc = ttnn.MeshProgramDescriptor()
         for ch, program, placed in state["placed"]:
-            program.cbs = arena_cbs(placed, arena_t)
+            program.cbs = arena_cbs(placed, arena_t) + state.get("static", {}).get(ch, [])
             mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(*ch), ttnn.MeshCoordinate(*ch))] = program
         return mesh_desc
 
-    def build(y, out, arena_t=None):
+    def build(y, out, arena_t=None, disp=None):
         nonlocal area_t
         if arena_t is not None:  # (a per-call arena: the same address, its buffer bound by the CBs)
             assert int(arena_t.buffer_address()) == area, "the arena moved: the kernels bake its address"
             area_t = arena_t
+        dpieces, ksrc = None, dict(srcs)
+        state["static"] = {}
+        if dispatch is not None:  # (the dispatch as the port kernels' first phase)
+            from .sparse_all_gather_2d import dispatch_phase
+
+            assert disp is not None and l1 is not None and not PER_DIR and not FUSED, "dispatch: L1 hand-off, per link"
+            ps_ct0 = 8
+            dpieces, (rinc, rph, sinc, sph, rd_ct, sd_ct) = dispatch_phase(
+                mesh_device,
+                disp["output"],
+                disp["plan"],
+                disp["manifest"],
+                port_core,
+                dispatch["sems"],
+                rd_ct0=1,
+                sd_ct0=ps_ct0,
+                cbs=DISP_CBS,
+                relays=dispatch["relays"],
+                words_addr=dispatch["words"],
+                ready_off=dispatch["ready_off"],
+                num_links=L,
+                torus=torus,
+                group=dispatch.get("group", 8),
+            )
+            rd_n = len(next(iter(next(iter(dpieces.values()))["rd"].values())))
+            sd_n = len(next(iter(next(iter(dpieces.values()))["sd"].values())))
+            pre_r, pre_s = "void kernel_main() {\n    size_t a = 0;\n", "void kernel_main() {\n    size_t a = 0;\n"
+            assert (
+                ksrc["pr1"].count(pre_r) == 1
+                and ksrc["ps"].count(pre_s) == 1
+                and ksrc["ps"].count("    conn.open();\n") == 1
+            )
+            ksrc["pr1"] = (
+                rinc
+                + rph
+                + ksrc["pr1"].replace(pre_r, f"void kernel_main() {{\n    sa::read_phase(0);\n    size_t a = {rd_n};\n")
+            )
+            ksrc["ps"] = (
+                sinc
+                + sph
+                + ksrc["ps"]
+                .replace(pre_s, f"void kernel_main() {{\n    size_t a = {sd_n};\n")
+                .replace(
+                    "    conn.open();\n", "    conn.open();\n    sa::send_phase(0, conn);  // (the dispatch first)\n"
+                )
+            )
         y_ct = list(ttnn.TensorAccessorArgs(y).get_compile_time_args())
         t_ct = list(ttnn.TensorAccessorArgs(tab_t).get_compile_time_args())
         o_ct = list(ttnn.TensorAccessorArgs(out).get_compile_time_args())
@@ -1819,6 +1870,9 @@ def sparse_combine_rf_prepare(
                         ), "acc_on_ports: no room for the injection ring"
                         cbs.append(arena_cbs([(CB_INJ, pset, inj_off, QP * ISLOT, ttnn.uint32, ISLOT)], area_t)[0])
                         placed.append((CB_INJ, pset, inj_off, QP * ISLOT, ttnn.uint32, ISLOT))
+            if dpieces is not None:  # (the dispatch's CBs: static, on this chip's port cores)
+                state["static"][ch] = list(dpieces[ch]["cbs"])
+                cbs = cbs + state["static"][ch]
             program.cbs = cbs
             if l1 is not None:
                 pids = port_ids[ch]
@@ -1902,6 +1956,9 @@ def sparse_combine_rf_prepare(
                                     v_ = virt(ttnn.CoreCoord(*xy))
                                     bt += [idx(s_), v_.x, v_.y]
                     args += [int(barrier["tensor"].buffer_address()), len(bt) // 3] + bt
+                if dpieces is not None:  # (the dispatch phase's args first)
+                    args = list(dpieces[ch]["sd"][(core.x, core.y)]) + args
+                    pr_rt[core.x][core.y] = list(dpieces[ch]["rd"][(core.x, core.y)]) + list(pr_rt[core.x][core.y])
                 ps_rt[core.x][core.y] = args
             ar_rt, ac_rt, aw_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             for i, core in enumerate(acc_cores):
@@ -1943,18 +2000,24 @@ def sparse_combine_rf_prepare(
             aw_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in acc_cores if not FUSED or (c.x, c.y) not in p_xy])
             program.kernels = [
                 ttnn.KernelDescriptor(
-                    kernel_source=srcs["pr1"] if l1 is not None else srcs["pr"],
+                    kernel_source=ksrc["pr1"] if l1 is not None else srcs["pr"],
                     source_type=st,
                     core_ranges=pset,
-                    compile_time_args=[CB_INJ] if l1 is not None else [CB_INJ, CB_TAB, row_bytes, ISLOT] + y_ct + t_ct,
+                    compile_time_args=(
+                        [CB_INJ] + (rd_ct if dpieces is not None else [])
+                        if l1 is not None
+                        else [CB_INJ, CB_TAB, row_bytes, ISLOT] + y_ct + t_ct
+                    ),
                     runtime_args=pr_rt,
                     config=dm("RISCV_1", NOC0),
                 ),
                 ttnn.KernelDescriptor(
-                    kernel_source=srcs["ps"],
+                    kernel_source=ksrc["ps"],
                     source_type=st,
                     core_ranges=pset,
-                    compile_time_args=[CB_INJ, row_bytes, SLOT, PSL, A, N, L, ISLOT] + (o_ct if FUSED else []),
+                    compile_time_args=[CB_INJ, row_bytes, SLOT, PSL, A, N, L, ISLOT]
+                    + (o_ct if FUSED else [])
+                    + (sd_ct if dpieces is not None else []),
                     runtime_args=ps_rt,
                     config=dm("RISCV_0", NOC1),
                 ),
@@ -1996,9 +2059,11 @@ def sparse_combine_rf_prepare(
             state["key"], state["desc"] = k, build(y, out)
         return ttnn.generic_op([y, tab_t, out], state["desc"])
 
-    def build_l1(y, out, arena_t=None):  # (the descriptor and, per chip in its order, the y writers' hand-off args)
+    def build_l1(
+        y, out, arena_t=None, disp=None
+    ):  # (the descriptor and, per chip in its order, the y writers' hand-off args)
         l1_args.clear()
-        desc = build(y, out, arena_t)
+        desc = build(y, out, arena_t, disp)
         return desc, [list(v) for v in l1_args]
 
     # what a fresh (uninitialized) arena needs zeroed for a call to start from scratch: per core (logical x, y), runs of

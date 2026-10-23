@@ -40,6 +40,7 @@ FIELDS = (
     "even_split",
     "rows_hint",
     "gu_kgroup",
+    "x_ready",
 )
 
 # DRAM-core (DRISC) gate/up weight readers only: no Tensix weight readers, no per-call Tensix fallback, inside the

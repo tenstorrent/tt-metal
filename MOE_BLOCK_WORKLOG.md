@@ -1034,3 +1034,22 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - After: GLM fused 99.92% vs ops 99.88% (test_router_vs_ops); block test GLM 98.95-99.46% (ops 98.97-99.56), K3
   98.48-98.73 (ops 98.44-98.79); the head test's picks GLM 99.45%, K3 99.73% (worst chip). Cost: the fin + top-K
   ~+8 us - GLM's chain 160-161 -> 172 (binds; SE 158), K3 378 (SE 392 binds).
+
+### Exchange stage 3: the dispatch inside the experts' program (opt-in, MoEOptions.experts_during_dispatch)
+- sparse_all_gather_2d.dispatch_phase: the dispatch's reader / sender bodies as phase functions (namespace sa) of the
+  combine's port kernels (sparse_combine_rf dispatch=: on its ports - place_ports with its cells - and its open fabric
+  connection: one sender a link; CBs 24..28, kept across the arena rebind; global semaphores on those cores before the
+  arena; the manifest per call below the arena - the reserve is now max(flat CBs, dispatch CBs) + manifest). After its
+  reader phase a port counts in on every x relay's ready word (+1, the chip's first port also the pad to 8).
+- Flat op (C++): FlatLayoutOptions.x_ready (plan key) - the relays (se11_xrd) wait for that count on their words at
+  X_READY_OFF, then re-arm by subtraction. "Landed" rests on every incoming link delivering END(GMAX) to a port of the
+  chip (asserted per port). CPU model test_exchange_phase_model.py (line / ring / torus, random interleavings, one FIFO a
+  link with rows before the entries behind them): no deadlock, the gate sound, counts exact, combine after the dispatch on
+  a link; an early gate trips it.
+- Correct (block PCC as before, 300-call soaks both models). Perf at the LoudBox's experts per chip (GLM 36, K3 56):
+  GLM dispatch + experts + combine 1460 us (ring 2) / 1440 (3) / 1412 (4) vs separate 141 + 1295 = 1436 at ring 4;
+  K3 2438 / 2447 / 2454 vs 133 + 2309 = 2442. Zones: the gate/up rings fill by ~75 us, but x-ready lands at 170-284 us
+  from a chip's start (the standalone dispatch 133-141): the dispatch stretches under the weight stream.
+- Dispatch DRAM per chip (rows written at every hop and read back by the next hop's reader; CPU count over the trees,
+  uniform routing, 160 tokens a chip): LoudBox ~19 MB (~37 us at 512 GB/s); Galaxy 8x4 35 MB GLM / 43 MB K3 (68 / 84 us)
+  vs weights 127 / 520 MB.

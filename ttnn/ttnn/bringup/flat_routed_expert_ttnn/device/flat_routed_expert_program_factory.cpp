@@ -941,6 +941,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         Defines xrd_def = with(dyn_def, {{"SE_SBT", sbt}, {"XHELP_SMALL", "1"}});
         if (indexed) {
             xrd_def["XRD_INDEXED"] = "1";
+            if (lo.x_ready > 0) {  // (x lands during the program: wait for the caller's count, layout.x_ready)
+                xrd_def["XRD_READY"] = std::to_string(lo.x_ready);
+            }
         }
         if (x_drisc) {  // (x from the DRISCs: the relays' credit / arrival semaphores, se_drisc.hpp SE_XSEM_*)
             TT_FATAL(p.rm_chunks <= 5, "MIMO_FL_DRISC_X: at most 5 row-major chunks (semaphores)");
@@ -1124,7 +1127,13 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             }
             if (indexed) {
                 xr.a(AddrSrc::TokenIndex);
-                xr.a(AddrSrc::Arena, p.ti_off);  // (unused since the XRD_IDX_ALL probe went: the args keep their order)
+                if (lo.x_ready > 0) {  // (the slot after the index: this relay's x-ready word, XRD_READY)
+                    xr.a(AddrSrc::Words, X_READY_OFF);
+                } else {
+                    xr.a(
+                        AddrSrc::Arena,
+                        p.ti_off);  // (unused since the XRD_IDX_ALL probe went: the args keep their order)
+                }
             }
             if (xhelp_all) {  // helper j: super-blocks g % NH == j; the primary none (its kernel idles off small M)
                 xr = Args{};

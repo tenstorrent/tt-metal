@@ -15,6 +15,9 @@ namespace ttnn::operations::bringup::flat_routed_expert {
 // The layout / program choices a caller makes for the flat routed expert: typed, part of the plan cache key and of
 // every program hash, passed from Python (FlatRoutedExpert(layout=...), presets in flat_layouts.py). Every default is
 // the plan's own choice - what an unset environment gave before these were options (ENV_CLEANUP.md). -1: unset.
+// the x-ready word's byte offset in each relay's words (past the gate/up cores' freed words, which the relays zero)
+constexpr uint32_t X_READY_OFF = 2032;
+
 struct FlatLayoutOptions {
     // Defaults (EXPERTS_COMBINE_CLOSEOUT.md): DRISC only - every gate/up weight from the DRAM cores, no Tensix weight
     // readers and no per-call Tensix fallback, inside the combine overlaps too - and even splits. Preset LEGACY in
@@ -59,6 +62,10 @@ struct FlatLayoutOptions {
     // instead of per block, the matmul order unchanged (bit-exact). -1: 2 (GLM-5.3 E 8 M 1024 / 2048 -2.7 / -3.4%,
     // DSv4.1 -1.2 / -1.3%, neutral below M 512 and for K3 / K2.7 / M3; 4 regressed M3 at 2048, FLAT_EXPERT_WORKLOG.md)
     int32_t gu_kgroup = -1;
+    // x landed signal (a caller that runs the dispatch in the same program): > 0 - every x relay waits until its
+    // x-ready word (the relay words at X_READY_OFF) reaches this count before its first x read, then re-arms it by
+    // subtraction; the caller's dispatch ports count in there once their rows have landed. -1: x is in place at launch
+    int32_t x_ready = -1;
 
     // every field, for the plan cache key and the program hashes
     std::vector<uint32_t> key() const;

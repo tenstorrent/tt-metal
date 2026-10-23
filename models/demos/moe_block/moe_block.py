@@ -124,7 +124,9 @@ class MoEDtypes:
 @dataclass(frozen=True)
 class MoEOptions:
     shared_expert: Literal["tp_split", "fold_into_combine"] = "tp_split"  # never replicated over TP
-    experts_during_dispatch: bool = False  # weights stream from the dispatch start
+    # the dispatch inside the experts' program (the combine's port kernels' first phase): the weights stream from the
+    # dispatch start, the experts' x reads wait until every port of the chip has its rows in (fused head only)
+    experts_during_dispatch: bool = False
     deterministic: bool = False  # fixed sum order, bit-identical runs (debug)
     # the head: "fused" one program a chip (tt/fused_head.py: x all-gather, shared expert + reduce-scatter, router,
     # routing exchange + planner, dispatch prep, latent); "ops" a program a stage; "auto": fused where it is built
@@ -310,11 +312,13 @@ class MoEBlock(LightweightModule):
         weights.check(model)
         # bring-up limits (each lifted by the piece that needs it)
         assert options.shared_expert == "tp_split", "bring-up: the shared expert TP-split, reduce-scattered in the head"
-        assert not options.experts_during_dispatch, "bring-up: the experts start after the dispatch"
         assert not sequence_zigzag, "bring-up: natural sequence order"
         fits = FusedHead.fits(g, model, dtypes)
         assert options.head != "fused" or fits is True, f"the fused head: {fits}"
         self.head_mode = "fused" if options.head == "fused" or (options.head == "auto" and fits is True) else "ops"
+        assert (
+            not options.experts_during_dispatch or self.head_mode == "fused"
+        ), "experts_during_dispatch: the fused head (its dispatch prep hands the exchange the dispatch buffer)"
         self.fused = None
         self.router = self.shared = None
         if self.head_mode == "ops":
@@ -325,7 +329,9 @@ class MoEBlock(LightweightModule):
         if model.latent_dim is not None:  # (the fused head does the latent down: only the up is used then)
             self.latent = LatentProjections(mesh_device, g, model, weights.latent, dtypes)
         self.experts = RoutedExperts(mesh_device, g, model, weights.routed, dtypes)
-        self.exchange = TokenExchange(mesh_device, g, model, self.experts)
+        self.exchange = TokenExchange(
+            mesh_device, g, model, self.experts, dispatch_in_program=options.experts_during_dispatch
+        )
         self.stage_hook = None  # (profiling: called with the stage name after every stage)
         self.keep_taps = False  # (debug: keep the last call's routing rows for taps())
         self._taps = {}
@@ -899,8 +905,9 @@ class TokenExchange:
     owners' rows. Built by the block after its head and tail ran once (the arena's address is baked into its kernels),
     rebuilt (with a warning) only if L1 allocated since moved the arena."""
 
-    def __init__(self, mesh, g: Geometry, model: MoEModel, experts: RoutedExperts):
+    def __init__(self, mesh, g: Geometry, model: MoEModel, experts: RoutedExperts, dispatch_in_program=False):
         self.mesh, self.g, self.model, self.experts = mesh, g, model, experts
+        self.dispatch_in_program = dispatch_in_program
         self.block = None
         self.builds = 0
 
@@ -922,6 +929,7 @@ class TokenExchange:
             torus=(g.tp_wraps, g.sp_wraps),
             joint_routing=True,
             combine_auto_cfg=True,
+            dispatch_in_program=self.dispatch_in_program,
         )
         self.builds += 1
 

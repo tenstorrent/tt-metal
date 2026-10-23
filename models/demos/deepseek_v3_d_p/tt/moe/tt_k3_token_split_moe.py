@@ -166,6 +166,7 @@ class TtK3TokenSplitMoE:
         shared_axis=1,
         joint_routing=False,
         combine_auto_cfg=False,
+        dispatch_in_program=False,
     ):
         """routed_only (GLM-5.3-Flash hack): only the routed experts and their combine - no router (the caller's top-k
         goes to routed()), no latent projections (d.latent = d.H: the dispatch rows are x), no shared expert; the
@@ -181,7 +182,10 @@ class TtK3TokenSplitMoE:
         joint_routing (routed_only): routed() takes the router's joint rows (combine_rf/router_topk.py's 32-token pages:
         ids, then weights' bf16 bits) as ids, wts None. combine_auto_cfg: the combine's accumulators, port placement and
         rings from the free cells and the arena (sparse_combine_rf.combine_auto, the close-out sizing) instead of 16
-        accumulators, acc_on_ports and combine_depth."""
+        accumulators, acc_on_ports and combine_depth. dispatch_in_program (routed_only, sparse dispatch, combine_auto_cfg):
+        routed_prepped's dispatch runs as the first phase of the combine's port kernels inside the experts' program (its
+        ports the combine's; the x relays wait until every port of their chip has its rows in: the flat layout's x_ready)
+        - the weights stream from the program's start, under the dispatch."""
         self.mesh, self.d, self.S, self.torus = mesh_device, d, S, tuple(torus)
         self.routed_only = routed_only
         assert not routed_only or d.latent == d.H, "routed_only: no latent projections (d.latent = d.H)"
@@ -327,6 +331,12 @@ class TtK3TokenSplitMoE:
         self.gu64 = gu64 and flat_layout is None
         self.flat_layout = flat_layout if flat_layout is not None else (k3_gu64(acc_on_ports) if self.gu64 else {})
         self.x_once, self.dw_batch, self.layout_overrides = x_once, dw_batch, dict(layout_overrides or {})
+        self.dispatch_in_program = bool(dispatch_in_program)
+        if self.dispatch_in_program:  # (the x relays wait for the ports' count: sparse_all_gather_2d.XREADY_N)
+            from ttnn.bringup.combine_rf.sparse_all_gather_2d import XREADY_N
+
+            assert routed_only and combine_auto_cfg, "dispatch_in_program: routed_only, combine_auto_cfg"
+            self.layout_overrides["x_ready"] = XREADY_N
         self.op = FlatRoutedExpert(
             mesh_device,
             "fake",
@@ -408,17 +418,30 @@ class TtK3TokenSplitMoE:
             from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import crs_rects
 
             rl = [ttnn.CoreCoord(*c) for c in plan["relays"]]
-            self.relay_words = ttnn.allocate_tensor_on_device(
-                ttnn.Shape([len(rl) * 32, 32]),
-                ttnn.bfloat16,
-                ttnn.TILE_LAYOUT,
-                mesh_device,
-                ttnn.MemoryConfig(
+            self.relay_words = ttnn.from_torch(  # (zero: the x-ready word counts from it - dispatch_in_program)
+                torch.zeros(len(rl) * 32, 32, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                     ttnn.BufferType.L1,
                     ttnn.ShardSpec(crs_rects(rl), (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
                 ),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
+            self.relays = [tuple(c) for c in plan["relays"]]
+        self.disp_sems = None
+        if self.dispatch_in_program:  # (the dispatch's global semaphores on the combine's port cores: persistent L1,
+            # created before the arena; the ports as the combine places them - acc_on_ports off, asserted below)
+            from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan as _mp
+            from ttnn.bringup.combine_rf.sparse_all_gather_2d import place_ports as _pp
+
+            chips_d, _, _ = _mp(mesh_device, 2, self.torus)
+            pxy = sorted({(c.x, c.y) for c in _pp(mesh_device, chips_d, self.cells).values()})
+            pcrs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in pxy])
+            self.disp_cores = pxy
+            self.disp_sems = tuple(ttnn.create_global_semaphore(mesh_device, pcrs, 0) for _ in range(4))
         # the arena: the flat expert's buffers, the combine's state / rings / CBs (~all of L1 on every core). Per call:
         # allocated after the dense ops before the experts, its combine state zeroed on the device, freed after (a
         # persistent one leaves the other ops no L1 for their circular buffers). The dispatch all-gather between the
@@ -526,6 +549,10 @@ class TtK3TokenSplitMoE:
                 grp = 8 if 2 * d.latent <= 7168 else 2  # (dispatch()'s row group)
                 disp = (int(ms[0][-1]) * 4 + 63) // 64 * 64 + static_cb_bytes(self.N, S, d.latent, group=grp)
             reserve = fused_arena_reserve(max(flat_cbs, disp), l1=True) + 1024
+            if self.dispatch_in_program:  # (one program: the manifest above both kinds of static CBs)
+                man_b = (int(ms[0][-1]) * 4 + 63) // 64 * 64
+                stat = static_cb_bytes(self.N, S, d.latent, group=grp)
+                reserve = fused_arena_reserve(max(flat_cbs, stat), l1=True) + man_b + 1024
             a_rows = max(a_rows, (int(mv.largest_contiguous_bytes_free_per_bank) - reserve) // 64 // 32 * 32)
         all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         self._arena_spec = (
@@ -667,7 +694,19 @@ class TtK3TokenSplitMoE:
             piece_max=max(7168, 2 * d.latent),  # (the L1 hand-off: one piece a row; a fabric payload >= row + 32 B)
             shared_rows=dict(tensor=self.y_se, axis=self.shared_axis) if self.shared_tp else None,
             barrier=dict(tensor=self.bar) if self.shared_tp else None,
+            dispatch=(
+                dict(
+                    sems=self.disp_sems,
+                    relays=self.relays,
+                    words=int(self.relay_words.buffer_address()),
+                    ready_off=2032,
+                    group=8 if 2 * d.latent <= 7168 else 2,  # (dispatch()'s row group)
+                )
+                if self.dispatch_in_program
+                else None
+            ),
         )
+        assert not (self.dispatch_in_program and acc_on_ports), "dispatch_in_program: the combine's ports per link"
         self.acc_on_ports = acc_on_ports
         self.A = len(self.combine.cells["accs"])
         self.planner = combine_planner_prepare(mesh_device, A=self.A, **self._planner_args) if self.A != 15 else probe
@@ -986,7 +1025,7 @@ class TtK3TokenSplitMoE:
             int(arena.buffer_address()) == self.arena_addr
         ), f"the arena landed at {int(arena.buffer_address())}, not {self.arena_addr}: an L1 tensor outlives its op"
         if self.desc is None:
-            self.desc, self.l1_args = self.combine.build_l1(self.y, self.out, arena)
+            self.desc, self.l1_args = self.combine.build_l1(self.y, self.out, arena, getattr(self, "_disp", None))
             self._desc_arena = arena
         elif (
             not self.routed_only
@@ -1361,6 +1400,8 @@ class TtK3TokenSplitMoE:
         rows, the route words) -> the routed experts' sum [S, H] bf16 TILE (a fresh tensor)."""
         assert self.routed_only and self.sparse_dispatch
         mark = hook or (lambda _: None)
+        if self.dispatch_in_program:
+            return self._routed_in_program(prep, op, mark)
         arena = self.alloc_arena()
         mark("arena_zero")
         xg = self.dispatch(
@@ -1373,6 +1414,61 @@ class TtK3TokenSplitMoE:
         y = self.tilize(ttnn.reshape(self.out, [self.S, self.d.H]))
         mark("tilize")
         return y
+
+    def _routed_in_program(self, prep, op, mark):
+        """routed_prepped with the dispatch inside the experts' program (dispatch_in_program): the arena zeroed (its own
+        program: the dispatch's END barrier then also covers every chip's zeroing), the manifest for the call, one
+        program for the dispatch + experts + combine, the tilize."""
+        from ttnn.bringup.combine_rf.sparse_all_gather_2d import manifest_layout, mesh_plan
+
+        xbuf, route = prep
+        R, C = self.R, self.C
+        _, _, (wx, wy) = mesh_plan(self.mesh, 2, self.torus)
+        words = manifest_layout(R, C, wx, wy, self.S)[2] * 4
+        crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in self.disp_cores])
+        mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(crs, [1, words], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        dkey = (int(xbuf.buffer_address()), int(route.buffer_address()))
+        if getattr(self, "_disp_key", None) != dkey:  # (the dispatch's buffers are in the port kernels' args)
+            self.desc, self.__dict__["_seen_keys"] = None, set()
+            self._disp_key = dkey
+        # (the arena first, then the manifest below it - the reserve counts both; the descriptor built with them)
+        self._disp = None
+        if self.desc is None:
+            arena = ttnn.allocate_tensor_on_device(*self._arena_spec)
+            man = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, len(self.disp_cores), words]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh, mc
+            )
+            self._man_addr = int(man.buffer_address())
+            ttnn.deallocate(man)
+            ttnn.deallocate(arena)
+        arena = self.alloc_arena_disp(dict(output=xbuf, plan=route), mc, words)
+        mark("arena_zero")
+        xg = ttnn.reshape(xbuf, [self.N * self.S, self.d.latent])
+        self.experts_combine(xg, self.planner.outs, arena, op)
+        ttnn.deallocate(self._man)
+        ttnn.deallocate(arena)
+        mark("dispatch_experts_combine")
+        y = self.tilize(ttnn.reshape(self.out, [self.S, self.d.H]))
+        mark("tilize")
+        return y
+
+    def alloc_arena_disp(self, disp, mc, words):
+        """alloc_arena for dispatch_in_program: the manifest after the arena, at the address the descriptor baked."""
+        arena = ttnn.allocate_tensor_on_device(*self._arena_spec)
+        assert int(arena.buffer_address()) == self.arena_addr, "the arena moved"
+        self._man = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, len(self.disp_cores), words]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh, mc
+        )
+        assert int(self._man.buffer_address()) == self._man_addr, "the manifest moved"
+        if self.desc is None:
+            self.desc, self.l1_args = self.combine.build_l1(self.y, self.out, arena, dict(disp, manifest=self._man))
+            self._desc_arena = arena
+        ttnn.generic_op([arena, self.words], self.zero_desc)
+        return arena
 
     def __call__(self, x, keep=False, hook=None):
         """x: [S, H] bf16 TILE per chip. Returns y [S, H] (and the intermediates with keep=True). hook(stage name),

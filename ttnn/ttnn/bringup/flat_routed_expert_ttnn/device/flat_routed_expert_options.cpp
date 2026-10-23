@@ -10,10 +10,10 @@ namespace ttnn::operations::bringup::flat_routed_expert {
 
 std::vector<uint32_t> FlatLayoutOptions::key() const {
     const auto u = [](int32_t v) { return static_cast<uint32_t>(v); };
-    return {drisc,       drisc_dual,      drisc_in_overlap, u(drisc_pure),  u(max_down),      u(x_helpers),
-            half_width,  u(hg_units),     u(row0),          u(row1),        u(x_path),        u(x_snakes),
-            u(x_pieces), u(x_fwd_ncrisc), u(x_fwd_noc),     u(x_fwd_depth), u(x_relay_depth), x_once,
-            u(dw_batch), pin_ratio,       single_subgrid,   even_split,     u(rows_hint),     u(gu_kgroup)};
+    return {drisc,        drisc_dual,     drisc_in_overlap, u(drisc_pure), u(max_down), u(x_helpers), half_width,
+            u(hg_units),  u(row0),        u(row1),          u(x_path),     u(x_snakes), u(x_pieces),  u(x_fwd_ncrisc),
+            u(x_fwd_noc), u(x_fwd_depth), u(x_relay_depth), x_once,        u(dw_batch), pin_ratio,    single_subgrid,
+            even_split,   u(rows_hint),   u(gu_kgroup),     u(x_ready)};
 }
 
 std::string FlatLayoutOptions::str() const {
@@ -21,7 +21,7 @@ std::string FlatLayoutOptions::str() const {
         "drisc {} dual {} in_overlap {} pure {} max_down {} x_helpers {} half_width {} hg_units {} rows {}..{} x_path "
         "{} "
         "snakes {} pieces {} fwd_ncrisc {} fwd_noc {} fwd_depth {} relay_depth {} x_once {} dw_batch {} pin_ratio {} "
-        "single_subgrid {} even_split {} rows_hint {} gu_kgroup {}",
+        "single_subgrid {} even_split {} rows_hint {} gu_kgroup {} x_ready {}",
         drisc,
         drisc_dual,
         drisc_in_overlap,
@@ -45,7 +45,8 @@ std::string FlatLayoutOptions::str() const {
         single_subgrid,
         even_split,
         rows_hint,
-        gu_kgroup);
+        gu_kgroup,
+        x_ready);
 }
 
 FlatProbes FlatProbes::from_env() {

@@ -148,11 +148,15 @@ def test_moe_block(mesh_device, device_params, model, chunk):
     import os
 
     m = MODELS[model]
+    if os.environ.get("MOE_EXPERTS"):  # (test-only: e.g. the Galaxy's experts per chip on the 2x4)
+        m = dataclasses.replace(m, num_experts=int(os.environ["MOE_EXPERTS"]))
     T, H = chunk, m.emb_dim
     w = random_weights(m)
     t0 = time.perf_counter()
     # (MOE_HEAD: the head as one fused program, a program a stage, or where built - test-only)
-    opts = MoEOptions(head=os.environ.get("MOE_HEAD", "auto"))
+    opts = MoEOptions(
+        head=os.environ.get("MOE_HEAD", "auto"), experts_during_dispatch=bool(int(os.environ.get("MOE_EDD", "0")))
+    )
     block = MoEBlock(mesh_device, m, chunk, w, WeightCache(path=None, layer=0), options=opts)
     logger.info(f"MoEBlock {model}: built in {time.perf_counter() - t0:.1f} s")
     g = block.geometry
