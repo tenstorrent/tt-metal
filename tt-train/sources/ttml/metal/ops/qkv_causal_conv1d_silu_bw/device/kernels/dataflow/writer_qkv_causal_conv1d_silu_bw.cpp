@@ -33,19 +33,15 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
     constexpr uint32_t view_bytes = tile_height * row_bytes;
     const uint32_t tile_bytes = output.get_entry_size();
     const uint32_t partial_tile_bytes = partial.get_entry_size();  // fp32 tiles
-    const uint32_t window_base = local_mem::detail::AddressAccess::address(window.local_mem());
-    UnicastEndpoint self;
-    const uint32_t self_x = my_x[noc.get_noc_id()];
-    const uint32_t self_y = my_y[noc.get_noc_id()];
 
     const auto push_grad_preact_shifted = [&]() {
         grad_preact_shifted.reserve_back(tap_count * channel_tiles_per_block);
         for (uint32_t tap = 0; tap < tap_count; ++tap) {
             noc.async_read(
-                self,
+                window,
                 grad_preact_shifted,
                 view_bytes,
-                {.noc_x = self_x, .noc_y = self_y, .addr = window_base + tap * row_bytes},
+                {.offset_bytes = tap * row_bytes},
                 {.offset_bytes = tap * view_bytes});
         }
         noc.async_read_barrier();
@@ -77,19 +73,14 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
 
         for (uint32_t step = 0; step < step_count; ++step) {
             grad_preact_rm.wait_front(channel_tiles_per_block);
-            const uint32_t grad_preact_addr = grad_preact_rm.get_read_ptr();
             if (step > 0) {
-                noc.async_read(
-                    self,
-                    window,
-                    halo_rows * row_bytes,
-                    {.noc_x = self_x, .noc_y = self_y, .addr = grad_preact_addr},
-                    {.offset_bytes = tile_height * row_bytes});
-                noc.async_read_barrier();
+                noc.async_write(
+                    grad_preact_rm, window, halo_rows * row_bytes, {}, {.offset_bytes = tile_height * row_bytes});
+                noc.async_write_barrier();
                 push_grad_preact_shifted();
             }
-            noc.async_read(self, window, view_bytes, {.noc_x = self_x, .noc_y = self_y, .addr = grad_preact_addr}, {});
-            noc.async_read_barrier();
+            noc.async_write(grad_preact_rm, window, view_bytes, {}, {});
+            noc.async_write_barrier();
             grad_preact_rm.pop_front(channel_tiles_per_block);
             // Compute runs grad_input one step behind the shifted copies (see the compute kernel), so row step - 2.
             if (step > 1) {
@@ -97,12 +88,9 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
             }
         }
         if (!has_halo) {
-            auto* tail = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(window_base + tile_height * row_bytes);
-            for (uint32_t i = 0; i < halo_rows * row_bytes / sizeof(uint32_t); ++i) {
-                tail[i] = 0;
-            }
-            push_grad_preact_shifted();  // the last row's shifted copies goes out before draining so compute never
-                                         // waits for it
+            noc.async_write_zeros(window, halo_rows * row_bytes, {.offset_bytes = tile_height * row_bytes});
+            noc.write_zeros_l1_barrier();
+            push_grad_preact_shifted();  // before draining, so compute never waits for the last row's copies
         }
         if (step_count > 1) {
             write_output(first_tile_row + step_count - 2, first_tile_column);

@@ -45,10 +45,6 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     constexpr uint32_t view_bytes = tile_height * row_bytes;
     static_assert(row_bytes % L1_ALIGNMENT == 0 && row_bytes % DRAM_ALIGNMENT == 0);
     const uint32_t tile_bytes = weights.get_entry_size();
-    const uint32_t window_base = local_mem::detail::AddressAccess::address(window.local_mem());
-    UnicastEndpoint self;
-    const uint32_t self_x = my_x[noc.get_noc_id()];
-    const uint32_t self_y = my_y[noc.get_noc_id()];
 
     DataflowBuffer ones(dfb::ones);
     // A tile of 1.0, needed because the FPU has no add-constant: stage B computes 1 + preact * (1 - s) with it.
@@ -127,12 +123,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
                     }
                 }
             } else {
-                noc.async_read(
-                    self,
-                    window,
-                    halo_rows * row_bytes,
-                    {.noc_x = self_x, .noc_y = self_y, .addr = window_base + tile_height * row_bytes},
-                    {});
+                noc.async_read(window, window, halo_rows * row_bytes, {.offset_bytes = tile_height * row_bytes}, {});
                 noc.async_read_barrier();
             }
             for (uint32_t row = 0; row < tile_height; ++row) {
@@ -148,10 +139,10 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
             x_shifted.reserve_back(tap_count * channel_tiles_per_block);
             for (uint32_t tap = 0; tap < tap_count; ++tap) {
                 noc.async_read(
-                    self,
+                    window,
                     x_shifted,
                     view_bytes,
-                    {.noc_x = self_x, .noc_y = self_y, .addr = window_base + tap * row_bytes},
+                    {.offset_bytes = tap * row_bytes},
                     {.offset_bytes = tap * view_bytes});
             }
             grad_out.reserve_back(channel_tiles_per_block);
