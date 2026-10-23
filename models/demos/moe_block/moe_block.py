@@ -489,8 +489,22 @@ class MoEBlock(LightweightModule):
         self.exchange = TokenExchange(mesh, g, m, self.experts, dispatch_in_program=options.experts_during_dispatch)
         self._warm_up()
 
+    OPS_KEEP = 16 * 1024  # (L1 a core the ops' one-time words take at the top: ~3 KB at M3 on Galaxy)
+
     def _warm_up(self):
-        """The head and the tail once on zeros (the exchange skipped): every op they run allocates its one-time L1."""
+        """The head and the tail once on zeros (the exchange skipped): every op they run allocates its one-time L1. The
+        ops place theirs during their first call, under their large L1 intermediates (the logits reduce-scatter's: 8
+        words 650 KB down on Galaxy) - stranded mid-L1 once those go, and the exchange's arena gets only the L1 below.
+        So a free block at the top, held apart by a spacer under it: the words land there, intermediates (larger)
+        below the spacer."""
+        mesh = self.mesh_device
+        top = _l1_hole(mesh, self.OPS_KEEP)
+        spacer = _l1_hole(mesh, 64)
+        ttnn.deallocate(top)
+        self._warm_up_ops()
+        ttnn.deallocate(spacer)
+
+    def _warm_up_ops(self):
         g, m = self.geometry, self.model
         mesh = self.mesh_device
         rep = ttnn.ReplicateTensorToMesh(mesh)
