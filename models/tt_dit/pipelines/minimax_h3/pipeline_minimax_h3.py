@@ -152,7 +152,8 @@ MINIMAX_H3_PIXEL_STD = _MINIMAX_H3_PIXEL_STD
 # conditioning rows, which sit at max(t, 0.999). See `references.py`.
 MINIMAX_H3_AUDIO_CONDITION_TIMESTEP = 1.0
 
-# Read from the two scheduler_config.json files, which hold nothing else.
+# Read from the two scheduler_config.json files, which hold nothing else. Distillation adapters may
+# need other shifts.
 VIDEO_SHIFT = 12.0
 AUDIO_SHIFT = 3.0
 
@@ -402,6 +403,13 @@ def resolve_mesh_preset(mesh_shape: tuple[int, ...], *, required: bool = True) -
             "Pass tp_axis, sp_axis, num_links and topology explicitly to run an untuned shape."
         )
         raise ValueError(msg)
+    # Overridden here because servers open their fabric from this preset; fabric and CCLs must agree.
+    override = os.environ.get("MINIMAX_H3_TOPOLOGY")
+    if override:
+        topologies = {"ring": ttnn.Topology.Ring, "linear": ttnn.Topology.Linear}
+        if override.lower() not in topologies:
+            raise ValueError(f"MINIMAX_H3_TOPOLOGY must be one of {sorted(topologies)}, got {override!r}")
+        preset = {**preset, "topology": topologies[override.lower()]}
     return preset
 
 
@@ -499,6 +507,8 @@ class MiniMaxH3Pipeline:
         topology: ttnn.Topology | None = None,
         coresident: bool | None = None,
         task: str = "t2va",
+        video_shift: float | None = None,
+        audio_shift: float | None = None,
         audio_split_mode: str | None = None,
         audio_t_factor: int | None = None,
         trace_audio: bool | None = None,
@@ -514,12 +524,17 @@ class MiniMaxH3Pipeline:
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
+        self.video_shift = VIDEO_SHIFT if video_shift is None else float(video_shift)
+        self.audio_shift = AUDIO_SHIFT if audio_shift is None else float(audio_shift)
         supplied = (tp_axis, sp_axis, num_links, topology)
         preset = resolve_mesh_preset(tuple(mesh_device.shape), required=any(v is None for v in supplied))
         tp_axis = preset["tp_axis"] if tp_axis is None else tp_axis
         sp_axis = preset["sp_axis"] if sp_axis is None else sp_axis
         num_links = preset["num_links"] if num_links is None else num_links
-        topology = preset["topology"] if topology is None else topology
+        if topology is None:
+            # A ring collective on a 1D line fabric aborts, so the open fabric wins over the preset.
+            fabric_is_line = ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D
+            topology = ttnn.Topology.Linear if fabric_is_line else preset["topology"]
         coresident = preset.get("coresident", True) if coresident is None else coresident
         self.trace_denoise = preset.get("trace_denoise", False) if trace_denoise is None else trace_denoise
         env_audio_t_shard = os.environ.get("MINIMAX_H3_AUDIO_T_SHARD")
@@ -551,7 +566,10 @@ class MiniMaxH3Pipeline:
         self._tt_video_out_idx = StateTensor()
         self._tt_audio_out_idx = StateTensor()
         self._tt_timestep = StateTensor()
+        self._tt_endpoint_timestep = StateTensor()
         self._tt_logical_n = StateTensor()
+        # True during `warmup`, whose output is discarded.
+        self._warming = False
         # One repository holds both partitions -- `transformer/` for t2va/fl2va and
         # `transformer_ref/` for ref2va -- with byte-identical `config.json`, so only the
         # weights differ. Fixed at construction because each is 62 GB and switching would
@@ -742,6 +760,8 @@ class MiniMaxH3Pipeline:
         num_links: int | None = None,
         topology: ttnn.Topology | None = None,
         task: str = "t2va",
+        video_shift: float | None = None,
+        audio_shift: float | None = None,
         audio_split_mode: str | None = None,
         audio_t_factor: int | None = None,
         trace_audio: bool | None = None,
@@ -755,6 +775,7 @@ class MiniMaxH3Pipeline:
         adaln_slot_roles: tuple[str, ...] | None = None,
         warmup: bool = True,
         coresident: bool | None = None,
+        **subclass_kwargs,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
 
@@ -780,6 +801,8 @@ class MiniMaxH3Pipeline:
             num_links=num_links,
             topology=topology,
             task=task,
+            video_shift=video_shift,
+            audio_shift=audio_shift,
             audio_split_mode=audio_split_mode,
             trace_audio=trace_audio,
             audio_t_factor=audio_t_factor,
@@ -793,6 +816,7 @@ class MiniMaxH3Pipeline:
             adaln_slot_roles=adaln_slot_roles,
             warmup=warmup,
             coresident=coresident,
+            **subclass_kwargs,
         )
 
     def _read_config(self, subfolder: str) -> dict:
@@ -1859,10 +1883,7 @@ class MiniMaxH3Pipeline:
         # Both schedules. Built here rather than after the layout because the keyframe step below needs
         # `scale_noise`, which takes its `t` at face value and works before `set_timesteps` -- but they
         # are set up fully so there is only one place that decides the schedule.
-        scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
-        audio_scheduler = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
-        scheduler.set_timesteps(num_inference_steps)
-        audio_scheduler.set_timesteps(num_inference_steps)
+        scheduler, audio_scheduler = self._build_schedulers(num_inference_steps)
 
         # All noise for the request, off one generator, in the reference's draw order: conditioning
         # first, then video, then audio. The reference spreads these across two blocks -- the keyframe
@@ -1990,10 +2011,7 @@ class MiniMaxH3Pipeline:
         with self._track_cache_misses(on_event, "encoder"):
             prompt_embeds, text_token_tags = self.encode_prompt(prompt, references=prepared)
 
-        scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
-        audio_scheduler = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
-        scheduler.set_timesteps(num_inference_steps)
-        audio_scheduler.set_timesteps(num_inference_steps)
+        scheduler, audio_scheduler = self._build_schedulers(num_inference_steps)
 
         # 3. Reference VAE encode.
         has_visual = any(reference.kind != "audio" for reference in prepared)
@@ -2087,6 +2105,20 @@ class MiniMaxH3Pipeline:
             on_event=on_event,
             condition_spec=condition_spec,
         )
+
+    def _build_schedulers(self, num_inference_steps: int) -> tuple[MiniMaxH3Scheduler, MiniMaxH3Scheduler]:
+        """The video and audio schedules for one request."""
+        scheduler = MiniMaxH3Scheduler(shift=self.video_shift)
+        audio_scheduler = MiniMaxH3Scheduler(shift=self.audio_shift)
+        scheduler.set_timesteps(num_inference_steps)
+        audio_scheduler.set_timesteps(num_inference_steps)
+        return scheduler, audio_scheduler
+
+    def _step_endpoints(
+        self, scheduler: MiniMaxH3Scheduler, audio_scheduler: MiniMaxH3Scheduler
+    ) -> tuple[torch.Tensor, torch.Tensor] | None:
+        """Each step's video and audio endpoint `r` for two-time conditioning; None for single-time."""
+        return None
 
     def _denoise_and_decode(
         self,
@@ -2256,6 +2288,7 @@ class MiniMaxH3Pipeline:
         trace_audio = self.trace_audio
         self.trace_audio = False
         self._log_generation = False
+        self._warming = True
         try:
             # The ladder walk goes first: it is the only stage that can run out of DRAM (each rung's
             # forced request binds the DiT's buffers and compiles its own decodes on the way), and on a
@@ -2275,6 +2308,7 @@ class MiniMaxH3Pipeline:
         finally:
             self.trace_audio = trace_audio
             self._log_generation = True
+            self._warming = False
 
     def _warm_denoise_buckets(
         self, prompt: str, generation_kwargs: dict, overrides: Mapping[int, dict]
@@ -2741,6 +2775,7 @@ class MiniMaxH3Pipeline:
 
         timesteps = scheduler.timesteps
         audio_timesteps = audio_scheduler.timesteps
+        endpoints = self._step_endpoints(scheduler, audio_scheduler)
 
         row_slot, slot_roles = build_slot_routing(layout, roles=self.adaln_slot_roles)
 
@@ -2853,19 +2888,32 @@ class MiniMaxH3Pipeline:
         t_preamble = time.time() - t_preamble
         t_first = t_steady = 0.0
 
-        def step_levels(i: int) -> torch.Tensor:
+        def step_levels(i: int) -> tuple[torch.Tensor, torch.Tensor | None]:
             t = float(timesteps[i])
             level_kwargs = {"video_timestep": t, "audio_timestep": float(audio_timesteps[i])}
             if "condition_video" in slot_roles:
                 level_kwargs["condition_video_timestep"] = max(t, MINIMAX_H3_KEYFRAME_NOISE_AUG)
             if "condition_audio" in slot_roles:
                 level_kwargs["condition_audio_timestep"] = MINIMAX_H3_AUDIO_CONDITION_TIMESTEP
-            return slot_levels(slot_roles, **level_kwargs)
+            if endpoints is None:
+                return slot_levels(slot_roles, **level_kwargs), None
+            # Conditioning slots are anchors with nowhere to go, so their interval is empty: r == t.
+            endpoint_kwargs = {
+                **level_kwargs,
+                "video_timestep": float(endpoints[0][i]),
+                "audio_timestep": float(endpoints[1][i]),
+            }
+            return slot_levels(slot_roles, **level_kwargs), slot_levels(slot_roles, **endpoint_kwargs)
 
-        def upload_levels(levels: torch.Tensor) -> None:
+        def upload_levels(levels: tuple[torch.Tensor, torch.Tensor | None]) -> None:
+            timestep, endpoint = levels
             self._tt_timestep.update(
-                levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
+                timestep.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
             )
+            if endpoint is not None:
+                self._tt_endpoint_timestep.update(
+                    endpoint.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
+                )
 
         upload_levels(step_levels(0))
         if _is_host_rank():
@@ -2904,6 +2952,7 @@ class MiniMaxH3Pipeline:
                         pad_to=rung,
                         traced=traced,
                         **tilerow_kwargs,
+                        **({} if endpoints is None else {"endpoint_timestep": self._tt_endpoint_timestep.value}),
                     )
                 except RuntimeError as err:
                     if "Out of Memory" in str(err):
