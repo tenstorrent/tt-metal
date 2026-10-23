@@ -2,8 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only tests for HyperFlow: header contract, schedule/endpoints, float32 time-embedder fusion.
-All of these fail silently on device (still produce video)."""
+"""Host-only tests for HyperFlow on the Turbo pipeline: the sampling contract read from the adapter
+header, the schedule and endpoints the denoise loop is handed, and the float32 fusion of both time
+embedders. Every failure here is silent on device -- a wrong grid, endpoint or embedder delta still
+produces video."""
 
 import json
 
@@ -73,7 +75,7 @@ def test_a_half_written_contract_raises(dropped, expect_error):
 
 
 def test_a_pipeline_at_other_shifts_is_refused(expect_error):
-    # A deployment left at the 768p Turbo shift (6) must not serve this file.
+    # The 768p Turbo shift: a deployment left at MINIMAX_H3_VIDEO_SHIFT=6 must not serve this file.
     with expect_error(ValueError, "cannot be reproduced"):
         MiniMaxH3HyperFlow.from_adapter_metadata(_metadata(), video_shift=6.0, audio_shift=AUDIO_SHIFT)
 
@@ -106,7 +108,7 @@ def test_the_grid_is_shifted_with_the_schedulers_own_formula(shift):
 
 
 def _pipeline(*, warming: bool, contract: MiniMaxH3HyperFlow | None) -> MiniMaxH3TurboPipeline:
-    """Skip the mesh-bound constructor; the schedule hooks read only these attributes."""
+    """The schedule hooks read four attributes; skip the mesh-bound constructor."""
     pipeline = object.__new__(MiniMaxH3TurboPipeline)
     pipeline.hyperflow = contract
     pipeline._warming = warming
@@ -135,7 +137,8 @@ def test_warmup_keeps_its_short_schedule():
 
 @pytest.mark.parametrize("warming", [False, True])
 def test_the_endpoint_of_a_step_is_the_next_steps_timestep(warming):
-    """`r_i = 1 - sigma_{i+1}`; warmup gets endpoints too so it compiles the request's forward."""
+    """`r_i = 1 - sigma_{i+1}`, so the last step aims at a clean sample. Warmup gets endpoints too,
+    so it compiles the same forward a request runs."""
     pipeline = _pipeline(warming=warming, contract=_contract())
     video, audio = pipeline._build_schedulers(3 if warming else 9)
     endpoints = pipeline._step_endpoints(video, audio)
@@ -158,7 +161,8 @@ def test_the_endpoint_of_a_step_is_the_next_steps_timestep(warming):
     ids=["hyperflow-omitted", "hyperflow-own-grid", "hyperflow-other", "turbo-omitted", "turbo-explicit"],
 )
 def test_an_omitted_step_count_defers_to_the_adapter(monkeypatch, contract, passed, forwarded):
-    """A mismatch is passed through for `_build_schedulers` to refuse."""
+    """A HyperFlow request may leave the step count out; a mismatch still reaches `_build_schedulers`,
+    which refuses it."""
     seen = {}
     monkeypatch.setattr(MiniMaxH3Pipeline, "__call__", lambda self, prompt, **kwargs: seen.update(kwargs))
     pipeline = _pipeline(warming=False, contract=contract)
@@ -194,7 +198,7 @@ def hyperflow_files(tmp_path):
         for linear, (out_features, in_features) in (("linear_1", (HIDDEN, FREQ)), ("linear_2", (OUT, HIDDEN))):
             for slot, tensor in _low_rank(generator, out_features, in_features).items():
                 adapter[f"transformer.{embedder}.{linear}.{slot}"] = tensor
-    # Block target: left to the device loader, not the host fold.
+    # A block target in bfloat16, which the host fold must leave to the device loader.
     adapter["transformer.transformer_blocks.0.attn.to_out.0.lora_A.weight"] = torch.randn(RANK, 16).bfloat16()
     adapter["transformer.transformer_blocks.0.attn.to_out.0.lora_B.weight"] = torch.randn(16, RANK).bfloat16()
     adapter_path = tmp_path / "hyperflow.safetensors"
@@ -245,10 +249,11 @@ def test_both_embedders_start_from_the_base_weights_with_their_own_delta(hyperfl
             expected = base + deltas[f"{embedder}.{key}"] if key.endswith("weight") else base
             assert value.dtype == torch.float32
             assert torch.equal(value, expected), f"{embedder}.{key}"
+    # Seeded from one base, adapted apart: the endpoint embedder is not the base embedder.
     assert not torch.equal(
         states["time_embedder"]["linear_1.weight"], states["endpoint_time_embedder"]["linear_1.weight"]
     )
-    # The fold must not mutate the base.
+    # The fold must not write back into the base it read.
     assert torch.equal(
         pipeline._read_checkpoint_tensors(["time_embedder.linear_1.weight"])["time_embedder.linear_1.weight"],
         checkpoint["time_embedder.linear_1.weight"],

@@ -2,7 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only checks that the MiniMax-H3 served envelope resolves to packable geometry within the arena caps."""
+"""Host-only gate for the MiniMax-H3 serving policy: the served envelope must resolve to geometry
+the pipeline can pack, and the text budget must sit exactly inside the prompt arena cap."""
 
 import pytest
 from PIL import Image
@@ -108,7 +109,8 @@ def test_served_reference_image_sizes_are_one_per_token_count():
 
 
 def test_swept_token_counts_close_over_continuous_aspects():
-    """The finite-grid sweeps must be dense enough that no continuous aspect reaches an unswept token count."""
+    """The sweeps sample the ratio space on a finite grid; this probe checks the grid is dense
+    enough that no continuous input aspect reaches a token count the grid missed."""
     import random
 
     multiple = p.MINIMAX_H3_CANVAS_MULTIPLE
