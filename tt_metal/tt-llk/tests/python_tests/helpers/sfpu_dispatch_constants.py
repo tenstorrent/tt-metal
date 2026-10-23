@@ -55,7 +55,7 @@ RELU_MIN_THRESHOLD = 5.0
 
 # Negative-side slopes.
 PRELU_SLOPE = 0.25
-LRELU_NEGATIVE_SLOPE = 0.009999999776482582
+LRELU_NEGATIVE_SLOPE = 0.1
 
 # UnaryMax/MinInt32 and UnaryMax/MinUint32 compare against this scalar.
 INT_MAXMIN_SCALAR = 1000
@@ -91,3 +91,8 @@ EMA_ALPHA_BITS = 0x3F19999A  # 0.6f
 EMA_BETA_BITS = 0x3ECCCCCD  # 0.4f
 EMA_ALPHA = struct.unpack("<f", struct.pack("<I", EMA_ALPHA_BITS))[0]
 EMA_BETA = struct.unpack("<f", struct.pack("<I", EMA_BETA_BITS))[0]
+
+# Dropout harness defaults (kDropoutScaleBits / kDropoutSeed); probability is p * INT_MAX.
+DROPOUT_SCALE = 2.0
+DROPOUT_PROBABILITY_MAX = 0x7FFFFFFF
+DROPOUT_SEED = 0xDEADBEEF

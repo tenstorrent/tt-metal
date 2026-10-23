@@ -20,6 +20,7 @@
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -513,7 +514,7 @@ private:
             TT_FATAL(core_type == CoreType::ETH, "Unsupported core type");
             std::set<CoreRange> core_ranges;
             const std::unordered_set<CoreCoord> active_eth_cores =
-                this->device_->get_devices()[0]->get_active_ethernet_cores(true);
+                this->device_->impl().get_devices()[0]->get_active_ethernet_cores(true);
             TT_FATAL(!active_eth_cores.empty(), "No active ethernet cores detected");
             for (CoreCoord eth_core : active_eth_cores) {
                 core_ranges.emplace(eth_core);

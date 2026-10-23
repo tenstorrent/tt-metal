@@ -36,15 +36,15 @@
 #include "tracy/Tracy.hpp"
 #include "tunnels_from_mmio_device.hpp"
 #include <tt-umd/utils/semver.hpp>
-#include <umd/device/cluster.hpp>
-#include <umd/device/cluster_descriptor.hpp>
-#include <umd/device/firmware/firmware_utils.hpp>
-#include <umd/device/simulation/simulation_chip.hpp>
-#include <umd/device/pcie/pci_device.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/cluster_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/cluster.hpp>
+#include <tt-umd/cluster_descriptor.hpp>
+#include <tt-umd/firmware/firmware_utils.hpp>
+#include <tt-umd/simulation/simulation_chip.hpp>
+#include <tt-umd/pcie/pci_device.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_types.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <unistd.h>
 
 static constexpr uint32_t HOST_MEM_CHANNELS = 4;
@@ -82,6 +82,22 @@ std::unique_ptr<tt::umd::ClusterDescriptor> get_mock_cluster_desc(const tt::llrt
         "Failed to load mock cluster descriptor from {}",
         rtoptions.get_mock_cluster_desc_path());
     return mock_cluster_desc;
+}
+
+// Whether [addr, addr + size) lies entirely in the core's L1 or DRAM bank, where nothing is a register.
+bool is_in_core_memory(
+    const tt::umd::SocDescriptor& soc_desc, const tt::umd::CoreCoord& core, uint64_t addr, uint64_t size) {
+    uint64_t memory_size = 0;
+    switch (core.core_type) {
+        case tt::CoreType::TENSIX:
+        case tt::CoreType::WORKER: memory_size = soc_desc.worker_l1_size; break;
+        case tt::CoreType::ETH:
+        case tt::CoreType::ACTIVE_ETH:
+        case tt::CoreType::IDLE_ETH: memory_size = soc_desc.eth_l1_size; break;
+        case tt::CoreType::DRAM: memory_size = soc_desc.dram_bank_size; break;
+        default: return false;
+    }
+    return (addr < memory_size) && (size <= (memory_size - addr));
 }
 
 }  // namespace
@@ -975,9 +991,17 @@ void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt
     }
 
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
-    this->driver_->write_to_device_reg(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+    const bool is_remote = this->get_cluster_desc()->is_chip_remote(chip_id);
+    if (is_remote && is_in_core_memory(soc_desc, core_coord, addr, sz_in_bytes)) {
+        // Write combining only splits writes through a local chip's TLB window. A remote chip's writes go over
+        // ethernet, where a register-width write costs one command per word, so a payload in L1 or a DRAM bank goes
+        // as a block. Registers keep register-width writes.
+        this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+    } else {
+        this->driver_->write_to_device_reg(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+    }
 
-    if (this->get_cluster_desc()->is_chip_remote(chip_id)) {
+    if (is_remote) {
         this->driver_->wait_for_non_mmio_flush(chip_id);
     }
 }
@@ -1065,6 +1089,20 @@ void Cluster::noc_multicast_write(
             {core_end.x, core_end.y},
             addr,
             sz_in_bytes);
+    }
+
+    if (this->target_type_ == tt::TargetDevice::Emule) {
+        // The emulated chip has no NOC multicast: write each worker core of the rectangle, as UMD's simulation
+        // backends do. Watcher sanitized the rectangle above; write_core sanitizes each core again.
+        const auto& worker_cores = this->virtual_worker_cores_.at(chip_id);
+        for (auto x = std::min(core_start.x, core_end.x); x <= std::max(core_start.x, core_end.x); x++) {
+            for (auto y = std::min(core_start.y, core_end.y); y <= std::max(core_start.y, core_end.y); y++) {
+                if (worker_cores.contains(tt::tt_metal::CoreCoord(x, y))) {
+                    this->write_core(mem_ptr, sz_in_bytes, tt_cxy_pair(chip_id, x, y), addr);
+                }
+            }
+        }
+        return;
     }
 
     tt::umd::CoreCoord start_coord = soc_desc.get_coord_at(core_start, CoordSystem::TRANSLATED);

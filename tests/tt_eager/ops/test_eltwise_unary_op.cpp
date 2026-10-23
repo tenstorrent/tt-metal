@@ -129,11 +129,12 @@ void test_operation_infrastructure() {
         ttnn::random::uniform(bfloat16(0), bfloat16(1), shape).to_layout(Layout::TILE).to_device(device);
 
     auto mem_config = tt::tt_metal::MemoryConfig{};
+    const std::vector<EltwiseUnaryWithParam> op_chain = {EltwiseUnaryWithParam{UnaryOpType::SQRT}};
     auto worker_grid = ttnn::operations::unary::get_worker_grid(
-        input_tensor, std::nullopt, std::optional<tt::tt_metal::MemoryConfig>(mem_config), std::nullopt);
+        op_chain, input_tensor, std::nullopt, std::optional<tt::tt_metal::MemoryConfig>(mem_config), std::nullopt);
 
     Op::operation_attributes_t op_args{
-        .op_chain = {EltwiseUnaryWithParam{UnaryOpType::SQRT}},
+        .op_chain = op_chain,
         .output_dtype = DataType::BFLOAT16,
         .memory_config = mem_config,
         .fp32_dest_acc_en = false,
