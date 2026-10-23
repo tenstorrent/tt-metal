@@ -74,10 +74,10 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_in, cb_out, cb_out);
     if constexpr (method == 1) {
         // Hoist the binary add init once (the pairwise chains below run InitReconfigOwner::Caller).
-        add_tiles_init(cb_in, cb_in);
+        add_init(cb_in, cb_in);
     } else if constexpr (method == 2) {
         // Same hoist, acc_to_dest=true: the DEST-accumulating add folds each pair into sticky D0.
-        add_tiles_init(cb_in, cb_in, true);
+        add_init(cb_in, cb_in, true);
     }
 
     for (uint32_t iter = 0; iter < kernel_iters; ++iter) {

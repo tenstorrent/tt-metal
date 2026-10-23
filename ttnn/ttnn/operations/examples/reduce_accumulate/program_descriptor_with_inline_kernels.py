@@ -101,7 +101,7 @@ void kernel_main() {
     for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
         // Re-establish the binary hw config each iteration (the previous iter's finalize reprogrammed
         // math/pack). pack -> cb_out (the finished mean is packed straight out; no intermediate CB).
-        binary_op_init_common(cb_in, cb_in, cb_out);
+        compute_kernel_hw_startup(cb_in, cb_in, cb_out);
         cb_wait_front(cb_in, num_tiles);
 
         tile_regs_acquire();
@@ -113,11 +113,11 @@ void kernel_main() {
             copy_tile(cb_in, 0, 0);                 // odd: DEST = cb_in[0]
             k = 1;
         } else {
-            add_tiles_init(cb_in, cb_in, false);
+            add_init(cb_in, cb_in, false);
             add_tiles(cb_in, cb_in, 0, 1, 0);       // even: DEST = cb_in[0] + cb_in[1]
             k = 2;
         }
-        add_tiles_init(cb_in, cb_in, true);
+        add_init(cb_in, cb_in, true);
         for (; k < num_tiles; k += 2) {
             add_tiles(cb_in, cb_in, k, k + 1, 0);   // DEST += cb_in[k] + cb_in[k+1]
         }

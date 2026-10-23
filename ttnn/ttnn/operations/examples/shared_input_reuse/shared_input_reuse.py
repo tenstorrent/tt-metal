@@ -168,7 +168,7 @@ void kernel_main() {
     // Build a zero tile: cb_zero[0] = in[0] - in[0]. (Peek the first chunk; do not pop it — the
     // accumulation loop below still consumes it.)
     cb_wait_front(cb_in, chunk_tiles);
-    sub_tiles_init(cb_in, cb_in);
+    sub_init(cb_in, cb_in);
     tile_regs_acquire();
     sub_tiles(cb_in, cb_in, 0, 0, 0);
     tile_regs_commit();
@@ -180,7 +180,7 @@ void kernel_main() {
     cb_wait_front(cb_zero, 1);
 
     // acc_to_dest=true => DEST += in[t] + 0, accumulating the whole stream in the fp32 DEST adder.
-    add_tiles_init(cb_in, cb_zero, /*acc_to_dest=*/true);
+    add_init(cb_in, cb_zero, /*acc_to_dest=*/true);
     tile_regs_acquire();  // DEST starts zeroed; running sum stays here across the whole stream
     for (uint32_t c = 0; c < num_chunks; ++c) {
         if (c > 0) { cb_wait_front(cb_in, chunk_tiles); }  // chunk 0 is already fronted
