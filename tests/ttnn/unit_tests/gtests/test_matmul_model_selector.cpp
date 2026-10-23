@@ -85,15 +85,14 @@ TEST(MatmulModelSelector, LoadFailuresAreReportedNotThrown) {
     EXPECT_NE(error, "");
 }
 
-// The real model: TT_MATMUL_MODEL_BLOB, else the blob shipped in the repo (under TT_METAL_HOME, or relative to the
-// repo root the tests run from)
+// The real model: TT_MATMUL_MODEL_BLOB, else the blob the build fetched into runtime/ (under TT_METAL_HOME, or relative
+// to the repo root the tests run from)
 std::filesystem::path model_blob_path() {
     if (const char* path = std::getenv("TT_MATMUL_MODEL_BLOB")) {
         return path;
     }
     const char* home = std::getenv("TT_METAL_HOME");
-    return std::filesystem::path(home != nullptr ? home : ".") /
-           "ttnn/cpp/ttnn/operations/matmul/device/config/model/matmul_model.blob";
+    return std::filesystem::path(home != nullptr ? home : ".") / "runtime/matmul_model/matmul_model.blob";
 }
 
 TEST(MatmulModelSelector, ScoresCandidatesWithTheModel) {

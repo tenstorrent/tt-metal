@@ -16,10 +16,10 @@ or from Python, before the first matmul:
 ttnn.CONFIG.matmul_model_config = True
 ```
 
-The model ships with ttnn (`matmul_model.blob` in this directory) and `ttnn.CONFIG.matmul_model_path` points at it by
+The build fetches the model blob (see "The model blob" below) and `ttnn.CONFIG.matmul_model_path` points at it by
 default. Set `matmul_model_path` to use another blob. The default is filled in by `import ttnn`; a C++ program that
-does not import ttnn's Python package sets `matmul_model_path` itself (the blob is installed under the runtime root at
-`ttnn/cpp/ttnn/operations/matmul/device/config/model/matmul_model.blob`).
+does not import ttnn's Python package sets `matmul_model_path` itself (the blob is under the runtime root at
+`runtime/matmul_model/matmul_model.blob`).
 
 When the flag is off nothing here runs and nothing is loaded. When it is on, the blob is loaded once, lazily, on
 the first matmul the model is eligible for. If it can't be loaded, a warning is logged once and matmul behaves as
@@ -85,10 +85,15 @@ A candidate that the device op rejects costs a caught exception and the critical
 
 ## The model blob
 
-`matmul_model.blob` (12 MB: 3000 GBDT trees of 255 leaves; exempted from the repository's 500 KB file check) is
-installed with ttnn at the same path under the runtime root. Replace it only with a retrained model; the analytic
-constants below must match the model it was trained with. It is produced from the model repository
-`tt-matmul-predictor`:
+`matmul_model.blob` (12 MB: 3000 GBDT trees of 255 leaves) is not in the repository. It is a one-layer OCI artifact,
+`ghcr.io/tenstorrent/tt-metal/matmul-model`, and CMake fetches it at configure time by its sha256 (an OCI layer's digest
+is the sha256 of its content, so the download is pinned and verified) into `runtime/matmul_model/`, like the SFPI
+toolchain; it is installed and packaged in the wheel at the same path under the runtime root. A failed fetch (offline,
+`-DTT_MATMUL_MODEL_FETCH=OFF`) is a CMake warning: without the blob, turning the model on logs a warning and keeps the
+default configs. To use a local blob instead, set `matmul_model_path` (or `TT_MATMUL_MODEL_BLOB` for the tests).
+
+Replace it only with a retrained model; the analytic constants below must match the model it was trained with. It is
+produced from the model repository `tt-matmul-predictor`:
 
 ```
 mmodel export ...                                                    # the repository's export entry point
@@ -96,16 +101,23 @@ python -m bench.export.export_gbdt <lightgbm_model.txt> model.blob --format blob
 ```
 
 The blob carries the GBDT trees, the feature names (checked against `kFeatureNames` at load, so a blob trained on
-other features is refused) and the sha256 of the LightGBM model it was exported from. The shipped blob: file sha256
+other features is refused) and the sha256 of the LightGBM model it was exported from. The current blob: file sha256
 `7dc37af22b6ae0d2ecb4f415a14cdc7e9b6e0208ee2ac2c2aacd049576ee9ae2`, model sha256
 `46dc43100ba9d1bdd6d30e408d23c7012a5e535cefab4d32ddb04910f1ba73a5` (logged at load), trained on device-time
 measurements of matmul program configs on Blackhole p150 (11x10 grid); the training data and training code live in
 `tt-matmul-predictor`. The analytic part (`matmul_model_features.cpp`,
 `matmul_model_device_params.cpp`) is code. Its constants must match the model the blob was trained with.
 
+To publish a new blob, push it as a new tag and update the sha256 in `../../../CMakeLists.txt` (the matmul op's):
+
+```
+oras push ghcr.io/tenstorrent/tt-metal/matmul-model:<tag> --artifact-type application/vnd.tenstorrent.matmul-model.v1 \
+    matmul_model.blob:application/octet-stream
+```
+
 ## Tests
 
 - **`unit_tests_ttnn`, `GbdtModel.*` and `MatmulModel*.*`.** These need no device and score candidates with the
-  shipped model (or `TT_MATMUL_MODEL_BLOB`). Set `TT_GBDT_PARITY_DIR` to also check the evaluator against LightGBM.
+  fetched model (or `TT_MATMUL_MODEL_BLOB`). Set `TT_GBDT_PARITY_DIR` to also check the evaluator against LightGBM.
 - **`tests/ttnn/unit_tests/operations/matmul/test_matmul_model_config.py`.** This needs a Blackhole device; it uses
-  the shipped model (or `TT_MATMUL_MODEL_BLOB`).
+  the fetched model (or `TT_MATMUL_MODEL_BLOB`).

@@ -4,7 +4,7 @@
 
 """The opt-in matmul config model (ttnn.CONFIG.matmul_model_config, #57884).
 
-Needs a Blackhole device. The tests that turn the model on use the blob that ships with ttnn (the default
+Needs a Blackhole device. The tests that turn the model on use the blob the build fetched (the default
 ttnn.CONFIG.matmul_model_path), or TT_MATMUL_MODEL_BLOB when set; a missing blob fails them.
 """
 

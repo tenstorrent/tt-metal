@@ -305,6 +305,8 @@ class CMakeBuild(build_ext):
         lib_patterns = ["_ttnn.so", "_ttnncpp.so", "libtt_metal.so", "libtt-umd.so*", "libtt_stl.so", "libtracy.so*"]
         runtime_patterns = [
             "hw/**/*",
+            # The matmul config model (ttnn.CONFIG.matmul_model_config), fetched by the build
+            "matmul_model/matmul_model.blob",
         ]
         runtime_exclude_files = []
         if BUNDLE_SFPI:
@@ -351,8 +353,6 @@ class CMakeBuild(build_ext):
             # the same header tree in an installed wheel as it does in a source checkout.
             "ttnn/kernel_lib/**/*.{hpp,inl}",
             "ttnn/operations/normalization/kernel_util/**/*",
-            # The matmul config model (ttnn.CONFIG.matmul_model_config) loads it at runtime
-            "ttnn/operations/matmul/device/config/model/matmul_model.blob",
         ]
         tt_metal_patterns = [
             "api/tt-metalium/buffer_constants.hpp",
