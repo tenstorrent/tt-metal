@@ -16,6 +16,9 @@ TP axis is a ring of 4: both balance to 1.5u a link direction. Per device (zone 
   chain    = planner end - (K3, x-first: its logits leave after the gather) the gather's shrink + CHAIN_GROWTH
              (the routing exchange + planner at N = 32 on the 8x4: see below); GLM's logits go first: no shift
   head     = max over devices of max(SE path, chain)
+LATENT (K3, when the head runs it - SE-LHAND): the ports send the latent all-to-all before the RS, so it is in the
+SE path's (down + RS end - gate/up end). The line's chip at TP position p sends max(p, G - 1 - p) latent blocks one way
+(3 at the ends), the ring of 4 at most 2: the SE path is also credited (that - 2) blocks at link rate.
 CHAIN_GROWTH (modelled, not measured): planner pre-exchange +4 us (3 N NoC writes a source), post-arrival +7 (N
 header / entry reads, N x M source loops; fewer experts an instance), the slowest of 8 TP groups' chains instead of 2
 (+9, ~10 us per-group spread, the same launch skew per chip as the LoudBox's); paths: Y in transit (<= 4 hops x 650 ns)
@@ -68,6 +71,12 @@ def floors(model):
     return dict(links=links, compute=compute, chain=chain, head=max(links, compute, chain))
 
 
+def latent_block_us(model):
+    """One latent block (an owner's rows of the chip's latent slice, bf16) at link rate."""
+    d, G = DIMS[model], 4
+    return d["rows"] // G * d["lat"] // G * 2 / LINK
+
+
 def zones(path):
     rows = list(csv.reader(open(path)))[2:]
     out = {}
@@ -85,14 +94,17 @@ def zones(path):
     return out
 
 
-def project(path, model, logits_first=None, offsets=None):
+def project(path, model, logits_first=None, offsets=None, rows=None):
     """Per device (dev, LoudBox end, planner end, Galaxy SE path, Galaxy chain). offsets {dev: us from its row's last
     launch, <= 0}: every time is then from the row's last launch (skew-corrected), else from the device's own start
-    (eager); a chip's compute still never finishes before its own start + its compute alone."""
+    (eager); a chip's compute still never finishes before its own start + its compute alone. rows ([[dev by TP
+    position] a mesh row]): the latent's line-vs-ring credit by position (module docstring)."""
     u = U[model]
+    pos = {d: i for row in rows or [] for i, d in enumerate(row)}
     after = not logits_first if logits_first is not None else LOGITS_AFTER_GATHER[model]
     zs = zones(path)
     on_engine = any("SE-RTRLD" in e for e in zs.values())  # (the router's matmul ran on the engine)
+    latent = any("SE-LHAND" in e for e in zs.values())
     gu_alone = GU_ALONE[(model, on_engine)]
     res = []
     for dev, e in zs.items():
@@ -101,6 +113,9 @@ def project(path, model, logits_first=None, offsets=None):
         end = max(v for k, v in e.items() if k.endswith("-KERNEL")) + sh
         front = max(gu - 1.5 * u * E_GATHER, gu_alone + sh)
         se = front + (ds - gu) - 1.5 * u
+        if latent and int(dev) in pos:
+            p = pos[int(dev)]
+            se -= max(0, max(p, 3 - p) - 2) * latent_block_us(model)
         shift = (gu - front) if after else 0.0
         chain = rp - shift + CHAIN_GROWTH[model]
         res.append((dev, end, rp, se, chain))
@@ -203,11 +218,15 @@ if __name__ == "__main__":
     for name, off in cases:
         if name != "eager" and off is None:
             continue
-        res = project(sys.argv[1], sys.argv[2], lf, off)
+        res = project(sys.argv[1], sys.argv[2], lf, off, rows)
         lb = max(end for _, end, *_ in res)
         head = max(max(se, ch) for *_, se, ch in res)
         print(
             f"{name}: LoudBox {lb:.0f} us | Galaxy-projected {head:.0f} us (SE path {max(se for *_, se, _ in res):.0f}, "
             f"routing chain {max(ch for *_, ch in res):.0f}) = {head / f['head']:.2f}x the Galaxy floor {f['head']:.0f}"
+        )
+    if rows and any("SE-LHAND" in e for e in zones(sys.argv[1]).values()):
+        print(
+            f"(SE path credited the latent's line-vs-ring: {latent_block_us(sys.argv[2]):.1f} us on the line's end chips)"
         )
     print(f"Galaxy floors: links {f['links']:.0f} us, compute {f['compute']:.0f}, routing chain {f['chain']:.0f}")
