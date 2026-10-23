@@ -215,7 +215,7 @@ def component_error(s, block_type: str, step: str, layer: int) -> float | None:
     """The step's own error in its component gate (task C.<block type>.<step>, its PCC vs golden on golden inputs),
     as a relative L2: sqrt(2 (1 - pcc)) (equal to rel L2 for an unbiased error on a zero-mean output, larger
     otherwise). None when that gate has not recorded it."""
-    m = metrics.load(f"C.{block_type}.{step}", s.bringup_dir / "results")
+    m = metrics.load(f"C.{block_type}.{step}", s.ledger_dir / "results")
     e = (m.get(f"err_{step}_L{layer:02d}") or {}).get("value")  # F81: the rel error itself
     if isinstance(e, (int, float)) and math.isfinite(e):
         return float(e)

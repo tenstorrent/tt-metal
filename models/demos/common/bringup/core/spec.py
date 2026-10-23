@@ -8,14 +8,23 @@ the full schema that the pipeline steps rely on.
 
 Paths:
     repo            git checkout that gates run in and commit to (default: this checkout)
-    bringup_dir     ledger dir in the repo: tasks.yaml, state.json, results/, BREADCRUMBS.md (default <model_dir>/bringup)
+    bringup_dir     the model's bring-up files in the repo, shared by every run of the model: hooks.py, plan, serving
+                    contract, knowledge, BREADCRUMBS.md (default <model_dir>/bringup)
+    ledger_dir      one run's ledger: spec.yaml, tasks.yaml, state.json, results/, approvals.yaml, overseer.yaml,
+                    supervision.md, dashboard/ (= bringup_dir, except a seeded run's: bringup_dir/ledgers/<box>-<mode>)
     art             artifact root outside git (default /localdev/$USER/bringup/<model>)
-      hf/ golden/ tt_cache/<mesh>/<version>/ profiles/ runs/<run>/
+      hf/ golden/ tt_cache/<mesh>/<version>/ profiles/ runs/<run>/ (a seeded run's: runs/<box>-<mode>/<run>/)
+    paths.hf, paths.golden, ...: absolute, or relative to art (F186)
 
 Prior bring-up: ``prior: models/demos/<slug>`` names an earlier bring-up of the same checkpoint (another mesh or
 configuration). This spec then shares its checkpoint download and goldens (hf/ and golden/ resolve to the prior's
 unless paths.hf / paths.golden say otherwise), its hooks reuse the prior's CPU reference, and every step's brief lists
 the prior's matching files to start from (orchestrator PRIOR_READS).
+
+Seeded run (F184): ``run: {box: galaxy_8x4, mode: full, seed: <the seed's spec path>}`` grows a finished bring-up of
+the same model (the seed, e.g. a partial run on a smaller box) into another run of the same model dir: the same tt/,
+hooks, CPU reference, plan, serving contract and forks, its own ledger (F183) and its own goldens. The seed's passed
+reference, contract and plan tasks are carried, not re-run (plan/ledger_gen.py seeded graph).
 
 Deployment target and boxes (F64). Without these keys the box the spec names is also the target (as before):
 
@@ -118,6 +127,7 @@ def _resolve(raw: dict) -> dict:
 
 
 SCALED_ENV = "BRINGUP_SCALED"
+SEED_RUNG = "seed"  # F185: a seeded run's ladder rung over the seed's layers (W.1, the port to this box)
 
 
 class Spec:
@@ -210,13 +220,25 @@ class Spec:
         return (self.repo / d) if d else self.model_dir / "bringup"
 
     @property
+    def ledger_name(self) -> str | None:
+        """F183: a seeded run's ledger name, ``<run box>-<mode>``; None for the model's own (first) ledger."""
+        return f"{self.run_box}-{self.mode}" if self.seed else None
+
+    @property
+    def ledger_dir(self) -> Path:
+        """F183: this run's ledger. Two runs of one model (a seed and the run grown from it) never share tasks, state,
+        results, approvals or the overseer's files; the model's shared files stay in bringup_dir."""
+        return self.bringup_dir / "ledgers" / self.ledger_name if self.ledger_name else self.bringup_dir
+
+    @property
     def art(self) -> Path:
         root = self.get("paths.art") or f"/localdev/{getpass.getuser()}/bringup"
         return Path(_expand(root)) / self.model
 
     def _art_sub(self, key: str, default: str) -> Path:
+        """paths.<key>: absolute, or relative to the artifact root (F186: one spec on several hosts)."""
         v = self.get(f"paths.{key}")
-        return Path(_expand(v)) if v else self.art / default
+        return self.art / _expand(v or default)
 
     # ---- prior bring-up (same checkpoint, another mesh or configuration)
     @property
@@ -227,6 +249,16 @@ class Spec:
 
     def prior_spec(self) -> "Spec | None":
         return Spec.load(self.prior / "bringup" / "spec.yaml") if self.prior else None
+
+    # ---- seed (F184: a finished run of the same model this run grows from)
+    @property
+    def seed(self) -> Path | None:
+        """The seed's spec file (``run.seed``, relative to the repo), or None."""
+        p = (self.data.get("run") or {}).get("seed")
+        return (self.repo / p) if p else None
+
+    def seed_spec(self) -> "Spec | None":
+        return Spec.load(self.seed) if self.seed else None
 
     def _shared(self, key: str, default: str) -> Path:
         """hf/ and golden/ are the prior's (same checkpoint, same CPU reference) unless this spec sets paths.<key>."""
@@ -269,7 +301,7 @@ class Spec:
         return base / mesh / (f"{version}-{variant}" if variant else version)
 
     def run_dir(self, run: str) -> Path:
-        return self.art / "runs" / run
+        return self.art / "runs" / (f"{self.ledger_name}/{run}" if self.ledger_name else run)
 
     # ---- model facts
     @property
@@ -433,6 +465,32 @@ class Spec:
             errs.append("prior: a different layer subset (its goldens cover other layers); set paths.golden")
         return errs
 
+    def _validate_seed(self) -> list[str]:
+        if not self.seed:
+            return []
+        if not self.seed.is_file():
+            return [f"run.seed: no spec at {self.seed}"]
+        s, errs = self.seed_spec(), []
+        for k in ("model", "hf_id", "model_dir", "hooks"):
+            if s.data.get(k) != self.data.get(k):
+                errs.append(
+                    f"run.seed: {k} {s.data.get(k)!r} differs from {self.data.get(k)!r} (a seed is the same model)"
+                )
+        if s.ledger_dir == self.ledger_dir:
+            errs.append("run.seed: the seed's ledger is this run's (another box or mode)")
+        if self.data.get("prior"):
+            errs.append("run.seed and prior exclude each other (prior copies the model; a seed grows it in place)")
+        if self.path and self.path.parent != self.ledger_dir:
+            errs.append(f"a seeded spec lives in its ledger: {self.ledger_dir / 'spec.yaml'}")
+        rung = next((r for r in self.data.get("ladder") or [] if r.get("name") == SEED_RUNG), None)
+        if rung is None:
+            errs.append(
+                f"a seeded spec has a ladder rung {SEED_RUNG!r}: the seed's layers at this run's size (task W.1)"
+            )
+        elif parse_layers(rung.get("layers", "all"), self.num_layers) != s.layers():
+            errs.append(f"ladder rung {SEED_RUNG!r}: layers must be the seed's {s.layers()}")
+        return errs
+
     # ---- validation
     def validate(self) -> list[str]:
         """Schema errors for a model spec (empty list = valid)."""
@@ -458,6 +516,7 @@ class Spec:
         if not (isinstance(mesh, list) and len(mesh) == 2 and all(isinstance(x, int) and x > 0 for x in mesh)):
             errs.append("box.mesh must be [rows, cols]")
         errs += self._validate_prior()
+        errs += self._validate_seed()
         for k in ("seq", "chunk"):
             if not isinstance(self.get(f"target.{k}"), int):
                 errs.append(f"target.{k} must be an int")

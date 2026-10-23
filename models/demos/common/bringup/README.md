@@ -154,6 +154,19 @@ $B op-ready <op> --from <clone>/ttnn/ttnn/operations --spec <spec>   # ttnn.brin
 $O resume --spec <spec>
 ```
 
+## Full bring-up from a seed (F183-F186)
+
+A finished bring-up (the seed, e.g. a partial run on a small box) grows into the whole model on a bigger box in the same
+model dir: one `tt/`, one CPU reference, one plan. The new run's spec is
+`bringup/ledgers/<box>-<mode>/spec.yaml` with `run: {box: <box>, mode: full, seed: <the seed's spec>}` and a ladder rung
+`seed` over the seed's layers; its tasks, state, results and approvals live in that folder (the seed's stay as they
+are). `plan.ledger_gen --spec <it> --write` writes the seeded graph: CK.1 checkpoint, G.<rung> imported goldens, B.1,
+W.1 (the seed's layers at real size on the new mesh), M.1 (every layer), then the ladder, smoke, contract, perf,
+O.1, Z.1. The seed's reference, contract and plan are carried (tasks.yaml `seed:`); its component and swap tests are
+for diagnosis only. Goldens are made where the checkpoint fits in RAM, indexed there
+(`reference.golden_import --rung <r> --index`), and copied, in part if the run's tests do not read everything; spec
+paths may be relative to the artifact root, so only `paths.art` changes per host.
+
 ## Layout
 
 | Path | What |
@@ -172,7 +185,7 @@ $O resume --spec <spec>
 | `skill/bringup/SKILL.md` | the `/bringup` skill (intake and supervision) |
 | `skill/rebase-bringup/` | the `/rebase-bringup` skill (rebase, fork syncs, re-verification) and `staleness.md` |
 | `selftest/` | the framework's own tests, CPU only: `python -m pytest -q models/demos/common/bringup/selftest/` |
-| `dev/BREADCRUMBS.md` | how the framework was built (F1 to F64) |
+| `dev/BREADCRUMBS.md` | how the framework was built (F1 onwards) |
 
 ## Rules the runner enforces
 

@@ -5,7 +5,7 @@
 
 Only an interactive Claude session can publish a page to claude.ai (the Artifact tool; a `claude -p` run started by
 the framework does not get it), so the orchestrator refreshes the local files after every gate and the overseer
-publishes them. `<bringup_dir>/dashboard/links.yaml` keeps the links (so every session publishes to the same pages)
+publishes them. `<ledger_dir>/dashboard/links.yaml` keeps the links (so every session publishes to the same pages)
 and the last publish time; the watch wakes the overseer with DASHBOARD STALE when the local files are newer than the
 last publish by more than `stale_after` (default 15 minutes).
 
@@ -28,17 +28,17 @@ FILE = "links.yaml"
 STALE_AFTER = 30 * 60  # F170 (audit item 20): the heartbeat's period; at 2 min every gate woke the overseer
 
 
-def path(bringup_dir: Path) -> Path:
-    return Path(bringup_dir) / "dashboard" / FILE
+def path(ledger_dir: Path) -> Path:
+    return Path(ledger_dir) / "dashboard" / FILE
 
 
-def load(bringup_dir: Path) -> dict:
-    p = path(bringup_dir)
+def load(ledger_dir: Path) -> dict:
+    p = path(ledger_dir)
     return (yaml.safe_load(p.read_text()) if p.exists() else None) or {}
 
 
-def save(bringup_dir: Path, data: dict) -> None:
-    p = path(bringup_dir)
+def save(ledger_dir: Path, data: dict) -> None:
+    p = path(ledger_dir)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(yaml.safe_dump(data, sort_keys=False))
 
@@ -57,20 +57,20 @@ def mark_published(run_dir: Path) -> dict:
     return rec
 
 
-def stale(bringup_dir: Path, stale_after: float = STALE_AFTER, now: float | None = None, run_dir=None) -> str | None:
+def stale(ledger_dir: Path, stale_after: float = STALE_AFTER, now: float | None = None, run_dir=None) -> str | None:
     """The DASHBOARD STALE line when the published links lag the local files by more than stale_after, else None."""
-    d = load(bringup_dir)
+    d = load(ledger_dir)
     links = d.get("links") or {}
     if not links:
         return None
-    check = Path(bringup_dir) / "dashboard" / "CHECK.txt"  # export.CHECK_FILE: passed tasks the page shows red
+    check = Path(ledger_dir) / "dashboard" / "CHECK.txt"  # export.CHECK_FILE: passed tasks the page shows red
     if check.exists() and check.read_text().strip():
         bad = check.read_text().strip().splitlines()
         return (
             f"DASHBOARD RED: {len(bad)} passed tasks show red (an export bug; fix it before publishing): "
             + "; ".join(bad[:3])
         )
-    files = [Path(bringup_dir) / "dashboard" / f for f in ("index.html", "teletext.html")]
+    files = [Path(ledger_dir) / "dashboard" / f for f in ("index.html", "teletext.html")]
     newest = max((f.stat().st_mtime for f in files if f.exists()), default=0)
     published = published_at(run_dir) if run_dir else float(d.get("published_at") or 0)
     now = now or time.time()
@@ -100,7 +100,7 @@ def main(argv=None) -> int:
     from models.demos.common.bringup.core.ledger import Ledger
 
     spec = Spec.load(a.spec)
-    bdir = spec.bringup_dir
+    bdir = spec.ledger_dir
     run_dir = spec.run_dir(run_name(Ledger(bdir)))
     d = load(bdir)
     if a.cmd == "set":

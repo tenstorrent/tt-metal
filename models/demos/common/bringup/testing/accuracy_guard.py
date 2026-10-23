@@ -28,7 +28,7 @@ class AccuracyFailed(RuntimeError):
 
 
 def marker(spec, tid: str) -> Path:
-    return spec.run_dir(run_name(Ledger(spec.bringup_dir))) / "ab" / tid / MARKER
+    return spec.run_dir(run_name(Ledger(spec.ledger_dir))) / "ab" / tid / MARKER
 
 
 def perf_task(spec, tid: str | None) -> dict | None:
@@ -36,7 +36,7 @@ def perf_task(spec, tid: str | None) -> dict | None:
     if not tid:
         return None
     try:
-        t = Ledger(spec.bringup_dir).task(tid)
+        t = Ledger(spec.ledger_dir).task(tid)
     except Exception:
         return None
     return t if t.get("step") == "perf" and t.get("role") else None
