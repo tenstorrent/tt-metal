@@ -120,6 +120,8 @@ def test_qkv_fused_stages(layer_idx, batch, cache_len, mesh_device, reset_seeds,
 
     # --- fused path ---
     q2, k2, v2 = split_qkv_heads_decode(xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated)
+    ttnn.deallocate(xqkv)  # dead after the two splits (the model frees it after its one); its L1 shard is the
+    # largest live buffer on the head_dim-512 layers at 32 users and the cache-write program below needs the room
     gq, gk = _gamma_tiles(weights, config.head_dim)
     nq, nk, nv = QkvNormRope.op(q2, k2, v2, gq, gk, cos_pos, sin_pos, eps)
     # the shards the two paths consumed are dead: free their L1 like the model does (at 32 users on the head_dim-512
