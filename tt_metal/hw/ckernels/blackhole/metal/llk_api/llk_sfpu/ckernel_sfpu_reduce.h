@@ -343,7 +343,7 @@ inline void perform_reduce_col_sum_avg() {
 //   init_reduce_sum_avg:                [0, 9)   column tree-add windows; row SUM/AVG replays [0, 6)
 //   init_reduce_max_min:                [0, 11)  LOADMACRO column window (float, UInt16 in a 16-bit Dest)
 //   init_reduce_max_min_int32:          [0, 3)   manual 3-swap window (UInt16 in 32-bit Dest)
-//   init_reduce_max_min_int32_signed:   [0, 15)  signed Int32 (and bit-31-flipped UInt32) column window
+//   init_reduce_max_min_int32_signed:   [0, 3)   plain SFPSWAP chain; column Int32/UInt32 faces are swap-ordered first
 //
 // SFPSWAP direction (SFPCONFIG bit 8): the row paths and the manual column paths read opposite SFPSWAP
 // operands, so the same pool type needs opposite directions. Each of them sets its own on entry
@@ -1618,15 +1618,17 @@ inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t b
 // INT_SIGN_MAGN_TO_INT32_2S_COMP) collapse INT32_MIN (0x80000000) to sign-magnitude "-0" (magnitude 0),
 // so it ranks as 0 and is dropped by SFPSWAP. These functions keep the raw two's-complement bits (load plain
 // INT32) and order them correctly over the full Int32 range, INT32_MIN included, in one of two ways:
-//   - the per-tile row reduce (perform_reduce_row_tile with int32_order) maps every loaded operand with
-//     int32_to_swap_order, after which a plain SFPSWAP orders it exactly as signed Int32;
-//   - the column reduce and the cross-tile row combine keep the both-negative re-swap of
-//     _emit_int32_signed_cswap_, mirroring the Wormhole fix (PR #49085).
+//   - int32_to_swap_order (XOR 0x7FFFFFFF into negative lanes) makes a plain SFPSWAP match signed order and
+//     is its own inverse. The per-tile row reduce (perform_reduce_row_tile with int32_order) maps every load;
+//     the column reduce maps each loaded face once, replays a 3-swap chain and unmaps the two stored results;
+//   - the cross-tile row combine compares each pair once, where the both-negative re-swap of
+//     _emit_int32_signed_cswap_ (mirroring the Wormhole fix, PR #49085) is cheaper than mapping both sides
+//     and unmapping the winner.
 // The sign-magnitude functions above are kept for SUM/AVG (which need two's-complement for SFPIADD) and for
 // UInt16. UInt32 MAX/MIN uses the signed path with bit 31 flipped (flip_sign_bits).
 
-// Number of SFPU instructions emitted by _emit_int32_signed_cswap_ (one two's-complement compare-and-swap).
-constexpr std::uint32_t INT32_SIGNED_CSWAP_LEN = 5;
+// Instruction count of the LREG7 -> LREG6 -> LREG5 -> LREG4 SFPSWAP chain recorded for the mapped column reduce.
+constexpr std::uint32_t INT32_COL_SWAP_CHAIN_LEN = 3;
 
 /**
  * @brief Two's-complement signed compare-and-swap of a register pair, matching SFPSWAP(VEC_MIN_MAX)
@@ -1734,12 +1736,11 @@ inline void perform_reduce_row_max_min_int32(std::uint32_t block_ct_dim, std::ui
 
 /**
  * @brief Init for the signed Int32 / UInt32 MAX/MIN reduce, column and row (init_reduce has no reduce_dim): resets
- *        the SFPU config, loads INT32_SWAP_ORDER_REG (LREG12) = 0x7FFFFFFF for the row path's int32_to_swap_order,
- *        and records the LREG4-7 -> LREG4 window of three two's-complement signed compare-and-swaps for the column
- *        path (so INT32_MIN is handled).
+ *        the SFPU config, loads INT32_SWAP_ORDER_REG (LREG12) = 0x7FFFFFFF for int32_to_swap_order, and records
+ *        the LREG4-7 -> LREG4 plain SFPSWAP chain the column path replays after mapping each loaded face.
  *
- * No direction is set here: both Int32 MAX/MIN calculates set their own on entry, and the recorded
- * compare-and-swaps read it at replay time.
+ * No direction is set here: both Int32 MAX/MIN calculates set their own on entry, and the recorded swaps read
+ * it at replay time.
  *
  * @tparam pool_type MAX or MIN; unused here.
  */
@@ -1747,13 +1748,14 @@ template <PoolType pool_type>
 inline void init_reduce_max_min_int32_signed() {
     _init_sfpu_config_reg();
 
-    // The row path maps its operands with int32_to_swap_order, which XORs with this constant.
+    // Row loads and column faces are mapped with int32_to_swap_order, which XORs with this constant.
     sfpi::vConstIntPrgm0 = INT32_SWAP_ORDER_MASK;
 
-    lltt::record(0, 3 * INT32_SIGNED_CSWAP_LEN);
-    _emit_int32_signed_cswap_<p_sfpu::LREG7, p_sfpu::LREG6>();
-    _emit_int32_signed_cswap_<p_sfpu::LREG6, p_sfpu::LREG5>();
-    _emit_int32_signed_cswap_<p_sfpu::LREG5, p_sfpu::LREG4>();
+    // The column kernel maps each face first, so a plain VEC_MIN_MAX orders signed Int32 (INT32_MIN included).
+    lltt::record(0, INT32_COL_SWAP_CHAIN_LEN);
+    TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG5, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG4, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
 }
 
 /**
@@ -1778,10 +1780,9 @@ inline void flip_sign_bits(const std::uint32_t num_tiles) {
 /**
  * @brief Column-wise MAX/MIN reduction for signed Int32, single 32x32 tile, correct over the full Int32
  *        range (including INT32_MIN). Same manual load/reduce/transpose structure as
- *        calculate_reduce_max_min_uint16, but loads plain INT32 (two's-complement bits preserved) and uses
- *        the signed compare-and-swap. The vertical LREG4-7 -> LREG4 reduction reuses the 3-swap replay
- *        buffer recorded by init_reduce_max_min_int32_signed; the final face-pair combine emits the signed
- *        swap inline. Int32 MAX/MIN only supports a single tile (block_rt_dim == 1).
+ *        calculate_reduce_max_min_uint16. Each loaded face is mapped with int32_to_swap_order, so the recorded
+ *        3-swap chain and the final face-pair swaps are plain SFPSWAPs; the two stored results are mapped back
+ *        to two's-complement. Int32 MAX/MIN only supports a single tile (block_rt_dim == 1).
  *
  * @tparam pool_type MAX or MIN. MAX is the inverted swap direction here; it is set on entry, not taken from
  *         the init.
@@ -1795,7 +1796,7 @@ inline void calculate_reduce_max_min_int32_col() {
         "Only MAX and MIN pool types are supported for this function");
 
     constexpr InstrModLoadStore INSTRUCTION_MODE = InstrModLoadStore::INT32;
-    constexpr std::uint32_t REPLAY_LEN = 3 * INT32_SIGNED_CSWAP_LEN;
+    constexpr std::uint32_t REPLAY_LEN = INT32_COL_SWAP_CHAIN_LEN;
 
     constexpr std::uint32_t ODD_COLUMNS = 2;
     constexpr std::uint32_t COLUMN_OFFSETS[4] = {0, 2, 0, 2};  // even, odd, even, odd
@@ -1820,8 +1821,13 @@ inline void calculate_reduce_max_min_int32_col() {
         // can be parked in LREG0-3 (via PARTIAL_LREG[i]) and survive the remaining faces.
         for (std::uint32_t i = 0; i < NUM_FACES; i++) {
             load_face_data<INSTRUCTION_MODE, false, p_sfpu::LREG4>(FACE_ADDRS[j][i], COLUMN_OFFSETS[i]);
+            // Map once per loaded row group; the parked partial stays mapped through the second replay.
+            int32_to_swap_order<p_sfpu::LREG4>();
+            int32_to_swap_order<p_sfpu::LREG5>();
+            int32_to_swap_order<p_sfpu::LREG6>();
+            int32_to_swap_order<p_sfpu::LREG7>();
 
-            lltt::replay(0, REPLAY_LEN);  // signed compare-and-swap reduce LREG4-7 -> LREG4
+            lltt::replay(0, REPLAY_LEN);  // plain SFPSWAP reduce of the mapped values, LREG4-7 -> LREG4
 
             TT_SFPMOV(0, p_sfpu::LREG4, PARTIAL_LREG[i], 0);
         }
@@ -1837,12 +1843,15 @@ inline void calculate_reduce_max_min_int32_col() {
         lltt::replay(0, REPLAY_LEN);
         TTI_SFPTRANSP(0, 0, 0, 0);
 
-        // Signed compare-and-swap to combine the two vertically adjacent faces (even and odd columns).
-        _emit_int32_signed_cswap_<p_sfpu::LREG7, p_sfpu::LREG6>();  // odd columns of face pair
-        _emit_int32_signed_cswap_<p_sfpu::LREG5, p_sfpu::LREG4>();  // even columns of face pair
+        // The partials are still mapped, so plain swaps combine the two vertically adjacent faces.
+        TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // odd columns of face pair
+        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG4, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // even columns of face pair
 
         TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
         TTI_SFPMOV(0, p_sfpu::LREG6, p_sfpu::LREG1, 0);
+        // The map is its own inverse: the stored results are two's-complement again (bit-31-flipped for UInt32).
+        int32_to_swap_order<p_sfpu::LREG0>();
+        int32_to_swap_order<p_sfpu::LREG1>();
 
         TT_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, top_face_addr);
         TT_SFPSTORE(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, top_face_addr + ODD_COLUMNS);
@@ -1860,7 +1869,7 @@ inline void calculate_reduce_max_min_int32_col() {
  * @tparam format The data format, currently supported: (Int32, UInt32, UInt16, Float32, Float16_b)
  * @param block_ct_dim Block dimension (used for MAX/MIN reduction to specify number of columns, default is 1 for single
  * tile)
- * @note Writes reduce state that calculate_reduce reads: replay slots [0, 15), the programmable constant registers
+ * @note Writes reduce state that calculate_reduce reads: replay slots [0, 11), the programmable constant registers
  *       LREG13 / LREG14 (row merge masks) and, depending on format and pool type, LREG12 (UInt16 mask, float column
  *       AVG 1/32, or the Int32 order constant). Another SFPU op's init between this and calculate_reduce breaks it,
  *       and an SFPU op that reads those registers after a reduce must run its own init first.
@@ -1874,8 +1883,8 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
 
     // Int32 reduce operands are two's-complement in DEST for every reduction. SUM and AVG load with plain
     // INT32 so the word reaches SFPIADD (a two's-complement adder) unchanged. MAX/MIN
-    // dispatch to init_reduce_max_min_int32_signed below (plain INT32 load + a software signed
-    // compare-and-swap, correct over the full Int32 range including INT32_MIN), so they do not use
+    // dispatch to init_reduce_max_min_int32_signed below (plain INT32 load, swap-order map, plain SFPSWAP,
+    // correct over the full Int32 range including INT32_MIN), so they do not use
     // INSTRUCTION_MODE here. init_reduce has no reduce_dim, so the column reduce consumes the LREG4-7 -> LREG4
     // replay buffer recorded by init_reduce_max_min_int32_signed; both calculates set their own SFPSWAP
     // direction on entry. UInt32 MAX/MIN takes the same path: calculate_reduce flips bit 31 around it.
@@ -1899,8 +1908,8 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
     // Dispatch to appropriate PoolType init
     if constexpr (pool_type == PoolType::MAX || pool_type == PoolType::MIN) {
         if constexpr (int32_max_min) {
-            // Signed Int32 MAX/MIN: records the LREG4-7 -> LREG4 signed compare-and-swap replay buffer
-            // (consumed by the column reduce). Handles INT32_MIN correctly.
+            // Signed Int32 MAX/MIN: records the LREG4-7 -> LREG4 plain SFPSWAP chain (consumed by the
+            // column reduce after int32_to_swap_order). Handles INT32_MIN correctly.
             init_reduce_max_min_int32_signed<pool_type>();
         } else if constexpr (clear_high_bits) {
             // UInt16 in 32-bit dest uses the manual (non-LOADMACRO) compare-and-swap path so the
@@ -1971,10 +1980,10 @@ inline void calculate_reduce(
     // sign-magnitude<->two's-complement change is done explicitly via SFPCAST. DEST holds two's-complement
     // Int32 for every reduction:
     //   SUM (two's-complement): plain INT32 so SFPIADD (a two's-complement adder) gets the word unchanged.
-    //   MAX/MIN (two's-complement): plain INT32 (bits preserved), feeding the software signed
-    //        compare-and-swap path (calculate_reduce_max_min_int32_col / perform_reduce_row_max_min_int32),
-    //        which is correct over the full Int32 range including INT32_MIN (issue #49803). Applies to BOTH
-    //        column and row, so a multi-axis reduce (column-then-row over the same DEST) stays consistent.
+    //   MAX/MIN (two's-complement): plain INT32 (bits preserved). The row tile and the column reduce map
+    //        negatives with int32_to_swap_order so a plain SFPSWAP matches signed order, INT32_MIN included
+    //        (issue #49803); the cross-tile row combine keeps _emit_int32_signed_cswap_. Both directions store
+    //        two's-complement, so a multi-axis reduce (column-then-row over the same DEST) stays consistent.
     //   AVG (two's-complement): plain INT32, like SUM, so the column sum and perform_int_average's
     //        divide-by-32 see the word unchanged.
     //   UInt32 MAX/MIN: the same signed path, with bit 31 of every datum flipped before and after, which maps
@@ -2007,7 +2016,7 @@ inline void calculate_reduce(
     // Dispatch to appropriate reduction kernel based on PoolType
     if constexpr (pool_type == PoolType::MAX || pool_type == PoolType::MIN) {
         if constexpr (int32_max_min) {
-            // Int32 (and bit-31-flipped UInt32) MAX/MIN: two's-complement compare-and-swap path (handles INT32_MIN).
+            // Int32 (and bit-31-flipped UInt32) MAX/MIN: swap-order map plus plain SFPSWAP (handles INT32_MIN).
             [[maybe_unused]] const std::uint32_t num_tiles = block_ct_dim * block_rt_dim;
             if constexpr (uint32_max_min) {
                 flip_sign_bits(num_tiles);
