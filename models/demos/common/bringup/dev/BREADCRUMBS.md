@@ -1993,3 +1993,19 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   records golden_hash_ok / golden_files_missing / drift_metrics / the margin); `--index` writes files.json where the
   golden is complete. Spec `paths.*` relative paths resolve under the artifact root (one spec on several hosts).
   Selftests test_an_imported_golden_verifies_as_a_partial_copy, test_relative_artifact_paths_are_under_the_artifact_root.
+
+## F187: every real-time profile records its per-op rows (2026-10-23, owner)
+- DeepSeek-V4.1 P.23: the dashboard shows the newest profile; a pick's gate profile had no op rows, so the
+  per-section op list (with each op's one-line note, F182) disappeared after the pick. Owner: never show an older
+  profile's ops instead; record them every time.
+- testing/profile.py want_ops(s, rt): on the real-time profiler the rows come from the same unsynced run (only host
+  bookkeeping is added; the clean wall is measured in its own run), so defaults.yaml perf.op_profile is now true. The
+  device profiler's op mode (a sync per call, about a minute per layer) still runs only when a spec sets
+  perf.op_profile itself or BRINGUP_PROFILE_OPS=1. Selftest test_every_real_time_profile_records_op_rows.
+
+## F188: a pick accepted after the final task passed still gets its full gate (2026-10-23)
+- DeepSeek-V4.1 P.23 was added after X.3 had passed and accepted on its quick A/B; its full gate stayed pending
+  (pending_full_gates runs only when the final task steps) and nothing ran it; the overseer ran it by hand.
+- orchestrator.py: when nothing is left to run and the final task (step perf, no role) has passed, the run's end
+  runs the pending full gates (the same code as before the final task: newest pick first, shared commands share a
+  run). Selftest test_a_pick_accepted_after_the_final_task_runs_its_full_gate_at_the_end.
