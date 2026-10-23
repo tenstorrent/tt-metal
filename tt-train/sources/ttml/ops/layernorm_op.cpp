@@ -99,10 +99,23 @@ autograd::TensorPtr layernorm(
     mean = out_tensors[1].value();
     rstd = out_tensors[2].value();
     autograd::GradFunction grad = [tensor, out, mean, rstd, gamma, beta_opt]() {
-        auto res = ttml::metal::layernorm_bw(tensor->get_value(), gamma->get_value(), mean, rstd, out->get_grad());
-        tensor->add_grad(res[0].value());
-        gamma->add_grad(res[1].value());
-        if (beta_opt.has_value()) {
+        const bool beta_requires_grad = beta_opt.has_value() && beta_opt.value()->get_requires_grad();
+        auto res = ttml::metal::layernorm_bw(
+            tensor->get_value(),
+            gamma->get_value(),
+            mean,
+            rstd,
+            out->get_grad(),
+            tensor->get_requires_grad(),
+            gamma->get_requires_grad(),
+            beta_requires_grad);
+        if (tensor->get_requires_grad()) {
+            tensor->add_grad(res[0].value());
+        }
+        if (gamma->get_requires_grad()) {
+            gamma->add_grad(res[1].value());
+        }
+        if (beta_requires_grad) {
             beta_opt.value()->add_grad(res[2].value());
         }
     };

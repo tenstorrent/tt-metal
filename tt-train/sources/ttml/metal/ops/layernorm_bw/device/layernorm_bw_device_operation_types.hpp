@@ -9,7 +9,12 @@
 namespace ttml::metal::ops::layernorm_bw::device {
 
 // Attributes for the backward operation (add more if needed)
-struct LayerNormBackwardParams {};
+struct LayerNormBackwardParams {
+    // Which grads to compute. A skipped grad has no output and its kernel work is skipped.
+    bool compute_grad_input = true;
+    bool compute_grad_gamma = true;
+    bool compute_grad_beta = true;
+};
 
 // Tensors required for backward
 struct LayerNormBackwardInputs {
@@ -26,8 +31,8 @@ struct LayerNormBackwardInputs {
 using operation_attributes_t = LayerNormBackwardParams;
 using tensor_args_t = LayerNormBackwardInputs;
 
-// Output tensor specs and tensors
-using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
-using tensor_return_value_t = std::vector<ttnn::Tensor>;
+// Output tensor specs and tensors: [dx, dgamma_components, dbeta_components]. A skipped grad is nullopt.
+using spec_return_value_t = std::vector<std::optional<tt::tt_metal::TensorSpec>>;
+using tensor_return_value_t = std::vector<std::optional<ttnn::Tensor>>;
 
 }  // namespace ttml::metal::ops::layernorm_bw::device
