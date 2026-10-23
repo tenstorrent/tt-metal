@@ -64,6 +64,8 @@ def _split_index_heads(t, index_dim):
     """[1, 1, S, n*index_dim] -> [1, n, S, index_dim] (head-major split, like the main QKV split)."""
     s = t.shape[2]
     n = t.shape[-1] // index_dim
+    if n == 1 and t.shape[1] == 1:
+        return t  # one index head on this device: the split is the identity
     t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
     t = ttnn.reshape(t, [1, s, n, index_dim])
     t = ttnn.permute(t, (0, 2, 1, 3))  # [1, n, S, index_dim]

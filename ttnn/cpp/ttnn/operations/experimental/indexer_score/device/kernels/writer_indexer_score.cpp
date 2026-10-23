@@ -224,15 +224,18 @@ void kernel_main() {
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     constexpr uint32_t group_stride = schedule_group_rows;
     constexpr uint32_t num_groups = schedule_groups;
-    const auto schedule = indexer_schedule::for_core<fused_ring_enabled>(
+    // The common valid length caps columns written per cell (full when unset).
+    uint32_t kv_len_tiles = get_common_arg_val<uint32_t>(indexer_common::writer::KvLength);
+    // Unfused: the same valid-prefix-bounded split as the reader/compute (same common KvLength).
+    const auto schedule = indexer_schedule::for_core_bounded<fused_ring_enabled>(
         core_id,
         group_stride,
-        {schedule_ring_size, schedule_units, 0, 0, schedule_blocks, schedule_cols, schedule_rotate});
+        {schedule_ring_size, schedule_units, 0, 0, schedule_blocks, schedule_cols, schedule_rotate},
+        kv_len_tiles,
+        k_tiles_per_unit);
     const uint32_t row_group0 = schedule.row_group;
     const uint32_t band0 = schedule.band_start;
     const uint32_t num_bands = schedule.band_count;
-    // The common valid length caps columns written per cell (full when unset).
-    uint32_t kv_len_tiles = get_common_arg_val<uint32_t>(indexer_common::writer::KvLength);
     // Per-device chunk-start (tiles); runtime so distinct values reuse one program. Only the block-pool
     // forced-local stamp uses it; always set.
     // Mid-slab boundary-chip forced-local block jump (tiles); both 0 off the boundary chip.
