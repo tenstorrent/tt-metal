@@ -292,6 +292,14 @@ def kv_cache_bf8_enabled():
     return os.environ.get("QWEN_SDPA_BF8", "0") == "1" or os.environ.get("QWEN36_KV_BF8", "1") == "1"
 
 
+def sdpa_prefill_exp_approx():
+    """QWEN36_SDPA_PREFILL_EXP_APPROX (default 1): prefill SDPA uses the fast approximate exponential. Since tt-metal
+    #57180 the fp32-dest SDPA kernel honours exp_approx_mode=False with the accurate SFPU exponential (~20x the SFPU cost
+    per QK tile); single-chip chunked SDPA at depth 128k, 2048 rows: 63.7 -> 29.5 ms, PCC vs fp32 0.99900 -> 0.99883.
+    0 restores the accurate exponential."""
+    return os.environ.get("QWEN36_SDPA_PREFILL_EXP_APPROX", "1") == "1"
+
+
 LMHEAD_CFG_ENV = "QWEN36_LMHEAD_CFG"
 _LMHEAD_LOGGED = False
 

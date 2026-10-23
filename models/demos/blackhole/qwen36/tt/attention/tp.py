@@ -522,7 +522,10 @@ class TPAttention:
         # prefill at <=2048, so this path never sees S>2048 and 256 has no reachable win.)
         ch = min(128 if S >= 2048 else 64, padded)
         sdpa_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=ch, k_chunk_size=ch
+            compute_with_storage_grid_size=(8, 8),
+            exp_approx_mode=tpc.sdpa_prefill_exp_approx(),
+            q_chunk_size=ch,
+            k_chunk_size=ch,
         )
         attn = ttnn.transformer.scaled_dot_product_attention(
             q8, k8, v8, is_causal=True, scale=self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG, program_config=sdpa_cfg
@@ -1484,9 +1487,10 @@ class TPAttention:
         # query rows (observed: row 0 -> argmax 0 at an unaligned chunk_start).
         qk_chunk = min(qk_chunk, S)
         # Full BH grid for SDPA perf (bit-identical to 8×8; see test_tp_chunked_prefill_pcc_sweep)
+        # Approximate exponential for prefill rows only (S >= 128); the 32-row verify bucket keeps the accurate one.
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
-            exp_approx_mode=False,
+            exp_approx_mode=tpc.sdpa_prefill_exp_approx() and S >= 128,
             q_chunk_size=qk_chunk,
             k_chunk_size=qk_chunk,
         )
