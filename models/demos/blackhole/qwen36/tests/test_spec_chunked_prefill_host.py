@@ -506,3 +506,164 @@ def test_exact_short_tail_final_chunk_uses_normal_resume(fake_ttnn, fake_pt):
     calls.clear()
     _run(e, tokens, 4097, 4096, final=True)
     assert not any(c[0] == "warm_last" for c in calls)
+
+
+# --------------------------------------------------------------------------- #
+# Concurrency: reserved rows, pins, remap, counters (note 84, Option B under load)
+# --------------------------------------------------------------------------- #
+def _bucketed_engine(calls, cache, B=8):
+    e = _setup(calls, cache, B=B)
+    e._buckets, e.host_slotmap, e.row_swaps, e._def_last = (1, 2, 4, 8), True, 0, None
+    e._row_gen = None
+    e._no_draft, e._withheld_streak = set(), {}
+    return e
+
+
+def _pre(e, slot, tokens, end, start, final, pt):
+    """The public prefill (the preamble claims the lowest free row) of runner slot ``slot``."""
+    Tp = end if not final else len(tokens)
+    return e.prefill(slot, tokens[:Tp], pt, None, start_pos=start, **({} if final else dict(final=False)))
+
+
+def test_exact_interleaved_requests_survive_row_swaps(fake_ttnn, fake_pt):
+    ta, tb, tc = _prompt(9000, seed=1), _prompt(6500, seed=2), _prompt(768, seed=3)
+    cache, calls = _cache(num_slots=8), []
+    e = _bucketed_engine(calls, cache)
+    pa, pb, pc = _row(NB), _row(NB).flip(1).contiguous(), _row(NB) + 500
+    # A on runner slot 5, B on slot 6, C on slot 7: every NEW request swaps onto the lowest free row
+    _pre(e, 5, ta, 4096, 0, False, pa)
+    row_a = e._phys[5]
+    assert row_a == 0 and e.row_swaps == 1
+    _pre(e, 6, tb, 4096, 0, False, pb)
+    row_b = e._phys[6]
+    assert row_b == 1 and e._chunk_reserved_rows() == {0, 1}  # B did not take A's row
+    _pre(e, 5, ta, 8192, 4096, False, pa)  # A2: its slot sits on a reserved row, never swapped
+    assert e._phys[5] == row_a
+    swaps = e.row_swaps
+    _pre(e, 7, tc, 768, None, True, pc)  # a new short request between the chunks
+    assert e._phys[7] == 2 and e.row_swaps == swaps + 1  # lowest UNRESERVED row
+    assert e._phys[5] == row_a and e._phys[6] == row_b
+    calls.clear()
+    _pre(e, 6, tb, 6500, 4096, True, pb)  # B2 (final)
+    warm = [c for c in calls if c[0] == "warm_last"]
+    assert [(c[1], c[2], c[3]) for c in warm] == [(f"last_hidden[{row_b}]", tb[4096], 4095)]
+    calls.clear()
+    _pre(e, 5, ta, 9000, 8192, True, pa)  # A3 (final)
+    warm = [c for c in calls if c[0] == "warm_last"]
+    assert [(c[1], c[2], c[3]) for c in warm] == [(f"last_hidden[{row_a}]", ta[8192], 8191)]
+    assert e.chunk_exact_resumes == 3 and getattr(e, "chunk_exact_misses", 0) == 0
+    assert getattr(e, "resume_fallbacks", 0) == 0
+    assert cache.stats["refusals"] == 0 if "refusals" in cache.stats else True
+    assert e._chunk_prog() == {} and cache.pinned_count() == 0
+
+
+def test_exact_foreign_prefill_on_pending_row_warns_with_identities_and_drops(fake_ttnn, fake_pt):
+    from loguru import logger
+
+    ta, td = _prompt(9000, seed=1), _prompt(5000, seed=4)
+    cache, calls, msgs = _cache(num_slots=8), [], []
+    e = _setup(calls, cache)
+    _run(e, ta, 4096, 0, final=False)
+    assert cache.pinned_count() == 1
+    sink = logger.add(lambda m: msgs.append(str(m)), level="WARNING")
+    try:
+        _run(e, td, 4096, 0, final=False)  # another request lands on the pending row anyway
+    finally:
+        logger.remove(sink)
+    assert any("refused" in m and "progress digest" in m and "another request dropped" in m for m in msgs)
+    assert cache.stats["refusals"] == 1
+    assert cache.pinned_count() == 1 and e._chunk_prog()[SLOT][0] == 4096  # the new request's own progress / pin
+
+
+def test_exact_stride_saves_never_evict_a_pinned_chunk_snapshot(fake_ttnn, fake_pt):
+    ta = _prompt(9000, seed=1)
+    cache, calls = _cache(num_slots=4), []
+    e = _setup(calls, cache)
+    _run(e, ta, 4096, 0, final=False)
+    pinned_key = list(cache._pins().values())[0]
+    for i in range(10):  # other requests' stride / learn saves churn the 3 free slots
+        cache.save(_prompt(2000, seed=20 + i), 1024)
+    assert pinned_key in cache._lru and cache.stats["evictions"] == 7
+    # the continuation still resumes exactly
+    calls.clear()
+    _run(e, ta, 8192, 4096, final=False)
+    assert e.chunk_exact_resumes == 1 and _segments(calls) == [(4096, 4096)]
+    # every slot pinned (forced): a plain save is skipped, nothing is evicted
+    cache2 = _cache(num_slots=2)
+    for i, k in enumerate(("x", "y")):
+        cache2._lru[(128 * (i + 1), k)] = i
+    cache2._free = []
+    cache2._pins().update({0: (128, "x"), 1: (256, "y")})
+    assert cache2.save(_prompt(500), 128) is False
+    assert cache2.stats["skipped_saves"] == 1 and cache2.stats["evictions"] == 0 and len(cache2._lru) == 2
+
+
+def test_exact_pin_cap_is_the_row_count(fake_ttnn, fake_pt):
+    cache = _cache(num_slots=8)
+    cache.max_pinned = 2
+    for i in range(3):
+        t = _prompt(1024, seed=i)
+        cache.save(t, 128)
+        assert cache.pin(t, 128, owner=i)
+    assert cache.pinned_count() == 2 and 0 not in cache._pins()
+
+
+def test_exact_release_of_mid_chunk_request_unpins_and_clears_progress(fake_ttnn, fake_pt):
+    cache, calls = _cache(num_slots=8), []
+    e = _bucketed_engine(calls, cache)
+    e._row_gens = lambda: [0] * 8
+    _pre(e, 3, _prompt(9000, seed=1), 4096, 0, False, _row(NB))
+    row = e._phys[3]
+    assert row in e._chunk_prog() and cache.pinned_count() == 1
+    e.release(3)  # abort / finish of a mid-chunk request
+    assert row not in e._chunk_prog() and cache.pinned_count() == 0
+    assert row not in e._chunk_reserved_rows()
+
+
+def test_exact_hidden_row_and_pin_follow_a_forced_remap(fake_ttnn, fake_pt):
+    ta = _prompt(9000, seed=1)
+    for host in (True, False):
+        cache, calls = _cache(num_slots=8), []
+        e = _bucketed_engine(calls, cache)
+        e.host_slotmap, e._gdn = host, []
+        _pre(e, 4, ta, 4096, 0, False, _row(NB))
+        row = e._phys[4]
+        hid = e._last_hidden[row]
+        idx = [1, 0, 2, 3, 4, 5, 6, 7]  # runner slots 0 and 1 swap; slot 4 stays
+        if not host:
+            idx = list(range(8))
+            idx[row], idx[7] = 7, row  # the device remap moves the engine row of the pending request
+        e.remap_slots(idx)
+        new_row = e._phys[4] if host else 7
+        assert (e._phys[4] == row) if host else True
+        assert e._last_hidden[new_row] is hid  # the hidden row follows the row
+        assert list(e._chunk_prog()) == [new_row] and list(cache._pins()) == [new_row]
+        calls.clear()
+        slot = 4 if host else 4
+        # the continuation (same runner slot, its row moved or not) resumes exactly
+        if not host:
+            e._phys = list(range(8))  # device remap: runner slot i is engine row i now
+            slot = new_row
+        _pre(e, slot, ta, 8192, 4096, False, _row(NB))
+        assert e.chunk_exact_resumes == 1 and [c[1] for c in calls if c[0] == "warm_last"] == [hid]
+
+
+def test_exact_counters_and_summary_line_every_1000_prefills(fake_ttnn, fake_pt):
+    from loguru import logger
+
+    cache, calls, msgs = _cache(num_slots=8), [], []
+    e = _bucketed_engine(calls, cache)
+    e._n_prefills = 997
+    sink = logger.add(lambda m: msgs.append(str(m)), level="INFO")
+    try:
+        ta = _prompt(9000, seed=1)
+        _pre(e, 2, ta, 4096, 0, False, _row(NB))
+        _pre(e, 2, ta, 8192, 4096, False, _row(NB))
+        assert not any("chunked-prefill summary" in m for m in msgs)
+        _pre(e, 2, ta, 9000, 8192, True, _row(NB))
+    finally:
+        logger.remove(sink)
+    line = [m for m in msgs if "chunked-prefill summary after 1000 prefills" in m]
+    assert len(line) == 1
+    for key in ("pinned_saves=2", "skipped_saves=0", "evictions=0", "exact_resumes=2", "refusals=0"):
+        assert key in line[0], line[0]

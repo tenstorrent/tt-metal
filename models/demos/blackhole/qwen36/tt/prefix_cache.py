@@ -164,17 +164,90 @@ class GdnPrefixStateCache:
         self.stats["tokens_skipped"] += pos
         return pos, self._lru[key]
 
+    # --- pinning (MTP chunked prefill Option B): a chunk-end snapshot is kept until its request's next chunk consumed it ---
+    _STAT_KEYS = ("pinned_saves", "skipped_saves", "exact_resumes", "refusals")
+
+    def _pins(self):
+        """owner (engine row) -> key of its pinned snapshot, insertion ordered (lazy: caches built without __init__ work)."""
+        return self.__dict__.setdefault("_pin_map", OrderedDict())
+
+    def bump(self, name, n=1):
+        self.stats[name] = self.stats.get(name, 0) + n
+
+    def max_pinned_limit(self):
+        """Pinned entries never exceed this (the engine sets it to its row count B: one live chunk per row); at most
+        num_slots-1 so one slot stays evictable."""
+        lim = self.__dict__.get("max_pinned", None)
+        return max(1, min(int(lim) if lim is not None else self.num_slots - 1, self.num_slots - 1))
+
+    def pin(self, tokens, pos, owner):
+        """Pin the snapshot (pos, digest(tokens[:pos])) for ``owner``; replaces the owner's earlier pin. Returns False when the
+        snapshot is not in the cache. Over the cap the oldest pin of another owner is dropped (logged)."""
+        key = (int(pos), self._digest(_tokens_np(tokens), int(pos)))
+        if key not in self._lru:
+            return False
+        pins = self._pins()
+        pins.pop(owner, None)
+        while len(pins) >= self.max_pinned_limit():
+            old_owner, old_key = next(iter(pins.items()))
+            del pins[old_owner]
+            logger.warning(
+                f"{self.name}: pin cap {self.max_pinned_limit()} reached: unpinned the snapshot at {old_key[0]} of row {old_owner}"
+            )
+        pins[owner] = key
+        self.bump("pinned_saves")
+        return True
+
+    def unpin(self, owner):
+        """Unpin ``owner``'s snapshot (consumed by its next chunk, or the request left). Returns True if one was pinned."""
+        return self._pins().pop(owner, None) is not None
+
+    def remap_owners(self, new_of):
+        """Device slot remap: owner row u becomes new_of[u]."""
+        pins = self._pins()
+        moved = [(new_of[o], k) for o, k in pins.items()]
+        pins.clear()
+        pins.update(moved)
+
+    def pinned_count(self):
+        return len(self._pins())
+
+    def summary(self):
+        """Compact counters line (INFO, once per 1000 prefills from the engine)."""
+        st = self.stats
+        return (
+            f"pinned={self.pinned_count()}/{self.max_pinned_limit()} pinned_saves={st.get('pinned_saves', 0)} "
+            f"skipped_saves={st.get('skipped_saves', 0)} evictions={st.get('evictions', 0)} "
+            f"exact_resumes={st.get('exact_resumes', 0)} refusals={st.get('refusals', 0)} "
+            f"saves={st.get('saves', 0)} entries={len(self._lru)}/{self.num_slots}"
+        )
+
+    def _evict_victim(self):
+        """Least recently used UNPINNED key, or None."""
+        pinned = set(self._pins().values())
+        for k in self._lru:
+            if k not in pinned:
+                return k
+        return None
+
     def save(self, tokens, pos):
-        """Snapshot the currently bound GDN state (the state AFTER tokens[:pos]) into a slot."""
+        """Snapshot the currently bound GDN state (the state AFTER tokens[:pos]) into a slot. LRU eviction skips pinned
+        snapshots; when no slot is free and none is evictable the save is skipped (counted, debug log). Returns True when the
+        snapshot is in the cache afterwards."""
         buf = _tokens_np(tokens)
         key = (int(pos), self._digest(buf, int(pos)))
         if key in self._lru:
             self._lru.move_to_end(key)
-            return
+            return True
         if self._free:
             slot = self._free.pop()
         else:
-            old_key, slot = self._lru.popitem(last=False)
+            old_key = self._evict_victim()
+            if old_key is None:
+                self.bump("skipped_saves")
+                logger.debug(f"{self.name}: every slot is pinned: save at {key[0]} skipped")
+                return False
+            slot = self._lru.pop(old_key)
             self._drop_pos(old_key)
             self.stats["evictions"] += 1
         for dn, (rec, carry) in zip(self._dns, self._slots[slot]):
@@ -186,6 +259,7 @@ class GdnPrefixStateCache:
             bisect.insort(self._positions, key[0])
         self._by_pos[key[0]].add(key[1])
         self.stats["saves"] += 1
+        return True
 
     def _drop_pos(self, key):
         pos, dig = key

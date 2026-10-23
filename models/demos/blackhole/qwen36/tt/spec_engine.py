@@ -1095,7 +1095,9 @@ class MTPSpecEngine:
         either of the two rows. Counts ``row_swaps``."""
         if not self._bucketed() or not self.host_slotmap:
             return
-        free = set(range(self.B)) - self._active
+        # Rows with pending chunk progress (Option B: a non-final chunk's snapshot pin + _last_hidden[row] belong to a live
+        # request between its chunks) are reserved: never free for another slot, and a slot sitting on one never moves.
+        free = set(range(self.B)) - self._active - self._chunk_reserved_rows()
         swap = plan_row_swap(int(slot), free, self._phys)
         if swap is None:
             return
@@ -1107,6 +1109,36 @@ class MTPSpecEngine:
         )
         self._set_slot_map(apply_row_swap(self._phys, swap))
         self.row_swaps += 1
+
+    def _chunk_reserved_rows(self):
+        """Engine rows whose request is between two chunks of one chunked prefill (``_chunk_progress`` keys). Invariant: such a
+        row is never claimed / swapped by _claim_low_row, so the request keeps row, snapshot pin and hidden row."""
+        return set(_chunk_prog_of(self))
+
+    def _chunk_cache(self):
+        return getattr(getattr(self, "model", None), "_prefix_cache", None)
+
+    def _chunk_unpin(self, row):
+        c = self._chunk_cache()
+        if c is not None and hasattr(c, "unpin"):
+            c.unpin(row)
+
+    def _chunk_bump(self, name):
+        c = self._chunk_cache()
+        if c is not None and hasattr(c, "bump"):
+            c.bump(name)
+
+    def _note_prefill_done(self):
+        """Every 1000 prefills: one INFO line with the chunk / prefix-cache counters (visible without debug)."""
+        n = self.__dict__.get("_n_prefills", 0) + 1
+        self.__dict__["_n_prefills"] = n
+        if n % 1000 == 0:
+            c = self._chunk_cache()
+            if c is not None and hasattr(c, "summary"):
+                logger.info(
+                    f"[spec_engine] chunked-prefill summary after {n} prefills: {c.summary()} "
+                    f"row_swaps={getattr(self, 'row_swaps', 0)} chunk_exact_misses={getattr(self, 'chunk_exact_misses', 0)}"
+                )
 
     def _set_slot_map(self, phys):
         self._phys = [int(r) for r in phys]
@@ -2297,7 +2329,8 @@ class MTPSpecEngine:
         self._fresh.pop(slot, None)
         self._parked.pop(slot, None)
         self._prompts.pop(slot, None)
-        _chunk_prog_of(self).pop(slot, None)  # a released row's chunk-resume entry (Option B) is void
+        if _chunk_prog_of(self).pop(slot, None) is not None:  # a released row's chunk-resume entry (Option B) is void
+            self._chunk_unpin(slot)  # ... and so is its pinned snapshot
         _row_vision_of(self).pop(slot, None)
         _record_row_delta(self, slot, None)  # the row's M-RoPE delta goes with its request (text rows are 0)
         self._fresh_dirty.discard(slot)
@@ -2336,6 +2369,11 @@ class MTPSpecEngine:
         self._finishing = {new_of[u] for u in self.__dict__.get("_finishing", ())}
         self._prompts = {new_of[u]: v for u, v in self._prompts.items()}
         self.__dict__["_chunk_progress"] = {new_of[u]: v for u, v in _chunk_prog_of(self).items()}
+        c = self._chunk_cache()
+        if c is not None and hasattr(
+            c, "remap_owners"
+        ):  # the pins follow their rows (_last_hidden moved with idx above)
+            c.remap_owners(new_of)
         self._fresh_dirty = {new_of[u] for u in self._fresh_dirty}
         self._active = {new_of[u] for u in self._active}
         self._offered = {new_of[u] for u in self._offered}
@@ -2393,7 +2431,9 @@ class MTPSpecEngine:
         """``prefill`` of engine row ``slot`` (``final`` False: a non-final chunk, see ``prefill``)."""
         reset_draft_skip(self, slot)
         self._parked.pop(slot, None)
-        prog = _chunk_prog_of(self).pop(slot, None)  # consumed by every prefill of the row (see _chunk_exact_resume)
+        # A prefill of the row ends its pending progress (see _chunk_exact_resume): the request it belongs to consumes it, any
+        # other request drops it (warning there; _claim_low_row keeps that from happening).
+        prog = _chunk_prog_of(self).pop(slot, None)
         self.__dict__.setdefault("_finishing", set()).discard(slot)  # a prefill gives the slot a new request
         self._fresh_dirty.discard(slot)
         model = self.model
@@ -2464,6 +2504,7 @@ class MTPSpecEngine:
             # the snapshot at e is gone (evicted): the plan fell back to the normal cap; the hidden row of e-1 is unusable
             exact = None
             self.chunk_exact_misses = getattr(self, "chunk_exact_misses", 0) + 1
+            self._chunk_bump("refusals")
             logger.warning(f"[spec_engine] chunk exact resume: snapshot at {start_pos} evicted, Option A resume")
         self._note_resume_fallback(prompt_list, start_pos, Tp, plan, final)
         vis_kw = {} if vision_tokens is None else dict(vision_tokens=vision_tokens)  # text: the calls are unchanged
@@ -2486,6 +2527,7 @@ class MTPSpecEngine:
             # request's page table. Slots >= e are warmed by the segments below.
             self._warm_resume_slot(slot, prompt_list[exact], exact - 1, pt_row)
             self.chunk_exact_resumes = getattr(self, "chunk_exact_resumes", 0) + 1
+            self._chunk_bump("exact_resumes")
         logits_dev = None
         if self.fast_prefill and self.prefill_recorded and self.recorded_prefill:
             fast_kw = {} if plan is None else dict(plan=plan, mtp_prompt=mtp_prompt)
@@ -2506,12 +2548,21 @@ class MTPSpecEngine:
                 model.prefill_for_spec(
                     prompt, pt_row, Tp, _on_chunk, slot=slot, plan=plan, final=False, save_end=save_end
                 )
+        self._chunk_unpin(slot)  # the previous chunk's snapshot was restored above (or refused): its pin ends
+        self._note_prefill_done()
         if not final:
             # nothing is registered for the row. Option A: the next chunk prefills again from the e-128 snapshot.
             # Option B: the next chunk resumes at e from the snapshot at e and the row captured into _last_hidden[slot].
             if save_end:
                 assert captured_row[0], f"non-final chunk never delivered the chunk holding slot {Tp - 1}"
                 _chunk_prog_of(self)[slot] = (Tp, self._chunk_digest(prompt_list, Tp), self._chunk_pt_sig(pt_row, Tp))
+                c = self._chunk_cache()
+                if c is not None and hasattr(c, "pin"):
+                    c.max_pinned = self.B  # one live chunk per engine row
+                    if not c.pin(prompt, Tp, slot):
+                        logger.warning(
+                            f"[spec_engine] chunk-end snapshot at {Tp} of row {slot} is not in the cache: not pinned"
+                        )
             return torch.zeros(self.vocab)
         assert captured_row[0], f"prefill never delivered the chunk holding slot {Tp - 1}"
         if isinstance(logits_dev, torch.Tensor):
@@ -2882,9 +2933,12 @@ class MTPSpecEngine:
         )
         if not ok:
             self.chunk_exact_misses = getattr(self, "chunk_exact_misses", 0) + 1
+            self._chunk_bump("refusals")
             logger.warning(
                 f"[spec_engine] chunk exact resume refused: start_pos={start_pos} progress end={e0} Tp={Tp} "
-                "(prompt / page table / length mismatch): Option A resume"
+                f"(prompt / page table / length mismatch): Option A resume; pending progress of another request dropped: "
+                f"progress digest {dig.hex()[:8]} (end {e0}), this prompt digest[:{e0}] "
+                f"{self._chunk_digest(prompt_list, min(e0, Tp)).hex()[:8]} (Tp {Tp})"
             )
             return None
         return e0
