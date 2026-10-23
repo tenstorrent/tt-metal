@@ -8,7 +8,8 @@ from abc import ABC, abstractmethod
 from ctypes import c_uint32
 from dataclasses import dataclass
 
-from .format_config import DataFormat
+from .chip_architecture import ChipArchitecture, get_chip_architecture
+from .format_config import DataFormat, is_dest_acc_needed
 from .golden_generators import TILE_DIMENSIONS
 from .llk_params import (
     FPU_BINARY_OPERATIONS,
@@ -18,6 +19,7 @@ from .llk_params import (
     ApproximationMode,
     BroadcastType,
     DataCopyType,
+    DestAccumulation,
     DestSync,
     DstRoundingMode,
     EltwiseBinaryReuseDestType,
@@ -89,6 +91,130 @@ class THROTTLE_LEVEL(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr int THROTTLE_LEVEL = {self.throttle_level};"
+
+
+@dataclass
+class MATMUL_ROW_MOP(TemplateParameter):
+    """Blackhole matmul math with one MOP per reuse row."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_ROW_MOP"
+
+
+# Operand formats of 8 bits per datum or less (_llk_unpack_AB_matmul_narrow_format_).
+MATMUL_NARROW_STREAM_FORMATS = (
+    DataFormat.Bfp8,
+    DataFormat.Bfp8_b,
+    DataFormat.Bfp4_b,
+    DataFormat.Bfp2_b,
+    DataFormat.Fp8_e4m3,
+    DataFormat.Int8,
+    DataFormat.UInt8,
+)
+
+
+@dataclass
+class MATMUL_STREAM_NARROW(TemplateParameter):
+    """Blackhole matmul unpack that streams an operand of 8 bits per datum or less into a 16-bit DEST."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_STREAM_NARROW"
+
+    @staticmethod
+    def for_block(formats, dest_acc, dest_sync, ct_dim: int, rt_dim: int, in0_r_dim: int = 32, math_fidelity=None) -> list:
+        """[MATMUL_STREAM_NARROW()] where _llk_unpack_AB_matmul_stream_narrow_ is true (full sync, 16-bit DEST, not an 8-row in0 tile, nor a 4-row or shorter one with ct_dim below 8, nor a 1x1 block at HiFi4), else []."""
+        if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+            return []
+        if dest_sync != DestSync.Full:
+            return []
+        if dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats):
+            return []
+        if in0_r_dim == 8 or (in0_r_dim <= 4 and ct_dim < 8):
+            return []
+        if math_fidelity == MathFidelity.HiFi4 and ct_dim == 1 and rt_dim == 1:
+            return []
+        streamed = formats.input_format if ct_dim >= rt_dim else formats.input_format_B
+        return (
+            [MATMUL_STREAM_NARROW()] if streamed in MATMUL_NARROW_STREAM_FORMATS else []
+        )
+
+
+@dataclass
+class MATMUL_IN1_ALT(TemplateParameter):
+    """Blackhole matmul with in1 32x16 tiles whose body alternates the DEST row groups (in1_order 1)."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_IN1_ALT"
+
+    @staticmethod
+    def for_tiles(
+        formats,
+        dest_acc,
+        math_fidelity,
+        in0_r_dim: int,
+        in0_c_dim: int,
+        in1_r_dim: int,
+        in1_c_dim: int,
+    ) -> list:
+        """[MATMUL_IN1_ALT()] for in1 32x16 with in0 other than 16x32, except LoFi with 32-bit DEST, else []."""
+        if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+            return []
+        if not (in1_r_dim > 16 and in1_c_dim <= 16):
+            return []
+        if in0_r_dim <= 16 and in0_c_dim > 16:
+            return []
+        fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
+        if math_fidelity == MathFidelity.LoFi and fp32_dest:
+            return []
+        return [MATMUL_IN1_ALT()]
+
+
+@dataclass(init=False, repr=False, eq=False)
+class MATMUL_FORM_KEYS(TemplateParameter):
+    """Blackhole matmul: the k steps per DEST section and output format matmul_default_form picks the forms by.
+
+    The report already carries both (k_dimm, formats.output), so they are kept out of the dataclass fields; the repr
+    still holds them, as the variant hash reads it."""
+
+    def __init__(
+        self, kt_per_section: int, output_format: DataFormat, row_le_8: bool = False
+    ):
+        self.kt_per_section = kt_per_section
+        self.output_format = output_format
+        self.row_le_8 = row_le_8
+
+    def __repr__(self) -> str:
+        return f"MATMUL_FORM_KEYS({self.kt_per_section}, {self.output_format.name}, {self.row_le_8})"
+
+    def convert_to_cpp(self) -> str:
+        return (
+            "#define MATMUL_FORM_KEYS\n"
+            f"constexpr std::uint32_t MATMUL_KT_PER_SECTION = {self.kt_per_section};\n"
+            f"constexpr DataFormat MATMUL_OUT_FORMAT = DataFormat::{self.output_format.name};"
+            + ("\n#define MATMUL_ROW_LE_8" if self.row_le_8 else "")
+        )
+
+    @staticmethod
+    def for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0) -> list:
+        """[MATMUL_FORM_KEYS(...)] on Blackhole, else []; row_le_8 when the block's row (the larger of ct_dim and rt_dim) has 8 tiles or fewer."""
+        if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+            return []
+        # the forms depend on k only as 1, 2 to 4 or 5 and more; one representative keeps the variant count down
+        return [
+            MATMUL_FORM_KEYS(
+                1 if kt_dim == 1 else (2 if kt_dim <= 4 else 5),
+                formats.output_format,
+                0 < max(ct_dim, rt_dim) <= 8,
+            )
+        ]
+
+
+@dataclass
+class MATMUL_UNPACK_TTSYNC(TemplateParameter):
+    """Blackhole matmul unpack with the row base addresses written through GPRs and WRCFG under Auto TTSync."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_UNPACK_TTSYNC"
 
 
 @dataclass
