@@ -1,0 +1,37 @@
+# 8-stage SC4 pipeline prefill at stage shape [4,4] with SP on mesh axis 1: two ranks per galaxy,
+# rank 2k on host k's top tray half (rows 0-3) and rank 2k+1 on its bottom half (rows 4-7), chained
+# top(H) -> bottom(H) -> top(H+1) along the host ring c07u08 -> c07u02 -> c08u02 -> c08u08.
+#
+# The rank binding has no host field: placement comes from mpirun, two slots per host in ring order
+# (`--host c07u08:2,c07u02:2,c08u02:2,c08u08:2 --map-by slot`), which assemble_pipeline_binding.py
+# prints. TT_VISIBLE_DEVICES is per galaxy and a wrong map does not error, so fill this from each
+# host's own probe:
+#   on every host:   python models/demos/deepseek_v3_d_p/utils/gen_pipeline_binding.py --layout 4x4 --out <host>.yaml
+#   then, anywhere:  python models/demos/deepseek_v3_d_p/utils/assemble_pipeline_binding.py assemble \
+#                      --probe c07u08.yaml --probe c07u02.yaml --probe c08u02.yaml --probe c08u08.yaml --out <yaml>
+# The `predict` subcommand fills it from the cabling descriptors instead, for a mock run or to check
+# the probes against.
+
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 1, mesh_id: 1, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 2, mesh_id: 2, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 3, mesh_id: 3, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 4, mesh_id: 4, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 5, mesh_id: 5, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 6, mesh_id: 6, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+  - {rank: 7, mesh_id: 7, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: ""}}
+
+mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration/ci/sc4_4x4_sp1_mgd.textproto
+
+global_env:
+  # SP's ring is the X axis, matched by the descriptor's dim_types [LINE, RING].
+  PREFILL_FABRIC_MODE: "2d_torus_x"
+  PREFILL_SP: "4"
+  PREFILL_TP: "4"
+  PREFILL_SP_AXIS: "1"
+  PREFILL_MAX_SEQ_LEN: "56320"
+  PREFILL_H2D_SERVICE_ID: "ds_prefill"
+  # PREFILL_PP_D2D_FIFO_BYTES stays at the runner's 256 B default, as in the 2-rank 4x4 binding: at
+  # SP=4 ring_mla's static CBs reach to within ~1.5 KB of the top of L1.
+  LOGURU_LEVEL: "INFO"
