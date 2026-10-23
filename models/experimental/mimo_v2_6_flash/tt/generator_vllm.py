@@ -41,8 +41,9 @@ padded length and the alignment of its start (attention.py), a bounded set.
 
 Speculative decoding (MIMO_SPEC_DECODE=mtp; the plugin's model-owned drafter contract, docs/SPEC_DECODE_CONTRACT.md,
 with ``--speculative-config '{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter",
-"num_speculative_tokens": 3}'``): the MTP layer drafts up to MAX_DRAFTS tokens for a lane that ran one request in its
-last step, and a verify step runs that request in every decode slot of its replica (reference/spec_decode.py). Lanes
+"num_speculative_tokens": 3}'``): the MTP layers draft up to MAX_DRAFTS tokens for a lane that ran one request in its
+last step (MIMO_MTP_LAYERS=3, the default: draft i + 1 from MTP layer i; 1: layer MIMO_MTP_LAYER drafts every
+token), and a verify step runs that request in every decode slot of its replica (reference/spec_decode.py). Lanes
 with several requests decline to draft and decode as usual; a verify block that still carries drafts beside other
 rows (a request joined after the proposal) is packed into passes of SPEC_SLOTS slots. A verify answers the
 plugin's argmax ids when every request of the step is greedy. A step with a sampled request is accepted on device
@@ -64,6 +65,12 @@ copies one 320-byte result page per pass to the host behind it without blocking 
 enqueued before the host waits): the argmax ids or the committed tokens and count, and the drafts.
 propose_draft_tokens returns those drafts when the plugin committed what the device did; it drafts from the host plan
 after a plain decode step, a logits verify, without the decode RoPE tables (MIMO_DEVICE_ROPE=0), or when the commits differ.
+
+The MTP rings only hold what the lane's drafts wrote. With MIMO_MTP_BACKFILL (default on, with the decode RoPE tables)
+each decode slot that may speculate keeps a history of the target's final normed hidden (tt/mtp_backfill.py: written
+by every decode step, verify pass and prefill chunk), and a draft whose request's rows the rings do not continue
+(``mtp_ring``: after the request's prompt, after the lane served several requests) is preceded by the backfill trace,
+which fills every MTP layer's ring from that history: its drafts are those of an MTP that saw every position.
 
 Asynchronous scheduling (MIMO_ASYNC_SPEC=1, the default: ``supports_async_spec_decode``). An ordinary step of a
 speculating launch overlaps the step in flight as it does without speculation, and the plugin proposes for it when it
@@ -131,10 +138,16 @@ DEVICE_ROPE = os.environ.get("MIMO_DEVICE_ROPE", "1") == "1"
 # Up to this context the tables hold whole 192-wide rows (201 MB per chip at 128K); past it only the 64 rotated dims
 # (``compact``: 537 MB per chip at 1M instead of 1.61 GB), each read appending the constant 1 / 0 of the other dims.
 ROPE_TABLE_FULL_WIDTH_MAX_LEN = 131072
-# MIMO_SPEC_DECODE=mtp: load the MTP layer (MIMO_MTP_LAYER, default 0, vLLM's MTP proposer's layer) and serve the
-# plugin's model-owned drafter contract (module docstring).
+# MIMO_SPEC_DECODE=mtp: load the MTP layers and serve the plugin's model-owned drafter contract (module docstring).
+# MIMO_MTP_LAYERS=3 (default): draft i + 1 from MTP layer i (vLLM 0.31's MultiModuleMTPSpeculator, which the GPU
+# references run with the num_nextn_predict_layers patch; needs the decode RoPE tables); 1: MTP layer MIMO_MTP_LAYER
+# (default 0) drafts every token, feeding itself its own output (vLLM's MTP proposer, upstream vLLM for MiMo).
 SPEC_DECODE = os.environ.get("MIMO_SPEC_DECODE", "")
+MTP_LAYERS = int(os.environ.get("MIMO_MTP_LAYERS", "3"))
 MTP_LAYER = int(os.environ.get("MIMO_MTP_LAYER", "0"))
+# MIMO_MTP_BACKFILL=0: no target-hidden history, no ring backfill (the rings start empty for each prompt and keep the
+# gaps of the steps the lane did not draft); it needs the decode RoPE tables.
+MTP_BACKFILL = os.environ.get("MIMO_MTP_BACKFILL", "1") == "1"
 # MIMO_SPEC_CHAIN=0: no draft chained behind a verify (every draft host-planned after the plugin's walk, and an
 # argmax_ids verify reads its greedy tokens without an accept step), the flow before tt/spec_chain.py, for comparison.
 SPEC_CHAIN = os.environ.get("MIMO_SPEC_CHAIN", "1") == "1"
@@ -342,7 +355,7 @@ class MiMoV2ForCausalLM:
         # Drafts returned from the chain and drafted from the host plan; with chain_check, chained drafts checked
         # against the host plan's and the mismatches; proposes for a step older than the lane's last one
         # (``_stale_source``: one step behind, or anywhere else); chain rows whose page tables have holes
-        # (``_check_chain_tables``); finishing slots the plugin named (``_check_finishing``).
+        # (``_check_chain_tables``); finishing slots the plugin named (``_check_finishing``); ring backfills.
         self.chain_stats = {
             "chained": 0,
             "host": 0,
@@ -352,11 +365,18 @@ class MiMoV2ForCausalLM:
             "misplaced": 0,
             "uncovered": 0,
             "finishing": 0,
+            "backfills": 0,
         }
         # The deferred verifies' tip ids, and the newest one while no other step followed it (the one a chained
         # verify may build on).
         self._next_tip = 0
         self._tip = None
+        # Per lane: (lane slot, last row) of the request whose rows the MTP rings hold up to that row (the last draft's
+        # B - 1), None after a prompt reset them; (lane slot, VerifyHandle) after a draft chained behind a verify, whose
+        # row the handle's page gives (``_ring``). A draft for another request, or past a gap, backfills first.
+        self.mtp_ring = [None] * self.dp
+        # Per lane and slot: where the slot's last prefill chunk ended (a chunk starting there continues its request).
+        self.prefill_ends = [{} for _ in range(self.dp)]
 
     # ------------------------------------------------------------------ construction and sizing
     @classmethod
@@ -380,7 +400,7 @@ class MiMoV2ForCausalLM:
         num_layers = hf_config.num_hidden_layers
         if num_layers > cfg.num_hidden_layers:
             raise ValueError(f"num_hidden_layers {num_layers} > the checkpoint's {cfg.num_hidden_layers}")
-        mtp_layer = None
+        mtp_layers = None
         if SPEC_DECODE:
             if SPEC_DECODE != "mtp":
                 raise ValueError(f"MIMO_SPEC_DECODE={SPEC_DECODE!r}: MiMo drafts with its MTP layer (mtp)")
@@ -389,7 +409,15 @@ class MiMoV2ForCausalLM:
                     f"a verify runs one request in {SPEC_SLOTS} decode slots: launch with --max-num-seqs >= "
                     f"{SPEC_SLOTS} per lane (got {max_batch_size // dp})"
                 )
-            mtp_layer = MTP_LAYER
+            if MTP_LAYERS not in (1, MAX_DRAFTS):
+                raise ValueError(f"MIMO_MTP_LAYERS={MTP_LAYERS}: 1, or {MAX_DRAFTS} (one MTP layer per draft)")
+            if MTP_LAYERS > cfg.num_nextn_predict_layers:
+                raise ValueError(f"MIMO_MTP_LAYERS={MTP_LAYERS}: the checkpoint has {cfg.num_nextn_predict_layers}")
+            if MTP_LAYERS > 1 and not DEVICE_ROPE:
+                raise ValueError("MIMO_MTP_LAYERS=3 plans its passes on device: it needs MIMO_DEVICE_ROPE=1")
+            mtp_layers = (MTP_LAYER,) if MTP_LAYERS == 1 else tuple(range(MAX_DRAFTS))
+            if MTP_BACKFILL and not DEVICE_ROPE:
+                logger.warning("MiMo vLLM: MIMO_MTP_BACKFILL needs the decode RoPE tables (MIMO_DEVICE_ROPE=1): off")
         logger.info(f"MiMo vLLM: {dp} replicas x {max_batch_size // dp} users, {num_layers} layers, {path}")
         generator = MiMoGalaxyGenerator(
             mesh_device,
@@ -402,7 +430,8 @@ class MiMoV2ForCausalLM:
             num_layers=num_layers,
             block_size=BLOCK_SIZE,
             setup_kv=False,
-            mtp_layer=mtp_layer,
+            mtp_layers=mtp_layers,
+            mtp_backfill=MTP_BACKFILL and DEVICE_ROPE,
         )
         return cls(generator, max_seq_len)
 
@@ -521,10 +550,10 @@ class MiMoV2ForCausalLM:
                     ]
                 )
             model.setup_vllm_kv_cache(self.per_lane, caches, groups, table_width)
-            if model.mtp is not None:
-                model.mtp.setup_cache()
             if DEVICE_ROPE:
                 model.setup_decode_rope_tables(compact_rope, rope_host)
+            if model.mtp is not None:
+                model.mtp.setup_cache()  # after the RoPE tables: the backfill reads them
             self.kv_caches.append(caches)
         logger.info(
             f"MiMo vLLM KV: {num_blocks} blocks of {block_size} per lane, {len(buffers)} buffers per replica, "
@@ -602,6 +631,7 @@ class MiMoV2ForCausalLM:
         slots = list(range(rows)) if empty_slots is None else [int(s) for s in empty_slots]
         placed = []
         table_rows = [{} for _ in range(self.dp)]
+        continues = {}
         for i in range(rows):
             lane, slot = divmod(slots[i], self.per_lane)
             # vLLM starts chunks and prefix hits on block boundaries; a chunk that does not is moved back to one and
@@ -620,6 +650,9 @@ class MiMoV2ForCausalLM:
                 cached, start = start // BLOCK_SIZE, 0
             placed.append((i, lane, slot, start, int(ends[i]), cached))
             table_rows[lane][slot] = self._group_rows(tables, i)
+            # The MTP history: a chunk starting where the slot's last one ended continues its request.
+            continues[i] = start > 0 and self.prefill_ends[lane].get(slot) == start
+            self.prefill_ends[lane][slot] = int(ends[i])
         for lane, rows_of_lane in enumerate(table_rows):
             if rows_of_lane:
                 self.models[lane].set_vllm_page_tables(rows_of_lane)
@@ -627,6 +660,7 @@ class MiMoV2ForCausalLM:
                 # empty for the new request.
                 self.spec_sources[lane] = self.source_positions[lane] = None
                 self.chained[lane] = None
+                self.mtp_ring[lane] = None
                 if self.models[lane].mtp is not None:
                     self.models[lane].mtp.reset()
         # A lane's first chunks of one padded length (at most PREFILL_BATCH_MAX_PADDED) go in one pass
@@ -659,7 +693,9 @@ class MiMoV2ForCausalLM:
                 handle = self.models[lane].prefill_enqueue_batch(chunks)
             else:
                 (chunk, slot, _), start = chunks[0], rows_of_pass[0][3]
-                handle = self.models[lane].prefill_enqueue(chunk, slot, start_pos=start)
+                handle = self.models[lane].prefill_enqueue(
+                    chunk, slot, start_pos=start, history_continues=continues[rows_of_pass[0][0]]
+                )
             pending.append((rows_of_pass, lane, handle))
         t1 = time.perf_counter()
         logits = [None] * rows
@@ -980,7 +1016,7 @@ class MiMoV2ForCausalLM:
             chained = accept and SPEC_CHAIN and source is not None and model.mtp is not None
             chained = chained and model.rope_tables is not None
             relay = source is not None and source.row in relayed
-            chains.append(chain_row(model.max_batch, source, limit, relay=relay) if chained else None)
+            chains.append((source, limit, relay) if chained else None)
             # The decode trace's resident tokens and positions are stale now: the plugin reloads after a verify.
             self.decode_positions[lane] = None
         # A deferred verify's sources travel with its handle: a propose without one (an ordinary step's) drafts
@@ -1007,8 +1043,11 @@ class MiMoV2ForCausalLM:
                     # MIMO_VLLM_TIMING splits the wait at the accept trace's end: verify vs chained draft.
                     if TIMING:
                         handle.timing_events[lane] = ttnn.record_event(model.mesh_device, 0)
+                    source, slot = sources[lane], sources[lane].row - lane * self.per_lane
                     model.mtp.enqueue_chained()
-                    handle.sources[lane] = sources[lane]
+                    # The rings now hold the request's rows up to the bonus - 1, which the page gives (``_ring``).
+                    self.mtp_ring[lane] = (slot, handle)
+                    handle.sources[lane] = source
                 handle.pages.append((lane, p[k], model.spec_chain, model.spec_chain.read_async()))
         for lane, p in enumerate(lanes):
             if p:
@@ -1025,7 +1064,7 @@ class MiMoV2ForCausalLM:
         results = handle.read()
         for lane, source in handle.sources.items():
             result = next(res for ln, _, res in results if ln == lane)
-            self.chained[lane] = chained_draft(result, source)
+            self.chained[lane] = chained_draft(result, source, layers=self._mtp_layers(lane))
         if TIMING:
             self._spec_timing(
                 "verify",
@@ -1217,9 +1256,17 @@ class MiMoV2ForCausalLM:
         return buffers[shape]
 
     def _enqueue_verify_pass(self, lane, vp, tables, chain=None, accept=None):
-        """``chain``: the pass's chain row (reference.spec_chain.chain_row), None when no draft chains behind it;
-        ``accept``: its accept step's (slots, groups), staged before the verify (TtMiMoModel.verify_enqueue)."""
+        """``chain``: (DraftSource, limit, relay) of the draft chained behind the pass, None when none does. The pass's
+        chain row (reference.spec_chain.chain_row) carries it and, with the MTP history, each slot's request slot (the
+        verify trace writes the slots' final norm rows into their requests' rings). ``accept``: its accept step's
+        (slots, groups), staged before the verify (TtMiMoModel.verify_enqueue)."""
         model = self.models[lane]
+        hslots = None
+        if model.mtp is not None and model.mtp.history is not None:
+            first = lane * self.per_lane
+            hslots = [None if row is None else row - first for row in vp.table_rows]
+        if chain is not None or hslots is not None:
+            chain = chain_row(model.max_batch, *(chain or (None, 0, False)), hslots=hslots)
         tok = torch.zeros(model.max_batch, dtype=torch.int32)
         pos = torch.full((model.max_batch,), -1, dtype=torch.int32)
         tok[:SPEC_SLOTS] = torch.tensor(vp.tokens, dtype=torch.int32)
@@ -1241,7 +1288,8 @@ class MiMoV2ForCausalLM:
         device (``_verify``), the drafts are already on the host: they are returned when the plugin committed what the
         device committed (the row's count, tokens and positions). Otherwise (a plain decode step, a logits verify, no
         decode RoPE tables, MIMO_SPEC_CHAIN=0, a draft the device declined at max_seq_len - K that ``num_drafts``
-        allows, or a different commit) the MTP drafts now from the host plan (reference.spec_decode.plan_mtp). A
+        allows, or a different commit) the MTP drafts now from the host plan (reference.spec_decode.plan_mtp), or with
+        every MTP layer from the commit's description (the device plans the passes: their rows depend on its stash). A
         propose for an ordinary step older than the lane's last one (async scheduling) drafts nothing on device
         (``_stale_source``). Only the lanes it consumed forget their source. ``hidden``: a deferred verify's handle,
         whose propose returns the drafts its pages carry (``_propose_deferred``)."""
@@ -1282,13 +1330,21 @@ class MiMoV2ForCausalLM:
                 hits += 1
                 if not self.chain_check:
                     continue
-            plan = plan_mtp(source, committed_positions[r].tolist(), m)
-            slot_tokens = [0] * SPEC_SLOTS
-            for c in range(m):
-                slot_tokens[source.slots[c]] = int(committed_tokens[r, c])
-            mtp.enqueue(slot_tokens, plan)
+            slot = source.row - lane * self.per_lane
+            self._backfill(lane, slot, int(committed_positions[r, 0]) - 1)
+            self.mtp_ring[lane] = (slot, int(committed_positions[r, m - 1]) - 1)
+            if mtp.multi:
+                mtp.enqueue_layers(source, committed_tokens[r].tolist(), committed_positions[r].tolist(), m)
+                anchor = SPEC_SLOTS - 1
+            else:
+                plan = plan_mtp(source, committed_positions[r].tolist(), m)
+                slot_tokens = [0] * SPEC_SLOTS
+                for c in range(m):
+                    slot_tokens[source.slots[c]] = int(committed_tokens[r, c])
+                mtp.enqueue(slot_tokens, plan)
+                anchor = plan.anchor
             inputs_s += mtp.last_inputs_s
-            jobs.append((lane, r, plan.anchor, hit))
+            jobs.append((lane, r, anchor, hit))
         waited = 0.0
         for lane, r, anchor, hit in jobs:
             t = time.perf_counter()
@@ -1334,7 +1390,7 @@ class MiMoV2ForCausalLM:
         hits = 0
         for lane, source in handle.sources.items():
             result = next(res for ln, _, res in results if ln == lane)
-            chained = chained_draft(result, source)
+            chained = chained_draft(result, source, layers=self._mtp_layers(lane))
             r = source.row
             if chained is None or r >= rows or int(committed_positions[r, 0]) < 0 or not 1 <= num_drafts <= MAX_DRAFTS:
                 continue
@@ -1346,6 +1402,34 @@ class MiMoV2ForCausalLM:
         if TIMING:
             self._spec_timing("propose", t0, 0.0, 0, chained=hits, verify_wait=handle.waited + handle.draft_wait)
         return DraftOutput(draft_token_ids=drafts, num_valid=valid)
+
+    def _mtp_layers(self, lane):
+        """The MTP layers drafting on ``lane`` (1, or MAX_DRAFTS: the chain's anchor is then the last slot)."""
+        return len(self.models[lane].mtp.layers)
+
+    def _ring(self, lane):
+        """``mtp_ring[lane]``: (lane slot, last row) or None. A draft chained behind a verify left (slot, its
+        VerifyHandle): the rows run up to its page's bonus - 1, or, when the chain declined (nothing written), unknown
+        (None). Reads the handle on the engine thread (by then the plugin has read it: a later step was built from
+        it), so the answer is ordered with the prefills that reset the ring."""
+        ring = self.mtp_ring[lane]
+        if ring is not None and isinstance(ring[1], VerifyHandle):
+            result = next(res for ln, _, res in ring[1].read() if ln == lane)
+            drafted = result.drafting and result.draft_anchor == result.anchor
+            ring = self.mtp_ring[lane] = (ring[0], result.bonus - 1) if drafted else None
+        return ring
+
+    def _backfill(self, lane, slot, a):
+        """Before a draft of the request in lane ``slot`` whose first row is at ``a`` (non-blocking, enqueued right
+        before it): the backfill trace when the MTP rings do not hold that request's rows up to a - 1 (after its
+        prompt, after a gap without drafts: ``mtp_ring``), with the MTP history (tt/mtp_backfill.py)."""
+        mtp = self.models[lane].mtp
+        if mtp.history is None or slot >= SPEC_SLOTS:
+            return
+        ring = self._ring(lane)
+        if ring is None or ring[0] != slot or ring[1] < a - 1:
+            mtp.enqueue_backfill(slot, a)
+            self.chain_stats["backfills"] += 1
 
     def _stale_source(self, lane, row, committed_positions, count):
         """None when the lane's DraftSource is the step this propose is for. Under async scheduling the plugin

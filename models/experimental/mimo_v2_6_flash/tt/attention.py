@@ -717,6 +717,29 @@ class TtMiMoAttention:
         k_fill.deallocate(True)
         v_fill.deallocate(True)
 
+    def fill_kv_rows(self, x, cos, sin, page_table, kv_cache):
+        """The K / V of S rows (x [1, 1, S, hidden], input-normed; S a multiple of the block size) at the positions
+        whose RoPE cos / sin [1, 1, S, head_dim] are given, written by paged_fill_cache into the blocks of row 0 of
+        ``page_table`` from its first position: the entries a decode step would write for each row, computed in the
+        prefill layout and without the attention (the MTP ring backfill, tt/mtp_backfill.py)."""
+        assert not self.split_users and self.sliding_window is not None
+        xqkv = self._prefill_qkv(x)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            xqkv,
+            num_heads=self.nh_local,
+            num_kv_heads=self.nkv_local,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        xqkv.deallocate(True)
+        q.deallocate(True)
+        trans = self.rope.transformation_mat_prefill
+        k_rot = ttnn.experimental.rotary_embedding_llama(k, cos, sin, trans, is_decode_mode=False)
+        k.deallocate(True)
+        self._fill(kv_cache, k_rot, v, page_table, 0, None)
+        k_rot.deallocate(True)
+        v.deallocate(True)
+
     def _cached_window(self, cache, blocks):
         """The cache blocks ``blocks`` (int32 [4] slice starts (block, 0, 0, 0) on device, in position order) as one
         bf16 [1, kv_heads, n * block, dim]. A tensor-args slice keys on the cache's shape, not on the block id."""

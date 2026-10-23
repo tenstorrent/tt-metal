@@ -13,13 +13,16 @@ answers, which drafts come from the chain and which from the host plan (and that
 (a commit other than the device's, a logits verify, no decode RoPE tables, the context limit, MIMO_SPEC_CHAIN=0), and
 that speculative greedy decoding reproduces the oracle sequence."""
 
+import random
 from types import SimpleNamespace
 
 import pytest
 import torch
 
+from models.experimental.mimo_v2_6_flash.reference.mtp import MtpProgramMirror
 from models.experimental.mimo_v2_6_flash.reference.sample_verify import control_words, verify_pass
 from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
+    CHAIN_HSLOTS,
     RESULT_WORDS,
     chain_step,
     drafts_step,
@@ -27,7 +30,7 @@ from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     unpack_result,
 )
 from models.experimental.mimo_v2_6_flash.reference.spec_decode import MAX_DRAFTS, SPEC_SLOTS, DraftSource
-from models.experimental.mimo_v2_6_flash.reference.spec_inputs import MTP_ROWS, pack_mtp, pack_verify
+from models.experimental.mimo_v2_6_flash.reference.spec_inputs import MTP_ROWS, pack_mtp, pack_mtp_layers, pack_verify
 from models.experimental.mimo_v2_6_flash.tt import generator_vllm
 from models.experimental.mimo_v2_6_flash.tt.generator_vllm import MiMoV2ForCausalLM
 
@@ -68,6 +71,8 @@ class FakeMTP:
     def __init__(self, lane):
         self.lane, self.last_inputs_s = lane, 0.0
         self.chained = self.planned = 0
+        self.layers, self.multi = [0], False
+        self.history, self.backfills = None, []
 
     def _run(self):
         """The three passes and the drafts step on the upload the lane holds."""
@@ -135,7 +140,7 @@ class FakeLane:
             self.verify_accept_stage(slots, groups)
         self.accepts += 1
         accept = verify_pass(None, None, self.argmax, self.ctrl, VOCAB)
-        self.mtp_words, header = chain_step(self.verify_words, accept, self.argmax)
+        self.mtp_words, header = chain_step(self.verify_words, accept, self.argmax, len(self.mtp.layers))
         self.chain.words[:64] = header
 
     def read_next_tokens(self, handle):
@@ -304,3 +309,226 @@ def test_the_context_limit(adapter, num_drafts):
         assert lane.mtp.planned == before[1] + int(fits and not chained), p
         if fits:
             assert out == [draft_of(bonus, k) for k in range(num_drafts)]
+
+
+# ---------------------------------------------------------------------- every MTP layer (MIMO_MTP_LAYERS=3)
+HIDDEN = 64
+
+
+def hidden_of(q, token):
+    """The fake target's final normed hidden at position q with input token ``token``."""
+    return torch.randn(HIDDEN, generator=torch.Generator().manual_seed(q * 1000003 + int(token)))
+
+
+def accepts(q):
+    """Whether the fake target takes the draft after position q (60% of positions, pseudo-random): counts of every
+    size."""
+    return random.Random(q).random() < 0.6
+
+
+class LayersMTP:
+    """The every-layer draft trace on a fake lane: reference.mtp.MtpProgramMirror on the packed upload and the last
+    step's final norm rows (whoever wrote the upload: the chain step, or the host's description)."""
+
+    def __init__(self, lane, mtps, embedding, lm_head):
+        self.lane, self.last_inputs_s = lane, 0.0
+        self.chained = self.planned = 0
+        self.layers, self.multi = list(mtps), True
+        self.history = None
+        self.program = MtpProgramMirror(mtps, embedding, lm_head, table_rows=B)
+
+    def _run(self):
+        self.lane.chain.words[64:] = self.program.run(self.lane.mtp_words, self.lane.step_hidden)
+
+    def enqueue_chained(self):
+        self.chained += 1
+        self._run()
+
+    def enqueue_layers(self, source, tokens, positions, m):
+        self.planned += 1
+        self.lane.mtp_words = pack_mtp_layers(B, source, tokens, positions, m).tolist()
+        self._run()
+
+    def read_drafts(self, anchor):
+        result = self.lane.chain.read()
+        assert result.draft_anchor == anchor == SPEC_SLOTS - 1
+        return result.drafts
+
+
+class LayersLane(FakeLane):
+    """A fake lane whose target takes a draft per ``accepts`` (else a token off the drafts) and keeps each slot's
+    final normed hidden (``hidden_of``) as the draft program's step rows."""
+
+    def __init__(self, mtps, embedding, lm_head):
+        super().__init__()
+        self.mtp = LayersMTP(self, mtps, embedding, lm_head)
+        self.step_hidden = torch.zeros(B, HIDDEN)
+
+    def verify_enqueue(self, tokens, positions, chain=None, accept=None):
+        """The verify trace: the relay step (a chained verify's tokens and positions from the lane's last page), then
+        the target over the slots."""
+        if accept is not None:
+            self.verify_accept_stage(*accept)
+        self.verify_words, self.ctrl = relay_step(
+            pack_verify(tokens, positions, chain).tolist(), self.chain.words, self.ctrl
+        )
+        tok, pos = self.verify_words[:B], self.verify_words[B : 2 * B]
+        self.argmax = [0] * B
+        for j in range(B):
+            if pos[j] < 0:
+                continue
+            self.step_hidden[j] = hidden_of(pos[j], tok[j])
+            nxt = tok[j + 1] if j + 1 < SPEC_SLOTS and pos[j + 1] == pos[j] + 1 else None
+            self.argmax[j] = nxt if nxt is not None and accepts(pos[j]) else (SEQ[pos[j] + 1] + 3 * j + 1) % VOCAB
+            if nxt is not None and not accepts(pos[j]) and self.argmax[j] == nxt:
+                self.argmax[j] = (nxt + 1) % VOCAB
+        return {"next_tokens": self.argmax}
+
+
+@pytest.fixture
+def layers_adapter(monkeypatch):
+    from models.experimental.mimo_v2_6_flash.reference.mtp import ReferenceMTPDrafter
+    from models.experimental.mimo_v2_6_flash.tests.test_spec_decode_host import mtp_drafter, tiny_config
+
+    g = torch.Generator().manual_seed(5)
+    cfg = tiny_config()
+    target = SimpleNamespace(
+        embedding=torch.randn(VOCAB, HIDDEN, generator=g), lm_head=torch.randn(VOCAB, HIDDEN, generator=g)
+    )
+    mtps = mtp_drafter(cfg, target, g, MAX_DRAFTS).mtps
+    lanes = [LayersLane(mtps, target.embedding, target.lm_head) for _ in range(DP)]
+    gen = SimpleNamespace(models=lanes, dp=DP, users_per_replica=PER_LANE, cfg=SimpleNamespace(vocab_size=VOCAB))
+    model = MiMoV2ForCausalLM(gen, MAX_SEQ_LEN)
+    model.layer_groups = [0]
+    model.reference = ReferenceMTPDrafter(mtps, target.embedding, target.lm_head)
+    return model
+
+
+def reference_drafts(model, source, committed, positions, m, slot_hidden):
+    """The host reference drafter's drafts for the plugin's commit of the speculating row."""
+    ref = model.reference
+    plan = ref.plan(source, positions, m)
+    slot_tokens = {source.slots[c]: committed[c] for c in range(m)}
+    return ref.draft(plan, slot_tokens, slot_hidden)
+
+
+def layers_start(model, p):
+    """A plain decode step of the request alone on lane 1 (slot 0) at p - 1, committing SEQ[p] at p."""
+    lane = model.models[1]
+    lane.step_hidden[0] = hidden_of(p - 1, SEQ[p - 1])
+    drafts = start(model, p)
+    want = reference_drafts(
+        model, DraftSource(row=SPEC_ROW, slots=[0]), [SEQ[p]], [p, -1, -1, -1], 1, {0: lane.step_hidden[0].clone()}
+    )
+    assert drafts == want
+    return drafts
+
+
+@pytest.mark.parametrize("mode", ["argmax_ids", "fused_sample"])
+def test_layers_chained_drafts_are_the_reference_drafters(layers_adapter, mode):
+    """Every MTP layer: each propose after a verify returns the drafts the device chained (the chain step's
+    description, the plan step on the device stash), and they are the host reference drafter's drafts for the
+    plugin's commit, over accepted counts of every size."""
+    model, lane = layers_adapter, layers_adapter.models[1]
+    p = 300
+    drafts = layers_start(model, p)
+    seq, counts = SEQ[: p + 1], set()
+    for _ in range(60):
+        before = (lane.mtp.chained, lane.mtp.planned)
+        q = len(seq) - 1
+        committed, positions, counts_t, _ = verify(
+            model, seq[-1], q, drafts, mode, others=[(0, SEQ[50], 50), (1, SEQ[90], 90)]
+        )
+        m = int(counts_t[SPEC_ROW])
+        counts.add(m)
+        new = committed[SPEC_ROW, :m].tolist()
+        source = DraftSource(row=SPEC_ROW, slots=list(range(1 + MAX_DRAFTS)))
+        slot_hidden = {c: hidden_of(q + c, ([seq[-1]] + drafts)[c]) for c in range(m)}
+        drafts = propose(model, committed, positions, counts_t)
+        assert (lane.mtp.chained, lane.mtp.planned) == (before[0] + 1, before[1]), "returned from the chain"
+        assert drafts == reference_drafts(model, source, new, positions[SPEC_ROW].tolist(), m, slot_hidden)
+        seq += new
+    assert counts == set(range(1, MAX_DRAFTS + 2))
+    assert model.chain_stats["chained"] == 60 and model.chain_stats["host"] == 1
+
+
+def test_layers_chain_check_redrafts_the_same(layers_adapter):
+    """MIMO_SPEC_CHAIN_CHECK with every layer: the host description of the same commit, run after the chained draft
+    (the stash then holds that draft's rows), drafts the same tokens."""
+    model = layers_adapter
+    model.chain_check = True
+    drafts = layers_start(model, 700)
+    seq = SEQ[:701]
+    for _ in range(30):
+        committed, positions, counts, _ = verify(model, seq[-1], len(seq) - 1, drafts)
+        seq += committed[SPEC_ROW, : int(counts[SPEC_ROW])].tolist()
+        drafts = propose(model, committed, positions, counts)
+    stats = model.chain_stats
+    assert stats["checked"] == stats["chained"] == 30 and stats["mismatched"] == 0
+
+
+def test_layers_a_different_commit_drafts_from_the_host_description(layers_adapter):
+    """The plugin commits one token fewer than the device: the host's description of its commit, planned on the
+    device stash the chained draft left, drafts the reference drafter's tokens for that commit."""
+    model, lane = layers_adapter, layers_adapter.models[1]
+    drafts = layers_start(model, 900)
+    seq = SEQ[:901]
+    for _ in range(40):
+        q = len(seq) - 1
+        committed, positions, counts, _ = verify(model, seq[-1], q, drafts)
+        m = int(counts[SPEC_ROW])
+        if m >= 2:
+            break
+        seq += committed[SPEC_ROW, :m].tolist()
+        source = DraftSource(row=SPEC_ROW, slots=list(range(1 + MAX_DRAFTS)))
+        slot_hidden = {c: hidden_of(q + c, ([seq[-2]] + drafts)[c]) for c in range(m)}
+        drafts = propose(model, committed, positions, counts)
+        reference_drafts(model, source, committed[SPEC_ROW, :m].tolist(), positions[SPEC_ROW].tolist(), m, slot_hidden)
+    assert m >= 2
+    committed[SPEC_ROW, m - 1] = -1
+    counts[SPEC_ROW] = m - 1
+    planned = lane.mtp.planned
+    source = DraftSource(row=SPEC_ROW, slots=list(range(1 + MAX_DRAFTS)))
+    slot_hidden = {c: hidden_of(q + c, ([seq[-1]] + drafts)[c]) for c in range(m - 1)}
+    got = propose(model, committed, positions, counts)
+    assert lane.mtp.planned == planned + 1
+    want = reference_drafts(
+        model, source, committed[SPEC_ROW, : m - 1].tolist(), positions[SPEC_ROW].tolist(), m - 1, slot_hidden
+    )
+    assert got == want
+
+
+# ---------------------------------------------------------------------- the ring backfill's bookkeeping
+def test_the_backfill_runs_where_the_rings_do_not_continue(adapter):
+    """With the MTP history (tt/mtp_backfill.py): the first draft after the prompt (the rings reset) and a draft
+    after steps without drafts backfill first; drafts after a verify (chained, re-drafted by the chain check, or
+    host-planned on a differing commit) do not. Every verify pass's chain row names its slots' request slot."""
+    lane = adapter.models[1]
+    lane.mtp.history = object()
+    lane.mtp.enqueue_backfill = lambda slot, a: lane.mtp.backfills.append((slot, a))
+    adapter.chain_check = True
+    rows_seen = []
+    enqueue = lane.verify_enqueue
+
+    def verify_enqueue(tokens, positions, chain=None, accept=None):
+        rows_seen.append(chain[CHAIN_HSLOTS : CHAIN_HSLOTS + SPEC_SLOTS].tolist())
+        return enqueue(tokens, positions, chain, accept)
+
+    lane.verify_enqueue = verify_enqueue
+    p = 600
+    drafts = start(adapter, p)
+    assert lane.mtp.backfills == [(0, p - 1)]
+    seq = SEQ[: p + 1]
+    for _ in range(5):
+        committed, positions, counts, _ = verify(adapter, seq[-1], len(seq) - 1, drafts)
+        seq += committed[SPEC_ROW, : int(counts[SPEC_ROW])].tolist()
+        drafts = propose(adapter, committed, positions, counts)
+    assert lane.mtp.backfills == [(0, p - 1)] and adapter.chain_stats["backfills"] == 1
+    assert rows_seen == [[1, 1, 1, 1]] * 5, "slot 0's request in every verify slot (slot + 1)"
+    # Steps without drafts (the lane served several requests): the next draft, after a plain step, backfills.
+    q = len(seq) + 7
+    start(adapter, q)
+    assert lane.mtp.backfills[-1] == (0, q - 1) and adapter.chain_stats["backfills"] == 2
+    # A plain step right after a draft continues the rings: no backfill.
+    start(adapter, q + 1)
+    assert adapter.chain_stats["backfills"] == 2

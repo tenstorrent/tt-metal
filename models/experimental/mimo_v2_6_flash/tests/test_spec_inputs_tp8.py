@@ -24,7 +24,17 @@ test_spec_relay_tp8: the relay step (a chained verify's tokens and positions int
 the accept step's control page, from the lane's last result page) against its mirror (reference.spec_chain.relay_step)
 bit for bit, eager and traced: every count of the step chained onto and every number of drafts relayed, around the
 ring's wrap and at the context limit, a page that drafted nothing, host content beside the relayed slots, and an
-upload without the relay word (untouched)."""
+upload without the relay word (untouched).
+
+test_spec_chain_layers_tp8: the same with every MTP layer (MIMO_MTP_LAYERS=3): the chain step's description and the
+drafts step, then the plan step (plan_mtp_layers on the device stash: every commit count, a plain step's slot, stash
+hits, misses and holes, the ring's wrap, the context end, an idle description) and the tokens steps, every output
+buffer and the stash page bit for bit against reference/spec_chain.py, eager and replayed from one capture.
+
+test_mtp_history_tp8: the MTP history's kernel steps (tt/mtp_backfill.py, kernels/mtp_history.cpp) against
+reference/mtp_backfill.py bit for bit: a decode step's, a verify pass's and a prefill list's writes (page and hidden
+rows), and the backfill's plan (rows, RoPE indices, tokens, the fill table, the stash page and hidden rows), eager and
+traced."""
 
 from types import SimpleNamespace
 
@@ -52,6 +62,9 @@ from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     chain_step,
     drafts_step,
     relay_step,
+    plan_step,
+    stash_page,
+    tokens_step,
 )
 from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
     MAX_DRAFTS,
@@ -61,7 +74,17 @@ from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
     plan_mtp,
     plan_verify_passes,
 )
-from models.experimental.mimo_v2_6_flash.reference.spec_inputs import pack_verify
+from models.experimental.mimo_v2_6_flash.reference.mtp_backfill import (
+    History,
+    backfill_plan,
+    backfill_row,
+    decode_writes,
+    entry,
+    prefill_writes,
+    verify_writes,
+)
+from models.experimental.mimo_v2_6_flash.reference.spec_chain import CHAIN_HSLOTS
+from models.experimental.mimo_v2_6_flash.reference.spec_inputs import pack_mtp_layers, pack_verify
 from models.experimental.mimo_v2_6_flash.tests.common import GALAXY_DEVICE_PARAMS, dp_submeshes, model_path
 from models.experimental.mimo_v2_6_flash.tests.test_spec_inputs_host import (
     REP,
@@ -73,6 +96,8 @@ from models.experimental.mimo_v2_6_flash.tests.test_spec_inputs_host import (
 from models.experimental.mimo_v2_6_flash.tt import kv as kv_lib
 from models.experimental.mimo_v2_6_flash.tt.common import MeshPlan
 from models.experimental.mimo_v2_6_flash.tt.model import ROPE_TABLE_MARGIN, TtMiMoModel
+from models.experimental.mimo_v2_6_flash.tt.mtp import make_layer_inputs
+from models.experimental.mimo_v2_6_flash.tt.mtp_backfill import MtpHistory
 from models.experimental.mimo_v2_6_flash.tt.rope import MiMoRotarySetup
 from models.experimental.mimo_v2_6_flash.tt.spec_chain import SpecChain
 from models.experimental.mimo_v2_6_flash.tt.spec_inputs import SpecInputs
@@ -312,6 +337,249 @@ def test_spec_chain_tp8(mesh_device):
     chain.drafts()
     got = words_of(chain.result)[0]
     assert got[DRAFTS_AT : DRAFTS_AT + 1 + MAX_DRAFTS] == [2] + [r[2] for r in head_rows]
+
+
+def int_words(t):
+    """A replicated row-major int32 tensor's values on every chip (signed)."""
+    return [ttnn.to_torch(d).reshape(-1).to(torch.int64).tolist() for d in ttnn.get_device_tensors(t)]
+
+
+def upload_ints(plan, values, t):
+    host = torch.tensor(values, dtype=torch.int32).reshape(t.shape)
+    rep = plan.replicate()
+    ttnn.copy_host_to_device_tensor(
+        ttnn.from_torch(host, dtype=t.dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep), t
+    )
+
+
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+def test_spec_chain_layers_tp8(mesh_device):
+    plan = MeshPlan(dp_submeshes(mesh_device)[0])
+    mesh = plan.mesh_device
+    spec = SpecInputs(plan, B, REP)
+
+    def u32(n):
+        return ttnn.from_torch(
+            torch.zeros(1, n, dtype=torch.int32),
+            device=mesh,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=plan.replicate(),
+        )
+
+    accept, argmax, heads = u32(ACCEPT_WORDS), u32(B), [u32(B) for _ in range(MAX_DRAFTS)]
+    li = make_layer_inputs(plan, B, 64)
+    chain = SpecChain(plan, spec, accept, argmax, heads, li)
+    chain.warm()
+    rng = random.Random(1)
+
+    # The chain and drafts steps.
+    def run_chain():
+        chain.chain()
+        chain.drafts()
+
+    replay = replayed(mesh, run_chain)
+    for bonus in (1, 255, 256, 257, MAX_SEQ_LEN - 1 - MAX_DRAFTS, MAX_SEQ_LEN - 2):
+        for n in range(MAX_DRAFTS + 1):
+            for m in range(1, n + 2):
+                if bonus - m < 0:
+                    continue
+                toks = [rng.randrange(152576) for _ in range(n + 1)]
+                (vp,) = plan_verify_passes([(3, toks, list(range(bonus - m, bonus - m + n + 1)), n)])
+                committed = [rng.randrange(152576) for _ in range(m)]
+                row = chain_row(B, draft_source([vp]), MAX_SEQ_LEN - MAX_DRAFTS)
+                tok = torch.zeros(B, dtype=torch.int32)
+                pos = torch.full((B,), -1, dtype=torch.int32)
+                tok[:SPEC_SLOTS] = torch.tensor(vp.tokens, dtype=torch.int32)
+                pos[:SPEC_SLOTS] = torch.tensor(vp.positions, dtype=torch.int32)
+                chain_t = torch.tensor(row, dtype=torch.int32)
+                acc = accept_page(m, committed)
+                ids = [rng.randrange(152576) for _ in range(B)]
+                head_rows = [[rng.randrange(152576) for _ in range(B)] for _ in range(MAX_DRAFTS)]
+                want_mtp, header = chain_step(pack_verify(tok, pos, chain_t).tolist(), acc, ids, layers=MAX_DRAFTS)
+                want_result = header + drafts_step(want_mtp, head_rows, layers=MAX_DRAFTS)
+                for runner in (run_chain, replay):
+                    ttnn.copy_host_to_device_tensor(spec.verify_host(tok, pos, chain_t), spec.verify_packed)
+                    upload_words(plan, acc, accept)
+                    upload_words(plan, ids, argmax)
+                    for h, words in zip(heads, head_rows):
+                        upload_words(plan, words, h)
+                    runner()
+                    for c, got in enumerate(words_of(spec.mtp_packed)):
+                        assert got == [w & 0xFFFFFFFF for w in want_mtp], f"bonus {bonus} n {n} m {m} chip {c}"
+                    for c, got in enumerate(words_of(chain.result)):
+                        assert got == want_result, f"bonus {bonus} n {n} m {m} chip {c}: result page"
+
+    # The plan step, then the tokens steps.
+    def run_plan():
+        chain.plan_layers()
+        for layer in range(1, MAX_DRAFTS):
+            chain.tokens(layer)
+
+    replay = replayed(mesh, run_plan)
+    outs = {"pos": li.pos, "rope": li.rope, "hidden": li.hidden, "tokens0": li.tokens[0]}
+    for bonus in (1, 3, 255, 256, 257, 4000, MAX_SEQ_LEN - 1):
+        sources = [(DraftSource(row=1, slots=[0, 1, 2, 3]), m) for m in range(1, SPEC_SLOTS + 1)]
+        sources += [(DraftSource(row=1, slots=[2]), 1)]
+        for source, m in sources:
+            if bonus - m < 0:
+                continue
+            positions = [bonus - m + 1 + c for c in range(m)] + [-1] * (1 + MAX_DRAFTS - m)
+            committed = [rng.randrange(152576) for _ in range(m)]
+            a = positions[0] - 1
+            stashes = [[-1] * (SPEC_SLOTS - r) + [a - r + j for j in range(r)] for r in range(SPEC_SLOTS + 1)]
+            stashes += [[-1, a - 3, -1, a - 1], [a - 40, a - 39, a - 38, a - 37]]
+            uploads = [pack_mtp_layers(B, source, committed, positions, m).tolist(), pack_mtp_layers(B).tolist()]
+            for stash_positions in stashes:
+                stash_positions = [p if p >= 0 else -1 for p in stash_positions]
+                page = stash_page(B, stash_positions, [rng.randrange(152576) for _ in range(SPEC_SLOTS)])
+                head_rows = [[rng.randrange(152576) for _ in range(B)] for _ in range(MAX_DRAFTS)]
+                for mtp in uploads:
+                    want, new = plan_step(mtp, page, B)
+                    want_tokens = [want["tokens0"]] + [
+                        tokens_step(want["tokens0"], head_rows, layer) for layer in range(1, MAX_DRAFTS)
+                    ]
+                    for runner in (run_plan, replay):
+                        upload_ints(plan, mtp, spec.mtp_packed)
+                        upload_ints(plan, page, li.stash)
+                        for h, words in zip(heads, head_rows):
+                            upload_words(plan, words, h)
+                        runner()
+                        what = f"bonus {bonus} m {m} slots {source.slots} stash {stash_positions} idle {mtp[0] == 0}"
+                        for name, t in outs.items():
+                            for c, got in enumerate(int_words(t)):
+                                assert got == want[name], f"{what}: {name} chip {c}"
+                        for j, t in enumerate(li.serial):
+                            for c, got in enumerate(int_words(t)):
+                                assert got == want["serial"][j], f"{what}: serial {j} chip {c}"
+                        for layer, t in enumerate(li.tokens):
+                            for c, got in enumerate(int_words(t)):
+                                assert got == want_tokens[layer], f"{what}: tokens {layer} chip {c}"
+                        for c, got in enumerate(int_words(li.stash)):
+                            assert got == new, f"{what}: stash page chip {c}"
+
+
+@pytest.mark.parametrize("layers", [3, 1])
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+def test_mtp_history_tp8(mesh_device, layers):
+    hidden_size = 256
+    plan = MeshPlan(dp_submeshes(mesh_device)[0])
+    mesh = plan.mesh_device
+    rep = plan.replicate()
+    hist = MtpHistory(plan, B, hidden_size, layers)
+    li = make_layer_inputs(plan, B, hidden_size) if layers > 1 else None
+    hist.warm(li)
+    mirror = History(hidden_size)
+    rng = random.Random(layers)
+    g = torch.Generator().manual_seed(layers)
+
+    def device_rows(rows):
+        return ttnn.from_torch(
+            rows.reshape(1, 1, -1, hidden_size),
+            device=mesh,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=rep,
+        )
+
+    def check(what):
+        for c, got in enumerate(int_words(hist.page)):
+            assert got == mirror.page, f"{what}: page chip {c}"
+        for c, got in enumerate(chips(hist.rows)):
+            assert torch.equal(
+                got.reshape(mirror.hidden.shape).float(), mirror.hidden.bfloat16().float()
+            ), f"{what}: rows chip {c}"
+
+    cur_pos = ttnn.from_torch(
+        torch.full((B,), -1, dtype=torch.int32),
+        device=mesh,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=rep,
+    )
+    tokens_tt = ttnn.from_torch(
+        torch.zeros(1, B, dtype=torch.int32),
+        device=mesh,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=rep,
+    )
+    src = device_rows(torch.zeros(B, hidden_size))
+    spec = SpecInputs(plan, B, REP)
+
+    def decode():
+        hist.stage(tokens_tt)
+        hist.decode(cur_pos, src)
+
+    def verify():
+        hist.verify(spec.verify_packed, src)
+
+    replay_decode, replay_verify = replayed(mesh, decode), replayed(mesh, verify)
+    for k in range(6):
+        rows = torch.randn(B, hidden_size, generator=g).bfloat16().float()
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                rows.reshape(1, 1, B, hidden_size), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep
+            ),
+            src,
+        )
+        pos = [rng.choice([-1, rng.randrange(1 << 20)]) for _ in range(B)]
+        tok = [rng.randrange(152576) for _ in range(B)]
+        upload_ints(plan, pos, cur_pos)
+        upload_words(plan, tok, tokens_tt)
+        (decode if k % 2 else replay_decode)()
+        mirror.apply(decode_writes(pos, tok), rows)
+        check(f"decode {k}")
+        vtok = torch.tensor([rng.randrange(152576) for _ in range(B)], dtype=torch.int32)
+        vpos = torch.tensor([rng.randrange(1 << 20) if j < 4 else -1 for j in range(B)], dtype=torch.int32)
+        chain = chain_row(B, None, 0, hslots=[rng.choice([None, 0, 1, 2, 3]) for _ in range(SPEC_SLOTS)])
+        ttnn.copy_host_to_device_tensor(
+            spec.verify_host(vtok, vpos, torch.tensor(chain, dtype=torch.int32)), spec.verify_packed
+        )
+        (verify if k % 2 else replay_verify)()
+        verify_words = pack_verify(vtok, vpos, torch.tensor(chain, dtype=torch.int32)).tolist()
+        mirror.apply(verify_writes(verify_words, chain[CHAIN_HSLOTS : CHAIN_HSLOTS + SPEC_SLOTS]), rows)
+        check(f"verify {k}")
+    # A prefill chunk's list (eager, as the prefill runs it), then backfills of every slot.
+    for slot, start, n, cont in ((1, 0, 200, False), (2, 64, 40, True), (3, 0, 7, False)):
+        x = torch.randn(1, 1, 256, hidden_size, generator=g).bfloat16().float()
+        writes = prefill_writes(slot, start, [rng.randrange(152576) for _ in range(n)], 0, cont)
+        norm = lambda t, prefill: ttnn.clone(t)  # noqa: E731 (the identity: the list's copy is what is checked)
+        lst = hist.prefill_list(writes)
+        hist.prefill(device_rows(x.reshape(-1, hidden_size)), norm, lst, len(writes))
+        mirror.apply(writes, x.reshape(-1, hidden_size))
+        check(f"prefill slot {slot}")
+    run = lambda: hist.backfill_plan(li)  # noqa: E731
+    replay = replayed(mesh, run)
+    for slot in range(SPEC_SLOTS):
+        for a in (5, 130, 300, 4000):
+            for q in range(max(0, a - 127), a + 1):
+                if rng.random() < 0.9:
+                    e = entry(slot, q)
+                    mirror.page[e], mirror.page[len(mirror.page) // 2 + e] = q, rng.randrange(152576)
+            upload_ints(plan, mirror.page, hist.page)
+            for upload in (backfill_row(B, slot, a), backfill_row(B)):
+                stash = stash_page(B, [1, 2, 3, 4], [5, 6, 7, 8]) if li is not None else None
+                if li is not None:
+                    upload_ints(plan, stash, li.stash)
+                want, new = backfill_plan(upload, mirror.page, layers, stash)
+                upload_ints(plan, upload, hist.upload)
+                (run if a % 2 else replay)()
+                for name, t in (("hidden", hist.hidx), ("rope", hist.rope), ("table", hist.table)):
+                    for c, got in enumerate(int_words(t)):
+                        assert got == want[name], f"slot {slot} a {a} {name} chip {c}"
+                for i, t in enumerate(hist.tokens):
+                    for c, got in enumerate(int_words(t)):
+                        assert got == want["tokens"][i], f"slot {slot} a {a} tokens {i} chip {c}"
+                if li is not None:
+                    for c, got in enumerate(int_words(li.stash)):
+                        assert got == new, f"slot {slot} a {a} stash chip {c}"
+                    stash_rows = chips(li.stash_hidden)[0].reshape(B, hidden_size).float()
+                    for k, e in want["stash_rows"]:
+                        assert torch.equal(stash_rows[k], mirror.hidden[e].bfloat16().float())
 
 
 @pytest.mark.parametrize("compact", [True, False], ids=["compact", "whole"])
