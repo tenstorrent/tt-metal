@@ -406,7 +406,23 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             import ttnn
             from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import corruptible
 
-            for r_ in self._spec_runners() + list(self.spec_buckets.values()):
+            capture_list = self._spec_runners() + list(self.spec_buckets.values())
+            if os.environ.get("DSV41_VLLM_SPEC_CAPTURE_ORDER") == "desc":
+                capture_list = capture_list[::-1]  # (debugging: capture the largest k first)
+            selftest = os.environ.get("DSV41_VLLM_SPEC_SELFTEST") == "1"
+
+            def _st(
+                tag, r_, pos=130
+            ):  # one round of the runner on an idle block, state restored: the argmax of row 0 of every user (all users hold the same block)
+                X_ = torch.zeros(r_.B, r_.n, dtype=torch.long)
+                X_[:, 0] = 1000
+                a_, m_, _ = r_._round(X_, torch.full((r_.B,), pos, dtype=torch.long), torch.zeros(r_.B))
+                r_.dec.restore_states(r_.snaps)
+                logger.info(
+                    f"SPECSELFTEST {tag} k={r_.k} pos={pos} bucket={r_.bucket_for(pos + r_.n + 1)}: argmax row0 {a_[:, 0].tolist()} row1 {a_[:, 1].tolist()} accepted {m_.tolist()}"
+                )
+
+            for r_ in capture_list:
                 with corruptible(self.m.md):
                     r_.snaps = r_.dec.snapshot_states()
                     r_.capture_trace()
@@ -417,6 +433,12 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                             torch.full((r_.B,), 130, dtype=torch.long),
                             int(os.environ.get("DSV41_SPEC_CALIB", "3")),
                         )
+                    if selftest:
+                        _st("after own capture", r_)
+                    if os.environ.get("DSV41_VLLM_SPEC_ABCOMPARE") == "1":
+                        r_._addr_capture = self._spec_addrs(r_)
+                if selftest:
+                    continue  # (snapshots kept until every runner is captured: second pass below)
                 for (
                     _,
                     snap,
@@ -426,6 +448,17 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                     if snap is not None:
                         ttnn.deallocate(snap)
                 r_.snaps = None
+            if selftest:
+                for r_ in capture_list:
+                    _st("after all captures", r_)
+                for pos_ in [int(x) for x in os.environ.get("DSV41_VLLM_SPEC_SELFTEST_POS", "").split(",") if x]:
+                    for r_ in capture_list:
+                        _st("position sweep", r_, pos_)
+                for r_ in capture_list:
+                    for _, snap in r_.snaps:
+                        if snap is not None:
+                            ttnn.deallocate(snap)
+                    r_.snaps = None
             if self.spec_adapt is not None:
                 self.spec._after_seed()
             logger.info(
@@ -1522,6 +1555,20 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                     temps[r], ks[r], ps[r], gens[r] = samp[0][i], samp[1][i], samp[2][i], self._gen_for(p)
                 cfg = dict(temperature=temps, top_k=ks, top_p=ps, gens=gens)
                 self.spec_stats["sampled_rows"] = self.spec_stats.get("sampled_rows", 0) + len(hot)
+        if os.environ.get("DSV41_VLLM_SPEC_LOG_ROUNDS") == "1":
+            logger.info(
+                f"SPECROUND k={kv} n={n} bucket={runner.bucket_for(int(base.max()) + n + 1) if hasattr(runner, 'bucket_for') else None} "
+                f"rows(logical,user,pos,runner_row,nv)={[(i, p, pos, r, nv_l[i]) for i, p, pos, r in [x[:4] for x in rows]]} force={force.tolist()} base={base.tolist()} X={X.tolist()}"
+            )
+        if (
+            os.environ.get("DSV41_VLLM_SPEC_ABCOMPARE") == "1"
+            and self.spec_adapt is not None
+            and rows
+            and not getattr(self, "_ab_done", False)
+            and int(base.max()) >= int(os.environ.get("DSV41_VLLM_SPEC_ABCOMPARE_MINPOS", "60000"))
+        ):
+            self._ab_done = True
+            self._ab_compare(tokens, base, rows)
         t0 = time.perf_counter()
         runner.sample_cfg = cfg  # None = greedy rows (the traced sampler then holds / gets greedy parameters)
         a, mm, d = runner._round(X, base, force)
@@ -1534,6 +1581,10 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         if rows:
             pp, rr = torch.tensor([x[1] for x in rows]), torch.tensor([x[3] for x in rows])
             pos_t, m_t = torch.tensor([x[2] for x in rows]), mm[rr].long()
+            if os.environ.get("DSV41_VLLM_SPEC_LOG_ROUNDS") == "1":
+                logger.info(
+                    f"SPECROUND result accepted={m_t.tolist()} next_tokens={a[rr, m_t].tolist()} first_argmax={a[rr, 0].tolist()}"
+                )
             if int((pos_t + m_t).max()) >= self.book.tok.shape[1]:
                 raise ValueError(
                     f"position {int((pos_t + m_t).max())} exceeds the history capacity {self.book.tok.shape[1]}"
@@ -1590,6 +1641,159 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         st["ret"] = time.perf_counter()
         st["post"] += st["ret"] - t1
         return VerifyOutput(spec_mode="argmax_ids", argmax_ids=out.reshape(W, n))
+
+    def _spec_addrs(self, r):
+        """DEBUG: {name: (device-0 buffer address, shape)} of every device tensor the verify views / decoder of runner ``r`` and the model's own attention objects / pool / indexers hold."""
+        import ttnn
+
+        out = {}
+
+        def grab(prefix, obj):
+            for name, v in list(vars(obj).items()):
+                if isinstance(v, ttnn.Tensor):
+                    try:
+                        out[f"{prefix}.{name}"] = (
+                            ttnn.get_device_tensors(v)[0].buffer_address() if v.is_allocated() else None,
+                            tuple(v.shape),
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        out[f"{prefix}.{name}"] = (f"err {e!r}"[:30], None)
+
+        grab("dec", r.dec)
+        for L, lv, _ in r.dec.layers:
+            grab(f"view{L}", lv.attention)
+            ix = getattr(lv.attention, "indexer", None)
+            if ix is not None:
+                grab(f"view{L}.idx", ix)
+            a = self.m.attns.get(L) if hasattr(self.m.attns, "get") else self.m.attns[L]
+            grab(f"model{L}", a)
+            if getattr(a, "indexer", None) is not None:
+                grab(f"model{L}.idx", a.indexer)
+        grab("pool", self.m.pool)
+        return out
+
+    def _ab_logits_check(self, r, k, runner_rows):
+        """DEBUG: host argmax of the logits row 0 of the users in ``runner_rows`` (every column shard read back) against the device ``sample_global`` result of the same round and against a second run of that op
+        on the same logits tensor."""
+        import ttnn
+
+        lg = r.dec.dbg_logits
+        cols, shard = r.cols, 129280 // r.cols
+        out = []
+        again = r.dec.head.sample_global(lg, r.dec.mesh_config, r.dec.ccl)
+        for q in runner_rows:
+            mr = q // r.U
+            row = (q % r.U) * r.n
+            parts = [
+                ttnn.to_torch(ttnn.get_device_tensors(lg)[mr * cols + c]).float().reshape(r.U * r.n, -1)[row]
+                for c in range(cols)
+            ]
+            full = torch.cat(parts)
+            top = full.topk(3)
+            shard_len = parts[0].shape[0]
+            out.append(
+                dict(
+                    user_row=q,
+                    host_argmax=int(top.indices[0]),
+                    host_top3=[(int(i), round(float(v), 3)) for v, i in zip(top.values, top.indices)],
+                    shard_len=shard_len,
+                    nan=bool(full.isnan().any()),
+                    col_max=[round(float(p_.max()), 2) for p_ in parts],
+                    col_arg=[int(p_.argmax()) for p_ in parts],
+                    sample_global_again=int(
+                        ttnn.to_torch(ttnn.get_device_tensors(again)[mr * cols]).reshape(-1).long()[row]
+                    ),
+                )
+            )
+        logger.info(f"ABCMP logits check k={k} (eager): {out}")
+
+    def _ab_compare(self, tokens, base, rows):
+        """DEBUG (DSV41_VLLM_SPEC_ABCOMPARE=1, once, the first round at a long position): the SAME block (column 0 of the step, drafts zero) through the eager verify of the k=5 runner, the k=3 runner and the k=5
+        runner again, from the same state (compressor state snapshots restored in between): per layer, the stream rows of the first token of every participating user compared (cosine, max |diff|). The first layer
+        where k=3 departs from k=5 by more than the k=5 run-to-run noise is where the k=3 runner differs."""
+        X = torch.zeros(self.B, self.spec.n, dtype=torch.long)
+        runner_rows = []
+        for i, p, pos, r in rows:
+            X[r, 0] = int(tokens[i, 0])
+            runner_rows.append(r)
+        self._ab_run(X, base, runner_rows)
+
+    def _ab_run(self, X, base, runner_rows):
+        import ttnn
+
+        k_big = max(self.spec.ks)
+        for k in sorted(self.spec.runners):
+            r = self.spec.runners[k]
+            now, was = self._spec_addrs(r), getattr(r, "_addr_capture", {})
+            changed = {n: (was.get(n), now.get(n)) for n in set(now) | set(was) if was.get(n) != now.get(n)}
+            logger.info(
+                f"ABCMP buffer addresses of runner k={k}: {len(now)} tensors, {len(changed)} changed since the warm-up capture: {dict(sorted(changed.items())[:60])}"
+            )
+        res, eager_out, traced_out = [], [], []
+        for k in (k_big, min(self.spec.ks), k_big):
+            r = self.spec.runners[k]
+            Xk = torch.zeros(self.B, r.n, dtype=torch.long)
+            Xk[:, 0] = X[:, 0]
+            r._ensure(base)
+            r.set_bucket(r.bucket_for(int(base.max()) + r.n + 1))
+            snaps = r.dec.snapshot_states()
+            r.dec.dbg_store = []
+            r.dec.set_force(0)
+            r._feed(Xk, base)
+            r.dec.forward()
+            ttnn.synchronize_device(r.md)
+            store, r.dec.dbg_store = r.dec.dbg_store, None
+            self._ab_logits_check(r, k, runner_rows)
+            ea, em, _ = r._readback(pack=r.dec.pack)
+            eager_out.append((k, ea[runner_rows, 0].tolist()))
+            v2 = torch.cat(
+                [
+                    ttnn.to_torch(ttnn.get_device_tensors(r.dec.top2)[row * r.cols]).reshape(r.U * r.n, -1)
+                    for row in range(r.rows)
+                ]
+            ).float()
+            t2 = v2.topk(2, dim=-1).values.reshape(self.B, r.n, 2)
+            logger.info(
+                f"ABCMP eager k={k} top1/top2 logit of row 0 per user row {[[round(float(t2[q, 0, 0]), 3), round(float(t2[q, 0, 1]), 3)] for q in runner_rows]}, "
+                f"rows 1..{r.n - 1} top1 {[[round(float(t2[q, j, 0]), 2) for j in range(1, r.n)] for q in runner_rows]}, nan in logits {bool(v2.isnan().any())}, shard width {v2.shape[1]}"
+            )
+            r.dec.restore_states(snaps)
+            for _, sn in snaps:
+                if sn is not None:
+                    ttnn.deallocate(sn)
+            r.set_bucket(None)
+            res.append((k, store, r.n))
+        for k in (k_big, min(self.spec.ks)):  # the captured traces from the same state
+            r = self.spec.runners[k]
+            Xk = torch.zeros(self.B, r.n, dtype=torch.long)
+            Xk[:, 0] = X[:, 0]
+            snaps = r.dec.snapshot_states()
+            ta, tm, _ = r._round(Xk, base, torch.zeros(self.B))
+            traced_out.append((k, ta[runner_rows, 0].tolist(), r.cur_bucket))
+            r.dec.restore_states(snaps)
+            for _, sn in snaps:
+                if sn is not None:
+                    ttnn.deallocate(sn)
+        logger.info(f"ABCMP argmax of row 0 per user row: eager {eager_out} traced {traced_out}")
+        (ka, sa, na), (kb, sb, nb), (kc, sc, nc) = res
+        first = None
+        for (tag, ta), (_, tb), (_, tc) in zip(sa, sb, sc):
+            line = []
+            for u_row in runner_rows:
+                mr = u_row // self.U
+                i_a, i_b = (u_row % self.U) * na, (u_row % self.U) * nb
+                a, b, c = ta[mr][i_a], tb[mr][i_b], tc[mr][i_a]
+                cos = lambda p, q: float((p * q).sum() / (p.norm() * q.norm()).clamp(min=1e-12))
+                line.append(
+                    (
+                        round(cos(a, b), 5),
+                        round(float((a - b).abs().max()), 3),
+                        round(cos(a, c), 5),
+                        round(float((a - c).abs().max()), 3),
+                    )
+                )
+            logger.info(f"ABCMP {tag:12s} (cos k{ka}-k{kb}, maxdiff, cos k{ka}-k{ka}', maxdiff) per user row: {line}")
+        logger.info("ABCMP done")
 
     def _sstat_dict(self):
         """Per-round timing accumulators of the spec stats line (cumulative between two log lines): round, gap between rounds, adapter pre / post / propose time, and the plugin's share of the gap split at

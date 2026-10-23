@@ -49,7 +49,9 @@ class SpecVerifier(DSV41Decoder):
         self._engram_rows(T)
         x, pre = self.embedding.forward(tokens)
         states = {k: ss.build(self.pos) for k, ss in self.step_states.items()}
-        dbg = os.environ.get("DSV41_DEBUG_LAYERS") == "1" and not getattr(self, "_dbg_done", False)
+        dbg = getattr(self, "dbg_store", None) is not None or (
+            os.environ.get("DSV41_DEBUG_LAYERS") == "1" and not getattr(self, "_dbg_done", False)
+        )
         for lid, layer, st in self.layers:
             if lid in self.engram:
                 x = self._engram_fwd(lid, x)
@@ -72,6 +74,20 @@ class SpecVerifier(DSV41Decoder):
 
     def _dbg(self, tag, x):
         ttnn.synchronize_device(self.md)
+        if (
+            getattr(self, "dbg_store", None) is not None
+        ):  # A/B comparison (generator_vllm DSV41_VLLM_SPEC_ABCOMPARE): keep the stream rows of every mesh row's first device
+            cols = self.md.shape[1]
+            self.dbg_store.append(
+                (
+                    tag,
+                    [
+                        ttnn.to_torch(ttnn.get_device_tensors(x)[r * cols]).float().reshape(x.shape[0], -1)
+                        for r in range(self.md.shape[0])
+                    ],
+                )
+            )
+            return
         t = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).float()
         print(
             f"LAYERDBG {tag:12s} absmax {float(t.abs().max()):.4g} mean|x| {float(t.abs().mean()):.4g} rows absmax {[round(float(t[i].abs().max()), 1) for i in range(min(t.shape[0], 4))]}",
@@ -250,7 +266,9 @@ class SpecDecoder(SpecVerifier):
         else:
             xs = None
             x, pre = self.embedding.forward(tokens)
-            dbg = os.environ.get("DSV41_DEBUG_LAYERS") == "1" and not getattr(self, "_dbg_done", False)
+            dbg = getattr(self, "dbg_store", None) is not None or (
+                os.environ.get("DSV41_DEBUG_LAYERS") == "1" and not getattr(self, "_dbg_done", False)
+            )
             for lid, layer, st in self.layers:
                 if lid in self.engram:
                     x = self._engram_fwd(lid, x)
@@ -280,7 +298,9 @@ class SpecDecoder(SpecVerifier):
             x = None
         else:
             x, pre = self.embedding.forward(tokens)
-            dbg = os.environ.get("DSV41_DEBUG_LAYERS") == "1" and not getattr(self, "_dbg_done", False)
+            dbg = getattr(self, "dbg_store", None) is not None or (
+                os.environ.get("DSV41_DEBUG_LAYERS") == "1" and not getattr(self, "_dbg_done", False)
+            )
             for lid, layer, st in self.layers:
                 if lid in self.engram:
                     x = self._engram_fwd(lid, x)
@@ -293,6 +313,8 @@ class SpecDecoder(SpecVerifier):
                     self._dbg(f"layer {lid}", x)
             self._dbg_done = True
             logits = self.head.forward(x, pre)
+        if getattr(self, "dbg_store", None) is not None:
+            self.dbg_logits = logits  # (A/B comparison: kept for the host argmax cross-check)
         a = self.head.sample_global(
             logits, self.mesh_config, self.ccl
         )  # [T,1] uint32 RM: argmax of every row (a round with sampled rows runs trace A / S / B instead)
