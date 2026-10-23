@@ -443,7 +443,8 @@ pipeline-level hashes.
   alignment on every call.
 - Every compile-time value of the program is a function of the capacity and the config, never of the first
   call's split: the ring SDPA keeps its K/V chains unicast under `dynamic_local_n` (the reader's multicast
-  flag is compile-time) and rejects one K head per chip, whose shared-K chain is host-built per length.
+  flag is compile-time; create and every cache hit assert it) and rejects one K head per chip, whose
+  shared-K chain is host-built per length.
 - Eager only. Runtime arguments are frozen in a captured trace, so a replay serves the captured length
   whatever the buffers hold. Three guards: the pipeline refuses `dynamic_length` with `trace_denoise`, the
   transformer's `forward` raises while a trace capture is active, and the `Tracer` rejects a replay input

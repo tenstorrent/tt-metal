@@ -3324,6 +3324,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         use_rotated_q_split ||
         (enable_kv_chains && ((k_uses_batch_chain && k_mcast_enabled) || (gqa_grouped_kv && gqa_mcast_enabled)));
     compute_kernel.named_compile_time_args.emplace_back("padded_q_slots", padded_q_slots_enabled ? 1u : 0u);
+    // A cache hit rewrites unicast head-chain words and Q ranges only, so no chain may compile to multicast.
+    TT_FATAL(
+        !dynamic_local_n || !(head_mcast_enabled || k_mcast_enabled || gqa_mcast_enabled || padded_q_slots_enabled),
+        "dynamic_local_n requires unicast K/V chains at every length");
     reader_kernel.named_compile_time_args.emplace_back(
         "k_row_Wt", input_tensor_k.padded_shape()[3] / tt::constants::TILE_WIDTH);
     reader_kernel.named_compile_time_args.emplace_back(
@@ -3912,6 +3916,7 @@ void apply_dynamic_local_n_runtime_args(
         use_head_chain,
         build_kv_chains,
         HeadMcastPolicy::Never);  // the reader was compiled unicast
+    TT_FATAL(!plan.head_mcast_enabled, "dynamic_local_n rebuilt a multicast head chain for a reader compiled unicast");
 
     auto& reader_grid_args = GetRuntimeArgs(program, kReaderKernelIndex);
     auto& writer_grid_args = GetRuntimeArgs(program, kWriterKernelIndex);
