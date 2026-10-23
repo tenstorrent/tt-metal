@@ -925,8 +925,8 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWTinyTiles) {
 // results via ELWADDDI (not op_mmul), which reads MxFp4_2x SrcA as zero.
 // Disabled due to hang: tenstorrent/tt-metal#59923
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixComputeReduceColumnMxFp4X2) {
-    if (MetalContext::instance().rtoptions().get_quasar_arch_variant() == "quasar_4row") {
-        GTEST_SKIP() << "MxFp4_2x register formats do not exist on the 4-row Quasar variant";
+    if (MetalContext::instance().rtoptions().get_quasar_variant() == "trinity") {
+        GTEST_SKIP() << "MxFp4_2x register formats do not exist on Trinity";
     }
     ReduceConfig test_config = {
         .shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
