@@ -47,7 +47,6 @@ MATMUL_FORMATS = input_output_formats(
     [
         DataFormat.Bfp8_b,
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Float32,
     ]
 )

@@ -163,7 +163,7 @@ class VocabParallelEmbedding(AbstractModuleBase):
         # Ids stay row-major (arrive RM, gather needs RM), so the index math skips the
         # tile round-trip. int32 is signed, so out-of-range-below ids go negative for the
         # ge(., 0) check.
-        ids = x.get_value(ttml.autograd.PreferredPrecision.FULL)
+        ids = x.get_value(ttml.autograd.PreferredPrecision.NATIVE)
         ids_signed = ttnn.typecast(ids, ttnn.DataType.INT32)
 
         local = ttnn.subtract(ids_signed, self._vocab_start)

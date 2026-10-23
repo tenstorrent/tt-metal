@@ -4,6 +4,8 @@
 
 import pytest
 import torch
+from loguru import logger
+
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
@@ -318,3 +320,75 @@ def test_group_norm_optional_weight_bias(
     base.test_group_norm_optional_weight_bias(
         device, N, C, H, W, num_groups, use_welford, has_weight, has_bias, specify_grid
     )
+
+
+@pytest.mark.parametrize("N, C, H, W, num_groups, grid_y, grid_x", base.GN_SHARDED_SHAPES)
+@pytest.mark.parametrize("offset", [0.0, 100.0], ids=["offset_0", "offset_100"])
+def test_group_norm_sharded_two_pass_fp32_row_major_matches_tile(
+    device, offset, N, C, H, W, num_groups, grid_y, grid_x
+):
+    torch.manual_seed(0)
+    x = torch.rand((N, C, H, W), dtype=torch.float32) + offset
+    w = torch.rand((C,), dtype=torch.float32)
+    b = torch.rand((C,), dtype=torch.float32)
+    ref = torch.nn.functional.group_norm(x.double(), num_groups, weight=w.double(), bias=b.double())
+    ref = ref.permute(0, 2, 3, 1).reshape(N, 1, W * H, C)
+
+    ck = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
+    mask = ttnn.to_device(ttnn.create_group_norm_input_mask(C, num_groups, grid.y, ttnn.DataType.BFLOAT8_B), device)
+    gamma = ttnn.create_group_norm_weight_bias_rm(w, C, grid.y)
+    beta = ttnn.create_group_norm_weight_bias_rm(b, C, grid.y)
+    gt = ttnn.from_torch(
+        gamma, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    bt = ttnn.from_torch(
+        beta, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    shard_spec = ttnn.ShardSpec(shard_grid, (N * H * W // grid.x, C // grid.y), ttnn.ShardOrientation.COL_MAJOR)
+    tensor_memory_layout = (
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED if grid.y == 1 else ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
+    )
+    mem = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
+
+    def run(layout):
+        xt = ttnn.from_torch(
+            x.permute(0, 2, 3, 1).reshape(N, 1, W * H, C),
+            dtype=ttnn.float32,
+            layout=layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        xt = ttnn.to_memory_config(xt, mem)
+        out = ttnn.group_norm(
+            xt,
+            num_groups=num_groups,
+            input_mask=mask,
+            weight=gt,
+            bias=bt,
+            memory_config=mem,
+            core_grid=grid,
+            dtype=ttnn.float32,
+            compute_kernel_config=ck,
+            use_welford=True,
+            output_layout=ttnn.TILE_LAYOUT,
+            inplace=False,
+        )
+        return ttnn.to_torch(ttnn.from_device(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))).double()
+
+    out_rm = run(ttnn.ROW_MAJOR_LAYOUT).reshape(ref.shape)
+    out_tile = run(ttnn.TILE_LAYOUT).reshape(ref.shape)
+
+    scale = ref.pow(2).mean().sqrt()
+    err_rm = ((out_rm - ref).pow(2).mean().sqrt() / scale).item()
+    err_tile = ((out_tile - ref).pow(2).mean().sqrt() / scale).item()
+    logger.debug(f"relative RMS error: ROW_MAJOR input {err_rm:.3e}, TILE input {err_tile:.3e}")
+    assert err_tile < 5e-3
+    assert err_rm < 2 * err_tile + 1e-4, f"ROW_MAJOR input error {err_rm:.3e} vs TILE input {err_tile:.3e}"

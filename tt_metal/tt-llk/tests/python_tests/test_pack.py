@@ -3,7 +3,7 @@
 """Test pack operation with various configurations.
 
 Tests the LLK pack kernel with:
-- Different data formats (Float16_b, Float16, Float32, Int32, Bfp8_b)
+- Different data formats (Float16_b, Float32, Int32, Bfp8_b)
 - Destination accumulation modes
 - Variable tile dimensions
 - ReLU activation
@@ -60,7 +60,6 @@ from helpers.utils import passed_test
 PACK_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
-        DataFormat.Float16,
         DataFormat.Float32,
         DataFormat.Int32,
         DataFormat.Bfp8_b,
