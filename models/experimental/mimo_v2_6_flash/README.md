@@ -28,8 +28,8 @@ in [doc/tp8_dp4_plan.md](doc/tp8_dp4_plan.md).
 | `tt/mtp.py` | `TtMiMoMTP`: the MTP layers as a traced 3-token drafter on one replica (draft i + 1 from layer i, or one layer) |
 | `tt/mtp_backfill.py`, `reference/mtp_backfill.py` | The target-hidden history (decode, verify and prefill write it) and the MTP ring backfill from it (`kernels/mtp_history.cpp`); their host mirror |
 | `tt/dflash.py`, `reference/dflash.py` | `TtDFlash`: the checkpoint's DFlash draft model (`dflash/`, 5 dense layers) as a traced one-pass drafter on one replica (`MIMO_SPEC_DECODE=dflash`): the decode / verify traces keep target layers 0/11/23/35/47's outputs, the draft program writes the committed rows into a context ring and drafts [anchor, 7 masks] non-causally; the fp32 reference as vLLM's `qwen3_dflash` runs it |
-| `tt/verify_sampler.py`, `reference/sample_verify.py` | Speculative acceptance on device (the plugin's `fused_sample`): the verify's accept walk on the device sampler's candidates (`kernels/sample_verify.cpp`), and its host layouts and integer mirror |
-| `tt/spec_inputs.py`, `tt/spec_chain.py`, `reference/spec_inputs.py`, `reference/spec_chain.py` | A verify's and a draft's packed inputs, derived on device; the MTP draft chained behind the verify and its acceptance (`kernels/spec_chain.cpp`), with one result page per pass; their torch / integer mirrors |
+| `tt/verify_sampler.py`, `reference/sample_verify.py` | Speculative acceptance on device (the plugin's `fused_sample`): the verify's accept walk on the device sampler's candidates (`kernels/sample_verify.cpp`; greedy only, `kernels/greedy_verify.cpp`, past the sampler's users), and its host layouts and integer mirror |
+| `tt/spec_inputs.py`, `tt/spec_chain.py`, `reference/spec_inputs.py`, `reference/spec_chain.py` | A verify's and a draft's packed inputs, derived on device; the MTP or DFlash draft chained behind the verify and its acceptance (`kernels/spec_chain.cpp`), with one result page per pass; their torch / integer mirrors |
 | `tt/generator_vllm.py` | `MiMoV2ForCausalLM`, the vllm-tt-plugin model class: DP=4 as in-process lanes, vLLM-owned hybrid KV (1 global + 5 SWA KV cache groups). Launch and results in [doc/vllm_integration/README.md](doc/vllm_integration/README.md) |
 | `tests/` | TP=8 x DP=4 tests on the 4x8 mesh; `tests/perf/` perf scripts and tt-kernel-agent check / bench commands. Results in [doc/tp8_dp4_plan.md](doc/tp8_dp4_plan.md) |
 
@@ -70,5 +70,6 @@ some Ethernet links can stay untrained, and opening the mesh then fails in
 - Serving gaps (doc/vllm_integration/README.md): device sampling is greedy only (other sampling runs on the host);
   chunked prefill's slot parity is not measured.
 - Speculative decoding: MTP drafting through vLLM is implemented but not yet run on hardware
-  (doc/vllm_integration/README.md, Speculative decoding); DFlash drafts at K = 3, host-planned (no chain), and its
-  K = 7 block needs an 8-slot verify (doc/vllm_integration/README.md, Speculative decoding (DFlash)).
+  (doc/vllm_integration/README.md, Speculative decoding); DFlash drafts its whole block (K = 7) on the 8-slot verify
+  (`MIMO_SPEC_SLOTS=8`), chained on device, within a few percent of chained MTP at c=1
+  (doc/vllm_integration/README.md, Speculative decoding (DFlash)).

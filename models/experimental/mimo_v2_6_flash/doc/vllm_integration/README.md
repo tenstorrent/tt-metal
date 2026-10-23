@@ -333,13 +333,13 @@ vllm serve ... \
 ## Speculative decoding (DFlash)
 
 The checkpoint's DFlash draft model (`dflash/`: 5 dense Qwen3-style layers, block of 8, non-causal, sliding window
-1024, attention sinks; ~1.47B parameters) drafts through the same contract, verify and accept path as MTP
-(`tt/dflash.py`, `reference/dflash.py`):
+1024, attention sinks; ~1.47B parameters) drafts through the same contract, verify, accept and chain path as MTP
+(`tt/dflash.py`, `reference/dflash.py`). Its whole block (K = 7) needs the 8-slot verify:
 
 ```bash
-export MIMO_SPEC_DECODE=dflash   # needs MIMO_DEVICE_ROPE=1 (the draft reads its cos / sin from the decode RoPE tables)
-vllm serve ... \
-  --speculative-config '{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter", "num_speculative_tokens": 3}'
+export MIMO_SPEC_DECODE=dflash MIMO_SPEC_SLOTS=8  # needs MIMO_DEVICE_ROPE=1 (the draft reads the decode RoPE tables)
+vllm serve ... --max-num-seqs 8 \
+  --speculative-config '{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter", "num_speculative_tokens": 7}'
 ```
 
 - **Context.** The decode and verify traces copy the outputs of target layers 0, 11, 23, 35, 47 into five tap buffers;
@@ -348,25 +348,41 @@ vllm serve ... \
   rows. A request's first chunk, or a draft that does not continue the ring, resets it.
 - **Draft.** One traced program per replica: [anchor, 7 x mask] through the 5 layers (DRAM-sharded projections, the
   block's attention as one decode-SDPA user whose 64 query heads are the (row, head) pairs), the target LM head and a
-  GreedyHead over rows 1-3. 2.5 ms per draft on one row; drafts equal the fp32 reference's on 99.6% of 480
+  GreedyHead over rows 1-7. 2.5 ms per draft on one row; drafts equal the fp32 reference's on 99.6% of 480
   (`tests/test_dflash_tp8.py`).
-- **Limits.** K = 3 (the verify is 4 slots wide: SPEC_SLOTS). Every draft is host-planned (no chain behind the
-  verify, no deferred read; `MIMO_SPEC_CHAIN` is off), and prompts prefill one row at a time (no batched prefill).
+- **Chain.** As MTP's (Speculative decoding above): the accept trace's chain step writes the DFlash draft's packed
+  upload from what the device committed (`reference/spec_chain.py` `dflash_chain_step`: the committed columns' slots
+  as context rows at their positions, the last committed token at the bonus as the anchor), and the draft trace ends
+  with the drafts step, which copies the GreedyHead row into the pass's result page; the relay, the deferred reads and
+  the chained verifies are unchanged. `MIMO_SPEC_CHAIN_CHECK=1` on hardware: 320 chained drafts, all equal to the
+  host plan's.
+- **8-slot verify** (`MIMO_SPEC_SLOTS=8`, `reference/spec_decode.py`; 4 by default, MTP's): a pass of up to 8 slots,
+  so up to 7 drafts. The decode kernels serve 8 rows: the MoE streams load each expert the slots selected once
+  (`MIMO_MOE_DEDUP=1`, the default; the gate|up and down streams take the distinct experts in user order, with
+  per-row routing weights), the 8-row compact qkv / o streams and row reductions, SwaDecodeQkv (one launch writes
+  every slot's K / V), GreedyHead, and the DeviceSampler / VerifySampler up to 8 users (launch 8 sequences per lane).
+  A verify with more slots than the device sampler's users accepts greedy requests only (`GreedyVerify`,
+  `kernels/greedy_verify.cpp`) and raises on a sampled one.
+- **Limits.** Prompts prefill one row at a time (no batched prefill); one speculating request per lane.
 
-c=1, 16 SPEED-Bench coding prompts, 512 output tokens, the same server for every row (BH Galaxy, 2026-10-23):
+c=1, 16 SPEED-Bench coding prompts, 512 output tokens (BH Galaxy, 2026-10-23; tokens / step, TPOT):
 
-| drafter | greedy: tokens / step, TPOT | sampled (T 1.0, top_p 0.95): tokens / step, TPOT |
-|---|---|---|
-| DFlash, K = 3, host-planned | 3.37, 7.26 ms | 3.20, 7.69 ms |
-| 3 MTP layers, host-planned (`MIMO_SPEC_CHAIN=0`) | 3.46, 7.00 ms | 3.27, 7.42 ms |
-| 3 MTP layers, chained (default) | 3.46, 4.87 ms | 3.21, 5.24 ms |
+| drafter | verify slots | greedy | sampled (T 1.0, top_p 0.95) |
+|---|---|---|---|
+| 3 MTP layers, chained (default) | 4 | 3.47, 4.35 ms | 3.33, 4.53 ms |
+| DFlash, K = 3, chained | 4 | 3.33, 4.54 ms | 3.20, 4.73 ms |
+| DFlash, K = 5, chained | 8 | 4.34, 4.44 ms | 4.00, 4.82 ms |
+| DFlash, K = 7, chained | 8 | 5.00, 4.20 ms | 4.45, 4.72 ms |
+| DFlash, K = 7, host-planned (the build before the chain) | 8 | 5.00, 5.82 ms | |
 
-Both host-planned drafts wait ~2.65 ms per step (DFlash's one pass vs three MTP passes); the steps are 26.3 vs
-25.8 ms, of which ~10 ms is host (verify upload ~5 ms, the plugin's walk 1.2 ms, gaps), which the MTP chain hides. At
-K = 3 DFlash accepts what the MTP layers do. Offline, along the target's greedy paths of 32 coding prompts
-(`reference/dflash.py`), DFlash with its whole block (K = 7) accepts 4.67 tokens per step greedy and 4.37 sampled
-against 3.16 / 3.02 at K = 3: its gain needs an 8-slot verify, which the 4-user decode kernels (MoE streams, SWA qkv,
-GreedyHead, the samplers, the compact row reductions) do not serve yet.
+A K = 7 step takes ~21 ms of device time (the 8-slot verify ~17.5 ms, its accept step 0.23 ms, the draft ~2.6 ms)
+against ~15 ms for MTP's (the 4-slot verify ~12 ms, three MTP passes ~2.65 ms). Of the 8-slot verify's extra
+~5.5 ms, ~2.8 ms is the MoE: 8 consecutive tokens of these prompts select 37.5 distinct experts per layer, 4 select 23,
+each streamed in ~4 us; the rest is the 8-row attention and reductions. That eats most of DFlash's 1.5 extra tokens
+per step: K = 7 is 3.5% faster than MTP greedy and ~4% slower sampled, where it accepts 4.45 tokens (sampled runs vary
+by a few percent: another MTP run gave 3.25, 4.65 ms). K = 5 pays the 8-row kernels with fewer tokens; at K = 3 DFlash
+accepts slightly less than the MTP layers for the same step. Open: an accept trace without SampleScan for all-greedy
+passes (0.23 ms per 8-slot step, 0.15 ms per 4-slot step, for both drafters); the draft's 10 row all-reduces.
 
 ### One MTP layer per draft
 
