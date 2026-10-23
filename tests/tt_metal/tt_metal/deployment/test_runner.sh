@@ -14,7 +14,7 @@ usage() {
 	cat << EOF
 Usage: $0 [--output <logdir>] [--iterations <n>] [--skip-reset] [--continue-on-failure] [--no-eth-links] [--mgd <path>]
 
-Run the deployment test suite (Ethernet, DRAM, PCIe read/write, DIDT).
+Run the deployment test suite (Ethernet, DRAM, NOC, PCIe read/write, DIDT).
 Must be run from the repository root with the tests already built.
 Everything printed to the console is also written to a single log file per run.
 
@@ -32,7 +32,7 @@ Optional:
                                             chip. Use on partially cabled systems, otherwise
                                             10 links per chip are expected.
     --mgd <path>                            Path to the mesh graph descriptor (.textproto) file to
-                                            use for the Ethernet, DRAM and PCIe tests (default: $MGD).
+                                            use for the Ethernet, DRAM, NOC and PCIe tests (default: $MGD).
     -h                                      Display this help message and exit
 
 Examples:
@@ -102,7 +102,7 @@ if [ -n "$MGD" ]; then
 	if [ ! -f "$MGD" ]; then echo "Mesh graph descriptor not found: $MGD"; exit 1; fi
 fi
 
-# All deployment tests (eth, DRAM, PCIe) source the MGD purely via this env var.
+# All deployment tests (eth, DRAM, NOC, PCIe) source the MGD purely via this env var.
 if [ -n "$MGD" ]; then
 	TT_MESH_GRAPH_DESC_PATH="$MGD"
 	export TT_MESH_GRAPH_DESC_PATH
@@ -221,7 +221,7 @@ run_test() {
 }
 
 # run_tests: runs one round of every per-iteration test (DIDT runs once, separately, after all iterations).
-# Sets last_eth_ok, last_dram_ok, last_pcie_read_ok, last_pcie_write_ok (1=pass, 0=fail).
+# Sets last_eth_ok, last_dram_ok, last_noc_ok, last_pcie_read_ok, last_pcie_write_ok (1=pass, 0=fail).
 # Returns 1 if any test failed, 0 otherwise.
 run_tests() {
 	failures=0
@@ -232,6 +232,10 @@ run_tests() {
 
 	run_test 'DRAM tests' $PYTHON tests/tt_metal/tt_metal/deployment/dram/test_runner.py &&
 		last_dram_ok=1 || last_dram_ok=0
+
+	# Active Ethernet cores only accept kernels in slow dispatch.
+	run_test 'NOC tests' env TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_deployment --gtest_filter='*DeploymentNoc*' &&
+		last_noc_ok=1 || last_noc_ok=0
 
 	run_test 'PCIe read test' ./build/tools/mem_bench --benchmark_filter='Device Reading Host/1073741824/32768/1/0/0/iterations:5/manual_time' --device-id=0 &&
 		last_pcie_read_ok=1 || last_pcie_read_ok=0
@@ -258,7 +262,7 @@ run_tests() {
 emit_banner "DEPLOYMENT TESTS RUN"
 emit "$(printf '%-12s %s' 'Date:' "$(date)")"
 emit "$(printf '%-12s %s' 'Host:' "$(hostname)")"
-emit "$(printf '%-12s %s' 'Tests:' 'Ethernet, DRAM, PCIe read, PCIe write (per iteration), DIDT (once, after all iterations)')"
+emit "$(printf '%-12s %s' 'Tests:' 'Ethernet, DRAM, NOC, PCIe read, PCIe write (per iteration), DIDT (once, after all iterations)')"
 emit_setup
 emit "$RULE_HEAVY"
 
@@ -267,6 +271,7 @@ reset_failures=0
 iterations_run=0
 eth_pass=0
 dram_pass=0
+noc_pass=0
 pcie_read_pass=0
 pcie_write_pass=0
 
@@ -286,6 +291,7 @@ do
 	then
 		last_eth_ok=0
 		last_dram_ok=0
+		last_noc_ok=0
 		last_pcie_read_ok=0
 		last_pcie_write_ok=0
 		iteration_failures=$((iteration_failures + 1))
@@ -300,6 +306,7 @@ do
 	iterations_run=$((iterations_run + 1))
 	eth_pass=$((eth_pass + last_eth_ok))
 	dram_pass=$((dram_pass + last_dram_ok))
+	noc_pass=$((noc_pass + last_noc_ok))
 	pcie_read_pass=$((pcie_read_pass + last_pcie_read_ok))
 	pcie_write_pass=$((pcie_write_pass + last_pcie_write_ok))
 	if [ "$CONTINUE_ON_FAILURE" -eq 0 ] && [ "$iteration_failures" -gt 0 ]
@@ -337,6 +344,7 @@ emit "$RULE_LIGHT"
 emit "$(printf '%-20s %s' 'Board resets:'     "$((iterations_run - reset_failures))/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'Ethernet tests:'  "$eth_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'DRAM tests:'      "$dram_pass/$iterations_run iterations passed")"
+emit "$(printf '%-20s %s' 'NOC tests:'       "$noc_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'PCIe read test:'  "$pcie_read_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'PCIe write test:' "$pcie_write_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'DIDT tests:'      "$([ "$didt_ok" -eq 1 ] && echo passed || echo failed)")"
