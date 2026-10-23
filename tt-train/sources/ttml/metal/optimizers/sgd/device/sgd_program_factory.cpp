@@ -8,9 +8,11 @@
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
+#include "sgd_device_operation.hpp"
 #include "sgd_device_operation_types.hpp"
 #include "tt-metalium/bfloat16.hpp"
 
@@ -25,6 +27,13 @@ constexpr auto kWriterKernelPath =
     "writer_sgd_interleaved_start_id.cpp";
 
 constexpr auto kComputeKernelPath = "tt-train/sources/ttml/metal/optimizers/sgd/device/kernels/compute/sgd_kernel.cpp";
+
+// Kernel push order: reader, writer, then the compute kernel of each work group (group 2 only when the tiles do not
+// split evenly over the cores)
+constexpr uint32_t kReaderKernelIdx = 0U;
+constexpr uint32_t kWriterKernelIdx = 1U;
+constexpr uint32_t kComputeGroup1KernelIdx = 2U;
+constexpr uint32_t kComputeGroup2KernelIdx = 3U;
 
 // reader runtime args
 constexpr uint32_t kParamAddrIdx = 0;
@@ -69,18 +78,50 @@ constexpr auto kOutputCbIndex = tt::CBIndex::c_16;
 
 namespace ttml::metal::optimizers::sgd::device {
 
-/**
- *   Helper struct to hold references to all kernels we create,
- *        used during runtime argument setup.
- */
-struct SGDKernels {
-    tt::tt_metal::KernelHandle reader;
-    tt::tt_metal::KernelHandle writer;
-    tt::tt_metal::KernelHandle compute_group_1;
-    tt::tt_metal::KernelHandle compute_group_2;
+TTML_ASSERT_DESCRIPTOR_OVERRIDE(SGDDeviceOperation, SGDProgramFactory);
+
+namespace {
+
+// Runtime args derived from the hash-excluded lr, momentum, dampening and weight_decay. create_descriptor() and
+// override_runtime_arguments() both take them from here, so a cache hit writes exactly what a miss would.
+struct SGDRuntimeScalars {
+    uint32_t packed_lr = 0U;
+    uint32_t packed_momentum = 0U;
+    uint32_t packed_one_minus_dampening = 0U;
+    uint32_t packed_wd = 0U;
+    bool use_weight_decay = false;
+    bool use_dampening = false;
 };
 
-SGDProgramFactory::cached_program_t SGDProgramFactory::create(
+// Each value is rounded to bf16 (to nearest even) and packed into both halves of a uint32. ttml's
+// pack_two_bfloat16_to_uint32 truncates instead, so it would change the results.
+SGDRuntimeScalars compute_runtime_scalars(const operation_attributes_t& operation_attributes) {
+    const bfloat16 bfloat_lr = bfloat16(operation_attributes.lr);
+    const bfloat16 bfloat_momentum = bfloat16(operation_attributes.momentum);
+    const bfloat16 bfloat_one_minus_dampening = bfloat16(1.0F - operation_attributes.dampening);
+    const bfloat16 bfloat_wd = bfloat16(operation_attributes.weight_decay);
+    return SGDRuntimeScalars{
+        .packed_lr = pack_two_bfloat16_into_uint32({bfloat_lr, bfloat_lr}),
+        .packed_momentum = pack_two_bfloat16_into_uint32({bfloat_momentum, bfloat_momentum}),
+        .packed_one_minus_dampening =
+            pack_two_bfloat16_into_uint32({bfloat_one_minus_dampening, bfloat_one_minus_dampening}),
+        .packed_wd = pack_two_bfloat16_into_uint32({bfloat_wd, bfloat_wd}),
+        .use_weight_decay = !(bfloat_wd == bfloat16(0.0F)),
+        .use_dampening = !(bfloat_one_minus_dampening == bfloat16(1.0F)),
+    };
+}
+
+// The work unit is one tile of the parameter (grad and the momentum buffer have its padded shape). Both functions walk
+// the cores with this split; create_descriptor() pins it to split_work_to_cores.
+WorkSplit compute_sgd_work_split(const ttnn::Tensor& param) {
+    return compute_work_split(
+        param.device()->compute_with_storage_grid_size(),
+        static_cast<uint32_t>(param.physical_volume() / tt::constants::TILE_HW));
+}
+
+}  // namespace
+
+tt::tt_metal::ProgramDescriptor SGDProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
@@ -90,15 +131,11 @@ SGDProgramFactory::cached_program_t SGDProgramFactory::create(
     const auto& param = tensor_args.param;
     const auto& grad = tensor_args.grad;
     const auto& momentum_wrapped = tensor_args.momentum_buffer;
-    const auto& lr = operation_attributes.lr;
-    const auto& momentum = operation_attributes.momentum;
-    const auto& dampening = operation_attributes.dampening;
-    const auto& weight_decay = operation_attributes.weight_decay;
     const bool nesterov = operation_attributes.nesterov;
 
     auto* device = param.device();
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::ProgramDescriptor desc;
 
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(param.dtype());
     tt::DataFormat output_data_format = input_data_format;
@@ -121,10 +158,12 @@ SGDProgramFactory::cached_program_t SGDProgramFactory::create(
 
     // get number of free cores
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_tiles_to_process);
+    const WorkSplit split = compute_sgd_work_split(param);
+    check_work_split(
+        split, num_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2);
 
     uint32_t block_size = std::min(8U, num_tiles_per_core_group_1);
     // -------------------------------------------------------------------------
@@ -136,81 +175,56 @@ SGDProgramFactory::cached_program_t SGDProgramFactory::create(
     const uint32_t num_input_tiles = twice_block_size;
     const uint32_t num_output_tiles = twice_block_size;
 
-    [[maybe_unused]] auto cb_param = create_circular_buffer(
-        program, all_cores, kParamCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kParamCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles));
 
-    [[maybe_unused]] auto cb_grad = create_circular_buffer(
-        program, all_cores, kGradCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kGradCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles));
 
-    [[maybe_unused]] auto cb_momentum_in = create_circular_buffer(
-        program, all_cores, kMomentumInCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kMomentumInCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles));
 
-    [[maybe_unused]] auto cb_param_wd = create_circular_buffer(
-        program, all_cores, kParamWdCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kParamWdCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles));
 
-    [[maybe_unused]] auto cb_grad_wd = create_circular_buffer(
-        program, all_cores, kGradWdCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kGradWdCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles));
 
-    [[maybe_unused]] auto cb_momentum_scaled = create_circular_buffer(
-        program,
-        all_cores,
-        kMomentumScaledCbIndex,
-        input_data_format,
-        bfloat16_single_tile_size_bytes,
-        num_input_tiles);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kMomentumScaledCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles));
 
-    [[maybe_unused]] auto cb_momentum_out = create_circular_buffer(
-        program, all_cores, kMomentumOutCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kMomentumOutCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles));
 
-    [[maybe_unused]] auto cb_momentum_dram = create_circular_buffer(
-        program, all_cores, kMomentumDramCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kMomentumDramCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_output_tiles));
 
-    [[maybe_unused]] auto cb_grad_dampened = create_circular_buffer(
-        program, all_cores, kGradDampenedCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kGradDampenedCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles));
 
-    [[maybe_unused]] auto cb_nesterov_momentum = create_circular_buffer(
-        program,
-        all_cores,
-        kNesterovMomentumCbIndex,
-        input_data_format,
-        bfloat16_single_tile_size_bytes,
-        num_input_tiles);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kNesterovMomentumCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles));
 
-    [[maybe_unused]] auto cb_nesterov_update = create_circular_buffer(
-        program,
-        all_cores,
-        kNesterovUpdateCbIndex,
-        input_data_format,
-        bfloat16_single_tile_size_bytes,
-        num_input_tiles);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kNesterovUpdateCbIndex, input_data_format, bfloat16_single_tile_size_bytes, num_input_tiles));
 
-    [[maybe_unused]] auto cb_update = create_circular_buffer(
-        program,
-        all_cores,
-        kUpdateCbIndex,
-        tt::DataFormat::Float16_b,
-        bfloat16_single_tile_size_bytes,
-        num_input_tiles);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kUpdateCbIndex, tt::DataFormat::Float16_b, bfloat16_single_tile_size_bytes, num_input_tiles));
 
-    [[maybe_unused]] auto cb_bcast_lr = create_circular_buffer(
-        program, all_cores, kBcastLrCbIndex, tt::DataFormat::Float16_b, bfloat16_single_tile_size_bytes, 1U);
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kBcastLrCbIndex, tt::DataFormat::Float16_b, bfloat16_single_tile_size_bytes, 1U));
 
-    [[maybe_unused]] auto cb_bcast_momentum = create_circular_buffer(
-        program, all_cores, kBcastMomentumCbIndex, tt::DataFormat::Float16_b, bfloat16_single_tile_size_bytes, 1U);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kBcastMomentumCbIndex, tt::DataFormat::Float16_b, bfloat16_single_tile_size_bytes, 1U));
 
-    [[maybe_unused]] auto cb_bcast_one_minus_dampening = create_circular_buffer(
-        program,
-        all_cores,
-        kBcastOneMinusDampeningCbIndex,
-        tt::DataFormat::Float16_b,
-        bfloat16_single_tile_size_bytes,
-        1U);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kBcastOneMinusDampeningCbIndex, tt::DataFormat::Float16_b, bfloat16_single_tile_size_bytes, 1U));
 
-    [[maybe_unused]] auto cb_bcast_wd = create_circular_buffer(
-        program, all_cores, kBcastWdCbIndex, tt::DataFormat::Float16_b, bfloat16_single_tile_size_bytes, 1U);
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kBcastWdCbIndex, tt::DataFormat::Float16_b, bfloat16_single_tile_size_bytes, 1U));
 
-    [[maybe_unused]] auto cb_output = create_circular_buffer(
-        program, all_cores, kOutputCbIndex, output_data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, kOutputCbIndex, output_data_format, bfloat16_single_tile_size_bytes, num_output_tiles));
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -225,18 +239,19 @@ SGDProgramFactory::cached_program_t SGDProgramFactory::create(
     defines["USE_MOMENTUM"] = momentum_buffer != nullptr ? "1" : "0";
     defines["USE_NESTEROV"] = nesterov ? "1" : "0";
 
-    SGDKernels kernels{};
     std::vector<uint32_t> reader_compile_time_args{block_size};
     tt::tt_metal::TensorAccessorArgs(param_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(grad_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(momentum_buffer).append_to(reader_compile_time_args);
 
-    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
+    desc.kernels.push_back(
+        make_reader_kernel_descriptor(all_cores, reader_compile_time_args, defines, kReaderKernelPath));
 
     std::vector<uint32_t> writer_compile_time_args{block_size};
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(momentum_buffer).append_to(writer_compile_time_args);
-    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
+    desc.kernels.push_back(
+        make_writer_kernel_descriptor(all_cores, writer_compile_time_args, defines, kWriterKernelPath));
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for fused sgd
@@ -246,164 +261,98 @@ SGDProgramFactory::cached_program_t SGDProgramFactory::create(
         num_tiles_per_core_group_1,  // per_core_block_cnt
         block_size};                 // per_core_block_size
 
-    kernels.compute_group_1 = create_compute_kernel(
-        program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/false);
+    desc.kernels.push_back(make_compute_kernel_descriptor(
+        core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/false));
 
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_group_2_args = {num_tiles_per_core_group_2, block_size};
-        kernels.compute_group_2 = create_compute_kernel(
-            program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/false);
+        desc.kernels.push_back(make_compute_kernel_descriptor(
+            core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/false));
     }
 
     // -------------------------------------------------------------------------
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
-
-    const bfloat16 bfloat_lr = bfloat16(lr);
-    const uint32_t packed_lr = pack_two_bfloat16_into_uint32({bfloat_lr, bfloat_lr});
-    const bfloat16 bfloat_momentum = bfloat16(momentum);
-    const uint32_t packed_momentum = pack_two_bfloat16_into_uint32({bfloat_momentum, bfloat_momentum});
-    const bfloat16 bfloat_one_minus_dampening = bfloat16(1.0F - dampening);
-    const uint32_t packed_one_minus_dampening =
-        pack_two_bfloat16_into_uint32({bfloat_one_minus_dampening, bfloat_one_minus_dampening});
-    const bfloat16 bfloat_wd = bfloat16(weight_decay);
-    const uint32_t packed_wd = pack_two_bfloat16_into_uint32({bfloat_wd, bfloat_wd});
-    const bool use_weight_decay = !(bfloat_wd == bfloat16(0.0F));
-    const bool use_dampening = !(bfloat_one_minus_dampening == bfloat16(1.0F));
-    for_each_core_with_work(
-        num_cores,
-        num_cores_y,
-        core_group_1,
-        core_group_2,
-        num_tiles_per_core_group_1,
-        num_tiles_per_core_group_2,
-        [&](const CoreWork& work) {
-            const auto& [core, core_index, num_tiles, start_tile, in_group_1] = work;
-            SetRuntimeArgs(
-                program,
-                kernels.reader,
-                core,
-                {param_buffer->address(),
-                 grad_buffer->address(),
-                 momentum_buffer != nullptr ? momentum_buffer->address() : 0U,
-                 packed_lr,
-                 packed_momentum,
-                 packed_one_minus_dampening,
-                 packed_wd,
-                 num_tiles,
-                 start_tile});
-            SetRuntimeArgs(
-                program,
-                in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2,
-                core,
-                {use_weight_decay, use_dampening});
-            SetRuntimeArgs(
-                program,
-                kernels.writer,
-                core,
-                {output_buffer->address(),
-                 momentum_buffer != nullptr ? momentum_buffer->address() : 0U,
-                 num_tiles,
-                 start_tile});
-        });
+    // The slots named by the k*Idx constants are rewritten by override_runtime_arguments() on every cache hit; tile
+    // counts and offsets follow from the hashed param shape.
+    const SGDRuntimeScalars scalars = compute_runtime_scalars(operation_attributes);
+    auto& reader = desc.kernels[kReaderKernelIdx];
+    auto& writer = desc.kernels[kWriterKernelIdx];
+    for_each_core_with_work(split, [&](const CoreWork& work) {
+        const auto& [core, core_index, num_tiles, start_tile, in_group_1] = work;
+        // Reader: param, grad and momentum (0 without a momentum buffer) addresses, then the packed lr, momentum,
+        // 1 - dampening and weight decay (kParamAddrIdx .. kBcastWdIdx), then num_tiles and start_tile
+        reader.emplace_runtime_args(
+            core,
+            {param_buffer,
+             grad_buffer,
+             momentum_buffer,
+             scalars.packed_lr,
+             scalars.packed_momentum,
+             scalars.packed_one_minus_dampening,
+             scalars.packed_wd,
+             num_tiles,
+             start_tile});
+        // Compute: (use_weight_decay, use_dampening)
+        desc.kernels[in_group_1 ? kComputeGroup1KernelIdx : kComputeGroup2KernelIdx].emplace_runtime_args(
+            core, {static_cast<uint32_t>(scalars.use_weight_decay), static_cast<uint32_t>(scalars.use_dampening)});
+        // Writer: (output_addr, momentum_addr, num_tiles, start_tile)
+        writer.emplace_runtime_args(core, {output_buffer, momentum_buffer, num_tiles, start_tile});
+    });
 
     // -------------------------------------------------------------------------
-    // 6) Return the fully configured program & relevant shared variables
+    // 6) Return the program descriptor
     // -------------------------------------------------------------------------
 
-    return cached_program_t{
-        std::move(program),
-        {/* sgd_reader_kernel_id  = */ kernels.reader,
-         /* sgd_writer_kernel_id  = */ kernels.writer,
-         /* sgd_kernel_group_1_id = */ kernels.compute_group_1,
-         /* sgd_kernel_group_2_id = */ kernels.compute_group_2,
-         /* core_group_1              = */ core_group_1,
-         /* core_group_2              = */ core_group_2,
-         /* num_cores                 = */ num_cores,
-         /* num_cores_y               = */ num_cores_y}};
+    return desc;
 }
 
 void SGDProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& shared_variables = cached_program.shared_variables;
-    auto& sgd_reader_kernel_id = shared_variables.reader_kernel_id;
-    auto& sgd_writer_kernel_id = shared_variables.writer_kernel_id;
-    auto& sgd_compute_kernel_group_1_id = shared_variables.compute_kernel_group_1_id;
-    auto& sgd_compute_kernel_group_2_id = shared_variables.compute_kernel_group_2_id;
-    auto& core_group_1 = shared_variables.core_group_1;
-    auto& core_group_2 = shared_variables.core_group_2;
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_coordinate*/) {
+    // Tile counts and offsets come from the hashed param shape and stay as create_descriptor() set them. The hash also
+    // keys whether a momentum buffer is present, so its slots hold an address exactly when the cached program has one.
+    const uint32_t param_addr = tensor_args.param.buffer()->address();
+    const uint32_t grad_addr = tensor_args.grad.buffer()->address();
+    const uint32_t momentum_addr =
+        tensor_args.momentum_buffer.has_value() ? tensor_args.momentum_buffer->buffer()->address() : 0U;
+    const uint32_t output_addr = tensor_return_value.buffer()->address();
+    const SGDRuntimeScalars scalars = compute_runtime_scalars(operation_attributes);
+    const WorkSplit split = compute_sgd_work_split(tensor_args.param);
 
-    uint32_t num_cores = shared_variables.num_cores;
-    uint32_t num_cores_y = shared_variables.num_cores_y;
+    auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
+    auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);
+    auto& compute_group_1_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kComputeGroup1KernelIdx);
+    // Without group 2 there is no fourth kernel and every core is in group 1.
+    auto& compute_group_2_runtime_args = split.has_group_2()
+                                             ? tt::tt_metal::GetRuntimeArgs(program, kComputeGroup2KernelIdx)
+                                             : compute_group_1_runtime_args;
 
-    auto* param_buffer = tensor_args.param.buffer();
-    auto* grad_buffer = tensor_args.grad.buffer();
-    auto* momentum_buffer =
-        tensor_args.momentum_buffer.has_value() ? tensor_args.momentum_buffer.value().buffer() : nullptr;
-
-    auto lr = operation_attributes.lr;
-    auto momentum = operation_attributes.momentum;
-    auto dampening = operation_attributes.dampening;
-    auto weight_decay = operation_attributes.weight_decay;
-
-    auto* output_buffer = tensor_return_value.buffer();
-
-    // Only address arguments need updating here; tile counts remain the same as in create().
-    auto& reader_runtime_args = GetRuntimeArgs(program, sgd_reader_kernel_id);
-    auto& writer_runtime_args = GetRuntimeArgs(program, sgd_writer_kernel_id);
-    auto& compute_group_1_runtime_args = GetRuntimeArgs(program, sgd_compute_kernel_group_1_id);
-    [[maybe_unused]] auto& compute_group_2_runtime_args = core_group_2.ranges().empty()
-                                                              ? compute_group_1_runtime_args
-                                                              : GetRuntimeArgs(program, sgd_compute_kernel_group_2_id);
-
-    bfloat16 bfloat_lr = bfloat16(lr);
-    uint32_t packed_lr = pack_two_bfloat16_into_uint32({bfloat_lr, bfloat_lr});
-
-    bfloat16 bfloat_momentum = bfloat16(momentum);
-    uint32_t packed_momentum = pack_two_bfloat16_into_uint32({bfloat_momentum, bfloat_momentum});
-
-    bfloat16 bfloat_one_minus_dampening = bfloat16(1.0F - dampening);
-    uint32_t packed_one_minus_dampening =
-        pack_two_bfloat16_into_uint32({bfloat_one_minus_dampening, bfloat_one_minus_dampening});
-
-    bfloat16 bfloat_wd = bfloat16(weight_decay);
-    uint32_t packed_wd = pack_two_bfloat16_into_uint32({bfloat_wd, bfloat_wd});
-
-    const bool use_weight_decay = !(bfloat_wd == bfloat16(0.0F));
-    const bool use_dampening = !(bfloat_one_minus_dampening == bfloat16(1.0F));
-
-    for_each_core(num_cores, num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
-        // Update input buffers for the reader kernel
+    for_each_core_with_work(split, [&](const CoreWork& work) {
+        const auto& core = work.core;
         {
             auto& runtime_args = reader_runtime_args[core.x][core.y];
-            runtime_args[kParamAddrIdx] = param_buffer->address();
-            runtime_args[kGradAddrIdx] = grad_buffer->address();
-            runtime_args[kMomentumInAddrIdx] = momentum_buffer != nullptr ? momentum_buffer->address() : 0U;
-            runtime_args[kBcastLrIdx] = packed_lr;
-            runtime_args[kBcastMomentumIdx] = packed_momentum;
-            runtime_args[kBcastOneMinusDampeningIdx] = packed_one_minus_dampening;
-            runtime_args[kBcastWdIdx] = packed_wd;
+            runtime_args[kParamAddrIdx] = param_addr;
+            runtime_args[kGradAddrIdx] = grad_addr;
+            runtime_args[kMomentumInAddrIdx] = momentum_addr;
+            runtime_args[kBcastLrIdx] = scalars.packed_lr;
+            runtime_args[kBcastMomentumIdx] = scalars.packed_momentum;
+            runtime_args[kBcastOneMinusDampeningIdx] = scalars.packed_one_minus_dampening;
+            runtime_args[kBcastWdIdx] = scalars.packed_wd;
         }
-        if (core_group_1.contains(core)) {
-            [[maybe_unused]] auto& runtime_args = compute_group_1_runtime_args[core.x][core.y];
-            runtime_args[kUseWeightDecayIdx] = use_weight_decay;
-            runtime_args[kUseDampeningIdx] = use_dampening;
-        } else if (core_group_2.contains(core)) {
-            [[maybe_unused]] auto& runtime_args = compute_group_2_runtime_args[core.x][core.y];
-            runtime_args[kUseWeightDecayIdx] = use_weight_decay;
-            runtime_args[kUseDampeningIdx] = use_dampening;
-        } else {
-            TT_THROW("Core {} not in specified core ranges", core);
+        {
+            auto& runtime_args =
+                (work.in_group_1 ? compute_group_1_runtime_args : compute_group_2_runtime_args)[core.x][core.y];
+            runtime_args[kUseWeightDecayIdx] = static_cast<uint32_t>(scalars.use_weight_decay);
+            runtime_args[kUseDampeningIdx] = static_cast<uint32_t>(scalars.use_dampening);
         }
-        // Update output buffer for the writer kernel
         {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
-            runtime_args[kOutputAddrIdx] = output_buffer->address();
-            runtime_args[kMomentumDramAddrIdx] = momentum_buffer != nullptr ? momentum_buffer->address() : 0U;
+            runtime_args[kOutputAddrIdx] = output_addr;
+            runtime_args[kMomentumDramAddrIdx] = momentum_addr;
         }
     });
 }

@@ -169,9 +169,8 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
 
     // [B, 1, 1, 1] UINT32 ROW_MAJOR INTERLEAVED on this device -- byte-for-byte the op's own
     // position-mode output spec, so a previous sample's output can be fed straight back in.
-    // ROW_MAJOR so each page is one aligned word, not a padded 4 KB tile; INTERLEAVED because the
-    // program hash keys buffer type only, so a sharded tensor would reuse an accessor compiled for
-    // the interleaved encoding.
+    // ROW_MAJOR so each page is one aligned word, not a padded 4 KB tile; INTERLEAVED, like the
+    // logits and the mask.
     auto check_index_tensor = [&](const ttnn::Tensor& t, const std::string& name, bool position_aware) {
         check_device_tensor(
             t,
@@ -230,17 +229,23 @@ ttsl::hash::hash_t GumbelSampleDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& logits = tensor_args.logits;
 
-    // seed and the temperature VALUE are runtime-only (re-applied on cache hits) so a training loop
-    // reuses one cached program. WHICH KERNEL the temperature selects IS keyed, via the same
-    // uses_gumbel_noise predicate the factory uses -- a bare `temperature > 0` would collide the
-    // sub-reciprocal-overflow greedy build with noisy programs. seed_axes changes which mesh
-    // coordinates get distinct programs.
+    // Left out of the key: seed, the temperature VALUE, the mask batch dim (the per-row mask
+    // stride), the token dim in position mode (below) and every buffer address. They reach the
+    // kernels only through runtime args, which
+    // GumbelSampleProgramFactory::override_runtime_arguments re-applies on every cache hit, so a
+    // training loop reuses one cached program. WHICH KERNEL the temperature selects IS keyed, via
+    // the same uses_gumbel_noise predicate the factory uses -- a bare `temperature > 0` would
+    // collide the sub-reciprocal-overflow greedy build with noisy programs. seed_axes changes which
+    // mesh coordinates get distinct programs.
     //
-    // Buffer PLACEMENT is keyed, not just presence: TensorAccessorArgs bakes DRAM/L1 into the
+    // Memory configs are keyed, not just presence: TensorAccessorArgs bakes DRAM/L1 into the
     // compile-time args, and a placement collision would aim accessors compiled for one memory
     // space at the other's addresses.
-    auto placement_of = [](const std::optional<ttnn::Tensor>& tensor) -> int {
-        return tensor.has_value() ? static_cast<int>(tensor->memory_config().buffer_type()) : -1;
+    auto memory_config_of = [](const std::optional<ttnn::Tensor>& tensor) -> std::optional<tt::tt_metal::MemoryConfig> {
+        if (!tensor.has_value()) {
+            return std::nullopt;
+        }
+        return tensor->memory_config();
     };
 
     const bool position_aware = tensor_args.positions.has_value();
@@ -251,7 +256,8 @@ ttsl::hash::hash_t GumbelSampleDeviceOperation::compute_program_hash(
     // every new prompt length is a fresh ~6 s JIT build. NORMALIZED rather than omitted because
     // hash_operation has no arity tag, so dropping an argument would let unrelated keys alias.
     // Load-bearing consequences: every token-derived runtime arg MUST be re-applied in
-    // override_runtime_arguments, and total_tiles must stay NC * Wt in position mode.
+    // GumbelSampleProgramFactory::override_runtime_arguments, and total_tiles must stay NC * Wt in
+    // position mode.
     auto token_normalized = [position_aware](tt::tt_metal::Shape shape) {
         if (position_aware) {
             shape[-2] = 1U;
@@ -265,14 +271,17 @@ ttsl::hash::hash_t GumbelSampleDeviceOperation::compute_program_hash(
         args.seed_axes,
         logits.dtype(),
         // The padded shape is not hashed: check_tensor pins it to the logical shape's round-up, so
-        // it is fully derived from what IS in the key. Likewise the positions shape: its entry
-        // count is NC, already in the key via (unrounded) dims 0 and 1.
+        // it is fully derived from what IS in the key. The mask is pinned the same way, and to the
+        // logits' dtype and width; its batch dim is the one free dim, left out above.
         token_normalized(logits.logical_shape()),
-        static_cast<int>(logits.memory_config().buffer_type()),
+        logits.memory_config(),
         tensor_args.logits_mask.has_value(),
-        placement_of(tensor_args.logits_mask),
-        placement_of(tensor_args.positions),
-        placement_of(tensor_args.preallocated_output));
+        memory_config_of(tensor_args.logits_mask),
+        // Full specs (an absent tensor hashes as 0): no excluded value lives in them, and
+        // validation pins only their logical shape while their aligned page size reaches the
+        // accessor compile-time args and, for positions, the staging CB size.
+        tensor_args.positions,
+        tensor_args.preallocated_output);
 }
 
 }  // namespace ttml::metal::ops::gumbel_sample::device
