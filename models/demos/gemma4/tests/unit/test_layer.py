@@ -77,6 +77,12 @@ def _create_hf_reference_layer(hf_text_config, layer_idx):
     return hf_layer
 
 
+def _reduced_experts(mesh_device):
+    """A small expert set for speed that still shards whole experts over every chip (ep*tp)."""
+    n_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "shape") else 1
+    return max(4, n_devices)
+
+
 def _create_hf_text_config(num_experts=None, top_k=None):
     """Create HF text config from HF_MODEL, with optional MoE overrides for speed."""
     from transformers import AutoConfig
@@ -146,7 +152,7 @@ def test_layer_forward(batch_size, seq_len, layer_idx, mesh_device, reset_seeds,
     forward passes with the same input, and checks PCC >= 0.90.
     """
     # Create HF config and reference layer
-    hf_text_config = _create_hf_text_config(num_experts=4, top_k=2)
+    hf_text_config = _create_hf_text_config(num_experts=_reduced_experts(mesh_device), top_k=2)
     hf_layer = _create_hf_reference_layer(hf_text_config, layer_idx)
 
     # Get HF state_dict and convert for TT
@@ -238,7 +244,7 @@ def test_layer_forward_decode(layer_idx, mesh_device, reset_seeds, request):
 
     from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
 
-    hf_text_config = _create_hf_text_config(num_experts=4, top_k=2)
+    hf_text_config = _create_hf_text_config(num_experts=_reduced_experts(mesh_device), top_k=2)
     hf_layer = _create_hf_reference_layer(hf_text_config, layer_idx)
     hf_state = hf_layer.state_dict()
     tt_state = _hf_state_to_tt_state(hf_state, layer_idx)

@@ -9,12 +9,40 @@ import torch
 from loguru import logger
 
 from models.demos.gemma4.tt.warmup_isls import run_prefill_ladder, warmup_prefill_isls
+from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.generator import (
     MAX_BATCHED_PREFILL_SEQ_LEN,
     SUPPORTED_PREFILL_BATCH_SIZES,
     batched_prefill_padded_batch,
     max_prefill_chunk_size_cutoff,
 )
+
+# GEMMA4_TRACE_SHORT_PREFILL=1 (opt-in): under bounded sliding keep the prefill device trace for the short
+# single-user buckets (padded kernel length <= GEMMA4_TRACE_SHORT_PREFILL_MAX, default 128: prompts of at most 128
+# tokens; longer prompts pad to the 1024 bucket, get_padded_prefill_len). The 128-token TTFT of the
+# 26B-A4B on the 4-chip line is a per-layer launch floor (160-187 ms eager vs the 86 ms target, 2026-10-23), and
+# the served QB2 entry runs bounded sliding (hybrid KV groups), which disables every prefill trace. The opt-in
+# captures only the short buckets at warmup (the sweep's trace ISL list is cut at the cap) and replays them at
+# runtime; batched and long prefills stay eager as before. Validation: test_prefill_trace_parity /
+# test_prefill_trace_perf under GEMMA4_BOUNDED_SLIDING=1 (traced == eager at 0.99 PCC; replay time).
+GEMMA4_TRACE_SHORT_PREFILL_ENV = "GEMMA4_TRACE_SHORT_PREFILL"
+
+
+def trace_short_prefill_max() -> int:
+    return int(os.environ.get("GEMMA4_TRACE_SHORT_PREFILL_MAX", "128"))
+
+
+def trace_short_prefill_opt_in(prefill_seq_len=None, batch_size: int = 1) -> bool:
+    """True when the short-prefill trace opt-in applies: flag on, a single user, and (when given) a prompt whose
+    padded kernel length is at most ``GEMMA4_TRACE_SHORT_PREFILL_MAX``."""
+    if os.environ.get(GEMMA4_TRACE_SHORT_PREFILL_ENV, "0") != "1":
+        return False
+    if int(batch_size) != 1:
+        return False
+    if prefill_seq_len is None:
+        return True
+    return int(get_padded_prefill_len(int(prefill_seq_len))) <= trace_short_prefill_max()
+
 
 # Kernel sequence lengths that may capture/replay prefill device traces (MoE only).
 #
@@ -784,13 +812,21 @@ def resolve_gemma4_prefill_trace_enable(
     # bounded prefills (B=1 short nightly prompts included); eager deferred-fill
     # remains. Batched+bounded also cannot refresh the scalar fill-cap tensor.
     if getattr(model, "bounded_sliding_kv_cache", False):
-        if enable_trace:
+        if enable_trace and not can_batch_prefill and trace_short_prefill_opt_in(prefill_seq_lens[0], batch_size):
             logger.info(
-                "Disabling prefill trace for bounded sliding "
-                "(TRACE mid-forward paged_fill_cache corrupts token-0 on TP; "
-                "eager deferred-fill path remains)."
+                "Gemma4 bounded sliding: GEMMA4_TRACE_SHORT_PREFILL keeps the prefill trace for seq_len={} "
+                "(single user, padded <= {})",
+                prefill_seq_lens[0],
+                trace_short_prefill_max(),
             )
-        return False
+        else:
+            if enable_trace:
+                logger.info(
+                    "Disabling prefill trace for bounded sliding "
+                    "(TRACE mid-forward paged_fill_cache corrupts token-0 on TP; "
+                    "eager deferred-fill path remains)."
+                )
+            return False
     trace_batch_size = batch_size
     if can_batch_prefill:
         # Must match the padded_batch the batched prefill will actually run, which

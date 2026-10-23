@@ -73,3 +73,37 @@ def test_layers_that_stop_sharing_content_get_their_own_buffers(monkeypatch):
     # copy made before the divergence was noticed lands on a replaced buffer).
     assert len({id(d) for d in persistent}) == 6
     assert len(copies) >= 6 and set(d.uid for d in persistent) <= set(copies)
+
+
+def test_lane_parallel_prefill_table_shards_to_one_row_per_column():
+    # A lanes-row table is the lane-parallel prefill layout: one row per column, like a
+    # single-row table; it must not be sized as the lane_slots-row frame (that grew the
+    # persistent buffers and dropped the decode traces after every lane-router prefill).
+    rows = model_module.lane_page_table_device_rows
+    assert rows(1, 4, 32) == 1
+    assert rows(4, 4, 32) == 1
+    assert rows(8, 4, 32) == 32
+    assert rows(128, 4, 32) == 32
+    assert rows(4, 4, 1) == 1  # single-slot lanes: the frame is lanes rows
+
+
+def test_lane_parallel_prefill_table_does_not_regrow_its_buffer(monkeypatch):
+    from types import SimpleNamespace
+
+    copies = []
+    m = _model(monkeypatch, copies)
+    m.mesh_config = SimpleNamespace(lane_sharded=True, lanes=4, lane_shard_mapper=lambda dev, dim: None)
+    m.lane_slots = 32
+    m.mesh_device = None
+    m._invalidate_decode_traces_after_page_table_realloc = False
+    lane_parallel = [torch.arange(4 * 8, dtype=torch.int32).reshape(4, 8)] * 2  # one row per lane
+    first = m._page_tables_to_ttnn(lane_parallel)
+    again = m._page_tables_to_ttnn([t + 1 for t in lane_parallel])
+    assert again[0] is first[0]  # same batch key, same device rows: no reallocation
+    assert m._invalidate_decode_traces_after_page_table_realloc is False
+    frame = [torch.zeros((128, 8), dtype=torch.int32)] * 2  # the decode frame keys its own buffers ...
+    m._page_tables_to_ttnn(frame)
+    # ... but a batch key first seen after the process's first key allocates where captured replays
+    # scribble, so the next decode re-captures (the first key, the warmup's own, needs nothing).
+    assert m._invalidate_decode_traces_after_page_table_realloc is True
+    assert m._g4_page_table_realloc_reason.startswith("new batch key")

@@ -250,7 +250,8 @@ def test_single_layer_model(mesh_device, layer_group, reset_seeds, request):
     base_config = _create_hf_text_config(vocab_size=256, num_layers=num_layers)
     is_moe = getattr(base_config, "enable_moe_block", False)
     if is_moe:
-        base_config.num_experts = 4
+        # Small for speed, but whole experts shard over every chip (ep*tp), so never fewer than that.
+        base_config.num_experts = max(4, mesh_device.get_num_devices() if hasattr(mesh_device, "shape") else 1)
         base_config.top_k_experts = 2
     hf_text_config = base_config
     hf_model = _create_hf_model(hf_text_config)

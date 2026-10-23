@@ -22,6 +22,7 @@ import torch
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig
+from models.demos.gemma4.tt.decode_matmul import DecodeLinear, flag
 from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, can_dram_shard
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
@@ -29,14 +30,18 @@ from models.demos.gemma4.utils.general_utils import get_cache_file_name
 # weight → no memory cost). On by default for tp>1; GEMMA4_ATTN_DRAM_SHARD=0
 # falls back to plain interleaved matmuls.
 _DRAM_SHARD_ATTN = os.environ.get("GEMMA4_ATTN_DRAM_SHARD", "1") != "0"
+# GEMMA4_ATTN_DECODE_1D=1: explicit 1D-multicast decode configs on the interleaved wqkv / o_proj matmuls (the
+# MoE path), K streamed in 4-tile blocks. Measured on a P150 (26B-A4B TP=4, trace replay): sliding wqkv
+# 53 -> 34 us, global wqkv 65 -> 47 us, o_proj 25 -> 18 us (sliding) / 46 -> 34 us (global), same HiFi2 numerics.
+_ATTN_DECODE_BLOCK_W = int(os.environ.get("GEMMA4_ATTN_DECODE_BLOCK_W", "4"))  # env override for the K-block sweep
 
 
 @dataclass(frozen=True)
 class AttentionWeights:
     """Container for attention weight tensors — immutable after creation."""
 
-    wqkv: Union[ttnn.Tensor, DramShardedLinear]  # Fused Q+K+V, column-parallel
-    o_proj: Union[ttnn.Tensor, DramShardedLinear]  # Row-parallel sharded
+    wqkv: Union[ttnn.Tensor, DramShardedLinear, DecodeLinear]  # Fused Q+K+V, column-parallel
+    o_proj: Union[ttnn.Tensor, DramShardedLinear, DecodeLinear]  # Row-parallel sharded
     q_norm_weight: ttnn.Tensor  # Replicated across devices
     k_norm_weight: ttnn.Tensor  # Replicated across devices
     is_global: bool  # Controls K=V tying and partial RoPE
@@ -168,6 +173,7 @@ def load_attention_weights(
     # on BH 1x4 (~0.93 vs 0.99). Dense models keep the opt.
     is_moe = bool(getattr(config, "enable_moe_block", False))
     dram_shard = _DRAM_SHARD_ATTN and tp > 1 and not is_moe and not fractured
+    decode_1d = flag("GEMMA4_ATTN_DECODE_1D")
     qkv_cache = get_cache_file_name(tensor_cache_path, f"wqkv{tp_suffix}{dtype_suffix}")
     oproj_cache = get_cache_file_name(tensor_cache_path, f"o_proj{o_proj_cache_suffix}{tp_suffix}{dtype_suffix}")
     qkv_cache_ws = (qkv_cache + ".ws") if qkv_cache else None
@@ -187,6 +193,16 @@ def load_attention_weights(
             cache_file_name=qkv_cache,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        if decode_1d:
+            # Per-device K / N from the device tensor (the mesh tensor reports its local shape).
+            wqkv = DecodeLinear(
+                wqkv,
+                mesh_device,
+                k=int(wqkv.shape[-2]),
+                n=int(wqkv.shape[-1]),
+                enabled=True,
+                max_block_w=_ATTN_DECODE_BLOCK_W,
+            )
 
     if dram_shard and o_proj_pad_size == 0 and can_dram_shard(oproj_k, oproj_n, dtype=weight_dtype):
         o_proj = DramShardedLinear(
@@ -202,6 +218,15 @@ def load_attention_weights(
             cache_file_name=oproj_cache,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        if decode_1d:
+            o_proj = DecodeLinear(
+                o_proj,
+                mesh_device,
+                k=int(o_proj.shape[-2]),
+                n=int(o_proj.shape[-1]),
+                enabled=True,
+                max_block_w=_ATTN_DECODE_BLOCK_W,
+            )
     q_norm_weight = ttnn.as_tensor(
         q_norm_w,
         device=mesh_device,

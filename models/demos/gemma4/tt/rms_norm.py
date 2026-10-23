@@ -1,10 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 from torch import nn
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
+from models.demos.gemma4.custom_ops.fused_norm_decode import FusedNormDecode
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 
@@ -38,9 +41,15 @@ class RMSNorm(nn.Module):
             # Keep the row-major copy for the width-sharded decode path.
             flat_weight = ttnn.reshape(self.tt_weight, (1, 1, 1, hf_config.hidden_size))
             self.tt_weight_tile = ttnn.to_layout(flat_weight, ttnn.TILE_LAYOUT)
+            # GEMMA4_NORM_FUSED=2: the [1, 1, 32, H] row-replicated gamma of custom_ops/fused_norm_decode (an
+            # on-device repeat of the loaded row, so a warm weight cache never persists it as a placeholder)
+            self.tt_weight_full = (
+                FusedNormDecode.full_gamma(self.tt_weight_tile) if os.environ.get("GEMMA4_NORM_FUSED") == "2" else None
+            )
         else:
             self.tt_weight = None
             self.tt_weight_tile = None
+            self.tt_weight_full = None
 
         self.eps = hf_config.rms_norm_eps
         self.mesh_device = mesh_device
@@ -125,8 +134,9 @@ class RMSNorm(nn.Module):
                 inplace=False,
             )
 
+            tp_axis = int(getattr(self.mesh_config, "tp_axis", 1))
             tt_gathered_stats_memory_config = ttnn.create_sharded_memory_config(
-                shape=[1, 1, 32, 32 * self.mesh_shape[1]],
+                shape=[1, 1, 32, 32 * int(self.mesh_config.mesh_shape[tp_axis])],
                 core_grid=ttnn.CoreGrid(y=1, x=1),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -137,7 +147,7 @@ class RMSNorm(nn.Module):
             tt_gathered_stats = ttnn.all_gather(
                 tt_stats,
                 dim=3,
-                cluster_axis=1,
+                cluster_axis=tp_axis,
                 memory_config=tt_gathered_stats_memory_config,
             )
             ttnn.deallocate(tt_stats)
@@ -159,6 +169,33 @@ class RMSNorm(nn.Module):
             # Prefill (height > 32) and the no-weight per-head norms keep the
             # plain path. Sharded config is dim-specific, so rebuild if the
             # activation width ever changes.
+            if (
+                len(x.shape) == 4
+                and x.shape[0] == 1
+                and x.shape[1] == 1
+                and 1 <= x.shape[-2] <= ttnn.TILE_SIZE
+                and not x.is_sharded()
+                and x.shape[-1] % ttnn.TILE_SIZE == 0
+                and os.environ.get("GEMMA4_NORM_FUSED") == "2"
+            ):
+                # GEMMA4_NORM_FUSED=2: one program on 22 cores with FPU broadcasts (custom_ops/fused_norm_decode);
+                # the layer-level forms (residual add, two inputs, three outputs) are taken by tt/layer.py.
+                gamma = self.tt_weight_full if self.with_scale else None
+                return FusedNormDecode.op(x, [gamma], self.eps)[0]
+            if (
+                self.with_scale
+                and self.tt_weight is not None
+                and len(x.shape) == 4
+                and 1 <= x.shape[-2] <= ttnn.TILE_SIZE
+                and not x.is_sharded()
+                and x.shape[-1] % ttnn.TILE_SIZE == 0
+                and os.environ.get("GEMMA4_NORM_FUSED", "0") == "1"
+            ):
+                # GEMMA4_NORM_FUSED=1: one multi-core program on the interleaved rows (custom_ops/rms_norm_decode)
+                # instead of the interleaved -> width-sharded -> rms_norm -> interleaved triple below.
+                from models.demos.gemma4.custom_ops.rms_norm_decode import RmsNormDecode
+
+                return RmsNormDecode.op(x, self.tt_weight_tile, self.eps)
             if (
                 self.with_scale
                 and self.tt_weight is not None

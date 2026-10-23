@@ -10,6 +10,7 @@ Uses HF-style ttnn.experimental.rotary_embedding (no transformation matrices).
 import os
 
 import ttnn
+from models.demos.gemma4.custom_ops.rope_decode.op import RopeDecode
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 
 from .operations import (
@@ -35,6 +36,22 @@ from .weights import AttentionWeights
 # Populated on the first (un-traced compile) call; inside trace capture the
 # probe is skipped entirely.
 _Q_SHARDED_MEM_CACHE: dict = {}
+
+# GEMMA4_QKV_NORM_ROPE_FUSED=1: the per-head q/k/v norms and the q/k RoPE as one generic op on the height-sharded
+# head tensors (custom_ops/qkv_norm_rope); the TILE [1, 1, 1, head_dim] gamma rows it takes are built once per
+# layer from the ROW_MAJOR norm weights (keyed by the q weight's id; the weights live as long as the model).
+_GAMMA_TILES: dict = {}
+
+
+def _gamma_tiles(weights: AttentionWeights, head_dim: int):
+    key = id(weights.q_norm_weight)
+    if key not in _GAMMA_TILES:
+
+        def _tile(w):
+            return ttnn.to_layout(ttnn.reshape(w, (1, 1, 1, head_dim)), ttnn.TILE_LAYOUT)
+
+        _GAMMA_TILES[key] = (_tile(weights.q_norm_weight), _tile(weights.k_norm_weight))
+    return _GAMMA_TILES[key]
 
 
 def _sdpa_max_cores_per_head_kwargs() -> dict:
@@ -79,6 +96,7 @@ def decode_forward(
     position_idx_cache=None,
     sequential_kv_write=False,
     rope_presliced=False,
+    rope_prepared=None,
 ):
     """
     Single-token decode attention, fully on device.
@@ -105,8 +123,13 @@ def decode_forward(
     """
     tp = mesh_config.tp if mesh_config else 1
 
-    # 1. Fused QKV projection
-    xqkv = apply_qkv_projection(hidden_states, weights)
+    # 1. Fused QKV projection (GEMMA4_QKV_L1_OUT=1: straight into L1, where the head split reads it anyway --
+    # drops the DRAM -> L1 copy of the Blackhole workaround in split_qkv_heads_decode)
+    xqkv = apply_qkv_projection(
+        hidden_states,
+        weights,
+        memory_config=ttnn.L1_MEMORY_CONFIG if os.environ.get("GEMMA4_QKV_L1_OUT", "0") == "1" else None,
+    )
 
     # 2. Split into Q, K, V heads
     tt_q, tt_k, tt_v = split_qkv_heads_decode(
@@ -115,10 +138,30 @@ def decode_forward(
 
     # 3. Per-head norms (move to DRAM for rms_norm, restore sharded for RoPE)
     q_sharded_mem = tt_q.memory_config()
-    tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
-    tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
+    fused_qkv = (
+        os.environ.get("GEMMA4_QKV_NORM_ROPE_FUSED", "0") == "1"
+        and not is_kv_shared
+        and rope_presliced
+        and len(cos_cache.shape) == 4
+        and int(cos_cache.shape[1]) == 1
+        and not (sequential_kv_write and int(tt_q.shape[1]) > 1)
+    )
+    if fused_qkv:
+        # norms + RoPE on the sharded head tensors, outputs in the same sharded layout (custom_ops/qkv_norm_rope)
+        from models.demos.gemma4.custom_ops.qkv_norm_rope import QkvNormRope
 
-    if is_kv_shared:
+        gq, gk = _gamma_tiles(weights, config.head_dim)
+        nq, nk, nv = QkvNormRope.op(tt_q, tt_k, tt_v, gq, gk, cos_cache, sin_cache, config.rms_norm_eps)
+        for t in (tt_q, tt_k, tt_v):
+            t.deallocate(True)
+        tt_q, tt_k, tt_v = nq, nk, nv
+    else:
+        tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
+        tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
+
+    if fused_qkv:
+        pass
+    elif is_kv_shared:
         # KV-shared layer: discard own K/V, use source layer's KV cache directly
         tt_k.deallocate(True)
         tt_v.deallocate(True)
@@ -136,7 +179,9 @@ def decode_forward(
     #   - 2D cache: gather the position rows with ttnn.embedding right here (legacy
     #     per-layer path, kept for the it-assistant drafter / direct callers).
     use_embedding_rope = rope_presliced or len(cos_cache.shape) == 2
-    if use_embedding_rope:
+    if fused_qkv:
+        pass  # rotated by the fused op above
+    elif use_embedding_rope:
         if rope_presliced:
             cos_pos, sin_pos = cos_cache, sin_cache  # [1, 1, batch_pad, head_dim], shared
         else:
@@ -157,13 +202,28 @@ def decode_forward(
         # the elementwise form; off by default until measured.
         peruser_at_b1 = os.environ.get("GEMMA4_ROPE_PERUSER_B1", "0") == "1"
         if batch > 1 or peruser_at_b1:
-            cos_b = ttnn.transpose(cos_pos, 1, 2)[:, :batch, :, :]  # [1, batch, 1, head_dim]
-            sin_b = ttnn.transpose(sin_pos, 1, 2)[:, :batch, :, :]
+            # ``rope_prepared`` (per step, per layer type, from the model) keeps the transposed/sliced cos/sin
+            # and their head-repeated forms across the layers of one type: only the first layer pays the ops.
+            base = rope_prepared.get("base") if rope_prepared is not None else None
+            if base is None:
+                cos_b = ttnn.transpose(cos_pos, 1, 2)[:, :batch, :, :]  # [1, batch, 1, head_dim]
+                sin_b = ttnn.transpose(sin_pos, 1, 2)[:, :batch, :, :]
+                if rope_prepared is not None:
+                    rope_prepared["base"] = (cos_b, sin_b)
+            else:
+                cos_b, sin_b = base
+
+        # GEMMA4_ROPE_DECODE_CUSTOM_OP=1: one generic_op (custom_ops/rope_decode) per rotation instead of the
+        # ~8 elementwise programs of the composite (same NeoX rotate_half numerics, PCC 0.99999x); opt-in until
+        # the lanes roofline and the e2e answers are re-measured with it.
+        rope_custom_op = os.environ.get("GEMMA4_ROPE_DECODE_CUSTOM_OP", "0") == "1"
 
         def _rope(t):
             if batch == 1 and not peruser_at_b1:
                 return apply_rope(t, cos_pos, sin_pos, token_index=0)
-            return apply_rope_decode_peruser(t, cos_b, sin_b)
+            if rope_custom_op:
+                return RopeDecode.op(t, cos_b, sin_b)
+            return apply_rope_decode_peruser(t, cos_b, sin_b, prepared=rope_prepared)
 
         # Rotate Q (and K, unless this is a KV-shared layer) with the shared
         # cos/sin. A concat(Q,K)->rope->split "fusion" was tried to collapse the
@@ -193,7 +253,7 @@ def decode_forward(
     )
     if kv_cache is not None:
         k_cache, v_cache = kv_cache
-        if not is_kv_shared:
+        if not is_kv_shared and not fused_qkv:
             # After HF-style RoPE, tensors may be in DRAM. Move to HEIGHT_SHARDED for cache update.
             tt_k = ttnn.to_memory_config(tt_k, q_sharded_mem)
             tt_v = ttnn.to_memory_config(tt_v, q_sharded_mem)

@@ -11,6 +11,7 @@ Follows gpt-oss kv_cache.py pattern.
 import torch
 
 import ttnn
+from models.demos.gemma4.tt.ccl import mesh_tp
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 # Hot cache blocks held in staging per decode slot for the loop-free packed KV
@@ -53,9 +54,9 @@ def init_kv_cache(
     Returns:
         [k_cache, v_cache] list of TT tensors
     """
-    # Determine TP from mesh shape (column axis)
+    # TP from the mesh shape along the dense TP axis (the columns unless GEMMA4_TP_AXIS=0)
     is_mesh = hasattr(mesh_device, "shape")
-    tp = mesh_device.shape[1] if is_mesh else 1
+    tp = mesh_tp(mesh_device)
 
     # When KV heads < TP, each device gets 1 KV head (GQA-assigned, not all heads)
     num_local_kv_heads = 1 if config.num_key_value_heads < tp else config.num_key_value_heads // tp
@@ -128,7 +129,7 @@ def init_kv_staging(
     Returns ``[k_staging, v_staging]``.
     """
     is_mesh = hasattr(mesh_device, "shape")
-    tp = mesh_device.shape[1] if is_mesh else 1
+    tp = mesh_tp(mesh_device)
     num_local_kv_heads = 1 if config.num_key_value_heads < tp else config.num_key_value_heads // tp
     stage_shape = [1, num_local_kv_heads, max_batch_size * blk * block_size, config.head_dim]
     mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None

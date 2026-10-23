@@ -105,6 +105,8 @@ def test_contract_sampled_top_k_uses_host_when_the_device_cannot_honor_it(adapte
     sampling.temperature[0] = temperature
     sampling.top_k[0] = top_k
     runner = SimpleNamespace(
+        # The plugin runner reads its seeded-sampling policy before the top-k rule (None = device default).
+        seeded_sampling_policy=None,
         sample_on_device_mode="decode_only",
         num_devices=8,
         tt_data_parallel_size=1,
@@ -129,6 +131,8 @@ def test_contract_penalty_request_uses_host_sampler(adapter):
     sampling.temperature[0] = 0.7
     sampling.top_k[0] = 2
     runner = SimpleNamespace(
+        # The plugin runner reads its seeded-sampling policy before the top-k rule (None = device default).
+        seeded_sampling_policy=None,
         sample_on_device_mode="decode_only",
         num_devices=8,
         tt_data_parallel_size=1,

@@ -90,7 +90,9 @@ def test_lanes_e2e(mesh_device, reset_seeds, request):
         cur_tok[row] = int(torch.argmax(lg.reshape(-1)).item())
 
     # ── Lane-major decode loop (host greedy) ──────────────────────────────
-    outputs = {row: [] for row in rows}
+    # The prefill logits already produced each user's first token; a model that answers in one token
+    # (26B-A4B: "Paris" then <end_of_turn>) only shows it here.
+    outputs = {row: [cur_tok[row]] for row in rows}
     for _step in range(GEN_TOKENS):
         tokens_g = torch.zeros(B_g, dtype=torch.long)
         pos_g = torch.full((B_g,), -1, dtype=torch.long)
@@ -107,6 +109,10 @@ def test_lanes_e2e(mesh_device, reset_seeds, request):
             enable_trace=False,
             read_from_device=True,
             sampling_params=None,
+            reload_inputs=True,
+            reload_page_table=True,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
         lg = logits[0] if isinstance(logits, (list, tuple)) else logits
         lg = lg.reshape(B_g, -1)

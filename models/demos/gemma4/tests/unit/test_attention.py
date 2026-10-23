@@ -30,13 +30,14 @@ from ...tests.test_factory import (
     compare_tensors,
     find_layer_idx,
     get_pcc_threshold,
+    mesh_tp_and_axis,
     parametrize_mesh_with_fabric,
 )
 
 
 def _skip_if_l1_overflow(config, mesh_device):
     """Skip if global attention head_dim overflows L1 on this mesh config."""
-    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    tp, _ = mesh_tp_and_axis(mesh_device)
     # Global layers with large head_dim (512) overflow L1 when hidden_size > 4096 on single device
     if not config.is_sliding and config.head_dim >= 512 and tp == 1:
         hf_config = TestFactory.create_hf_config()
@@ -53,8 +54,8 @@ def _setup_attention(mesh_device, layer_idx, create_kv_cache=False, max_seq_len=
 
     state_dict = {k: v.clone() for k, v in hf_attn.state_dict().items() if not k.startswith("v_norm")}
 
-    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
-    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
+    tp, tp_axis = mesh_tp_and_axis(mesh_device)
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp), tp_axis=tp_axis)
     ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
 
     tt_attn = Gemma4Attention(
@@ -413,7 +414,7 @@ def test_attention_decode_paged_batched(layer_idx, batch, cache_len, mesh_device
     config = Gemma4AttentionConfig(TestFactory.create_hf_config(), layer_idx)
     _skip_if_l1_overflow(config, mesh_device)
 
-    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    tp, tp_axis = mesh_tp_and_axis(mesh_device)
     num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
     is_mesh = num_devices > 1
 
@@ -430,7 +431,7 @@ def test_attention_decode_paged_batched(layer_idx, batch, cache_len, mesh_device
     max_seq_len = blocks_per_user * block_size
     paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
 
-    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp))
+    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=tp), tp_axis=tp_axis)
     ccl_manager = CCLManager(mesh_device, num_links=1) if tp > 1 else None
     kv_cache = init_kv_cache(
         mesh_device=mesh_device, config=config, paged_attention_config=paged_attention_config, cache_dtype=ttnn.bfloat16
