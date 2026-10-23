@@ -1430,8 +1430,8 @@ struct ChunkKnobs {
 // One Q row with a wide K step, many Q rows with one K tile, square, and both rectangles.
 const std::vector<ChunkKnobs> kChunkKnobSweep = {{32, 256}, {128, 32}, {64, 64}, {128, 64}, {64, 256}};
 
-void run_chunk_knob_sweep(SDPATestConfig base) {
-    for (const auto& knobs : kChunkKnobSweep) {
+void run_chunk_knob_sweep(SDPATestConfig base, const std::vector<ChunkKnobs>& sweep = kChunkKnobSweep) {
+    for (const auto& knobs : sweep) {
         SDPATestConfig config = base;
         config.program_config = {.q_chunk_size = knobs.q_chunk_size, .k_chunk_size = knobs.k_chunk_size};
         config.test_name = fmt::format("{}_q{}_k{}", base.test_name, knobs.q_chunk_size, knobs.k_chunk_size);
@@ -1466,6 +1466,22 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal_GQA_ManySeqs) {
         .num_key_heads = 4U,
         .mask_type = ttml::metal::AttentionMaskType::Causal,
         .test_name = "ChunkKnobs_Causal_GQA_ManySeqs"});
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal_NonPow2) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // S = 12 tiles: 3-tile chunks give odd sub-blocks and a causal step count that is not a power of two.
+    run_chunk_knob_sweep(
+        SDPATestConfig{
+            .batch_size = 1U,
+            .sequence_length = 384U,
+            .query_dim = 128U,
+            .key_value_dim = 128U,
+            .num_query_heads = 2U,
+            .num_key_heads = 2U,
+            .mask_type = ttml::metal::AttentionMaskType::Causal,
+            .test_name = "ChunkKnobs_Causal_NonPow2"},
+        {{96, 96}, {32, 96}, {96, 32}, {128, 96}, {96, 384}});
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Arbitrary) {
@@ -1539,5 +1555,6 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ChangeProgramHash) {
     k_changed.program_config.k_chunk_size = 128U;
     EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(q_changed));
     EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(k_changed));
-    EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(q_changed), ttsl::hash::hash_objects_with_default_seed(k_changed));
+    EXPECT_NE(
+        ttsl::hash::hash_objects_with_default_seed(q_changed), ttsl::hash::hash_objects_with_default_seed(k_changed));
 }
