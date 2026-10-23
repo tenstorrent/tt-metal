@@ -256,15 +256,30 @@ class Gemma4DecoderLayer:
         )
 
     def _forward_tail_fused_dense(self, residual, attn_output):
-        """The dense layer after attention as three fused norm programs (see the module docstring)."""
+        """The dense layer after attention as three fused norm programs (see the module docstring);
+        GEMMA4_NORM_CHAIN_FUSED=1 chains the first two (post-attention norm + residual, pre-FF norm) into one
+        program (custom_ops/fused_norm_chain)."""
         eps = self.post_attention_layernorm.eps
-        # post_attention_layernorm(attn) + residual
-        hidden = FusedNormDecode.op(
-            attn_output, [self.post_attention_layernorm.tt_weight_full], eps, residual=residual
-        )[0]
-        residual.deallocate(True)
-        attn_output.deallocate(True)
-        normed = FusedNormDecode.op(hidden, [self.pre_feedforward_layernorm.tt_weight_full], eps)[0]
+        if decode_flag("GEMMA4_NORM_CHAIN_FUSED") == "1":
+            from models.demos.gemma4.custom_ops.fused_norm_chain import FusedNormChainDecode
+
+            hidden, normed = FusedNormChainDecode.op(
+                attn_output,
+                residual,
+                self.post_attention_layernorm.tt_weight_full,
+                self.pre_feedforward_layernorm.tt_weight_full,
+                eps,
+            )
+            residual.deallocate(True)
+            attn_output.deallocate(True)
+        else:
+            # post_attention_layernorm(attn) + residual
+            hidden = FusedNormDecode.op(
+                attn_output, [self.post_attention_layernorm.tt_weight_full], eps, residual=residual
+            )[0]
+            residual.deallocate(True)
+            attn_output.deallocate(True)
+            normed = FusedNormDecode.op(hidden, [self.pre_feedforward_layernorm.tt_weight_full], eps)[0]
         mlp_output = self.shared_mlp(normed)
         normed.deallocate(True)
         # post_feedforward_layernorm + residual, times the layer scalar
