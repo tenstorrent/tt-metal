@@ -310,6 +310,16 @@ inline void dest_section_flip()
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, base_addr);
 }
 
+// One stall for the post and the base flip: the post already waits for math and SFPU idle, so the flip needs no second stall.
+inline void dest_section_post_flip()
+{
+    update_dest_offset_id();
+    const std::uint32_t base_addr = get_dest_buffer_base();
+    TTI_STALLWAIT(p_stall::STALL_SYNC | p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
+    TTI_SEMPOST(semaphore::t6_sem(semaphore::MATH_PACK));
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, base_addr);
+}
+
 template <DstStart Dst>
 inline void set_dest_section_base()
 {
