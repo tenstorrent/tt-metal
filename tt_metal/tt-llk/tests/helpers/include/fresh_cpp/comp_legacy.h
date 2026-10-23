@@ -49,14 +49,14 @@ __attribute__((noinline)) void calculate_comp_fresh_cpp_legacy()
     for (int d = 0; d < ITERATIONS; ++d)
     {
         const sfpi::vFloat v = sfpi::dst_reg[d];
-        sfpi::vFloat r       = sfpi::vConst0;
+        sfpi::vFloat r       = sfpi::vFloat(0.0f);
         if constexpr (COMP_MODE == SfpuType::not_equal_zero)
         {
             // ne(v, 0) = !(|v| == 0)
-            r = sfpi::vConst1;
+            r = sfpi::vFloat(1.0f);
             v_if (sfpi::abs(v) == 0.0f)
             {
-                r = sfpi::vConst0;
+                r = sfpi::vFloat(0.0f);
             }
             v_endif;
         }
@@ -65,12 +65,12 @@ __attribute__((noinline)) void calculate_comp_fresh_cpp_legacy()
             // lt(v, 0): true negatives only — a sign-magnitude -0.0 must not count.
             v_if (v < 0.0f)
             {
-                r = sfpi::vConst1;
+                r = sfpi::vFloat(1.0f);
             }
             v_endif;
             v_if (sfpi::abs(v) == 0.0f)
             {
-                r = sfpi::vConst0;
+                r = sfpi::vFloat(0.0f);
             }
             v_endif;
         }
@@ -78,12 +78,12 @@ __attribute__((noinline)) void calculate_comp_fresh_cpp_legacy()
         {
             v_if (v > 0.0f)
             {
-                r = sfpi::vConst1;
+                r = sfpi::vFloat(1.0f);
             }
             v_endif;
             v_if (sfpi::abs(v) == 0.0f)
             {
-                r = sfpi::vConst0;
+                r = sfpi::vFloat(0.0f);
             }
             v_endif;
         }
@@ -92,12 +92,12 @@ __attribute__((noinline)) void calculate_comp_fresh_cpp_legacy()
             // le(v, 0) = lt(v, 0) || (|v| == 0); both zeros answer 1.
             v_if (v < 0.0f)
             {
-                r = sfpi::vConst1;
+                r = sfpi::vFloat(1.0f);
             }
             v_endif;
             v_if (sfpi::abs(v) == 0.0f)
             {
-                r = sfpi::vConst1;
+                r = sfpi::vFloat(1.0f);
             }
             v_endif;
         }
@@ -105,15 +105,15 @@ __attribute__((noinline)) void calculate_comp_fresh_cpp_legacy()
         {
             // ge(v, 0) = !(v < 0) with both zeros answering 1 regardless of
             // their sign bit.
-            r = sfpi::vConst1;
+            r = sfpi::vFloat(1.0f);
             v_if (v < 0.0f)
             {
-                r = sfpi::vConst0;
+                r = sfpi::vFloat(0.0f);
             }
             v_endif;
             v_if (sfpi::abs(v) == 0.0f)
             {
-                r = sfpi::vConst1;
+                r = sfpi::vFloat(1.0f);
             }
             v_endif;
         }

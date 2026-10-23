@@ -133,7 +133,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "fresh_cpp/comp.h"
 // Byte-untouched legacy tt-llk LUT sigmoid (6-segment SFPLUTFP32 hand kernel,
 // laneED sem-only audit): impl-3 hand arm of test_perf_lut_variant_fresh_cpp.
-#include "sfpu/ckernel_sfpu_sigmoid.h"
+#include "campaign_legacy_sigmoid.h"
 // Canonical per-op semantic bodies (storm contract: fresh_cpp/README.md).
 #include "fresh_cpp/acosh_fitted.h"
 #include "fresh_cpp/celu_fitted.h"

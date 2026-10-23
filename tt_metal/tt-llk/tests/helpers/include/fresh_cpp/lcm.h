@@ -158,8 +158,8 @@ __attribute__((noinline)) void calculate_lcm_fresh_cpp()
             // a*b+c form against the once-negated divisor (header piece 2).
             sfpi::vFloat r        = sfpi::as<sfpi::vFloat>(sfpi::vInt(sfpi::vConstIntPrgm0) - sfpi::as<sfpi::vInt>(gf));
             const sfpi::vFloat ng = -gf;
-            r                     = (ng * r + sfpi::vConst1) * r + r;
-            r                     = (ng * r + sfpi::vConst1) * r + r;
+            r                     = (ng * r + sfpi::vFloat(1.0f)) * r + r;
+            r                     = (ng * r + sfpi::vFloat(1.0f)) * r + r;
 
             // Nearest-integer recovery: q + 2^23 lands the exact quotient in
             // the mantissa field (q < 2^23, certified margin << 0.5).

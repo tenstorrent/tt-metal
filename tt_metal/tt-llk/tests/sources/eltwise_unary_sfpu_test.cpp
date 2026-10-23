@@ -82,7 +82,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 // laneED sem-only audit): included ONLY as the impl-3 hand arm of
 // test_sigmoid_lut_fresh_cpp — no production dispatch reaches it (corpus
 // manifest class D-ABSENT).
-#include "sfpu/ckernel_sfpu_sigmoid.h"
+#include "campaign_legacy_sigmoid.h"
 // Canonical per-op semantic bodies (storm contract: fresh_cpp/README.md).
 #include "fresh_cpp/acosh_fitted.h"
 #include "fresh_cpp/celu_fitted.h"

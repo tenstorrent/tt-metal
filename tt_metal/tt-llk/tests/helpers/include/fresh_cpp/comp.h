@@ -70,10 +70,10 @@ __attribute__((noinline)) void calculate_comp_fresh_cpp()
             // ne(v, 0) = !(|v| == 0): default 1, both zeros overwrite to 0.
             // v is nonzero exactly when its magnitude bits have fewer than 32
             // leading zeros.
-            sfpi::dst_reg[d] = sfpi::vConst0;
+            sfpi::dst_reg[d] = sfpi::vFloat(0.0f);
             v_if (sfpi::lz(sfpi::as<sfpi::vUInt>(v), sfpi::LZMode::IgnoreSign) != 32)
             {
-                sfpi::dst_reg[d] = sfpi::vConst1;
+                sfpi::dst_reg[d] = sfpi::vFloat(1.0f);
             }
             v_endif;
         }
@@ -81,50 +81,50 @@ __attribute__((noinline)) void calculate_comp_fresh_cpp()
         {
             // lt(v, 0): true negatives only — a sign-magnitude -0.0 must not
             // count, so the zero test overwrites last.
-            sfpi::dst_reg[d] = sfpi::vConst0;
+            sfpi::dst_reg[d] = sfpi::vFloat(0.0f);
             v_if (v < 0.0f)
             {
-                sfpi::dst_reg[d] = sfpi::vConst1;
+                sfpi::dst_reg[d] = sfpi::vFloat(1.0f);
             }
             v_endif;
             v_if (sfpi::abs(v) == 0.0f)
             {
-                sfpi::dst_reg[d] = sfpi::vConst0;
+                sfpi::dst_reg[d] = sfpi::vFloat(0.0f);
             }
             v_endif;
         }
         else if constexpr (COMP_MODE == SfpuType::greater_than_zero)
         {
-            sfpi::dst_reg[d] = sfpi::vConst0;
+            sfpi::dst_reg[d] = sfpi::vFloat(0.0f);
             v_if (v > 0.0f)
             {
-                sfpi::dst_reg[d] = sfpi::vConst1;
+                sfpi::dst_reg[d] = sfpi::vFloat(1.0f);
             }
             v_endif;
             v_if (sfpi::abs(v) == 0.0f)
             {
-                sfpi::dst_reg[d] = sfpi::vConst0;
+                sfpi::dst_reg[d] = sfpi::vFloat(0.0f);
             }
             v_endif;
             // GH-F1: the > lowering admits quiet NaN; golden answers 0.
             v_if (sfpi::is_nan(v))
             {
-                sfpi::dst_reg[d] = sfpi::vConst0;
+                sfpi::dst_reg[d] = sfpi::vFloat(0.0f);
             }
             v_endif;
         }
         else if constexpr (COMP_MODE == SfpuType::less_than_equal_zero)
         {
             // le(v, 0) = lt(v, 0) || (|v| == 0); both zeros answer 1.
-            sfpi::dst_reg[d] = sfpi::vConst0;
+            sfpi::dst_reg[d] = sfpi::vFloat(0.0f);
             v_if (v < 0.0f)
             {
-                sfpi::dst_reg[d] = sfpi::vConst1;
+                sfpi::dst_reg[d] = sfpi::vFloat(1.0f);
             }
             v_endif;
             v_if (sfpi::abs(v) == 0.0f)
             {
-                sfpi::dst_reg[d] = sfpi::vConst1;
+                sfpi::dst_reg[d] = sfpi::vFloat(1.0f);
             }
             v_endif;
         }
@@ -132,21 +132,21 @@ __attribute__((noinline)) void calculate_comp_fresh_cpp()
         {
             // ge(v, 0) = !(v < 0) with both zeros answering 1 regardless of
             // their sign bit.
-            sfpi::dst_reg[d] = sfpi::vConst1;
+            sfpi::dst_reg[d] = sfpi::vFloat(1.0f);
             v_if (v < 0.0f)
             {
-                sfpi::dst_reg[d] = sfpi::vConst0;
+                sfpi::dst_reg[d] = sfpi::vFloat(0.0f);
             }
             v_endif;
             v_if (sfpi::abs(v) == 0.0f)
             {
-                sfpi::dst_reg[d] = sfpi::vConst1;
+                sfpi::dst_reg[d] = sfpi::vFloat(1.0f);
             }
             v_endif;
             // GH-F1: the default-1 shape admits quiet NaN; golden answers 0.
             v_if (sfpi::is_nan(v))
             {
-                sfpi::dst_reg[d] = sfpi::vConst0;
+                sfpi::dst_reg[d] = sfpi::vFloat(0.0f);
             }
             v_endif;
         }
