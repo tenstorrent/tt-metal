@@ -541,21 +541,21 @@ class TtK3TokenSplitMoE:
                     ttnn.deallocate(t)
             if g0 is not getattr(self, "_rg_out", None):
                 ttnn.deallocate(g0)
-        if self.shared_tp:  # (allocated before the arena: above it, not capping the L1 below it)
-            # (the fused op's barrier words: persistent, never rewritten - cumulative counts across calls)
-            gcores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
-            self.bar = ttnn.from_torch(
-                torch.zeros(1, 1, grid.x * grid.y, 16, dtype=torch.int32),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=mesh_device,
-                memory_config=ttnn.MemoryConfig(
-                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                    ttnn.BufferType.L1,
-                    ttnn.ShardSpec(gcores, [1, 16], ttnn.ShardOrientation.ROW_MAJOR),
-                ),
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
+        # (allocated before the arena: above it, not capping the L1 below it)
+        # (the combine's start barrier words: persistent, never rewritten - cumulative counts across calls)
+        gcores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+        self.bar = ttnn.from_torch(
+            torch.zeros(1, 1, grid.x * grid.y, 16, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(gcores, [1, 16], ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
         a_rows = int(plan["arena_tiles"]) * 32
         if (
             combine_auto_cfg
@@ -722,7 +722,11 @@ class TtK3TokenSplitMoE:
             acc_on_ports=acc_on_ports,
             piece_max=max(7168, 2 * d.latent),  # (the L1 hand-off: one piece a row; a fabric payload >= row + 32 B)
             shared_rows=dict(tensor=self.y_se, axis=self.shared_axis) if self.shared_tp else None,
-            barrier=dict(tensor=self.bar) if self.shared_tp else None,
+            # (always: a port forwards ring layouts / rows / credits into another chip's arena only once every chip's
+            # combine started - after that chip's per-call zeroing. The dispatch's END markers do not order it: a home
+            # at the far end of a 1x4 line finished its dispatch and forwarded its layouts to chip 0 before chip 0's
+            # zeroing ran, which wiped them - chip 0's ports then waited forever, ~1 call in 100)
+            barrier=dict(tensor=self.bar),
             dispatch=(
                 dict(
                     sems=self.disp_sems,

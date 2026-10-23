@@ -58,6 +58,7 @@ class CombineProbes:
     noyread: str = "0"  # SPC_NOYREAD: rows not read from y (garbage)
     nodrain: bool = False  # SPC_NODRAIN=1: no end-of-call credit drain
     piggy: str = ""  # SPC_PIGGY: 1 / 0 overrides piggyback_credits
+    hw: bool = False  # SPC_HW=1: hang words - a sparse snapshot of each port's / accumulator's loop state in MISC 480..
     se: str = ""  # SPC_SE: shared_rows probes - off (no rows, both sides: wrong sums) / noread (no DRAM reads: garbage)
     # / noown (the accumulators skip the own block)
 
@@ -75,6 +76,7 @@ class CombineProbes:
             nodrain=env.get("SPC_NODRAIN") == "1",
             se=env.get("SPC_SE", ""),
             piggy=env.get("SPC_PIGGY", ""),
+            hw=env.get("SPC_HW") == "1",
         )
 
 
@@ -304,7 +306,7 @@ NH_, HSZ_ = 8, 128
 MISC_BYTES = 2048
 # MISC words: 1 returned so far; 100 calls; 101 base; 112.. scratch; 128.. landed (writers); 192.. profile; 208..
 # devplan scratch; 256.. rows consumed per source chip (accumulators increment); 288.. rows covered by the credit
-# snapshots sent; 320.. acc taken[] (per ring = source chip)
+# snapshots sent; 320.. acc taken[] (per ring = source chip); 477..511 the hang words (CombineProbes.hw)
 M_RTOT, M_RDONE, M_TAKEN = 256, 288, 320
 
 
@@ -547,6 +549,11 @@ void kernel_main() {
     const uint32_t calls_ = misc[104] + 1;
     misc[104] = calls_;
     const uint32_t tag = (calls_ - 1) % 255 + 1;
+    if constexpr (__HW__) {  // (hang words: the layouts already here when this kernel starts, by home: 4 bits each)
+        uint32_t m = 0;
+        for (uint32_t ci = 0; ci < N * AP; ++ci) m += (lay_r[ci] != 0 ? 1u : 0u) << (4 * (ci / AP));
+        misc[477] = m;
+    }
     for (uint32_t ci = 0; ci < N * AP; ++ci) u0[ci] = used[ci];
     uint32_t lay_pend = 0;  // (sources whose layouts this port still forwards: bit s)
     for (uint32_t s = 0; s < N; ++s) {
@@ -754,6 +761,14 @@ void kernel_main() {
         const uint32_t it0 = get_timestamp_32b();
         const uint32_t c0 = p_cred;
         ++n_iter;
+        if constexpr (__HW__) {  // (hang words: MISC 480.. every 512 loops - a store a loop hid the hang before)
+            if ((n_iter & 511) == 1) {
+                misc[480] = 0x48570000u | (calls_ & 0xFFFF), misc[481] = n_iter, misc[482] = inj_done;
+                misc[483] = n_inj, misc[484] = returned - ret0, misc[485] = n_ret, misc[486] = fused_more();
+                misc[487] = lay_pend, misc[488] = se_sent, misc[489] = se_n, misc[490] = any_ret();
+                misc[491] = unflushed, misc[492] = n_blocked, misc[494] = me | lnk << 8;
+            }
+        }
         invalidate_l1_cache();
         hand_off();
         write_out();
@@ -770,6 +785,12 @@ void kernel_main() {
             if (src >= ilim) src -= get_local_cb_interface(cb_inj).fifo_size;
             const uint32_t ts0 = get_timestamp_32b();
             if (!send_row(src)) {  // (its ring's layout not here yet, or the ring full)
+                if constexpr (__HW__) {  // (the blocked row: its header word, its ring's layout word and used / credit)
+                    const uint32_t hw_h = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + LASTPB)[0];
+                    const uint32_t hw_ci = (hw_h & 0xFF) * AP + ((hw_h >> 8) & 0xFFFF) % A;
+                    misc[493] = hw_h, misc[495] = hw_ci < N * AP ? lay_r[hw_ci] : 0xDEADu;
+                    misc[479] = hw_ci < N * AP ? used[hw_ci] : 0, misc[478] = hw_ci < N * AP ? cred[hw_ci] : 0;
+                }
                 ++n_blocked;
                 blk = true;
                 break;
@@ -1146,8 +1167,16 @@ void kernel_main() {
             }
         }
     }
+    uint32_t hw_it = 0;
     while (done < n_rows) {
         invalidate_l1_cache();
+        if constexpr (__HW__) {  // (hang words: MISC 496..)
+            if ((++hw_it & 511) == 1) {
+                misc[496] = 0x41430000u | (calls_ & 0xFFFF), misc[497] = done, misc[498] = n_rows;
+                misc[499] = li, misc[500] = n_local, misc[501] = me | hc << 8, misc[502] = hw_it;
+                for (uint32_t k = 0; k < N && k < 4; ++k) misc[503 + k] = taken[k] - t0[k], misc[507 + k] = want[k];
+            }
+        }
         if (li == n_local && t_local == 0) t_local = get_timestamp_32b();
         while (L1M && li < n_local) {
             if (!take_local()) break;
@@ -1577,6 +1606,15 @@ def sparse_combine_rf_prepare(
     else:
         area_t = arena
     area = int(area_t.buffer_address())
+    if pr.hw:  # (hang words: where a triage add-on finds them - every combine core's MISC 480..511)
+        import json
+
+        os.makedirs("generated/moe_block", exist_ok=True)
+        cores = sorted({(v.x, v.y) for v in (virt(ttnn.CoreCoord(*c)) for c in all_cores)})
+        json.dump(
+            dict(misc=area + MISC, layr=area + LAYR, layo=area + LAYO, nap=N * AP, cores=cores),
+            open("generated/moe_block/combine_hw.json", "w"),
+        )
     cnt_off = CNT if counts_off is None else counts_off
     assert cnt_off % 16 == 0 and RET + 4 * N * AP <= cnt_off and cnt_off + 512 <= MISC
     coll = acc_cores[0]
@@ -1670,6 +1708,7 @@ def sparse_combine_rf_prepare(
         "__PD__": str(PD),
         "__PS__": str(PS),
         "__DRAIN__": "false" if pr.nodrain else "true",  # (probe: no end-of-call credit drain)
+        "__HW__": str(int(pr.hw)),
         "__MRTOT__": str(M_RTOT),
         "__MRDONE__": str(M_RDONE),
         "__MTAKEN__": str(M_TAKEN),

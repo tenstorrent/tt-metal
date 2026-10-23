@@ -1516,3 +1516,24 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   packers waiting for free tiles, y writers issuing), the others' flat kernels done, their combine kernels waiting.
   Standalone flat + combine (scratch_flat_combine_rf closeout, K3 Galaxy load) passes on both the line and the ring,
   traced 100 replays (fused 1182-1184 us).
+
+### The SP 1 experts + combine hang: lost ring layouts (fixed)
+- Hang words (sparse_combine_rf CombineProbes.hw / SPC_HW=1, read after a hang by tools/triage/dump_combine_hw.py):
+  in every repro the line-end chip 0's two combine ports were blocked from the call's start on a row for home 3,
+  whose ring layout word read 0. Chip 0's LAYR held homes 1 / 2's layouts; home 3's block was zero on both ports.
+  Home 3's ports held them in LAYO with nothing pending - forwarded. Credits were not the issue (all returned).
+- One variable at a time: zero gate off (K3_ZGATE=0) still hung. Re-forwarding every layout each 64K loops: 3 x 300
+  checked replays clean, and one back-to-back phase took +5.7 ms (a rescued layout). A shadow copy of each forwarded
+  block far from LAYR (MISC 384+) went missing with it, and the layouts present at the port kernel's start show they
+  can land before the receiving chip's combine starts. With LAYR left out of the per-call zeroing (the port clearing
+  it at its end): 3 x 300 clean. So the per-call zeroing on chip 0 ran after home 3's layouts landed: the dispatch's
+  END markers do not order every chip's zeroing before another chip's combine forwards.
+- Fix: the combine's start barrier (BAR: each port core counts in on every other chip's port cores, then waits for
+  N - 1) now always on (TtK3TokenSplitMoE; it was only on with the shared expert in the combine). Nothing crosses
+  into another chip's arena before every chip's combine started, i.e. after its zeroing.
+- Validation: line 3 x 300 checked replays + eager + b2b clean; ring 1000 checked replays clean, per program head
+  455-458 | dispatch 57-58 | experts 1189 | tail 112-116 us (the barrier hides under the experts); 2x4 k3_g224
+  traced clean; mock Galaxy 6 / 6 build.
+- Open (new): one 2x4 traced run hung in the fused tail on the first call (all chips: the tail engine's compute waiting
+  z, its ports waiting a fabric slot / their reader); the next run with the same code passed. Triage in
+  moe_block_runs/hang_blk_bar_2x4.log. To narrow in the stress phase.
