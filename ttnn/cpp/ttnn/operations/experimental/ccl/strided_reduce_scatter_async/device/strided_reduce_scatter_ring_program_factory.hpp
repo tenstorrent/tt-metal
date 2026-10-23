@@ -94,7 +94,7 @@ build_ring_strided_reduce_scatter_async_program_artifacts(
 // slice_Ht is the reduce-scattered height in tiles (the activations', not the windowed MM output's).
 void ring_strided_reduce_scatter_async_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
-    const StridedReduceScatterProgramArtifacts& artifacts,
+    const operations::experimental::ccl::strided_reduce_scatter_async::detail::StridedReduceScatterProgramArtifacts& artifacts,
     const std::optional<tt::tt_metal::GlobalSemaphore>& barrier_semaphore,
     const std::vector<tt::tt_metal::GlobalSemaphore>& semaphore,
     uint32_t slice_Ht,
