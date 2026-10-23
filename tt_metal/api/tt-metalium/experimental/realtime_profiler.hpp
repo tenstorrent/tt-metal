@@ -42,47 +42,6 @@ using ProgramRealtimeProfilerCallbackHandle = uint64_t;
 
 // clang-format off
 /**
- * Register a callback to be invoked when real-time profiler data arrives from a device.
- * Multiple callbacks can be registered; they are invoked concurrently. If a callback shares a resource
- * with other callbacks or across multiple MeshDevices, access it in a thread-safe way (e.g. with a lock).
- * Callbacks that are too slow to keep up with incoming profiler data may miss records; this
- * is reported by ProgramRealtimeRecordBatch::dropped.
- *
- * Return value: ProgramRealtimeProfilerCallbackHandle - handle that can be passed to
- *               UnregisterProgramRealtimeProfilerCallback to remove the callback.
- */
-// clang-format on
-ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallback callback);
-
-/**
- * Unregister a previously registered callback by its handle.
- *
- * This call blocks until any in-flight invocation of that callback has completed.
- */
-void UnregisterProgramRealtimeProfilerCallback(ProgramRealtimeProfilerCallbackHandle handle);
-
-/**
- * Returns true if the real-time profiler is currently running on at least one chip.
- *
- * The real-time profiler is gated on host-accessible dispatch resources: it needs a
- * dedicated tensix core reserved from the dispatch pool and an MMIO-connected device
- * for the D2H socket. On configurations where those are not available (e.g. ETH
- * dispatch, remote chips on multi-host meshes), the profiler bows out silently and
- * no records will ever be delivered to registered callbacks.
- *
- * Callers that want to distinguish "profiler is on but has not produced records yet"
- * from "profiler is disabled by the current dispatch config" should query this before
- * asserting on collected record counts — the canonical use case is for tests that
- * want to gracefully skip when RT profiler is not supported.
- *
- * This is safe to call at any time after device construction. It becomes true after
- * the init-sync handshake for the first device completes, and returns to false when
- * every RT-profiler-enabled device has been closed.
- */
-bool IsProgramRealtimeProfilerActive();
-
-// clang-format off
-/**
  * Register a callback to be invoked with real-time profiler records for programs that ran on `mesh_device`'s local
  * chips. Multiple callbacks can be registered; they are invoked concurrently. If a callback shares a resource with
  * other callbacks or across multiple MeshDevices, access it in a thread-safe way (e.g. with a lock). Callbacks that

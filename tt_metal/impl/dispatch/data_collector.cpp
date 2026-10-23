@@ -175,46 +175,6 @@ std::optional<tt::ProgramSubDeviceInfo> DataCollector::GetProgramSubDevice(
     return it->second;
 }
 
-tt::ProgramRealtimeProfilerCallbackHandle DataCollector::RegisterProgramRealtimeProfilerCallback(
-    tt::ProgramRealtimeProfilerCallback callback) {
-    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
-    auto handle = tt::AllocateProgramRealtimeProfilerCallbackHandle();
-    program_realtime_profiler_callbacks_.push_back({handle, std::move(callback)});
-    const auto& stored_callback = program_realtime_profiler_callbacks_.back().callback;
-    for (auto* listener : realtime_callback_listeners_) {
-        listener->on_callback_registered(handle, stored_callback);
-    }
-    return handle;
-}
-
-void DataCollector::UnregisterProgramRealtimeProfilerCallback(tt::ProgramRealtimeProfilerCallbackHandle handle) {
-    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
-    auto it = std::find_if(
-        program_realtime_profiler_callbacks_.begin(),
-        program_realtime_profiler_callbacks_.end(),
-        [handle](const auto& entry) { return entry.handle == handle; });
-    if (it == program_realtime_profiler_callbacks_.end()) {
-        return;
-    }
-    program_realtime_profiler_callbacks_.erase(it);
-    for (auto* listener : realtime_callback_listeners_) {
-        listener->on_callback_unregistered(handle);
-    }
-}
-
-void DataCollector::AttachRealtimeProfilerCallbackListener(tt::RealtimeProfilerCallbackListener* listener) {
-    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
-    realtime_callback_listeners_.push_back(listener);
-    for (const auto& registration : program_realtime_profiler_callbacks_) {
-        listener->on_callback_registered(registration.handle, registration.callback);
-    }
-}
-
-void DataCollector::DetachRealtimeProfilerCallbackListener(tt::RealtimeProfilerCallbackListener* listener) {
-    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
-    std::erase(realtime_callback_listeners_, listener);
-}
-
 void DataCollector::NotifyRealtimeProfilerActivated(uint32_t chip_id) {
     std::lock_guard<std::mutex> lock(realtime_profiler_active_chips_mutex_);
     realtime_profiler_active_chips_.insert(chip_id);

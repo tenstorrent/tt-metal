@@ -553,9 +553,7 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
         dev_state.pending_first_unthrottled_finish_sync = true;
     }
 
-    DataCollector* data_collector = MetalContext::instance(context_id_).data_collector().get();
-    data_collector->AttachRealtimeProfilerCallbackListener(this);
-    data_collector_ = data_collector;
+    data_collector_ = MetalContext::instance(context_id_).data_collector().get();
 
     // Background receiver thread that polls all device sockets round-robin
     receiver_thread_ = std::thread(&RealtimeProfilerManager::run_receiver, this);
@@ -908,7 +906,7 @@ void RealtimeProfilerManager::run_init_sync() {
     tracy_handler_ = std::make_unique<RealtimeProfilerTracyHandler>();
 #if defined(TRACY_ENABLE)
     add_consumer(
-        tt::AllocateProgramRealtimeProfilerCallbackHandle(),
+        allocate_consumer_handle(),
         [handler = tracy_handler_.get()](const tt::ProgramRealtimeRecordBatch& batch) { handler->HandleBatch(batch); });
 #endif
     for (const auto& dev_state : devices_) {
@@ -1214,13 +1212,9 @@ void RealtimeProfilerManager::stop_consumer(Consumer& consumer, ConsumerStopMode
     }
 }
 
-void RealtimeProfilerManager::on_callback_registered(
-    tt::ProgramRealtimeProfilerCallbackHandle handle, const tt::ProgramRealtimeProfilerCallback& callback) {
-    add_consumer(handle, callback);
-}
-
-void RealtimeProfilerManager::on_callback_unregistered(tt::ProgramRealtimeProfilerCallbackHandle handle) {
-    remove_consumer(handle);
+tt::ProgramRealtimeProfilerCallbackHandle RealtimeProfilerManager::allocate_consumer_handle() {
+    static std::atomic<tt::ProgramRealtimeProfilerCallbackHandle> next_handle{0};
+    return next_handle.fetch_add(1, std::memory_order_relaxed);
 }
 
 void RealtimeProfilerManager::add_consumer(
@@ -1276,7 +1270,6 @@ void RealtimeProfilerManager::shutdown() {
     // Upper bound on the wait for the push kernel to finish draining; see the poll below.
     constexpr auto kShutdownKernelExitGrace = std::chrono::milliseconds(100);
     constexpr auto kShutdownKernelExitPollBackoff = std::chrono::microseconds(50);
-    MetalContext::instance(context_id_).data_collector()->DetachRealtimeProfilerCallbackListener(this);
     // The push kernel can only finish once the receiver reads again.
     receiver_paused_.store(false, std::memory_order_release);
 
@@ -1420,7 +1413,7 @@ void RealtimeProfilerManager::shutdown() {
 
     tracy_handler_.reset();
     // Clear activation state before destroying per-device records so concurrent
-    // tt::IsProgramRealtimeProfilerActive() queries don't observe a chip mid-shutdown.
+    // tt::IsProgramRealtimeProfilerActive(context_id) queries don't observe a chip mid-shutdown.
     for (const auto& dev_state : devices_) {
         tt::NotifyProgramRealtimeProfilerDeactivated(context_id_, dev_state.chip_id);
     }
