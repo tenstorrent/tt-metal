@@ -44,18 +44,10 @@ void start_tensor_prefetcher(
 void queue_tensor_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const std::vector<TensorPrefetcherQueueTensor>& tensors,
-    const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const std::vector<std::shared_ptr<metal_exp::PrefetcherPipe>>& prefetcher_pipes,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset,
     bool capture_into_trace) {
-    const bool has_gcb = global_cb.has_value();
-    const bool has_pipes = !prefetcher_pipes.empty();
-    TT_FATAL(
-        has_gcb != has_pipes,
-        "queue_tensor_prefetcher_request needs exactly one delivery target: global_cb {} supplied, "
-        "prefetcher_pipes {} supplied",
-        has_gcb ? "was" : "was not",
-        has_pipes ? "was" : "was not");
+    TT_FATAL(!prefetcher_pipes.empty(), "queue_tensor_prefetcher_request needs at least one PrefetcherPipe");
 
     std::vector<tt::tt_metal::experimental::TensorPrefetcherInput> inputs;
     inputs.reserve(tensors.size());
@@ -84,13 +76,8 @@ void queue_tensor_prefetcher_request(
     // — with capture_into_trace false we hand metal no queue, and the request is sent
     // immediately even mid trace-capture.
     auto* trace_cq = capture_into_trace ? &mesh_device->mesh_command_queue() : nullptr;
-    if (has_pipes) {
-        tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
-            *mesh_device, ttnn::prefetcher_pipe_refs(prefetcher_pipes), device_subset, inputs, trace_cq);
-    } else {
-        tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
-            *mesh_device, *global_cb, device_subset, inputs, trace_cq);
-    }
+    tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
+        *mesh_device, ttnn::prefetcher_pipe_refs(prefetcher_pipes), device_subset, inputs, trace_cq);
 }
 
 std::vector<std::shared_ptr<metal_exp::PrefetcherPipe>> create_prefetcher_pipes_for_tensor_prefetcher(

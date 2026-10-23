@@ -33,6 +33,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from tests.ttnn.unit_tests.operations.prefetcher_common import (
     bank_receivers_contiguous,
     bytes_per_tile,
+    make_tensor_prefetcher_pipes,
     require_tensor_prefetcher,
     ring_grid_cols,
     tensor_prefetcher_session,
@@ -597,7 +598,7 @@ def test_tensor_prefetcher_multichip_dram_harvesting(mesh_device):
     device. The discriminating check -- comparing each bank's resolved sender across the mesh, and
     reporting when the device pair is too homogeneous to tell the paths apart -- needs the
     per-device SOC descriptors, which Python cannot reach; it lives in the C++ regression
-    DramSenderGCBMultiDeviceFixture.ConfigAndSenderStateUsePerDeviceDramTopology.
+    PrefetcherPipeDramSenderMultiDeviceFixture.ConfigPagesUsePerDeviceDramTopology.
     """
     require_tensor_prefetcher(mesh_device)
 
@@ -610,6 +611,14 @@ def test_tensor_prefetcher_multichip_dram_harvesting(mesh_device):
     N = num_dram_banks * n_tiles_per_receiver * ttnn.TILE_SIZE
     k_block_w_tiles = (K_padded // ttnn.TILE_SIZE) // ring_size
     push_page_size = k_block_w_tiles * n_tiles_per_receiver * bytes_per_tile(dtype)
+
+    # Pipes before the weight: replicating it across the mesh runs a Program on the receivers, and pipe
+    # rings cannot be placed on a core a live Program holds.
+    bank_to_receivers = [
+        (bank, bank_receivers_contiguous(bank, recv_per_bank=1, ring_cols=ring_grid_cols(num_dram_banks, ring_size)))
+        for bank in range(num_dram_banks)
+    ]
+    _pipe_space, pipes = make_tensor_prefetcher_pipes(mesh_device, bank_to_receivers, 4 * push_page_size)
 
     torch.manual_seed(0xC0FFEE)
     pt_weight = torch.zeros(1, 1, K_padded, N)
@@ -633,22 +642,15 @@ def test_tensor_prefetcher_multichip_dram_harvesting(mesh_device):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    bank_to_receivers = [
-        (bank, bank_receivers_contiguous(bank, recv_per_bank=1, ring_cols=ring_grid_cols(num_dram_banks, ring_size)))
-        for bank in range(num_dram_banks)
-    ]
-    gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(
-        mesh_device, bank_to_receivers, 4 * push_page_size
-    )
-
     with tensor_prefetcher_session(mesh_device):
-        ttnn.experimental.queue_tensor_prefetcher_request(mesh_device, [(tt_weight, ring_size)], global_cb=gcb)
-        ttnn.experimental.test_dram_prefetcher_validator(
+        ttnn.experimental.queue_tensor_prefetcher_request(mesh_device, [(tt_weight, ring_size)], prefetcher_pipes=pipes)
+        ttnn.experimental.test_tensor_prefetcher_pipe_validator(
             mesh_device,
             tt_weight,
             num_layers=1,
             print_stride=max(1, ring_size // 4),
-            global_cb=gcb,
+            prefetcher_pipes=pipes,
+            bank_to_receivers=bank_to_receivers,
         )
 
 
