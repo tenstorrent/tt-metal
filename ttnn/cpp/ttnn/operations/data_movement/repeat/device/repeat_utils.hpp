@@ -14,8 +14,9 @@
 namespace ttnn::operations::data_movement::repeat {
 
 // True when repeat can run natively on sharded L1 buffers (no strip/reshard round-trip).
-// A row-major WIDTH/BLOCK shard page that is not L1-aligned is native only with unaligned_rows_native:
-// codegen and the composite path copy those rows faster, wherever they can place the output.
+// A row-major WIDTH/BLOCK shard page that is not L1-aligned and splits a row over several shards is native only with
+// unaligned_rows_native: codegen and the composite path copy those rows faster, wherever they can place the output.
+// A row on one such page stays eligible.
 bool is_native_repeat_sharding(
     const tt::tt_metal::TensorSpec& input_spec,
     const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config = std::nullopt,

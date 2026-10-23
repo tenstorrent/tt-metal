@@ -97,13 +97,16 @@ def _output_memory(kind, sharded):
 
 
 @pytest.mark.parametrize("rank", [3, 4, 5])
-@pytest.mark.parametrize("strategy", [ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.BLOCK])
+@pytest.mark.parametrize("strategy", [ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.BLOCK, ttnn.ShardStrategy.HEIGHT])
 @pytest.mark.parametrize("output, preallocate", OUTPUTS)
 def test_repeat_narrow_rows(device, rank, strategy, output, preallocate):
-    # A 3-word row in a 5-word shard is one padded 20-byte page. Native is the only route: codegen and the
-    # composite path unshard it first, and the row-major unshard does not take a page wider than the row.
+    # A 3-word row in a 5-word shard is one padded 20-byte page. Native repeats it in place. For WIDTH and BLOCK it is
+    # the only route: codegen and the composite path unshard it first, and the row-major unshard does not take such a
+    # page wider than the row.
     if strategy == ttnn.ShardStrategy.WIDTH:
         layout, grid, shape = ttnn.TensorMemoryLayout.WIDTH_SHARDED, _cores(1, 1), [1, 4, 3]
+    elif strategy == ttnn.ShardStrategy.HEIGHT:
+        layout, grid, shape = ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _cores(1, 1), [1, 4, 3]
     else:
         layout, grid, shape = ttnn.TensorMemoryLayout.BLOCK_SHARDED, _cores(1, 2), [2, 4, 3]
     shape = [1] * (rank - 3) + shape
@@ -124,14 +127,15 @@ def test_repeat_narrow_rows(device, rank, strategy, output, preallocate):
         (ttnn.TensorMemoryLayout.WIDTH_SHARDED, (1, 1), [4, 5], [1, 4, 3], [1, 1, 2, 1]),
         (ttnn.TensorMemoryLayout.WIDTH_SHARDED, (1, 1), [4, 5], [1, 4, 3], [3, 1, 1, 1]),
         (ttnn.TensorMemoryLayout.WIDTH_SHARDED, (1, 1), [4, 5], [4, 3], [1, 2, 1]),
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (1, 1), [4, 5], [1, 4, 3], [1, 1, 2, 1]),
     ],
-    ids=["block_new_axis", "block_rows_x3", "width_new_axis", "width_outer_x3", "width_rank2"],
+    ids=["block_new_axis", "block_rows_x3", "width_new_axis", "width_outer_x3", "width_rank2", "height_new_axis"],
 )
 @pytest.mark.parametrize("output, preallocate", INTERLEAVED_OUTPUTS)
 def test_repeat_narrow_rows_rank_expansion(device, layout, grid, shard, shape, repeats, output, preallocate):
     # A repeat vector longer than the input rank adds leading axes before routing. That view keeps the padded row
-    # too: re-deriving the shard from the logical width throws for WIDTH, and for BLOCK reads 12-byte pages out of
-    # 16-byte slots. Each repeated group fits in one shard's rows, so native takes every case.
+    # too: re-deriving the shard from the logical width throws for WIDTH and HEIGHT, and for BLOCK reads 12-byte pages
+    # out of 16-byte slots. Each repeated group fits in one shard's rows, so native takes every case.
     input_memory = _sharded(layout, _cores(*grid), shard)
     result = _repeat(device, shape, input_memory, repeats, _output_memory(output, None), preallocate, "native")
     if output == "implicit":
@@ -249,6 +253,42 @@ def test_repeat_unaligned_narrow_rows_off_native_throw(device, expect_error, sou
         _route(lambda: ttnn.repeat(tensor, repeats, **kwargs))
 
 
+_HEIGHT = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+
+
+@pytest.mark.parametrize(
+    "shape, grid, shard, buffer, repeats, output, route",
+    [
+        ([1, 4, 3], (1, 1), [4, 5], ttnn.BufferType.L1, [2, 2, 1], None, "codegen"),
+        ([1, 4, 3], (1, 1), [4, 5], ttnn.BufferType.DRAM, [1, 2, 1], None, "codegen"),
+        ([1, 4, 3], (1, 1), [4, 5], ttnn.BufferType.L1, [1, 1, 1], ttnn.DRAM_MEMORY_CONFIG, "composite"),
+        ([1, 1, 1, 4, 3], (1, 1), [4, 5], ttnn.BufferType.L1, [1, 1, 2, 2, 1], None, "composite"),
+        ([1, 4, 3], (1, 1), [4, 5], ttnn.BufferType.L1, [1, 2, 1], _sharded(_HEIGHT, _cores(2, 1), [4, 5]), "codegen"),
+        ([1, 4, 3], (1, 1), [4, 5], ttnn.BufferType.L1, [1, 1, 2], None, "codegen"),
+        ([12, 2], (2, 1), [6, 4], ttnn.BufferType.L1, [1, 2], None, "codegen"),
+    ],
+    ids=[
+        "two_axes",
+        "dram_input",
+        "all_ones_dram",
+        "rank5_two_axes",
+        "other_grid_output",
+        "last_dim",
+        "last_dim_2_cores",
+    ],
+)
+def test_repeat_height_narrow_rows_off_native(device, shape, grid, shard, buffer, repeats, output, route):
+    # The row-major unshard reads a HEIGHT page as the logical row, so a narrow HEIGHT row leaves its shards wherever
+    # native declines it, as on main. A last-dimension repeat goes there too: native's last-dimension view drops the
+    # row padding, and on main such a call threw or wrote misaligned NoC transfers.
+    input_memory = ttnn.MemoryConfig(
+        _HEIGHT, buffer, ttnn.ShardSpec(_cores(*grid), shard, ttnn.ShardOrientation.ROW_MAJOR)
+    )
+    result = _repeat(device, shape, input_memory, repeats, output, False, route)
+    if output is not None:
+        assert result.memory_config() == output
+
+
 @pytest.mark.parametrize("rank", [3, 5])
 @pytest.mark.parametrize("strategy", [ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.BLOCK])
 @pytest.mark.parametrize("output, preallocate", OUTPUTS)
@@ -300,7 +340,7 @@ def test_repeat_narrow_row_wider_page(device, output, preallocate):
 @pytest.mark.parametrize("output, preallocate", INTERLEAVED_OUTPUTS)
 def test_repeat_partial_final_shard(device, rank, strategy, width, shard_width, output, preallocate):
     # A row split over shards whose last shard is partial (7 words over 5-word shards; 30 over 8-word, 32-byte,
-    # aligned shards) stays on codegen or the composite path.
+    # aligned shards) stays on codegen or the composite path: repeat's view changes each of these shapes.
     cores = -(-width // shard_width)
     layout = (
         ttnn.TensorMemoryLayout.WIDTH_SHARDED
@@ -340,6 +380,26 @@ def test_repeat_partial_final_shard_into_unaligned_sharded_output(device, expect
         return
     result = _repeat(device, shape, input_memory, repeats, output_memory, False, "codegen")
     assert result.memory_config() == output_memory
+
+
+@pytest.mark.parametrize("shape", [[1, 2, 4, 30], [2, 4, 30]], ids=["rank4", "new_axis"])
+@pytest.mark.parametrize("output, preallocate", OUTPUTS)
+def test_repeat_partial_final_shard_unchanged_view(device, shape, output, preallocate):
+    # 30 words over four 8-word shards, the last one partial. Repeating axis 1 of a rank-4 tensor views it as
+    # [upper, repeat, lower, width], its own shape, so native repeats it in place, as on main.
+    grid = _cores(4, 1)
+    sharded = _sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, grid, [16, 8])
+    output_memory = _output_memory(output, sharded)
+    result = _repeat(
+        device,
+        shape,
+        _sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, grid, [8, 8]),
+        [1, 2, 1, 1],
+        output_memory,
+        preallocate,
+        "native",
+    )
+    assert result.memory_config() == (sharded if output == "implicit" else output_memory)
 
 
 @pytest.mark.parametrize("rank", [3, 4, 5])

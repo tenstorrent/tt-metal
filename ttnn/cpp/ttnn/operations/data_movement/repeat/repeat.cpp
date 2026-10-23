@@ -45,7 +45,8 @@ struct UpperRepeatDims {
 // shard from the unpadded row, so keep the padded width.
 ttnn::Tensor view_keeping_row_padding(const ttnn::Tensor& tensor, const ttnn::Shape& logical_shape) {
     const uint32_t padded_width = tensor.padded_shape()[-1];
-    if (tensor.layout() != ttnn::ROW_MAJOR_LAYOUT || padded_width == tensor.logical_shape()[-1]) {
+    if (tensor.layout() != ttnn::ROW_MAJOR_LAYOUT || padded_width == tensor.logical_shape()[-1] ||
+        tensor.logical_shape() == logical_shape) {
         return ttnn::view(tensor, logical_shape);
     }
     auto padded_shape = logical_shape;
@@ -300,11 +301,12 @@ bool same_placement(const MemoryConfig& a, const MemoryConfig& b) {
 
 using repeat::interleaved_in;
 
-// sharded_to_interleaved takes only L1 shards with L1-aligned row-major pages; to_memory_config copies any other page,
-// and that copy does not complete when the page is wider than the row. Throw instead of moving such a tensor off its
-// shards.
+// sharded_to_interleaved takes only L1 shards with L1-aligned row-major pages; to_memory_config copies any other page.
+// That copy reads a HEIGHT page as the logical row, but does not complete on a WIDTH or BLOCK page wider than its row.
+// Throw instead of moving such a tensor off its shards.
 void check_rows_can_leave_shards(const ttnn::Tensor& tensor) {
     if (tensor.layout() != ttnn::ROW_MAJOR_LAYOUT || !tensor.memory_config().is_sharded() ||
+        tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
         !tensor.shard_spec().has_value()) {
         return;
     }
@@ -314,10 +316,10 @@ void check_rows_can_leave_shards(const ttnn::Tensor& tensor) {
     TT_FATAL(
         row_width >= shard_width ||
             (in_l1 && !repeat::is_unaligned_row_major_shard_page(tensor.memory_config(), tensor.element_size())),
-        "repeat: this call would move {}-element rows out of {}-element row-major shards {}, and that copy does not "
-        "complete. Repeat takes such rows natively only from L1 shards, along one axis other than the last, into the "
-        "input's sharded layout and grid, with each repeated group of rows inside one shard; otherwise use L1 shards "
-        "whose page is L1-aligned.",
+        "repeat: this call would move {}-element rows out of {}-element row-major WIDTH or BLOCK shards {}, and that "
+        "copy does not complete. Repeat takes such rows natively only from L1 shards, along one axis other than the "
+        "last, with each repeated group of rows inside one shard, into interleaved memory or into L1 shards of the "
+        "input's layout and grid; otherwise use HEIGHT shards or L1 shards whose page is L1-aligned.",
         row_width,
         shard_width,
         in_l1 ? "whose page is not L1-aligned" : "in DRAM");

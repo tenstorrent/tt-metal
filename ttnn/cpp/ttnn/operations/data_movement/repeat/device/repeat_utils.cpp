@@ -59,6 +59,20 @@ uint64_t trailing_row_volume(const ttnn::Shape& shape, int32_t repeat_dim) {
     return v;
 }
 
+// True when the [upper, repeat, lower, width] view native puts a row-major tensor in, for a repeat along repeat_dim,
+// has the tensor's own shape, so the view returns the tensor as it is.
+bool upper_repeat_view_keeps_shape(const ttnn::Shape& shape, int32_t repeat_dim) {
+    const auto rank = static_cast<int32_t>(shape.rank());
+    if (rank != 4 || repeat_dim < 0 || repeat_dim >= rank - 1) {
+        return false;
+    }
+    uint64_t upper = 1;
+    for (int32_t i = 0; i < repeat_dim; ++i) {
+        upper *= static_cast<uint64_t>(shape[i]);
+    }
+    return upper == shape[0] && shape[repeat_dim] == shape[1] && trailing_row_volume(shape, repeat_dim) == shape[2];
+}
+
 }  // namespace
 
 bool is_replication_locally_contained(
@@ -109,12 +123,13 @@ bool is_native_repeat_sharding(
     if (input_spec.layout() == Layout::ROW_MAJOR) {
         const auto& shard = input_spec.memory_config().shard_spec()->shape;
         // A row narrower than its shard is one padded page, and repeat's views keep that padding. Codegen and the
-        // composite path unshard it first: an L1 shard with an L1-aligned page takes sharded_to_interleaved, but any
-        // other page takes a row-major copy that does not complete when the page is wider than the row, so repeat
-        // throws there. A split row whose final shard is partial stays on codegen or the composite path; the native
-        // kernels have not been verified on its padded last page.
+        // composite path unshard it first: an L1 shard with an L1-aligned page takes sharded_to_interleaved, and any
+        // other page a row-major copy, which completes for a HEIGHT page but not for a WIDTH or BLOCK page wider than
+        // its row, so repeat throws there. A split row whose final shard is partial stays on codegen or the composite
+        // path, unless repeat's view leaves its shape unchanged: native then repeats the tensor as it is, as on main.
         const bool narrow_row = input_spec.logical_shape()[-1] < shard[1];
-        if (!narrow_row && input_spec.padded_shape()[-1] != input_spec.logical_shape()[-1]) {
+        if (!narrow_row && input_spec.padded_shape()[-1] != input_spec.logical_shape()[-1] &&
+            !upper_repeat_view_keeps_shape(input_spec.logical_shape(), repeat_dim)) {
             return false;
         }
         // Codegen and the composite path copy unaligned WIDTH/BLOCK pages that split a row faster than the staged
@@ -136,11 +151,13 @@ bool is_native_repeat_sharding(
             return false;
         }
     }
-    // RM WIDTH/BLOCK last-dim: reject (ttnn::view breaks shard width).
+    // RM last-dim: reject WIDTH/BLOCK (ttnn::view breaks shard width), and a row narrower than its shard, whose padding
+    // the last-dim view drops (a HEIGHT shard then throws or writes misaligned NoC transfers).
     if (input_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR && repeat_dim >= 0 &&
         repeat_dim == static_cast<int32_t>(input_spec.logical_shape().rank()) - 1) {
         const auto in_layout = input_spec.memory_config().memory_layout();
-        if (in_layout == TensorMemoryLayout::WIDTH_SHARDED || in_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        if (in_layout == TensorMemoryLayout::WIDTH_SHARDED || in_layout == TensorMemoryLayout::BLOCK_SHARDED ||
+            input_spec.logical_shape()[-1] < input_spec.memory_config().shard_spec()->shape[1]) {
             return false;
         }
     }
