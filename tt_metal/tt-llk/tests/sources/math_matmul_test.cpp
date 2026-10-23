@@ -247,7 +247,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop>(DST_INDEX, CT_DIM, RT_DIM);
                     }
-                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en, (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3)>();
                 }
             }
         }
