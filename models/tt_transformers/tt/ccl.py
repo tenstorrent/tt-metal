@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.common.modules.tt_ccl import get_num_links as get_common_num_links
+from models.common.tt_ccl import get_num_links as get_common_num_links
 
 
 def get_num_links(mesh_device, cluster_axis=None):
@@ -129,6 +129,7 @@ def tt_all_reduce(
     chunks_per_sync=10,
     num_workers_per_link=2,
     subdevice_id=None,
+    num_buffers_per_channel=2,
 ):
     """
     Perform an all-reduce operation across devices in a mesh.
@@ -146,6 +147,7 @@ def tt_all_reduce(
         sharded: Whether to use sharded memory config.
         dtype: Data type for CCL operations.
         use_composite: Whether to use composite reduce_scatter + all_gather.
+        chunks_per_sync, num_workers_per_link, num_buffers_per_channel: reduce_scatter hyperparameters (1xN branch only).
 
     Returns:
         The reduced tensor.
@@ -190,7 +192,7 @@ def tt_all_reduce(
             topology=topology,
             chunks_per_sync=chunks_per_sync,
             num_workers_per_link=num_workers_per_link,
-            num_buffers_per_channel=2,
+            num_buffers_per_channel=num_buffers_per_channel,
             subdevice_id=subdevice_id,
         )
         input_tensor.deallocate(True)

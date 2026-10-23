@@ -414,6 +414,12 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     TT_FATAL(
         !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_streaming_profiler_enabled()),
         "Cannot enable both debug printing and the streaming profiler");
+    // The NOC debug dump only reads the profiler's DRAM buffers, so data that trace-only or accumulate profiling keeps
+    // in L1 would never reach the host.
+    TT_FATAL(
+        !(get_experimental_noc_debug_dump_enabled() && (get_profiler_trace_only() || get_profiler_accumulate())),
+        "TT_METAL_NOC_DEBUG_DUMP cannot be combined with TT_METAL_TRACE_PROFILER or TT_METAL_PROFILER_ACCUMULATE: "
+        "the debug dump only reads the profiler DRAM buffers, and those modes keep part of their data in L1.");
 }
 
 const RunTimeOptions::TraceAllocationOptions& RunTimeOptions::get_trace_allocation_options() {

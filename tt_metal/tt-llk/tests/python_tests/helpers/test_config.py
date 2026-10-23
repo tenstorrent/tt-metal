@@ -957,7 +957,7 @@ class TestConfig:
         # (These used to default to a shared ``[]`` that the fold mutated, so a
         # variant constructed without explicit ``templates`` inherited the
         # previous variant's runtimes -- invisible until it changed what got
-        # compiled. Regression coverage: test_test_config.py.)
+        # compiled. Regression coverage: tests/hardware_free/harness/test_config.py.)
         templates = list(templates or [])
         runtimes = list(runtimes or [])
 
@@ -1923,6 +1923,21 @@ class TestConfig:
             else self.boot_mode
         )
 
+        VARIANT_ELF_DIR = (
+            TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
+        )
+
+        self.temp_elfs = [
+            str((VARIANT_ELF_DIR / f"{trisc_name}.elf").absolute())
+            for trisc_name in TestConfig.KERNEL_COMPONENTS
+        ]
+
+        missing = [Path(elf).name for elf in self.temp_elfs if not Path(elf).is_file()]
+        if missing:
+            raise FileNotFoundError(
+                f"{VARIANT_ELF_DIR} has no {', '.join(missing)}: the variant did not compile, so it is not run"
+            )
+
         # Zero the device print buffer header before each kernel run so the
         # first DEVICE_PRINT() observes wpos=rpos=0 and a free lock.
         if TestConfig.DEVICE_PRINT_ENABLED or self.requires_device_print:
@@ -1998,17 +2013,9 @@ class TestConfig:
         else:
             commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
 
-        VARIANT_ELF_DIR = (
-            TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
-        )
-
-        self.temp_elfs = [
-            str((VARIANT_ELF_DIR / f"{trisc_name}.elf").absolute())
-            for trisc_name in TestConfig.KERNEL_COMPONENTS
-        ]
-
         if TestConfig.LAST_LOADED_ELFS != VARIANT_ELF_DIR:
-            TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
+            # A failed load or start address update leaves the TRISCs on two variants
+            TestConfig.LAST_LOADED_ELFS = Path()
 
             for i, elf_file_path in enumerate(self.temp_elfs):
                 if TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE:
@@ -2046,7 +2053,10 @@ class TestConfig:
                     BriscCmd.UPDATE_START_ADDR_CACHE_AND_START,
                     timeout=brisc_cmd_timeout,
                 )
+                TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
                 return
+
+            TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
 
         match boot_mode:
             case BootMode.BRISC:
