@@ -5,7 +5,7 @@
 #include "moreh_matmul_backward.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include "ttnn/operations/moreh/moreh_dot_backward/moreh_dot_backward.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/moreh/moreh_matmul/device/moreh_matmul_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
@@ -36,7 +36,15 @@ std::vector<std::optional<Tensor>> moreh_matmul_backward(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     if (operations::moreh::moreh_matmul_backward::is_dot_backward(output_grad, input, other)) {
-        return ttnn::moreh_dot_backward(output_grad, input, other, input_grad, other_grad, memory_config);
+        // output_grad is a scalar, so each gradient is output_grad broadcast over the other operand.
+        std::vector<std::optional<Tensor>> dot_grads(2);
+        if (input_grad.has_value()) {
+            dot_grads[0] = ttnn::multiply(other, output_grad, std::nullopt, memory_config, input_grad);
+        }
+        if (other_grad.has_value()) {
+            dot_grads[1] = ttnn::multiply(input, output_grad, std::nullopt, memory_config, other_grad);
+        }
+        return dot_grads;
     }
 
     std::vector<std::optional<Tensor>> outputs(2);

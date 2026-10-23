@@ -7,6 +7,7 @@
 
 namespace ttnn {
 
+[[deprecated("moreh_dot_backward is deprecated and will be removed after 2026-11-26. Use ttnn::multiply instead.")]]
 std::vector<std::optional<Tensor>> moreh_dot_backward(
     const Tensor& output_grad,
     const Tensor& input,
