@@ -95,7 +95,7 @@ DramPrefetcherConsumerDeviceOperation::ProgramFactory::create_at(
     tensor_return_value_t& /*tensor_return_value*/) {
     using namespace tt::tt_metal;
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*operation_attributes.mesh_device);
 
     if (!operation_attributes.prefetcher_pipes.empty()) {
         const auto& pipes = operation_attributes.prefetcher_pipes;

@@ -44,7 +44,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
     ////////////////////////////////////////////////////////////////////////////
     //                            Program Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program{};
+    Program program = CreateProgram(*input.device());
 
     // Distribute work across core grid
     uint32_t num_rows = static_cast<uint32_t>(input.physical_volume() / input.padded_shape()[-1]);

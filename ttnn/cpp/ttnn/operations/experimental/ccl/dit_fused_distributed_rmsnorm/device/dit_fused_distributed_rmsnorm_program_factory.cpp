@@ -370,7 +370,7 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const auto& tile_row_map = tensor_args.affine_tile_row_map;
     const bool use_tile_row_map = tile_row_map.has_value();
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*input_tensor.device());
 
     const auto& input_shape = input_tensor.padded_shape();
     const uint32_t W = input_shape[-1];                            // hidden dim per device

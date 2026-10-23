@@ -143,7 +143,7 @@ TopkRoutePrepProgramFactory::cached_program_t TopkRoutePrepProgramFactory::creat
     const auto& input = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
 
-    auto program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateProgram(*input.device());
 
     const auto split = compute_work_split(input);
     const auto grid = input.device()->compute_with_storage_grid_size();

@@ -284,7 +284,7 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
     Buffer* tensor_buffer = source_tensor.buffer();
     const CoreRangeSet receiver_cores = global_cb.receiver_cores();
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*source_tensor.device());
 
     // Receiver-side remote CB: wait_front/pop_front units are one full per-receiver block.
     CircularBufferConfig remote_cfg(geom.page_bytes_per_recv);

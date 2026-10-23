@@ -3058,7 +3058,7 @@ RingReduceScatterMeshWorkloadFactory::create_at(
         input_tensor, mesh_coordinate, operation_attributes.cluster_axis);
 
     std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler> fused_op_signaler = std::nullopt;
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*input_tensor.device());
     return {
         std::move(program),
         ::ttnn::build_ring_reduce_scatter_minimal_async_program_artifacts(
@@ -3150,7 +3150,7 @@ LineReduceScatterMeshWorkloadFactory::create_at(
         input_tensor, mesh_coordinate, operation_attributes.cluster_axis);
 
     std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler> fused_op_signaler = std::nullopt;
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*input_tensor.device());
     return {
         std::move(program),
         ::ttnn::build_line_reduce_scatter_minimal_async_program_artifacts(
