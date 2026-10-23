@@ -38,8 +38,10 @@ inline bool bf16_dest_softplus() {
     return false;
 #endif
 }
+// Each call records replay slots 0-14, below replay_buf_offset = 16, where matmul and
+// reduce record.
 template <int ITERATIONS = 32>
-inline void calculate_softplus_bf16() {
+__attribute__((noinline)) inline void calculate_softplus_bf16() {
     ckernel::sfpu::bf16::softplus::calculate_abs_exp_correction<ckernel::sfpu::SoftplusBf16Config, ITERATIONS>();
 }
 inline void init_softplus_bf16() {

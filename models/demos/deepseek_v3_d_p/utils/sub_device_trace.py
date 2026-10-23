@@ -54,7 +54,7 @@ class SubDeviceTraceController:
     def __init__(self, mesh_device, cq_id=0):
         self.mesh_device = mesh_device
         self.cq_id = cq_id
-        # ordered (kind, payload): (_TRACE, tid)|(_LOAD, mgr_id)|(_CLEAR, None)|(_ACK, layer_idx)|(_VARIANTS, dict)
+        # ordered (kind, payload): (_TRACE, tid)|(_LOAD, mgr_id)|(_CLEAR, None)|(_ACK, layer_ids)|(_VARIANTS, dict)
         self._program = []
         self._current_tid = None
         self._capturing = False
@@ -104,21 +104,25 @@ class SubDeviceTraceController:
         else:
             self.mesh_device.clear_loaded_sub_device_manager()
 
-    def layer_ack(self, layer_idx):
+    def layer_ack(self, *layer_ids):
         """MLA finished this layer's KV write (post zero-pad). Capturing -> split + record the ack
         boundary (NO host action during capture: the capture pass is not a real chunk, so we must not
         bump the ack counter). Eager (not capturing) -> call the callback directly (matches the
         non-trace runner). At replay the ack callback fires between the two trace segments. No-op if no
-        callback is registered."""
+        callback is registered.
+
+        Several ids ack together at one boundary, in order: back-to-back splits would capture an empty
+        segment, which end_trace_capture does not support."""
         if self._on_layer_complete is None:
             return
         if self._capturing:
-            self._split(self._ACK, layer_idx)
+            self._split(self._ACK, layer_ids)
         else:
             # Eager (idle controller): flush this layer's KV before the ack, same as the non-trace path —
             # the migration worker reads it out-of-band from the CQ.
             ttnn.synchronize_device(self.mesh_device)
-            self._on_layer_complete(layer_idx)
+            for layer_idx in layer_ids:
+                self._on_layer_complete(layer_idx)
 
     def capture_variants(self, variants):
         """Record each ``variants`` callable as an alternative capture of the same region; ``replay(variant=)``
@@ -197,7 +201,8 @@ class SubDeviceTraceController:
             else:  # _ACK: per-layer migration ack (callback set => non-None here). Flush the preceding
                 # segment(s) so the out-of-band migration worker sees post-write KV, THEN fire the ack.
                 ttnn.synchronize_device(self.mesh_device)
-                self._on_layer_complete(payload)
+                for layer_idx in payload:
+                    self._on_layer_complete(layer_idx)
 
     # ------------------------------------------------------------------ stats / cleanup
     @property

@@ -226,13 +226,14 @@ constexpr std::uint32_t abs_exp_held_coefficient()
 
 // Held loads the multiplier and the two upper exponent coefficients into L3 and L2 per row, in
 // slots the Prgm0..2 form leaves as NOPs and two more, instead of reading them from Prgm0..2.
+// The slots abs_exp_residual_core_head issues: the part of the row a window too short for all of it records.
 template <typename Config, std::uint32_t Hold, bool Held = false>
-inline void abs_exp_residual_core()
+inline constexpr std::uint32_t abs_exp_residual_core_head_slots = 13u + ((Held) ? 2u : 0u);
+
+template <typename Config, std::uint32_t Hold, bool Held = false>
+inline void abs_exp_residual_core_head()
 {
-    constexpr std::uint32_t kCorrectionC0  = __builtin_bit_cast(std::uint32_t, Config::kNumerator[0]);
     constexpr std::uint32_t kMultiplierReg = Held ? ckernel::p_sfpu::LREG3 : ckernel::p_sfpu::LREG12;
-    constexpr std::uint32_t kC2Reg         = Held ? ckernel::p_sfpu::LREG2 : ckernel::p_sfpu::LREG13;
-    constexpr std::uint32_t kC1Reg         = Held ? ckernel::p_sfpu::LREG3 : ckernel::p_sfpu::LREG14;
     TTI_SFPLOAD(ckernel::p_sfpu::LREG0, 0, Hold, 0);
     TTI_SFPSETSGN(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, 1); // |x|
     if constexpr (Held)
@@ -272,6 +273,14 @@ inline void abs_exp_residual_core()
     TTI_SFPSHFT(0, 1, 0, 0);
     TTI_SFPEXMAN(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1, sfpi::SFPEXMAN_MOD1_PAD9);
     TTI_SFPCAST(ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG1, 0);
+}
+
+template <typename Config, std::uint32_t Hold, bool Held = false>
+inline void abs_exp_residual_core_tail()
+{
+    constexpr std::uint32_t kCorrectionC0 = __builtin_bit_cast(std::uint32_t, Config::kNumerator[0]);
+    constexpr std::uint32_t kC2Reg        = Held ? ckernel::p_sfpu::LREG2 : ckernel::p_sfpu::LREG13;
+    constexpr std::uint32_t kC1Reg        = Held ? ckernel::p_sfpu::LREG3 : ckernel::p_sfpu::LREG14;
     if constexpr (Held)
     {
         TTI_SFPLOADI(ckernel::p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_UPPER, (abs_exp_held_coefficient<Config, 1>() >> 16));

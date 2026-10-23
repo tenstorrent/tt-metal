@@ -69,6 +69,7 @@ def run_all_reduce_impl(
     validate_all=True,
     profiler=BenchmarkProfiler(),
     linear=True,
+    fp32_dest_acc_modes=(False,),
 ):
     cluster_shape = (8, 4)
 
@@ -77,6 +78,8 @@ def run_all_reduce_impl(
 
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
+    if len(set(fp32_dest_acc_modes)) > 1:
+        mesh_device.enable_program_cache()
 
     ##################################
     ##### Set up fabric stuff
@@ -182,7 +185,7 @@ def run_all_reduce_impl(
     ##### Run the op
     ##################################
 
-    def run_op(n_iters, store_all_results=True):
+    def run_op(n_iters, store_all_results=True, fp32_dest_acc=False):
         outs = []
         with mesh_device.cache_entries_counter.measure():
             for i in range(n_iters):
@@ -200,6 +203,7 @@ def run_all_reduce_impl(
                     topology=all_reduce_topology,
                     num_links=num_links,
                     subdevice_id=worker_sub_device_id,
+                    fp32_dest_acc=fp32_dest_acc,
                 )
                 if not trace_mode:
                     ttnn.synchronize_device(mesh_device)
@@ -259,7 +263,13 @@ def run_all_reduce_impl(
 
     else:
         signpost("start")
-        tt_outs = run_op(num_iters, store_all_results=validate_all)
+        tt_outs = []
+        for fp32_dest_acc in fp32_dest_acc_modes:
+            mode_outs = run_op(num_iters, store_all_results=validate_all, fp32_dest_acc=fp32_dest_acc)
+            if validate_all:
+                tt_outs.extend(mode_outs)
+            else:
+                tt_outs = mode_outs
         signpost("stop")
 
     ##################################
@@ -286,7 +296,7 @@ def run_all_reduce_impl(
     if validate_all:
         for tensor_index in range(len(tt_outs)):
             tt_out_tensor = tt_outs[tensor_index]
-            output_tensor = output_tensor_goldens_list[tensor_index]
+            output_tensor = output_tensor_goldens_list[tensor_index % len(output_tensor_goldens_list)]
             validate(tt_out_tensor, output_tensor)
     else:
         tt_out_tensor = tt_outs[-1]
@@ -294,10 +304,17 @@ def run_all_reduce_impl(
         validate(tt_out_tensor, output_tensor)
 
     reshard_op_cnt = 1 if loopback_size > 1 else 0
-    assert (
-        mesh_device.cache_entries_counter.total == 1 + reshard_op_cnt
-        or mesh_device.cache_entries_counter.total == num_iters + reshard_op_cnt
-    ), f"Device has {mesh_device.cache_entries_counter.total} program cache entries"
+    distinct_fp32_programs = len(set(fp32_dest_acc_modes))
+    if distinct_fp32_programs > 1:
+        assert mesh_device.cache_entries_counter.total == distinct_fp32_programs + reshard_op_cnt, (
+            f"fp32_dest_acc modes {fp32_dest_acc_modes} produced "
+            f"{mesh_device.cache_entries_counter.total} program cache entries"
+        )
+    else:
+        assert (
+            mesh_device.cache_entries_counter.total == 1 + reshard_op_cnt
+            or mesh_device.cache_entries_counter.total == num_iters + reshard_op_cnt
+        ), f"Device has {mesh_device.cache_entries_counter.total} program cache entries"
 
     mesh_device.reset_sub_device_stall_group()
 
@@ -470,4 +487,39 @@ def test_all_reduce_loopback(
         warmup_iters=warmup_iters,
         trace_mode=trace_mode,
         validate_all=False,
+    )
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 23887872,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_all_reduce_fp32_dest_acc_cache_key(mesh_device, function_level_defaults):
+    if mesh_device.get_num_devices() != 32:
+        pytest.skip("Not TG!")
+
+    # false, true, then false again: two programs, and the third call must hit the first.
+    run_all_reduce_impl(
+        mesh_device,
+        [1, 1, 32, 1280],
+        1,
+        ttnn.bfloat16,
+        1,
+        24,
+        RING_CRS,
+        10,
+        QKV_CRS,
+        num_iters=1,
+        trace_mode=False,
+        validate_all=True,
+        fp32_dest_acc_modes=(False, True, False),
     )

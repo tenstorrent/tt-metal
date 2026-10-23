@@ -6,6 +6,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_softplus_bf16_replay_window.h"
 #include "ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_softplus_bf16_min_max.h"
 #include "sfpu/ckernel_sfpu_softplus_bf16_finite_reciprocal.h"

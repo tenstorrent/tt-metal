@@ -25,6 +25,7 @@ Two things about this tower differ from the text encoder in `model_qwen3vl.py`:
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
 import torch
@@ -953,7 +954,8 @@ class Qwen3VlVisionModel(Module):
 
     The position table is kept on the host rather than the device: interpolating it is a pure function
     of `grid_thw` and the table, so `prepare_pos_embeds` settles it with host arithmetic and the result
-    is uploaded, as with the rotary tensors.
+    is uploaded, as with the rotary tensors. Being no `Parameter`, it is saved to and loaded from the
+    weight cache next to them by `save` and `load`.
     """
 
     def __init__(
@@ -1040,6 +1042,17 @@ class Qwen3VlVisionModel(Module):
         weight = state.pop("pos_embed.weight", None)
         if weight is not None:
             self._pos_embed_weight = weight.detach().float()
+
+    def save(self, directory: str | Path, /, *, prefix: str = "") -> None:
+        if self._pos_embed_weight is None:
+            msg = "pos_embed weight is unavailable; call load_torch_state_dict first"
+            raise ValueError(msg)
+        super().save(directory, prefix=prefix)
+        torch.save(self._pos_embed_weight, Path(directory) / f"{prefix}pos_embed.weight.pt")
+
+    def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
+        super().load(directory, prefix=prefix)
+        self._pos_embed_weight = torch.load(Path(directory) / f"{prefix}pos_embed.weight.pt")
 
     def prepare_pos_embeds(self, grid_thw: torch.Tensor) -> torch.Tensor:
         """The `(total_patches, hidden_size)` interpolated position embedding, on the host."""

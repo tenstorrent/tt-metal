@@ -462,6 +462,73 @@ def test_quasar_fold_tile_zero_stride_fatal(device, expect_error):
             _qsr_prim_fold(t, sh, sw)
 
 
+def test_quasar_to_layout_host_tensor_same_layout_with_memory_config():
+    # Host tensors have no memory config; a requested one must not be compared against it.
+    x = torch.rand(1, 1, 4, 8, dtype=torch.bfloat16)
+    host = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+    result = ttnn.experimental.quasar.to_layout(host, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    assert result.storage_type() == ttnn.StorageType.HOST
+    assert torch.equal(ttnn.to_torch(result), x)
+
+
+@pytest.mark.parametrize("pad_value", [3.0, -1.5, 8.0])
+def test_quasar_pad_rm_sharded_width_only_bfloat16_value(device, pad_value):
+    input_shape, pad_to_shape = (1, 1, 12, 8), (1, 1, 12, 64)
+    core_grid = ttnn.CoreGrid(x=2, y=6)
+    if device.core_grid.x < core_grid.x or device.core_grid.y < core_grid.y:
+        pytest.skip("core grid for this test is not compatible with the device")
+
+    torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+    mem_config = ttnn.create_sharded_memory_config(input_shape, core_grid=core_grid, strategy=ttnn.ShardStrategy.HEIGHT)
+    tt_input = ttnn.interleaved_to_sharded(
+        ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device),
+        mem_config,
+        keep_l1_aligned=True,
+    )
+    tt_output = ttnn.to_torch(
+        ttnn.to_memory_config(
+            ttnn.experimental.quasar.pad(tt_input, pad_to_shape, (0, 0, 0, 0), pad_value), ttnn.L1_MEMORY_CONFIG
+        )
+    )
+
+    expected = torch.nn.functional.pad(torch_input_tensor, (0, pad_to_shape[-1] - input_shape[-1]), value=pad_value)
+    assert torch.equal(tt_output, expected)
+
+
+def test_quasar_pad_tile_rank1(device):
+    torch_input_tensor = torch.rand(40, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.to_torch(ttnn.experimental.quasar.pad(tt_input, [(0, 24)], 2.0))
+    assert torch.equal(tt_output, torch.nn.functional.pad(torch_input_tensor, (0, 24), value=2.0))
+
+
+@pytest.mark.parametrize("shard_orient", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_quasar_pad_rm_sharded_height_value(device, shard_orient):
+    # Pads C and H with a nonzero value, which takes the reader that loops back its own pad-value stores.
+    n, c, h, w = 1, 2, 32, 32
+    padding, torch_padding, value = ((1, 1), (2, 30), (0, 0)), (0, 0, 2, 30, 1, 1), 8.0
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    expected = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
+
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+
+    def height_sharded(rows):
+        shard_spec = ttnn.ShardSpec(grid, (rows // grid.num_cores(), w), shard_orient)
+        return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    tt_input = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=height_sharded(n * c * h),
+    )
+    tt_output = ttnn.experimental.quasar.pad(
+        tt_input, padding=padding, value=value, memory_config=height_sharded(expected.numel() // w)
+    )
+    assert torch.equal(ttnn.to_torch(tt_output), expected)
+
+
 def test_quasar_tilize_l1_output_reserved_in_budget(device):
     tile_dim, tile_bytes = 32, 2048  # bfloat16 in and out
     info = ttnn._ttnn.reports.get_device_info(device)
@@ -753,3 +820,84 @@ def test_quasar_untilize_with_unpadding_l1_output_reserved_in_budget(device, inp
         assert_with_ulp(expected_result=golden, actual_result=ttnn.to_torch(result.cpu()), ulp_threshold=0)
     finally:
         ttnn.deallocate(resident)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_quasar_untilize_l1_output_reserved_in_budget(device, dtype):
+    tile_dim, out_tile_bytes = 32, 2048  # untilize emits bfloat16 for both input dtypes
+    in_tile_bytes = 2048 if dtype == ttnn.bfloat16 else 1088
+    info = ttnn._ttnn.reports.get_device_info(device)
+    free_l1, num_banks = info.cb_limit, info.l1_num_banks
+
+    # The output takes OUTPUT_FRACTION_PCT % of free L1: enough that the full-row CBs no longer
+    # fit beside it (so the reservation must divert to the block factory), the block factory still fits
+    # in the remaining ~6% of free L1, and the input is DRAM-interleaved so it costs no L1.
+    # Wt = 32 keeps num_tiles_per_row <= 32, which disables select_program_factory's second route to the block
+    # factory (num_tiles_per_row > 32), so only the enough_space_height flag can pick it.
+    Wt = 32
+    OUTPUT_FRACTION_PCT = 94
+    row_bytes = Wt * tile_dim * 2
+    cbs = Wt * (in_tile_bytes + out_tile_bytes)
+    rows = -(-(OUTPUT_FRACTION_PCT * free_l1 // 100) * num_banks // row_bytes)
+    Ht = -(-rows // tile_dim)
+    output = -(-Ht * tile_dim // num_banks) * row_bytes
+
+    if not (cbs < free_l1 < cbs + output):
+        pytest.skip(f"No shape separates the routes on this device (free_l1={free_l1}, banks={num_banks})")
+
+    shape = (1, 1, Ht * tile_dim, Wt * tile_dim)
+    torch.manual_seed(0)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(
+        x,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=dtype,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+    )
+    result = ttnn.experimental.quasar.untilize(ttnn_in, memory_config=L1_INTERLEAVED)
+    ref = ttnn.to_torch(ttnn_in)
+    got = ttnn.to_torch(result)
+    assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
+
+
+# Regression for the HC sharded transpose deriving its cores from the shard-grid bounding box:
+# grids not anchored at (0,0), or made of several ranges, used to abort at program build.
+# The 2D grid is run with both orientations, since ROW_MAJOR and COL_MAJOR linearize multi-row grids
+# differently (single-row grids cannot tell them apart).
+@pytest.mark.parametrize(
+    "grid_ranges, orientation",
+    [
+        ([((1, 0), (2, 0))], ttnn.ShardOrientation.ROW_MAJOR),  # offset single range
+        ([((0, 0), (0, 0)), ((2, 0), (2, 0))], ttnn.ShardOrientation.ROW_MAJOR),  # disjoint ranges
+        ([((1, 0), (2, 1))], ttnn.ShardOrientation.ROW_MAJOR),  # offset 2D grid
+        ([((1, 0), (2, 1))], ttnn.ShardOrientation.COL_MAJOR),  # offset 2D grid
+    ],
+    ids=["offset_range", "multi_range", "offset_2d_row_major", "offset_2d_col_major"],
+)
+# [1, 2, 8, 128] takes the factory's special case with 2 or 4 cores. [1, 3, 4, 1024] gives shard height
+# 6 (2 cores) or 3 (4 cores) with C=3, H=4, which fails the special-case divisibility checks and so takes
+# the generic per-shard NoC path. The shard must stay a multiple of 1024 elements, otherwise the sharded
+# HC path is not selected.
+@pytest.mark.parametrize("shape", [[1, 2, 8, 128], [1, 3, 4, 1024]], ids=["special_case", "generic"])
+def test_quasar_transpose_hc_sharded_non_origin_grid(device, grid_ranges, orientation, shape):
+    compute_grid = device.compute_with_storage_grid_size()
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*s), ttnn.CoreCoord(*e)) for s, e in grid_ranges})
+    max_x = max(e[0] for _, e in grid_ranges)
+    max_y = max(e[1] for _, e in grid_ranges)
+    if compute_grid.x <= max_x or compute_grid.y <= max_y:
+        pytest.skip(f"needs a worker grid of at least {max_x + 1}x{max_y + 1}")
+    num_cores = grid.num_cores()
+    n, c, h, w = shape
+    shard_h = (n * c * h) // num_cores
+    mem_cfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, (shard_h, w), orientation),
+    )
+    torch.manual_seed(0)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=mem_cfg)
+    out = ttnn.experimental.quasar.transpose(tt_in, 1, 2)
+    actual = ttnn.to_torch(out).to(torch.bfloat16)
+    assert torch.equal(actual, x.transpose(1, 2))
