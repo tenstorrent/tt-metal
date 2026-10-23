@@ -464,7 +464,7 @@ def test_a_declared_tolerance_that_may_loosen_beside_a_list_is_a_regression(
         _table(past, *base_extra, op=TANH), _table(head_row, *head_extra, op=TANH)
     )
     assert (Kind.TOLERANCE_WIDENED, None) in [(c.kind, c.segment) for c in changes]
-    assert all(c.is_regression for c in changes)
+    assert all(c.kind.loosens for c in changes)
     assert compare(_table(past, op=TANH), _table(past, op=TANH)) == []
 
 

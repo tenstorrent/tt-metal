@@ -59,6 +59,7 @@ def refuses(match: str):
     return pytest.raises(ValueError, match=match)  # allow-pytest.raises: host-only test
 
 
-def problem_id(value) -> str:
-    """A parametrize id: the ``Problem`` member's name, nothing for other values."""
-    return value.name if isinstance(value, Problem) else ""
+def problem_id(value) -> str | None:
+    """A parametrize id: the ``Problem`` member's name; ``None`` (pytest's own
+    numbering) for other values."""
+    return value.name if isinstance(value, Problem) else None

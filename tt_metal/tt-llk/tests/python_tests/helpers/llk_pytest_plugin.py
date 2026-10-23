@@ -243,7 +243,9 @@ def pytest_addoption(parser):
         default=None,
         metavar="PATH",
         help="Append one JSON record per recorded comparison to PATH (created and "
-        "truncated at session start). Reporting only: it cannot change a verdict.",
+        "truncated at session start; one that cannot be is a usage error). Reporting "
+        "only, except that the sweep's records are required: a sweep cell whose record "
+        "is not written fails.",
     )
     parser.addoption(
         "--ulp-emit",
@@ -547,7 +549,9 @@ def pytest_configure(config):
         try:
             utils_module.prepare_ulp_measure_file()
         except OSError as exc:
-            raise pytest.UsageError(f"--ulp-measure: cannot prepare the file: {exc}")
+            raise pytest.UsageError(
+                f"--ulp-measure: cannot prepare the file: {exc}"
+            ) from exc
         # Refresh order folder with setup_files function
         order_processing.setup_files(TestConfig.ARTEFACTS_DIR / "order_records", True)
         if os.path.exists(log_file):

@@ -344,7 +344,9 @@ def _segment_changes(
     was: Held, now: Held, query: BudgetKey
 ) -> list[tuple[Kind, tuple[float, float], str, str]]:
     """``(kind, segment, held_before, held_after)`` per run of the input over which the
-    two rows' gates differ, over the union of both lists' edges. On a segment held to a
+    two rows' gates differ, over the union of both lists' edges, then the cell-wide
+    changes (``segment`` ``None``): declared bounds that may loosen where neither side
+    is a whole-cell gate, and more excused non-finite lanes. On a segment held to a
     figure on both sides (gated or past the ceiling, either way round) a widened floor
     ranks after a raise or a lost gate and before a tightening or a new gate: both
     figures are measured outside the floor, so a wider one forgives lanes."""
