@@ -6993,6 +6993,8 @@ def test_multihost_graph_report(request):
     for op_name in op_names:
         expected = {r: 1 for r in range(world_size)}
         assert op_counts[op_name] == expected, f"{op_name} count per rank {op_counts[op_name]}, expected {expected}"
-    # Assumes every rank opens the same number of devices, as each half of the T3K two-rank binding does.
-    expected = {r: mesh_device.get_num_devices() for r in range(world_size)}
+    # Each rank records only its own local devices: get_num_devices() counts the whole mesh across all ranks, while
+    # get_device_ids() lists this rank's local ones. Assumes every rank owns the same number of devices, as each half
+    # of the T3K two-rank binding does.
+    expected = {r: len(mesh_device.get_device_ids()) for r in range(world_size)}
     assert device_counts == expected, f"device count per rank {device_counts}, expected {expected}"
