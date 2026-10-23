@@ -22,7 +22,10 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/shared_with_host/snake_ring.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/all_gather_concat_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.hpp"
+#include "ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_op.hpp"
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -2088,4 +2091,105 @@ TEST_F(FusedAllGatherMatmulHookTest, StridedAllGatherMinimalMatmulAsyncLabelsEve
             StridedAllGatherMinimalMatmulAsync::compute_output_specs(params, args).size())
             << "chunks " << chunks;
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Two fused ops whose operands carry labels of different distribution ranks, on a 2x4 mesh. Each test builds the op's
+// attributes and inputs, places device tensors with real mesh mappers, and calls the op's compute_output_topologies:
+// the hook itself is pinned, with no fabric and no kernel involved.
+// ---------------------------------------------------------------------------------------------------------------------
+
+namespace {
+
+using FusedOpHookLabel2x4Test = tt::tt_metal::MeshDevice2x4Fixture;
+
+}  // namespace
+
+// A whole-mesh reduce_scatter of a replicated matmul labels its output {8},[Shard(3)] over the input's storage
+// coordinates. The fused addcmul operands carry the N-D [Replicate, Shard(3)] label of a 2-D mapper: their distribution
+// rank differs from the scatter label's, so union_topology leaves them out and the scatter label stands.
+TEST_F(FusedOpHookLabel2x4Test, MinimalMatmulStridedReduceScatterAsyncKeepsTheScatterLabelOverAddcmulOperands) {
+    using ttnn::experimental::prim::MinimalMatmulParams;
+    using ttnn::experimental::prim::MinimalMatmulStridedReduceScatterAsync;
+    using ttnn::experimental::prim::MinimalMatmulStridedReduceScatterAsyncInputs;
+    using ttnn::experimental::prim::MinimalMatmulStridedReduceScatterAsyncParams;
+    auto& mesh = *mesh_device_;
+    const MeshShape& shape = mesh.shape();
+    const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(mesh);
+    const auto addcmul_mapper = ttnn::distributed::create_mesh_mapper(
+        mesh, ttnn::distributed::MeshMapperConfig{.placements = {TopoReplicate{}, TopoShard{3}}});
+    const ttnn::Tensor input = mesh_tensor(mesh, ttnn::Shape{1, 1, 32, 64}, *replicate);
+    const ttnn::Tensor weight = mesh_tensor(mesh, ttnn::Shape{1, 1, 64, 256}, *replicate);
+    const ttnn::Tensor addcmul_a = mesh_tensor(mesh, ttnn::Shape{1, 1, 32, 256 * shape[1]}, *addcmul_mapper);
+    const ttnn::Tensor addcmul_b = mesh_tensor(mesh, ttnn::Shape{1, 1, 32, 256 * shape[1]}, *addcmul_mapper);
+    ASSERT_EQ(addcmul_a.tensor_topology(), nd_label(shape, {TopoReplicate{}, TopoShard{3}}));
+
+    const MinimalMatmulStridedReduceScatterAsyncParams params{
+        .matmul_struct = MinimalMatmulParams{},
+        .fused_ternary_scalar = 1.0F,
+        .dim = 3,
+        .num_links = 1,
+        .ring_size = static_cast<uint32_t>(mesh.num_devices()),
+        .rs_output_mem_config = tt::tt_metal::MemoryConfig{},
+        .rs_intermediate_mem_config = std::nullopt,
+        .topology = ttnn::ccl::Topology::Ring,
+        .semaphore = {},
+        .barrier_semaphore = std::nullopt,
+        .using_persistent_buffers = false,
+        .sub_device_id = std::nullopt,
+        .cluster_axis = std::nullopt,
+        .num_workers_per_link = std::nullopt,
+        .num_buffers_per_channel = std::nullopt,
+        .chunk_width_in_mm_blocks = std::nullopt,
+        .mm_window_blocks = std::nullopt,
+        .reduce_scatter_core_grid_offset = tt::tt_metal::CoreCoord{0, 0}};
+    const MinimalMatmulStridedReduceScatterAsyncInputs args{
+        .input_tensor = input,
+        .weight_tensor = weight,
+        .optional_rs_intermediate_tensor = std::nullopt,
+        .optional_rs_output_tensor = std::nullopt,
+        .addcmul_input_tensor1 = addcmul_a,
+        .addcmul_input_tensor2 = addcmul_b};
+
+    const auto labels = MinimalMatmulStridedReduceScatterAsync::compute_output_topologies(params, args);
+    ASSERT_EQ(labels.size(), 3u);
+    const TensorTopology matmul = collapsed_label(shape, TopoReplicate{});
+    EXPECT_EQ(labels[0], matmul);                                // the matmul output
+    EXPECT_EQ(labels[1], matmul);                                // the reduce_scatter intermediate
+    EXPECT_EQ(labels[2], collapsed_label(shape, TopoShard{3}));  // the reduce_scatter output
+}
+
+// all_gather_concat gathers the users dim along mesh axis 1 and folds the heads into the last dim of its
+// [seq, 1, users, num_heads * head_dim] output: an N-D [Shard(2), Shard(1)] input (heads on axis 0, users on axis 1)
+// reads [Shard(3), Replicate] after it.
+TEST_F(FusedOpHookLabel2x4Test, AllGatherConcatRenumbersTheHeadsShardOfAnNdLabel) {
+    using ttnn::experimental::prim::AllGatherConcatDeviceOperation;
+    using ttnn::experimental::prim::AllGatherConcatInputs;
+    using ttnn::experimental::prim::AllGatherConcatParams;
+    auto& mesh = *mesh_device_;
+    const MeshShape& shape = mesh.shape();
+    const auto mapper = ttnn::distributed::create_mesh_mapper(
+        mesh, ttnn::distributed::MeshMapperConfig{.placements = {TopoShard{2}, TopoShard{1}}});
+    // [seq, users, heads, head_dim], with 8 users and 32 heads on each device.
+    const ttnn::Tensor input = mesh_tensor(mesh, ttnn::Shape{1, 8 * shape[1], 32 * shape[0], 128}, *mapper);
+    ASSERT_EQ(input.tensor_topology(), nd_label(shape, {TopoShard{2}, TopoShard{1}}));
+
+    const tt::tt_metal::CoreRangeSet semaphore_cores{
+        tt::tt_metal::CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}}};
+    const AllGatherConcatParams params(
+        /*dim=*/1,
+        /*num_links=*/1,
+        /*ring_size=*/shape[1],
+        tt::tt_metal::MemoryConfig{},
+        ttnn::ccl::Topology::Linear,
+        ttnn::global_semaphore::create_global_semaphore(&mesh, semaphore_cores, 0),
+        /*sub_device_id=*/std::nullopt,
+        /*num_heads=*/32,
+        /*use_noc1_only=*/false,
+        /*cluster_axis=*/1);
+    const AllGatherConcatInputs args{.input_tensor = input, .buffer_tensor = input};
+
+    const auto labels = AllGatherConcatDeviceOperation::compute_output_topologies(params, args);
+    ASSERT_EQ(labels.size(), 1u);
+    EXPECT_EQ(labels[0], nd_label(shape, {TopoShard{3}, TopoReplicate{}}));
 }
