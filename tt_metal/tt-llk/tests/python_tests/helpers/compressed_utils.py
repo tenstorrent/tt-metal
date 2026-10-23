@@ -29,7 +29,7 @@ from helpers.test_variant_parameters import (
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
 from helpers.tilize_untilize import tilize, untilize
 from helpers.unpack import unpack_bfp2_b, unpack_bfp4_b, unpack_bfp8_b
-from helpers.utils import matmul_acc_atol, passed_test
+from helpers.utils import matmul_acc_atol, passed_test, tolerances
 from ttexalens.tt_exalens_lib import write_to_device
 
 # -----------------------------------------------------------------------------
@@ -358,6 +358,13 @@ def unpack_bfp_tile(tile, code, tile_dim, face_dim=FACE_C_DIM):
     )  # face-major -> row-major
 
 
+def face_max_err(res_faces, ref_faces, c):
+    # Max abs error of 16-column output face c against a reference of any float dtype, rounded for a log line.
+    return round(
+        (res_faces[:, c].float() - ref_faces[:, c].float()).abs().max().item(), 4
+    )
+
+
 def run_compressed(
     M,
     K,
@@ -372,6 +379,8 @@ def run_compressed(
     make_meta,
     pcc_threshold=None,
     calls=CUSTOM_MM_CALLS(),
+    dest_acc=DestAccumulation.No,
+    stimuli=None,
 ):
     # Shared driver for both compressed-matmul tests. Kernel-specific parts are passed
     # flat: kernel (C++ source), granularity (assignment unit — 32 tile / 16 face),
@@ -382,7 +391,9 @@ def run_compressed(
     # ku/cu are the assignment row/col counts (K//granularity, N//granularity), which
     # differ from the 32-tile grid kt/ct (K//32, N//32) on the face kernel.
     # calls (CUSTOM_MM_CALLS) splits K over back-to-back calls; pack_b / make_meta then lay B and its meta
-    # out per call.
+    # out per call. dest_acc selects the DEST width the kernel accumulates in; the output stays Float16_b.
+    # stimuli, when given, is the (A, B) bf16 pair, shaped (M, K) and (K, N), to run instead of the seeded
+    # randn one. Returns the (M, N) bf16 result and the golden it passed, for a caller with a stricter check.
     kt, ct = K // DEFAULT_TILE_R_DIM, N // DEFAULT_TILE_C_DIM  # 32-tile kernel grid
     ku, cu = (
         K // granularity,
@@ -425,9 +436,16 @@ def run_compressed(
     # b_dequant = dequant(quant(B)), so BFP rounding is folded into the golden rather
     # than charged against PCC. The per-kernel pack_b / make_meta turn the packed
     # tiles into the device B buffer and its meta.
-    torch.manual_seed(0)
-    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_b = torch.randn((K, N), dtype=torch.bfloat16)
+    if stimuli is None:
+        torch.manual_seed(0)
+        torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+        torch_b = torch.randn((K, N), dtype=torch.bfloat16)
+    else:
+        torch_a, torch_b = stimuli
+        assert torch_a.shape == (M, K) and torch_b.shape == (
+            K,
+            N,
+        ), f"stimuli must be A ({M}, {K}) and B ({K}, {N})"
     b_dequant = torch.zeros((K, N), dtype=torch.bfloat16)
     tiles = []  # (code, packed_bytes) per assignment unit, in row-major order
     for i, code in enumerate(assignment):
@@ -483,7 +501,7 @@ def run_compressed(
             IN_FACE_DIMS(in0_face_r_dim=M),
         ],
         variant_stimuli=CompressedStimuliConfig(kt, ct, packed_a, packed_b, meta),
-        dest_acc=DestAccumulation.No,
+        dest_acc=dest_acc,
     )
 
     res = configuration.run().result
@@ -504,6 +522,41 @@ def run_compressed(
     # accumulates the K-deep sum in a bf16 dest, so noise grows ~linearly per K-tile.
     acc_atol = matmul_acc_atol(golden, kt, DataFormat.Float16_b)
 
+    # Per-face distance from the exact LoFi sum (the same golden before its bf16 rounding), logged on every
+    # run: with a 32-bit DEST the two faces of a ct_dim == 1 tile must look alike, since each keeps its even
+    # partial in DEST and adds the odd one through SrcB.
+    golden32 = MatmulGolden()(
+        torch_a,
+        b_dequant,
+        DataFormat.Float32,
+        MathFidelity.LoFi,
+        input_A_dimensions=[M, K],
+        input_B_dimensions=[K, N],
+        tilize=False,
+        input_A_format=DataFormat.Float16_b,
+        input_B_format=DataFormat.Float16_b,
+    ).reshape(M, N // FACE_C_DIM, FACE_C_DIM)
+    res_faces = res_tensor.reshape(M, N // FACE_C_DIM, FACE_C_DIM)
+    logger.info(
+        "max abs error per output face vs the fp32 golden (dest_acc={}): {}",
+        dest_acc.name,
+        [face_max_err(res_faces, golden32, c) for c in range(N // FACE_C_DIM)],
+    )
+
+    # Name the 16-column output faces outside the tolerance half of passed_test's gate (the same isclose on
+    # the same bf16 operands, matching NaNs allowed; PCC is whole-tensor), so a failure says which face of
+    # DEST it hit.
+    rtol = tolerances[DataFormat.Float16_b].rtol
+    golden_faces = golden.to(torch.bfloat16).reshape(M, N // FACE_C_DIM, FACE_C_DIM)
+    bad_faces = {
+        f"face{c}": face_max_err(res_faces, golden_faces, c)
+        for c in range(N // FACE_C_DIM)
+        if not (
+            torch.isclose(golden_faces[:, c], res_faces[:, c], atol=acc_atol, rtol=rtol)
+            | (torch.isnan(golden_faces[:, c]) & torch.isnan(res_faces[:, c]))
+        ).all()
+    }
+
     assert passed_test(
         golden,
         res_tensor,
@@ -511,4 +564,8 @@ def run_compressed(
         custom_atol=acc_atol,
         custom_pcc_threshold=pcc_threshold,
         print_pcc=True,
-    ), f"compressed matmul failed for shape=(M={M}, K={K}, N={N})"
+    ), (
+        f"compressed matmul failed for shape=(M={M}, K={K}, N={N}); output faces outside "
+        f"atol={acc_atol:.4g}/rtol={rtol} (max abs err): {bad_faces}"
+    )
+    return res_tensor, golden

@@ -23,8 +23,7 @@
 // Every fragment a table needs must appear in the sequence as a contiguous substring, so the sequence is
 // an overlap-packing of the required fragment set and has to fit its slot in the replay buffer.
 //
-// Letter case is the skip convention: lower case skips a work item, upper case does it, and a has-work
-// mask picks one item pattern's fragment out of one template, e.g. case_encode("ni", 0b10) resolves "nI".
+// Letter case is the skip convention: lower case skips a work item, upper case does it.
 
 namespace ckernel
 {
@@ -87,25 +86,6 @@ public:
     }
 
     /**
-     * @brief Resolve the fragment a has-work mask selects out of a lower-case template.
-     *
-     * @param tmpl: All-lower-case template, one character per work item.
-     * @param mask: Bit i set upper-cases character i, e.g. case_encode("ni", 0b10) resolves "nI".
-     */
-    template <std::size_t N>
-    constexpr std::uint32_t case_encode(const char (&tmpl)[N], const std::uint32_t mask) const
-    {
-        std::array<char, N> encoded {};
-        std::size_t n = 0;
-        for (; tmpl[n] != '\0'; ++n)
-        {
-            encoded[n] = ((mask >> n) & 1u) ? static_cast<char>(tmpl[n] - ('a' - 'A')) : tmpl[n];
-        }
-        encoded[n] = '\0';
-        return fragment(encoded.data());
-    }
-
-    /**
      * @brief Record the sequence into the replay buffer, one instruction per character.
      *
      * @tparam Emit: Callable taking one code character and issuing that character's instruction.
@@ -161,17 +141,12 @@ constexpr bool all_resolved(const std::array<std::uint32_t, N>& table)
 template <const auto& Seq, std::size_t N, typename Entry>
 constexpr std::array<std::uint32_t, N> build_table(Entry&& entry)
 {
-    const auto find        = [](const char* needle) { return Seq.fragment(needle); };
-    const auto case_encode = [](const auto& tmpl, const std::uint32_t mask) { return Seq.case_encode(tmpl, mask); };
+    const auto find = [](const char* needle) { return Seq.fragment(needle); };
 
     std::array<std::uint32_t, N> table {};
     for (std::uint32_t i = 0; i < N; ++i)
     {
-        if constexpr (std::is_invocable_v<Entry&, std::uint32_t, decltype(find), decltype(case_encode)>)
-        {
-            table[i] = entry(i, find, case_encode);
-        }
-        else if constexpr (std::is_invocable_v<Entry&, std::uint32_t, decltype(find)>)
+        if constexpr (std::is_invocable_v<Entry&, std::uint32_t, decltype(find)>)
         {
             table[i] = entry(i, find);
         }
@@ -207,15 +182,15 @@ constexpr sequence<N - 1> make_sequence(const char (&codes)[N])
 /**
  * @brief Build a runtime-index -> instruction decode table over a code sequence.
  *
- * The entry builder gets @ref sequence::fragment and @ref sequence::case_encode bound to Seq, so a table
- * body names fragments directly: find("N"), case_encode("ni", mask).
+ * The entry builder gets @ref sequence::fragment bound to Seq, so a table body names fragments directly:
+ * find("N").
  *
  * @tparam Seq: The @ref sequence to resolve against. A template argument rather than a parameter, so the
  *              built table is a constant expression here and the check below can be a static_assert.
  * @tparam N: Table size; the index handed to entry runs over [0, N).
- * @tparam Entry: Callable returning the instruction for one index, invoked as entry(index),
- *                entry(index, find) or entry(index, find, case_encode) -- whichever it accepts, and
- *                stateless, which a namespace-scope lambda always is.
+ * @tparam Entry: Callable returning the instruction for one index, invoked as entry(index) or
+ *                entry(index, find) -- whichever it accepts, and stateless, which a namespace-scope lambda
+ *                always is.
  */
 template <const auto& Seq, std::size_t N, typename Entry>
 constexpr std::array<std::uint32_t, N> make_table(Entry&& entry)
