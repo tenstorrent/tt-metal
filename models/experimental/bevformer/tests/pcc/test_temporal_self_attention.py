@@ -70,7 +70,7 @@ def test_temporal_self_attention_forward(
     # Extract parameters from configs
     embed_dims = config.embed_dims
     num_heads = config.num_heads
-    num_points = config.num_points
+    num_points = config.tsa_num_points
     num_queries = bev_h * bev_w
 
     # BEV spatial shapes - single level for temporal self attention

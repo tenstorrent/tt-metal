@@ -129,8 +129,7 @@ def test_bevformer_layer_perf(
         feedforward_channels=FEEDFORWARD_CHANNELS,
     )
 
-    # Every attention samples the preset's num_points, as the TT layer gives them.
-    ref_model = BEVFormerLayer(**layer_kwargs, tsa_num_points=config.num_points)
+    ref_model = BEVFormerLayer(**layer_kwargs, tsa_num_points=config.tsa_num_points)
     ref_model.eval()
     # Without a previous BEV, upstream's encoder hands the self-attention each sample's grid twice.
     ref_2d = reference_bev_points(bev_h, bev_w, batch_size)
@@ -152,6 +151,7 @@ def test_bevformer_layer_perf(
         spatial_shapes=spatial_shapes,
         bev_shape=bev_shape,
         batch_first=True,
+        temporal_num_points=config.tsa_num_points,
         **layer_kwargs,
     )
 

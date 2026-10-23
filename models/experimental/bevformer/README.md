@@ -573,4 +573,6 @@ the port:
   weights for them and record them in the parameters, which `TTResNet` and `TTFPN` read them from.
 
 The dataset presets (camera rigs, image sizes, point-cloud ranges) that the deformable-attention,
-point-sampling and encoder tests use are test fixtures, in `tests/common.py`.
+point-sampling and encoder tests use are test fixtures, in `tests/common.py`. The base presets take
+BEVFormer-base's encoder attention sizes: 8 points per head and level in the spatial cross-attention
+and its deformable attention, 4 in the temporal self-attention.

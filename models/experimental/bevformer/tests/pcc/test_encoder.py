@@ -135,8 +135,7 @@ def test_bevformer_encoder_forward(
         pc_range=list(config.pc_range),
     )
 
-    # Every attention samples the preset's num_points, as the TT layer gives them.
-    ref_model = BEVFormerEncoder(**encoder_kwargs, tsa_num_points=config.num_points)
+    ref_model = BEVFormerEncoder(**encoder_kwargs, tsa_num_points=config.tsa_num_points)
     ref_model.eval()
 
     # Create preprocessed parameters from PyTorch model
@@ -152,6 +151,7 @@ def test_bevformer_encoder_forward(
         batch_first=True,
         return_intermediate=False,
         feedforward_channels=tt_parameters.config.feedforward_channels,
+        temporal_num_points=config.tsa_num_points,
         **encoder_kwargs,
     )
 
