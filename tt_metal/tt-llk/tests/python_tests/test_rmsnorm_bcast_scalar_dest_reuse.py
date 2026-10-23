@@ -530,14 +530,8 @@ def test_rmsnorm_bcast_scalar_dest_reuse_unpack_full_transpose(
 def test_rmsnorm_bcast_scalar_dest_reuse_reprograms_srca_x_span(
     formats, dest_acc, mathop, num_tiles
 ):
-    """The unpack init must program the X span on the unpacker that reads L1.
-
-    x-start/x-end is per-unpacker state. The rmsnorm MOP issues every real UNPACR on
-    SrcA (unpacker A) and feeds SrcB a ZEROSRC dummy for the MOVD2B, so unpacker A is the
-    one whose span matters. Here the unpack thread leaves unpacker A at a one-row span
-    before the rmsnorm init, as ``_llk_unpack_A_top32_rm_init_`` does and as the stock seed
-    init in this driver otherwise masks: if the init programs only unpacker B, every face
-    arrives as 16 datums plus stale SrcA and the whole-tile result is wrong.
+    """The unpack init must program the X span on unpacker A, the one its MOP reads L1 with;
+    the driver leaves it at a one-row span first, as ``_llk_unpack_A_top32_rm_init_`` does.
     """
     _skip_unsupported(formats, dest_acc)
 
@@ -559,16 +553,14 @@ def test_rmsnorm_bcast_scalar_dest_reuse_reprograms_srca_x_span(
     )
 
 
-# Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).
+# bf16 denormals are multiples 1..127 of 2^-133; SrcA is 2^100 * [1, 4) so a kept denormal shows up.
 BF16_DENORMAL_MIN = 2.0**-133
 BF16_DENORMAL_MANTISSAS = 1 << 7
-# SrcA is scaled up so a kept denormal scalar gives a visibly nonzero product; its mantissas are drawn
-# from [DENORMAL_SRCA_LOW, DENORMAL_SRCA_HIGH) so no operand is itself zero or denormal.
 DENORMAL_SRCA_SCALE = 2.0**100
 DENORMAL_SRCA_LOW, DENORMAL_SRCA_HIGH = 1.0, 4.0
-# Positive-control scalar: a tiny bf16 NORMAL (min normal is 2^-126), so the same keep-flag sequence
-# must NOT flush it; against 2^100 SrcA its products land in [1, 4), inside the golden's tolerance.
-TINY_NORMAL_SCALAR = 2.0**-100
+TINY_NORMAL_SCALAR = (
+    2.0**-100
+)  # positive control: a bf16 normal that must not be flushed
 
 
 @pytest.mark.parametrize("math_fidelity", _fidelities(MathOperation.Elwmul))
@@ -576,19 +568,8 @@ TINY_NORMAL_SCALAR = 2.0**-100
 def test_rmsnorm_bcast_scalar_dest_reuse_flushes_denormal_scalar_after_keep_flag(
     math_fidelity, scalar_kind
 ):
-    """The math init must restore the Src zero flag a preceding copy_init left at keep.
-
-    ``denormal``: the broadcast scalar is a bf16 denormal, which a bf16 ELWMUL flushes to
-    zero under the operand-driven flag; multiplied by 2^100 it gives a nonzero product if
-    kept, so every output must come out exactly 0. The seed datacopy runs with the flag at
-    keep (as ``copy_init`` sets it) so the denormal reaches DEST intact and the flag is still
-    at keep when the rmsnorm init runs -- the production sequence in which copy_init precedes
-    the rmsnorm ELWMUL init.
-
-    ``tiny_normal``: positive control on the identical sequence with a tiny *normal* scalar
-    (2^-100), checked against the golden. An all-zero result there would mean the scalar
-    never reached SrcB or the MOP never ran -- which ``count_nonzero == 0`` alone cannot tell
-    from a flushed denormal, since clear_dest zeroes DEST first.
+    """The math init must restore the Src zero flag a preceding copy_init left at keep: a denormal
+    scalar must flush to all-zero output, and the tiny-normal control on the same sequence must not.
     """
     formats = FORMATS[0]
     assert formats.input_format == DataFormat.Float16_b

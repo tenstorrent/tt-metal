@@ -79,9 +79,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if constexpr (RMSNORM_CLOBBER_UNPA_X_END)
     {
-        // Leave unpacker A's X span at one row, as _llk_unpack_A_top32_rm_init_ does (its post-phase restore
-        // resets the XY counters, not x_end). The rmsnorm init must re-program it: its MOP issues every real
-        // UNPACR on SrcA, so an inherited span unpacks 16 datums per face instead of 256.
+        // Leave unpacker A's X span at one row, as _llk_unpack_A_top32_rm_init_ does; the rmsnorm init must
+        // re-program it.
         config_unpacker_x_end<p_setadc::UNP_A>(1 /*face_r_dim*/);
     }
 
@@ -127,9 +126,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if constexpr (RMSNORM_PRESERVE_SRC_ZERO_FLAG)
     {
-        // Leave the Src zero flag at keep, as copy_init does before its datacopy, so a denormal seed survives
-        // into DEST. The rmsnorm init must restore the operand-driven value, or the FPU keeps the denormal
-        // scalar MOVD2B broadcasts into SrcB instead of flushing it.
+        // Leave the Src zero flag at keep, as copy_init does; the rmsnorm init must restore the default.
         math::_configure_preserve_zero_flag_state_();
     }
 

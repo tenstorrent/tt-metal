@@ -108,8 +108,8 @@ inline void rmsnorm_bcast_scalar_reuse_dest_as_src()
  *
  * @tparam eltwise_binary_type: FPU op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam num_tiles: Tiles the MOP walks per call (matches the unpack init).
- * @tparam clear_dest: ZEROACC the DEST section between the MOVD2B and the MOP; required for ELWMUL, which
- *         accumulates into DEST.
+ * @tparam clear_dest: ZEROACC every tile of the DEST section between the MOVD2B and the MOP. ELWMUL accumulates
+ *         into DEST, so set it unless the output tiles are already zero (and no other tile in the section is live).
  * @param src_index: DEST tile holding the scalar.
  * @param dst_index: DEST tile the first output lands in.
  * @note No op that leaves the Src zero-substitution flag at keep (copy_init / datacopy) may run between
@@ -263,8 +263,8 @@ inline void _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_(const std::uint32_t 
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 
-    // ELWADD/ELWMUL/ELWSUB read the Src zero-substitution flag but this init never sets it, so re-establish
-    // the operand-driven DEFAULT here -- otherwise a preceding copy_init/datacopy op that left PRESERVE leaks
-    // into the MOP (denormal Src results differ). Mirrors _llk_math_eltwise_binary_init_.
+    // ELWADD/ELWMUL/ELWSUB read the Src zero-substitution flag and the addr-mod/MOP setup above does not touch
+    // it, so re-establish the operand-driven DEFAULT here -- otherwise a preceding copy_init/datacopy op that
+    // left PRESERVE leaks into the MOP (denormal Src results differ). Mirrors _llk_math_eltwise_binary_init_.
     math::_configure_default_zero_flag_state_();
 }

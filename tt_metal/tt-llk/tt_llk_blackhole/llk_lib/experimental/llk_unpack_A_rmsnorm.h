@@ -107,7 +107,8 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
  * _llk_unpack_A_ call, SrcB fed a dummy dvalid for the MOVD2B on the math thread.
  *
  * Owns unpacker A's X span: every real UNPACR of the MOP targets SrcA, so this init programs x_end on
- * unpacker A (where DEST_TO_SRCB also routes the operand address) and relies on nothing a previous op left.
+ * unpacker A (where DEST_TO_SRCB also routes the operand address) and does not inherit it; Tile_x_dim, the
+ * Y stride and the XY counters are inherited and must still be canonical.
  *
  * @tparam num_tiles: Tiles the MOP walks per _llk_unpack_A_ call.
  * @tparam BType/acc_to_dest/binary_reuse_dest: Must be SCALAR / true / DEST_TO_SRCB (static_assert).
@@ -115,7 +116,9 @@ inline void _llk_unpack_A_rmsnorm_mop_config_(
  *        num_faces == 4 only).
  * @param face_r_dim: Rows per face; sets the X span.
  * @param num_faces: Faces per tile (1, 2 or 4).
- * @note Pairs with @ref _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_ on the math thread.
+ * @note Pairs with @ref _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_ on the math thread. The matching execute
+ *       is the generic @ref _llk_unpack_A_ with the same <SCALAR, true, DEST_TO_SRCB> arguments; other arguments
+ *       route the L1 address to unpacker B, which the static_assert here cannot see.
  */
 template <
     std::uint32_t num_tiles,
