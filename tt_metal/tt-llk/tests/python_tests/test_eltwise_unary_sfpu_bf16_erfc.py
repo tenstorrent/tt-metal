@@ -20,8 +20,8 @@ _BF16_STOCK_BOARDS = {}
 # kernel's result instead of torch's; the sweep expects that word's class there.
 _BF16_STOCK_SPECIALS = {
     MathOperation.Erfc: {
-        ChipArchitecture.BLACKHOLE: {"pos_inf": 0x2C4F, "pos_nan": 0x2C4F},
-        ChipArchitecture.WORMHOLE: {"pos_inf": 0x2C4E, "pos_nan": 0x2C4E},
+        ChipArchitecture.BLACKHOLE: {"pos_nan": 0x2C4F},
+        ChipArchitecture.WORMHOLE: {"pos_nan": 0x2C4E},
     },
 }
 

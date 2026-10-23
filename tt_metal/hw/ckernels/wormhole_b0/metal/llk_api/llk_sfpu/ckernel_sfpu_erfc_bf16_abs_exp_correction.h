@@ -6,6 +6,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "ckernel_sfpu_erfc_bf16_replay_window.h"
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_erfc_bf16_min_max.h"
 #include "ckernel_sfpu_erfc_bf16_mirrored_terminals.h"
@@ -42,6 +43,10 @@ inline void calculate_abs_exp_correction() {
             sfpi::vUInt encoded = sfpi::dst_reg[row].template mode<sfpi::DataLayout::U16>();
             ttpoly::erfc::positive_nonfinite_terminal<6>(encoded, result, Config::kPositiveNonfiniteConstant);
             ttpoly::erfc::negative_nan_class_terminal<1, true>(encoded, result);
+            // +Inf alone (exponent byte FF, sign and mantissa clear in DEST's BF16 layout) stores its own
+            // limit, where the positive NaNs keep the shared constant.
+            v_if(encoded == sfpi::vUInt(0x00ffu)) { result = Config::kPositiveInfinityConstant; }
+            v_endif;
         }
         result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         sfpi::dst_reg[row] = result;
