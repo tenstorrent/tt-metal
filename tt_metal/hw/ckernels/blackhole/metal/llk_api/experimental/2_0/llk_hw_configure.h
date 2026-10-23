@@ -81,9 +81,9 @@ inline void llk_pack_hw_configure() {
         OUT_DESC.shape.face_r_dim,
         OUT_DESC.shape.total_col_dim(),
         OUT_DESC.shape.total_num_faces(),
-        // partial_face: derived from the output geometry, matching legacy get_output_partial_face
-        // (Tile::partial_face == tile height < 32). Folds at compile time; full 32-row tiles give false.
-        ckernel::experimental::is_partial_height(OUT_DESC.shape),
+        // partial_face by face height (is_face_partial), not is_partial_height (tile height < 32): a 16x32
+        // tile has two full-height faces. Folds at compile time; full-height faces give false.
+        is_face_partial(OUT_DESC.shape.face_r_dim),
         0 /*relu_config*/);
 }
 #endif

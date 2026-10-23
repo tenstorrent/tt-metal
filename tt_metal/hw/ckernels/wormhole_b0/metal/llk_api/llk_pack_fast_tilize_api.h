@@ -37,7 +37,7 @@ inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
-    const bool partial_face = get_output_partial_face(output_id);
+    const bool partial_face = is_output_face_partial(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
     SAN_HOOK(uninit<OperationPackFastTilizeWh>(
@@ -50,8 +50,9 @@ inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
     _llk_pack_fast_tilize_uninit_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
         pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
 
-    // The uninit tail-calls _llk_pack_init_, so seat OperationPack on llk_pack_init's num_tiles == 1 path.
-    if (partial_face) {
+    // The uninit tail-calls _llk_pack_init_, so seat OperationPack on llk_pack_init's num_tiles == 1 path, with
+    // its rule for when the MOP bakes the format in.
+    if (llk_pack_internal::tile_pack_mop_form_depends_on_format(num_faces, partial_face)) {
         SAN_HOOK(init<OperationPack>(
             StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
             StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),

@@ -184,7 +184,8 @@ inline void _llk_pack_configure_addrmod_()
  * @param pack_dst_format: Destination (L1) data format.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
- * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param partial_face: True if the faces are shorter than FACE_R_DIM rows (face_r_dim < FACE_R_DIM; false for
+ *        full-height faces such as a 16x32 tile's), so a block-float tile carries one exponent chunk.
  * @param narrow_tile: True if the tile occupies fewer than the full set of packer interfaces.
  * @param num_tiles: Number of tiles processed per MOP run.
  * @note @ref _llk_pack_configure_addrmod_ must have programmed the ADDR_MOD slots for the same pack_mode.
@@ -200,6 +201,7 @@ inline void _llk_pack_mop_config_(
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(num_tiles >= 1, "num_tiles must be >= 1");
+    LLK_ASSERT(!partial_face || face_r_dim < FACE_R_DIM, "partial_face requires a face shorter than FACE_R_DIM rows (one exponent chunk per tile)");
 
     if constexpr (pack_mode != PackMode::Untilize)
     {
@@ -216,17 +218,29 @@ inline void _llk_pack_mop_config_(
         }
     }
 
-    const std::uint32_t PACKCNT               = (partial_face && IS_BFP_FORMAT(pack_dst_format)) ? 1 : num_faces;
+    const bool partial_face_bfp               = llk_pack_internal::is_partial_face_bfp_pack(pack_dst_format, num_faces, partial_face);
+    const std::uint32_t PACKCNT               = partial_face_bfp ? 1 : num_faces;
     constexpr std::uint32_t MEGAROW           = 1;
     constexpr std::uint32_t ZERO_OUTPUT_FLAG  = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
     constexpr std::uint32_t MOP_INNER_LOOP    = 1;
     llk_pack_internal::configured_num_tiles   = num_tiles;
     llk_pack_internal::configured_zero_output = ZERO_OUTPUT_FLAG;
+    // Record the MOP for a format reconfig: only the default, data-emitting, single-tile variant is rebuilt there
+    // (the variant every pack init in use builds); the zero-output variant is not, and the multi-tile MOP packs
+    // full four-face tiles, whose form never depends on the format.
+    llk_pack_internal::tile_pack_mop.programmed       = (pack_mode == PackMode::Default) && !zero_output && (num_tiles == 1);
+    llk_pack_internal::tile_pack_mop.partial_face_bfp = partial_face_bfp;
+    llk_pack_internal::tile_pack_mop.face_r_dim       = face_r_dim;
+    llk_pack_internal::tile_pack_mop.num_faces        = num_faces;
+    llk_pack_internal::tile_pack_mop.partial_face     = partial_face;
+    llk_pack_internal::tile_pack_mop.narrow_tile      = narrow_tile;
 
     if constexpr (pack_mode != PackMode::Untilize)
     {
-        if (partial_face && IS_BFP_FORMAT(pack_dst_format))
+        if (partial_face_bfp)
         {
+            // Two short faces through one interface: the second PACR packs the second face into the same tile, so
+            // the tile carries one exponent chunk. A one-face tile never comes here (it has no second face to pack).
             LLK_ASSERT(num_tiles == 1, "multi-tile partial-face BFP pack is not supported");
             constexpr std::uint32_t MOP_OUTER_LOOP = 1;
             ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1));
@@ -283,10 +297,47 @@ inline void _llk_pack_mop_config_(
     }
 }
 
+namespace llk_pack_internal
+{
+/**
+ * @brief Rebuild the tile pack MOP for a new output format when that format flips the MOP's form.
+ *
+ * Reads the record left by @ref _llk_pack_mop_config_ and rebuilds the MOP in the recorded geometry. Kept out of
+ * line: the format reconfig is inlined at every pack-output switch of a kernel, and the rebuild would otherwise
+ * bring a copy of @ref _llk_pack_mop_config_ to each of them.
+ *
+ * @param pack_dst_format: Destination (L1) data format.
+ * @return True when the tile pack MOP was rebuilt.
+ */
+static __attribute__((noinline, noclone)) bool rebuild_tile_pack_mop_for_format(const std::uint32_t pack_dst_format)
+{
+    const TilePackMop mop = tile_pack_mop;
+    if (!mop.programmed || is_partial_face_bfp_pack(pack_dst_format, mop.num_faces, mop.partial_face) == mop.partial_face_bfp)
+    {
+        return false;
+    }
+    // Single-tile by construction (only a single-tile MOP is recorded), stated as a literal so the multi-tile MOP and
+    // its output-offset sizing are not instantiated here.
+    _llk_pack_mop_config_<PackMode::Default, false /*zero_output*/>(
+        pack_dst_format, mop.face_r_dim, mop.num_faces, mop.partial_face, mop.narrow_tile, 1 /*num_tiles*/);
+    return true;
+}
+} // namespace llk_pack_internal
+
 /**
  * @brief Reconfigure the packer source/destination data formats and tile geometry at runtime.
  *
  * Used to switch the packer to a new data format without a full HW re-configure.
+ *
+ * The tile pack MOP packs a short-face block-float tile of two faces with one packer interface and every other
+ * tile with one interface per face, so its form depends on the output format. When the tile pack MOP is
+ * programmed and this reconfig crosses that line (a matmul switching from its Float16_b partials to a short-face
+ * block-float output, or back), the MOP is rebuilt for the new format with the geometry the pack init built it
+ * with: a reconfig reprograms the formats and strides and, from its geometry arguments, the block-float exponent
+ * section size and the L1 offset; it leaves the init-owned state (the ADDR_MODs, the packer X counter and, apart
+ * from this rebuild, the MOP) alone. A reconfig to another tile geometry without a re-init therefore leaves the
+ * packer on a mix of the two geometries; a caller that changes the tile geometry re-inits. Any other MOP
+ * (untilize, rows, fast tilize, zero output) is left in place.
  *
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
  * @param pack_src_format: Source (dest register) data format.
@@ -294,11 +345,13 @@ inline void _llk_pack_mop_config_(
  * @param tile_size: Size of one output tile in bytes.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
- * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param partial_face: True if the faces are shorter than FACE_R_DIM rows (face_r_dim < FACE_R_DIM; false for
+ *        full-height faces such as a 16x32 tile's), so a block-float tile carries one exponent chunk.
  * @param narrow_tile: True if the tile occupies fewer than the full set of packer interfaces.
+ * @return True when the tile pack MOP was rebuilt for the new format.
  */
 template <bool is_fp32_dest_acc_en>
-inline void _llk_pack_reconfig_data_format_(
+inline bool _llk_pack_reconfig_data_format_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
@@ -308,8 +361,11 @@ inline void _llk_pack_reconfig_data_format_(
     [[maybe_unused]] const bool narrow_tile = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(!partial_face || face_r_dim < FACE_R_DIM, "partial_face requires a face shorter than FACE_R_DIM rows (one exponent chunk per tile)");
 
     reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face);
+
+    return llk_pack_internal::rebuild_tile_pack_mop_for_format(pack_dst_format);
 }
 
 /**
@@ -328,7 +384,8 @@ inline void _llk_pack_reconfig_data_format_(
  * @param tile_size: Size of one output tile in bytes.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
- * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param partial_face: True if the faces are shorter than FACE_R_DIM rows (face_r_dim < FACE_R_DIM; false for
+ *        full-height faces such as a 16x32 tile's), so a block-float tile carries one exponent chunk.
  * @param narrow_tile: True if the tile occupies fewer than the full set of packer interfaces.
  * @param relu_config: Packed relu mode and threshold configuration (0 disables relu).
  */
@@ -344,6 +401,7 @@ inline void _llk_pack_hw_configure_(
     const std::uint32_t relu_config = 0)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(!partial_face || face_r_dim < FACE_R_DIM, "partial_face requires a face shorter than FACE_R_DIM rows (one exponent chunk per tile)");
 
     configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
 }
@@ -364,7 +422,8 @@ inline void _llk_pack_hw_configure_(
  * @param pack_dst_format: Destination (L1) data format.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
- * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param partial_face: True if the faces are shorter than FACE_R_DIM rows (face_r_dim < FACE_R_DIM; false for
+ *        full-height faces such as a 16x32 tile's), so a block-float tile carries one exponent chunk.
  * @param narrow_tile: True if the tile occupies fewer than the full set of packer interfaces.
  * @param num_tiles: Number of tiles processed per MOP run.
  * @note Init programs ADDR_MOD + MOP + the packer X (datum) counter. The X counter is pack_mode-dependent

@@ -45,7 +45,7 @@ inline void llk_pack_hw_configure(std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
-    const bool partial_face = get_output_partial_face(output_id);
+    const bool partial_face = is_output_face_partial(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
@@ -179,7 +179,14 @@ inline void llk_pack_dest_init(const std::uint32_t pack_output) {
  * Reconfigure the packer for a new output operand's data format.
  *
  * Face geometry (face_r_dim, num_faces), partial-face flag, narrow-tile flag and tile size are
- * derived from the new output's CB metadata.
+ * derived from the new output's CB metadata. When the tile pack MOP is programmed and the new output
+ * moves it across the partial-face block-float line (one packer interface per tile instead of one per
+ * face, or back), the LLK rebuilds that MOP for the new format in the geometry the pack init built it
+ * with, and the pack operation is seated on it again as llk_pack_init seated it: the new format, the
+ * init geometry. A reconfig reprograms the formats and strides and, from the new output's geometry, the
+ * block-float exponent section size and the L1 offset; it leaves the init-owned state (the ADDR_MODs, the packer
+ * X counter and, apart from this rebuild, the MOP) alone. A reconfig to another tile geometry without a re-init
+ * therefore leaves the packer on a mix of the two geometries; a caller that changes the tile geometry re-inits.
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @param  new_output          New output circular buffer / operand index to configure for.
@@ -189,7 +196,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t output_id = get_output_id(new_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
-    const bool partial_face = get_output_partial_face(output_id);
+    const bool partial_face = is_output_face_partial(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
     SAN_HOOK(reconfigure(
@@ -201,7 +208,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         StateVal<Operand<Exu::Pack>::PartialFace>(partial_face),
         StateVal<Operand<Exu::Pack>::NarrowTile>(narrow_tile),
         StateDiscard<std::uint32_t>(get_local_cb_interface(output_id).fifo_page_size)));
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
+    [[maybe_unused]] const bool tile_pack_mop_rebuilt = _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         get_local_cb_interface(output_id).fifo_page_size,
@@ -209,6 +216,20 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         num_faces,
         partial_face,
         narrow_tile);
+    if (tile_pack_mop_rebuilt) {
+        // The rebuilt MOP bakes the new format in (the partial-face block-float PACR variant) and keeps the
+        // geometry the pack init built it with, so it is seated as llk_pack_init seats a format-dependent MOP:
+        // the format recorded, the geometry the init's. A pack to an output of another geometry still reads
+        // as drift against this record, as it did against the init's.
+        [[maybe_unused]] const auto& mop = llk_pack_internal::tile_pack_mop;
+        SAN_HOOK(init<OperationPack>(
+            StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+            StateVal<Operand<Exu::Pack>::FaceHeight>(mop.face_r_dim),
+            StateVal<Operand<Exu::Pack>::NumFaces>(mop.num_faces),
+            StateVal<Operand<Exu::Pack>::PartialFace>(mop.partial_face),
+            StateVal<Operand<Exu::Pack>::NarrowTile>(mop.narrow_tile),
+            StateVal<OperationPack::NumTiles>(llk_pack_internal::configured_num_tiles)));
+    }
 }
 
 /**
