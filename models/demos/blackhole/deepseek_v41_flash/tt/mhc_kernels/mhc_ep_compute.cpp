@@ -58,7 +58,7 @@ void kernel_main() {
 
     for (uint32_t j = 0; j < TPJ; ++j) {
         reconfig_data_format(cb_xn, cb_xn);
-        mul_tiles_init(cb_xn, cb_xn);
+        mul_init(cb_xn, cb_xn);
         tile_regs_acquire();
         mul_tiles(cb_xn, cb_xn, j, j, 0);
         tile_regs_commit();

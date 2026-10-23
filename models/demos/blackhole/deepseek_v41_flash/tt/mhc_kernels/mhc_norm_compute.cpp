@@ -53,7 +53,7 @@ void kernel_main() {
     // tmp_g = h_g * rs  (fp32)
     for (uint32_t g = 0; g < ng; ++g) {
         reconfig_data_format(cb_h, cb_rs);
-        mul_tiles_init(cb_h, cb_rs);
+        mul_init(cb_h, cb_rs);
         tile_regs_acquire();
         mul_tiles(cb_h, cb_rs, g, 0, 0);
         tile_regs_commit();
@@ -69,7 +69,7 @@ void kernel_main() {
     pack_reconfig_data_format(cb_out);
     for (uint32_t g = 0; g < ng; ++g) {
         reconfig_data_format(cb_tmp, cb_w);
-        mul_tiles_init(cb_tmp, cb_w);
+        mul_init(cb_tmp, cb_w);
         tile_regs_acquire();
         mul_tiles(cb_tmp, cb_w, g, g, 0);
         tile_regs_commit();

@@ -40,7 +40,7 @@ void kernel_main() {
     // squares
     for (uint32_t j = 0; j < TPJ; ++j) {
         reconfig_data_format(cb_x, cb_x);
-        mul_tiles_init(cb_x, cb_x);
+        mul_init(cb_x, cb_x);
         tile_regs_acquire();
         mul_tiles(cb_x, cb_x, j, j, 0);
         tile_regs_commit();

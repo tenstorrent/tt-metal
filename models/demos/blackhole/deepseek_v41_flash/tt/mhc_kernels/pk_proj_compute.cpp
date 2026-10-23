@@ -28,7 +28,7 @@ void kernel_main() {
     for (uint32_t r = 0; r < R; ++r) {
         xx.wait_front(TPC);
         reconfig_data_format(cb_x, cb_x);
-        mul_tiles_init(cb_x, cb_x);
+        mul_init(cb_x, cb_x);
         for (uint32_t j = 0; j < TPC; ++j) {
             tile_regs_acquire();
             mul_tiles(cb_x, cb_x, j, j, 0);
