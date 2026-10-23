@@ -104,7 +104,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
 
 // exp_21f constants. The one-argument _sfpu_exp_21f_bf16_(val) materialises them per call; callers that
 // evaluate exp inside a row loop pass them in through the five-argument overload instead, built once before
-// the loop (sfpi (through 7.84.0) never hoists an SFPLOADI literal out of a loop on its own, so each fp32 literal
+// the loop (sfpi (through 7.89.0) never hoists an SFPLOADI literal out of a loop on its own, so each fp32 literal
 // otherwise costs an SFPLOADI pair per row). Same values either way: the two forms are bit-identical.
 constexpr float EXP_21F_ONE_LN2 = 1.4426950216293334961f;  // 0x3FB8AA3B
 constexpr float EXP_21F_C0 = EXP_21F_BF16_C0;
@@ -116,7 +116,7 @@ constexpr float EXP_21F_C2 = EXP_21F_BF16_C2;
 // so the arm that never reads one pays nothing: a float is folded away, an sfpi::vFloat is an SFPLOADI pair
 // per call. sfpi cannot spill, so each kernel hoists only what fits beside its live data -- one LReg too
 // many is a compile error ("too few lregs"), never a slowdown. Declare these non-const: a const vFloat
-// that lives across a partially unrolled loop makes sfpi (through 7.84.0) try to spill it ("cannot write SFPU
+// that lives across a partially unrolled loop makes sfpi (through 7.89.0) try to spill it ("cannot write SFPU
 // object to memory").
 template <bool COND>
 using HoistedIf = std::conditional_t<COND, sfpi::vFloat, float>;

@@ -117,7 +117,7 @@ inline void softplus_init() {
 // built once before its loop (a runtime float used per row otherwise costs RISC-built SFPLOADIs on every row)
 // and the coefficients are vConstFloatPrgm0/1/2 from
 // softplus_init; the SDPA fused kernel passes plain floats and literals and is unchanged. Identical
-// arithmetic either way (sfpi (through 7.84.0) never hoists a loop-invariant literal by itself).
+// arithmetic either way (sfpi (through 7.89.0) never hoists a loop-invariant literal by itself).
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,

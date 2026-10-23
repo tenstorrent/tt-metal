@@ -34,7 +34,7 @@ constexpr float TANHSHRINK_BF16_P3 = 5.3348409333e-02f;
 
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanhshrink() {
-    // Loop-invariant constants loaded once and kept in LRegs (sfpi (through 7.84.0) never hoists a literal out of a
+    // Loop-invariant constants loaded once and kept in LRegs (sfpi (through 7.89.0) never hoists a literal out of a
     // loop by itself, so each fp32 literal otherwise costs an SFPLOADI pair per row). bf16: Q0/Q1/P0 are in
     // Prgm0/1/2 from tanhshrink_init and q2, q3, p1 here. fp32: the row already fills all eight LRegs, so
     // nothing is hoisted here; its exp reads log2(e) and -ln2_hi from Prgm1/2 instead (see the init).
