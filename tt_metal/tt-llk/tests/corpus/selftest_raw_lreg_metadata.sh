@@ -23,8 +23,11 @@ if [[ ${1:-} == --target-cxx ]]; then
     }
     target_cxx=$2
     sfpi_include=$4
-    if "$target_cxx" -mcpu=tt-bh-tensix -I"$sfpi_include" -dM -E -x c++ - <<< '#include "lltt.h"' |
-        grep LLTT_HAS_LREG_EFFECT > /dev/null; then
+    # Complete the producer and check its exit before searching.  grep -q on
+    # a live compiler pipe can close it early and turn a present capability
+    # into a false negative under pipefail (SIGPIPE).
+    capability_macros=$("$target_cxx" -mcpu=tt-bh-tensix -I"$sfpi_include" -dM -E -x c++ - <<< '#include "lltt.h"')
+    if grep -q LLTT_HAS_LREG_EFFECT <<< "$capability_macros"; then
         echo "INFO: effect markers use lltt::lreg_effect"
     else
         echo "INFO: SFPI has no lltt::lreg_effect; effect markers use the compiler builtin"
@@ -45,8 +48,8 @@ if [[ ${1:-} == --target-cxx ]]; then
                 echo "FAIL: $arch $opt emitted $count effects, expected $fixture_effects" >&2; exit 1;
             }
             # A lane-merge compiler owns inactive destination preservation.
-            if "$target_cxx" -mcpu="$cpu" -dM -E -x c++ /dev/null |
-                grep -q __riscv_xtt_sfprawlreg_merge; then
+            capability_macros=$("$target_cxx" -mcpu="$cpu" -dM -E -x c++ /dev/null)
+            if grep -q __riscv_xtt_sfprawlreg_merge <<< "$capability_macros"; then
                 runtime_read=0
                 inlined_read=0
                 macro_read=128
