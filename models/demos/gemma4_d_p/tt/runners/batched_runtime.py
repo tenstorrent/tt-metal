@@ -4,11 +4,11 @@
 """Packed traced prefill forwards into engine-owned Gemma4 KV slots: up to forward_chunks chunks of 2048 tokens each.
 
 Implements prefill_forward for PREFILL_FORWARD_CHUNKS > 1 (forward_entries): each non-empty entry is one chunk of one
-request, a request may take several adjacent entries, and every entry starts on a 2048-token boundary, so the packed
-payload needs no rotation and every request's KV has the layout the migration table expects. One trace per number of
-non-empty entries, all compiled before any is captured: a compile pass allocates persistent tensors lazily, and
-allocated after another trace's capture they can land on that trace's freed intermediates. Projections take the
-fidelity of one 2k chunk (HiFi2), not of the stacked rows.
+request, a request may take several adjacent entries, and every entry starts on a 256-token slab boundary
+(Gemma4PrefillRuntime.resume_granularity), its tokens rotated to its block-cyclic rows
+(chunk_layout.pack_forward_tokens). One trace per number of non-empty entries, all compiled before any is captured: a
+compile pass allocates persistent tensors lazily, and allocated after another trace's capture they can land on that
+trace's freed intermediates. Projections take the fidelity of one 2k chunk (HiFi2), not of the stacked rows.
 
 Layer completions: a forward of n entries completes like n chunks in entry order, num_layers per entry, each naming
 its entry's (slot, start, end), and none precedes its KV. With a D2H ack service, entry 0's records go per layer from
@@ -39,8 +39,8 @@ class Gemma4BatchedPrefillRuntime(Gemma4PrefillRuntime):
         self.entry_metadata = []
 
     def _host_rows(self, seqs):
-        """Per-entry chunk-long sequences -> the [1, total] host tensor whose CP shard is each rank's slabs of every
-        entry in entry order: the packed payload (chunk_layout.pack_forward_tokens) at chunk-aligned starts."""
+        """Per-entry chunk-long sequences, rotated -> the [1, total] host tensor whose CP shard is each rank's slabs of
+        every entry in entry order: the packed payload (chunk_layout.pack_forward_tokens)."""
         cp, n = self.mesh_config.cp_degree, len(seqs)
         rows = torch.stack([torch.as_tensor(s, dtype=torch.int64).view(cp, self.slab) for s in seqs], dim=1)
         return ttnn.from_torch(
@@ -65,8 +65,8 @@ class Gemma4BatchedPrefillRuntime(Gemma4PrefillRuntime):
     def _stage(self, entries):
         """Host refresh of the positions, per-entry model metadata and per-entry ack records a replay reads."""
         n = len(entries)
-        starts = [torch.arange(e.start, e.start + self.config.chunk_size) for e in entries]
-        ttnn.copy_host_to_device_tensor(self._host_rows(starts), self.positions[n])
+        positions = [self._chunk_positions(e.start) for e in entries]
+        ttnn.copy_host_to_device_tensor(self._host_rows(positions), self.positions[n])
         for metadata, e in zip(self.model.lane_prefill_metadata(n), entries):
             metadata.update(slot_idx=e.slot, kv_actual_global=e.start)
         if n > 1:
@@ -143,7 +143,8 @@ class Gemma4BatchedPrefillRuntime(Gemma4PrefillRuntime):
 
     def validate_forward(self, entries):
         """Gemma4's rules on top of forward_entries.validate_forward_entries (which the runner applies): every
-        non-empty entry starts on a chunk boundary, and a slot's first entry continues the slot or restarts it."""
+        non-empty entry starts at a multiple of the resume granularity, and a slot's first entry starts within what the
+        slot holds."""
         chunk = self.config.chunk_size
         real = [e for e in entries if not e.is_empty]
         if len(entries) != self.forward_chunks:
@@ -154,8 +155,10 @@ class Gemma4BatchedPrefillRuntime(Gemma4PrefillRuntime):
         for i, e in enumerate(real):
             if not 0 <= e.slot < self.config.num_users:
                 raise ValueError(f"Entry {i}: KV slot {e.slot} is outside [0, {self.config.num_users})")
-            if e.start < 0 or e.start % chunk:
-                raise ValueError(f"Entry {i}: start {e.start} is not a nonnegative multiple of {chunk}")
+            if e.start < 0 or e.start % self.resume_granularity:
+                raise ValueError(
+                    f"Entry {i}: start {e.start} is not a nonnegative multiple of {self.resume_granularity}"
+                )
             if not e.start < e.end <= min(e.start + chunk, self.config.max_seq_len):
                 raise ValueError(f"Entry {i}: [{e.start}, {e.end}) must hold 1 to {chunk} tokens within the context")
             previous = real[i - 1] if i else None
@@ -166,8 +169,8 @@ class Gemma4BatchedPrefillRuntime(Gemma4PrefillRuntime):
                     )
             elif e.slot in seen:
                 raise ValueError(f"Entry {i}: slot {e.slot}'s entries must be adjacent")
-            elif e.start != 0 and e.start != self.slot_ends[e.slot]:
-                raise ValueError(f"Slot {e.slot} expects position {self.slot_ends[e.slot]}, got {e.start}")
+            elif e.start > self.slot_ends[e.slot]:  # a resume may rewind into the cached prefix, not skip past it
+                raise ValueError(f"Slot {e.slot} holds {self.slot_ends[e.slot]} tokens, got an entry at {e.start}")
             seen.add(e.slot)
         return real
 
