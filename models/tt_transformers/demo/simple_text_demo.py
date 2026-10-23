@@ -1297,7 +1297,15 @@ def test_demo_text(
         # queue every step's token read and do the host work for the previous step while the chip runs this one.
         # The read is queued before the next launch on the same command queue, so it sees this step's output.
         # Teacher forcing and stress tests need the token on the host before the next step.
-        pipelined_decode = enable_trace and device_sampling_params is not None and not token_accuracy and not stress_test
+        # TT_DEMO_PIPELINED_DECODE=0 keeps the blocking loop (A/B control).
+        pipelined_decode = (
+            enable_trace
+            and device_sampling_params is not None
+            and not token_accuracy
+            and not stress_test
+            and os.environ.get("TT_DEMO_PIPELINED_DECODE", "1") != "0"
+        )
+        logger.info(f"Decode loop: {'pipelined' if pipelined_decode else 'blocking'}")
         pending_read = None
 
         def read_step_tokens(step_read):
