@@ -59,6 +59,42 @@ def load_yaml(p: Path) -> dict:
     return (yaml.safe_load(p.read_text()) or {}) if p.exists() else {}
 
 
+# F182: one line per TTNN op in the dashboard: the model's bringup/dashboard.yaml op_notes (section, op, optional shape
+# substring) first, else this generic line by op type
+GENERIC_OP_NOTES = {
+    "linear": "matmul with a weight (projection)",
+    "matmul": "matmul",
+    "to_layout": "layout conversion (tile <-> row-major): glue",
+    "typecast": "dtype cast: glue",
+    "slice": "slice: glue",
+    "concat": "concatenation: glue",
+    "reshape": "reshape: glue",
+    "permute": "permute: glue",
+    "pad": "padding: glue",
+    "add": "elementwise add",
+    "multiply": "elementwise multiply",
+    "subtract": "elementwise subtract",
+    "div": "elementwise divide",
+    "maximum": "elementwise max",
+    "embedding": "gather rows by index",
+    "scatter": "scatter by index",
+    "mesh_partition": "keep this chip's part of a replicated tensor",
+    "all_gather": "collective: gather over a mesh axis",
+    "bringup.fabric_all_gather": "collective: gather over a mesh axis (fabric fork)",
+    "bringup.fabric_reduce_scatter": "collective: sum over a mesh axis, each chip keeps its slice (fabric fork)",
+    "experimental.all_to_all_async_generic": "collective: all-to-all reshard over a mesh axis",
+    "from_torch": "host -> device upload",
+    "generic_op": "custom program (generic_op)",
+}
+
+
+def op_note(rules: list, section: str, op: str, shape: str) -> str:
+    for r in rules or []:
+        if r.get("op") == op and r.get("section") in (None, "*", section) and (r.get("shape") or "") in (shape or ""):
+            return r.get("what", "")
+    return GENERIC_OP_NOTES.get(op, "")
+
+
 def hf_arch(spec) -> str:
     try:
         from models.demos.common.bringup.reference.golden import hf_path
@@ -664,6 +700,7 @@ def load_profile(spec, res: Path, plan_doc: dict) -> dict | None:
     prof = json.loads(prof_p.read_text())
     base_p = res / "X.1_profile.json"
     base = json.loads(base_p.read_text()) if base_p.exists() and base_p != prof_p else None
+    op_rules = load_yaml(spec.bringup_dir / "dashboard.yaml").get("op_notes") or []  # F182
     meta = dict(plan_doc.get("profile_sections") or {})  # F181: plus the model's bringup/dashboard.yaml (no plan edit)
     for k, v in (load_yaml(spec.bringup_dir / "dashboard.yaml").get("profile_sections") or {}).items():
         meta[k] = dict(meta.get(k) or {}, **v)
@@ -728,6 +765,7 @@ def load_profile(spec, res: Path, plan_doc: dict) -> dict | None:
             {
                 "op": r["op"],
                 "shape": r["shape"],
+                "what": op_note(op_rules, key, r["op"], r["shape"]),  # F182
                 "mem": r["mem"],
                 "calls": round(r["calls"] / n, 2),
                 "ms": round(r["ms"] / n, 3),
