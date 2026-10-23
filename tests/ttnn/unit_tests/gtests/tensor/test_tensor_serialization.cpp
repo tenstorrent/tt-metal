@@ -772,8 +772,7 @@ TEST(TensorSerializationFlatbufferGuardTest, ReplicaSizeMismatchRejectedEvenWhen
     expect_dump_rejected(test_file, tensor, "sizes differ");
 }
 
-// The label lists (0,1) but only (0,0) holds a shard, as for a single shard taken out of a distributed tensor: a
-// two-coordinate label over one shard is rejected.
+// The label lists (0,1) but only (0,0) holds a shard: a two-coordinate label over one shard is rejected.
 TEST(TensorSerializationFlatbufferGuardTest, LabelCoordWithoutShardRejected) {
     TemporaryFile test_file("label_coord_without_shard.tensorbin");
     const TensorTopology label(MeshShape(2), Placements{shard_on(1)}, all_coords(MeshShape(1, 2)));
