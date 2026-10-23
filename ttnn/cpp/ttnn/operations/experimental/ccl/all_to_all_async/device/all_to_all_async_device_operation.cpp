@@ -181,6 +181,7 @@ ttsl::hash::hash_t AllToAllAsyncDeviceOperation::compute_program_hash(
     auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    // semaphore is excluded from the key and re-applied by AllToAllAsyncProgram::override_runtime_arguments
     return tt::tt_metal::operation::hash_operation<AllToAllAsyncDeviceOperation>(
         operation_attributes.in_dim,
         operation_attributes.out_dim,

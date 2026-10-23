@@ -88,6 +88,8 @@ class PrefillRunParams:
     # rather than re-read from the env downstream so one resolution decides which drafter gets built.
     dflash_checkpoint_path: str = ""
     mtp_levels: int = 0
+    # Decode's MTP level count, 0 = mtp_levels. Levels past mtp_levels reuse its KV: table aliases + acks.
+    mtp_decode_levels: int = 0
 
     @property
     def sp_factor(self) -> int:
@@ -331,6 +333,9 @@ ADAPTER_PATHS = {
     # DeepSeek-V3.2-Exp: DSA, still test-only (config + sparse-MLA reference parity; serving not wired).
     "deepseek_v32": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:DeepSeekV32Adapter",
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
+    # DeepSeek-V4: hyper-connection residual, per-layer SWA / HCA / CSA attention; serving is single-rank, eager.
+    "deepseek_v4_flash": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v4:DeepSeekV4FlashAdapter",
+    "deepseek_v4_pro": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v4:DeepSeekV4ProAdapter",
     "gemma4_d_p": "models.demos.gemma4_d_p.tt.runners.adapters.gemma4:Gemma4PrefillAdapter",
     # GLM-5.2: runnable through the runner only (no tests / CI); same architecture as GLM-5.3.
     "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2:GLM52Adapter",

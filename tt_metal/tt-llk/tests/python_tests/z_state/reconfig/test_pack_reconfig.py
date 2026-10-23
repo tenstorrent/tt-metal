@@ -3,6 +3,7 @@
 
 from itertools import product
 
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.llk_params import (
     DestAccumulation,
@@ -63,15 +64,38 @@ def get_valid_dest_acc(
 ) -> bool:
     return (
         [DestAccumulation.Yes]
-        if any(f.is_integer() for f in formats)
+        if any(f.is_integer() for f in formats) or formats in ROUND_10B_MANT_FORMATS
         else [DestAccumulation.No, DestAccumulation.Yes]
+    )
+
+
+# Float16 is out of the sweep below, but PCK_DEST_RD_CTRL_Round_10b_mant is set only when an fp32
+# dest packs from Float16, and no functional test can see a 10-bit-mantissa rounding difference.
+# These rows keep the reconfig RMW of that bit covered, so they only run with dest_acc=Yes.
+ROUND_10B_MANT_FORMATS = [
+    (
+        DataFormat.Float16,
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        DataFormat.Float16_b,
+    ),  # clears the bit
+]
+# Sets the bit. Blackhole only: Wormhole infers pack_src Float32 for a Float16 output, so the bit
+# would stay clear there.
+if get_chip_architecture() != ChipArchitecture.WORMHOLE:
+    ROUND_10B_MANT_FORMATS.append(
+        (
+            DataFormat.Float16_b,
+            DataFormat.Float16_b,
+            DataFormat.Float16,
+            DataFormat.Float16,
+        )
     )
 
 
 @parametrize(
     formats=generate_valid_formats(
         [
-            DataFormat.Float16,
             DataFormat.Float16_b,
             DataFormat.Bfp8,
             DataFormat.Bfp8_b,
@@ -83,7 +107,8 @@ def get_valid_dest_acc(
             DataFormat.Int8,
             DataFormat.UInt8,
         ]
-    ),
+    )
+    + ROUND_10B_MANT_FORMATS,
     dest_acc=lambda formats: get_valid_dest_acc(formats),
 )
 def test_pack_reconfig(

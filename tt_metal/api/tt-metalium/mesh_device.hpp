@@ -51,6 +51,7 @@ class FabricNodeId;
 }
 namespace tt::tt_metal {
 
+class MetalEnv;
 class SubDeviceManagerTracker;
 class ThreadPool;
 struct TraceDescriptor;
@@ -68,6 +69,18 @@ class DistributedContext;
 }
 
 using DeviceIds = std::vector<int>;
+
+// Options for creating a MeshDevice from a MetalEnv.
+//
+// num_command_queues, dispatch_core_config and worker_l1_size apply to the whole MetalEnv: while a MeshDevice created
+// from it is open, other open_* calls must pass the same values.
+struct OpenMeshDeviceOptions {
+    size_t l1_small_size = DEFAULT_L1_SMALL_SIZE;
+    size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE;
+    uint8_t num_command_queues = 1;
+    DispatchCoreConfig dispatch_core_config;
+    size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE;
+};
 
 class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
     friend class MeshDeviceImpl;
@@ -153,7 +166,6 @@ public:
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
         ttsl::Span<const SubDeviceId> sub_device_ids) const override;
     const std::set<CoreCoord>& ethernet_cores() const override;
-    const std::set<CoreCoord>& storage_only_cores() const override;
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
     SystemMemoryManager& sysmem_manager() override;
@@ -340,6 +352,18 @@ public:
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+
+    // Open a MeshDevice which will use the given MetalEnv.
+    static std::shared_ptr<MeshDevice> open_mesh_device(
+        MetalEnv& env, const MeshDeviceConfig& config, const OpenMeshDeviceOptions& options = {});
+
+    // Open a unit mesh for the physical device ID which will use the given MetalEnv.
+    static std::shared_ptr<MeshDevice> open_unit_mesh(
+        MetalEnv& env, ChipId device_id, const OpenMeshDeviceOptions& options = {});
+
+    // Open a unit mesh for each physical device ID in the list which will use the given MetalEnv.
+    static std::map<ChipId, std::shared_ptr<MeshDevice>> open_unit_meshes(
+        MetalEnv& env, ttsl::Span<const ChipId> device_ids, const OpenMeshDeviceOptions& options = {});
 
     // Only for internal and testing purposes
     const MeshDeviceImpl& impl() const { return *pimpl_; }

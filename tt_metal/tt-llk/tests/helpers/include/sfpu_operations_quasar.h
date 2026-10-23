@@ -28,6 +28,7 @@
 #include "llk_sfpu/ckernel_sfpu_comp.h"
 #include "llk_sfpu/ckernel_sfpu_cumsum.h"
 #include "llk_sfpu/ckernel_sfpu_digamma.h"
+#include "llk_sfpu/ckernel_sfpu_dropout.h"
 #include "llk_sfpu/ckernel_sfpu_elu.h"
 #include "llk_sfpu/ckernel_sfpu_ema.h"
 #include "llk_sfpu/ckernel_sfpu_erf.h"
@@ -57,6 +58,7 @@
 #include "llk_sfpu/ckernel_sfpu_recip.h"
 #include "llk_sfpu/ckernel_sfpu_relu.h"
 #include "llk_sfpu/ckernel_sfpu_remainder.h"
+#include "llk_sfpu/ckernel_sfpu_reshuffle_rows.h"
 #include "llk_sfpu/ckernel_sfpu_rounding_ops.h"
 #include "llk_sfpu/ckernel_sfpu_rpow.h"
 #include "llk_sfpu/ckernel_sfpu_rsqrt.h"
@@ -158,6 +160,47 @@ inline constexpr bool unhandled_op = false;
 // Mirrored by EMA_ALPHA_BITS / EMA_BETA_BITS in helpers/sfpu_dispatch_constants.py.
 inline constexpr std::uint32_t kEmaAlphaBits = 0x3F19999Au; // 0.6f
 inline constexpr std::uint32_t kEmaBetaBits  = 0x3ECCCCCDu; // 0.4f
+
+// Dropout defaults (p = 0, so x * 2.0) match sfpu_dispatch_constants.py; SFPU_DROPOUT_PARAMS overrides them.
+#ifdef SFPU_DROPOUT_PROBABILITY
+constexpr std::uint32_t kDropoutProbability = SFPU_DROPOUT_PROBABILITY;
+constexpr std::uint32_t kDropoutSeed        = SFPU_DROPOUT_SEED;
+constexpr std::uint32_t kDropoutScaleBits   = SFPU_DROPOUT_SCALE_BITS;
+#else
+constexpr std::uint32_t kDropoutProbability = 0u;
+constexpr std::uint32_t kDropoutSeed        = 0xDEADBEEFu;
+constexpr std::uint32_t kDropoutScaleBits   = 0x40000000u; // scale = 2.0f
+#endif
+
+/**
+ * @brief Seed the PRNG for dropout with an explicit seed (fuser path; the dispatcher passes kDropoutSeed).
+ *
+ * @tparam APPROX Whether to use the approximate path (dropout has none).
+ * @param seed Seed handed to dropout_init.
+ */
+template <bool APPROX = false>
+void init_dropout_quasar(std::uint32_t seed)
+{
+    dropout_init<APPROX>(seed);
+}
+
+/**
+ * @brief Apply dropout in-place on one Dest tile with explicit parameters (fuser path).
+ *
+ * @tparam DST_SYNC Destination synchronization mode used for bounds checking.
+ * @tparam is_fp32_dest_acc_en Whether Dest is in FP32 mode.
+ * @tparam APPROX Whether to use the approximate path (dropout has none).
+ * @tparam ITERATIONS Number of SFPU loop iterations.
+ * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
+ * @param probability Drop probability as p * INT_MAX.
+ * @param scale_bits fp32 bit pattern of the scale applied to kept data.
+ * @note Must be preceded by @ref init_dropout_quasar.
+ */
+template <DstSync DST_SYNC, bool is_fp32_dest_acc_en, bool APPROX = false, int ITERATIONS = SFPU_ITERATIONS>
+void call_dropout_quasar(std::uint32_t dst_index, std::uint32_t probability, std::uint32_t scale_bits)
+{
+    SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_dropout, (APPROX, ITERATIONS), dst_index, VectorMode::RC, probability, scale_bits);
+}
 
 /**
  * @brief Whether OPERATION is one of the six comparison-to-zero modes.
@@ -491,6 +534,10 @@ void init_unary_sfpu_operation_quasar()
         init_ema<0 /*OUT_TILE_DELTA*/>();
         ema_load_alpha_beta(kEmaAlphaBits, kEmaBetaBits);
     }
+    else if constexpr (OPERATION == SfpuType::dropout)
+    {
+        init_dropout_quasar<APPROX>(kDropoutSeed);
+    }
     // rsub_scalar_int32 is stateless: its compute API init is SFPU_UNARY_INIT(unused).
 }
 
@@ -621,6 +668,7 @@ void call_signbit_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_form
  * @param first Whether this tile starts a fresh top-to-bottom accumulation chain; only cumsum
  *        and ema read it. Defaults to true so each tile is independent.
  * @param fill_const_value Constant written by fill; other operations ignore it.
+ * @param idx_addr reshuffle_rows only: L1 address of the row mask minus its 16-byte header.
  * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op.
  */
 template <
@@ -635,7 +683,8 @@ void call_unary_sfpu_operation_quasar(
     std::uint32_t dst_index,
     DataFormat sfpu_format                        = DataFormat::Float32,
     [[maybe_unused]] const bool first             = true,
-    [[maybe_unused]] const float fill_const_value = 5.0f)
+    [[maybe_unused]] const float fill_const_value = 5.0f,
+    [[maybe_unused]] const std::uint32_t idx_addr = 0)
 {
     constexpr std::uint32_t kReluThresholdBits = 0x40A00000u; // 5.0f
     if constexpr (OPERATION == SfpuType::abs)
@@ -879,6 +928,18 @@ void call_unary_sfpu_operation_quasar(
             ema_clear_previous_output();
         }
         SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, is_fp32_dest_acc_en, calculate_ema, dst_index, VectorMode::RC_custom);
+    }
+    else if constexpr (OPERATION == SfpuType::dropout)
+    {
+        call_dropout_quasar<DST_SYNC, is_fp32_dest_acc_en, APPROX, ITERATIONS>(dst_index, kDropoutProbability, kDropoutScaleBits);
+    }
+    else if constexpr (OPERATION == SfpuType::reshuffle_rows)
+    {
+        // _sfpu_check_ only validates dst_index; the accumulator is dst_index + 1.
+        LLK_ASSERT(
+            (dst_index + 1 < trisc::get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, trisc::DstTileShape::Tile32x32>()),
+            "reshuffle_rows accumulator tile dst_index + 1 exceeds max dest tiles");
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_reshuffle_rows, (APPROX), dst_index, VectorMode::RC_custom, idx_addr);
     }
     else if constexpr (OPERATION == SfpuType::floor)
     {
@@ -1285,6 +1346,14 @@ void call_unary_sfpu_operation_quasar(
     }
 }
 
+// Fixed mask for BinaryOp::RESHUFFLE_ROWS, since the fuser cannot pass an L1 buffer.
+// Keep in sync with RESHUFFLE_ROWS_FUSER_MASK in helpers/golden_generators.py.
+alignas(4) inline constexpr std::uint8_t RESHUFFLE_ROWS_FUSER_MASK[ckernel::sfpu::RESHUFFLE_MASK_HEADER_BYTES + TILE_R_DIM] = {
+    0,  0,  0,  0,  0,   0,  0, 0,  0,  0,   0,  0,  0,  0,   0,  0, // header, skipped by the kernel
+    31, 30, 16, 15, 255, 32, 0, 0,  0,  47,  5,  5,  48, 254, 17, 3, //
+    1,  2,  31, 31, 100, 8,  9, 15, 16, 255, 20, 21, 22, 64,  7,  0,
+};
+
 constexpr bool quasar_binary_op_is_max_min(ckernel::BinaryOp op)
 {
     return op == ckernel::BinaryOp::MAX || op == ckernel::BinaryOp::MIN;
@@ -1449,7 +1518,7 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
         calculate_gcd_init();
     }
     // RSHFT / LSHFT / LOGICAL_RSHFT need no init beyond the shared SFPU one.
-    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / LOGSIGMOID are stateless — no init.
+    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / LOGSIGMOID / RESHUFFLE_ROWS are stateless — no init.
 }
 
 /**
@@ -1872,6 +1941,22 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             src1_tile,
             dst_tile,
             VectorMode::RC);
+    }
+    else if constexpr (OP == BinaryOp::RESHUFFLE_ROWS)
+    {
+        // The kernel always accumulates into the tile after in0.
+        LLK_ASSERT(src1_tile == src0_tile + 1 && dst_tile == src1_tile, "RESHUFFLE_ROWS needs in1 = in0 + 1 and out = in1");
+        LLK_ASSERT(
+            (dst_tile < trisc::get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, trisc::DstTileShape::Tile32x32>()),
+            "RESHUFFLE_ROWS accumulator tile exceeds max dest tiles");
+        SFPU_UNARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_reshuffle_rows,
+            (APPROXIMATION_MODE),
+            src0_tile,
+            VectorMode::RC_custom,
+            static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(RESHUFFLE_ROWS_FUSER_MASK)) /*idx_addr*/);
     }
     else if constexpr (OP == BinaryOp::RSHFT || OP == BinaryOp::LSHFT || OP == BinaryOp::LOGICAL_RSHFT)
     {

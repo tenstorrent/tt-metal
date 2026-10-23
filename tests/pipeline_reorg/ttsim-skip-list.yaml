@@ -3,12 +3,22 @@
 #
 # Structure: Each architecture has its own section with all tests to skip.
 # Tests that apply to all architectures are duplicated in each section.
+# Paths are pytest node ids from the repo root, the same form ttnn sim legs pass
+# to --deselect.
+#
+# run_ttsim_regression.sh reads this file too. It keeps entries under
+# tt_metal/tt-llk/tests/python_tests/ and drops that prefix, because the LLK
+# suite collects pytest with python_tests/ as rootdir. ttnn sim legs only apply
+# wormhole_b0 and blackhole, so quasar entries are LLK-only. The weekly
+# workflow passes --no-ignore; these LLK entries are for callers that must
+# stay green, such as the quasar ttsim PR gate.
 
 wormhole_b0:
   # Job-level timeouts -- can be cut down still
   - tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_resnet50_e2e_graph_capture
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_unary_dram_reads.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
@@ -23,6 +33,7 @@ blackhole:
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py
   - tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_unary_dram_reads.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
@@ -38,3 +49,24 @@ blackhole:
   # ZEROACC failures
   # https://github.com/tenstorrent/ttsim-private/issues/326
   - tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py
+
+quasar:
+  # ttsim: rv32_v_alu baby-RISC V extension is out of scope.
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_vector_add_l1_quasar.py::test_vector_add_l1_quasar
+  # ttsim: tensix_cfg_wr32 reg=80 is unimplemented.
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_rand_quasar.py::test_rand_quasar
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_rand_quasar.py::test_rand_seed_quasar
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_rand_dest16__op1_math2_Rand__op1_math3_Neg__op1_math4_Add1__op1_math5_Add1__op1_math6_Abs__op1_math7_Neg__op1_math8_Add1__op1_math9_GreaterThanEqualZero__operand1_format_Float16_b]
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_rand_dest16__op1_math2_Rand__op1_math3_Neg__op1_math4_Add1__op1_math5_Add1__op1_math6_Abs__op1_math7_Neg__op1_math8_Add1__op1_math9_GreaterThanEqualZero__operand1_format_Float16]
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_rand_dest32__op1_math2_Rand__op1_math3_Neg__op1_math4_Add1__op1_math5_Add1__op1_math6_Abs__op1_math7_Neg__op1_math8_Add1__op1_math9_GreaterThanEqualZero__operand1_format_Float16_b]
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_rand_dest32__op1_math2_Rand__op1_math3_Neg__op1_math4_Add1__op1_math5_Add1__op1_math6_Abs__op1_math7_Neg__op1_math8_Add1__op1_math9_GreaterThanEqualZero__operand1_format_Float16]
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_rand_dest32__op1_math2_Rand__op1_math3_Neg__op1_math4_Add1__op1_math5_Add1__op1_math6_Abs__op1_math7_Neg__op1_math8_Add1__op1_math9_GreaterThanEqualZero__operand1_format_Float32]
+  # ttsim: tensix_cfg_wr32 reg=82 (PRNG_SEED_OVERRIDE_CTRL, dropout's seeding) is unimplemented.
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_sfpu_quasar.py::test_dropout_reseed_quasar
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_sfpu_quasar.py::test_eltwise_unary_sfpu_quasar[mathop_formats_dest_acc_sync_input_dims:(<MathOperation.Dropout:
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_dropout_
+  # ttsim: check_unpack_formats, Int4/UInt4 → Int8/UInt8 widening is unimplemented.
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_unpack_unary_operand_quasar.py::test_unpack_unary_operand_quasar[formats_dest_acc_sync_transpose_unpack_sel_dims:(InputOutputFormat[A:Int4,
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_unpack_unary_operand_quasar.py::test_unpack_unary_operand_quasar[formats_dest_acc_sync_transpose_unpack_sel_dims:(InputOutputFormat[A:UInt4,
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_pack_quasar.py::test_pack_quasar[formats_dest_acc_sync_dims_relu:(InputOutputFormat[A:Int4,
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_pack_quasar.py::test_pack_quasar[formats_dest_acc_sync_dims_relu:(InputOutputFormat[A:UInt4,

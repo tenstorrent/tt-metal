@@ -6,6 +6,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <vector>
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -14,20 +15,14 @@
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
 
-// Import functions from the new namespace
-using ttnn::experimental::prim::build_line_reduce_scatter_minimal_async_program_artifacts;
-using ttnn::experimental::prim::build_ring_reduce_scatter_minimal_async_program_artifacts;
-
 namespace ttnn::operations::ccl {
 
-ReduceScatterDeviceOperation::ReduceScatterProgram::cached_mesh_workload_t
-ReduceScatterDeviceOperation::ReduceScatterProgram::create_mesh_workload(
+tt::tt_metal::WorkloadDescriptor ReduceScatterDeviceOperation::ReduceScatterProgram::create_workload_descriptor(
     const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    tensor_return_value_t& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor workload_descriptor;
 
     auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
@@ -36,128 +31,117 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_mesh_workload(
     // 3 semaphores used for within op synchronizations
     auto sem_buffer_type = operation_attributes.use_l1_small_for_semaphores ? tt::tt_metal::BufferType::L1_SMALL
                                                                             : tt::tt_metal::BufferType::L1;
-    std::vector<tt::tt_metal::GlobalSemaphore> multidevice_semaphores = {
+    workload_descriptor.semaphores = {
         ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type),
         ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type),
         ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type),
     };
     // 1 barrier semaphore used to ensure that all the buffers are allocated
     ttsl::SmallVector<tt::tt_metal::SubDeviceId> subdevice_ids = {sd_id};
-    auto barrier_semaphore =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type);
+    workload_descriptor.semaphores.push_back(
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type));
+    const auto& multidevice_semaphores = workload_descriptor.semaphores;
+    const auto& barrier_semaphore = workload_descriptor.semaphores.back();
     tt::tt_metal::distributed::Synchronize(
         *mesh_device, std::nullopt, subdevice_ids);  // interaction with subdevice needs to be investigated
 
-    for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(
-            operation_attributes,
-            coord,
-            tensor_args,
-            tensor_return_value,
-            tensor_coords,
-            multidevice_semaphores,
-            barrier_semaphore);
-        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(coord, std::move(cached_program.shared_variables));
+    workload_descriptor.programs.reserve(tensor_coords.coords().size());
+    for (const auto& mesh_coordinate : tensor_coords.coords()) {
+        tt::tt_metal::ProgramDescriptor program{};
+
+        // Get mesh and axis related information
+        uint32_t target_ring_size =
+            ::ttnn::ccl::get_topological_dimension(tensor_args.input_tensor, operation_attributes.cluster_axis);
+
+        log_debug(tt::LogOp, "Getting forward neighbor for {}", mesh_coordinate);
+        const std::optional<MeshCoordinate> forward_coordinate = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            tensor_args.input_tensor,
+            mesh_coordinate,
+            1,
+            operation_attributes.topology,
+            operation_attributes.cluster_axis);
+
+        log_debug(tt::LogOp, "Getting backward neighbor for {}", mesh_coordinate);
+        const std::optional<MeshCoordinate> backward_coordinate =
+            ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+                tensor_args.input_tensor,
+                mesh_coordinate,
+                -1,
+                operation_attributes.topology,
+                operation_attributes.cluster_axis);
+        TT_FATAL(
+            forward_coordinate.has_value() || backward_coordinate.has_value(),
+            "DEBUG: forward_coord or backward_coord is null");
+
+        log_debug(tt::LogOp, "Getting device index for {}", mesh_coordinate);
+        uint32_t device_index = ::ttnn::ccl::get_linearized_index_from_physical_coord(
+            tensor_args.input_tensor, mesh_coordinate, operation_attributes.cluster_axis);
+        log_debug(tt::LogOp, "Device index for {} is {}", mesh_coordinate, device_index);
+
+        // Get core and subdevice related information
+        auto bbox = subdevice_core_range_set.bounding_box();
+        auto first_coord = bbox.start_coord;
+
+        std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler> no_fuse = std::nullopt;
+
+        // semaphores[0..2] are the op semaphores; semaphores[3] is the barrier. Pass only the first three.
+        const std::vector<tt::tt_metal::GlobalSemaphore> op_semaphores(
+            multidevice_semaphores.begin(), multidevice_semaphores.begin() + 3);
+        if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
+            ttnn::experimental::prim::build_ring_reduce_scatter_minimal_async_program_artifacts(
+                program,
+                tensor_args.input_tensor,
+                tensor_return_value.at(0),
+                /*penult_intermediate_tensor=*/std::nullopt,  // accessible via the reduce_scatter_minimal_async path
+                mesh_coordinate,
+                forward_coordinate,
+                backward_coordinate,
+                tensor_return_value.at(1),
+                operation_attributes.dim,
+                operation_attributes.num_links,
+                target_ring_size,
+                device_index,
+                operation_attributes.topology,
+                op_semaphores,
+                barrier_semaphore,
+                false,  // since we don't have a persistent intermediate buffer option, this must be false
+                operation_attributes.subdevice_id,
+                no_fuse,  // never fusing with this
+                operation_attributes.chunks_per_sync,
+                operation_attributes.num_workers_per_link,
+                operation_attributes.num_buffers_per_channel,
+                first_coord,  // first core in the subdevice is our offset as we don't use this version for fusions
+                operation_attributes.compute_kernel_config);
+        } else {
+            ttnn::experimental::prim::build_line_reduce_scatter_minimal_async_program_artifacts(
+                program,
+                tensor_args.input_tensor,
+                tensor_return_value.at(0),
+                /*penult_intermediate_tensor=*/std::nullopt,  // accessible via the reduce_scatter_minimal_async path
+                mesh_coordinate,
+                forward_coordinate,
+                backward_coordinate,
+                tensor_return_value.at(1),
+                operation_attributes.dim,
+                operation_attributes.num_links,
+                target_ring_size,
+                device_index,
+                operation_attributes.topology,
+                op_semaphores,
+                barrier_semaphore,
+                false,  // since we don't have a persistent intermediate buffer option, this must be false
+                operation_attributes.subdevice_id,
+                no_fuse,  // never fusing with this
+                operation_attributes.chunks_per_sync,
+                operation_attributes.num_workers_per_link,
+                operation_attributes.num_buffers_per_channel,
+                first_coord,  // first core in the subdevice is our offset as we don't use this version for fusions
+                operation_attributes.compute_kernel_config);
+        }
+        workload_descriptor.programs.push_back({ttnn::MeshCoordinateRange(mesh_coordinate), std::move(program)});
     }
 
-    return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
-}
-
-ttnn::device_operation::CachedProgram<ReduceScatterDeviceOperation::ReduceScatterProgram::shared_variables_t>
-ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
-    const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
-    const ttnn::MeshCoordinateRangeSet& /*tensor_coords*/,
-    const std::vector<tt::tt_metal::GlobalSemaphore>& multidevice_semaphores,
-    const tt::tt_metal::GlobalSemaphore& barrier_semaphore) {
-    tt::tt_metal::Program program{};
-
-    // Get mesh and axis related information
-    auto* mesh_device = tensor_args.input_tensor.device();
-    uint32_t target_ring_size =
-        ::ttnn::ccl::get_topological_dimension(tensor_args.input_tensor, operation_attributes.cluster_axis);
-
-    log_debug(tt::LogOp, "Getting forward neighbor for {}", mesh_coordinate);
-    const std::optional<MeshCoordinate> forward_coordinate = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
-        tensor_args.input_tensor, mesh_coordinate, 1, operation_attributes.topology, operation_attributes.cluster_axis);
-
-    log_debug(tt::LogOp, "Getting backward neighbor for {}", mesh_coordinate);
-    const std::optional<MeshCoordinate> backward_coordinate = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
-        tensor_args.input_tensor,
-        mesh_coordinate,
-        -1,
-        operation_attributes.topology,
-        operation_attributes.cluster_axis);
-    TT_FATAL(
-        forward_coordinate.has_value() || backward_coordinate.has_value(),
-        "DEBUG: forward_coord or backward_coord is null");
-
-    log_debug(tt::LogOp, "Getting device index for {}", mesh_coordinate);
-    uint32_t device_index = ::ttnn::ccl::get_linearized_index_from_physical_coord(
-        tensor_args.input_tensor, mesh_coordinate, operation_attributes.cluster_axis);
-    log_debug(tt::LogOp, "Device index for {} is {}", mesh_coordinate, device_index);
-
-    // Get core and subdevice related information
-    auto sd_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    auto bbox = subdevice_core_range_set.bounding_box();
-    auto first_coord = bbox.start_coord;
-
-    std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler> no_fuse = std::nullopt;
-
-    auto builder = operation_attributes.topology == ttnn::ccl::Topology::Ring
-                       ? build_ring_reduce_scatter_minimal_async_program_artifacts
-                       : build_line_reduce_scatter_minimal_async_program_artifacts;
-    auto reduce_scatter_program_artifacts = builder(
-        program,
-        tensor_args.input_tensor,
-        tensor_return_value.at(0),
-        /*penult_intermediate_tensor=*/std::nullopt,  // accessible via the reduce_scatter_minimal_async path
-        mesh_coordinate,
-        forward_coordinate,
-        backward_coordinate,
-        tensor_return_value.at(1),
-        operation_attributes.dim,
-        operation_attributes.num_links,
-        target_ring_size,
-        device_index,
-        operation_attributes.topology,
-        multidevice_semaphores,
-        barrier_semaphore,
-        false,  // since we don't have a persistent intermediate buffer option, this must be false
-        operation_attributes.subdevice_id,
-        no_fuse,  // never fusing with this
-        operation_attributes.chunks_per_sync,
-        operation_attributes.num_workers_per_link,
-        operation_attributes.num_buffers_per_channel,
-        first_coord,  // first core in the subdevice is our offset as we don't use this version for fusions
-        operation_attributes.compute_kernel_config);
-
-    shared_variables_t shared_vars{
-        .multidevice_semaphores = multidevice_semaphores,
-        .barrier_semaphore = barrier_semaphore,
-        .program_artifacts = reduce_scatter_program_artifacts};
-
-    return {std::move(program), std::move(shared_vars)};
-}
-
-void ReduceScatterDeviceOperation::ReduceScatterProgram::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    const std::array<uint32_t, 3> addresses = {
-        tensor_args.input_tensor.buffer()->address(),
-        tensor_return_value.at(0).buffer()->address(),
-        tensor_return_value.at(1).buffer()->address()};
-    // This factory owns stable semaphores; only tensor bindings change on cache hits.
-    for (const auto& [range, shared] : cached_workload.shared_variables) {
-        std::copy(addresses.begin(), addresses.end(), shared.program_artifacts.reader_common_args.get().data());
-        std::copy(addresses.begin(), addresses.end(), shared.program_artifacts.writer_common_args.get().data());
-    }
+    return workload_descriptor;
 }
 
 }  // namespace ttnn::operations::ccl

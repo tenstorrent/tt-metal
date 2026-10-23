@@ -661,8 +661,9 @@ jobs:
     uses: ./.github/workflows/llk-smoke-impl.yaml
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
-      # sanity-skus, same as ttnn-sanity-tests. llk_pr_gate_tests.yaml references only
-      # wh_n150_civ2 and bh_p150b_civ2_viommu, so every other SKU in the list produces no
+      # sanity-skus, same as ttnn-sanity-tests. llk_pr_gate_tests.yaml's hardware rows
+      # are wh_n150_civ2 and bh_p150b_civ2_viommu; sim_quasar_xl is the PR-gate ttsim
+      # shards and is absent from sanity-skus, so every other SKU in the list produces no
       # matrix row, and a sim-only run yields none at all (the arch gate above also stops
       # that case before the impl is reached).
       enabled-skus: ${{ needs.generate-sku-matrix.outputs.sanity-skus }}
@@ -673,22 +674,17 @@ jobs:
       ref: ${{ needs.resolve-ref.outputs.sha }}
       budget-type: sanity
 
-  # LLK Quasar build check (compile-only, no hardware). Mirrors pr-gate's llk-build-quasar.
-  llk-build-quasar:
+  # Quasar LLK tests on ttsim, the same two shards as the PR gate. Opt-in with
+  # run-llk-sanity-tests. The hardware smoke job above does not pick these up:
+  # sim_quasar_xl is not a sanity SKU, and llk-smoke-impl drops simulator rows.
+  llk-quasar-tests:
     needs: [resolve-docker-pull-refs, resolve-ref]
     if: ${{ always() && !cancelled() && needs.resolve-docker-pull-refs.result == 'success' && toJSON(inputs.run-llk-sanity-tests) == 'true' }}
-    runs-on: tt-ubuntu-2204-xlarge-stable
-    timeout-minutes: 20
-    container:
-      image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        timeout-minutes: 20
-        with:
-          ref: ${{ needs.resolve-ref.outputs.sha }}
-      - uses: ./.github/actions/llk-compile-quasar
-        with:
-          pytest-markers: "quasar"
+    secrets: inherit
+    uses: ./.github/workflows/llk-ttsim-pr-gate-impl.yaml
+    with:
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
+      ref: ${{ needs.resolve-ref.outputs.sha }}
 
   # ── AI run summary ────────────────────────────────────────────────
   # Aggregates the per-leg ai-job-summary artifacts from the sanity impls this
