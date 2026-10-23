@@ -21,7 +21,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from helpers.chip_architecture import quasar_arch_variant
+from helpers.chip_architecture import quasar_variant
 
 _TESTS_ROOT = Path(__file__).resolve().parents[2]
 _TT_METAL = Path(__file__).resolve().parents[4]
@@ -30,7 +30,7 @@ _QUASAR_LLK = _TT_METAL / "tt-llk/tt_llk_quasar"
 
 
 def _quasar_variant_include():
-    variant = quasar_arch_variant()
+    variant = quasar_variant()
     return [f"-I{_QUASAR_LLK / 'arch' / variant}"] if variant else []
 
 
@@ -119,6 +119,7 @@ def emitted(tmp_path_factory):
             "-DCOMPILE_FOR_TRISC=0",
             "-DTENSIX_FIRMWARE",
             *_quasar_variant_include(),
+            f"-I{_QUASAR_LLK}",
             f"-I{_QUASAR_LLK / 'common/inc'}",
             f"-I{_QUASAR_LLK / 'common/inc/sfpu'}",
             f"-I{_QUASAR_LLK / 'llk_lib'}",
