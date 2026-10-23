@@ -957,7 +957,7 @@ class TestConfig:
         # (These used to default to a shared ``[]`` that the fold mutated, so a
         # variant constructed without explicit ``templates`` inherited the
         # previous variant's runtimes -- invisible until it changed what got
-        # compiled. Regression coverage: test_test_config.py.)
+        # compiled. Regression coverage: tests/hardware_free/harness/test_config.py.)
         templates = list(templates or [])
         runtimes = list(runtimes or [])
 

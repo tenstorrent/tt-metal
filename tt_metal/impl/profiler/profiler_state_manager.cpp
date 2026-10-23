@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <thread>
 #include <vector>
 #include "profiler_state_manager.hpp"
@@ -79,13 +80,18 @@ uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtopti
             profiler_program_support_count.value());
     }
 
-    const uint32_t dram_bank_size_per_risc_bytes =
-        dram_bank_size_per_risc_bytes_single_program * profiler_program_support_count.value();
+    const uint64_t dram_bank_size_per_risc_bytes =
+        static_cast<uint64_t>(dram_bank_size_per_risc_bytes_single_program) * profiler_program_support_count.value();
+    TT_FATAL(
+        dram_bank_size_per_risc_bytes <= std::numeric_limits<uint32_t>::max(),
+        "Profiler program support count {} needs {} B of DRAM per RISC, which does not fit in 32 bits",
+        profiler_program_support_count.value(),
+        dram_bank_size_per_risc_bytes);
 
     rtoptions.set_profiler_program_support_count(profiler_program_support_count.value());
 
     TT_ASSERT(dram_bank_size_per_risc_bytes > kernel_profiler::PROFILER_L1_BUFFER_SIZE);
-    return dram_bank_size_per_risc_bytes;
+    return static_cast<uint32_t>(dram_bank_size_per_risc_bytes);
 }
 
 uint32_t get_profiler_dram_bank_size_for_hal_allocation(llrt::RunTimeOptions& rtoptions) {

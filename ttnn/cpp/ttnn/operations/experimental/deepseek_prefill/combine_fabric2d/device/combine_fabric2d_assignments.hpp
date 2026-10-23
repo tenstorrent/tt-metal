@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <map>
+#include <utility>
 #include <vector>
 
 #include "combine_fabric2d_placement.hpp"
@@ -30,6 +31,7 @@ struct Assignment {
     uint32_t relay_chunk = 0;  // is_relay: which chunk of this stream's region
     uint32_t dst_chip_id = 0;  // !is_relay: fabric name of the destination chip
     uint32_t dst_dg_index = 0;  // !is_relay: that chip's index in the dispatch group, indexing expert_offsets
+    uint32_t distance = 0;      // !is_relay: hops to that chip, which names the channel it is queued in
     uint32_t split_idx = 0;
     uint32_t split_count = 1;
 };
@@ -43,6 +45,8 @@ std::map<StreamId, std::vector<Assignment>> generate_assignments(
 std::vector<combine_chunk::ChunkDescriptor> forwarding_chunks(
     StreamId stream, uint32_t my_dg_index, uint32_t ring_extent, uint32_t num_links);
 
+
+
 // Relay chunks a stream receives, which is also how many its upstream neighbour emits into this stream's
 // share of the forwarding buffer. Equals (own forwarding) + (re-forwarded), so upstream writer and
 // downstream reader agree on the chunk count without exchanging anything.
@@ -55,5 +59,39 @@ constexpr uint32_t relay_chunks_per_stream(uint32_t ring_extent) {
     const uint32_t m = ring_extent / 2;
     return m * (m - 1) / 2;
 }
+
+// ---------------------------------------------------------------------------------------------------
+// Virtual channels.
+//
+// A forwarding region is not one queue but one per MOVEMENT CLASS: the (hops upstream, hops downstream)
+// pair a page is in. For an extent-8 ring that is six -- (-1,+3) (-1,+2) (-1,+1) (-2,+2) (-2,+1) (-3,+1) --
+// which is exactly what chunks_in_forwarder_ref_frame already enumerates, so a channel index IS an index
+// into that list.
+//
+// Two properties make this work, and both are why the split is by class rather than by anything coarser:
+//
+//   DRAIN. A class with dst == +1 is delivered to the next chip's OUTPUT, so draining it needs no space
+//   anywhere. Every other class moves one hop and becomes a class nearer +1, so every chain ends in a
+//   deliverable one within half_extent - 1 hops: (-1,+3) -> (-2,+2) -> (-3,+1) -> out. The graph is a
+//   forest of paths, never a cycle, so a blocked chip always has a legal move and capacity stops being a
+//   correctness parameter. Merge classes and that stops holding -- lump every dst > +1 together and
+//   (-1,+3) -> (-2,+2) lands back in the same channel, which wraps the ring.
+//
+//   ORDER. Each class at a chip is fed by exactly one class on the chip before it, so a channel has a
+//   single producer and stays a dense FIFO. That is what lets both sides keep deriving page positions
+//   from the same generator with nothing exchanged.
+// ---------------------------------------------------------------------------------------------------
+
+// The (src, dst) hop offsets of every channel, in channel order.
+std::vector<std::pair<int32_t, int32_t>> forwarding_classes(uint32_t dg_size);
+
+inline uint32_t num_vcs(uint32_t dg_size) { return relay_chunks_per_stream(dg_size); }
+
+// The channel a page in channel `vc` lands in on the next chip, or VC_NONE when it is delivered there.
+uint32_t vc_after_hop(uint32_t vc, uint32_t dg_size);
+
+// The channel this chip's own tokens for a destination `distance` hops away land in downstream. Only
+// distance >= 2 is forwarded at all; distance 1 is a final write and has no channel.
+uint32_t vc_for_own(uint32_t distance, uint32_t dg_size);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d

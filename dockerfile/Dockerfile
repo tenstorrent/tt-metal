@@ -43,7 +43,7 @@ ARG PYTHON_VERSION=""
 # Fallback UV_IMAGE for standalone `docker build` without Bake.
 # The single source of truth is docker-bake.hcl variable "UV_IMAGE".
 # When upgrading uv, update docker-bake.hcl first, then sync this default.
-ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b
+ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b
 # Prebuilt tt-llm-engine migration image that release-models bakes _migration_client
 # out of on the 3.10 build (see the mig-client stages before release-models), so that
 # image doubles as the disaggregated-prefill worker. Global because it is used in a
@@ -121,6 +121,15 @@ RUN test -x /usr/local/bin/cmake || { echo "ERROR: cmake not found in cmake-laye
     test -x /usr/local/bin/zstd || { echo "ERROR: zstd not found in zstd-layer" >&2; exit 1; } && \
     test -d "${OMPI_PREFIX}/bin" || \
     { echo "ERROR: ${OMPI_PREFIX}/bin not found. OMPI_VERSION (${OMPI_VERSION}) likely differs from Dockerfile.tools ARG OMPI_VERSION." >&2; exit 1; }
+
+# UCX links libmpi.so against libibverbs/librdmacm/libnuma. These live in `base`, not in
+# a CI stage: release, mig-client and release-models all derive straight from base, and
+# without them libmpi.so fails to load in exactly the images that ship.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libibverbs1 \
+    librdmacm1 \
+    libnuma1 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Auto-detect Python version from Ubuntu version if not explicitly provided
 RUN DETECTED_PYTHON_VERSION="${PYTHON_VERSION}"; \

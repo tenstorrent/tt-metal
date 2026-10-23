@@ -88,6 +88,9 @@ class TtPrefillRuntimeConfig:
     dflash_checkpoint_path: str = ""
     # Number of MTP prediction levels K to run after the trunk, 0 = off.
     mtp_levels: int = 0
+    # Decode's MTP level count D, 0 = K. Decode keeps one KV cache for all D levels, so with K = 1 the KV
+    # table publishes levels 2..D as aliases of level 1's rows and each chunk acks them with it.
+    mtp_decode_levels: int = 0
     # Pipeline-parallel rank slicing. first_layer_idx is the global index of this
     # rank's first layer; is_first_rank gates the embedding, is_last_rank marks the
     # final stage (non-last ranks forward the hidden state instead of running a tail).
@@ -117,6 +120,16 @@ class TtPrefillRuntimeConfig:
     @property
     def tp_factor(self) -> int:
         return self.mesh_shape[self.tp_axis]
+
+    @property
+    def mtp_ack_levels(self) -> int:
+        """MTP levels the KV table publishes and each chunk acks: decode's D, or K when unset."""
+        levels = self.mtp_decode_levels or self.mtp_levels
+        assert levels == self.mtp_levels or (self.mtp_levels == 1 and levels > 1), (
+            f"mtp_decode_levels={self.mtp_decode_levels} needs mtp_levels=1 (got {self.mtp_levels}): only "
+            "level 1's rows can stand in for the levels decode runs on its one shared cache"
+        )
+        return levels
 
 
 class TtPrefillRuntime:
@@ -340,7 +353,8 @@ class TtPrefillRuntime:
         )
 
         logger.info(
-            f"Building MTP predictor: num_levels={k}, layer_idx={mtp_cfg.mtp_layer_idx}, "
+            f"Building MTP predictor: num_levels={k}, decode_levels={self.config.mtp_ack_levels}, "
+            f"layer_idx={mtp_cfg.mtp_layer_idx}, "
             f"first_cache_slot={self.config.num_layers}, layer_num={self.config.num_layers + k}, "
             f"index_share={mtp_cfg.index_share_for_mtp_iteration}, cache={mtp_cache_path}"
         )
@@ -352,6 +366,7 @@ class TtPrefillRuntime:
             mtp_cfg,
             seq_len=self.config.chunk_size,
             num_levels=k,
+            decode_levels=self.config.mtp_ack_levels,
             layer_idx=mtp_cfg.mtp_layer_idx,
             first_cache_slot=self.config.num_layers,
             kv_only_last_level=self.config.kv_only_last_mtp_level,
@@ -1370,9 +1385,10 @@ class TtPrefillRuntime:
         only the KV-tail rank writes those layers, so only its LOCAL count grows.
 
         MTP widens it the same way: ``kv_migration_stages`` puts its K slots in the last rank's stage, so
-        the consumer needs an ack for each of them too.
+        the consumer needs an ack for each of them too. A decode running D > K levels on one shared cache
+        widens it to D: the table publishes the extra levels as aliases of level 1, and each is acked.
         """
-        extra = self.config.mtp_levels
+        extra = self.config.mtp_ack_levels
         if self.config.dflash_enabled:
             extra += self.drafter.config.num_hidden_layers
         return global_ack_layers + extra, local_ack_layers + (extra if self.config.is_last_rank else 0)
@@ -1548,6 +1564,19 @@ class TtPrefillRuntime:
                 layer for layer in range(total_layers) if not indexer_layer_is_reused(self.hf_config, layer)
             ]
 
+        # Decode's MTP levels past level 1 read level 1's cache rows, so the table publishes them there too.
+        kvpe_alias_rows = None
+        computed_levels, decode_levels = self.config.mtp_levels, self.config.mtp_ack_levels
+        if decode_levels > computed_levels:
+            from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import merged_num_layers
+
+            # From the gathered stages, not this rank's config: rank 0 builds the table and holds no MTP row.
+            physical_rows = (
+                merged_num_layers(stage_layouts[0]) if stage_layouts else self.config.num_layers + computed_levels
+            )
+            level1_row = physical_rows - computed_levels
+            kvpe_alias_rows = {level1_row + level: level1_row for level in range(computed_levels, decode_levels)}
+
         # The table must describe the SAME layout the caches were allocated with and the write op produced.
         return build_and_serialize_kv_chunk_table(
             mesh_device=self.mesh_device,
@@ -1569,6 +1598,7 @@ class TtPrefillRuntime:
             stage_layouts=stage_layouts,
             layer_rows=self.kv_table_layer_rows(stage_layouts),
             index_layer_ids=index_layer_ids,
+            kvpe_alias_rows=kvpe_alias_rows,
         )
 
     def read_slot_kv(self, kv_caches: MlaKvCaches, slot: int):

@@ -184,13 +184,6 @@ public:
         return get_shard_noc_addr(shard_id, offset, noc);
     }
 
-    // Returns the bank-relative base address (offset) used by this accessor.
-    // (For L1-sharded tensors, this is the local L1 base address of the shard region.)
-    // Not noted, unlike get_noc_addr: it must stay constexpr, and C++17 allows no asm there. A kernel that uses it for
-    // direct access to its local shard should hold a LocalTensorAccessor, which is noted.
-    FORCE_INLINE
-    constexpr uint32_t get_bank_base_address() const { return bank_base_address; }
-
     // Helpers
     struct PageMapping {
         size_t bank_id;
@@ -524,11 +517,6 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
         return false;
     }
 
-    // Returns the bank-relative base address (offset) used by this accessor.
-    // (For L1-sharded tensors, this is the local L1 base address of the shard region.)
-    FORCE_INLINE
-    constexpr uint32_t get_bank_base_address() const { return this->bank_base_address; }
-
     // Returns a proxy for shard pages iterator
     tensor_accessor::ShardPages<TensorAccessor> shard_pages(
         uint32_t shard_id,
@@ -823,5 +811,14 @@ struct ShardView {
     uint64_t get_noc_addr(uint32_t shard_id, uint32_t offset, uint8_t noc) const {
         return accessor.get_shard_noc_addr(shard_id, offset, noc);
     }
+};
+
+// Addresses the tensor by allocator bank: `{.bank_id, .offset_bytes}` names offset_bytes into the tensor's region of
+// bank bank_id (an L1 bank's worker core, or a DRAM bank; the tensor's memory type picks which). Use it where the
+// kernel already works in banks (e.g. a host-computed bank id per transfer) rather than pages or shards.
+template <typename Accessor>
+struct BankView {
+    const Accessor& accessor;
+    explicit BankView(const Accessor& acc) : accessor(acc) {}
 };
 // NOLINTEND(misc-unused-parameters)
