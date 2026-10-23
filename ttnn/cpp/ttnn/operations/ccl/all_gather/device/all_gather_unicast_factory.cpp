@@ -88,7 +88,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_program(
         for (uint32_t w = 0; w < group.workers.size(); ++w) {
             const CoreCoord& core = group.workers[w];
             const auto ws = plan_ns::schedule(plan, dev, group.link, group.dir, w);
-            prog::add_reader_rt_args(desc.kernels[prog::kReaderIdx], core, input, output, ws, init_sem, data_sem);
+            prog::add_reader_rt_args(desc.kernels[prog::kReaderIdx], core, input, output, ws, data_sem);
 
             // Mirror addressing: core coordinates are the same on every device, so our own coordinates name the
             // downstream worker that receives data_valid.
@@ -101,6 +101,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_program(
                 ws.last_take,
                 ws.cadence_slots,
                 ws.init_send ? 1u : 0u,
+                ws.init_wait,
                 init_sem,  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
                 data_sem,  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
                 static_cast<uint32_t>(partner.x),

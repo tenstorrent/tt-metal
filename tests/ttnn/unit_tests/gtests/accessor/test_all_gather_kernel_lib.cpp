@@ -8,10 +8,12 @@
 // and checks every delivered byte:
 //   W  the walk is a bijection on the slice, resumes at any position, its order does not depend on the stripe,
 //      every run is linear at the destination and within the column cap, and mid-row slices walk whole rows;
-//   P  every packet is <= P_A bytes and <= 4 segments, cuts on A, reads congruent with their sources and inside
-//      their pages, and delivers each unit once, with its own bytes, in walk order;
+//   P  every packet is <= the packet cap (<= P_A) bytes and <= 4 segments, cuts on A, reads congruent with their
+//      sources and inside their pages, and delivers each unit once, with its own bytes, in walk order; where the cap
+//      is below P_A no segment exceeds a quarter of it (the bound packet_cap() is built on);
 //   S  a slot carries at most max_slot_units() units of one iteration (so a relay's wait target covers every read),
-//      the reader never writes the writer's header region, and SignalCadence signals every unit by iteration end.
+//      the reader keeps its local-copy addresses in the slot and never writes the writer's header region, and
+//      SignalCadence signals every unit by iteration end.
 
 #include <gtest/gtest.h>
 
@@ -297,12 +299,16 @@ public:
         rwalk_{walk_, {}},
         rinput_{input_, [this](const ag::DstRun& r) { return run_sources(r); }, c.A, {}, 0},
         rrelay_{relay_, [this](const ag::DstRun& r) { return run_sources(r); }, c.A, {}, 0},
-        in_b_(rwalk_, rinput_, c.P_A),
-        relay_b_(rwalk_, rrelay_, c.P_A),
-        lay_(ag::slot_offsets(c.k, c.A, c.hdr_bytes, c.P_A)),
+        cap_(ag::packet_cap(geo(c), ag::walk_shape(geo(c), out.contiguous_page_stride()))),
+        in_b_(rwalk_, rinput_, cap_),
+        relay_b_(rwalk_, rrelay_, cap_),
+        lay_(ag::slot_offsets(c.k, c.A, c.hdr_bytes, cap_)),
         cadence_(c.cadence) {
+        check(cap_ % c.A == 0 && cap_ >= c.A && cap_ <= c.P_A, "packet cap a multiple of A within P_A");
         check(lay_.slot_bytes % c.A == 0 && lay_.pay_off % c.A == 0 && lay_.hdr_off % c.A == 0, "slot offsets on A");
-        check(lay_.rec_off + c.k * ag::kPacketRecordBytes <= lay_.hdr_off, "records overlap the headers");
+        check(lay_.rec_off + c.k * ag::kPacketRecordBytes <= lay_.loc_off, "records overlap the local addresses");
+        check(lay_.loc_off % 8 == 0 && lay_.loc_off + c.k * ag::kLocalAddrBytes <= lay_.hdr_off, "local addresses");
+        check(lay_.pay_stride == cap_, "payload stride is the packet cap");
         check(lay_.hdr_stride >= c.hdr_bytes && lay_.pay_off == lay_.hdr_off + c.k * lay_.hdr_stride, "header slots");
         mem_.assign(kSlots * lay_.slot_bytes / sizeof(uint64_t), 0);
         // The writer's headers: a pattern the reader must never disturb.
@@ -332,7 +338,7 @@ public:
         uint32_t consumed = 0;
         while (consumed < take_units) {
             // The relay wait target taken before reserving: every unit this slot reads must lie below it.
-            const uint32_t target = std::min(consumed + ag::max_slot_units(c_.k, c_.A, c_.P_A), take_units);
+            const uint32_t target = std::min(consumed + ag::max_slot_units(c_.k, c_.A, cap_), take_units);
             const uint32_t s = slots_++ % kSlots;
             uint32_t packets = 0, units = 0;
             for (; packets < c_.k; ++packets) {
@@ -434,13 +440,15 @@ private:
             uint32_t off, bytes;
         };
         std::vector<Rd> reads;
-        uint8_t* payload = slot(s) + lay_.pay_off + j * c_.P_A;
-        const uint32_t payload_l1 = kCbBase + s * lay_.slot_bytes + lay_.pay_off + j * c_.P_A;
+        uint8_t* payload = slot(s) + lay_.pay_off + j * lay_.pay_stride;
+        const uint32_t payload_l1 = kCbBase + s * lay_.slot_bytes + lay_.pay_off + j * lay_.pay_stride;
         auto* rec = reinterpret_cast<ag::PacketRecord*>(slot(s) + lay_.rec_off + j * ag::kPacketRecordBytes);
         const uint32_t ra = relay_iter_ ? c_.ro : c_.ri;
-        uint64_t local[NOC_SCATTER_WRITE_MAX_CHUNKS] = {};
+        // Where the reader keeps the packet's own-NOC segment starts: its region of the slot, not its stack.
+        auto* local = reinterpret_cast<uint64_t*>(slot(s) + lay_.loc_off + j * ag::kLocalAddrBytes);
+        std::fill(local, local + ag::kSegmentsPerPacket, 0);
         auto read = [&](uint64_t src, uint32_t off, uint32_t n) {
-            check(n > 0 && off % c_.A == 0 && off + n <= c_.P_A, "read outside the packet payload");
+            check(n > 0 && off % c_.A == 0 && off + n <= cap_, "read outside the packet payload");
             check((payload_l1 + off - src) % ra == 0, "read not congruent with its source");
             for (uint32_t i = 0; i < n; ++i) {
                 payload[off + i] = byte_at(src + i);
@@ -458,7 +466,7 @@ private:
             check(local[i] == rec->cmd.noc_address[i], "local segment address differs from the record's");
         }
         ++st_.packets;
-        check(bytes <= c_.P_A && bytes % c_.A == 0, "packet size");
+        check(bytes <= cap_ && bytes % c_.A == 0, "packet size");
         check(rec->payload_bytes == bytes, "record payload size");
         check(rec->cmd.chunk_count >= 1 && rec->cmd.chunk_count <= NOC_SCATTER_WRITE_MAX_CHUNKS, "segment count");
         st_.segments += rec->cmd.chunk_count;
@@ -475,6 +483,7 @@ private:
         uint32_t seg_end = 0;
         ag::for_each_segment(*rec, rec->cmd.noc_address, [&](uint32_t off, uint64_t dst, uint32_t len) {
             check(off == seg_end && len > 0 && len % c_.A == 0, "segment not cut on A");
+            check(cap_ == c_.P_A || len <= cap_ / ag::kSegmentsPerPacket, "a segment longer than packet_cap assumes");
             seg_end += len;
             for (uint32_t ub = 0; ub < len; ub += c_.A) {
                 const auto it = pos_.find(dst + ub);
@@ -521,6 +530,7 @@ private:
     RecWalk<ag::Walk<Out>> rwalk_;
     RecSrc<ag::InputPieces<In>> rinput_;
     RecSrc<ag::RelayPieces> rrelay_;
+    uint32_t cap_;
     ag::PacketBuilder<RecWalk<ag::Walk<Out>>, RecSrc<ag::InputPieces<In>>> in_b_;
     ag::PacketBuilder<RecWalk<ag::Walk<Out>>, RecSrc<ag::RelayPieces>> relay_b_;
     ag::SlotLayout lay_;
@@ -761,12 +771,18 @@ TEST(AllGatherKernelLib, WalkShape) {
     // A page bigger than the packet still walks one element per column.
     constexpr auto big = ag::walk_shape({64, 313, 313, 8, 313, 15168, true}, 8);
     static_assert(big.h == 1);
-    // Slot layout: offsets on A, records before headers, payloads last.
+    // Packet cap: 4 segments of at most a column (h elements), or of a stripe row when elements are units.
+    static_assert(ag::packet_cap({64, 32, 320, 8, 32, 15168, true}, tile) == 15168);  // 4 x 2 tiles > P_A
+    static_assert(ag::packet_cap({32, 4, 6, 4, 1, 7616, true}, sub) == 4 * 6 * 32);   // 4 stripe rows of 192 B
+    static_assert(ag::packet_cap({64, 313, 313, 8, 313, 15168, true}, big) == 15168);
+    // Slot layout: records, local addresses, then headers and payloads on A.
     constexpr auto lay = ag::slot_offsets(2, 64, 96, 15168);
-    static_assert(lay.rec_off == 8 && lay.hdr_off == 128 && lay.hdr_stride == 128 && lay.pay_off == 384);
-    static_assert(lay.pay_stride == 15168 && lay.slot_bytes == 384 + 2 * 15168 && lay.slot_bytes % 64 == 0);
-    static_assert(lay.record(1000, 1) == 1000 + 8 + 48 && lay.header(1000, 1) == 1000 + 256);
-    static_assert(lay.payload(1000, 1) == 1000 + 384 + 15168);
+    static_assert(lay.rec_off == 8 && lay.loc_off == 8 + 96 && lay.hdr_off == 192 && lay.hdr_stride == 128);
+    static_assert(lay.pay_off == 448 && lay.pay_stride == 15168 && lay.slot_bytes == 448 + 2 * 15168);
+    static_assert(lay.record(1000, 1) == 1000 + 8 + 48 && lay.local(1000, 1) == 1000 + 104 + 32);
+    static_assert(lay.header(1000, 1) == 1000 + 320 && lay.payload(1000, 1) == 1000 + 448 + 15168);
     static_assert(ag::max_slot_units(2, 64, 15168) == 2 * 237);
+    constexpr auto small = ag::slot_offsets(16, 64, 96, 1024);
+    static_assert(small.pay_stride == 1024 && small.slot_bytes % 64 == 0 && ag::max_slot_units(16, 64, 1024) == 256);
     SUCCEED();
 }

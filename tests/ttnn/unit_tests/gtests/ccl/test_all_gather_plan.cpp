@@ -703,7 +703,7 @@ AgPlan unicast_plan(uint32_t N, bool ring, uint32_t elements, uint32_t links, ui
     p.geo.A = 64;
     p.geo.E = E;
     p.geo.P_A = 64 * 5;  // a packet holds a few elements, so iterations span several slots
-    p.geo.fill = p.geo.P_A;
+    p.geo.cap = p.geo.fill = p.geo.P_A;
     p.slices = make_slices(elements, links * n);
     return p;
 }
@@ -715,7 +715,7 @@ AgPlan mcast_plan(uint32_t N, uint32_t elements, uint32_t links, uint32_t varian
     p.geo.A = 64;
     p.geo.E = 1;
     p.geo.P_A = 64 * 5;
-    p.geo.fill = p.geo.P_A;
+    p.geo.cap = p.geo.fill = p.geo.P_A;
     p.variants = variants;
     p.slices = make_slices(elements, links);
     return p;
@@ -802,7 +802,7 @@ TEST(AllGatherPlan, MuxPerActiveDirection) {
 // The units each data_valid signal carries, in order, for an ideal walk (every slot full). The real walk carries no
 // more per slot, so the checks below hold for it too.
 std::vector<uint32_t> writer_signals(const AgPlan& plan, const WorkerSched& ws) {
-    const uint32_t cap = ag::max_slot_units(plan.choice.k, plan.geo.A, plan.geo.P_A);
+    const uint32_t cap = ag::max_slot_units(plan.choice.k, plan.geo.A, plan.geo.cap);
     ag::SignalCadence cadence(ws.cadence_slots);
     std::vector<uint32_t> signals;
     for (uint32_t i = 0; i < ws.iters; ++i) {
@@ -826,7 +826,7 @@ std::vector<uint32_t> writer_signals(const AgPlan& plan, const WorkerSched& ws) 
 void check_unicast_sync(const AgPlan& plan, const std::string& label) {
     const uint32_t N = plan.N;
     const uint32_t E = plan.geo.E;
-    const uint32_t cap = ag::max_slot_units(plan.choice.k, plan.geo.A, plan.geo.P_A);
+    const uint32_t cap = ag::max_slot_units(plan.choice.k, plan.geo.A, plan.geo.cap);
     // init credits per (dev, link, dir, w)
     std::map<std::array<uint32_t, 4>, uint32_t> init_got;
     uint64_t init_sends = 0, init_waits = 0;
@@ -968,15 +968,16 @@ void check_mcast_sync(std::array<uint32_t, 2> mesh, std::array<bool, 2> ring, ui
     const bool alt = mcast_routes(N, mesh, {0, 0}, std::nullopt, ring).alternates;
     const AgPlan plan = mcast_plan(N, 5, links, alt ? 2 : 1);
     for (uint32_t l = 0; l < links; ++l) {
-        // Init and done ride every (connection, variant) of every device's core on link l to the same core elsewhere.
-        std::map<std::array<int, 2>, uint32_t> got;
+        // Done rides every (connection, variant) of every device's core on link l to the same core elsewhere; init
+        // only variant 0.
+        std::map<std::array<int, 2>, uint32_t> got, init_got;
         uint64_t sends = 0, waits = 0;
         for (uint32_t r = 0; r < mesh[0]; ++r) {
             for (uint32_t c = 0; c < mesh[1]; ++c) {
                 const uint32_t dev = (r * mesh[1]) + c;
                 const auto ws = schedule(plan, dev, l, 0, 0);
                 ASSERT_TRUE(ws.init_send && ws.local_copy && ws.iters == 1) << label;
-                ASSERT_EQ(ws.init_wait, ws.end_wait) << label;
+                ASSERT_EQ(ws.init_wait * plan.variants, ws.end_wait) << label;
                 waits += ws.end_wait;
                 const auto routes = mcast_routes(N, mesh, {r, c}, std::nullopt, ring);
                 for (uint32_t v = 0; v < plan.variants; ++v) {
@@ -985,6 +986,9 @@ void check_mcast_sync(std::array<uint32_t, 2> mesh, std::array<bool, 2> ring, ui
                              receivers(conn, v == 0 ? conn.range_v0 : conn.range_v1, {int(r), int(c)}, mesh, wraps)) {
                             got[p]++;
                             ++sends;
+                            if (v == 0) {
+                                init_got[p]++;
+                            }
                         }
                     }
                 }
@@ -996,6 +1000,7 @@ void check_mcast_sync(std::array<uint32_t, 2> mesh, std::array<bool, 2> ring, ui
                 const auto ws = schedule(plan, (r * mesh[1]) + c, l, 0, 0);
                 const std::array<int, 2> me{int(r), int(c)};
                 ASSERT_EQ(got[me], ws.end_wait) << label << " dev " << r << "," << c;
+                ASSERT_EQ(init_got[me], ws.init_wait) << label << " dev " << r << "," << c;
             }
         }
     }
@@ -1060,7 +1065,7 @@ TEST(AllGatherPlan, ShrinkOrder) {
     };
     const AgForce uc{.algo = AgAlgo::Unicast};
     const PlanIn ref = plan_in_for(in, out, -1, 8, Fab::Line, make_facts(kBH), 2, uc);
-    const uint32_t n_want = model_workers(busiest_link_packets(*make_geometry(ref, true), 8, false, 2));
+    const uint32_t n_want = model_workers(false, busiest_link_packets(*make_geometry(ref, true), 8, false, 2));
     ASSERT_GE(n_want, 2u);
     struct Case {
         CoreRangeSet cores;
@@ -1118,7 +1123,7 @@ void check_plan(const PlanIn& in, const AgPlan& plan, const std::string& label) 
     ASSERT_LE(plan.choice.links, in.links) << label;
     ASSERT_LE(kCbSlots * plan.slot_bytes, in.facts.l1_small_floor - in.facts.l1_base) << label;
     ASSERT_EQ(
-        plan.slot_bytes, ag::slot_offsets(plan.choice.k, plan.geo.A, in.facts.header_bytes, plan.geo.P_A).slot_bytes);
+        plan.slot_bytes, ag::slot_offsets(plan.choice.k, plan.geo.A, in.facts.header_bytes, plan.geo.cap).slot_bytes);
     ASSERT_EQ(plan.slices.size(), uint32_t{plan.choice.links} * plan.choice.n) << label;
     ASSERT_EQ(plan.slices.back().e0 + plan.slices.back().ne, plan.geo.elements) << label;
     ASSERT_GE(plan.geo.P_A, plan.geo.A) << label;
@@ -1253,7 +1258,6 @@ TEST(AllGatherPlan, ParseForce) {
              "unicast:n=2,",
              "unicast:n=0",
              "unicast:n=4",
-             "unicast:k=5",
              "unicast:links=256",
              "unicast:rdelay=65536",
              "unicast:n=2,n=3",
@@ -1264,6 +1268,8 @@ TEST(AllGatherPlan, ParseForce) {
          }) {
         EXPECT_ANY_THROW(parse_force(bad)) << "'" << bad << "'";
     }
+    EXPECT_EQ(parse_force(fmt::format("unicast:k={}", kMaxPacketsPerSlot)).k, kMaxPacketsPerSlot);
+    EXPECT_ANY_THROW(parse_force(fmt::format("unicast:k={}", kMaxPacketsPerSlot + 1)));
 }
 
 // ---- footprint and mux map over budget: a smaller n or the next algorithm, never a fatal ----
@@ -1282,7 +1288,7 @@ TEST(AllGatherPlan, FootprintAndMuxMap) {
     // Up to 2 channels fit: n is whatever the model wants, capped at 2.
     f.l1_small_floor = f.mux_map_end[1];
     const PlanIn two = plan_in_for(in, out, -1, 8, Fab::Line, f, 2, uc);
-    const uint32_t n_want = model_workers(busiest_link_packets(*make_geometry(two, true), 8, false, 2));
+    const uint32_t n_want = model_workers(false, busiest_link_packets(*make_geometry(two, true), 8, false, 2));
     EXPECT_EQ(make_plan(two).choice.n, std::min(n_want, 2u));
     // A forced n whose map does not fit is a fatal, not a shrink.
     EXPECT_ANY_THROW(
@@ -1295,7 +1301,7 @@ TEST(AllGatherPlan, FootprintAndMuxMap) {
     EXPECT_ANY_THROW(make_plan(plan_in_for(in, out, -1, 8, Fab::Line, f, 2, uc)));
     // The slot CB footprint shrinks k, then rules both algorithms out: composite.
     const Geometry geo = *make_geometry(plan_in_for(in, out, -1, 8, Fab::Line, bh), true);
-    const uint32_t one_slot = ag::slot_offsets(1, geo.A, bh.header_bytes, geo.P_A).slot_bytes;
+    const uint32_t one_slot = ag::slot_offsets(1, geo.A, bh.header_bytes, geo.cap).slot_bytes;
     f = bh;
     f.l1_small_floor = f.l1_base + (kCbSlots * one_slot);
     for (auto& end : f.mux_map_end) {
@@ -1314,6 +1320,31 @@ TEST(AllGatherPlan, FootprintAndMuxMap) {
     plan = make_plan(plan_in_for(in, out, -1, 8, Fab::Line, f));
     EXPECT_EQ(plan.choice.algo, AgAlgo::Composite);
     EXPECT_NE(plan.composite_reason.find("slot buffers exceed"), std::string::npos) << plan.composite_reason;
+}
+
+// ---- packet cap: short runs get a smaller payload stride and more packets per slot ----
+
+TEST(AllGatherPlan, PacketCap) {
+    const AgFacts bh = make_facts(kBH);
+    // Tiles in long runs: packets fill to P_A.
+    {
+        const auto [in, out] = gather_specs({1, 1, 256, 8192}, -1, 8);
+        const AgPlan plan = make_plan(plan_in_for(in, out, -1, 8, Fab::Line, bh));
+        EXPECT_EQ(plan.geo.cap, plan.geo.P_A);
+    }
+    // 256 B of each 2 KB row per device: a packet holds at most 4 such segments.
+    const auto [in, out] = gather_specs({1, 1, 8192, 1024}, -1, 8, DataType::BFLOAT16, Layout::ROW_MAJOR);
+    for (const Fab fab : {Fab::Line, Fab::Ring}) {
+        const AgPlan plan = make_plan(plan_in_for(in, out, -1, 8, fab, bh));
+        ASSERT_NE(plan.choice.algo, AgAlgo::Composite);
+        EXPECT_EQ(plan.geo.cap, ag::kSegmentsPerPacket * 256);
+        EXPECT_LE(plan.geo.fill, plan.geo.cap);
+        // More packets per slot than full packets would get, and the slot is sized by the cap, not P_A.
+        EXPECT_GT(plan.choice.k, (kSlotReadBytes + plan.geo.P_A - 1) / plan.geo.P_A);
+        EXPECT_LE(plan.choice.k, kMaxPacketsPerSlot);
+        EXPECT_EQ(
+            plan.slot_bytes, ag::slot_offsets(plan.choice.k, plan.geo.A, bh.header_bytes, plan.geo.cap).slot_bytes);
+    }
 }
 
 // ---- header pool: 2 * V * connections > headers_per_risc makes multicast illegal ----
@@ -1428,6 +1459,95 @@ TEST(AllGatherPlan, ModelRunBytes) {
                 << label << (unicast ? " unicast" : " multicast") << ": model " << geo->run_bytes << " B, walk " << mean
                 << " B";
         }
+    }
+}
+
+// ---- stripe banks: the fewest banks holding one device's stripe, and the unicast bank bound ----
+
+// Brute force over the output's pages: device d's stripe is its W bytes of each N * W byte output row.
+uint32_t brute_stripe_banks(const TensorSpec& out, uint32_t N, uint64_t stripe_row_bytes, uint32_t interleaved_banks) {
+    const uint64_t page = out.compute_page_size_bytes();
+    const uint64_t pages = out.compute_packed_buffer_size_bytes() / page;
+    std::vector<uint32_t> bank_of(pages);
+    const auto dist = out.compute_buffer_sharding_args().buffer_distribution_spec();
+    if (dist) {
+        const auto m = dist->compute_page_mapping();
+        for (size_t c = 0; c < m.core_host_page_indices.size(); ++c) {
+            for (const uint32_t p : m.core_host_page_indices[c]) {
+                if (p < pages) {
+                    bank_of[p] = c;
+                }
+            }
+        }
+    } else {
+        for (uint64_t p = 0; p < pages; ++p) {
+            bank_of[p] = p % interleaved_banks;
+        }
+    }
+    std::vector<std::set<uint32_t>> held(N);
+    for (uint64_t p = 0; p < pages; ++p) {
+        for (uint64_t b = p * page; b < (p + 1) * page; b += 16) {
+            held[(b / stripe_row_bytes) % N].insert(bank_of[p]);
+        }
+    }
+    size_t fewest = SIZE_MAX;
+    for (const auto& h : held) {
+        fewest = std::min(fewest, h.size());
+    }
+    return static_cast<uint32_t>(fewest);
+}
+
+TEST(AllGatherPlan, StripeBanks) {
+    const AgFacts bh = make_facts(kBH);
+    const auto dram = interleaved(BufferType::DRAM);
+    const auto l1 = interleaved(BufferType::L1);
+    // One row of 8 cores: a 64 x 1024 shard of a [512, 8192] tensor is one stripe of one row block, dealt round-robin
+    // onto the 8 cores, so stripe d lives in core d alone.
+    const auto row8 = CoreRangeSet(CoreRange({0, 0}, {7, 0}));
+    const auto nd = MemoryConfig(BufferType::DRAM, NdShardSpec{shape_of({1, 1, 64, 1024}), row8});
+    const auto nd_wide = MemoryConfig(BufferType::DRAM, NdShardSpec{shape_of({1, 1, 64, 2048}), row8});
+    struct Case {
+        std::vector<uint32_t> out;
+        int32_t dim;
+        Layout layout;
+        MemoryConfig mc;
+        uint32_t banks;  // by hand
+    };
+    const std::vector<Case> cases = {
+        {{1, 1, 256, 8192}, -1, Layout::TILE, dram, 8},        // 32 tiles per stripe row: every bank
+        {{1, 1, 64, 512}, -1, Layout::TILE, dram, 2},          // 2 tiles per stripe row, rows 16 tiles apart
+        {{1, 1, 64, 2048}, -1, Layout::TILE, l1, 16},          // 8 tiles per stripe row, 2 rows, 120 L1 banks
+        {{1, 1, 1024, 1024}, -1, Layout::ROW_MAJOR, dram, 8},  // 256 B of each 2 KB page
+        {{1, 1, 512, 8192}, -1, Layout::TILE, nd, 1},          // one bank per stripe
+        {{1, 1, 512, 8192}, -1, Layout::TILE, nd_wide, 2},     // 4 shard columns on 8 cores: 2 banks each
+    };
+    for (const auto& c : cases) {
+        const auto [in, out] = gather_specs(c.out, c.dim, 8, DataType::BFLOAT16, c.layout, dram, c.mc);
+        const PlanIn pin = plan_in_for(in, out, c.dim, 8, Fab::Line, bh);
+        ASSERT_TRUE(pin.shape_reason.empty()) << pin.shape_reason;
+        const uint64_t stripe_row_bytes = uint64_t{pin.pages.pages_per_stripe_row} * pin.pages.ci;
+        const uint32_t banks = c.mc.is_dram() ? bh.num_banks_dram : bh.num_banks_l1;
+        EXPECT_EQ(pin.pages.stripe_banks, brute_stripe_banks(out, 8, stripe_row_bytes, banks))
+            << fmt::format("{}", fmt::join(c.out, "x"));
+        EXPECT_EQ(pin.pages.stripe_banks, c.banks) << fmt::format("{}", fmt::join(c.out, "x"));
+        EXPECT_EQ(make_geometry(pin, true)->stripe_banks, pin.pages.stripe_banks);
+    }
+    // A stripe in fewer banks only slows the unicast model, and multicast not at all.
+    const auto [in, out] = gather_specs({1, 1, 512, 8192}, -1, 8);
+    Geometry geo = *make_geometry(plan_in_for(in, out, -1, 8, Fab::Line, bh), true);
+    ASSERT_EQ(geo.stripe_banks, bh.num_banks_dram);
+    for (const bool ring : {false, true}) {
+        double prev = 0;
+        for (const uint32_t b : {8u, 4u, 2u, 1u}) {
+            geo.stripe_banks = b;
+            const double t = model_us(kUc, geo, 8, ring, 2);
+            EXPECT_GE(t, prev);
+            prev = t;
+        }
+        Geometry unknown = geo;
+        unknown.stripe_banks = 0;
+        EXPECT_EQ(model_us(kMc, unknown, 8, ring, 2), model_us(kMc, geo, 8, ring, 2));
+        EXPECT_LE(model_us(kUc, unknown, 8, ring, 2), model_us(kUc, geo, 8, ring, 2));
     }
 }
 

@@ -33,10 +33,11 @@ namespace ttnn::operations::ccl::all_gather_plan {
 // CB slots per worker. A third slot measured within 3% on BH; reads in flight per slot (k) are the lever instead.
 inline constexpr uint32_t kCbSlots = 2;
 // Read bytes one slot aims to have in flight: two full packets at P = 15168 (k = 2 cut worker time 24% vs k = 1).
+// Packets shorter than that (a smaller payload, or a packet cap from short runs) get more per slot.
 inline constexpr uint32_t kSlotReadBytes = 2 * 15168;
-// The reader keeps a slot's segment addresses on its stack (32 B a packet), in 4 KB of local memory shared with
-// globals, so k is capped small; 4 packets still keep 4 reads in flight at the 4352 B default payload.
-inline constexpr uint32_t kMaxPacketsPerSlot = 4;
+// Packets per slot at most. Nothing in the kernels grows with k but the slot (records and local addresses live in it,
+// not on a stack), so this only bounds the L1 search; slot_bytes is still checked against L1.
+inline constexpr uint32_t kMaxPacketsPerSlot = 32;
 
 // Mux V2 buffers per channel. n = 1 needs 4 (2 costs 12-14% on BH); at n >= 2, 2 is within 3% of 4 and keeps the
 // mux's L1 map smallest.
@@ -76,11 +77,13 @@ inline constexpr uint32_t kMc = 1;
 // The input's and output's pages, from their specs. Page content c*, aligned page (bank pitch) a* and read alignment
 // r*, in bytes; i input, o output. pages_per_stripe_row: input pages this device contributes to one output row.
 // L: the output's contiguous_page_stride(). run_pages: output pages contiguous (stride L) from the first page of a
-// stripe row (unbounded for interleaved).
+// stripe row (unbounded for interleaved). stripe_banks: the fewest output banks (DRAM banks, L1 banks or shard cores)
+// that hold one device's stripe (0: unknown).
 struct Pages {
     uint32_t ci = 0, co = 0, ai = 0, ao = 0, ri = 0, ro = 0;
     uint32_t in_pages = 0, pages_per_stripe_row = 0;
     uint32_t L = 1, run_pages = 1;
+    uint32_t stripe_banks = 0;
     bool operator==(const Pages&) const = default;
 };
 
@@ -114,13 +117,16 @@ PlanIn make_plan_in(
 // payload cap, a multiple of A. dst_cross/src_cross: runs may continue across output/input pages. lambda, h,
 // cross_row: the walk shape (ag::walk_shape, shared with the kernel). run_bytes: modelled mean bytes per packet
 // segment (a destination run, split evenly when longer than P_A); fill: modelled payload per packet (at most 4
-// segments).
+// segments). cap: the packet builder's payload cap and slot payload stride (ag::packet_cap). stripe_banks:
+// Pages::stripe_banks.
 struct Geometry {
     uint32_t A = 0, Ui = 0, Uo = 0, S = 0, R = 0, E = 0, elements = 0, P_A = 0;
     bool dst_cross = false, src_cross = false;
     uint32_t lambda = 1, h = 1;
     bool cross_row = false;
+    uint32_t cap = 0;
     uint32_t run_bytes = 0, fill = 0;
+    uint32_t stripe_banks = 0;
     bool operator==(const Geometry&) const = default;
 };
 
@@ -207,13 +213,13 @@ struct WorkerSched {
     uint32_t iter_units = 0;                // units of one full iteration (ne * E)
     // Unicast: signal data_valid every this many slots and at each iteration end.
     uint32_t cadence_slots = 0;
-    // Init credits the reader waits for and consumes before reading.
+    // Init credits the writer waits for and consumes before its first send.
     uint32_t init_wait = 0;
     // What data_sem must reach before the reader exits: unicast data_valid units from upstream; multicast done credits.
     uint32_t end_wait = 0;
     // Iteration 0 also writes this device's stripe into its own output.
     bool local_copy = false;
-    // Unicast: one init credit to the neighbor's opposite-direction worker w; multicast: on every route variant.
+    // Unicast: one init credit to the neighbor's opposite-direction worker w; multicast: one to every other device.
     bool init_send = false;
     bool operator==(const WorkerSched&) const = default;
 };
@@ -247,13 +253,15 @@ McastRoutes mcast_routes(
 
 // ---- choice model (exposed for tests and logs) ----
 
-// Packets on the busiest link-direction: ceil(B / fill), B = stripe bytes * (N - 1) / (ring ? 2 : 1) / links.
+// Bytes and packets on the busiest link-direction: B = stripe bytes * (N - 1) / (ring ? 2 : 1) / links, ceil(B / fill).
+uint64_t busiest_link_bytes(const Geometry& geo, uint32_t N, bool ring, uint32_t links);
 uint64_t busiest_link_packets(const Geometry& geo, uint32_t N, bool ring, uint32_t links);
 
-// Modelled time T = F + pkts * P_A / BW in microseconds for algorithm kUc / kMc.
+// Modelled time in microseconds for algorithm kUc / kMc: F + B / BW, and for unicast at least F + the time the
+// stripe's banks need for its writes and relay reads.
 double model_us(uint32_t algo, const Geometry& geo, uint32_t N, bool ring, uint32_t links);
 
 // Unicast workers per link-direction the model wants (before placement shrinks it).
-uint32_t model_workers(uint64_t busiest_packets);
+uint32_t model_workers(bool ring, uint64_t busiest_packets);
 
 }  // namespace ttnn::operations::ccl::all_gather_plan

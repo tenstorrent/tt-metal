@@ -101,13 +101,14 @@ tt::tt_metal::ProgramDescriptor build_multicast_program(
     for (uint32_t link = 0; link < plan.mcast_cores.size(); ++link) {
         const CoreCoord& core = plan.mcast_cores[link];
         const auto ws = plan_ns::schedule(plan, dev, link, 0, 0);
-        prog::add_reader_rt_args(desc.kernels[prog::kReaderIdx], core, input, output, ws, init_sem, done_sem);
+        prog::add_reader_rt_args(desc.kernels[prog::kReaderIdx], core, input, output, ws, done_sem);
 
         // Init and done go to the same core on every other device (mirror addressing).
         const CoreCoord mirror = mesh_device->worker_core_from_logical_core(core);
         std::vector<uint32_t> writer_rt = {
             ws.last_take,
             ws.init_send ? 1u : 0u,
+            ws.init_wait,
             init_sem,  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
             done_sem,  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
             static_cast<uint32_t>(mirror.x),
