@@ -29,7 +29,7 @@ const m2::KernelSpecName READER{"reader"};
 const m2::KernelSpecName WRITER{"writer"};
 const m2::KernelSpecName COMPUTE{"compute"};
 const m2::ScratchpadSpecName X_WINDOW{"x_window"};
-const m2::ScratchpadSpecName DC_WINDOW{"dc_window"};
+const m2::ScratchpadSpecName GRAD_PREACT_WINDOW{"grad_preact_window"};
 
 m2::DataflowBufferSpec make_dataflow_buffer(const m2::DFBSpecName& name, uint32_t tiles, tt::DataFormat format) {
     return m2::DataflowBufferSpec{
@@ -101,10 +101,10 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
     const uint32_t row_splits = attrs.row_splits;
     const auto dist = distribute(input.device().compute_with_storage_grid_size(), channel_blocks * row_splits);
 
-    const m2::DFBSpecName RAINBOW_RM{"rainbow_rm"}, RAINBOW_TILE{"rainbow_tile"}, WEIGHTS{"weights"},
-        GRAD_OUT{"grad_out"}, PREACT{"preact"}, SIGMOID{"sigmoid"}, DC_TILE{"dc_tile"}, DC_RM{"dc_rm"},
-        PARTIAL{"partial"}, DC_RAINBOW_RM{"dc_rainbow_rm"}, DC_RAINBOW_TILE{"dc_rainbow_tile"}, OUTPUT{"output"},
-        ONES{"ones"};
+    const m2::DFBSpecName X_SHIFTED_RM{"x_shifted_rm"}, X_SHIFTED_TILE{"x_shifted_tile"}, WEIGHTS{"weights"},
+        GRAD_OUT{"grad_out"}, PREACT{"preact"}, SIGMOID{"sigmoid"}, GRAD_PREACT_TILE{"grad_preact_tile"},
+        GRAD_PREACT_RM{"grad_preact_rm"}, PARTIAL{"partial"}, GRAD_PREACT_SHIFTED_RM{"grad_preact_shifted_rm"},
+        GRAD_PREACT_SHIFTED_TILE{"grad_preact_shifted_tile"}, OUTPUT{"output"}, ONES{"ones"};
     const m2::TensorParamName INPUT{"input"}, HISTORY{"history"}, GRAD_Q{"grad_q"}, GRAD_K{"grad_k"}, GRAD_V{"grad_v"},
         TAP0{"tap0"}, TAP1{"tap1"}, TAP2{"tap2"}, TAP3{"tap3"}, GRAD_INPUT{"grad_input"},
         GRAD_TAP_PARTIAL{"grad_tap_partial"};
@@ -120,8 +120,8 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
 
     m2::KernelSpec reader{
         .unique_id = READER,
-        .source = std::string(kernel_dir) + "dataflow/reader.cpp",
-        .dfb_bindings = {producer(RAINBOW_RM), producer(WEIGHTS), producer(GRAD_OUT), producer(ONES)},
+        .source = std::string(kernel_dir) + "dataflow/reader_qkv_causal_conv1d_silu_bw.cpp",
+        .dfb_bindings = {producer(X_SHIFTED_RM), producer(WEIGHTS), producer(GRAD_OUT), producer(ONES)},
         .scratchpad_bindings = {{X_WINDOW, "x_window"}},
         .tensor_bindings =
             {tensor(INPUT),
@@ -145,9 +145,10 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
     };
     m2::KernelSpec writer{
         .unique_id = WRITER,
-        .source = std::string(kernel_dir) + "dataflow/writer.cpp",
-        .dfb_bindings = {consumer(DC_RM), producer(DC_RAINBOW_RM), consumer(OUTPUT), consumer(PARTIAL)},
-        .scratchpad_bindings = {{DC_WINDOW, "dc_window"}},
+        .source = std::string(kernel_dir) + "dataflow/writer_qkv_causal_conv1d_silu_bw.cpp",
+        .dfb_bindings =
+            {consumer(GRAD_PREACT_RM), producer(GRAD_PREACT_SHIFTED_RM), consumer(OUTPUT), consumer(PARTIAL)},
+        .scratchpad_bindings = {{GRAD_PREACT_WINDOW, "grad_preact_window"}},
         .tensor_bindings = {tensor(GRAD_INPUT), tensor(GRAD_TAP_PARTIAL)},
         .compile_time_args =
             {{"channel_tiles_per_block", channel_tiles_per_block},
@@ -172,22 +173,22 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
         .unique_id = COMPUTE,
         .source = std::string(kernel_dir) + "compute/qkv_causal_conv1d_silu_bw.cpp",
         .dfb_bindings =
-            {consumer(RAINBOW_RM),
-             producer(RAINBOW_TILE),
-             consumer(RAINBOW_TILE),
+            {consumer(X_SHIFTED_RM),
+             producer(X_SHIFTED_TILE),
+             consumer(X_SHIFTED_TILE),
              consumer(WEIGHTS),
              consumer(GRAD_OUT),
              producer(PREACT),
              consumer(PREACT),
              producer(SIGMOID),
              consumer(SIGMOID),
-             producer(DC_TILE),
-             consumer(DC_TILE),
-             producer(DC_RM),
+             producer(GRAD_PREACT_TILE),
+             consumer(GRAD_PREACT_TILE),
+             producer(GRAD_PREACT_RM),
              producer(PARTIAL),
-             consumer(DC_RAINBOW_RM),
-             producer(DC_RAINBOW_TILE),
-             consumer(DC_RAINBOW_TILE),
+             consumer(GRAD_PREACT_SHIFTED_RM),
+             producer(GRAD_PREACT_SHIFTED_TILE),
+             consumer(GRAD_PREACT_SHIFTED_TILE),
              producer(OUTPUT),
              consumer(ONES)},
         .compile_time_args =
@@ -204,7 +205,7 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
         .dataflow_buffers = std::move(dataflow_buffers),
         .scratchpads =
             {{.unique_id = X_WINDOW, .size_per_node = window_bytes},
-             {.unique_id = DC_WINDOW, .size_per_node = window_bytes}},
+             {.unique_id = GRAD_PREACT_WINDOW, .size_per_node = window_bytes}},
         .tensor_parameters =
             {
                 {.unique_id = INPUT, .spec = input.tensor_spec()},

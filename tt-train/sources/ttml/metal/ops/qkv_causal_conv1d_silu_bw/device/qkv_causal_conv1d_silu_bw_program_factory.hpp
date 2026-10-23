@@ -31,9 +31,9 @@ inline std::array<QkvCausalConv1dSiluBackwardDataflowBuffer, 13> qkv_conv_bw_dat
     const auto bf16 = input_format;
     constexpr auto fp32 = tt::DataFormat::Float32;
     return {{
-        {"rainbow_rm", 8 * channel_tiles_per_block, bf16},    // x window copied 4x, each one row lower, row-major, x2
-        {"rainbow_tile", 4 * channel_tiles_per_block, bf16},  // the same 4 copies as tiles
-        {"weights", 8 * channel_tiles_per_block, bf16},       // taps [4][channel_tiles_per_block], x2 to prefetch
+        {"x_shifted_rm", 8 * channel_tiles_per_block, bf16},    // x window copied 4x, each one row lower, row-major, x2
+        {"x_shifted_tile", 4 * channel_tiles_per_block, bf16},  // the same 4 copies as tiles
+        {"weights", 8 * channel_tiles_per_block, bf16},         // taps [4][channel_tiles_per_block], x2 to prefetch
         {"grad_out", 2 * channel_tiles_per_block, bf16},
         {"preact", channel_tiles_per_block, bf16},
         // fp32: silu_bw needs preact * (1 - s), and a bf16 s near 1 leaves (1 - s) with few bits. One block, so
@@ -41,11 +41,13 @@ inline std::array<QkvCausalConv1dSiluBackwardDataflowBuffer, 13> qkv_conv_bw_dat
         // when channel_tiles_per_block is not a multiple of 4, which with a 4-tile buffer made the next batch
         // straddle the end.
         {"sigmoid", channel_tiles_per_block, fp32},
-        {"dc_tile", channel_tiles_per_block, bf16},
-        {"dc_rm", 2 * channel_tiles_per_block, bf16},
+        {"grad_preact_tile", channel_tiles_per_block, bf16},
+        {"grad_preact_rm", 2 * channel_tiles_per_block, bf16},
         {"partial", 4 * channel_tiles_per_block, fp32},  // grad_w partial [4][channel_tiles], packer adds in place
-        {"dc_rainbow_rm", 8 * channel_tiles_per_block, bf16},  // 4 shifted row-major copies of the dc window, x2
-        {"dc_rainbow_tile", 4 * channel_tiles_per_block, bf16},
+        {"grad_preact_shifted_rm",
+         8 * channel_tiles_per_block,
+         bf16},  // 4 shifted row-major copies of the grad_preact window, x2
+        {"grad_preact_shifted_tile", 4 * channel_tiles_per_block, bf16},
         {"output", 2 * channel_tiles_per_block, bf16},
         {"ones", 1, bf16},
     }};
@@ -55,7 +57,7 @@ inline uint64_t qkv_conv_bw_window_bytes(uint64_t channel_tiles_per_block, uint6
     return qkv_conv_bw_window_rows * channel_tiles_per_block * tt::constants::TILE_WIDTH * bytes_per_element;
 }
 
-// L1 per core: every dataflow buffer plus the input and dc row windows.
+// L1 per core: every dataflow buffer plus the input and grad_preact row windows.
 inline uint64_t qkv_conv_bw_l1_bytes(
     uint32_t channel_tiles_per_block, tt::DataFormat input_format, uint64_t bytes_per_element) {
     uint64_t bytes = 0;

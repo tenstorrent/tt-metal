@@ -46,10 +46,10 @@ FORCE_INLINE void mul_bcast_rows_accumulate(
 
 // out = sum_tap weights[w] * copy_tap, w = tap (preact) or 3 - tap (grad_input), summed in DST.
 template <uint32_t channel_tiles_per_block>
-[[gnu::noinline]] void conv(uint32_t rainbow_cb, bool reversed, DataflowBuffer& out, uint32_t out_cb) {
+[[gnu::noinline]] void conv(uint32_t shifted_cb, bool reversed, DataflowBuffer& out, uint32_t out_cb) {
     out.reserve_back(channel_tiles_per_block);
-    reconfig_data_format(rainbow_cb, dfb::weights);
-    mul_bcast_rows_init(rainbow_cb, dfb::weights);
+    reconfig_data_format(shifted_cb, dfb::weights);
+    mul_bcast_rows_init(shifted_cb, dfb::weights);
     pack_reconfig_data_format(out_cb);
     for (uint32_t base = 0; base < channel_tiles_per_block; base += dst_tiles) {
         const uint32_t n = batch_size<channel_tiles_per_block>(base);
@@ -58,7 +58,7 @@ template <uint32_t channel_tiles_per_block>
             const uint32_t w = reversed ? tap_count - 1 - tap : tap;
             for (uint32_t i = 0; i < n; ++i) {
                 mul_bcast_rows_accumulate(
-                    rainbow_cb,
+                    shifted_cb,
                     dfb::weights,
                     tap * channel_tiles_per_block + base + i,
                     w * channel_tiles_per_block + base + i,
@@ -75,10 +75,10 @@ template <uint32_t channel_tiles_per_block>
     out.push_back(channel_tiles_per_block);
 }
 
-// dc = grad_out * s * (1 + (preact - preact * s)), s = sigmoid(preact). FPU only after the sigmoid.
+// grad_preact = grad_out * s * (1 + (preact - preact * s)), s = sigmoid(preact). FPU only after the sigmoid.
 template <uint32_t channel_tiles_per_block>
-[[gnu::noinline]] void silu_backward(DataflowBuffer& sigmoid, DataflowBuffer& dc_tile) {
-    dc_tile.reserve_back(channel_tiles_per_block);
+[[gnu::noinline]] void silu_backward(DataflowBuffer& sigmoid, DataflowBuffer& grad_preact_tile) {
+    grad_preact_tile.reserve_back(channel_tiles_per_block);
     for (uint32_t base = 0; base < channel_tiles_per_block; base += dst_tiles) {
         const uint32_t n = batch_size<channel_tiles_per_block>(base);
         sigmoid.reserve_back(n);
@@ -129,17 +129,17 @@ template <uint32_t channel_tiles_per_block>
         }
         tile_regs_commit();
         tile_regs_wait();
-        pack_reconfig_data_format(dfb::dc_tile);
+        pack_reconfig_data_format(dfb::grad_preact_tile);
         for (uint32_t i = 0; i < n; ++i) {
-            pack_tile(i, dfb::dc_tile);
+            pack_tile(i, dfb::grad_preact_tile);
         }
         tile_regs_release();
         sigmoid.pop_front(n);
     }
-    dc_tile.push_back(channel_tiles_per_block);
+    grad_preact_tile.push_back(channel_tiles_per_block);
 }
 
-// partial[tap][tile_column] += dc * copy_tap. The partial lives in L1 and the packer adds each step's
+// partial[tap][tile_column] += grad_preact * copy_tap. The partial lives in L1 and the packer adds each step's
 // products onto them in place (pack_reconfig_l1_acc), in fp32: nothing is unpacked back into the engine, so no
 // tf32 rounding. The pages are reserved once per item, written out of order by tile index, and pushed to the
 // writer on the last own step.
@@ -152,10 +152,10 @@ template <uint32_t channel_tiles_per_block>
     for (uint32_t base = 0; base < total; base += dst_tiles) {
         const uint32_t n = batch_size<total>(base);
         tile_regs_acquire();
-        reconfig_data_format(dfb::dc_tile, dfb::rainbow_tile);
-        mul_init(dfb::dc_tile, dfb::rainbow_tile);
+        reconfig_data_format(dfb::grad_preact_tile, dfb::x_shifted_tile);
+        mul_init(dfb::grad_preact_tile, dfb::x_shifted_tile);
         for (uint32_t i = 0; i < n; ++i) {
-            mul_tiles(dfb::dc_tile, dfb::rainbow_tile, (base + i) % channel_tiles_per_block, base + i, i);
+            mul_tiles(dfb::grad_preact_tile, dfb::x_shifted_tile, (base + i) % channel_tiles_per_block, base + i, i);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -173,24 +173,25 @@ template <uint32_t channel_tiles_per_block>
 }
 
 template <uint32_t channel_tiles_per_block>
-[[gnu::noinline]] void grad_input_tile(DataflowBuffer& dc_rainbow, DataflowBuffer& output) {
-    compute_kernel_lib::tilize<channel_tiles_per_block, dfb::dc_rainbow_rm, dfb::dc_rainbow_tile>(tap_count);
-    dc_rainbow.wait_front(tap_count * channel_tiles_per_block);
-    conv<channel_tiles_per_block>(dfb::dc_rainbow_tile, true, output, dfb::output);
-    dc_rainbow.pop_front(tap_count * channel_tiles_per_block);
+[[gnu::noinline]] void grad_input_tile(DataflowBuffer& grad_preact_shifted, DataflowBuffer& output) {
+    compute_kernel_lib::tilize<channel_tiles_per_block, dfb::grad_preact_shifted_rm, dfb::grad_preact_shifted_tile>(
+        tap_count);
+    grad_preact_shifted.wait_front(tap_count * channel_tiles_per_block);
+    conv<channel_tiles_per_block>(dfb::grad_preact_shifted_tile, true, output, dfb::output);
+    grad_preact_shifted.pop_front(tap_count * channel_tiles_per_block);
 }
 
 template <uint32_t channel_tiles_per_block, uint32_t tile_rows, uint32_t row_splits>
 TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
-    compute_kernel_hw_startup(dfb::rainbow_rm, dfb::rainbow_tile, dfb::dc_rm);
-    DataflowBuffer rainbow_window(dfb::rainbow_tile);
+    compute_kernel_hw_startup(dfb::x_shifted_rm, dfb::x_shifted_tile, dfb::grad_preact_rm);
+    DataflowBuffer x_shifted(dfb::x_shifted_tile);
     DataflowBuffer weights(dfb::weights);
     DataflowBuffer grad_out(dfb::grad_out);
     DataflowBuffer preact(dfb::preact);
     DataflowBuffer sigmoid(dfb::sigmoid);
-    DataflowBuffer dc_tile(dfb::dc_tile);
+    DataflowBuffer grad_preact_tile(dfb::grad_preact_tile);
     DataflowBuffer partial(dfb::partial);
-    DataflowBuffer dc_rainbow(dfb::dc_rainbow_tile);
+    DataflowBuffer grad_preact_shifted(dfb::grad_preact_shifted_tile);
     DataflowBuffer output(dfb::output);
     DataflowBuffer ones(dfb::ones);
 
@@ -218,35 +219,36 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
             ones.wait_front(1);
         }
         for (uint32_t step = 0; step < step_count; ++step) {
-            compute_kernel_lib::tilize<channel_tiles_per_block, dfb::rainbow_rm, dfb::rainbow_tile>(tap_count);
-            rainbow_window.wait_front(tap_count * channel_tiles_per_block);
+            compute_kernel_lib::tilize<channel_tiles_per_block, dfb::x_shifted_rm, dfb::x_shifted_tile>(tap_count);
+            x_shifted.wait_front(tap_count * channel_tiles_per_block);
             grad_out.wait_front(channel_tiles_per_block);
 
-            conv<channel_tiles_per_block>(dfb::rainbow_tile, false, preact, dfb::preact);
+            conv<channel_tiles_per_block>(dfb::x_shifted_tile, false, preact, dfb::preact);
             preact.wait_front(channel_tiles_per_block);
-            silu_backward<channel_tiles_per_block>(sigmoid, dc_tile);
-            dc_tile.wait_front(channel_tiles_per_block);
+            silu_backward<channel_tiles_per_block>(sigmoid, grad_preact_tile);
+            grad_preact_tile.wait_front(channel_tiles_per_block);
             preact.pop_front(channel_tiles_per_block);
             if (step < own_steps) {  // the extra step's rows belong to the next core's partial
                 const bool first = step == 0, last = step + 1 == own_steps;
                 accumulate_partial<channel_tiles_per_block>(partial, first, last);
             }
-            compute_kernel_lib::untilize<channel_tiles_per_block, dfb::dc_tile, dfb::dc_rm>(1);
-            rainbow_window.pop_front(tap_count * channel_tiles_per_block);
+            compute_kernel_lib::untilize<channel_tiles_per_block, dfb::grad_preact_tile, dfb::grad_preact_rm>(1);
+            x_shifted.pop_front(tap_count * channel_tiles_per_block);
             grad_out.pop_front(channel_tiles_per_block);
 
-            // grad_input of tile row r needs the dc rainbow of r, which the writer builds once dc of row r + 1
-            // exists, i.e. during step r + 1. Running it at step r + 2 gives the writer a whole step to build it,
-            // instead of compute idling on the 4 shifted copies at the end of every step.
+            // grad_input of tile row r needs the shifted grad_preact of r, which the writer builds once grad_preact of
+            // row r + 1 exists, i.e. during step r + 1. Running it at step r + 2 gives the writer a whole step to build
+            // it, instead of compute idling on the 4 shifted copies at the end of every step.
             if (step > 1) {
-                grad_input_tile<channel_tiles_per_block>(dc_rainbow, output);  // row first_tile_row + step - 2
+                grad_input_tile<channel_tiles_per_block>(grad_preact_shifted, output);  // row first_tile_row + step - 2
             }
         }
         if (step_count > 1) {
-            grad_input_tile<channel_tiles_per_block>(dc_rainbow, output);  // row first_tile_row + step_count - 2
+            grad_input_tile<channel_tiles_per_block>(
+                grad_preact_shifted, output);  // row first_tile_row + step_count - 2
         }
         if (!has_halo) {
-            grad_input_tile<channel_tiles_per_block>(dc_rainbow, output);  // row end_tile_row - 1, zero tail
+            grad_input_tile<channel_tiles_per_block>(grad_preact_shifted, output);  // row end_tile_row - 1, zero tail
         }
     }
     if (current_block != no_block) {

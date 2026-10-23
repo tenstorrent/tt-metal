@@ -15,17 +15,18 @@ constexpr uint32_t tap_count = 4;
 constexpr uint32_t halo_rows = tap_count - 1;
 constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
 
-// Keeps the previous dc tile as rows in a 35-row window. When the next dc tile arrives, its first 3 rows complete
-// the window, 4 shifted copies are pushed for the grad_input conv of the previous tile, then grad_input is written.
+// Keeps the previous grad_preact tile as rows in a 35-row window. When the next grad_preact tile arrives, its first 3
+// rows complete the window, 4 shifted copies are pushed for the grad_input conv of the previous tile, then grad_input
+// is written.
 template <uint32_t channel_tiles_per_block, uint32_t tile_rows, uint32_t row_splits, uint32_t channel_tiles>
 TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
     const auto grad_input = TensorAccessor(tensor::grad_input);
     const auto grad_tap_partial = TensorAccessor(tensor::grad_tap_partial);
-    DataflowBuffer dc_rm(dfb::dc_rm);
-    DataflowBuffer dc_rainbow(dfb::dc_rainbow_rm);
+    DataflowBuffer grad_preact_rm(dfb::grad_preact_rm);
+    DataflowBuffer grad_preact_shifted(dfb::grad_preact_shifted_rm);
     DataflowBuffer output(dfb::output);
     DataflowBuffer partial(dfb::partial);  // the finished partial, accumulated in place by the packer
-    Scratchpad<uint16_t> window(scratch::dc_window);
+    Scratchpad<uint16_t> window(scratch::grad_preact_window);
     Noc noc;
 
     constexpr uint32_t row_bytes = channel_tiles_per_block * tt::constants::TILE_WIDTH * sizeof(uint16_t);
@@ -37,18 +38,18 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
     const uint32_t self_x = my_x[noc.get_noc_id()];
     const uint32_t self_y = my_y[noc.get_noc_id()];
 
-    const auto push_dc_rainbow = [&]() {
-        dc_rainbow.reserve_back(tap_count * channel_tiles_per_block);
+    const auto push_grad_preact_shifted = [&]() {
+        grad_preact_shifted.reserve_back(tap_count * channel_tiles_per_block);
         for (uint32_t tap = 0; tap < tap_count; ++tap) {
             noc.async_read(
                 self,
-                dc_rainbow,
+                grad_preact_shifted,
                 view_bytes,
                 {.noc_x = self_x, .noc_y = self_y, .addr = window_base + tap * row_bytes},
                 {.offset_bytes = tap * view_bytes});
         }
         noc.async_read_barrier();
-        dc_rainbow.push_back(tap_count * channel_tiles_per_block);
+        grad_preact_shifted.push_back(tap_count * channel_tiles_per_block);
     };
     const auto write_output = [&](uint32_t tile_row, uint32_t first_tile_column) {
         output.wait_front(channel_tiles_per_block);
@@ -75,22 +76,22 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
         const uint32_t step_count = end_tile_row - first_tile_row + (has_halo ? 1 : 0);
 
         for (uint32_t step = 0; step < step_count; ++step) {
-            dc_rm.wait_front(channel_tiles_per_block);
-            const uint32_t dc_addr = dc_rm.get_read_ptr();
+            grad_preact_rm.wait_front(channel_tiles_per_block);
+            const uint32_t grad_preact_addr = grad_preact_rm.get_read_ptr();
             if (step > 0) {
                 noc.async_read(
                     self,
                     window,
                     halo_rows * row_bytes,
-                    {.noc_x = self_x, .noc_y = self_y, .addr = dc_addr},
+                    {.noc_x = self_x, .noc_y = self_y, .addr = grad_preact_addr},
                     {.offset_bytes = tile_height * row_bytes});
                 noc.async_read_barrier();
-                push_dc_rainbow();
+                push_grad_preact_shifted();
             }
-            noc.async_read(self, window, view_bytes, {.noc_x = self_x, .noc_y = self_y, .addr = dc_addr}, {});
+            noc.async_read(self, window, view_bytes, {.noc_x = self_x, .noc_y = self_y, .addr = grad_preact_addr}, {});
             noc.async_read_barrier();
-            dc_rm.pop_front(channel_tiles_per_block);
-            // Compute runs grad_input one step behind the rainbow (see the compute kernel), so row step - 2.
+            grad_preact_rm.pop_front(channel_tiles_per_block);
+            // Compute runs grad_input one step behind the shifted copies (see the compute kernel), so row step - 2.
             if (step > 1) {
                 write_output(first_tile_row + step - 2, first_tile_column);
             }
@@ -100,7 +101,8 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
             for (uint32_t i = 0; i < halo_rows * row_bytes / sizeof(uint32_t); ++i) {
                 tail[i] = 0;
             }
-            push_dc_rainbow();  // the last row's rainbow goes out before draining so compute never waits for it
+            push_grad_preact_shifted();  // the last row's shifted copies goes out before draining so compute never
+                                         // waits for it
         }
         if (step_count > 1) {
             write_output(first_tile_row + step_count - 2, first_tile_column);

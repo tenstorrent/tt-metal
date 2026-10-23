@@ -34,8 +34,8 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const auto tap1 = TensorAccessor(tensor::tap1);
     const auto tap2 = TensorAccessor(tensor::tap2);
     const auto tap3 = TensorAccessor(tensor::tap3);
-    // rainbow = the x window copied 4 times, each copy one row lower. preact = conv(rainbow) = sum_j w_j * copy_j
-    DataflowBuffer rainbow_window(dfb::rainbow_rm);  // 64 slots: the 4 copies, row-major, 8 slots each, x2
+    // x_shifted = the x window copied 4 times, each copy one row lower. preact = conv(x_shifted) = sum_j w_j * copy_j
+    DataflowBuffer x_shifted(dfb::x_shifted_rm);  // 64 slots: the 4 copies, row-major, 8 slots each, x2
     DataflowBuffer weights(dfb::weights);
     DataflowBuffer grad_out(dfb::grad_out);
     Scratchpad<uint16_t> window(scratch::x_window);
@@ -145,11 +145,11 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
             }
             noc.async_read_barrier();
 
-            rainbow_window.reserve_back(tap_count * channel_tiles_per_block);
+            x_shifted.reserve_back(tap_count * channel_tiles_per_block);
             for (uint32_t tap = 0; tap < tap_count; ++tap) {
                 noc.async_read(
                     self,
-                    rainbow_window,
+                    x_shifted,
                     view_bytes,
                     {.noc_x = self_x, .noc_y = self_y, .addr = window_base + tap * row_bytes},
                     {.offset_bytes = tap * view_bytes});
@@ -182,7 +182,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
                 }
             }
             noc.async_read_barrier();
-            rainbow_window.push_back(tap_count * channel_tiles_per_block);
+            x_shifted.push_back(tap_count * channel_tiles_per_block);
             grad_out.push_back(channel_tiles_per_block);
         }
     }
