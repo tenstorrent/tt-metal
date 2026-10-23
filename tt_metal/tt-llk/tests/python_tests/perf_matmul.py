@@ -17,6 +17,7 @@ from helpers.matmul_sweep import (
     DEST_RT_CT_BLOCKS,
     PERF_RING_TILES,
     generate_tile_dims,
+    matmul_pack_form,
     mid_fill_rt_ct_pairs,
     unpack_matmul_fits_perf_ring,
 )
@@ -32,6 +33,7 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_PACK_BLOCK,
     MATMUL_STREAM_NARROW,
     NUM_FACES,
     THROTTLE_LEVEL,
@@ -160,6 +162,16 @@ def test_perf_matmul(
             THROTTLE_LEVEL(),
             *MATMUL_STREAM_NARROW.for_block(
                 formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim
+            ),
+            MATMUL_PACK_BLOCK(
+                matmul_pack_form(
+                    formats,
+                    dest_sync,
+                    math_fidelity,
+                    dims.rt_dim,
+                    dims.ct_dim,
+                    dims.kt_dim,
+                )
             ),
         ],
         runtimes=[

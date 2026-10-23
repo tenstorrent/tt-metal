@@ -20,6 +20,7 @@ from helpers.llk_params import (
 from helpers.matmul_sweep import (
     generate_matmul_dimension_combinations,
     generate_tile_dims,
+    matmul_pack_form,
 )
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
@@ -30,6 +31,7 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_PACK_BLOCK,
     MATMUL_ROW_MOP,
     MATMUL_STREAM_NARROW,
     MATMUL_UNPACK_TTSYNC,
@@ -169,6 +171,16 @@ def test_matmul(
             *([MATMUL_UNPACK_TTSYNC()] if unpack_ttsync else []),
             *MATMUL_STREAM_NARROW.for_block(
                 formats, dest_acc, dest_sync, matmul_dims.ct_dim, matmul_dims.rt_dim
+            ),
+            MATMUL_PACK_BLOCK(
+                matmul_pack_form(
+                    formats,
+                    dest_sync,
+                    math_fidelity,
+                    matmul_dims.rt_dim,
+                    matmul_dims.ct_dim,
+                    matmul_dims.kt_dim,
+                )
             ),
         ],
         runtimes=[
@@ -360,6 +372,16 @@ def test_matmul_full_sync(math_fidelity, formats, dims):
                 DestSync.Full,
                 matmul_dims.ct_dim,
                 matmul_dims.rt_dim,
+            ),
+            MATMUL_PACK_BLOCK(
+                matmul_pack_form(
+                    formats,
+                    DestSync.Full,
+                    math_fidelity,
+                    matmul_dims.rt_dim,
+                    matmul_dims.ct_dim,
+                    matmul_dims.kt_dim,
+                )
             ),
         ],
         runtimes=[

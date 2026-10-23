@@ -18,6 +18,7 @@ from helpers.matmul_sweep import (
     MatmulConfig,
     generate_face_layout_config_sweep,
     generate_tile_dims,
+    matmul_pack_form,
     mid_fill_rt_ct_pairs,
     skip_matmul_combination,
     sweep_tiny_tiles_matmul,
@@ -32,6 +33,7 @@ from helpers.test_variant_parameters import (
     IN_TILE_DIMS,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_PACK_BLOCK,
     MATMUL_STREAM_NARROW,
     NUM_BLOCKS,
     NUM_FACES,
@@ -255,6 +257,19 @@ def test_perf_math_matmul(
                 matmul_config.dest_sync,
                 matmul_config.tile_dimensions.ct_dim,
                 matmul_config.tile_dimensions.rt_dim,
+            ),
+            MATMUL_PACK_BLOCK(
+                matmul_pack_form(
+                    formats,
+                    matmul_config.dest_sync,
+                    math_fidelity,
+                    matmul_config.tile_dimensions.rt_dim,
+                    matmul_config.tile_dimensions.ct_dim,
+                    matmul_config.tile_dimensions.kt_dim,
+                    matmul_config.tile_dimensions.in0_tile_r_dim,
+                    matmul_config.tile_dimensions.in1_tile_c_dim,
+                    throttle,
+                )
             ),
         ],
         runtimes=[
