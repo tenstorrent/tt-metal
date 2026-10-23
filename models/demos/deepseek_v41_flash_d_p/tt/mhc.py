@@ -35,6 +35,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import build_consts
 
 from . import ccl
+from . import mm_configs as mm
 from .ccl import dealloc
 from .common import DRAM, TP_AXIS, compute_config, fpu_weight, tp_sum
 from .layout import HC, streams_cols_to_chip_major
@@ -100,7 +101,9 @@ class TtHcMixes:
     def partial_row(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """This chip's partial row [1, 1, R, 32]: x @ fn^T (its hidden slice) in columns 0..23, its sum of x^2 in
         column 24 (what ttnn.bringup.mhc_post(stats_weight=fn_t) emits in the residual's pass, MHC_FUSED=on)."""
-        mix = ttnn.matmul(x, self.fn_t, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
+        mix = mm.matmul(
+            x, self.fn_t, site="hc.fn", dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM
+        )
         packed = ttnn.bringup.mhc_pre_xing_pack(mix, x, n=HC)  # column 24 = this chip's sum of x^2 (exact)
         dealloc(mix)
         return packed
@@ -143,7 +146,9 @@ class TtHcMixes:
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         rows = x.shape[-2]
-        mix = ttnn.matmul(x, self.fn_t, dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM)
+        mix = mm.matmul(
+            x, self.fn_t, site="hc.fn", dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM
+        )
         packed = ttnn.bringup.mhc_pre_xing_pack(mix, x, n=HC)  # column 24 = this chip's sum of x^2 (exact)
         dealloc(mix)
         red = tp_sum(self.mesh, packed)

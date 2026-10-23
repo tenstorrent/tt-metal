@@ -29,6 +29,7 @@ import torch
 import ttnn
 
 from . import ccl
+from . import mm_configs as mm
 from .ccl import dealloc
 from .common import DRAM, TP_AXIS, act_dtype, attn_compute_config, bf16_activations, cast, dense_dtype, tp_sum
 from .norm import TtDistributedRmsNorm
@@ -74,7 +75,9 @@ class TtAttnInProj:
     def __call__(self, xq: ttnn.Tensor) -> ttnn.Tensor:
         # CCL_IMPL=fabric_bf16 (P.6): the partial in bf16 for the bf16 reduce-scatter (tt/ccl.py:partial_dtype)
         pdt = ccl.partial_dtype(self.mesh) if settings.get("HC_TP_SUM") == "gather_add" else ttnn.float32
-        part = ttnn.linear(xq, self.weight, dtype=pdt, compute_kernel_config=self.attn_ckc, memory_config=DRAM)
+        part = mm.linear(
+            xq, self.weight, site="q_a", dtype=pdt, compute_kernel_config=self.attn_ckc, memory_config=DRAM
+        )
         # BF16_ACTIVATIONS=on (P.20): the exchanged [wq_a | wkv] output stays bf16 (the GPU code's fp8 GEMM writes
         # bf16); q_norm / kv_norm read it in place
         out = tp_sum(self.mesh, part, fp32=not bf16_activations())

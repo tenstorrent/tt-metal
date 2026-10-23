@@ -1,0 +1,76 @@
+{
+ "used": [
+  {
+   "id": "K-51",
+   "how": "auto configs at fp32 DEST are slow (in0_block_w small): swept explicit 2D mcast with in0_block_w up to 16 and minimal_matmul; the rule takes bw 16 where it fits (DS41-112)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "every model-sized run (capture, sweep, gate) with --no-precompile",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-53",
+   "how": "PYTHONPATH pinned to this checkout for every run",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-30",
+   "how": "judged every config by its error vs float64 on the device-rounded inputs against auto's (same FPU operand bits), not by bit-identity",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-103",
+   "how": "minimal_matmul's 1e-5-rel difference from auto on bf16 outputs read as the last bf16 rounding of the same fp32 sums (vs-fp64 error equal)",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "how much L1 the model leaves free for CBs at a call, and that MemoryView block addresses are offsets from the allocator base (DS41-114)",
+  "MatmulMultiCoreReuseProgramConfig needs per_core_N == N, and at fp32 DEST it rounds its K-block partials to the output dtype (DS41-113)",
+  "minimal_matmul vs ttnn.linear auto at fp32 DEST on prefill projections (DS41-112)"
+ ],
+ "overseer": [],
+ "cited_only": [
+  "DS41-112",
+  "DS41-114",
+  "GLM-5"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.23",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-23T11:31:56",
+  "head": "d694059f842",
+  "touched": [
+   "models/demos/common/bringup/knowledge/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/P.23.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/P.23_profile.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.23.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/__init__.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_matmul_sweep.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_kv.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mhc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mm_configs.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/q_a.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/router.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

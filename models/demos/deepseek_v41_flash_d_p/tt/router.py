@@ -43,6 +43,7 @@ import torch
 
 import ttnn
 
+from . import mm_configs as mm
 from .ccl import dealloc
 from .common import DRAM, SP_AXIS, compute_config
 from .settings import settings
@@ -104,7 +105,9 @@ class TtRouter:
         s = x.shape[-2]
         assert s <= self.max_rows and s % TILE == 0, f"router rows {s} (max {self.max_rows}, tile aligned)"
         assert x.shape[-1] == self.hidden, (tuple(x.shape), self.hidden)
-        logits = ttnn.linear(x, self.w, dtype=ttnn.float32, compute_kernel_config=self.cfg, memory_config=DRAM)
+        logits = mm.linear(
+            x, self.w, site="router", dtype=ttnn.float32, compute_kernel_config=self.cfg, memory_config=DRAM
+        )
         if self.fused:
             return self._fused(logits, s)
         sp = ttnn.softplus(logits, beta=1.0, threshold=20.0, memory_config=DRAM)

@@ -54,6 +54,7 @@ import torch
 import ttnn
 
 from . import ccl
+from . import mm_configs as mm
 from .ccl import dealloc
 from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, bf16_activations, cast, tp_sum
 from .norm import TtDistributedRmsNorm
@@ -418,7 +419,7 @@ class TtCompressor:
         self.glue_partial = indexer_glue() and settings.get("HC_TP_SUM") == "gather_add"  # P.16 (tt/ccl.tp_sum)
 
     def _mm(self, a: ttnn.Tensor, b: ttnn.Tensor, dtype=ttnn.float32) -> ttnn.Tensor:
-        return ttnn.linear(a, b, dtype=dtype, compute_kernel_config=self.ckc, memory_config=DRAM)
+        return mm.linear(a, b, site="compressor", dtype=dtype, compute_kernel_config=self.ckc, memory_config=DRAM)
 
     def _pool(self, p: ttnn.Tensor) -> ttnn.Tensor:
         """[1, 1, R, 2 hd] = [kv | gate] per token -> the pair-pooled latent [1, 1, R / 2, hd] fp32."""
