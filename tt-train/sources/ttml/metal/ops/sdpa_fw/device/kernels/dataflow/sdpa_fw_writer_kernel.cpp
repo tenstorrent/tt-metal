@@ -13,9 +13,8 @@ void kernel_main() {
     uint32_t runtime_args_counter = 0;
     uint32_t output_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t intermediates_addr = get_arg_val<uint32_t>(runtime_args_counter++);
-    // Work units handed to this core: Q chunks in standard mode, Q chunk pairs in balanced mode.
-    uint32_t num_units = get_arg_val<uint32_t>(runtime_args_counter++);
-    uint32_t start_unit = get_arg_val<uint32_t>(runtime_args_counter++);
+    // Then the core's work items (Q chunks): num_runs, (first_item, num_items) per run.
+    const uint32_t num_runs = get_arg_val<uint32_t>(runtime_args_counter++);
 
     constexpr uint32_t cb_intermediates = tt::CBIndex::c_4;
     constexpr uint32_t cb_output = tt::CBIndex::c_15;
@@ -25,7 +24,6 @@ void kernel_main() {
     constexpr uint32_t q_heads = get_compile_time_arg_val(2);     // num of heads in query
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);  // query tile-rows per Q chunk
     constexpr uint32_t q_num_chunks = Ht / Sq_chunk_t;
-    [[maybe_unused]] constexpr uint32_t pairs_per_seq = q_num_chunks / 2;
 
     const uint32_t tile_bytes = get_tile_size(cb_output);
 
@@ -49,7 +47,7 @@ void kernel_main() {
     generate_tile_with_bfloat16_value(cb_reduction_scaler, one);  // tile with 1.0 for reduction
     generate_matmul_row_reduce_tile(cb_matmul_reduce);            // tile for matmul row reduce
 
-#if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
+#ifdef CAUSAL_MASK
     // Emit *pre-transformed* mask tiles so the compute kernel can stamp them directly
     // onto QK^T scores via the packer's L1-accumulate path (TTNN's
     // `apply_causal_mask_lightweight` pattern). The mask values are added in FP32 in L1 by
@@ -97,19 +95,11 @@ void kernel_main() {
 #endif
     };
 
-#ifdef BALANCED_PARALLELISM
-    // Balanced: pairs, heavy then light (same order as reader/compute).
-    for (uint32_t p = 0; p < num_units; ++p) {
-        const uint32_t global_pair_idx = start_unit + p;
-        const uint32_t seq_idx = global_pair_idx / pairs_per_seq;
-        const uint32_t pair_in_seq = global_pair_idx % pairs_per_seq;
-        write_q_chunk(seq_idx * q_num_chunks + (q_num_chunks - 1U - pair_in_seq));
-        write_q_chunk(seq_idx * q_num_chunks + pair_in_seq);
+    for (uint32_t run = 0; run < num_runs; ++run) {
+        const uint32_t first_item = get_arg_val<uint32_t>(runtime_args_counter++);
+        const uint32_t num_items = get_arg_val<uint32_t>(runtime_args_counter++);
+        for (uint32_t item = first_item; item < first_item + num_items; ++item) {
+            write_q_chunk(item);
+        }
     }
-#else
-    // Standard mode: consecutive Q chunks.
-    for (uint32_t i = 0; i < num_units; ++i) {
-        write_q_chunk(start_unit + i);
-    }
-#endif
 }

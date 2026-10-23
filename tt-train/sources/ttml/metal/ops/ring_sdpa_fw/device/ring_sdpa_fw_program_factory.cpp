@@ -15,7 +15,6 @@
 
 namespace ttml::metal::ops::ring_sdpa_fw {
 
-
 RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
@@ -84,10 +83,7 @@ RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::creat
         shared_variables_t ring_vars{
             .sdpa_fw_reader_kernel = sdpa_vars.sdpa_fw_reader_kernel,
             .sdpa_fw_writer_kernel = sdpa_vars.sdpa_fw_writer_kernel,
-            .sdpa_fw_kernel_group_1 = sdpa_vars.sdpa_fw_kernel_group_1,
-            .sdpa_fw_kernel_group_2 = sdpa_vars.sdpa_fw_kernel_group_2,
-            .core_group_1 = sdpa_vars.core_group_1,
-            .core_group_2 = sdpa_vars.core_group_2,
+            .sdpa_fw_compute_kernel = sdpa_vars.sdpa_fw_compute_kernel,
             .num_cores = sdpa_vars.num_cores,
             .num_cores_y = sdpa_vars.num_cores_y};
 
@@ -158,10 +154,7 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
         sdpa_fw::SDPAForwardProgramFactory::shared_variables_t sdpa_shared_vars{
             .sdpa_fw_reader_kernel = shared_vars.sdpa_fw_reader_kernel,
             .sdpa_fw_writer_kernel = shared_vars.sdpa_fw_writer_kernel,
-            .sdpa_fw_kernel_group_1 = shared_vars.sdpa_fw_kernel_group_1,
-            .sdpa_fw_kernel_group_2 = shared_vars.sdpa_fw_kernel_group_2,
-            .core_group_1 = shared_vars.core_group_1,
-            .core_group_2 = shared_vars.core_group_2,
+            .sdpa_fw_compute_kernel = shared_vars.sdpa_fw_compute_kernel,
             .num_cores = shared_vars.num_cores,
             .num_cores_y = shared_vars.num_cores_y};
 

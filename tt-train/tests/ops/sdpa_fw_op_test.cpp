@@ -1219,8 +1219,8 @@ INSTANTIATE_TEST_SUITE_P(
             .use_gate = true,
             .test_name = "NIGHTLY_GQA_4Q_2KV"},
         // Balanced parallelism: causal, even St, and B*H*St/2 >= number of cores (B=4, H=12, S=256 gives 192
-        // light/heavy row pairs), so the program factory selects the paired reader/compute/writer loops and the
-        // gate is read inside the paired read_row lambda.
+        // light/heavy row pairs), so the program factory hands out paired Q chunks and each core's gate reads
+        // follow that item order.
         SDPATestConfig{
             .batch_size = 4U,
             .sequence_length = 256U,
@@ -1458,7 +1458,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal_GQA_ManySeqs) {
     run_chunk_knob_sweep(SDPATestConfig{
         .batch_size = 8U,
         .sequence_length = 256U,
-        .query_dim = 1024U,  // 16 heads * 64
+        .query_dim = 1024U,     // 16 heads * 64
         .key_value_dim = 256U,  // 4 kv heads * 64
         .num_query_heads = 16U,
         .num_key_heads = 4U,
