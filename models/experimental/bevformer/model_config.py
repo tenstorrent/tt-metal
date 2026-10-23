@@ -286,12 +286,9 @@ _C3_C4_LEVELS = tuple(level for level, layer in enumerate(_VARIANT.out_indices) 
 # fits.
 DRAM_ACTIVATION_LEVELS = _C3_C4_LEVELS
 
-# Width slices for the spatial convs of the DRAM layers and levels, lowered per conv to what
-# its output width allows. The tightest is the strided 1x1 downsample that opens layer2: its
-# 6 x 232 x 400 x 256 input is in DRAM, and each slice is read into L1 as bfloat16
-# ROW_MAJOR for the halo, 3.25 MB per L1 bank in total against 576 KB free, so it needs at
-# least 6 slices. 8 leaves margin over that. TTConv2D lowers the count per conv to its
-# output width in tiles, as a width slice is whole tiles wide: 7 for this conv's 200-wide output.
+# Width slices for the spatial convs of the DRAM layers and levels without a count of their own
+# below. TTConv2D lowers the count per conv to its output width in tiles, as a width slice is
+# whole tiles wide.
 DRAM_CONV_SLICES = 8
 
 # Width slices for a layer's non-DCN 3x3 conv2s, by layer (0 is layer1), over DRAM_CONV_SLICES:
@@ -299,8 +296,8 @@ DRAM_CONV_SLICES = 8
 # halo and write-back ops.
 CONV2_DRAM_CONV_SLICES = {0: 2, 1: 1}
 
-# Layers whose downsample and non-DCN conv2s are block sharded (layer3, layer4). Height sharded,
-# each core of tiny's layer4 conv2 would hold its whole 512-channel 3x3 weight, more than L1.
+# Layers whose non-DCN conv2s are block sharded (layer3, layer4): height sharded, each core of
+# tiny's layer4 conv2 would hold its whole 512-channel 3x3 weight, more than L1.
 BLOCK_SHARDED_STAGES = (2, 3)
 
 # Width slices for the DRAM levels' 3x3 output convs, by level (0 is C3), over DRAM_CONV_SLICES:

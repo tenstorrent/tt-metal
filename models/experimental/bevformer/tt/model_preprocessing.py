@@ -208,8 +208,8 @@ def create_perception_transformer_parameters(transformer, device, dtype=WEIGHT_D
 
 # Each BatchNorm is folded into the conv before it. The backbone's conv input shapes are recorded
 # from one reference forward; the FPN's follow from its input levels' shapes. The weights stay on
-# the host: conv2d lays them out for its input on the device. A stride-1 1x1 conv whose activations
-# are in DRAM runs as a matmul instead and gets a Linear's weight; the DCNs get their op's weight,
+# the host: conv2d lays them out for its input on the device. A 1x1 conv whose activations are in
+# DRAM runs as a matmul instead and gets a Linear's weight; the DCNs get their op's weight,
 # laid out for the order it samples its columns in.
 
 

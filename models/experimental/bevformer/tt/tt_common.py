@@ -6,9 +6,9 @@
 the ResNet101-DCN backbone and the FPN share.
 
 conv2d lays the conv's weights out once, in the constructor, for one interleaved DRAM input dtype
-and layout. A later call with a different input fails. A 1x1 stride-1 conv whose
-activation lives in DRAM runs as a matmul; a spatial conv there runs in a fixed
-number of width slices.
+and layout. A later call with a different input fails. A 1x1 conv whose
+activation lives in DRAM runs as a matmul, over a subsample of its input when strided; a spatial
+conv there runs in a fixed number of width slices.
 """
 
 import math
@@ -56,14 +56,9 @@ class TTFFN:
 
 
 def is_pointwise(conv):
-    """Whether ``conv``, anything with a conv's geometry, is a 1x1 stride-1 conv without padding or
-    groups: a matmul over channels."""
-    return (
-        tuple(conv.kernel_size) == (1, 1)
-        and tuple(conv.stride) == (1, 1)
-        and tuple(conv.padding) == (0, 0)
-        and conv.groups == 1
-    )
+    """Whether ``conv``, anything with a conv's geometry, is a 1x1 conv without padding or groups: a
+    matmul over channels of its input, subsampled at its stride."""
+    return tuple(conv.kernel_size) == (1, 1) and tuple(conv.padding) == (0, 0) and conv.groups == 1
 
 
 class TTConv2D:
@@ -74,11 +69,12 @@ class TTConv2D:
     given; conv2d lays its weights out for that input, so they are prepared here against it and a
     forward does no host work, and a call with a different input fails instead of running on
     mismatched weights.
-    With ``dram_activation``, a 1x1 stride-1 conv runs as ``ttnn.linear`` instead, which
-    takes any layout, sharding or dtype and ignores ``input_dtype``, ``input_layout`` and
-    ``output_layout``; its ``conv_pth`` is then a Linear's ``(in, out)`` weight and ``(1, out)``
-    bias, which ``model_preprocessing`` emits for such convs. A spatial conv keeps conv2d and runs
-    in ``dram_conv_slices`` width slices.
+    With ``dram_activation``, a 1x1 conv runs as ``ttnn.linear`` instead, over its input
+    subsampled at its stride, and takes any layout, sharding or dtype, ignoring ``input_dtype`` and
+    ``input_layout``; a call with ``subsampled`` passes the subsample (``subsample``) itself. Its
+    ``conv_pth`` is then a Linear's ``(in, out)`` weight and ``(1, out)`` bias, which
+    ``model_preprocessing`` emits for such convs. A spatial conv keeps conv2d and runs in
+    ``dram_conv_slices`` width slices.
 
     ``dealloc_act`` lets conv2d free the L1-sharded copy it makes of a DRAM input once the
     halo has read it; the DRAM input itself is never freed.
@@ -92,8 +88,8 @@ class TTConv2D:
     when each core's shard fits ``L1_OUTPUT_MAX_SHARD_BYTES``; ``output_in_l1`` says whether it does.
     ``output_dtype`` is the dtype the conv emits, None for its input's. A spatial conv, on
     conv2d's own path with packer_l1_acc off, keeps its partial sums between reduction blocks
-    in the output dtype; a 1x1 stride-1 conv runs as a matmul (conv2d lowers it, or
-    ``ttnn.linear`` above), which keeps them in fp32 with ``fp32_dest_acc_en``.
+    in the output dtype; a 1x1 conv runs as a matmul (conv2d lowers a stride-1 one, and
+    ``ttnn.linear`` above runs any), which keeps them in fp32 with ``fp32_dest_acc_en``.
     """
 
     def __init__(
@@ -165,6 +161,8 @@ class TTConv2D:
         self.input_height = conv.input_height
         self.input_width = conv.input_width
         self.batch_size = conv.batch_size
+        self.output_height = (self.input_height + 2 * self.padding[0] - self.kernel_size[0]) // self.stride[0] + 1
+        self.output_width = (self.input_width + 2 * self.padding[1] - self.kernel_size[1]) // self.stride[1] + 1
 
         self.slice_config = None
         if self.dram_activation and not self.is_pointwise:
@@ -172,8 +170,7 @@ class TTConv2D:
             # count is fixed here. Width slices of a TILE output are whole tiles wide, so a
             # conv whose output is W wide takes at most ceil(W / TILE_SIZE) of them.
             assert dram_conv_slices is not None, "a spatial conv with dram_activation needs dram_conv_slices"
-            output_width = (self.input_width + 2 * self.padding[1] - self.kernel_size[1]) // self.stride[1] + 1
-            num_slices = min(dram_conv_slices, math.ceil(output_width / ttnn.TILE_SIZE))
+            num_slices = min(dram_conv_slices, math.ceil(self.output_width / ttnn.TILE_SIZE))
             self.slice_config = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=num_slices)
         elif output_layout == ttnn.ROW_MAJOR_LAYOUT:
             self.slice_config = ttnn.Conv2dL1FullSliceConfig
@@ -212,7 +209,7 @@ class TTConv2D:
         """Rows over every core, each core's output rows kept in its own L1 as a height shard, when
         that shard fits L1_OUTPUT_MAX_SHARD_BYTES."""
         num_cores = grid.x * grid.y
-        rows_t = math.ceil(self.batch_size * self.input_height * self.input_width / ttnn.TILE_SIZE)
+        rows_t = math.ceil(self.batch_size * self.output_height * self.output_width / ttnn.TILE_SIZE)
         per_core_m = math.ceil(rows_t / num_cores)
         if per_core_m * ttnn.TILE_SIZE * self.out_channels * 2 > self.L1_OUTPUT_MAX_SHARD_BYTES:
             return
@@ -250,7 +247,7 @@ class TTConv2D:
         splits the rows over every core with the weights multicast; a wider output also splits its
         columns over up to 8 grid columns, which keeps a write-heavy linear off a few cores."""
         num_cores = grid.x * grid.y
-        rows_t = math.ceil(self.batch_size * self.input_height * self.input_width / ttnn.TILE_SIZE)
+        rows_t = math.ceil(self.batch_size * self.output_height * self.output_width / ttnn.TILE_SIZE)
         if rows_t < num_cores:
             return None
         in_t, out_t = self.in_channels // ttnn.TILE_SIZE, self.out_channels // ttnn.TILE_SIZE
@@ -314,11 +311,24 @@ class TTConv2D:
         warmup_output, _, _ = self._conv2d(warmup_input)
         ttnn.deallocate(warmup_output)
 
-    def _pointwise_as_linear(self, x):
-        # conv2d lowers a 1x1/stride-1 conv to a matmul that always shards its activation
-        # in L1 and never slices it, so an activation larger than L1 cannot run as a conv.
-        # A 1x1 conv over NHWC is a matmul over channels, and ttnn.linear streams
-        # interleaved DRAM operands of any height.
+    def subsample(self, x):
+        """``x``, the ``(1, 1, N*H*W, C)`` input, at this conv's stride: ``(1, 1, N*H'*W', C)``
+        ROW_MAJOR in DRAM. ROW_MAJOR, where the strided slice copies whole channel rows."""
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        nhwc = (self.batch_size, self.input_height, self.input_width, self.in_channels)
+        x = ttnn.slice(
+            ttnn.reshape(x, nhwc), [0, 0, 0, 0], list(nhwc), [1, *self.stride, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        return ttnn.reshape(x, (1, 1, self.batch_size * self.output_height * self.output_width, self.in_channels))
+
+    def _pointwise_as_linear(self, x, subsampled):
+        # conv2d lowers a 1x1 conv to a matmul that always shards its activation in L1 and
+        # never slices it, so an activation larger than L1 cannot run as a conv; strided, it
+        # also runs width-sliced with a halo. A 1x1 conv over NHWC is a matmul over the
+        # channels of the pixels its stride keeps, and ttnn.linear streams interleaved DRAM
+        # operands of any height.
+        if tuple(self.stride) != (1, 1) and not subsampled:
+            x = self.subsample(x)
         if x.is_sharded():
             x = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
         # conv2d returns (1, 1, N*H*W, C) whatever the input rank; match it so the
@@ -348,9 +358,10 @@ class TTConv2D:
             core_grid=self.linear_core_grid,
         )
 
-    def __call__(self, x):
+    def __call__(self, x, subsampled=False):
         if self.dram_activation and self.is_pointwise:
-            return self._pointwise_as_linear(x), self.input_height, self.input_width
+            return self._pointwise_as_linear(x, subsampled), self.output_height, self.output_width
+        assert not subsampled, "only a 1x1 conv run as ttnn.linear takes a subsampled input"
 
         assert (
             x.memory_config() == self.input_memory_config
