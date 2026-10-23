@@ -67,3 +67,6 @@ Runner command: `python -m models.autoports.qwen_qwen3_8_27b.tests.run_decoder -
 
 - Independent xhigh subagent /root/stage_review returned clean-pass with no required work. Final report: STAGE_REVIEW.md; interim findings: STAGE_REVIEW_initial.md. The final reviewer independently rederived all eight decode/seven prefill windows, checked11171+286 linearB16 device rows against C++ timestamps, verified14/14 JUnit results, final hashes, telemetry and staged artifact retention.
 - Stage-owned files only are checkpointed in tt-metal, branch exp26-qwen38-bringup. No optimization/multichip/full-model/vLLM stage was started, and nothing is pushed. Large capture intermediates and model weights remain ignored; accepted compact evidence is explicitly staged.
+
+- Implementation and evidence checkpoint: tt-metal / exp26-qwen38-bringup / `98a1723100d35616e6552ea9466fcb6c893092a3`. Created only after clean-pass. Git lacked an author identity; commits use command-local `Codex <codex@localhost>` without changing repository/global config.
+- This SHA-recording documentation follow-up is also local; both SHAs are recorded in the final telemetry packet at `/home/mvasiljev/agentic-research-data/experiment-26/bringup-logs/qwen38-27b/20261023-astra-medium-exp26-clean/telemetry/packets/bf452eab-a14c-4c27-9161-a094297f5789.json`. No push was performed.
