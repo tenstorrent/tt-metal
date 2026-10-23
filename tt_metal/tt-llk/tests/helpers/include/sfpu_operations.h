@@ -427,11 +427,7 @@ template <
     bool FUSED_SORT         = false>
 void call_unary_sfpu_operation_init(std::uint32_t math_format)
 {
-    // Once-per-kernel SFPU init (SFPU config reg + invariant ADDR_MOD_7). In metal each per-op
-    // llk_math_eltwise_unary_sfpu_init runs this itself (#50381); this standalone LLK harness does not go
-    // through that path, so it must run the once-init itself. Ops migrated to the self-contained
-    // per-op init (SFPU_UNARY_INIT_SC*) rely on this running first; unmigrated ops still carry the invariant
-    // inside their _llk_math_eltwise_unary_sfpu_init_ but re-running it here is harmless (idempotent).
+    // Only the topk branches (_init_topk / _init_topk_fused_) need this; every other op's llk_math_eltwise_unary_sfpu_init sets it.
     llk_math_sfpu_init_once();
 
     if constexpr (OPERATION == SfpuType::acosh || OPERATION == SfpuType::asinh)
