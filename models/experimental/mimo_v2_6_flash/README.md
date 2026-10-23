@@ -70,4 +70,5 @@ some Ethernet links can stay untrained, and opening the mesh then fails in
 - Serving gaps (doc/vllm_integration/README.md): device sampling is greedy only (other sampling runs on the host);
   chunked prefill's slot parity is not measured.
 - Speculative decoding: MTP drafting through vLLM is implemented but not yet run on hardware
-  (doc/vllm_integration/README.md, Speculative decoding); DFlash is not started.
+  (doc/vllm_integration/README.md, Speculative decoding); DFlash drafts at K = 3, host-planned (no chain), and its
+  K = 7 block needs an 8-slot verify (doc/vllm_integration/README.md, Speculative decoding (DFlash)).
