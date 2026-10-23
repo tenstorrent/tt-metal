@@ -283,7 +283,14 @@ def test_full_prefill_times_a_prefix_subset(fx, monkeypatch):
     m = Fake()
     assert profile.full_prefill(Spec.load(fx(layers=[0, 1])), m, None, [0, 1], rung, tokens) is not None
     assert "norm" not in m.calls and rec["prefill_layers"] == 2 and rec["prefill_ms_full"] >= 0
-    assert profile.full_prefill(Spec.load(fx(layers=[0, 2])), Fake(), None, [0, 2], rung, tokens) is None
+    # F178: a gapped subset is timed back to back (it was silently skipped: None); its state sources must be in it
+    m2 = Fake()
+    assert profile.full_prefill(Spec.load(fx(layers=[0, 2])), m2, None, [0, 2], rung, tokens) is not None
+    assert rec["prefill_gapped"] == 1 and rec["prefill_layers"] == 2
+    sp = Spec.load(fx(layers=[0, 2]))
+    sp.state_sources = lambda i: [1] if i == 2 else []  # layer 2 reads layer 1's state, which is not timed
+    with pytest.raises(ValueError, match="outside the timed stack"):
+        profile.full_prefill(sp, Fake(), None, [0, 2], rung, tokens)
     m = Fake()
     profile.full_prefill(Spec.load(fx()), m, None, [0, 1, 2], rung, tokens)
     assert m.calls.count("norm") == 3  # compile pass, timed pass, per-chunk pass

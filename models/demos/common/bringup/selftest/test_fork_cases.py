@@ -278,3 +278,20 @@ def test_no_fork_case_carries_a_tolerance_of_its_own():
         for e in case_lint(c)
     ]
     assert not bad, f"{len(bad)} cases, e.g. {bad[:3]}"
+
+
+def test_a_volatile_cache_key_does_not_change_a_calls_signature():
+    """F179: DeepSeek-V4.1 O.1: a flat_routed_expert call carried extra_key (a program-cache key from buffer addresses)
+    that changed between two runs, so its signature did too and no case could cover it. The signature leaves volatile
+    arguments out; the pre-F179 signature is kept as sig_full so existing cases still match."""
+    from models.demos.common.bringup.testing import fork_capture as FC
+
+    FC._CALLS.clear()
+    FC.record("ttnn.bringup.flat_routed_expert", [1, 2], {"extra_key": 9507296, "k": 3})
+    FC.record("ttnn.bringup.flat_routed_expert", [1, 2], {"extra_key": 9582688, "k": 3})
+    assert len(FC._CALLS) == 1 and next(iter(FC._CALLS.values()))["count"] == 2
+    FC.record("ttnn.bringup.flat_routed_expert", [1, 2], {"extra_key": 1, "k": 4})
+    assert len(FC._CALLS) == 2  # a real difference still separates calls
+    c = next(iter(FC._CALLS.values()))
+    assert c["sig_full"] != c["sig"]
+    FC._CALLS.clear()
