@@ -61,24 +61,13 @@
 # generated bf16 op: leaky_relu_bw
 # generated bf16 op: lgamma
 # generated bf16 op: log
-- name: "ttnn eltwise generated bf16 log"
-  cmd: >-
-    pytest --timeout 120 -s -v
-    tests/ttnn/unit_tests/operations/eltwise/test_unary_category3_bfloat16.py::test_log_family_accurate[log10]
-    tests/ttnn/unit_tests/operations/eltwise/test_unary_category3_bfloat16.py::test_log_family_nonpositive_domain[accurate-log10]
-  skus:
-    wh_n300_civ2:
-      timeout: 2
-    bh_p150b_civ2:
-      timeout: 2
-  team: ttnn
-  budget_type: device_perf
-  owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: log10
 - name: "ttnn eltwise generated bf16 log10"
   cmd: >-
     pytest --timeout 120 -s -v
     tests/ttnn/unit_tests/operations/eltwise/test_unary_category1_bfloat16.py::test_log10_bf16_unflushed_zero_and_subnormal_inputs
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category3_bfloat16.py::test_log_family_accurate[log10]
+    tests/ttnn/unit_tests/operations/eltwise/test_unary_category3_bfloat16.py::test_log_family_nonpositive_domain[accurate-log10]
   skus:
     wh_n300_civ2:
       timeout: 2
