@@ -19,10 +19,11 @@ class MeshDevice;
 // Internal, unstable API - read the stability/usage conditions in tt_metal/api/internal/README.md
 namespace tt::tt_metal::internal {
 
-// Guards one host wait loop against a Blackhole Tensix BRISC halted on an L1 ECC error (its halt
-// record in mailboxes_t::l1_ecc_halt). Checks the watched chips' Tensix cores once the loop has been stalled for
-// a while, periodically after that, and at once if another wait has already reported a halt. No-op when the
-// feature is off.
+// Guards one host wait loop against a Blackhole Tensix BRISC halted on an L1 ECC error. Once the wait has been
+// stalled for about 10 s, and every 10 s after that, it reads the watched chips' halt records
+// (mailboxes_t::l1_ecc_halt) and throws std::runtime_error naming the chip, core and cause if one has halted. After
+// any wait has reported a halt, every other wait throws at once. A no-op off Blackhole silicon, or with
+// TT_METAL_DISABLE_L1_ECC_HALT=1.
 class L1EccHaltWatch {
 public:
     // Watches one chip.
@@ -30,9 +31,10 @@ public:
     // Watches the mesh's chips. A null mesh_device disables the watch.
     explicit L1EccHaltWatch(const distributed::MeshDevice* mesh_device);
 
-    // Call on every iteration that is still waiting. May throw.
+    // Call on every iteration of the wait that has not finished yet. Reads the device only once the wait has been
+    // stalled for a while (see above). Throws if a halt is found.
     void stalled();
-    // Checks immediately. Call before a loop's own timeout throws.
+    // Reads the halt records now and throws if one is found. Call before a loop's own timeout throws.
     void check_now();
 
 private:
