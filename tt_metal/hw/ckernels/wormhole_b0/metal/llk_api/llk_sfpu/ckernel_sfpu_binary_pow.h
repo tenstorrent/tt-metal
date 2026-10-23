@@ -10,7 +10,7 @@
 #include "cmath_common.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_exp.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_pow_df.h"
 
 using namespace sfpi;
 
@@ -203,112 +203,12 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
  * sign. A +0 base is unaffected, and the magnitude stays correct throughout.
  */
 sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat pow) {
-    // The algorithm works in two steps:
-    // 1) Compute log2(base)
-    // 2) Compute base**pow = 2**(pow * log2(base))
+    // base**pow = 2**(pow*log2|base|) with pow*log2|base| = z_hi + z_lo, z_hi exact (ckernel_sfpu_pow_df.h),
+    // so the error no longer grows with |pow*log2 m|.
+    sfpi::vFloat z_hi, z_lo;
+    _sfpu_pow_z_df_(sfpi::abs(base), pow, z_hi, z_lo);
 
-    // Step 1: Compute log2(base) using improved log
-    // Normalize base to calculation range
-    sfpi::vFloat abs_base = sfpi::abs(base);
-    sfpi::vFloat m = sfpi::setexp(abs_base, 127);
-    sfpi::vInt exp = sfpi::exexp(abs_base);
-
-    // Range reduction: ensure m in [sqrt(2)/2, sqrt(2)] ≈ [0.707, 1.414]
-    constexpr float SQRT2 = 1.4142135381698608f;
-    // If m >= sqrt(2), divide by 2 and increment exponent
-    v_if(m >= SQRT2) {
-        // m = m * 0.5f;  // Divide by 2
-        m = m * 0.5f;
-        exp = exp + 1;
-    }
-    v_endif;
-
-    // Transform to z = (m - 1) / (m + 1)
-    sfpi::vFloat m_plus_1 = m + 1.0f;  // t in [1.707, 2.414] since m in [sqrt(2)/2, sqrt(2)]
-    // 1/t: initial guess 1.0f - 0.2426406871192851f*t (linear interp on [1.7,2.4]), then Newton-Raphson y = y*(2 -
-    // t*y).
-    sfpi::vFloat recip = 1.0f - 0.2426406871192851f * m_plus_1;
-    recip = recip * (2.0f - m_plus_1 * recip);  // 1st NR
-    recip = recip * (2.0f - m_plus_1 * recip);  // 2nd NR
-    // 3rd NR: two NR iterations leave a ~2 ULP reciprocal residual that, after the
-    // atanh(z) log series and pow*log2 multiply, is the floor keeping 2.5 at 4 ULP.
-    // One more quadratically-convergent step drives 1/(m+1) to full fp32 precision.
-    recip = recip * (2.0f - m_plus_1 * recip);  // 3rd NR for float32
-    // z = (m-1)*recip. The subtract is kept separate rather than folded into a multiply-add:
-    // the range reduction above leaves m in [sqrt(2)/2, sqrt(2)], which is inside [0.5, 2], so
-    // Sterbenz's lemma makes m - 1 exact for every representable m and the only rounding left is
-    // the multiply. Written as m*recip - recip it is instead a subtraction of two nearly equal
-    // quantities whenever the base is near 1.0, where m*recip and recip agree to ~24 bits. SFPMAD
-    // is only partially fused -- the product keeps four bits beyond fp32, not the exact product a
-    // true FMA would give -- so those four bits are all that survives the cancellation. The error
-    // is then scaled by pow in pow*log2(base): 250 ULP at pow = 1000, 4.4% relative at 3e6.
-    sfpi::vFloat z = (m - 1.0f) * recip;
-
-    // Compute z**2 for polynomial evaluation
-    sfpi::vFloat z2 = z * z;
-    // Polynomial approximation using odd powers
-    sfpi::vFloat p = PolynomialEvaluator::eval(
-        z2, 1.0f, 0.3333333333333333f, 0.2f, 0.14285714285714285f, 0.1111111111111111f, 0.09090909090909091f);
-    sfpi::vFloat ln_m = 2.0f * (z * p);
-
-    sfpi::vFloat exp_f32 = sfpi::convert<sfpi::vFloat>(sfpi::convert<sfpi::vSMag>(exp), sfpi::RoundMode::Nearest);
-
-    // log2(base) = ln(base)/ln(2) = exp + ln_m/ln(2). Keep the two contributions
-    // separate: exp_f32 is the large integer part, ln_m*ln2inv the small fractional
-    // part. Collapsing pow*log2(base) into one fp32 before 2**z squeezes out the
-    // fractional mantissa bits for large |base| (the 20-27 ULP error). Instead carry
-    // z = pow*log2(base) as an unevaluated double-float (z_hi, z_lo) and cancel the
-    // large integer part against k=round(z) before the tail is ever rounded away.
-    const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;
-    constexpr float LN2 = 0.693147180559945309f;
-
-    // Step 2: base**pow = 2**(pow*log2(base)).
-    // The residual after the two-sum is the fp32 rounding of pow*exp_f32 itself:
-    // exp_f32 is the large integer exponent and pow can carry a full 24-bit mantissa,
-    // so the product needs ~30 bits and drops its low bits before the two-sum sees
-    // them. exp_f32 is a small integer, so a Veltkamp split of pow makes both partial
-    // products exact (12-bit half * <=7-bit integer fits a 24-bit significand); the low
-    // half pow_lo*exp_f32 rides in z_lo so none of the integer term's bits are lost.
-    constexpr float VELTKAMP_SPLIT = 4097.0f;  // 2**12 + 1
-    sfpi::vFloat pc = pow * VELTKAMP_SPLIT;
-    sfpi::vFloat pow_hi = pc - (pc - pow);
-    sfpi::vFloat pow_lo = pow - pow_hi;
-
-    sfpi::vFloat z_hi = pow_hi * exp_f32;
-    sfpi::vFloat z_lo = pow_lo * exp_f32 + pow * (ln_m * vConst1Ln2);
-
-    // Dekker FastTwoSum so k=round(z) sees the true integer part while the residual e
-    // keeps the dropped tail. Exact under the precondition |z_hi| >= |z_lo| or z_hi == 0:
-    // z_hi = pow*exponent(base) and z_lo carries the fractional log2 term (|z_lo| <
-    // ~0.5*|pow| plus a <=2**-12*|pow| Veltkamp remainder). When exponent(base) == 0 then
-    // z_hi == 0 exactly (the sum is already exact); otherwise |exponent(base)| >= 1 so
-    // |z_hi| >= |pow| > |z_lo|.
-    sfpi::vFloat s = z_hi + z_lo;
-    sfpi::vFloat e = z_lo - (s - z_hi);
-    // vConstFloatPrgm1 holds -127 (matches the original clamp); use it directly to avoid a copy.
-    v_if(s < sfpi::vConstFloatPrgm1) {
-        s = sfpi::vConstFloatPrgm1;
-        e = 0.0f;
-    }
-    v_endif;
-
-    sfpi::vInt k_int;
-    sfpi::vFloat k = _sfpu_round_to_nearest_int32_(s, k_int);
-    // Reduced argument (s - k) is exact by Sterbenz; add back the tail e.
-    sfpi::vFloat frac = (s - k) + e;
-
-    // 2**frac via the accurate exp helper (frac is small), then scale by 2**k.
-    sfpi::vFloat y = _sfpu_exp_fp32_accurate_(frac * LN2);
-    // setexp writes the 8-bit exponent field and wraps instead of saturating, so an
-    // overflowing magnitude silently becomes a finite value. Detect overflow from the
-    // biased exponent about to be written (>= 255 is the inf field) and clamp explicitly.
-    // Checking out_exp (already needed by setexp) instead of keeping the float s live
-    // across the exp helper avoids pushing this kernel past the SFPU register-allocator
-    // budget (reload-insn ICE); out_exp >= 255 is equivalent to s >= 128.
-    sfpi::vInt out_exp = sfpi::exexp(y, sfpi::ExponentMode::Biased) + k_int;
-    y = sfpi::setexp(y, out_exp);
-    v_if(out_exp >= 255) { y = std::numeric_limits<float>::infinity(); }
-    v_endif;
+    sfpi::vFloat y = _sfpu_pow2_df_(z_hi, z_lo);
 
     // |pow| removes a -0 exponent: convert<vSMag16> would round trip that back to something the
     // bit-exact compare below reports as non-integer (on BH, not on WH) and gives NaN instead of 1
@@ -335,13 +235,12 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     }
     v_endif;
 
-    // setexp/exexp map 0 to log2 = -127, so 0**p evaluates as 2**(-127p).
+    // The pow_df reduction maps 0 to log2 = -127 (as setexp/exexp did), so 0**p evaluates as 2**(-127p).
     // Must follow the negative-base branch: SFPU `<` is sign-bit based, so
     // v_if(base < 0) classes -0 as negative and would overwrite the 0 with the
     // complex-result NaN; -0 is a zero, not a negative base.
-    // SFPU `== 0` is bit-exact, so matching -0 needs an abs. Recompute it here
-    // rather than reusing abs_base: that live range would span the log2/exp2 body
-    // and spills this kernel.
+    // SFPU `== 0` is bit-exact, so matching -0 needs an abs. Recompute |base| here:
+    // keeping it live across the pow_df core would not fit in the 8 LRegs.
     // Fill 0 for every non-zero exponent, then narrow to the negative ones, which
     // IEEE defines as +inf. v_and tightens the enclosing predicate in place, so it
     // costs one compare where a second flat v_if would also save and restore the
