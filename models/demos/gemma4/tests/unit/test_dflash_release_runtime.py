@@ -7,6 +7,7 @@ These import the production modules, so they need the TT runtime and run on a
 device host; the host-only chain tests are in ``test_dflash_capture_release.py``.
 """
 
+import importlib.util
 from types import SimpleNamespace
 
 import pytest
@@ -39,6 +40,11 @@ def test_base_release_runs_once_and_the_destructor_only_runs_the_base(monkeypatc
     assert released.count(11) == 1
 
 
+@pytest.mark.skipif(
+    importlib.util.find_spec("vllm") is None,
+    reason="DiffusionGemmaForCausalLM derives from the vLLM generator base in models.tt_transformers.tt.generator_vllm, "
+    "which imports vllm at module level; the models unit-test image does not ship vllm",
+)
 def test_diffusion_gemma_release_reaches_the_base():
     from models.experimental.diffusion_gemma.tt.generator_vllm import DiffusionGemmaForCausalLM
 

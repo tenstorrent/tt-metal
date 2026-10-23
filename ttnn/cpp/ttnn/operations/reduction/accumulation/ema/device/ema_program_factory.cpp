@@ -51,7 +51,7 @@ ttnn::device_operation::ProgramArtifacts EmaDeviceOperation::EmaProgramFactory::
 
     const auto& input = tensor_args.input.mesh_tensor();
     const auto& output = tensor_return_value.mesh_tensor();
-    tt::tt_metal::distributed::MeshDevice& device = input.mutable_device();
+    const tt::tt_metal::distributed::MeshDevice& device = input.device();
 
     // Grid sizing
     // -----------

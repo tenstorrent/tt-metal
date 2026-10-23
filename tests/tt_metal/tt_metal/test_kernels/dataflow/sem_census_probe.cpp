@@ -16,8 +16,6 @@ void kernel_main() {
     const uint32_t report_addr = get_arg(args::report_addr);
     const uint32_t increment_times = get_arg(args::increment_times);
     const uint32_t is_reporter = get_arg(args::is_reporter);
-    // Kernels with different thread counts must not share a barrier slot.
-    const uint32_t barrier_idx = get_arg(args::barrier_idx);
     const uint32_t wait_min_total = get_arg(args::wait_min_total);
 
     // The mechanism comes from the binding token the host emitted.
@@ -28,7 +26,9 @@ void kernel_main() {
     }
 
     // Barrier across this kernel's own threads, so the reporter sees all of their increments.
-    sync_threads(barrier_idx);
+    // Firmware gives each co-resident kernel its own slot, so kernels with different thread
+    // counts cannot collide here.
+    sync_threads();
 
     if (is_reporter != 0 && get_my_thread_id() == 0u) {
         if (wait_min_total != 0u) {

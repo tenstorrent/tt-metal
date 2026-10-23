@@ -15,6 +15,7 @@ equal to the window admits no j>=1 at all.
 """
 
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -65,16 +66,36 @@ def test_every_candidate_query_keeps_its_full_window(monkeypatch):
             assert (base + j) % ring not in slots or slots[(base + j) % ring] == base + j
 
 
-def test_the_headroom_is_opt_in_and_warns_when_absent(monkeypatch, caplog):
-    """It must NOT reserve silently: doubling the ring doubles the bounded pool
-    for every sliding layer (50 on 31B) and OOMs the shipped P150x8 config
-    during KV allocation. So it warns, names the knob, and leaves the ring
-    alone -- wrong tokens are worse than a warning, and a server that cannot
-    boot is worse than both."""
+def test_the_model_sizes_the_ring_rather_than_the_operator(monkeypatch):
+    """With no headroom set, a speculating class gets a ring that fits its drafts.
+
+    The premise of this test has been wrong twice, so it records what settled it.
+    First it asserted the guard warns and continues, on the grounds that "a
+    server that cannot boot is worse" than wrong tokens -- tt-metal#57701 is the
+    report that this produces plausible, wrong text with one startup warning as
+    the only trace. Then it asserted a refusal, on the grounds that doubling the
+    ring OOMs the shipped P150x8 config. That was inherited from a comment
+    written before tt-metal#57655 sized the bounded page tables from the ring;
+    measured afterwards on P150x8 at max_num_seqs=32 with
+    GEMMA4_MAX_TOKENS_ALL_USERS=262144, the doubled ring allocates and serves.
+
+    So the headroom is neither warned about nor refused: the model sets it,
+    because it alone knows the class, K, the window, and whether bounded sliding
+    resolved on. An env var every launch must get right is the wrong interface.
+    """
     monkeypatch.delenv(SPEC_RING_HEADROOM_ENV, raising=False)
+    # _auto_size_spec_ring writes os.environ directly; monkeypatch cannot undo a
+    # value it did not set, so restore it here or it leaks into later tests.
+    monkeypatch.setenv(SPEC_RING_HEADROOM_ENV, "0")
+    monkeypatch.delenv(SPEC_RING_HEADROOM_ENV)
+    gv._auto_size_spec_ring(
+        SimpleNamespace(_SPEC_N=6, __name__="Gemma4DFlash"),
+        SimpleNamespace(text_config=SimpleNamespace(sliding_window=WINDOW)),
+        bounded_sliding=True,
+    )
+    assert bounded_ring_modulo(WINDOW) == 2 * WINDOW
+    # and the guard that backstops it is satisfied by what the model chose
     gv._reserve_spec_ring_headroom(WINDOW, 6, "test")
-    assert SPEC_RING_HEADROOM_ENV not in os.environ
-    assert bounded_ring_modulo(WINDOW) == WINDOW
 
 
 def test_an_operator_value_is_left_alone(monkeypatch):

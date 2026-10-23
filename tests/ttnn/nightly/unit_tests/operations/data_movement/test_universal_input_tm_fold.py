@@ -187,7 +187,7 @@ def _run_fold(
     assert_with_pcc(ref.float(), got.float(), pcc)
 
 
-# Interleaved routing — RM goes through MultiCoreDRAMFold RM branch; TILE untilizes first.
+# TILE takes the tile-native scratch-gather factory when scratch fits L1, else falls back to untilize→RM.
 
 
 @pytest.mark.parametrize(
@@ -389,6 +389,126 @@ def test_fold_f32_dtype(shape, layout, in_mc_factory, device):
     _run_fold(shape, 2, 2, layout, in_mc_factory(shape, device), None, device, dtype=ttnn.float32)
 
 
+# Bit-exact scratch-gather check — PCC can't see a few-slot scatter miss; f32 also pins the
+# UnpackToDest packer-mantissa claim (reverting to UnpackToSrc must fail torch.equal).
+
+
+@pytest.mark.parametrize(
+    "shape, stride",
+    [
+        pytest.param((1, 32, 32, 32), (2, 2), id="32x32x32_2x2"),
+        pytest.param((1, 32, 32, 64), (2, 2), id="32x32x64_2x2"),
+        # W=16 clamps width_limit; C=8 keeps c_bytes < c_padded_bytes so the padded-C-tile gather stays live.
+        pytest.param((1, 16, 16, 8), (2, 2), id="16x16x8_2x2"),
+    ],
+)
+@pytest.mark.parametrize(
+    "torch_dt, ttnn_dt",
+    [
+        pytest.param(torch.bfloat16, ttnn.bfloat16, id="bf16"),
+        pytest.param(torch.float32, ttnn.float32, id="f32"),
+    ],
+)
+def test_fold_tile_native_bit_exact(shape, stride, torch_dt, ttnn_dt, device):
+    torch.manual_seed(0)
+    x = torch.rand(shape, dtype=torch_dt)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn_dt, device=device, memory_config=DRAM_INTERLEAVED)
+    got = ttnn.to_torch(ttnn.fold(ttnn_in, stride[0], stride[1]).cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert torch.equal(_fold_golden(x, stride[0], stride[1]), got)
+
+
+# Pin routing (not values) across the three rejection axes; each test matches the distinguishing
+# substring so it can't pass under a different condition firing first.
+
+
+_prim_fold = ttnn._ttnn.operations.data_movement._prim_fold
+_is_tile_native_fold_supported = ttnn._ttnn.operations.data_movement._is_tile_native_fold_supported
+
+
+def _tile_native_boundary_shapes(device, hw, stride):
+    """Return (fits_shape, over_shape) that bracket the L1-capacity half of the gate for this arch.
+    Walks C in TILE_WIDTH increments so c_bytes is always 16B-aligned; scratch/CBs is what flips."""
+    H, W = hw
+    stride_h, stride_w = stride
+    prev_fits = None
+    for c_tiles in range(1, 129):
+        C = c_tiles * 32
+        shape = (1, H, W, C)
+        probe = ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.bfloat16),
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            device=device,
+            memory_config=DRAM_INTERLEAVED,
+        )
+        supported = _is_tile_native_fold_supported(probe, stride_h, stride_w)
+        ttnn.deallocate(probe)
+        if supported:
+            prev_fits = shape
+        elif prev_fits is not None:
+            return prev_fits, shape
+    pytest.skip("Predicate never rejected — sweep did not cross the boundary on this arch")
+
+
+def test_fold_tile_gate_pins_routing(device, expect_error):
+    stride_h, stride_w = 16, 16
+    fits_shape, over_shape = _tile_native_boundary_shapes(device, hw=(224, 224), stride=(stride_h, stride_w))
+
+    torch.manual_seed(0)
+    x_fits = torch.rand(fits_shape, dtype=torch.bfloat16)
+    t_fits = ttnn.from_torch(
+        x_fits, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=DRAM_INTERLEAVED
+    )
+    assert _is_tile_native_fold_supported(t_fits, stride_h, stride_w), f"predicate must accept fits {fits_shape}"
+    got = ttnn.to_torch(_prim_fold(t_fits, stride_h, stride_w).cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert torch.equal(_fold_golden(x_fits, stride_h, stride_w), got)
+
+    t_over = ttnn.from_torch(
+        torch.zeros(over_shape, dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=DRAM_INTERLEAVED,
+    )
+    assert not _is_tile_native_fold_supported(t_over, stride_h, stride_w), f"predicate must reject over {over_shape}"
+    # Match the capacity-specific substring so the sharded / c_bytes / stride branches can't pass this.
+    with expect_error(RuntimeError, "exceed L1 budget"):
+        _prim_fold(t_over, stride_h, stride_w)
+
+
+def test_fold_tile_gate_pins_alignment(device, expect_error):
+    # C=3 bf16 → c_bytes=6; match "c_bytes=6" so a sharded/capacity failure can't silently pass.
+    shape = (1, 32, 32, 3)
+    stride_h, stride_w = 2, 2
+    torch.manual_seed(0)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    t = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=DRAM_INTERLEAVED)
+    assert not _is_tile_native_fold_supported(t, stride_h, stride_w), "c_bytes=6 must be rejected"
+    with expect_error(RuntimeError, r"c_bytes=6 \(not 16B-aligned\)"):
+        _prim_fold(t, stride_h, stride_w)
+    # Composite falls back to untilize→RM and returns the correct result.
+    got = ttnn.to_torch(ttnn.fold(t, stride_h, stride_w).cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert torch.equal(_fold_golden(x, stride_h, stride_w), got)
+
+
+def test_fold_tile_zero_stride_fatal(device, expect_error):
+    # Without stride>0 short-circuit the predicate divides by 0 (input_width / stride_w) — SIGFPE
+    # instead of clean FATAL. Predicate returns False → composite → RM → validate_fold FATALs.
+    shape = (1, 32, 32, 32)
+    t = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=DRAM_INTERLEAVED,
+    )
+    for sh, sw in [(2, 0), (0, 2), (0, 0)]:
+        assert not _is_tile_native_fold_supported(t, sh, sw), f"predicate must reject stride ({sh},{sw})"
+        # Direct prim call — validate_fold's own stride > 0 FATAL fires first.
+        with expect_error(RuntimeError, r"stride_[hw] .* must be > 0"):
+            _prim_fold(t, sh, sw)
+
+
 # Non-standard strides — asymmetric, non-power-of-two (e.g. 3x5, 2x3).
 
 
@@ -506,10 +626,10 @@ def test_fold_invalid_shard_shape_fatals(device):
             None,
             id="rm_dram_height_sharded",
         ),
-        # TILE interleaved (composite untilize hop).
+        # TILE interleaved (tile-native scratch-gather factory).
         pytest.param(ttnn.TILE_LAYOUT, (1, 16, 16, 8), lambda s, d: L1_INTERLEAVED, None, id="tile_l1_interleaved"),
         pytest.param(ttnn.TILE_LAYOUT, (1, 16, 16, 8), lambda s, d: DRAM_INTERLEAVED, None, id="tile_dram_interleaved"),
-        # TILE W/B-sharded (composite untilize + L1-interleaved staging).
+        # TILE W/B-sharded (composite untilize→RM before prim, sharded staging).
         pytest.param(ttnn.TILE_LAYOUT, (1, 32, 32, 128), _tile_width_shard, None, id="tile_width_sh"),
         pytest.param(ttnn.TILE_LAYOUT, (1, 32, 32, 128), _tile_block_shard, None, id="tile_block_sh"),
     ],

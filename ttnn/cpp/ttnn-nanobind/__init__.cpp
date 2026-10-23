@@ -21,7 +21,6 @@
 #include "ttnn-nanobind/prefetcher_pipe.hpp"
 #include "ttnn-nanobind/hd_socket.hpp"
 #include "ttnn-nanobind/d2d_stream_service.hpp"
-#include "ttnn-nanobind/counter_channel.hpp"
 #include "ttnn-nanobind/h2d_stream_service.hpp"
 #include "ttnn-nanobind/d2h_stream_service.hpp"
 #include "ttnn-nanobind/layer_ack_service.hpp"
@@ -33,6 +32,7 @@
 #include "ttnn-nanobind/profiler.hpp"
 #include "ttnn-nanobind/program_descriptors.hpp"
 #include "ttnn-nanobind/tensor_accessor_args.hpp"
+#include "ttnn-nanobind/mcast_host.hpp"
 #include "ttnn-nanobind/reports.hpp"
 #include "ttnn-nanobind/tensor.hpp"
 #include "ttnn-nanobind/types.hpp"
@@ -64,6 +64,7 @@
 #include "ttnn/operations/full_like/full_like_nanobind.hpp"
 #include "ttnn/operations/generic/generic_op_nanobind.hpp"
 #include "ttnn/operations/index_fill/index_fill_nanobind.hpp"
+#include "ttnn/operations/index_fill_new/index_fill_new_nanobind.hpp"
 #include "ttnn/operations/kv_cache/kv_cache_nanobind.hpp"
 #include "ttnn/operations/loss/loss_nanobind.hpp"
 #include "ttnn/operations/matmul/matmul_nanobind.hpp"
@@ -208,6 +209,10 @@ void py_module(nb::module_& mod) {
     auto m_index_fill = mod.def_submodule("index_fill", "index_fill operation");
     index_fill::bind_index_fill_operation(m_index_fill);
 
+    // Phase-1 descriptor-migration scaffolding for index_fill (#42392); removed in Phase 3.
+    auto m_index_fill_new = mod.def_submodule("index_fill_new", "index_fill_new operation");
+    index_fill_new::bind_index_fill_new_operation(m_index_fill_new);
+
     auto m_bernoulli = mod.def_submodule("bernoulli", "bernoulli operations");
     bernoulli::bind_bernoulli_operation(m_bernoulli);
 
@@ -260,10 +265,8 @@ NB_MODULE(_ttnn, mod) {
         mod.def_submodule("d2h_stream_service", "ttnn persistent device-to-host streaming service");
     auto m_d2d_stream_service =
         mod.def_submodule("d2d_stream_service", "ttnn persistent device-to-device streaming service");
-    auto m_counter_channel = mod.def_submodule("counter_channel", "ttnn cross-process producer-counter channel");
     auto m_layer_ack_service = mod.def_submodule("layer_ack_service", "ttnn per-layer completion ack service");
-    auto m_layer_completion =
-        mod.def_submodule("layer_completion", "Pipelined-prefill layer-completion ring/router/consumer");
+    auto m_layer_completion = mod.def_submodule("layer_completion", "Pipelined-prefill layer-completion ring/router");
     auto m_mesh_socket = mod.def_submodule("mesh_socket", "ttnn mesh socket");
     auto m_profiler = mod.def_submodule("profiler", "Submodule defining the profiler");
     auto m_reports = mod.def_submodule("reports", "ttnn reports");
@@ -271,6 +274,8 @@ NB_MODULE(_ttnn, mod) {
     auto m_fabric = mod.def_submodule("fabric", "Fabric instantiation APIs");
     auto m_program_descriptors = mod.def_submodule("program_descriptor", "Program descriptors types");
     auto m_tensor_accessor_args = mod.def_submodule("tensor_accessor_args", "Tensor accessor args types");
+    auto m_mcast_host =
+        mod.def_submodule("mcast_host", "Host-side mcast helper (counterpart of kernel_lib/mcast/kernel/mcast_pipe)");
 
     // TYPES
     ttnn::tensor::tensor_mem_config_module_types(m_tensor);
@@ -292,13 +297,13 @@ NB_MODULE(_ttnn, mod) {
     ttnn::h2d_stream_service::py_module_types(m_h2d_stream_service);
     ttnn::d2h_stream_service::py_module_types(m_d2h_stream_service);
     ttnn::d2d_stream_service::py_module_types(m_d2d_stream_service);
-    ttnn::counter_channel::py_module_types(m_counter_channel);
     ttnn::layer_ack_service::py_module_types(m_layer_ack_service);
     ttnn::layer_completion::bind_layer_completion_api(m_layer_completion);
     ttnn::mesh_socket::py_module_types(m_mesh_socket);
     ttnn::reports::py_module_types(m_reports);
     ttnn::program_descriptors::py_module_types(m_program_descriptors);
     ttnn::tensor_accessor_args::py_module_types(m_tensor_accessor_args);
+    ttnn::mcast_host::py_module_types(m_mcast_host);
 
     // FUNCTIONS / OPERATIONS
     ttnn::tensor::tensor_mem_config_module(m_tensor);
@@ -336,11 +341,11 @@ NB_MODULE(_ttnn, mod) {
     ttnn::h2d_stream_service::py_module(m_h2d_stream_service);
     ttnn::d2h_stream_service::py_module(m_d2h_stream_service);
     ttnn::d2d_stream_service::py_module(m_d2d_stream_service);
-    ttnn::counter_channel::py_module(m_counter_channel);
     ttnn::mesh_socket::py_module(m_mesh_socket);
     ttnn::profiler::py_module(m_profiler);
     ttnn::reports::py_module(m_reports);
     ttnn::tensor_accessor_args::py_module(m_tensor_accessor_args);
+    ttnn::mcast_host::py_module(m_mcast_host);
 
     // ttnn operations have to come before the deprecated ones,
     // because ttnn defines additional type bindings.

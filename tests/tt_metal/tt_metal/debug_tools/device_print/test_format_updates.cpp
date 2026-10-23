@@ -41,8 +41,8 @@ class DevicePrintFormatUpdatesFixture : public DevicePrintFixture {
 public:
     void TestFormatUpdate(
         const std::string& kernel_path,
-        stl::Span<std::string_view> expected_format_messages,
-        stl::Span<const uint32_t> runtime_args = {}) {
+        ttsl::Span<std::string_view> expected_format_messages,
+        ttsl::Span<const uint32_t> runtime_args = {}) {
         const std::string elf_file_path = CompileKernel(kernel_path, runtime_args);
 
         // Same reader the DEVICE_PRINT server uses (DevicePrintParser::get_parser_for_elf). It also

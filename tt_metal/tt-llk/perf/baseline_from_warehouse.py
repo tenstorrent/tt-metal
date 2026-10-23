@@ -9,11 +9,15 @@ import argparse
 import csv
 import json
 import os
+import time
 from statistics import median
 
 VIEW = "TTDATASF.LLK_PERF.LLK_PERF_V"
 
 _BATCH = 20000
+# --commits holds at most 200 commits (llk-perf-baseline-commits.sh) and a commit has
+# one run per queue attempt, so this ceiling on candidate runs is never reached.
+_MAX_RUNS = 500
 
 
 DENSE = {
@@ -72,22 +76,74 @@ def connect():
     )
 
 
-def pick_run(cursor, view, arch, pipeline, speed_of_light, exclude_workflow_run=None):
-    """Newest run of this pipeline, arch and mode, other than the run being gated."""
+def pick_run(
+    cursor,
+    view,
+    arch,
+    pipeline,
+    speed_of_light,
+    exclude_workflow_run=None,
+    commits=None,
+):
+    """Newest run of this pipeline, arch and mode, other than the run being gated.
+
+    With ``commits`` (newest first), only runs at those commits count, and the
+    newest commit wins over the newest upload.
+    """
     where = "ARCH = %s AND PIPELINE = %s AND SPEED_OF_LIGHT = %s"
     params = (arch, pipeline, speed_of_light)
     if exclude_workflow_run:
         where += " AND RUN_ID NOT LIKE %s"
         params += (f"%-{exclude_workflow_run}-%",)
+    if commits:
+        where += f" AND COMMIT_SHA IN ({', '.join(['%s'] * len(commits))})"
+        params += tuple(commits)
     cursor.execute(
         f"SELECT RUN_ID, ANY_VALUE(COMMIT_SHA), MAX(RUN_TS) FROM {view} "
-        f"WHERE {where} GROUP BY RUN_ID ORDER BY MAX(RUN_TS) DESC LIMIT 1",
+        f"WHERE {where} GROUP BY RUN_ID ORDER BY MAX(RUN_TS) DESC "
+        f"LIMIT {_MAX_RUNS if commits else 1}",
         params,
     )
-    row = cursor.fetchone()
-    if not row:
+    rows = cursor.fetchall() if commits else [cursor.fetchone()]
+    rows = [r for r in rows if r]
+    if not rows:
         return None
+    if commits:
+        rank = {c: i for i, c in enumerate(commits)}
+        rows.sort(key=lambda r: rank.get(r[1], len(rank)))
+    row = rows[0]
     return {"run_id": row[0], "commit_sha": row[1], "run_ts": str(row[2])}
+
+
+def find_run(cursor, a, sol, sleep=time.sleep):
+    """The run at the first of ``--commits``, waited for; else the newest of the
+    others, marked stale. Empty ``--commits``: none. No ``--commits``: the newest."""
+
+    def pick(commits=None):
+        return pick_run(
+            cursor, a.view, a.arch, a.pipeline, sol, a.exclude_workflow_run, commits
+        )
+
+    if a.commits is None:
+        return pick()
+    commits = [c.strip() for c in a.commits.split(",") if c.strip()]
+    if not commits:
+        return None
+    want = commits[0]
+    deadline = time.monotonic() + a.wait_minutes * 60
+    while True:
+        run = pick([want])
+        if run:
+            return run
+        if time.monotonic() >= deadline:
+            break
+        print(f"no {a.pipeline} run at {want} yet; checking again")
+        sleep(a.poll_seconds)
+    run = pick(commits[1:]) if len(commits) > 1 else None
+    if run:
+        print(f"::warning::no {a.pipeline} run at {want}; using {run['commit_sha']}")
+        run.update(stale=True, expected_commit=want)
+    return run
 
 
 def fetch(cursor, view, run_id, speed_of_light):
@@ -168,7 +224,7 @@ def main(argv=None):
     ap.add_argument(
         "--pipeline",
         default="baseline",
-        help="baseline (pinned) or nightly (the previous night)",
+        help="baseline (pinned), nightly (the previous night) or merge_baseline",
     )
     ap.add_argument("--speed-of-light", required=True, choices=("true", "false"))
     ap.add_argument(
@@ -176,6 +232,18 @@ def main(argv=None):
         default="",
         help="workflow run id whose own upload must not become its baseline",
     )
+    ap.add_argument(
+        "--commits",
+        default=None,
+        help="comma-separated commits, newest first; the run at the first is wanted",
+    )
+    ap.add_argument(
+        "--wait-minutes",
+        type=float,
+        default=0,
+        help="how long to wait for the first commit's run before taking the others",
+    )
+    ap.add_argument("--poll-seconds", type=float, default=60)
     ap.add_argument("--out", default="baseline_perf/baseline.csv")
     ap.add_argument("--metadata", default="baseline_metadata.json")
     a = ap.parse_args(argv)
@@ -184,7 +252,7 @@ def main(argv=None):
     conn = connect()
     try:
         cur = conn.cursor()
-        run = pick_run(cur, a.view, a.arch, a.pipeline, sol, a.exclude_workflow_run)
+        run = find_run(cur, a, sol)
         if not run:
             print(f"no {a.pipeline} run for arch={a.arch} speed_of_light={sol}")
             _write_meta(a.metadata, {}, have=False)

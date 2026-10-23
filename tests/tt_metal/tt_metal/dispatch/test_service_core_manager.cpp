@@ -29,12 +29,14 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/program/program_impl.hpp"
+#include "impl/program/slow_dispatch.hpp"
 
 #include "impl/allocator/allocator.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/llrt.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "mesh_dispatch_fixture.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::distributed::test {
 
@@ -239,9 +241,8 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
             prog, kernel, svc_core, {(uint32_t)stop_addr, (uint32_t)counter_addr, (uint32_t)service_done_addr});
 
         prog.impl().compile(device, /*force_slow_dispatch=*/true);
-        tt::tt_metal::detail::WriteRuntimeArgsToDevice(device, prog, /*force_slow_dispatch=*/true);
-        tt::tt_metal::detail::LaunchProgram(
-            device, prog, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+        tt::tt_metal::slow_dispatch::WriteRuntimeArgsToDevice(*device, prog, /*force_slow_dispatch=*/true);
+        tt::tt_metal::slow_dispatch::LaunchProgramAsync(*device, prog, /*force_slow_dispatch=*/true);
 
         auto read_counter = [&]() -> uint32_t {
             uint32_t val = 0;
@@ -355,29 +356,19 @@ TEST_F(ServiceCoreFdFixture, ServiceCoreShardedL1BufferOnClaimedCore) {
     ASSERT_FALSE(device->allocator_impl()->has_bank(BufferType::L1, core))
         << "a claimable dispatch-column core is not expected to own an L1 bank";
 
-    // Qualified: in this namespace an unqualified ShardedBufferConfig is the mesh-level one.
     constexpr uint32_t kPageSize = 1024;
-    const tt::tt_metal::ShardedBufferConfig config{
-        .device = device,
-        .size = kPageSize,
-        .page_size = kPageSize,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
-        .shard_parameters = ShardSpecBuffer(
+    const BufferShardingArgs sharding_args(
+        ShardSpecBuffer(
             CoreRangeSet(CoreRange(core, core)),
             {1, kPageSize / sizeof(uint32_t)},
             ShardOrientation::ROW_MAJOR,
             {1, 1},
-            {1, kPageSize / sizeof(uint32_t)})};
+            {1, kPageSize / sizeof(uint32_t)}),
+        TensorMemoryLayout::WIDTH_SHARDED);
 
     // Unclaimed, it is just a core the allocator knows nothing about.
     auto create_buffer = [&] {
-        return BufferImpl::create(
-            config.device,
-            config.size,
-            config.page_size,
-            config.buffer_type,
-            BufferShardingArgs(config.shard_parameters, config.buffer_layout));
+        return BufferImpl::create(device, kPageSize, kPageSize, BufferType::L1, sharding_args);
     };
     EXPECT_ANY_THROW(create_buffer());
 
@@ -399,7 +390,7 @@ TEST_F(ServiceCoreFdFixture, ServiceCoreShardedL1BufferOnClaimedCore) {
 // claim lookup rather than an incidental layout difference.
 TEST_F(ServiceCoreFdFixture, ServiceCoreShardedL1MeshBufferOnClaimedCore) {
     auto& mesh_device = this->devices_[0];
-    const auto devices = mesh_device->get_devices();
+    const auto devices = mesh_device->impl().get_devices();
     auto& svc = MetalContext::instance().get_service_core_manager();
 
     // One coordinate for the whole mesh: MeshBuffer applies a single shard spec on every device, so

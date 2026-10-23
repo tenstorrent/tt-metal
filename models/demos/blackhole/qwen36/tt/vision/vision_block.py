@@ -86,6 +86,7 @@ class VisionBlock(LightweightModule):
         self,
         x: ttnn.Tensor,
         rot_mats,
+        cu_window_seqlens=None,
     ) -> ttnn.Tensor:
         """Run the vision block.
 
@@ -106,6 +107,7 @@ class VisionBlock(LightweightModule):
         attn_out = self.attention.forward(
             attn_in,
             rot_mats=rot_mats,
+            cu_window_seqlens=cu_window_seqlens,
         )
 
         # Residual + attn_out: both fractured along dim=3.

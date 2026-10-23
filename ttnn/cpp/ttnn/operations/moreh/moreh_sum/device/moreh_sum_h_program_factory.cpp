@@ -215,9 +215,8 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
     // unconditionally and gates only some of its FIFO calls on do_mask_h. When masking is off the
     // reader does not produce into it, leaving compute the single toucher — bound as both PRODUCER
     // and CONSUMER (self-loop) so the DFB still presents one endpoint of each kind per node.
-    // masked_input is bound PRODUCER+CONSUMER in *every* configuration: the kernel constructs its
-    // buffer object outside the do_mask_h guard, so the dfb::masked_input token has to exist even
-    // where the guard discards all of its FIFO traffic.
+    // masked_input is bound PRODUCER+CONSUMER in *every* configuration so its DFB token exists while
+    // the kernel's discarded do_mask_h branch is still type-checked.
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t units_per_core) {
         Group<DFBBinding> dfb_bindings = {
             DFBBinding{

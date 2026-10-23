@@ -33,6 +33,15 @@ constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/kernel_lib/untilize_helpers.hpp"
 
+// Pops a constant the writer pushed once and compute read by index without popping. dummy_unpack orders the
+// pop after the wait on Quasar (a bare wait_front -> pop_front traps the unpacker).
+ALWI void release_writer_constant(uint32_t dfb_id, uint32_t num_tiles) {
+    DataflowBuffer dfb(dfb_id);
+    dfb.wait_front(num_tiles);
+    dummy_unpack(dfb_id);
+    dfb.pop_front(num_tiles);
+}
+
 void kernel_main() {
     // Quasar: reset the packer-operand tracker so the first pack of this launch re-inits the packer
     // descriptor regardless of any value left over from a prior launch. No-op on WH/BH.
@@ -107,7 +116,8 @@ void kernel_main() {
 #ifdef TILIZE_Q
     constexpr auto dfb_q_rm = dfb::q_rm;
 #endif
-    constexpr auto dfb_zero_in = dfb::zero_in;
+    // The zero tile is entry 1 of identity_scale_in (entry 0 is the reduce scaler); see matmul_blocks.
+    constexpr auto dfb_zero_in = dfb::identity_scale_in;
 #ifdef USE_CUR_POS_TENSOR
     // #44366: compute reads cur_pos from compute_cur_pos (writer reads writer_cur_pos)
     // — see reader_decode_all.cpp.
@@ -719,17 +729,24 @@ void kernel_main() {
                 // Use appropriate max buffer based on tree reduction
                 uint32_t max_dfb_for_sink = dfb_prev_max;
 
+                // max_block, sub_exp_block and mul_block_inplace pack via a bare pack_tile, so each is
+                // preceded by a pack_reconfig_out naming its output (Quasar packer re-point).
+
                 // m_new: max_block writes cur (m_new) into dfb_cur_max (max_1, its own DFB); split max
                 // means the two exp reads below take cur at its own front (no offset).
+                pack_reconfig_out(dfb_cur_max);
                 max_block<vector_mode>(dfb_attention_sink, max_dfb_for_sink, dfb_cur_max, Sq_chunk_t);
 
                 // exp(m - m_new)
+                pack_reconfig_out(dfb_exp_max_diff);
                 sub_exp_block<scale_fp32>(max_dfb_for_sink, dfb_cur_max, dfb_exp_max_diff, Sq_chunk_t);
 
                 // l -> l * exp(m - m_new)
+                pack_reconfig_out(dfb_prev_sum);
                 mul_block_inplace(dfb_prev_sum, dfb_exp_max_diff, Sq_chunk_t);
 
                 // exp(sink - m_new)
+                pack_reconfig_out(dfb_exp_max_diff_2);
                 sub_exp_block<scale_fp32>(dfb_attention_sink, dfb_cur_max, dfb_exp_max_diff_2, Sq_chunk_t);
                 // Pop the front block (prev/max_dfb_for_sink); the trailing pop below drains cur.
                 DataflowBuffer(dfb_cur_max).pop_front(Sq_chunk_t);
@@ -790,4 +807,25 @@ void kernel_main() {
 
     // Free up dfb_q_in after Q chunks
     DataflowBuffer(dfb_q_in).pop_front(q_chunk_tiles);
+
+    // The writer pushes these constant tiles once on every core with local data; compute reads them by index
+    // (add_block_inplace<false>, the fused-mask matmul, reduce_c) without popping. Release them so the buffers
+    // are left balanced.
+    release_writer_constant(dfb_identity_scale_in, 2);  // reduce scaler + zero tile
+#ifdef HAS_BLOCK_PADDING
+    release_writer_constant(dfb_block_pad_mask, Sq_chunk_t * Sk_chunk_t_dynamic);
+#endif
+    if constexpr (is_causal) {
+        release_writer_constant(dfb_mask_in, Sq_chunk_t * Sk_chunk_t_dynamic);
+    }
+#ifdef SLIDING_WINDOW
+    if (k_chunk_start == window_start_chunk && window_start_unaligned > 0) {
+        release_writer_constant(dfb_sliding_window_mask_in, Sq_chunk_t * Sk_chunk_t_dynamic);
+    }
+#endif
+#ifdef USE_ATTENTION_SINK
+    // The reader pushes the attention sink (Sq_chunk_t tiles) on every core with local data; only the core
+    // that finalizes the output reads it (by index, never popped). Release it on every core.
+    release_writer_constant(dfb_attention_sink, Sq_chunk_t);
+#endif
 }

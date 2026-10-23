@@ -46,6 +46,7 @@
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include "tt_metal/impl/host_api/temp_quasar_api.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -81,7 +82,7 @@ DfbInitTimingBenchContext create_dfb_init_timing_bench_context() {
 
     DfbInitTimingBenchContext ctx;
     ctx.mesh_device = id_to_device.begin()->second;
-    ctx.device = ctx.mesh_device->get_devices()[0];
+    ctx.device = ctx.mesh_device->impl().get_devices()[0];
     return ctx;
 }
 
@@ -1267,7 +1268,7 @@ void run_benchmark_case_six_debug(DfbInitTimingBenchContext& ctx) {
 // Same 1Sx1A topology as BenchmarkCaseSixDebug but with implicit_sync enabled.
 // Uses a single-producer DM kernel that forces num_sw_threads=1 before finish()
 // (see dfb_bench_case6_debug_implicit_dm.cpp). Without that, finish()'s internal
-// sync_threads(get_num_threads()) waits for all 6 launched DM harts even though
+// sync_threads() waits for all 6 launched DM harts even though
 // only DM4 issues the implicit read.
 void run_benchmark_case_six_debug_implicit_sync(DfbInitTimingBenchContext& ctx) {
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));

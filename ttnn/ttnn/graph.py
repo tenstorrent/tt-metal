@@ -744,6 +744,13 @@ def pretty_format(captured_graph):
             node_string = format_string.format("Allocate Kernel Scratchpad")
         elif node["node_type"] == "circular_buffer_deallocate_all":
             node_string = format_string.format("Deallocate All Program-Scope L1")
+        elif node["node_type"] == "sub_device_manager":
+            node_string = format_string.format("Sub-Device Manager: " + str(node["params"]["sub_device_manager_id"]))
+        elif node["node_type"] == "program_execution":
+            sub_device_id = node["params"].get("sub_device_id")
+            node_string = format_string.format(
+                "Program Execution: sub-device " + (str(sub_device_id) if sub_device_id is not None else "unresolved")
+            )
         else:
             raise ValueError(f"Unknown node type: {node['node_type']}")
 

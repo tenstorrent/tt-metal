@@ -26,7 +26,7 @@
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "../metal2_host_api/test_helpers.hpp"
+#include "../metal2_host_api/test_helpers/test_helpers.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -385,8 +385,8 @@ TEST_F(UnitMeshAnyDispatchFixture, Pack22DFBsUseSharedTCSlotPool) {
     }
 
     constexpr uint32_t num_dfbs = 22;
-    static_assert(num_dfbs <= ::dfb::MAX_ACTIVE_DFBS_PACK);
-    static_assert(num_dfbs <= ::dfb::MAX_PACK_TC_SLOTS);
+    static_assert(num_dfbs <= ::dfb::MAX_ACTIVE_DFBS_TRISC);
+    static_assert(num_dfbs <= ::dfb::MAX_TRISC_TC_SLOTS);
 
     const m2::KernelSpecName pack_name{"pack"};
     auto pack = make_compute_kernel(

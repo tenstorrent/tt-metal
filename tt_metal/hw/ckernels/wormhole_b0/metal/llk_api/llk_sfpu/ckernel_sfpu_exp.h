@@ -453,38 +453,6 @@ sfpi_inline sfpi::vFloat _sfpu_exp_(sfpi::vFloat val) {
     return val;
 }
 
-template <bool APPROXIMATION_MODE>
-sfpi_inline sfpi::vFloat _calculate_exponential_body_(sfpi::vFloat in) {
-    sfpi::vFloat out;
-
-    if constexpr (APPROXIMATION_MODE) {
-        constexpr int FRAC_BITS = 3;
-        constexpr std::uint32_t SP_BIAS = 127 << FRAC_BITS;
-
-        // * by 1/ln2 and add convert to 7.3 FxP format
-        sfpi::vFloat vConstLn2Recip = sfpi::vConstFloatPrgm0;
-        sfpi::vFloat conv = in * vConstLn2Recip;
-
-        // Clear exp bits
-        sfpi::vInt c23_73 = p_exp::C23_73;
-        sfpi::vInt tmp = sfpi::as<sfpi::vInt>(conv) - c23_73;
-
-        // Add bias
-        tmp += SP_BIAS;
-
-        // SHL to move integer bits to exponent
-        out = sfpi::as<sfpi::vFloat>(tmp << (10 - FRAC_BITS));
-    } else {
-        // Force sign to 0 (make number positive)
-        out = _sfpu_exp_(sfpi::setsgn(in, 0));
-
-        v_if(in < 0) { out = sfpu_reciprocal_iter<2>(out); }
-        v_endif;
-    }
-
-    return out;
-}
-
 template <bool SCALE_EN, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(sfpi::vFloat val, const std::uint32_t exp_base_scale_factor) {
     if constexpr (SCALE_EN) {
@@ -518,7 +486,9 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
             TTI_SFPSWAP(0, p_sfpu::LREG14, p_sfpu::LREG0, 9);
+            TTI_SFPNOP;  // SFPMAD must not read LREG0 before the SFPSWAP result lands (SFPSWAP + SFPNOP costs no cycle)
             TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
+            TTI_SFPNOP;  // no WH SFPU scoreboard: SFP_STOCH_RND must not read LREG0 the cycle after SFPMAD writes it
             TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
             TTI_SFPSHFT(15, p_sfpu::LREG0, p_sfpu::LREG0, 1);
             TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
@@ -644,6 +614,7 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
             TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
+            TTI_SFPNOP;  // no WH SFPU scoreboard: SFP_STOCH_RND must not read LREG0 the cycle after SFPMAD writes it
             TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
             TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG1, 5);  // lreg[1] = lreg[0] << 15
             TTI_SFPSETSGN(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // lreg[0] preserves sign, copies e/m from lreg[1]
@@ -720,11 +691,7 @@ constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uin
 constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
 constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
 
-template <
-    bool APPROXIMATION_MODE,
-    std::uint32_t scale,
-    bool CLAMP_NEGATIVE,
-    bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE, std::uint32_t scale, bool CLAMP_NEGATIVE, bool is_fp32_dest_acc_en>
 void exp_init() {
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
     // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as

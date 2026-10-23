@@ -29,6 +29,7 @@ enum CompileTimeArg : uint32_t {
     kMetaCbId,
     kCollectsArrivals,
     kArrivalsExpected,
+    kMulticast,
     kNumFixedCompileTimeArgs,
 };
 
@@ -45,6 +46,10 @@ constexpr uint32_t meta_cb_id = get_compile_time_arg_val(kMetaCbId);
 // incrementer per semaphore, which is what Semaphore::up requires to not drop updates.
 constexpr bool collects_arrivals = get_compile_time_arg_val(kCollectsArrivals) == 1;
 constexpr uint32_t arrivals_expected = get_compile_time_arg_val(kArrivalsExpected);
+// A multicast exchange reads one payload per run of hops that ship the same source slab.
+constexpr bool multicast = get_compile_time_arg_val(kMulticast) == 1;
+
+namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
 void kernel_main() {
     constexpr auto input_accessor_args =
@@ -90,6 +95,20 @@ void kernel_main() {
         }
     }
 
+    uint32_t mc_hop_count = 1;
+    std::array<uint32_t, ring_attention_all_gather::kMaxMulticastHaloHops> mc_origin_rows{};
+    std::array<uint32_t, num_inputs> mc_input_Wt{};
+    if constexpr (multicast) {
+        mc_hop_count = get_arg_val<uint32_t>(arg_idx++);
+        ASSERT(mc_hop_count <= ring_attention_all_gather::kMaxMulticastHaloHops);
+        for (uint32_t i = 0; i < mc_hop_count; ++i) {
+            mc_origin_rows[i] = get_arg_val<uint32_t>(arg_idx++);
+        }
+        for (uint32_t input = 0; input < num_inputs; ++input) {
+            mc_input_Wt[input] = get_arg_val<uint32_t>(arg_idx++);
+        }
+    }
+
     // Derive source tails and link ranges from the replay's metadata.
     if constexpr (has_halo_metadata) {
         const uint32_t slot_id_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -132,6 +151,20 @@ void kernel_main() {
             input_tile_start[input] = range.start;
             input_tile_end[input] = range.end;
         }
+        if constexpr (multicast) {
+            ring_attention_all_gather::compute_multicast_origin_rows(
+                kv_actual_isl,
+                q_local_tile_rows,
+                ring_size,
+                halo_tile_rows,
+                source_device,
+                cache_local_tile_rows,
+                halo_slot_count,
+                hop,
+                sources.first_start_tile,
+                mc_hop_count,
+                mc_origin_rows.data());
+        }
     }
 
     auto input_accessors_tuple = make_tensor_accessor_tuple(input_accessor_args, arg_idx);
@@ -144,23 +177,33 @@ void kernel_main() {
     CircularBuffer cb_output(cb_output_id);
     const uint32_t cb_fifo_limit = get_local_cb_interface(cb_output_id).fifo_limit;
     const uint32_t cb_fifo_size = get_local_cb_interface(cb_output_id).fifo_size;
-    for (uint32_t input = 0; input < num_inputs; ++input) {
-        for (uint32_t bh = 0; bh < input_batch_head_count[input]; ++bh) {
-            uint32_t tiles_read = input_tile_start[input];
-            prefetch_batch_read_tiles<input_page_size, packet_size_in_pages, prefetch_packets, 1>(
-                noc,
-                cb_output,
-                tiles_read,
-                input_tile_end[input],
-                cb_fifo_limit,
-                cb_fifo_size,
-                input_accessors[input],
-                [&](uint32_t tile) {
-                    const uint32_t source_tile = tile < halo_pages[input]
-                                                     ? first_origin[input] + tile
-                                                     : second_origin[input] + tile - halo_pages[input];
-                    return input_batch_base[input] + bh * input_stride_pages[input] + source_tile;
-                });
+    for (uint32_t run_start = 0; run_start < mc_hop_count;) {
+        uint32_t run_end = run_start + 1;
+        if constexpr (multicast) {
+            run_end = ring_joint::chunked_sliding_halo_run_end(mc_origin_rows.data(), run_start, mc_hop_count);
+            for (uint32_t input = 0; input < num_inputs; ++input) {
+                first_origin[input] = mc_origin_rows[run_start] * mc_input_Wt[input];
+            }
+        }
+        run_start = run_end;
+        for (uint32_t input = 0; input < num_inputs; ++input) {
+            for (uint32_t bh = 0; bh < input_batch_head_count[input]; ++bh) {
+                uint32_t tiles_read = input_tile_start[input];
+                prefetch_batch_read_tiles<input_page_size, packet_size_in_pages, prefetch_packets, 1>(
+                    noc,
+                    cb_output,
+                    tiles_read,
+                    input_tile_end[input],
+                    cb_fifo_limit,
+                    cb_fifo_size,
+                    input_accessors[input],
+                    [&](uint32_t tile) {
+                        const uint32_t source_tile = tile < halo_pages[input]
+                                                         ? first_origin[input] + tile
+                                                         : second_origin[input] + tile - halo_pages[input];
+                        return input_batch_base[input] + bh * input_stride_pages[input] + source_tile;
+                    });
+            }
         }
     }
 

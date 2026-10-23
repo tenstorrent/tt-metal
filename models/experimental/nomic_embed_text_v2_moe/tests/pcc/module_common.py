@@ -19,11 +19,17 @@ import torch
 
 import ttnn
 
+from models.common.metrics import compute_max_abs_error, compute_pcc
 from models.experimental.nomic_embed_text_v2_moe.common import slice_state_dict
 
 # (batch, seqlen). 37 is deliberately off-tile: padding bugs only surface when S is not a
 # multiple of 32, and S is the batch's longest tokenized sequence, so that is the common case.
 TOKEN_SHAPES = [(1, 128), (2, 512), (2, 37)]
+
+# Past 32 tile rows of M = B * S the dense projections run through minimal_matmul, which no
+# TOKEN_SHAPES entry reaches. 4x512 folds to 64: M is below N for QKV and fc1 and above it for
+# out_proj and fc2, so both orientations run, and the QKV, out_proj and fc1 outputs go to L1.
+DENSE_SHAPES = [*TOKEN_SHAPES, (4, 512)]
 
 # A wrong layout or convention does not lose precision, it decorrelates. Anything under this is
 # the wrong tensor, not a less precise one.
@@ -33,6 +39,17 @@ DECORRELATED_PCC = 0.5
 # are the two prefixes the module tests read weights from.
 DENSE_LAYER = 0
 MOE_LAYER = 1
+
+# The shared-bias offset the wrong placement leaves behind. Measured well above this; PCC cannot
+# see it at all.
+BIAS_MISPLACEMENT_MAX_ABS = 1e-3
+
+# How far from 1 the measured count of shared biases a token holds may be. Measured 1.000 and 1.007
+# where a stacked pass adds the bias in w2's fp32 accumulator, and 0.946 and 0.950 where a transposed
+# pass adds it to the bfloat16 sum in bfloat16, which drops it from the half of the elements where
+# it is under half a step of the sum. A bias added inside the per-expert loop counts the mean
+# routed-weight sum instead, about 0.55.
+BIAS_SCALE_TOLERANCE = 0.1
 
 
 def load_reference(factory, state_dict: dict, prefix: str):
@@ -102,3 +119,44 @@ def dense_routing(tokens: int, experts: int, top_k: int) -> torch.Tensor:
     probabilities = torch.randn(tokens, experts).softmax(dim=-1)
     values, indices = torch.topk(probabilities, top_k, dim=-1)
     return torch.zeros_like(probabilities).scatter_(-1, indices, values)
+
+
+def bias_scale(got: torch.Tensor, without_bias: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
+    """How many times the output holds the bias: its difference from the bias-free run, projected on it.
+
+    1 where the bias is added once to each token's sum, the mean routed-weight sum where it is added
+    inside every expert's term. Projected over every token, the rounding the two runs do differently,
+    up to a bfloat16 step when the bias is added inside a matmul's accumulator, averages out.
+    """
+    difference = (got - without_bias).double().reshape(-1, bias.shape[-1])
+    direction = bias.double().reshape(1, -1)
+    return (difference * direction).sum(-1).mean() / (direction * direction).sum()
+
+
+def assert_bias_added_once(
+    got: torch.Tensor, without_bias: torch.Tensor, bias: torch.Tensor, routed_weight_sum: torch.Tensor
+) -> None:
+    """The shared expert bias is in the output once per token, not once per routed expert.
+
+    Both placements are built from the module's own bias-free output rather than the reference: at
+    real weights the bfloat16 noise is 0.22 against an offset of (sum(w) - 1) * bias far below it.
+
+    Args:
+        got: The module output.
+        without_bias: The same module's output with its bias zeroed.
+        bias: The (H,) shared bias.
+        routed_weight_sum: Each token's sum of routing weights, broadcastable against got.
+    """
+    assert (routed_weight_sum < 1.0).all(), "top-k weights are not renormalized, so they must sum below 1"
+    correct = without_bias + bias
+    inside_the_loop = without_bias + bias * routed_weight_sum
+    assert (
+        compute_max_abs_error(correct, inside_the_loop) > BIAS_MISPLACEMENT_MAX_ABS
+    ), "the two placements agreed; the offset this test exists to catch is not present"
+    assert compute_pcc(inside_the_loop, correct) > 0.9999, "if PCC caught this, the docstring is stale"
+    inside_scale = float(routed_weight_sum.mean())
+    assert 1 - inside_scale > BIAS_SCALE_TOLERANCE, "a bias added inside the loop would pass"
+    scale = float(bias_scale(got, without_bias, bias))
+    assert (
+        abs(scale - 1) < BIAS_SCALE_TOLERANCE
+    ), f"the output holds the bias {scale:.3f} times: once is 1, inside the loop {inside_scale:.3f}"

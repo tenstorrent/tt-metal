@@ -16,6 +16,7 @@
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include "distributed/mesh_socket_utils.hpp"
 #include "program.hpp"
 #include <map>
@@ -217,6 +218,7 @@ void Inspector::program_compile_finished(
         std::lock_guard<std::mutex> lock(data->programs_mutex);
         auto& program_data = data->programs_data[program->get_id()];
         program_data.compile_finished_timestamp = std::chrono::high_resolution_clock::now();
+        program_data.semaphores = program->semaphores();
         data->logger.log_program_compile_finished(program_data);
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log program compile finished: {}", e.what());
@@ -339,6 +341,7 @@ void Inspector::mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buff
         {
             std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
             data->mesh_buffers_data.erase(mesh_buffer);
+            data->global_semaphores_data.erase(mesh_buffer);
             if (auto it = data->mesh_sockets_data.find(mesh_buffer); it != data->mesh_sockets_data.end()) {
                 destroyed_socket = std::move(it->second);
                 data->mesh_sockets_data.erase(it);
@@ -369,8 +372,6 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
 
         inspector::MeshSocketData socket_data;
         socket_data.is_sender = is_sender;
-        socket_data.config_buffer_address = config_buffer->address();
-        socket_data.data_buffer_address = is_sender ? 0 : socket->get_data_buffer()->address();
         socket_data.fifo_size = socket->get_config().socket_mem_config.fifo_size;
         socket_data.bytes_acked_offset_bytes = sender_size.md_size_bytes;
         socket_data.bytes_acked_stride_bytes = sender_size.ack_size_bytes;
@@ -414,6 +415,17 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
         if (by_core.empty()) {
             return;  // this rank owns no core of this socket
         }
+        // address() is 0 for per-core buffers, so resolve the per-core addresses here, on the rank that owns the core.
+        socket_data.config_buffer_address = socket->get_config_buffer_address();
+        if (!is_sender) {
+            const auto& data_buffer = *socket->get_data_buffer();
+            const auto& receiver_core = socket->get_config().socket_connection_config.front().receiver_core;
+            socket_data.data_buffer_address =
+                socket->get_config().socket_mem_config.per_core_allocation
+                    ? experimental::per_core_allocation::get_per_core_address(
+                          data_buffer, receiver_core.device_coord, receiver_core.core_coord)
+                    : data_buffer.address();
+        }
         socket_data.local_cores.reserve(by_core.size());
         for (auto& [key, core_data] : by_core) {
             socket_data.local_cores.push_back(std::move(core_data));
@@ -428,83 +440,43 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
     }
 }
 
-void Inspector::mesh_workload_created(const distributed::MeshWorkloadImpl* mesh_workload) noexcept {
+void Inspector::global_semaphore_created(const distributed::MeshBuffer* buffer, const CoreRangeSet& cores) noexcept {
     if (!is_enabled()) {
         return;
     }
     auto* data = get_inspector_data();
     if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
         return;
     }
     try {
-        std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
-        auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
-        mesh_workload_data.mesh_workload = mesh_workload;
-        mesh_workload_data.mesh_workload_id = mesh_workload->get_id();
-        data->logger.log_mesh_workload_created(mesh_workload_data);
+        inspector::GlobalSemaphoreData semaphore_data;
+        semaphore_data.address = buffer->address();
+        semaphore_data.cores = cores;
+        for (const auto* device : buffer->device()->impl().get_devices()) {
+            semaphore_data.chip_ids.push_back(device->id());
+        }
+        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+        data->global_semaphores_data.insert_or_assign(buffer, std::move(semaphore_data));
     } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log mesh workload created: {}", e.what());
+        TT_INSPECTOR_LOG("Failed to log global semaphore created: {}", e.what());
     }
 }
 
-void Inspector::mesh_workload_destroyed(const distributed::MeshWorkloadImpl* mesh_workload) noexcept {
+void Inspector::global_semaphore_reset(const distributed::MeshBuffer* buffer, uint32_t value) noexcept {
     if (!is_enabled()) {
         return;
     }
     auto* data = get_inspector_data();
     if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
         return;
     }
     try {
-        std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
-        auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
-        data->logger.log_mesh_workload_destroyed(mesh_workload_data);
-        data->mesh_workloads_data.erase(mesh_workload->get_id());
+        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+        if (auto it = data->global_semaphores_data.find(buffer); it != data->global_semaphores_data.end()) {
+            it->second.reset_value = value;
+        }
     } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log mesh workload destroyed: {}", e.what());
-    }
-}
-
-void Inspector::mesh_workload_add_program(
-    const distributed::MeshWorkloadImpl* mesh_workload,
-    const distributed::MeshCoordinateRange& device_range,
-    std::size_t program_id) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
-    if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
-        return;
-    }
-    try {
-        std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
-        auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
-        data->logger.log_mesh_workload_add_program(mesh_workload_data, device_range, program_id);
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log mesh workload add program: {}", e.what());
-    }
-}
-
-void Inspector::mesh_workload_set_program_binary_status(
-    const distributed::MeshWorkloadImpl* mesh_workload, std::size_t mesh_id, ProgramBinaryStatus status) noexcept {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
-    if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
-        return;
-    }
-    try {
-        std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
-        auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
-        mesh_workload_data.binary_status_per_device[mesh_id] = status;
-        data->logger.log_mesh_workload_set_program_binary_status(mesh_workload_data, mesh_id, status);
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log mesh workload set program binary status: {}", e.what());
+        TT_INSPECTOR_LOG("Failed to log global semaphore reset: {}", e.what());
     }
 }
 

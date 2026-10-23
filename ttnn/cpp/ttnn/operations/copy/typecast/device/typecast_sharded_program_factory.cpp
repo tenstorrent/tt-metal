@@ -150,7 +150,7 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
 
     const KernelSpec reader{
         .unique_id = READER,
-        .source = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/dataflow/reader_unary_sharded_metal2.cpp",
+        .source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded_metal2.cpp",
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}},

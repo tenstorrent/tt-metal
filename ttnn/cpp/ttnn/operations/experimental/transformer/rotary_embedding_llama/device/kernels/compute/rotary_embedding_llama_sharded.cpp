@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "api/compute/tile_move_copy.h"  // dummy_unpack
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
@@ -118,15 +119,29 @@ void kernel_main() {
         REL();
         rotated_in_interm_dfb_obj.push_back(Wt);
         mul_bcast_rows_init(dfb::rotated_interm, dfb::sin);
+#ifdef ARCH_QUASAR
+        // Quasar (quirk #1, re-init per DFB-id change): this InitReconfigOwner::Caller chain emits no setup,
+        // so the caller owns the pack BFD. The packer was last programmed for rotated_interm (pack_init above),
+        // so retarget it to sin_interm or the chain's PackTile trips the pack re-init guard (llk_pack_tile_api.h).
+        pack_init(dfb::sin_interm);
+#endif
         // sin_interim = rotated * sin
         ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
             ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Mul,
                 bulk_block_input(dfb::rotated_interm),
-                ckl::input(held_block_input(dfb::sin), ckl::BroadcastDim::Row)>{},
-            ckl::PackTile<bulk_output(dfb::sin_interm)>{});
+                ckl::input(held_block_input(dfb::sin), ckl::BroadcastDim::Row)>{rotated_in_interm_dfb_obj, sin_dfb_obj},
+            ckl::PackTile<bulk_output(dfb::sin_interm)>{sin_interm_dfb_obj});
 
+#ifdef ARCH_QUASAR
+        // Quasar (quirk #1): another InitReconfigOwner::Caller chain, but with DIFFERENT operands (input, cos)
+        // than the sin chain (rotated_interm, sin). WH/BH reuse the one op-level init above (operands are just
+        // execute args); Quasar bakes the operand BFDs into the init, so re-init BOTH the unpack side (input,
+        // cos -> llk_unpack_AB_api.h reinit guard) and the pack side (cos_interm) for this chain.
+        mul_bcast_rows_init(dfb::input, dfb::cos);
+        pack_init(dfb::cos_interm);
+#endif
         // cos_interim = x * cos
         ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
             ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
@@ -138,12 +153,27 @@ void kernel_main() {
                     ckl::PopPolicy::AtEnd,
                     ckl::InputTileMapping::Block,
                     ckl::DataFormatReconfig::Disabled),
-                ckl::input(held_block_input(dfb::cos), ckl::BroadcastDim::Row)>{},
-            ckl::PackTile<bulk_output(dfb::cos_interm)>{});
+                ckl::input(held_block_input(dfb::cos), ckl::BroadcastDim::Row)>{in_dfb_obj, cos_dfb_obj},
+            ckl::PackTile<bulk_output(dfb::cos_interm)>{cos_interm_dfb_obj});
 
+#ifdef ARCH_QUASAR
+        // Quasar (quirk #1): ckl::add uses the default InitReconfigOwner::Chain, so it re-inits the UNPACK
+        // side (add_init for cos_interm/sin_interm) itself -- but the chain does reconfig, not pack_init,
+        // so it does NOT re-program the pack BFD. Retarget the packer to `out` before its PackTile.
+        pack_init(dfb::out);
+#endif
         // out = cos_interim + sin_interim
         ckl::add<bulk_block_input(dfb::cos_interm), bulk_block_input(dfb::sin_interm), bulk_output(dfb::out)>(
-            ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt));
+            ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
+            cos_interm_dfb_obj,
+            sin_interm_dfb_obj,
+            out_dfb_obj);
+        // The output is the borrowed output shard and this kernel is its only producer and consumer (self-loop):
+        // pop each block once it is written so the buffer is left balanced. dummy_unpack orders the pop after
+        // the wait on Quasar (nothing unpacks this buffer).
+        out_dfb_obj.wait_front(Wt);
+        dummy_unpack(dfb::out);
+        out_dfb_obj.pop_front(Wt);
     }
 
     // Done with the sin/cos matrices, so remove from DFB

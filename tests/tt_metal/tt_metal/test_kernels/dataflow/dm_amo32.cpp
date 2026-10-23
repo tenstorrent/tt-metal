@@ -19,7 +19,7 @@ void kernel_main() {
     if (get_my_thread_id() == 0u) {
         invalidate_l2_cache_line(reinterpret_cast<uintptr_t>(counter));
     }
-    sync_threads(0);
+    sync_threads();
 #endif
 
     for (uint32_t i = 0; i < increment_times; i++) {

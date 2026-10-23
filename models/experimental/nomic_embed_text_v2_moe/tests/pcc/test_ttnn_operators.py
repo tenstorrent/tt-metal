@@ -4,8 +4,9 @@
 """Per-operator PCC validation for everything outside attention and the MoE FFN.
 
 Each test exercises one TTNN operator at this model's shapes, under the settings
-tt/model_config.py will run it with, against the torch operator the reference uses. Clearing
-these first means a later module failure is a composition bug, not a kernel surprise.
+tt/model_config.py and tt/matmul_config.py will run it with, against the torch operator the
+reference uses. Clearing these first means a later module failure is a composition bug, not a
+kernel surprise.
 
 Weight operands come from the real checkpoint wherever dynamic range matters, since a bf16
 matmul's error tracks the operand distribution and randn(0, 1) is not that distribution.
@@ -24,18 +25,22 @@ from models.common.utility_functions import run_for_blackhole
 from models.experimental.nomic_embed_text_v2_moe.common import TOKENIZER
 from models.experimental.nomic_embed_text_v2_moe.reference.postprocessing import l2_normalize, mean_pool
 from models.experimental.nomic_embed_text_v2_moe.tt.common import (
+    LayerNormParameters,
     flatten_tokens,
     to_device,
     transpose_linear_weight,
     unflatten_tokens,
 )
+from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import SMALL_M_TILES, dense_linear
+from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device]
 
 # Every operator in this file clears this at model shapes in bfloat16, all of them at 0.99999
-# or better. SDPA, in the attention file, is the only one that comes close at 0.9998. Dropping
-# the gate to accommodate a regression would hide the class of bug these tests exist to catch.
+# or better. SDPA, in the attention file, and the bfloat8_b expert chain, in the MoE file, come
+# closest, at 0.9997 to 0.9998. Dropping the gate to accommodate a regression would hide the class
+# of bug these tests exist to catch.
 OPERATOR_PCC = 0.999
 
 # (batch, seqlen). 37 is deliberately off-tile: padding bugs only surface when S is not a
@@ -112,7 +117,7 @@ def test_layer_norm(device, tt_config, config, batch, seqlen):
         weight=to_device(weight, device),
         bias=to_device(bias, device),
         epsilon=config.layer_norm_epsilon,
-        compute_kernel_config=tt_config.compute_kernel_config,
+        compute_kernel_config=tt_config.compute_kernel_config(OpGroup.NORM),
     )
 
     ref = torch.nn.functional.layer_norm(x, (hidden,), weight, bias, eps=config.layer_norm_epsilon)
@@ -137,37 +142,73 @@ def test_layer_norm_fuses_the_post_norm_residual(device, tt_config, config, batc
         weight=to_device(weight, device),
         bias=to_device(bias, device),
         epsilon=config.layer_norm_epsilon,
-        compute_kernel_config=tt_config.compute_kernel_config,
+        compute_kernel_config=tt_config.compute_kernel_config(OpGroup.NORM),
     )
 
     ref = torch.nn.functional.layer_norm(x + residual, (hidden,), weight, bias, eps=config.layer_norm_epsilon)
     assert_with_pcc(ref, out, OPERATOR_PCC)
 
 
+@pytest.mark.parametrize("batch, seqlen", [(1, 128), (2, 512), (8, 512)])
+def test_layer_norm_reads_both_weight_forms_alike(device, tt_config, config, batch, seqlen):
+    """LayerNormParameters' tiled DRAM and row-major L1 forms give the same norm, bit for bit.
+
+    The norm takes the row-major copy above SMALL_M_TILES tile rows of M and the tiled one up to
+    it, so the choice has to be speed alone. 1x128 and 2x512 read the tiled form, 8x512 the
+    row-major one.
+    """
+    hidden = config.hidden_size
+    x = to_device(torch.randn(batch, 1, seqlen, hidden), device)
+    residual = to_device(torch.randn(batch, 1, seqlen, hidden), device)
+    parameters = LayerNormParameters(torch.randn(hidden), torch.randn(hidden), device, tt_config.weight_dtype)
+
+    def norm(weight, bias):
+        out = ttnn.layer_norm(
+            x,
+            residual_input_tensor=residual,
+            weight=weight,
+            bias=bias,
+            epsilon=config.layer_norm_epsilon,
+            compute_kernel_config=tt_config.compute_kernel_config(OpGroup.NORM),
+        )
+        return ttnn.to_torch(out)
+
+    assert torch.equal(norm(*parameters.tiled), norm(*parameters.row_major))
+    wide = batch * ttnn.core.divup(seqlen, ttnn.TILE_SIZE) > SMALL_M_TILES
+    assert parameters.for_input(x) is (parameters.row_major if wide else parameters.tiled)
+
+
 # Projections.
 
 
 @pytest.mark.needs_weights
+@pytest.mark.parametrize("batch, seqlen", [*TOKEN_SHAPES, (4, 512)])
 @pytest.mark.parametrize(
-    "key, in_dim_is_ffn",
+    "key, in_dim_is_ffn, group",
     [
-        ("encoder.layers.0.attn.Wqkv", False),
-        ("encoder.layers.0.attn.out_proj", False),
-        ("encoder.layers.0.mlp.fc1", False),
-        ("encoder.layers.0.mlp.fc2", True),
+        ("encoder.layers.0.attn.Wqkv", False, OpGroup.QKV),
+        ("encoder.layers.0.attn.out_proj", False, OpGroup.ATTN_OUT),
+        ("encoder.layers.0.mlp.fc1", False, OpGroup.FC1),
+        ("encoder.layers.0.mlp.fc2", True, OpGroup.FC2),
     ],
 )
-def test_linear(device, tt_config, config, state_dict, key, in_dim_is_ffn):
-    """aten.addmm -> ttnn.linear, at each of the four biased projection widths."""
+def test_linear(device, tt_config, config, state_dict, key, in_dim_is_ffn, group, batch, seqlen):
+    """aten.addmm -> dense_linear, at each of the four biased projection widths, under each one's own group.
+
+    TOKEN_SHAPES fold to at most 32 tile rows of M and take ttnn.linear. 4x512 folds to 64 and
+    takes minimal_matmul, with M on the grid's rows for QKV and fc1, whose N is wider, and on its
+    columns for out_proj and fc2; the QKV, out_proj and fc1 outputs go to L1 there.
+    """
     weight, bias = state_dict[key + ".weight"], state_dict[key + ".bias"]
     in_dim = config.intermediate_size if in_dim_is_ffn else config.hidden_size
-    x = torch.randn(1, 1, 512, in_dim)
+    x = torch.randn(batch, 1, seqlen, in_dim)
 
-    out = ttnn.linear(
+    out = dense_linear(
         to_device(x, device),
-        to_device(transpose_linear_weight(weight), device, dtype=tt_config.weight_dtype),
-        bias=to_device(bias, device, dtype=tt_config.weight_dtype),
-        compute_kernel_config=tt_config.compute_kernel_config,
+        to_device(transpose_linear_weight(weight), device, dtype=tt_config.matmul_weight_dtype(group)),
+        to_device(bias, device, dtype=tt_config.weight_dtype),
+        group,
+        tt_config,
     )
 
     assert_with_pcc(torch.nn.functional.linear(x, weight, bias), out, OPERATOR_PCC)
@@ -177,13 +218,28 @@ def test_linear(device, tt_config, config, state_dict, key, in_dim_is_ffn):
 
 
 @pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
-def test_gelu(device, config, batch, seqlen):
-    """aten.gelu -> ttnn.gelu, exact erf, at the dense FFN's intermediate width."""
+def test_gelu(device, config, tt_config, batch, seqlen):
+    """aten.gelu -> ttnn.gelu in the model's variant, at the dense FFN's intermediate width."""
     x = torch.randn(1, 1, batch * seqlen, config.intermediate_size)
 
-    out = ttnn.gelu(to_device(x, device))
+    out = ttnn.gelu(to_device(x, device), variant=tt_config.dense_gelu)
 
     assert_with_pcc(torch.nn.functional.gelu(x, approximate="none"), out, OPERATOR_PCC)
+
+
+def test_tanh_gelu_is_exact_to_well_under_bfloat16(device, config):
+    """The tanh form differs from exact erf by at most 4.7e-4, at x = -2.70.
+
+    bfloat16 rounds GELU's output by up to 1.6e-2, 33 times that, and the model's GELUs write
+    bfloat16 and bfloat8_b. Run in fp32, where the approximation is separable from the rounding.
+    """
+    x = torch.randn(1, 1, 512, config.intermediate_size)
+    ref = torch.nn.functional.gelu(x, approximate="none")
+    x_tt = to_device(x, device, dtype=ttnn.float32)
+
+    tanh = compute_max_abs_error(ttnn.to_torch(ttnn.gelu(x_tt, variant=ttnn.GeluVariant.Tanh)).float(), ref)
+
+    assert tanh < 1e-3, f"expected the tanh GELU within 1e-3 of exact erf in fp32, got {tanh:.3e}"
 
 
 def test_gelu_fast_mode_is_worse_than_the_bfloat16_noise_floor(device, config):
@@ -222,7 +278,8 @@ def test_token_axis_reshape_round_trip_is_exact(device, config, batch, seqlen):
 
 
 def test_typecast(device, config):
-    """aten._to_copy -> ttnn.typecast, the fp32-to-bf16 step the router needs before scatter."""
+    """aten._to_copy -> ttnn.typecast, fp32 to bf16. The router writes its bf16 gate from the fp32
+    product directly; test_one_hot_reproduces_the_scatter pins that rounding."""
     x = torch.randn(1, 1, 512, config.hidden_size)
 
     out = ttnn.typecast(to_device(x, device, dtype=ttnn.float32), ttnn.bfloat16)
@@ -235,21 +292,23 @@ def test_typecast(device, config):
 
 
 @pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
-def test_mean_pool_excludes_padding(device, config, batch, seqlen):
-    """Mask-weighted mean over the sequence axis: ttnn.mul, ttnn.sum, ttnn.div.
+def test_mean_pool_excludes_padding(device, tt_config, config, batch, seqlen):
+    """Mask-weighted mean over the sequence axis: one batched ttnn.matmul of mask / count weights.
 
     Padding has to be excluded because the <pad> embedding is non-zero, so counting it would
-    make a text's embedding depend on its batch-mates.
+    make a text's embedding depend on its batch-mates. The divisor rides in the weights.
     """
     hidden = config.hidden_size
     x = torch.randn(batch, 1, seqlen, hidden)
     mask = torch.ones(batch, seqlen, dtype=torch.long)
     mask[0, (seqlen * 3) // 4 :] = 0
 
-    x_tt = to_device(x, device)
-    mask_tt = to_device(mask.reshape(batch, 1, seqlen, 1).float(), device)
-    pooled = ttnn.divide(
-        ttnn.sum(ttnn.multiply(x_tt, mask_tt), dim=2, keepdim=True), ttnn.sum(mask_tt, dim=2, keepdim=True)
+    weights = (mask / mask.sum(dim=1, keepdim=True)).reshape(batch, 1, 1, seqlen)
+    pooled = ttnn.matmul(
+        to_device(weights, device, dtype=ttnn.float32),
+        to_device(x, device),
+        dtype=ttnn.float32,
+        compute_kernel_config=tt_config.compute_kernel_config(OpGroup.REDUCE),
     )
 
     ref = mean_pool(x.squeeze(1), mask).reshape(batch, 1, 1, hidden)

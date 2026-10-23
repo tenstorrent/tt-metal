@@ -10,9 +10,10 @@ The two passes between a request and the packed layout, mirroring the reference'
 
 1. :func:`prepare_references` -- validate the request and put every reference on
    **its own** resolution. An image is resized by ``reference_resize_mode`` (default
-   ``match`` against the target canvas), a video onto the 768 px canvas of its own
-   aspect ratio at 24 fps truncated to the generated frame count, a soundtrack onto
-   the audio VAE's sample rate truncated to the generated duration.
+   ``match`` against the target canvas), a video the same way under ``match`` and
+   otherwise onto the 768 px canvas of its own aspect ratio, at 24 fps truncated to
+   the generated frame count, a soundtrack onto the audio VAE's sample rate
+   truncated to the generated duration.
 2. :func:`encode_references` -- encode each one and, in doing so, **resolve the
    latent geometry the packed layout is built from**. This is why the encode has to
    run before the layout, unlike ``fl2va`` where a keyframe's geometry is the
@@ -52,15 +53,11 @@ from .packing import (
     MINIMAX_H3_FPS,
     MINIMAX_H3_MAX_DURATION,
     MINIMAX_H3_MIN_DURATION,
-    align_num_frames,
 )
 from .packing_ref2va import (
-    MINIMAX_H3_MAX_REFERENCE_AUDIOS,
-    MINIMAX_H3_MAX_REFERENCE_IMAGES,
-    MINIMAX_H3_MAX_REFERENCE_VIDEOS,
-    MINIMAX_H3_MAX_REFERENCES,
     MiniMaxH3PreparedReference,
     MiniMaxH3Reference,
+    check_reference_kinds,
     prepare_reference_frames,
     prepare_reference_image,
     prepare_reference_waveform,
@@ -70,6 +67,7 @@ from .packing_ref2va import (
     resolve_reference_image_size,
     trim_reference_num_frames,
 )
+from .policy import align_num_frames, get_num_frames
 
 # The audio VAE hops 800 samples at 32 kHz. Its `encode` right-pads the waveform up
 # to a whole hop with ZEROS, which our device encoder does not do -- it asserts
@@ -78,35 +76,17 @@ MINIMAX_H3_AUDIO_HOP = 800
 
 # Latent count of the longest soundtrack a request can carry (15 s aligned up to 362 frames -> 604 hops).
 MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS = math.ceil(
-    align_num_frames(round(MINIMAX_H3_MAX_DURATION * MINIMAX_H3_FPS))
-    * MINIMAX_H3_AUDIO_LATENTS_PER_SECOND
-    / MINIMAX_H3_FPS
+    get_num_frames(MINIMAX_H3_MAX_DURATION) * MINIMAX_H3_AUDIO_LATENTS_PER_SECOND / MINIMAX_H3_FPS
 )
 
 
 def check_references(references: Sequence[MiniMaxH3Reference]) -> list[str]:
     """Validate a ``references`` list against the documented per-request limits.
 
-    Returns the modality of each entry, in request order. The "audio cannot be
-    alone" rule is the reference's: an audio reference has to be paired with at
-    least one image or video, because a ref2va request with no visual reference has
-    nothing to condition the picture on.
+    Returns the modality of each entry, in request order.
     """
-    if not references:
-        raise ValueError("ref2va needs at least one reference; use a t2va call for text-only requests")
-
-    kinds = [reference_kind(index, entry) for index, entry in enumerate(references)]
-    for kind, limit in (
-        ("image", MINIMAX_H3_MAX_REFERENCE_IMAGES),
-        ("video", MINIMAX_H3_MAX_REFERENCE_VIDEOS),
-        ("audio", MINIMAX_H3_MAX_REFERENCE_AUDIOS),
-    ):
-        if kinds.count(kind) > limit:
-            raise ValueError(f"H3 accepts at most {limit} {kind} references, got {kinds.count(kind)}")
-    if len(kinds) > MINIMAX_H3_MAX_REFERENCES:
-        raise ValueError(f"H3 accepts at most {MINIMAX_H3_MAX_REFERENCES} references in total, got {len(kinds)}")
-    if set(kinds) == {"audio"}:
-        raise ValueError("an audio reference must be paired with at least one image or video reference")
+    kinds = [reference_kind(index, entry) for index, entry in enumerate(references or [])]
+    check_reference_kinds(kinds)
     return kinds
 
 
@@ -116,9 +96,8 @@ def resolve_num_frames(
     """The generated frame count, derived from the references when it was left open.
 
     Only derivable when **exactly one** reference carries audio -- with two, the
-    request is ambiguous about which duration to generate. The duration ceiling is
-    checked against the *aligned* count, because a 14.99 s soundtrack rounds up to
-    362 frames, i.e. 15.083 s, and it is the aligned count that gets generated.
+    request is ambiguous about which duration to generate. A 15 s soundtrack aligns
+    up to 362 frames, i.e. 15.083 s, the same count a 15 s request generates.
     """
     if num_frames is not None:
         return align_num_frames(num_frames)
@@ -137,14 +116,7 @@ def resolve_num_frames(
             f"references[{index}] is {duration:g} s long, outside the {MINIMAX_H3_MIN_DURATION} to "
             f"{MINIMAX_H3_MAX_DURATION} seconds H3 generates"
         )
-    aligned = align_num_frames(round(duration * MINIMAX_H3_FPS))
-    if aligned / MINIMAX_H3_FPS > MINIMAX_H3_MAX_DURATION:
-        raise ValueError(
-            f"references[{index}] is {duration:g} s, which rounds up to {aligned} frames (17n + 5), i.e. "
-            f"{aligned / MINIMAX_H3_FPS:g} s -- past the {MINIMAX_H3_MAX_DURATION} s H3 generates. Pass "
-            "num_frames to generate a shorter video from this soundtrack."
-        )
-    return aligned
+    return get_num_frames(duration)
 
 
 def prepare_references(
@@ -160,7 +132,7 @@ def prepare_references(
 
     A video goes through the two passes the reference's ``ffmpeg`` decode applied,
     **in this order**: the constant-frame-rate resample onto 24 fps, then the
-    LANCZOS rescale onto its own canvas. Frames handed over at 24 fps and already at
+    LANCZOS rescale onto its encode size. Frames handed over at 24 fps and already at
     that canvas therefore reach the VAE untouched, which is the parity-exact route.
     """
     check_references(references)
@@ -188,7 +160,13 @@ def prepare_references(
             reference.image = prepare_reference_image(image, height, width)
         elif reference.kind == "video":
             frames = resample_reference_frames(reference_media_to_uint8(entry.video), float(entry.fps))
-            reference.frames = prepare_reference_frames(frames, num_frames)
+            reference.frames = prepare_reference_frames(
+                frames,
+                num_frames,
+                mode=reference_resize_mode,
+                target_width=target_width,
+                target_height=target_height,
+            )
         if reference.has_audio:
             reference.waveform = prepare_reference_waveform(
                 entry.audio,

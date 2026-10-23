@@ -1,0 +1,6 @@
+# Install in a separate CPU or CUDA PyTorch environment.
+diffusers @ git+https://github.com/huggingface/diffusers.git@fef717ffb01f407d2637584ed936c16db908587a
+transformers==5.17.0
+accelerate
+pillow
+safetensors

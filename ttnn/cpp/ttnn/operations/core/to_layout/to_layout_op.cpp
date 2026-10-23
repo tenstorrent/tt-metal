@@ -67,7 +67,10 @@ Tensor to_layout_impl(
                 "dtype "
                 "won't be changed!");
         }
-        if (memory_config.has_value() and memory_config.value() != get_memory_config(tensor_arg).value()) {
+        // Host and deallocated tensors have no memory config.
+        const auto current_mem_config = get_memory_config(tensor_arg);
+        if (memory_config.has_value() and current_mem_config.has_value() and
+            memory_config.value() != current_mem_config.value()) {
             log_warning(
                 tt::LogOp,
                 "ttnn::to_layout: memory_config is specified but the tensor is already in the requested layout! "

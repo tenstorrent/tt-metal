@@ -57,8 +57,8 @@ void measure_latency(const std::string& kernel_name) {
             .noc = tt_metal::NOC::RISCV_0_default,
             .defines = defines});
 
-    tt::tt_metal::detail::SetDeviceProfilerDir(kernel_name + "_microbenchmark");
-    tt::tt_metal::detail::FreshProfilerDeviceLog();
+    tt::tt_metal::detail::SetDeviceProfilerDir(*mesh_device, kernel_name + "_microbenchmark");
+    tt::tt_metal::detail::FreshProfilerDeviceLog(*mesh_device);
     tt_metal::LaunchProgram(*mesh_device, std::move(program));
 }
 

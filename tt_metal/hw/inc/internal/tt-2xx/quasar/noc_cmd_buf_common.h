@@ -302,11 +302,6 @@ inline __attribute__((always_inline)) void noc_increment_nonposted_writes_issued
     noc_nonposted_writes_num_issued[noc] += delta;
 }
 
-inline __attribute__((always_inline)) bool noc_nonposted_writes_sent_at_count(uint32_t noc, uint32_t expected_count) {
-    uint32_t sent = NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
-    return (int32_t)(sent - expected_count) >= 0;
-}
-
 inline __attribute__((always_inline)) void noc_cmd_buf_set_targ_addr_coordinate(
     uint32_t noc, uint32_t cmd_buf, uint32_t coord) {
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, coord);
@@ -427,8 +422,6 @@ inline __attribute__((always_inline)) void init_at_cmd_buf(uint64_t my_xy, uint3
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET / 8, my_xy);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_OVERLAY_WR_RESP_VC);
-    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
-        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MAX_BYTES_IN_PACKET_REG_OFFSET / 8, NOC_OVERLAY_MAX_BYTES_IN_PACKET);
 }
 
 inline __attribute__((always_inline)) void overlay_cmd_buff_init(uint32_t atomic_ret_val) {
@@ -499,6 +492,16 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_flushed(u
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_transaction_id_sent(
     uint32_t noc, uint32_t transcation_id) {
     return __builtin_riscv_ttrocc_scmdbuf_wr_sent_trid(transcation_id) == 0;
+}
+
+// The RoCC write counts track what is outstanding now, not a running total, so there is nothing to checkpoint.
+inline __attribute__((always_inline)) uint32_t noc_nonposted_writes_checkpoint(uint32_t noc) { return 0; }
+
+// Returns true once every static-trid write on this tile has been read out of L1, from any DM core and issued
+// before or after the checkpoint. That covers the caller's writes before the checkpoint, at the cost of also
+// waiting on the rest.
+inline __attribute__((always_inline)) bool noc_nonposted_writes_sent_since(uint32_t noc, uint32_t checkpoint) {
+    return ncrisc_noc_nonposted_write_with_transaction_id_sent(noc, NOC_OVERLAY_TRID_STATIC);
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_transaction_id_flushed(

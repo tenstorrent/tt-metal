@@ -308,18 +308,69 @@ class TtMHCHead(LightweightModule):
     Sinkhorn and no fused kernel: this runs once per model, not once per layer.
     """
 
-    def __init__(self, device, cfg, fn: torch.Tensor, base: torch.Tensor, scale: torch.Tensor, dtype=ttnn.float32):
+    def __init__(
+        self,
+        device,
+        cfg,
+        fn: torch.Tensor,
+        base: torch.Tensor,
+        scale: torch.Tensor,
+        dtype=ttnn.float32,
+        tp_axis: int | None = None,
+        num_links: int | None = None,
+        topology=ttnn.Topology.Linear,
+    ):
+        self.device = device
         self.cfg = cfg
         self.n = cfg.n
         self.eps = float(cfg.eps)
         self.norm_eps = float(cfg.norm_eps)
         self.ckc = _compute_kernel_config()
         self.a = float(scale[0])
-        self.fn_T = _upload(device, fn.t(), (1, 1, fn.shape[1], fn.shape[0]), dtype)
+        # Same TP contract as TtMHCWrap: fn_T is sharded along mesh axis 1 in the order x is split.
+        assert tp_axis in (None, 1), f"tp_axis must be None or 1 (fn_T is sharded along mesh axis 1), got {tp_axis}"
+        self.tp_axis = tp_axis
+        self.num_links = num_links if num_links is not None else (2 if is_blackhole() else 1)
+        self.topology = topology
+        self.tp_factor = device.shape[tp_axis] if tp_axis is not None else 1
+        self.tt_ccl = get_tt_ccl(device) if self.tp_factor > 1 else None
+        if self.tp_factor > 1:
+            assert cfg.dim % self.tp_factor == 0, (
+                f"the mHC head splits hidden {cfg.dim} across the TP axis, which the factor "
+                f"{self.tp_factor} does not divide"
+            )
+            assert fn.shape[1] == self.n * cfg.dim, f"fn is {tuple(fn.shape)}, expected [*, {self.n * cfg.dim}]"
+            local = cfg.dim // self.tp_factor
+            self.fn_T = ttnn.from_torch(
+                fn.t().contiguous().reshape(1, self.n, cfg.dim, fn.shape[0]),
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                dtype=dtype,
+                mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=(None, 2)),
+            )
+            self.fn_T = ttnn.reshape(self.fn_T, [1, 1, self.n * local, fn.shape[0]])
+        else:
+            self.fn_T = _upload(device, fn.t(), (1, 1, fn.shape[1], fn.shape[0]), dtype)
         self.base = _upload(device, base, (1, 1, 1, cfg.n), dtype)
+
+    def _tp_sum(self, t):
+        """Sum ``t`` across the TP axis, leaving the result on every chip."""
+        return ttnn.experimental.all_reduce_async(
+            t,
+            cluster_axis=self.tp_axis,
+            mesh_device=self.device,
+            barrier_semaphores=self.tt_ccl.barrier_semaphore_handles[self.tp_axis],
+            rs_global_semaphores=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
+            ag_global_semaphores=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
+            num_links=self.num_links,
+            math_op=ttnn.ReduceType.Sum,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self.topology,
+        )
 
     def forward(self, x):
         """[1,1,T,n*C] -> [1,1,T,C]."""
-        mixes = _project(x, self.fn_T, self.norm_eps, self.ckc)
+        tp_sum = self._tp_sum if self.tp_factor > 1 else None
+        mixes = _project(x, self.fn_T, self.norm_eps, self.ckc, tp_sum, self.tp_factor)
         pre = ttnn.add(ttnn.sigmoid(ttnn.add(ttnn.mul(mixes, self.a), self.base)), self.eps)
         return _mix(_streams(x, self.n), _cols(pre, self.n))

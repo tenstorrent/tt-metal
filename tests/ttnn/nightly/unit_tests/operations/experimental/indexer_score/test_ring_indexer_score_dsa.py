@@ -157,6 +157,50 @@ def _linear_full_mesh_ref(q_g, k_g, w_g, ring_size, local_sq, chunk_start):
     return torch.cat(refs, dim=2)
 
 
+def _sptp_full_mesh_positions(mesh_shape, local_sq, chunk_global, chunk_start):
+    """Query positions of each row-major device on a full mesh, laid out the way GLM-5.2 builds them.
+
+    The mesh rows are SP ranks: a chunk's queries are rotated into each row's SP stripe
+    (chunk_global / rows tokens per slab), in position order, starting at chunk_start. The mesh columns are
+    TP windows: column c takes rows [c*local_sq, (c+1)*local_sq) of its row's rotated list. On the boundary
+    SP rank that list holds the chunk's first and last tokens, so the slab seam lands on whichever column's
+    window covers it -- not on a single device's own stripe."""
+    rows, cols = mesh_shape
+    cl = chunk_global // rows  # SP stripe per slab
+    boundary_slab = chunk_start // chunk_global
+    boundary_sp = (chunk_start // cl) % rows
+    offset = chunk_start % cl
+    positions = []
+    for tensor_rank in range(rows * cols):
+        sp_rank, tp_col = divmod(tensor_rank, cols)
+        update_idxt = (
+            (boundary_slab + 1) * cl
+            if sp_rank < boundary_sp
+            else (boundary_slab * cl + offset if sp_rank == boundary_sp else boundary_slab * cl)
+        )
+        lr = update_idxt + tp_col * local_sq + torch.arange(local_sq)
+        positions.append((lr // cl) * chunk_global + sp_rank * cl + (lr % cl))
+    return positions
+
+
+def _sptp_full_mesh_ref(q_g, k_nat, w_g, mesh_shape, chunk_global, chunk_start, t_len):
+    """Head-summed relu score with each device's queries at their SP-rotated, TP-windowed positions."""
+    ring_size = mesh_shape[0] * mesh_shape[1]
+    local_sq = q_g.shape[2] // ring_size
+    positions = _sptp_full_mesh_positions(mesh_shape, local_sq, chunk_global, chunk_start)
+    kh = k_nat[:, 0, :t_len].float()
+    refs = []
+    for tensor_rank, pos in enumerate(positions):
+        sl = slice(tensor_rank * local_sq, (tensor_rank + 1) * local_sq)
+        qh, wh = q_g[:, :, sl, :].float(), w_g[:, :, sl, :].float()
+        score = torch.zeros(1, local_sq, t_len)
+        for h in range(qh.shape[1]):
+            score += torch.relu(qh[:, h] @ kh.transpose(-2, -1)) * wh[:, 0, :, h : h + 1]
+        future = torch.arange(t_len).unsqueeze(0) > pos.unsqueeze(1)
+        refs.append(score.masked_fill(future, float("-inf")).unsqueeze(1))
+    return torch.cat(refs, dim=2)
+
+
 def _assert_remote_gather_slots(k_local, k_gathered, ring_size, valid_local_rows=None, cache_batch_idx=None):
     """Every remote transport shard must land in its canonical row-major tensor slot."""
     local_shards = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(k_local)]
@@ -771,7 +815,9 @@ def _run_full_mesh_accuracy_case(mesh_shape, *, block_cyclic, fabric_config=ttnn
     local_sq = 64
     chunk_global = ring_size * local_sq
     if block_cyclic:
-        # Enter slab 1, rotate ownership by one tensor rank, and make exactly that boundary rank straddle.
+        # Enter slab 1 mid SP stripe: 96 tokens into SP rank 0's stripe (chunk_global / rows = 256 per slab
+        # on 2x4 and 8x4), which is not a multiple of the 64-row TP window. SP rank 0 then holds the chunk's
+        # first and last tokens and the slab seam falls inside its third TP window (#58339).
         chunk_start = chunk_global + local_sq + 32
         t_len = 3 * chunk_global
     else:
@@ -817,10 +863,32 @@ def _run_full_mesh_accuracy_case(mesh_shape, *, block_cyclic, fabric_config=ttnn
 
         assert torch.equal(outputs[0], outputs[1]), "full-mesh indexer replay is not bit-exact"
         if block_cyclic:
-            ref = _straddle_ref(q_g, k_nat, w_g, ring_size, chunk_global, chunk_start, t_len)
+            ref = _sptp_full_mesh_ref(q_g, k_nat, w_g, mesh_shape, chunk_global, chunk_start, t_len)
         else:
             ref = _linear_full_mesh_ref(q_g, k_nat, w_g, ring_size, local_sq, chunk_start)
         assert_indexer_match(outputs[0], ref, chunk_global, t_len, check_neg=True)
+
+        if block_cyclic:
+            # Metadata (trace-safe) path: the reader derives the same causal geometry on device. kv_len is
+            # chunk_start + chunk_global there, so compare the scored prefix.
+            meta_out = ttnn.experimental.ring_indexer_score_dsa(
+                q_dev,
+                k_gathered,
+                w_dev,
+                k_local,
+                semaphores,
+                cluster_axis=None,
+                topology=ttnn.Topology.Ring,
+                num_links=2,
+                ag_sub_device_id=subdevice_id,
+                chunk_start_idx_tensor=_replicated_u32(mesh, chunk_start),
+                program_config=glx_config(heads),
+                **kwargs,
+            )
+            ttnn.synchronize_device(mesh, sub_device_ids=stall_group)
+            meta_host = ttnn.to_torch(meta_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=2))
+            kv_len = chunk_start + chunk_global
+            assert_indexer_match(meta_host[..., :kv_len], ref[..., :kv_len], chunk_global, kv_len, check_neg=True)
         logger.info(
             f"full-mesh indexer {mesh_shape} {'block-cyclic rotated' if block_cyclic else 'contiguous'}: "
             "PCC, deterministic replay, cache reuse, and canonical remote K placement passed"
@@ -1140,14 +1208,15 @@ def test_indexer_score_sptp_loudbox_ring_partial_readiness():
     [ttnn.FabricConfig.FABRIC_2D_TORUS_XY, ttnn.FabricConfig.FABRIC_2D],
     ids=["torus_xy", "fabric_2d"],
 )
-def test_indexer_score_full_mesh_galaxy_8x4_accuracy(fabric_config):
+@pytest.mark.parametrize("block_cyclic", [False, True], ids=["contiguous", "block_cyclic_rotated"])
+def test_indexer_score_full_mesh_galaxy_8x4_accuracy(fabric_config, block_cyclic):
     """Exercise the fixed 32-entry readiness tables at their supported Galaxy limit.
 
     A torus closes the 8x4 snake; a plain 2D fabric has no closing edge and resolves the same
     walk as an open path, and the gathered result must match either way."""
     if ttnn.get_num_devices() != 32:
         pytest.skip("8x4 full-mesh indexer coverage requires exactly 32 available devices")
-    _run_full_mesh_accuracy_case((8, 4), block_cyclic=False, fabric_config=fabric_config)
+    _run_full_mesh_accuracy_case((8, 4), block_cyclic=block_cyclic, fabric_config=fabric_config)
 
 
 def test_indexer_score_full_mesh_indexed_bounded_gather_cache_hit_and_determinism():
@@ -1201,7 +1270,9 @@ def test_indexer_score_full_mesh_indexed_bounded_gather_cache_hit_and_determinis
         out0 = _score(slot=1, chunk_start=32, kv_len=large_kv_len)
         entries_after_first = mesh.num_program_cache_entries()
         scratch_after_large = [ttnn.to_torch(tensor).clone() for tensor in ttnn.get_device_tensors(k_gathered)]
-        ref0 = _straddle_ref(q_g, k_nat[1:2, :, :large_kv_len, :], w_g, ring_size, chunk_global, 32, large_kv_len)
+        ref0 = _sptp_full_mesh_ref(
+            q_g, k_nat[1:2, :, :large_kv_len, :], w_g, mesh_shape, chunk_global, 32, large_kv_len
+        )
         assert_indexer_match(out0[:, :, :, :large_kv_len], ref0, chunk_global, large_kv_len, check_neg=True)
         _assert_remote_gather_slots(
             k_local,
@@ -1219,7 +1290,7 @@ def test_indexer_score_full_mesh_indexed_bounded_gather_cache_hit_and_determinis
         out2 = _score(slot=2, chunk_start=0, kv_len=chunk_global)
         assert mesh.num_program_cache_entries() == entries_after_first, "runtime scalar changes recompiled"
         assert torch.equal(out1[..., :chunk_global], out2[..., :chunk_global]), "cache-hit replay is not bit-exact"
-        ref1 = _straddle_ref(q_g, k_nat[2:3, :, :chunk_global, :], w_g, ring_size, chunk_global, 0, chunk_global)
+        ref1 = _sptp_full_mesh_ref(q_g, k_nat[2:3, :, :chunk_global, :], w_g, mesh_shape, chunk_global, 0, chunk_global)
         assert_indexer_match(out1[:, :, :, :chunk_global], ref1, chunk_global, chunk_global, check_neg=True)
         _assert_remote_gather_slots(k_local, k_gathered, ring_size, valid_local_rows=local_sq, cache_batch_idx=2)
         scratch_after_small = [ttnn.to_torch(tensor) for tensor in ttnn.get_device_tensors(k_gathered)]

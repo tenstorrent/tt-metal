@@ -5,16 +5,27 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <initializer_list>
+#include <iterator>
 #include <optional>
+#include <ostream>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <vector>
 
+#include <fmt/base.h>
 #include <fmt/core.h>
+#include <fmt/format.h>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/shape_base.hpp>
 #include <tt-metalium/maybe_remote.hpp>
+#include <tt_stl/small_vector.hpp>
+#include <tt_stl/span.hpp>
 
 namespace tt::tt_metal::distributed {
 

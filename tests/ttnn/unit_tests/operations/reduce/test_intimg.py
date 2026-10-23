@@ -30,9 +30,11 @@ def ttnn_integral_image_channel_last(features_nhwc):
     [
         # fmt: off
         ([1, 12, 40, 256]),
-        ([1, 24, 80, 256])
+        ([1, 24, 80, 256]),
+        # Depth 60 is not a multiple of block depth 48.
+        ([1, 60, 64, 256]),
     ],
-    ids=["OFT32", "OFT16"],
+    ids=["OFT32", "OFT16", "partial_depth"],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["DRAM"])
@@ -89,7 +91,8 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
         pcc_threshold = 0.999
         rtol = 0.012
         atol = 32.640
-        frobenius_threshold = 0.003
+        # Deeper sum than the other shapes.
+        frobenius_threshold = 0.004 if input_shape_nhwc[1] > 48 else 0.003
     # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,

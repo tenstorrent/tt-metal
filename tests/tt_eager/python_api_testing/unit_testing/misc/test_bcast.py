@@ -289,3 +289,40 @@ def test_bcast_h_block_sharded_batched_channel(device, batch, height_per_batch, 
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_ref_output.float(), output_tensor, 0.999)
     logger.info(pcc_msg)
     assert passing, pcc_msg
+
+
+@pytest.mark.parametrize(
+    "orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR], ids=["row_major", "col_major"]
+)
+def test_bcast_hw_sharded_multi_row_col(device, orientation):
+    # Regression: cores were walked in device-grid order, not shard order. Needs a 2D grid and bN*bC > 1.
+    torch.manual_seed(0)
+    N, C, H, W = 2, 1, 256, 32
+    a_torch = torch.rand([N, C, H, W], dtype=torch.bfloat16)
+    b_torch = torch.rand([N, C, 1, 1], dtype=torch.bfloat16)
+    torch_ref_output = a_torch + b_torch
+
+    a_tt = ttnn.from_torch(a_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    # Explicit ShardSpec: create_sharded_memory_config transposes the shard shape for COL_MAJOR.
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 1))})
+    shard_shape = [N * C * H // grid.num_cores(), W]
+    in_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(grid, shard_shape, orientation)
+    )
+    a_tt = ttnn.to_memory_config(a_tt, in_sharded_mem_config)
+
+    b_tt = ttnn.from_torch(b_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    tt_output = ttnn.bcast(
+        a_tt,
+        b_tt,
+        ttnn.BcastOpMath.ADD,
+        ttnn.BcastOpDim.HW,
+        memory_config=ttnn.get_memory_config(a_tt),
+    )
+    output_tensor = ttnn.to_torch(tt_output).float()
+
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_ref_output.float(), output_tensor, 0.999)
+    logger.info(pcc_msg)
+    assert passing, pcc_msg

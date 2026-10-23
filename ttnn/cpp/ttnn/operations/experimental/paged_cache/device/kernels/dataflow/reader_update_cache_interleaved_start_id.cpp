@@ -51,7 +51,10 @@ void kernel_main() {
     dfb_input.reserve_back(Wt);
     dfb_input.push_back(Wt);
 
-    const uint32_t cache_tile_bytes = dfb_cache.get_tile_size();
+    // get_entry_size(): this DFB's live per-program entry size. get_tile_size() reads a global descriptor
+    // array that intervening ops clobber on Quasar DM kernels (stale -> wrong size -> DRAM over/under-run on
+    // a later invocation; cf. fill_cache). Byte-identical to get_tile_size() on WH/BH.
+    const uint32_t cache_tile_bytes = dfb_cache.get_entry_size();
 
     constexpr uint32_t TILE_HEIGHT = 32;
 
@@ -108,8 +111,14 @@ void kernel_main() {
 #endif
                 noc.async_read_barrier();
                 dfb_page_table.push_back(1);
+#ifdef PAGE_TABLE_ENTRY_UINT16
+                // Sharded page tables hold UINT16 entries, DRAM ones UINT32.
+                volatile tt_l1_ptr uint16_t* page_table_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page_table_wr_ptr);
+#else
                 volatile tt_l1_ptr uint32_t* page_table_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_wr_ptr);
+#endif
 
                 const uint32_t virtual_block_id = update_idx / block_size;
                 const uint32_t physical_block_id = page_table_ptr[virtual_block_id];

@@ -8,6 +8,13 @@ real text and nothing at all about retrieval quality, which is what the model is
 Measured on a Blackhole p300c, grid 11x10, bfloat16 activations and weights with HiFi4 and
 fp32 destination accumulation, weights read from the pinned checkpoint. One run, 2026-09-18.
 
+The matmul optimization of [#57524](https://github.com/tenstorrent/tt-metal/issues/57524) later
+lowered the fidelity of most matmuls, down to LoFi on expert w2, and moved both expert weights,
+the expert intermediate and the w2 output of large expert passes to bfloat8_b. Measured again on
+the same 13 splits, nDCG@10 moved by -0.0012 to +0.0005 per split against the pre-change code
+(mean -0.0001), where two runs of the pre-change code differ by up to 0.0022. The numbers below
+are the 2026-09-18 run.
+
 ## 1. What was measured
 
 | Dataset | Split | Content |

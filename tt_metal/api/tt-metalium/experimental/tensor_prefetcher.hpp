@@ -20,6 +20,9 @@
 #include <optional>
 #include <vector>
 
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include <tt_stl/optional_reference.hpp>
+
 namespace tt::tt_metal {
 
 class MeshTensor;
@@ -73,6 +76,25 @@ struct TensorPrefetcherConfig {
 // use this to skip rather than fail.
 bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device);
 
+// Picks which groups of a grouped weight a request streams. A grouped weight is a receiver-
+// contiguous weight whose NdShardSpec shard is (G, K, N / ring_size) with G the tensor's dim -3, so
+// every receiver slab stacks all G groups (e.g. MoE experts). With a selector the prefetcher reads
+// `mask` on device when it reaches the request and streams, in ascending group order, only the groups
+// whose mask entry is non-zero -- the order a sparse matmul scans the same mask in. Reading it on
+// device is what lets a traced request follow a mask the device rewrites between replays.
+//
+// `mask` must be a ROW_MAJOR, BFLOAT16 or UINT16 tensor of exactly G elements in one page (every dim
+// but the last is 1), G <= 256, on the same mesh as the weight, in DRAM (interleaved) or in L1 on a
+// single core. It must be written before the request is queued (fence the writing queue with
+// WaitForCqOnTensorPrefetcher) and must not change until the consumer that reads it has run;
+// otherwise the prefetcher and the consumer disagree on which groups arrive and the delivery
+// target deadlocks. That fence cannot be captured into a trace while the request can, so a mask
+// written by an op inside the same trace is not fenced on replay: today the mask must be written,
+// and fenced, before execute_trace.
+struct TensorPrefetcherGroupSelector {
+    std::reference_wrapper<const MeshTensor> mask;
+};
+
 // One prefetch work item: a weight tensor plus the number of K-blocks to split
 // its K dimension into. `block_count` is used in place of the GCB ring size when
 // dividing K (k_block_w_tiles = ceil(K_tiles / block_count)), so different
@@ -110,6 +132,8 @@ struct TensorPrefetcherInput {
     // built to consume in the matching order, else it deadlocks. The host is responsible for
     // supplying a rotation consistent with the consumer's ring topology.
     std::vector<uint32_t> rotation;
+    // Grouped weights only. Unset streams every group in ascending order.
+    std::optional<TensorPrefetcherGroupSelector> group_selector = std::nullopt;
 };
 
 // Build per-device Programs (two DRISC kernels per DRAM bank), allocate
@@ -161,7 +185,39 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
 void QueueTensorPrefetcherRequest(
     distributed::MeshDevice& mesh_device,
     const GlobalCircularBuffer& gcb,
-    const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
+    ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
+    const std::vector<TensorPrefetcherInput>& input_tensors,
+    distributed::MeshCommandQueue* trace_capture_cq = nullptr);
+
+// Queue one prefetch request against PrefetcherPipes instead of a GlobalCircularBuffer. The target
+// object is what selects the delivery transport; everything else behaves as documented above, and
+// requests against a GCB and against PrefetcherPipes may be interleaved on one running prefetcher.
+//
+// `prefetcher_pipes` must be every pipe of one CreatePrefetcherPipesForTensorPrefetcher result for
+// the same mesh device, in any order. Each pipe carries its bank-local slab base. Consumers bind
+// each pipe on its own receivers through ProgramRunArgs and read through the device-side
+// experimental::PrefetcherPipe.
+//
+// Additional preconditions for this transport, all TT_FATAL with the offending values:
+//   - every pipe has a DRAM sender, comes from the same factory call, and shares one ring size;
+//     every pipe of that call is listed, each once;
+//   - receiver sets are disjoint across every pipe;
+//   - every tensor must resolve to the receiver-contiguous layout (each receiver owning a disjoint
+//     contiguous shard). One receiver per bank qualifies: a bank's whole shard is then that
+//     receiver's slab, which is why such a weight is read as receiver-contiguous here even though
+//     ttnn reports it as legacy WIDTH_SHARDED (the two layouts name the same bytes, and a GCB still
+//     reads it as K-row-major).
+//
+// Everything else carries over: the streaming `rotation` works the same way it does for a GCB, and
+// a tensor's per-receiver block size need not equal the pipes' `entry_size` nor divide the ring --
+// the sender re-grids its write cursor per tensor, and any trailing remainder of the ring is a gap
+// both endpoints credit at the wrap. The ring itself is fixed at creation and never resizes, so
+// size it for the consumer: one block is enough for the transport, while a consumer that keeps a
+// block of lookahead (a streaming matmul) needs two.
+void QueueTensorPrefetcherRequest(
+    distributed::MeshDevice& mesh_device,
+    const std::vector<std::reference_wrapper<const PrefetcherPipe>>& prefetcher_pipes,
+    ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
     const std::vector<TensorPrefetcherInput>& input_tensors,
     distributed::MeshCommandQueue* trace_capture_cq = nullptr);
 
@@ -179,7 +235,8 @@ void QueueTensorPrefetcherRequest(
 //
 // Preconditions (TT_FATAL): a prefetcher is active on `cq`'s mesh device.
 void WaitForCqOnTensorPrefetcher(
-    distributed::MeshCommandQueue& cq, const std::optional<distributed::MeshCoordinateRangeSet>& device_subset);
+    distributed::MeshCommandQueue& cq,
+    ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset);
 
 // Block until all previously queued requests have been delivered and the
 // kernels have exited, then release the prefetcher's resources. No-op if no

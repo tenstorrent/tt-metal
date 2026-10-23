@@ -69,6 +69,11 @@ void kernel_main() {
             for (uint32_t i = 0; i < output_row_size_elems; ++i) {
                 pad_ptr[i] = 0;
             }
+        } else if constexpr (output_elem_size == 1) {
+            volatile tt_l1_ptr uint8_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(pad_addr);
+            for (uint32_t i = 0; i < output_row_size_elems; ++i) {
+                pad_ptr[i] = 0;
+            }
         }
     }
 

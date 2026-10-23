@@ -34,7 +34,7 @@ inline constexpr uint32_t HACK_AHEAD = 2;
 inline constexpr uint32_t H_ROUND_NOC1_MASK = 0;
 inline constexpr bool SCATTER_ONE_SIGNAL = true;
 inline constexpr uint32_t WD_SPLIT = 3;
-// False buys the `ndest` payload write-acks back. POSTED measures 1.5% (glm_51) to 2.2% (kimi_k3)
+// False buys the `ndest` payload write-acks back. POSTED measures 1.5% (glm_53) to 2.2% (kimi_k3)
 // faster at 2048-5120 tokens against a 0.1-0.3% run spread, and it correctly PCC-checks, but its
 // safety rests on a LINKED non-posted flag never overtaking a posted payload on the same VC. That
 // is a hardware ordering guarantee nobody has confirmed, and violating it corrupts an h slot

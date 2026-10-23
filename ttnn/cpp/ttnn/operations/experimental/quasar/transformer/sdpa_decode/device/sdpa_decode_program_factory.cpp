@@ -8,6 +8,7 @@
 #include <climits>
 #include <cmath>
 #include <cstdint>
+#include <numeric>
 #include <optional>
 #include <string>
 #include <vector>
@@ -16,6 +17,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
@@ -199,8 +201,9 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     TT_FATAL(num_cores_available >= B, "Cores available ({}) must be >= batch size ({})", num_cores_available, B);
 
     // ========== Core Allocation ==========
-    const uint32_t max_cores_per_head =
-        program_config.has_value() ? program_config->max_cores_per_head_batch : num_cores_available;
+    const uint32_t max_cores_per_head = program_config.has_value()
+                                            ? program_config->max_cores_per_head_batch
+                                            : std::min<uint32_t>(num_cores_available, 1u << MAX_TREE_REDUCTION_ROUNDS);
     TT_FATAL(max_cores_per_head > 0, "max_cores_per_head_batch must be > 0");
     const uint32_t max_num_cores_for_compute = max_cores_per_head * B * num_kv_heads;
     const uint32_t num_cores_per_batch_uncapped = std::min(num_cores_available, max_num_cores_for_compute) / B;
@@ -412,19 +415,23 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     // Matmul block/subblock configuration for output (QK * V)
     uint32_t out_in0_block_w = Sk_chunk_t > 0 ? Sk_chunk_t : 0;
     uint32_t out_num_blocks = Sk_chunk_t > 0 ? 1 : 0;
-    const uint32_t out_out_subblock_w = std::min(vDHt, dst_size);
+    uint32_t out_out_subblock_w = std::min(vDHt, dst_size);
+    while (out_out_subblock_w > 1 && vDHt % out_out_subblock_w != 0) {
+        out_out_subblock_w--;
+    }
     const uint32_t out_out_subblock_h =
         (out_out_subblock_w == vDHt) ? std::min(PNHt, dst_size / out_out_subblock_w) : 1;
     const uint32_t out_in0_num_subblocks = PNHt / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
 
-    // DHt granularity for compute loops (must be power of 2)
-    uint32_t dht_granularity = std::min(DHt, dst_size);
-    uint32_t log2_dht_granularity = static_cast<uint32_t>(std::log2(dht_granularity));
-    if (dht_granularity != (1u << log2_dht_granularity)) {
-        dht_granularity = 1;
-        log2_dht_granularity = 0;
+    // DHt granularity for compute loops: a power of 2 that divides both DHt and vDHt, since the
+    // normalisation loops run over vDHt-wide rows.
+    const uint32_t dht_divisor = std::gcd(DHt, vDHt);
+    uint32_t dht_granularity = std::bit_floor(std::min(dht_divisor, dst_size));
+    while (dht_granularity > 1 && dht_divisor % dht_granularity != 0) {
+        dht_granularity /= 2;
     }
+    const uint32_t log2_dht_granularity = std::countr_zero(dht_granularity);
 
     // ========== Tile Counts for Circular Buffers ==========
     const uint32_t q_tiles = PNHt * DHt;
@@ -564,7 +571,6 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     const DFBSpecName DFB_PAGE_TABLE{"page_table"};
     const DFBSpecName DFB_Q_RM{"q_rm"};
     const DFBSpecName DFB_OUT_WORKER{"out_worker"};
-    const DFBSpecName DFB_ZERO_IN{"zero_in"};
     const DFBSpecName DFB_SLIDING_MASK{"sliding_window_mask_in"};
     const DFBSpecName DFB_BLOCK_PAD_MASK{"block_pad_mask"};
     const DFBSpecName DFB_COMPUTE_CUR_POS{"compute_cur_pos"};
@@ -573,6 +579,8 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     const DFBSpecName DFB_OUT_L{"out_l"};
     const DFBSpecName DFB_OUT{"out"};
     const ScratchpadSpecName INTERMED_OUT_SCRATCH{"intermed_out"};
+    // Non-sharded page table: a node-local scratchpad instead of a self-loop DFB (illegal on Gen2).
+    const ScratchpadSpecName PAGE_TABLE_SCRATCH{"page_table_sp"};
     const DFBSpecName DFB_QK_IM{"qk_im"};
     const DFBSpecName DFB_OUT_IM{"out_im"};
     const DFBSpecName DFB_OUT_ACC_IM{"out_accumulate_im"};
@@ -596,6 +604,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     Group<DFBBinding> compute_dfb;
     Group<ScratchpadSpec> scratchpads;
     Group<ScratchpadBinding> writer_scratch;
+    Group<ScratchpadBinding> reader_scratch;
 
     auto add_dfb = [&](const DFBSpecName& name,
                        uint32_t entry_size,
@@ -684,8 +693,11 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         bind(compute_dfb, DFB_ATTN_SINK, "attention_sink", DFBEndpointType::CONSUMER);
     }
 
-    // identity_scale — writer produces, compute consumes.
-    add_dfb(DFB_IDENTITY_SCALE, scalar_tile_size, scale_tiles, scalar_df, &scalar_tile);
+    // identity_scale — writer produces, compute consumes. Entry 0 is the reduce scaler, entry 1 the zero
+    // tile the fused QK mask add reads (formerly a separate zero_in DFB). Sharing one DFB saves a
+    // DM-visible tile counter: Quasar has 16 per Neo, and the sliding-window GPT-OSS config needs 17
+    // DM<->Tensix DFBs otherwise.
+    add_dfb(DFB_IDENTITY_SCALE, scalar_tile_size, scale_tiles + 1, scalar_df, &scalar_tile);
     bind(writer_dfb, DFB_IDENTITY_SCALE, "identity_scale_in", DFBEndpointType::PRODUCER);
     bind(compute_dfb, DFB_IDENTITY_SCALE, "identity_scale_in", DFBEndpointType::CONSUMER);
 
@@ -719,24 +731,29 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         bind(compute_dfb, DFB_COMPUTE_CUR_POS, "cur_pos", DFBEndpointType::CONSUMER);
     }
 
-    // page_table — reader fills + raw-reads its own buffer (self-loop) (conditional).
+    // page_table — reader fills + raw-reads its own buffer (conditional).
     if (is_paged_attention) {
-        uint32_t page_table_num_entries = is_page_table_sharded ? B : 1;
-        add_dfb(
-            DFB_PAGE_TABLE,
-            page_table_stick_size,
-            page_table_num_entries,
-            page_table_df,
-            nullptr,
-            is_page_table_sharded ? std::optional<TensorParamName>(PAGE_TABLE) : std::nullopt);
-        bind(reader_dfb, DFB_PAGE_TABLE, "page_table", DFBEndpointType::PRODUCER);
-        bind(reader_dfb, DFB_PAGE_TABLE, "page_table", DFBEndpointType::CONSUMER);
+        if (is_page_table_sharded) {
+            // Sharded: the DFB borrows the page_table tensor's resident L1 shard; the reader raw-reads it.
+            add_dfb(
+                DFB_PAGE_TABLE,
+                page_table_stick_size,
+                B,
+                page_table_df,
+                nullptr,
+                std::optional<TensorParamName>(PAGE_TABLE));
+            bind(reader_dfb, DFB_PAGE_TABLE, "page_table", DFBEndpointType::PRODUCER);
+            bind(reader_dfb, DFB_PAGE_TABLE, "page_table", DFBEndpointType::CONSUMER);
+        } else {
+            // Non-sharded: the reader reads one page-table stick from DRAM into a private page and reads it
+            // back — a self-loop DFB, which Gen2 forbids. Use a node-local scratchpad instead (accessor
+            // "page_table" so the kernel selects scratch::page_table on the non-sharded build).
+            scratchpads.push_back(
+                ScratchpadSpec{.unique_id = PAGE_TABLE_SCRATCH, .size_per_node = page_table_stick_size});
+            reader_scratch.push_back(
+                ScratchpadBinding{.scratchpad_spec_name = PAGE_TABLE_SCRATCH, .accessor_name = "page_table"});
+        }
     }
-
-    // zero_in — writer produces, compute consumes.
-    add_dfb(DFB_ZERO_IN, scalar_tile_size, scale_tiles, scalar_df, &scalar_tile);
-    bind(writer_dfb, DFB_ZERO_IN, "zero_in", DFBEndpointType::PRODUCER);
-    bind(compute_dfb, DFB_ZERO_IN, "zero_in", DFBEndpointType::CONSUMER);
 
     // sliding_window_mask — writer produces, compute consumes (conditional).
     if (sliding_window_size > 0) {
@@ -1052,7 +1069,6 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         maybe_unpack(DFB_V_IN, v_df, true);
         maybe_unpack(DFB_MASK_IN, mask_df, true);
         maybe_unpack(DFB_IDENTITY_SCALE, scalar_df, true);
-        maybe_unpack(DFB_ZERO_IN, scalar_df, true);
         maybe_unpack(DFB_Q_RM, q_df, tilize_q);
         maybe_unpack(DFB_SLIDING_MASK, mask_df, sliding_window_size > 0);
         maybe_unpack(DFB_BLOCK_PAD_MASK, mask_df, has_block_padding);
@@ -1061,12 +1077,30 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     // ---- Kernel specs ----
     const std::string kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa_decode/device/kernels/";
+    // Quasar: every DM-side DFB endpoint with implicit sync draws NoC transaction IDs from one 24-entry
+    // program-wide pool. The attention-sink and sliding-window DFBs (GPT-OSS) push it past the limit, so
+    // they use explicit sync; their producers barrier before push_back.
+    // The tree-reduction stats DFBs also use explicit sync: with PNHt == 2 (64 q heads, GPT-OSS) each
+    // takes 2 txn ids, which alone overflows the pool. The writer already barriers its NoC reads before
+    // pushing m_in/l_in and its NoC writes before popping out_m/out_l.
+    auto reader_hw = ttnn::create_reader_datamovement_config();
+    auto writer_hw = ttnn::create_writer_datamovement_config();
+    for (const auto& stats_dfb : {DFB_M_IN, DFB_L_IN, DFB_OUT_M, DFB_OUT_L}) {
+        writer_hw.config_2xx->disable_dfb_implicit_sync_for.push_back(stats_dfb);
+    }
+    if (use_attention_sink) {
+        reader_hw.config_2xx->disable_dfb_implicit_sync_for.push_back(DFB_ATTN_SINK);
+    }
+    if (sliding_window_size > 0) {
+        writer_hw.config_2xx->disable_dfb_implicit_sync_for.push_back(DFB_SLIDING_MASK);
+    }
     KernelSpec reader{
         .unique_id = READER,
         .source = std::filesystem::path(kernel_path + "dataflow/reader_decode_all.cpp"),
         .compiler_options = {.defines = std::move(reader_defines)},
         .dfb_bindings = std::move(reader_dfb),
         .semaphore_bindings = std::move(reader_sems),
+        .scratchpad_bindings = std::move(reader_scratch),
         .tensor_bindings = std::move(reader_tensors),
         .compile_time_args = std::move(reader_cta),
         .runtime_arg_schema =
@@ -1084,7 +1118,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
                   "mcast_y0",
                   "mcast_y1",
                   "num_dests"}},
-        .hw_config = ttnn::create_reader_datamovement_config(),
+        .hw_config = std::move(reader_hw),
         .advanced_options = {.num_runtime_varargs = 2 * num_output_cores},
     };
     KernelSpec writer{
@@ -1119,7 +1153,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
                   "children_per_round_3",
                   "children_per_round_4",
                   "children_per_round_5"}},
-        .hw_config = ttnn::create_writer_datamovement_config(),
+        .hw_config = std::move(writer_hw),
         .advanced_options =
             {.num_runtime_varargs = 2 * num_cores_per_head + 2 * num_reducer_cores + 2 * num_output_cores},
     };

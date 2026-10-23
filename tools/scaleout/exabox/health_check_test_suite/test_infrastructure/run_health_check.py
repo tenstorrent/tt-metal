@@ -99,7 +99,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--tier",
         default="light",
-        choices=["light", "medium", "deploy"],
+        choices=["light", "medium", "deploy", "pre_reboot"],
         help="Diagnostic tier passed to the diag suite",
     )
     p.add_argument(

@@ -15,6 +15,7 @@ mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration
 global_env:
   # Absolute so every rank resolves it regardless of cwd; tt-run expands ${VARS} from the launch shell.
   PREFILL_MANIFEST: "${TT_METAL_HOME}/models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json"
+  M3_INDEX_CACHE_BF16: "0"        # migration needs a bf8 index_k (the decode peer's dtype), as the manifest
 
   PREFILL_FABRIC_MODE: "2d_torus_xy"
   PREFILL_SP: "8"

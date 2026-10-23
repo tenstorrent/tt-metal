@@ -69,6 +69,19 @@ def bounded_ring_modulo(sliding_window):
     return ring
 
 
+def _stashed_tail_end(chunk_start_idx, valid_seq_len, seq_len):
+    """Absolute position one past the last row of the sliding tail a prefill call stashes.
+
+    The tail is the last rows of ``min(seq_len, valid_seq_len)`` K/V rows of a
+    chunk starting at ``chunk_start_idx``. None when the offset is a device tensor
+    (traced) or the valid length is per slot (batched).
+    """
+    if isinstance(chunk_start_idx, ttnn.Tensor) or isinstance(valid_seq_len, (list, tuple, ttnn.Tensor)):
+        return None
+    rows = int(seq_len) if valid_seq_len is None else min(int(seq_len), int(valid_seq_len))
+    return int(chunk_start_idx or 0) + rows
+
+
 class Gemma4AttentionConfig:
     """Configuration for a single attention layer, derived from HF config + layer type."""
 
@@ -359,6 +372,10 @@ class Gemma4Attention:
                 # tail — releasing the shared slot here wiped tails other
                 # requests still needed (second victim mode of the same bug).
                 self._release_sliding_prefill_tail(req_key=_req_key)
+            tail_ends = getattr(self, "_sliding_tail_ends", None)
+            if tail_ends is None:
+                tail_ends = {}
+                self._sliding_tail_ends = tail_ends
             tt_out, kept_kv, sliding_tail_out = prefill_forward(
                 hidden_states=hidden_states,
                 cos_cache=cos_cache,
@@ -378,10 +395,18 @@ class Gemma4Attention:
                 chunk_start_idx=chunk_start_idx,
                 chunk_page_table=chunk_page_table,
                 sliding_tail_in=self._get_sliding_tail(_req_key),
+                sliding_tail_end=tail_ends.get(_req_key),
             )
             # prefill_forward consumed (deallocated) the incoming tail; stash the
             # new one for the next chunk under this request's key.
             self._put_sliding_tail(_req_key, sliding_tail_out)
+            tail_ends.pop(_req_key, None)
+            if sliding_tail_out is not None:
+                end = _stashed_tail_end(chunk_start_idx, valid_seq_len, hidden_states.shape[-2])
+                if end is not None:
+                    tail_ends[_req_key] = end
+                while len(tail_ends) > self._SLIDING_TAIL_MAX_KEYS:
+                    tail_ends.pop(next(iter(tail_ends)))
             self._last_kv = kept_kv
             return tt_out
 

@@ -9,6 +9,7 @@ import warnings
 import math
 import ttnn
 from ttnn.operations.activations import get_golden_function_for_activation
+from ttnn.operations.golden_common import golden_to_output_dtype
 
 SlidingWindowParallelConfig = ttnn._ttnn.operations.sliding_window.ParallelConfig
 Conv2dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
@@ -177,14 +178,15 @@ def _golden_function(
     input_height: int,
     input_width: int,
     kernel_size: Union[int, Tuple[int, int]],
-    stride: Union[int, Tuple[int, int]],
-    padding: Union[int, Tuple[int, int], Tuple[int, int, int, int]],
+    stride: Union[int, Tuple[int, int]] = (1, 1),
+    padding: Union[int, Tuple[int, int], Tuple[int, int, int, int]] = (0, 0),
     dilation: Union[int, Tuple[int, int]] = (1, 1),
     groups: int = 1,
     bias_tensor=None,
     conv_config: Conv2dConfig = None,
     return_output_dim=False,
     return_weights_and_bias=False,
+    dtype=None,
     **_,
 ):
     import torch
@@ -193,7 +195,8 @@ def _golden_function(
         0, 3, 1, 2
     )  # 1, 1, NHW, C -> N, C, H, W
 
-    bias_tensor = bias_tensor.reshape(-1)  # torch expected 1D bias
+    if bias_tensor is not None:
+        bias_tensor = bias_tensor.reshape(-1).float()  # torch expected 1D bias
 
     if hasattr(padding, "__len__"):
         if len(padding) == 2:
@@ -226,7 +229,7 @@ def _golden_function(
     output_tensor = torch.nn.functional.conv2d(
         torch_padded_input,
         weight_tensor.float(),
-        bias=bias_tensor.float(),
+        bias=bias_tensor,
         stride=stride,
         padding=(0, 0),
         dilation=dilation,
@@ -243,6 +246,7 @@ def _golden_function(
 
     N, C, H, W = output_tensor.shape
     output_tensor = output_tensor.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)  # N, C, H, W -> 1, 1, NHW, C
+    output_tensor = golden_to_output_dtype(output_tensor, dtype)
 
     if return_output_dim or return_weights_and_bias:
         return [output_tensor]
