@@ -25,5 +25,5 @@ MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
       models/demos/gpt_oss_d_p/tests/test_kv_cache_table.py
   '
 
-# The canonical launcher gates all-layer K/V PCC for both 1K slots and clean shutdown.
+# The canonical launcher gates all-layer K/V PCC for both slots, two 1K chunks each, and clean shutdown.
 exec bash "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/run_multirank_pcc.sh" gptoss120b sc1

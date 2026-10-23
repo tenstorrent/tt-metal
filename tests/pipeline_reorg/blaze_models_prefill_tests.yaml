@@ -1687,6 +1687,7 @@
       export PREFILL_CHUNK_SIZE=1024
       export PREFILL_TPS_ITERS=1
       export GPT_OSS_KV_PCC_MIN=0.85
+      export PREFILL_RESUME_AT=992  # also gate a follow-up turn resuming mid-chunk
       timeout -k 2m 35m mpirun --pernode --tag-output bash -lc '
         python3 models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py
       '
@@ -1722,7 +1723,7 @@
       echo "[$tag] PASS ($((d / 60)) min $((d % 60)) s)  $title"
     }
 
-    run_section 1/3 "(GPT-OSS-120B) prefill KV table and runner accuracy 1k, all layers, two slots" gpt_oss_prefill_runner
+    run_section 1/3 "(GPT-OSS-120B) prefill KV table and runner accuracy 2k in 1k chunks, all layers, two slots" gpt_oss_prefill_runner
     run_section 2/3 "(GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@1k" gpt_oss_kv_pcc_1k
     run_section 3/3 "(GPT-OSS-120B) variable-chunk prefill smoke 1k vs 8k" gpt_oss_varchunk_smoke
   test_type: gpt_oss_prefill_suite

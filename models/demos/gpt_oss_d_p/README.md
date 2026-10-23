@@ -107,8 +107,9 @@ fills in, and `bounded_sliding_kv_cache`. The runtime has no trace path.
 `mpirun`, not pytest. It loads real weights from the tilized TTNN cache and prefills the golden
 prompt in chunks. It prints throughput two ways, over the real prompt tokens and over the processed
 (padded) tokens. Then it reads every layer's K and V back, PCCs them against the golden, and fails
-below `GPT_OSS_KV_PCC_MIN`. The 5k@1k section of the CI job runs exactly this; it is the quickest way to
-reproduce a number.
+below `GPT_OSS_KV_PCC_MIN`. With `PREFILL_RESUME_AT=R` it then re-prefills slot 0 as `[0, R)` plus one chunk
+from `R`, the way a follow-up chat turn resumes mid-chunk, and gates that PCC too. The 5k@1k section of the
+CI job runs exactly this with `R=992`; it is the quickest way to reproduce a number.
 
 ```bash
 cd <tt-metal>; source python_env/bin/activate

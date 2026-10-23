@@ -577,7 +577,9 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
     )
 
 
-def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+def _read_slot_kv_and_check_pcc(
+    table, device_map: dict, slot_id: int, real_len: int, trace_dir, num_ranks: int | None = None
+):
     golden_cap = int(os.environ.get("PREFILL_PCC_GOLDEN_LEN", "0"))
     if golden_cap:
         real_len = min(real_len, golden_cap)
@@ -590,7 +592,7 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
     if ADAPTER.name == "llama_3p1_8b":
         return _read_slot_kv_and_check_pcc_llama(table, device_map, slot_id, real_len, trace_dir)
     if ADAPTER.name == "gpt_oss_d_p":
-        return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir)
+        return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir, num_ranks)
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
 
 
@@ -755,7 +757,9 @@ def _check_mtp_kv_slots(
     return min_pcc
 
 
-def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+def _read_slot_kv_and_check_pcc_gpt_oss(
+    table, device_map: dict, slot_id: int, real_len: int, trace_dir, num_ranks: int | None = None
+):
     from pathlib import Path
 
     from safetensors import safe_open
@@ -819,6 +823,9 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
     )
     if checked == 0:
         raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
+    # A single rank holds every layer, so a layer missing from its device map is a broken map, not another rank's.
+    if num_ranks == 1 and checked != NUM_LAYERS:
+        raise RuntimeError(f"slot {slot_id}: only {checked}/{NUM_LAYERS} layers resolved against the device map")
     return mins
 
 
@@ -1362,7 +1369,9 @@ def _verify_resident_slots(
         real_len = res.real_len
         if real_len <= 0:
             continue
-        slot_mins = _read_slot_kv_and_check_pcc(kv_table, device_map, slot_id, real_len, slot_traces[slot_id])
+        slot_mins = _read_slot_kv_and_check_pcc(
+            kv_table, device_map, slot_id, real_len, slot_traces[slot_id], num_ranks=num_ranks
+        )
         for cache, value in slot_mins.items():
             per_cache[cache] = value if cache not in per_cache else min(per_cache[cache], value)
         pcc = min(slot_mins.values())
@@ -1663,11 +1672,6 @@ def main() -> None:
         f"p99={_percentile(sorted_ms, 0.99):.1f}"
     )
 
-    if cfg.verify and ADAPTER.name == "gpt_oss_d_p":
-        from models.demos.gpt_oss_d_p.tt.runners.acceptance import require_layer_acks
-
-        require_layer_acks(received_completions, expected_completions)
-
     if world_size > 1:
         _mr_bcast_resident(mr_rank, stats.resident)
 
@@ -1682,6 +1686,9 @@ def main() -> None:
             verify_ok = False
     elif cfg.verify:
         logger.error("[producer] PREFILL_PRODUCER_CHECK_PCC=1 but no KV chunk table available; skipping PCC.")
+        verify_ok = False
+    if cfg.verify and ADAPTER.verify_layer_completions and received_completions != expected_completions:
+        logger.error(f"[producer] layer completions: received {received_completions}/{expected_completions}")
         verify_ok = False
 
     if world_size > 1:
