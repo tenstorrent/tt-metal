@@ -66,6 +66,9 @@ constexpr uint32_t kNumDyGammaXnormSumTiles = 1U;
 
 const std::string kMaskWDefineKey = "DO_MASK_W";
 const std::string kEverythingFitsInL1DefineKey = "EVERYTHING_FITS_IN_L1";
+const std::string kComputeGradInputDefineKey = "COMPUTE_GRAD_INPUT";
+const std::string kComputeGradGammaDefineKey = "COMPUTE_GRAD_GAMMA";
+const std::string kComputeGradBetaDefineKey = "COMPUTE_GRAD_BETA";
 
 bool fits_in_l1_check(
     const uint32_t Wt,
@@ -73,6 +76,9 @@ bool fits_in_l1_check(
     const uint32_t block_size,
     const uint32_t bfloat16_single_tile_size_bytes,
     const uint32_t float32_single_tile_size_bytes,
+    const bool compute_grad_input,
+    const bool compute_grad_gamma,
+    const bool compute_grad_beta,
     tt::tt_metal::IDevice* device) {
     // Calculate available L1 memory
     const uint32_t available_L1_in_bytes =
@@ -84,17 +90,19 @@ bool fits_in_l1_check(
     // Memory for input data CBs
     const uint32_t scaler_memory = kNumScalerTiles * bfloat16_single_tile_size_bytes;
     const uint32_t mask_memory = kNumMaskTiles * bfloat16_single_tile_size_bytes;
-    const uint32_t gamma_memory = bf16_row_memory;
+    // Gamma is only used for dx.
+    const uint32_t gamma_memory = compute_grad_input ? bf16_row_memory : 0U;
     const uint32_t x_hat_memory = bf16_row_memory_padded_to_block_size;
     const uint32_t input_memory = bf16_row_memory;
     const uint32_t mean_memory = kNumRstdTiles * bfloat16_single_tile_size_bytes;  // same shape as rstd
     const uint32_t rstd_memory = kNumRstdTiles * bfloat16_single_tile_size_bytes;
     const uint32_t dL_dout_memory = bf16_row_memory;
 
-    // Memory for output CBs
-    const uint32_t dx_memory = 2 * block_size * bfloat16_single_tile_size_bytes;
-    const uint32_t dgamma_components_memory = 2 * block_size * bfloat16_single_tile_size_bytes;
-    const uint32_t dbeta_components_memory = 2 * block_size * bfloat16_single_tile_size_bytes;
+    // Memory for output CBs. An output CB is only created when its grad is requested.
+    const uint32_t output_cb_memory = 2 * block_size * bfloat16_single_tile_size_bytes;
+    const uint32_t dx_memory = compute_grad_input ? output_cb_memory : 0U;
+    const uint32_t dgamma_components_memory = compute_grad_gamma ? output_cb_memory : 0U;
+    const uint32_t dbeta_components_memory = compute_grad_beta ? output_cb_memory : 0U;
 
     // Memory for intermediate computation CBs
     const uint32_t dy_gamma_sum_memory = kNumDyGammaSumTiles * float32_single_tile_size_bytes;
@@ -195,6 +203,10 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     // -------------------------------------------------------------------------
     const uint32_t twice_block_size = 2U * block_size;
 
+    const bool compute_grad_input = operation_attributes.compute_grad_input;
+    const bool compute_grad_gamma = operation_attributes.compute_grad_gamma;
+    const bool compute_grad_beta = operation_attributes.compute_grad_beta;
+
     const uint32_t closest_to_Wt_multiple_of_block_size = ((Wt + block_size - 1) / block_size) * block_size;
     const bool everything_fits_in_l1 = fits_in_l1_check(
         Wt,
@@ -202,6 +214,9 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
         block_size,
         bfloat16_single_tile_size_bytes,
         float32_single_tile_size_bytes,
+        compute_grad_input,
+        compute_grad_gamma,
+        compute_grad_beta,
         device);
 
     const uint32_t num_input_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
@@ -216,8 +231,11 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
         program, all_cores, kScalerCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
     [[maybe_unused]] auto cb_mask_w = create_circular_buffer(
         program, all_cores, kMaskWCbIndex, default_data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
-    [[maybe_unused]] auto cb_gamma = create_circular_buffer(
-        program, all_cores, kGammaCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+    // Gamma is only read for dx.
+    if (compute_grad_input) {
+        [[maybe_unused]] auto cb_gamma = create_circular_buffer(
+            program, all_cores, kGammaCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+    }
     [[maybe_unused]] auto cb_x_hat = create_circular_buffer(
         program, all_cores, kXHatCbIndex, default_data_format, bfloat16_single_tile_size_bytes, num_x_hat_tiles);
     [[maybe_unused]] auto cb_rstd = create_circular_buffer(
@@ -236,23 +254,29 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
         bfloat16_single_tile_size_bytes,
         kNumMeanBcastTiles);
 
-    // Output CBs
-    [[maybe_unused]] auto cb_dx = create_circular_buffer(
-        program, all_cores, kDxCbIndex, default_data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    [[maybe_unused]] auto cb_dgamma_components = create_circular_buffer(
-        program,
-        all_cores,
-        kDgammaComponentsCbIndex,
-        default_data_format,
-        bfloat16_single_tile_size_bytes,
-        twice_block_size);
-    [[maybe_unused]] auto cb_dbeta_components = create_circular_buffer(
-        program,
-        all_cores,
-        kDbetaComponentsCbIndex,
-        default_data_format,
-        bfloat16_single_tile_size_bytes,
-        twice_block_size);
+    // Output CBs. An output CB is only created when its grad is requested.
+    if (compute_grad_input) {
+        [[maybe_unused]] auto cb_dx = create_circular_buffer(
+            program, all_cores, kDxCbIndex, default_data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+    }
+    if (compute_grad_gamma) {
+        [[maybe_unused]] auto cb_dgamma_components = create_circular_buffer(
+            program,
+            all_cores,
+            kDgammaComponentsCbIndex,
+            default_data_format,
+            bfloat16_single_tile_size_bytes,
+            twice_block_size);
+    }
+    if (compute_grad_beta) {
+        [[maybe_unused]] auto cb_dbeta_components = create_circular_buffer(
+            program,
+            all_cores,
+            kDbetaComponentsCbIndex,
+            default_data_format,
+            bfloat16_single_tile_size_bytes,
+            twice_block_size);
+    }
 
     // Intermediate computation CBs
     [[maybe_unused]] auto cb_rstd_bcast = create_circular_buffer(
@@ -285,9 +309,10 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     auto* mean_buffer = mean.buffer();
     auto* rstd_buffer = rstd.buffer();
     auto* dLdout_buffer = dLdout.buffer();
-    auto* dx_buffer = output[0].buffer();
-    auto* dgamma_components_buffer = output[1].buffer();
-    auto* dbeta_components_buffer = output[2].buffer();
+    // An output is nullopt when its grad is not requested.
+    auto* dx_buffer = compute_grad_input ? output[0].value().buffer() : nullptr;
+    auto* dgamma_components_buffer = compute_grad_gamma ? output[1].value().buffer() : nullptr;
+    auto* dbeta_components_buffer = compute_grad_beta ? output[2].value().buffer() : nullptr;
 
     std::map<std::string, std::string> defines;
     if (mask_w != 0) {
@@ -295,6 +320,15 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     }
     if (everything_fits_in_l1) {
         defines[kEverythingFitsInL1DefineKey] = "1";
+    }
+    if (compute_grad_input) {
+        defines[kComputeGradInputDefineKey] = "1";
+    }
+    if (compute_grad_gamma) {
+        defines[kComputeGradGammaDefineKey] = "1";
+    }
+    if (compute_grad_beta) {
+        defines[kComputeGradBetaDefineKey] = "1";
     }
 
     LayerNormBackwardKernels kernels;
@@ -307,9 +341,14 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
-    tt::tt_metal::TensorAccessorArgs(dx_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dgamma_components_buffer).append_to(writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dbeta_components_buffer).append_to(writer_compile_time_args);
+    // A skipped output gets placeholder args so the writer's accessor offsets do not depend on the flags.
+    for (auto* buffer : {dx_buffer, dgamma_components_buffer, dbeta_components_buffer}) {
+        if (buffer != nullptr) {
+            tt::tt_metal::TensorAccessorArgs(buffer).append_to(writer_compile_time_args);
+        } else {
+            tt::tt_metal::TensorAccessorArgs().append_to(writer_compile_time_args);
+        }
+    }
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
@@ -364,14 +403,14 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
                  dLdout_buffer->address(),
                  start_row,
                  num_rows});
-            // Writer kernel runtime args
+            // Writer kernel runtime args. A skipped output's address is 0.
             SetRuntimeArgs(
                 program,
                 kernels.writer,
                 core,
-                {dx_buffer->address(),
-                 dgamma_components_buffer->address(),
-                 dbeta_components_buffer->address(),
+                {dx_buffer != nullptr ? dx_buffer->address() : 0U,
+                 dgamma_components_buffer != nullptr ? dgamma_components_buffer->address() : 0U,
+                 dbeta_components_buffer != nullptr ? dbeta_components_buffer->address() : 0U,
                  start_row,
                  num_rows});
         });
@@ -407,9 +446,10 @@ void LayerNormBackwardProgramFactory::override_runtime_arguments(
     auto* rstd_buffer = tensor_args.rstd.buffer();
     auto* dLdout_buffer = tensor_args.dL_dout.buffer();
 
-    auto* dx_buffer = output[0].buffer();
-    auto* dgamma_buffer = output[1].buffer();
-    auto* dbeta_buffer = output[2].buffer();
+    // An output is nullopt when its grad is not requested.
+    auto* dx_buffer = operation_attributes.compute_grad_input ? output[0].value().buffer() : nullptr;
+    auto* dgamma_buffer = operation_attributes.compute_grad_gamma ? output[1].value().buffer() : nullptr;
+    auto* dbeta_buffer = operation_attributes.compute_grad_beta ? output[2].value().buffer() : nullptr;
 
     // Only address arguments need updating here; tile counts remain the same as in create().
     auto& reader_runtime_args = GetRuntimeArgs(program, layernorm_bw_reader_kernel_id);
@@ -429,9 +469,15 @@ void LayerNormBackwardProgramFactory::override_runtime_arguments(
         // Update output buffers for the writer kernel
         {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
-            runtime_args[kDxBufferIdx] = dx_buffer->address();
-            runtime_args[kDgammaComponentsBufferIdx] = dgamma_buffer->address();
-            runtime_args[kDbetaComponentsBufferIdx] = dbeta_buffer->address();
+            if (dx_buffer != nullptr) {
+                runtime_args[kDxBufferIdx] = dx_buffer->address();
+            }
+            if (dgamma_buffer != nullptr) {
+                runtime_args[kDgammaComponentsBufferIdx] = dgamma_buffer->address();
+            }
+            if (dbeta_buffer != nullptr) {
+                runtime_args[kDbetaComponentsBufferIdx] = dbeta_buffer->address();
+            }
         }
     });
 }

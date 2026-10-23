@@ -6,11 +6,16 @@
 
 #include <array>
 #include <cmath>
+#include <optional>
+#include <ostream>
+#include <string>
 #include <tuple>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/ops/layernorm_bw/layernorm_bw.hpp"
+#include "metal/ops/layernorm_fw/layernorm_fw.hpp"
 #include "test_utils/random_data.hpp"
 
 // Reference implementation using xtensor
@@ -212,3 +217,148 @@ TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_DoesNotFitInL1_WtNotDivisibleBy
 TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_OneTilePerRow) {
     CompareKernelVsXArray(1, 19, 1, 213, 10);
 }
+
+// ============================================================================
+// Skipping grads in the LayerNorm backward kernel
+// ============================================================================
+// layernorm_bw takes a flag for each of dx, dgamma and dbeta. A skipped grad is nullopt; the kernel drops its compute
+// and its output CB and, for dx, gamma and both row sums. Rows cover dx off on both kernel paths (everything in L1,
+// with several rows per core so gamma is read once, and not), dgamma and dbeta each skipped, and each output as the
+// one the writer takes its tile size from.
+// ============================================================================
+
+namespace {
+
+struct LayerNormBwSkipCase {
+    std::string name;
+    std::vector<uint32_t> shape;
+    bool compute_grad_input = true;
+    bool compute_grad_gamma = true;
+    bool compute_grad_beta = true;
+};
+
+// gtest prints a failing row's parameter through this; without it the row prints as raw bytes.
+void PrintTo(const LayerNormBwSkipCase& c, std::ostream* os) {
+    *os << c.name;
+}
+
+struct LayerNormBwInputs {
+    ttnn::Tensor input;
+    ttnn::Tensor gamma;
+    ttnn::Tensor mean;
+    ttnn::Tensor rstd;
+    ttnn::Tensor dL_dout;
+};
+
+LayerNormBwInputs make_layernorm_bw_inputs(const std::vector<uint32_t>& shape, uint32_t seed) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const std::vector<uint32_t> gamma_shape{1U, 1U, 1U, shape[3]};
+    auto input = core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed), device);
+    auto gamma = core::from_xtensor(test_utils::make_uniform_xarray<float>(gamma_shape, 0.0F, 1.0F, seed + 1U), device);
+    auto beta = core::from_xtensor(test_utils::make_uniform_xarray<float>(gamma_shape, 0.0F, 1.0F, seed + 2U), device);
+    auto dL_dout = core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed + 3U), device);
+    const auto fw = metal::layernorm_fw(input, gamma, beta, /* epsilon */ 1e-5F, /* return_mean_rstd */ true);
+    return {input, gamma, fw[1].value(), fw[2].value(), dL_dout};
+}
+
+}  // namespace
+
+class LayerNormBwSkipTest : public ::testing::TestWithParam<LayerNormBwSkipCase> {
+protected:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device();
+    }
+
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+// Each requested grad must equal the one from the full backward bit for bit: the kernel does the same per-tile
+// arithmetic either way. The flags are compile-time, so the first skipping run must compile its own program; a second
+// run with other live inputs must hit that program and read and write the new buffers.
+TEST_P(LayerNormBwSkipTest, RequestedGradsMatchFullBackward) {
+    using namespace ttml;
+    const LayerNormBwSkipCase& c = GetParam();
+    auto* device = &autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    // Both sets stay alive, so the second cannot land at the first's addresses.
+    const LayerNormBwInputs first = make_layernorm_bw_inputs(c.shape, 1U);
+    const LayerNormBwInputs second = make_layernorm_bw_inputs(c.shape, 11U);
+
+    const auto run =
+        [](const LayerNormBwInputs& in, bool compute_grad_input, bool compute_grad_gamma, bool compute_grad_beta) {
+            return metal::layernorm_bw(
+                in.input,
+                in.gamma,
+                in.mean,
+                in.rstd,
+                in.dL_dout,
+                compute_grad_input,
+                compute_grad_gamma,
+                compute_grad_beta);
+        };
+    const std::array<bool, 3> requested{c.compute_grad_input, c.compute_grad_gamma, c.compute_grad_beta};
+    // The full backward also compiles the dgamma / dbeta reductions, so the skipping runs below only add their own
+    // program.
+    const auto to_host = [](const std::vector<std::optional<ttnn::Tensor>>& grads) {
+        std::vector<xt::xarray<float>> host;
+        for (const auto& grad : grads) {
+            host.push_back(core::to_xtensor(grad.value()));
+        }
+        return host;
+    };
+    const auto expected_first = to_host(run(first, true, true, true));
+    const auto expected_second = to_host(run(second, true, true, true));
+
+    const auto entries_before = device->num_program_cache_entries();
+    const auto skip_first = run(first, c.compute_grad_input, c.compute_grad_gamma, c.compute_grad_beta);
+    const auto entries_after_first = device->num_program_cache_entries();
+    EXPECT_EQ(entries_after_first, entries_before + 1U)
+        << c.name << ": the skipping run must compile exactly one program of its own";
+    const auto skip_second = run(second, c.compute_grad_input, c.compute_grad_gamma, c.compute_grad_beta);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_after_first)
+        << c.name << ": the second skipping run at identical shapes missed the program cache";
+
+    const std::array<const char*, 3> grad_names{"dx", "dgamma", "dbeta"};
+    for (const auto& [grads, expected, label] :
+         {std::tuple{&skip_first, &expected_first, "first"}, std::tuple{&skip_second, &expected_second, "second"}}) {
+        ASSERT_EQ(grads->size(), 3U) << c.name;
+        for (size_t i = 0; i < 3U; ++i) {
+            ASSERT_EQ((*grads)[i].has_value(), requested[i]) << c.name << ": " << grad_names[i] << " presence";
+            if (requested[i]) {
+                EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor((*grads)[i].value()), (*expected)[i])))
+                    << c.name << ": " << grad_names[i] << " on the " << label
+                    << " inputs differs from the full backward";
+            }
+        }
+    }
+}
+
+// C = 127: Wt = 4, so a partial block of 3 and masking; 256 tile rows give every core more than one row on Wormhole
+// and Blackhole. C = 16383: Wt = 512, so input, dL_dout and x_hat alone (3 MB) exceed L1 even without gamma.
+INSTANTIATE_TEST_SUITE_P(
+    LayerNormBwSkipCases,
+    LayerNormBwSkipTest,
+    ::testing::Values(
+        LayerNormBwSkipCase{
+            .name = "InputOnly_FitsInL1",
+            .shape = {1U, 1U, 8192U, 127U},
+            .compute_grad_gamma = false,
+            .compute_grad_beta = false},
+        LayerNormBwSkipCase{.name = "NoInput_FitsInL1", .shape = {1U, 1U, 8192U, 127U}, .compute_grad_input = false},
+        LayerNormBwSkipCase{
+            .name = "BetaOnly_FitsInL1",
+            .shape = {1U, 1U, 8192U, 127U},
+            .compute_grad_input = false,
+            .compute_grad_gamma = false},
+        LayerNormBwSkipCase{
+            .name = "NoBeta_DoesNotFitInL1", .shape = {1U, 1U, 64U, 16383U}, .compute_grad_beta = false},
+        LayerNormBwSkipCase{
+            .name = "GammaOnly_DoesNotFitInL1",
+            .shape = {1U, 1U, 64U, 16383U},
+            .compute_grad_input = false,
+            .compute_grad_beta = false}),
+    [](const ::testing::TestParamInfo<LayerNormBwSkipCase>& info) { return info.param.name; });
