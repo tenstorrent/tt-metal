@@ -1216,3 +1216,30 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - Device time noisy (K3 dispatch 140 / 148 with vs 140 / 135 + 5 without); traced, a win: K3 replay 3041-3045 vs
   3048-3055 us (back to back 2989-2996 vs 2995-2998). Programs a layer: K3 6 -> 5 (4 traced), GLM 8 -> 7 (6 traced).
   Soaks: K3 eager 300 + traced 300, GLM 200 + 200.
+
+### Chunk scaling: chunk 2048 (1024 rows a mesh row = a Galaxy chip at chunk 8192) vs 1280 (640 = Galaxy 5120)
+- What does not fit at 1024 rows: (1) the fused head - its engine needs one chunk of GY x MT = 32 row tiles for the
+  fused reduce-scatter; GY 10 doesn't divide 32 and at GY 8 x MT 4 a pass holds 2 fp32 tiles, the gate / up pass split
+  fails (K3: 8 tiles into 5 passes; GLM: 2 pairs into 2) - a re-plan, not an L1 limit; (2) the fused tail - 8 row tiles
+  a chunk, two K halves: 16 core rows (10): it needs 2 row tiles a core (not built); its arena then ~1.55 MB at a ring
+  slot a chunk (> 1.4), ~1.15-1.37 MB at 2-3 slots with FREE credits. The combine (S 256) fits. So 2048 runs the ops
+  head and tail; 1280 below both ways (ops: the like-for-like ratio). Uniform routing (random router weights). The
+  ops path's taps now keep a device copy (keep_taps "device"): it traces too.
+- LoudBox device time (slowest chip, median of 5), ops head + ops tail, and the ratio 2048 / 1280:
+  K3 (448 experts):  head 1121 -> 1580 (1.41) | dispatch 138 -> 197 (1.43) | experts_combine 2280 -> 2374 (1.04) |
+                     tail 271 -> 373 (1.38) | block 3814 -> 4531 (1.19); traced replay (back to back) 3678 -> 4375
+                     (1.19); fused 1280: 3137 device, 2991 traced
+  GLM (288):         head 494 -> 676 (1.37) | dispatch 144 -> 206 (1.43) | experts_combine 1339 -> 1305 (0.97) |
+                     tail 71 -> 95 (1.34) | block 2052 -> 2286 (1.11); traced 1868 -> 2154 (1.15); fused 1280 1693
+- At the Galaxy's experts per chip (K3 224 = 28 a chip, GLM 64 = 8):
+  K3:   head 1082 -> 1541 (1.42) | dispatch 133 -> 192 (1.44) | experts_combine 1276 -> 1414 (1.11) | tail 270 -> 373
+        (1.38) | block 2767 -> 3526 (1.27); fused 1280: 2109
+  GLM:  head 454 -> 629 (1.39) | dispatch 146 -> 211 (1.44) | experts_combine 466 -> 576 (1.24) | tail 70 -> 96 (1.38) |
+        block 1141 -> 1518 (1.33); fused 1280: 934
+- Galaxy-projected (the Galaxy-load runs; modelled: the TP collectives on the ring of 4 at half the line's time - x_ag,
+  logits_rs, shared_rs, latent_a2a, tail_ag / tail_a2a; the dispatch x 1.12 for the 8 x 4 mesh's hops, the earlier
+  model's 155 / 139; the fused head from galaxy_projection, the fused tail ~88):
+  K3 ops:  head 859 -> 1205 (1.40) | dispatch 149 -> 215 (1.44) | experts 1281 -> 1419 (1.11) | tail 229 -> 311 (1.36) |
+           block 2519 -> 3150 (1.25); fused 1280: head ~388, dispatch 162, experts 1288, tail ~88 = ~1925
+  GLM ops: head 334 -> 462 (1.38) | dispatch 164 -> 236 (1.44) | experts 471 -> 581 (1.23) | tail 45 -> 64 (1.44) |
+           block 1014 -> 1344 (1.33); fused 1280: head ~165, dispatch 167, experts 435, tail 43 = ~810

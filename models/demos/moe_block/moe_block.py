@@ -412,7 +412,9 @@ class MoEBlock(LightweightModule):
             return self._tail(y_own, se)
         rows, own, se = self._head(x)
         # ---- exchange ----
-        if self.keep_taps:  # (host copies: the exchange consumes the routing rows)
+        if self.keep_taps == "device":  # (a device copy - the exchange consumes the routing rows: a traced forward)
+            self._taps = dict(rows_dev=ttnn.clone(rows))
+        elif self.keep_taps:  # (host copies: the exchange consumes the routing rows)
             self._taps = dict(rows=[ttnn.to_torch(t) for t in ttnn.get_device_tensors(rows)])
         y_own = self.exchange(own, rows, hook=self.stage_hook)  # owners' sums [S/N, Hr]
         ttnn.deallocate(own)

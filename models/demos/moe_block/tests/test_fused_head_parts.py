@@ -402,6 +402,7 @@ def test_head_se3(mesh_device, device_params):
             I=I,
             glu=glu,
             MT=int(os.environ.get("SE_MT", "2")),
+            GY=int(os.environ.get("HXC_GY", "10")),  # (test-only: other row counts - 1024 rows: 8 x MT 4)
             KB=int(os.environ.get("SE_KB", "0")) or None,
             rs_dim=RS_DIM[name] if os.environ.get("SE_RS") else None,  # (+ down + SE reduce-scatter:)
             rs_mode=os.environ.get("SE_RS") or "fused",  # (fused: in this program; mrs: the ported op on h, the bar)

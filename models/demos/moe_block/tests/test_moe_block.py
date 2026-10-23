@@ -139,7 +139,7 @@ _PARAMS = [
         id=f"{name}-{chunk}",
     )
     for name, m in MODELS.items()
-    for chunk in (5120, 1280)  # (1280: the Galaxy's per-chip load, 640 rows a mesh row)
+    for chunk in (5120, 2048, 1280)  # (1280 / 2048: a Galaxy chip at chunk 5120 / 8192 - 640 / 1024 rows a mesh row)
 ]
 
 
@@ -262,25 +262,32 @@ _TRACE_PARAMS = [
             fabric_payload_size=fabric_payload(m.routed_width), l1_small_size=0, trace_region_size=TRACE_REGION
         ),
         name,
-        id=f"{name}-1280",
+        chunk,
+        id=f"{name}-{chunk}",
     )
     for name, m in MODELS.items()
+    for chunk in (1280, 2048)
 ]
 
 
-@pytest.mark.parametrize("mesh_device, device_params, model", _TRACE_PARAMS, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, model, chunk", _TRACE_PARAMS, indirect=["mesh_device", "device_params"]
+)
 @pytest.mark.timeout(3600)
-def test_moe_block_traced(mesh_device, device_params, model):
-    """One forward (chunk 1280) captured as a trace on the block's input buffer and replayed: each replay's x (from a
+def test_moe_block_traced(mesh_device, device_params, model, chunk):
+    """One forward (chunk 1280 or 2048) captured as a trace on the block's input buffer and replayed: each replay's x (from a
     pool of fresh inputs, never the previous one) written into the input buffer first, each replay's output checked
     against its own reference (the device's routing, read from the kept routing rows); MOE_TRACE_REPLAYS (test-only)
     replays. Then the wall time of a replay, with and without the input write, vs an eager forward."""
     import os
 
-    m, chunk = MODELS[model], 1280
+    m = MODELS[model]
+    if os.environ.get("MOE_EXPERTS"):  # (test-only: e.g. the Galaxy's experts per chip on the 2x4)
+        m = dataclasses.replace(m, num_experts=int(os.environ["MOE_EXPERTS"]))
     T, H = chunk, m.emb_dim
     w = random_weights(m)
-    block = MoEBlock(mesh_device, m, chunk, w, WeightCache(path=None, layer=0))
+    opts = MoEOptions(head=os.environ.get("MOE_HEAD", "auto"), tail=os.environ.get("MOE_TAIL", "auto"))
+    block = MoEBlock(mesh_device, m, chunk, w, WeightCache(path=None, layer=0), options=opts)
     g = block.geometry
     mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(2, 3))
     composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(R, C), dims=(2, 3))
