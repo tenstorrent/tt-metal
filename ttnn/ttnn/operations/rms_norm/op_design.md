@@ -59,6 +59,11 @@ Taggers the op must export (names the golden suite already uses): `tag_alignment
 `tag_gamma_dtype` / `tag_gamma_layout` → `"none"` when `axes["gamma_mode"] == "no_gamma"`, else pass the axis value
 through. `"none"` is always legal for both gamma axes.
 
+> **Verifier correction (registry):** register only `tag_alignment` / `tag_rank` in `INPUT_TAGGERS`. `gamma_dtype` /
+> `gamma_layout` are finite TARGET axes; the golden cartesian does not iterate an axis that has a registered tagger,
+> and a tagger sees only the shape, so registering `tag_gamma_*` collapsed every cartesian gamma cell to `"none"` and
+> INVALID skipped all of them. The two functions stay (same `"none"` contract) and feed `_axes_for()` in `validate()`.
+
 ## Tensors
 
 ### Input

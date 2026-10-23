@@ -11,6 +11,7 @@ The device program (blocking plan, CBs, kernels) lives in rms_norm_program_descr
 
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 import ttnn
@@ -64,9 +65,19 @@ def tag_gamma_layout(inputs, axes):
     return axes.get("gamma_layout", "none")
 
 
+# Only the SHAPE-derived axes are registered. gamma_dtype / gamma_layout are finite TARGET axes: the golden
+# cartesian (eval/feature_matrix.cartesian) does NOT iterate an axis that has a registered tagger ("the tagger
+# wins"), and a tagger only sees the input shape — so registering tag_gamma_* collapsed every cartesian gamma cell
+# to gamma_dtype="none", which INVALID {gamma_mode: gamma, gamma_dtype: none} then skipped (1680 cells, the whole
+# gamma path untested by the cartesian suite). The two functions keep the "none"-sentinel contract and are used by
+# _axes_for() to classify a real call; the golden runtime classifier (eval/golden_tests/rms_norm/axes.py) pins the
+# same sentinel itself.
 INPUT_TAGGERS = {
     "alignment": tag_alignment,
     "rank": tag_rank,
+}
+
+GAMMA_TAGGERS = {
     "gamma_dtype": tag_gamma_dtype,
     "gamma_layout": tag_gamma_layout,
 }
@@ -121,7 +132,7 @@ def _axes_for(input_tensor, gamma, compute_kernel_config):
         "memory_layout": input_tensor.memory_config().memory_layout,
     }
     shape = tuple(input_tensor.shape)
-    for axis_name, tagger in INPUT_TAGGERS.items():
+    for axis_name, tagger in {**INPUT_TAGGERS, **GAMMA_TAGGERS}.items():
         axes[axis_name] = tagger((shape,), axes)
     return axes
 
@@ -151,10 +162,12 @@ def validate(input_tensor, *, gamma=None, compute_kernel_config=None, memory_con
 # ---------------------------------------------------------------------------
 
 
-def _structural_checks(input_tensor, gamma):
+def _structural_checks(input_tensor, gamma, epsilon):
     shape = list(input_tensor.shape)
     if len(shape) < 2:
         raise ValueError(f"rms_norm: input must have rank >= 2, got shape {shape}")
+    if not math.isfinite(float(epsilon)) or float(epsilon) < 0.0:
+        raise ValueError(f"rms_norm: epsilon must be finite and >= 0, got {epsilon!r}")
     if gamma is not None:
         W = shape[-1]
         gshape = list(gamma.shape)
@@ -175,7 +188,7 @@ def rms_norm(
     compute_kernel_config: Optional[ttnn.ComputeConfigDescriptor] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
 ) -> ttnn.Tensor:
-    _structural_checks(input_tensor, gamma)
+    _structural_checks(input_tensor, gamma, epsilon)
     if compute_kernel_config is None:
         compute_kernel_config = default_compute_kernel_config()
     validate(input_tensor, gamma=gamma, compute_kernel_config=compute_kernel_config, memory_config=memory_config)

@@ -109,29 +109,46 @@ def _round_up(v, m):
     return ((v + m - 1) // m) * m
 
 
-def _footprint(geo: Geometry, b, n, c, k, L, gw):
-    """Per-core CB bytes — the closed form of l1_ledger.md §Footprint (must mirror _build_cbs)."""
+# CB page-format roles, resolved to a concrete dtype in _build_cbs.
+_FMT_IN, _FMT_OUT, _FMT_GAMMA, _FMT_SCALER, _FMT_F32 = "in", "out", "gamma", "scaler", "f32"
+
+
+def _cb_specs(geo: Geometry, b, n, c, k, L, gw, x_depth):
+    """THE single definition of every CB: [(index, num_pages, page_bytes, format_role)].
+
+    Both the L1 solve (_footprint) and the allocation (_build_cbs) read this list, so a block / chunk / depth knob
+    changes the budget and the real CB sizes in exactly one place (l1_ledger.md §Ledger mirrors it).
+    """
     s = k * c
-    out_depth = 1 if geo.is_rm else 2
-    total = 0
+    out_depth = 1 if geo.is_rm else 2  # RM: normalize -> untilize are sequential on compute (no overlap to buy)
+    stream_depth = 2  # reader / writer run one chunk ahead of compute
+    specs = []
     if geo.is_rm:
-        total += 2 * c * geo.in_tile_bytes  # cb_x_rm_sticks
-    total += X_DEPTH_BLOCKS * b * s * geo.in_tile_bytes  # cb_x_tiles
+        specs.append((CB_X_RM_STICKS, stream_depth * c, geo.in_tile_bytes, _FMT_IN))
+    specs.append((CB_X_TILES, x_depth * b * s, geo.in_tile_bytes, _FMT_IN))
     if geo.has_gamma and geo.gamma_is_rm:
-        total += _round_up(n * TILE * geo.gamma_elem_bytes, ttnn.get_dram_alignment())  # cb_gamma_rm_stick
+        stick_bytes = _round_up(n * TILE * geo.gamma_elem_bytes, ttnn.get_dram_alignment())
+        specs.append((CB_GAMMA_RM_STICK, 1, stick_bytes, _FMT_GAMMA))
     if geo.has_gamma:
-        total += s * geo.gamma_tile_bytes  # cb_gamma_tiles
-    total += 2 * SCALER_TILE_BYTES  # cb_reduce_scaler
-    total += 2 * b * F32_TILE_BYTES  # cb_sumsq
+        specs.append((CB_GAMMA_TILES, s, geo.gamma_tile_bytes, _FMT_GAMMA))
+    specs.append((CB_REDUCE_SCALER, 2, SCALER_TILE_BYTES, _FMT_SCALER))
+    specs.append((CB_SUMSQ, 2 * b, F32_TILE_BYTES, _FMT_F32))
     if gw >= 2:
-        total += (b + gw * b + b) * F32_TILE_BYTES  # partial, gather, inv_rms_root
-    total += b * F32_TILE_BYTES  # cb_inv_rms
+        specs.append((CB_ROWSUM_PARTIAL, b, F32_TILE_BYTES, _FMT_F32))
+        specs.append((CB_ROWSUM_GATHER, gw * b, F32_TILE_BYTES, _FMT_F32))
+        specs.append((CB_INV_RMS_ROOT, b, F32_TILE_BYTES, _FMT_F32))
+    specs.append((CB_INV_RMS, b, F32_TILE_BYTES, _FMT_F32))
     if geo.has_gamma:
-        total += L * b * c * F32_TILE_BYTES  # cb_x_gamma
-    total += out_depth * b * c * geo.out_tile_bytes  # cb_out_tiles
+        specs.append((CB_X_GAMMA, L * b * c, F32_TILE_BYTES, _FMT_F32))
+    specs.append((CB_OUT_TILES, out_depth * b * c, geo.out_tile_bytes, _FMT_OUT))
     if geo.is_rm:
-        total += 2 * b * c * geo.out_tile_bytes  # cb_out_rm_sticks
-    return total
+        specs.append((CB_OUT_RM_STICKS, stream_depth * b * c, geo.out_tile_bytes, _FMT_OUT))
+    return specs
+
+
+def _footprint(geo: Geometry, b, n, c, k, L, gw, x_depth=X_DEPTH_BLOCKS):
+    """Per-core CB bytes — the closed form of l1_ledger.md §Footprint, summed from _cb_specs."""
+    return sum(pages * page_bytes for _, pages, page_bytes, _ in _cb_specs(geo, b, n, c, k, L, gw, x_depth))
 
 
 def _select_blocking(geo: Geometry, num_cores_available: int, l1_budget_bytes: int) -> BlockingPlan:
@@ -241,31 +258,25 @@ def _cb(index, core_ranges, num_pages, page_bytes, dtype):
 
 
 def _build_cbs(geo: Geometry, plan: BlockingPlan, cores, in_dtype, out_dtype, gamma_dtype):
-    """Every CB declared once over all used cores at one nominal size (M1)."""
-    b, c, s, n, gw = plan.block_rows, plan.chunk_w_tiles, plan.row_stride_tiles, plan.core_w_tiles, plan.w_group_size
-    out_depth = 1 if geo.is_rm else 2
-    cbs = []
-    if geo.is_rm:
-        cbs.append(_cb(CB_X_RM_STICKS, cores, 2 * c, geo.in_tile_bytes, in_dtype))
-    cbs.append(_cb(CB_X_TILES, cores, plan.x_depth_blocks * b * s, geo.in_tile_bytes, in_dtype))
-    if geo.has_gamma and geo.gamma_is_rm:
-        stick_bytes = _round_up(n * TILE * geo.gamma_elem_bytes, ttnn.get_dram_alignment())
-        cbs.append(_cb(CB_GAMMA_RM_STICK, cores, 1, stick_bytes, gamma_dtype))
-    if geo.has_gamma:
-        cbs.append(_cb(CB_GAMMA_TILES, cores, s, geo.gamma_tile_bytes, gamma_dtype))
-    cbs.append(_cb(CB_REDUCE_SCALER, cores, 2, SCALER_TILE_BYTES, ttnn.bfloat16))
-    cbs.append(_cb(CB_SUMSQ, cores, 2 * b, F32_TILE_BYTES, ttnn.float32))
-    if plan.is_w_split:
-        cbs.append(_cb(CB_ROWSUM_PARTIAL, cores, b, F32_TILE_BYTES, ttnn.float32))
-        cbs.append(_cb(CB_ROWSUM_GATHER, cores, gw * b, F32_TILE_BYTES, ttnn.float32))
-        cbs.append(_cb(CB_INV_RMS_ROOT, cores, b, F32_TILE_BYTES, ttnn.float32))
-    cbs.append(_cb(CB_INV_RMS, cores, b, F32_TILE_BYTES, ttnn.float32))
-    if geo.has_gamma:
-        cbs.append(_cb(CB_X_GAMMA, cores, plan.xg_lookahead_chunks * b * c, F32_TILE_BYTES, ttnn.float32))
-    cbs.append(_cb(CB_OUT_TILES, cores, out_depth * b * c, geo.out_tile_bytes, out_dtype))
-    if geo.is_rm:
-        cbs.append(_cb(CB_OUT_RM_STICKS, cores, 2 * b * c, geo.out_tile_bytes, out_dtype))
-    return cbs
+    """Every CB declared once over all used cores at one nominal size (M1), from the same _cb_specs as the solve."""
+    fmt = {
+        _FMT_IN: in_dtype,
+        _FMT_OUT: out_dtype,
+        _FMT_GAMMA: gamma_dtype,
+        _FMT_SCALER: ttnn.bfloat16,
+        _FMT_F32: ttnn.float32,
+    }
+    specs = _cb_specs(
+        geo,
+        plan.block_rows,
+        plan.core_w_tiles,
+        plan.chunk_w_tiles,
+        plan.chunks_per_row,
+        plan.xg_lookahead_chunks,
+        plan.w_group_size,
+        plan.x_depth_blocks,
+    )
+    return [_cb(index, cores, pages, page_bytes, fmt[role]) for index, pages, page_bytes, role in specs]
 
 
 def _f32_bits(x):

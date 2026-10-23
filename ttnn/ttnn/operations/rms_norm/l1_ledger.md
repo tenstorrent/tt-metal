@@ -28,7 +28,7 @@ axis of the R2 combine, extent `w_group_size` (`gw`).
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_x_rm_sticks` (RM input only) | `2·c` (page = `T_in` = 32 sticks × 32 elems) | `c` being tilized + `c` landing | `{row: streams → 1 tile-row, w: spans → c (chunk), member: n/a → 1}` | input dtype (raw sticks; no accumulation) | reader | compute | one (row, chunk) slab each | concurrent with `cb_x_tiles` (it feeds it); 2× live = double buffering (reader one slab ahead) |
+| `cb_x_rm_sticks` (RM input only) | `2·c` (page = `T_in` = 32 sticks × 32 elems) | `c` being tilized + `c` landing | `{row: streams → 1 tile-row, w: spans → c (chunk), member: n/a → 1}` | input dtype (raw sticks; no accumulation) | reader | compute | one (row, chunk) slab each | concurrent with `cb_x_tiles` (it feeds it) and with `cb_out_rm_sticks` (the reader lands block b+1 slabs while compute untilizes block b — verifier note); 2× live = double buffering (reader one slab ahead) |
 | `cb_x_tiles` | `d_x · b · s` | `b · s` (the resident block) | `{row: spans → b, w: spans → s (resident slice, nominal), member: n/a → 1}` | input dtype — loaded data / tilize output, no accumulation crosses this boundary (audit 2: not a DEST-accumulated intermediate) | reader (TILE) / compute tilize (RM) | compute | a block; popped per chunk `b·c` | concurrent with every compute phase of its block; capacity = live set at Phase 0 (`d_x = 1`) |
 | `cb_gamma_rm_stick` (RM gamma only) | 1 page of `round_up(n·32·e_g, dram_align)` bytes | 1 | `{row: n/a → 1, w: spans → n·32 elements, member: n/a → 1}` | gamma dtype, raw bytes | writer | writer | kernel start only (before first output) | could alias `cb_out_rm_sticks` / `cb_out_tiles` (disjoint lifetime: gamma is built before the first output chunk) — not done: ≤ `n·128` B (≤ 1/16 of one gamma tile row-set) is below the cost of an alias and its lockstep rule |
 | `cb_gamma_tiles` (gamma only) | `s` | `slice_w_tiles_this_core` (≤ `n`) | `{row: n/a (reuse-shared over rows) → 1, w: spans → s, member: n/a → 1}` | gamma dtype (bf16 / fp32; loaded data) | writer | compute | whole kernel | concurrent with every block; `s − n` padding pages = chunk rounding (nominal quanta, M6) |
@@ -59,6 +59,10 @@ axis of the R2 combine, extent `w_group_size` (`gw`).
 | `l1_budget_bytes` | CB-allocatable worker L1 | free run from the L1 allocator base (`GetAllocatorBaseAddress`, 111 744 B on BH p150) up to the lowest allocated L1 buffer, i.e. `GetMemoryView(device, L1)`: `total_bytes_per_bank` (1 461 120 B on BH) clipped by the lowest allocated block | runtime query (`_l1_budget_bytes`). Implementation note: `ttnn.get_max_worker_l1_unreserved_size()` (1 531 776 B) over-states it by ~70 KB on BH and produced a CB-region overflow on the fp32 `4096×8192` R2 case |
 
 ## Footprint (per core, bytes) — the closed form `_select_blocking` evaluates
+
+Single source (verifier fix): every capacity below is produced by ONE host function, `_cb_specs(...)` in
+`rms_norm_program_descriptor.py`; `_footprint()` sums it for the L1 solve and `_build_cbs()` allocates from it, so a
+knob change (`b`, `c`, `k`, `L`, `gw`, `d_x`, the stream / output depths) moves the budget and the real CBs together.
 
 ```
 footprint(b, n, c, k, L, gw) =
