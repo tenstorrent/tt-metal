@@ -123,7 +123,9 @@ Optional:
     --cluster-debug-always                  Collect the snapshot after every attempt, passing or failing,
                                             e.g. for a known-good baseline. Ignored with --skip-cluster-debug.
     --cluster-debug-use-ipmi                Read the QSFP cages with ipmitool on each host instead of the
-                                            BMC API (\$TT_BMC_API_URL / \$TT_BMC_API_TOKEN, passed through).
+                                            BMC API. Without it the snapshot uses --bmc-api-url as
+                                            \$TT_BMC_API_URL, and \$TT_BMC_API_TOKEN, else --bmc-password, as
+                                            the token.
     --cluster-debug-tool <path>             The tt-bh-glx-cluster-debug executable for that snapshot; must be
                                             visible at the same path on every host (default: \$TT_CLUSTER_DEBUG_TOOL,
                                             else the one on PATH)
@@ -1045,7 +1047,8 @@ collect_cluster_debug() {
     # A failed snapshot is a warning; an interrupted one (Ctrl-C, or a TERM aimed at the
     # collector) stops recovery here rather than rolling on to the next reset.
     local debug_exit=0
-    "$SCRIPT_DIR/run_cluster_debug.sh" "${args[@]}" || debug_exit=$?
+    TT_BMC_API_URL="$BMC_API_URL" TT_BMC_API_TOKEN="${TT_BMC_API_TOKEN:-$BMC_PASSWORD}" \
+        "$SCRIPT_DIR/run_cluster_debug.sh" "${args[@]}" || debug_exit=$?
     if [[ $debug_exit -eq 130 || $debug_exit -eq 143 ]]; then
         echo "Cluster debug collection was interrupted; stopping recovery."
         exit "$debug_exit"

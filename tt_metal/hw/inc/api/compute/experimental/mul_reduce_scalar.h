@@ -54,11 +54,13 @@ template <
 ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb, uint32_t num_tiles, float scaler) {
     MATH(constexpr MathFidelity mul_f = program_fidelity ? MATH_FIDELITY : mul_fidelity);
     MATH(constexpr MathFidelity reduce_f = program_fidelity ? MATH_FIDELITY : reduce_fidelity);
+    // The reduce tail's move_dest_to_src only encodes tiles 0..7, so 8 caps num_tiles even when DEST holds more.
     constexpr uint32_t dest_capacity =
         get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
+    constexpr uint32_t max_tiles = dest_capacity < 8 ? dest_capacity : 8;
     LLK_ASSERT(
-        accumulate_in_one_tile || num_tiles <= dest_capacity,
-        "mul_reduce_scalar_tile: num_tiles exceeds the DEST capacity; accumulate_in_one_tile has no such limit");
+        accumulate_in_one_tile || num_tiles <= max_tiles,
+        "mul_reduce_scalar_tile: num_tiles exceeds min(8, DEST capacity); accumulate_in_one_tile has no such limit");
 #if !defined(ARCH_BLACKHOLE)
     static_assert(!accumulate_in_one_tile, "accumulate_in_one_tile is Blackhole-only");
 #endif
@@ -134,7 +136,7 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
  * The final scalar result is stored in dest[0] at element position [0].
  *
  * The multiply accumulates into DEST, so the tiles it writes must be zero on entry; the packer clears each
- * DEST half it releases. By default product i goes to dest[i], which bounds num_tiles by the DEST capacity.
+ * DEST half it releases. By default product i goes to dest[i], which bounds num_tiles by min(8, DEST capacity).
  * accumulate_in_one_tile sums every product in dest[0] instead: num_tiles is then unbounded, and one column
  * reduce serves the whole row. With a bf16 DEST each element's running sum is rounded to bf16 at every
  * accumulate, so its error grows with num_tiles.
@@ -145,7 +147,7 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
  * | Function   | icb0                   | Input circular buffer 0 (tensor A)                         | uint32_t | 0 to 31     | True     |
  * | Function   | icb1                   | Input circular buffer 1 (tensor B)                         | uint32_t | 0 to 31     | True     |
  * | Function   | ocb                    | Output circular buffer (used to program packer face_r_dim) | uint32_t | 0 to 31     | True     |
- * | Function   | num_tiles              | Number of tiles to process                                 | uint32_t | 1 to the DEST tile capacity (4 in fp32 half-sync), or any with accumulate_in_one_tile | True |
+ * | Function   | num_tiles              | Number of tiles to process                                 | uint32_t | 1 to min(8, DEST tile capacity) (4 in fp32 half-sync), or any with accumulate_in_one_tile | True |
  * | Function   | scalar                 | Scalar multiplier for reduction (default: 1.0)             | float    | Any float   | False    |
  *
  * Return value: None
