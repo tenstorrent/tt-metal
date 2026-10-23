@@ -42,6 +42,7 @@ class ExpertGatherSmall:
     CB_ROUTING, CB_SCRATCH, CB_TILE = 0, 1, 2
     SEM = 0
     MAX_TOKENS = 256
+    ROWS_BATCH = 16  # hidden rows copied per batch (NR reads, one barrier, NR writes, one barrier)
 
     @staticmethod
     def enabled() -> bool:
@@ -57,6 +58,7 @@ class ExpertGatherSmall:
         assert E % TILE == 0 and E_loc <= E and 1 <= K <= E_loc * 0 + E, (E, E_loc, K)
         assert H % TILE == 0 and 2 * H <= 8192, f"H {H}: a row must fit the kernel's L1 staging"
         self.T, self.E, self.E_loc, self.K, self.H = T, E, E_loc, K, H
+        self.NR = min(self.ROWS_BATCH, T)
         self.M = self.capacity(T, K, E_loc)
         assert self.M % TILE == 0 and self.M >= T * K, "drop-free buffer contract"
 
@@ -102,8 +104,8 @@ class ExpertGatherSmall:
         tile_bytes = TILE * TILE * 2
         rows_t, cols_e_t, m_t = T // TILE, E // TILE, M // TILE
         scratch_bytes = (
-            256 + T * 8 + E_loc * 64 + 64 + 512 + 2 * E * 4 + H * 2
-        )  # the kernel's scratch layout (64-aligned regions)
+            256 + T * 8 + E_loc * 64 + 64 + 512 + 2 * E * 4 + self.NR * H * 2
+        )  # the kernel's scratch layout (64-aligned regions, NR staged rows)
         scratch_bytes = (scratch_bytes + 63) // 64 * 64
 
         def cb(idx_, total, page, fmt=ttnn.bfloat16):
@@ -116,7 +118,7 @@ class ExpertGatherSmall:
         cbs = [
             cb(self.CB_ROUTING, rows_t * tile_bytes, tile_bytes),
             cb(self.CB_SCRATCH, scratch_bytes, scratch_bytes),
-            cb(self.CB_TILE, tile_bytes, tile_bytes),
+            cb(self.CB_TILE, (rows_t + 1) * tile_bytes, tile_bytes),  # the zero tile + one staged column of W
         ]
         ct = [
             self.CB_ROUTING,
@@ -133,6 +135,7 @@ class ExpertGatherSmall:
             self.SEM,
             noc[0].x,
             noc[0].y,
+            self.NR,
         ]
         for t in (hidden, routing, idx, buffer, counts, offsets, w):
             ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()

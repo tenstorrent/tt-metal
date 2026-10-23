@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """custom_ops/expert_gather_small vs the torch golden, single chip: the 26B (4,1) shapes (T 128 / 256, E 128, 32
 local experts, top-8, H 2816) with random top-k routing, an empty expert, a full-region expert (every token on one
-expert) and the drop-free worst case (every token's 8 experts all local); exact buffer rows, counts, offsets, W."""
+expert), the drop-free worst case (every token's 8 experts all local) and the 32 cores on a forced 8x8 grid; exact
+buffer rows, counts, offsets, W."""
 
 import pytest
 import torch
@@ -41,12 +42,16 @@ def _routing(T, E, K, mode, idx):
         (128, 128, 32, 8, 2816, "empty_expert"),
         (128, 128, 32, 8, 2816, "one_expert"),
         (256, 128, 32, 8, 2816, "all_local"),
+        (128, 128, 32, 8, 2816, "random_wh8x8"),  # the 32 cores laid out on a forced 8x8 (Wormhole) grid
     ],
     ids=lambda v: str(v),
 )
 @pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
-def test_expert_gather_small(mesh_device, device_params, T, E, E_loc, K, H, mode):
+def test_expert_gather_small(mesh_device, device_params, T, E, E_loc, K, H, mode, monkeypatch):
     torch.manual_seed(1)
+    if mode.endswith("_wh8x8"):
+        monkeypatch.setenv("GEMMA4_TEST_GRID", "8x8")
+        mode = mode[: -len("_wh8x8")]
     idx = list(range(32, 32 + E_loc)) if E >= 64 else list(range(E_loc))  # this chip's experts: a middle slab
     if mode == "empty_expert" and E_loc < 2:
         pytest.skip("needs two local experts")
