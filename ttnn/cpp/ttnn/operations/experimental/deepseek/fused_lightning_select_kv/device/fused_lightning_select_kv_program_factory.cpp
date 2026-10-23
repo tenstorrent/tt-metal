@@ -327,9 +327,13 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
             TensorBinding{.tensor_parameter_name = NEW_KV_ROW_INDEX, .accessor_name = "new_kv_row_index"});
         writer_compiler_options.defines.emplace("HAS_NEW_KV_ROW", "1");
     }
-    if (is_candidate_source) {
+    const uint32_t kv_page_bytes = static_cast<uint32_t>(tensor_args.kv_cache.buffer()->page_size());
+    // The writer's kv staging rows; with num_parts > 1 core 0 assembles the candidates page there
+    // instead, which in candidate source mode can be larger than the gather's stage.
+    uint32_t kv_wr_rows = kKvStageRows;
+    if (is_candidate_source && !is_partial) {
         // Core 0 assembles the candidate list, then pool_count 64 B past it, in its kv_wr stage.
-        const uint32_t stage_bytes = kKvStageRows * tensor_args.kv_cache.buffer()->page_size();
+        const uint32_t stage_bytes = kKvStageRows * kv_page_bytes;
         const uint32_t list_bytes =
             tt::round_up(args.candidate_topk_blocks * static_cast<uint32_t>(sizeof(uint32_t)), 64u);
         TT_FATAL(
@@ -343,16 +347,13 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
             TensorBinding{.tensor_parameter_name = CANDIDATE_BLOCKS, .accessor_name = "candidate_blocks"});
         writer_tensor_bindings.push_back(
             TensorBinding{.tensor_parameter_name = POOL_COUNT, .accessor_name = "pool_count"});
+    }
+    if (is_candidate_source) {
         writer_compiler_options.defines.emplace("CANDIDATE_SOURCE", "1");
     }
     if (is_partial) {
-        // Core 0 assembles the candidates in its kv_wr stage.
-        const uint32_t stage_bytes = kKvStageRows * tensor_args.kv_cache.buffer()->page_size();
-        TT_FATAL(
-            kv_output.buffer()->page_size() <= stage_bytes,
-            "fused_lightning_select_kv: {} candidates do not fit the {} B kv staging buffer",
-            args.k,
-            stage_bytes);
+        const auto cand_page_bytes = static_cast<uint32_t>(kv_output.buffer()->page_size());
+        kv_wr_rows = std::max(kv_wr_rows, tt::div_up(cand_page_bytes, kv_page_bytes));
         writer_compiler_options.defines.emplace("PARTIAL_OUTPUT", "1");
     }
     // The writer reads its keys' rows into row_tbl, one uint32 per key.
@@ -594,7 +595,7 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
              weights_dfb,
              indices_dfb,
              make_dfb(KV_DFB, tensor_args.kv_cache, kKvStageRows),
-             make_dfb(KV_WR_DFB, tensor_args.kv_cache, kKvStageRows),
+             make_dfb(KV_WR_DFB, tensor_args.kv_cache, kv_wr_rows),
              blocks_dfb,
              sel_dfb,
              cur_pos_dfb,
@@ -672,7 +673,7 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     if (has_num_keys) {
         run_args.tensor_args.emplace(NUM_KEYS, std::cref(tensor_args.num_keys_tensor->mesh_tensor()));
     }
-    if (is_candidate_source) {
+    if (is_candidate_source && !is_partial) {
         run_args.tensor_args.emplace(CANDIDATE_BLOCKS, std::cref(output.at(2).mesh_tensor()));
         run_args.tensor_args.emplace(POOL_COUNT, std::cref(output.at(3).mesh_tensor()));
     }

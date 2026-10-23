@@ -42,6 +42,7 @@ import math
 import queue
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Sequence
 
@@ -189,23 +190,24 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
             if image_rows:
                 self.embedding_weight = extend_embedding(self.embedding_weight, image_rows, config.vocab_size)
 
-        self.layers: list[DeepSeekV41PrefillDecoderLayer] = []
-        for i in range(num_layers):
-            layer_device = self.layer_devices[i]
-            layer_cache = cache.sub(f"layers.{i}")
-            layer_experts = experts[i] if experts is not None else None
-            if layer_experts is None:
-                note(f"layer {i + 1}/{num_layers}: routed experts", important=True)
-                layer_experts = DeepSeekV41PreloadedExperts(
-                    config,
-                    self._noting_provider(expert_provider(loader, i), i, num_layers, config.num_local_experts),
-                    layer_device,
-                    dtype=expert_dtype,
-                    cache=layer_cache.sub("ffn"),
-                    tp_size=tp_size,
-                )
-            self.layers.append(
-                DeepSeekV41PrefillDecoderLayer(
+        self.layers: list[DeepSeekV41PrefillDecoderLayer] = [None] * num_layers
+
+        def build_stage(layer_ids: list[int]) -> None:
+            for i in layer_ids:
+                layer_device = self.layer_devices[i]
+                layer_cache = cache.sub(f"layers.{i}")
+                layer_experts = experts[i] if experts is not None else None
+                if layer_experts is None:
+                    note(f"layer {i + 1}/{num_layers}: routed experts", important=True)
+                    layer_experts = DeepSeekV41PreloadedExperts(
+                        config,
+                        self._noting_provider(expert_provider(loader, i), i, num_layers, config.num_local_experts),
+                        layer_device,
+                        dtype=expert_dtype,
+                        cache=layer_cache.sub("ffn"),
+                        tp_size=tp_size,
+                    )
+                self.layers[i] = DeepSeekV41PrefillDecoderLayer(
                     config,
                     i,
                     decoder_layer_weights(loader, i, config),
@@ -217,8 +219,16 @@ class DeepSeekV41PrefillModel(DeepSeekV4PrefillModel):
                     moe_weight_dtype=moe_weight_dtype,
                     tp_size=tp_size,
                 )
-            )
-            note(f"layer {i + 1}/{num_layers}: built")
+                note(f"layer {i + 1}/{num_layers}: built")
+
+        # One thread per layer device: each is its own submesh (allocator, command queues), and its layers are built
+        # in order, so every device allocates as it would serially.
+        device_layers: dict[int, list[int]] = {}
+        for i in range(num_layers):
+            device_layers.setdefault(id(self.layer_devices[i]), []).append(i)
+        with ThreadPoolExecutor(max_workers=len(device_layers), thread_name_prefix="prefill-build") as pool:
+            for stage in [pool.submit(build_stage, ids) for ids in device_layers.values()]:
+                stage.result()
 
         self.eps = config.rms_norm_eps
         self.norm_weight = self.lm_head = None
