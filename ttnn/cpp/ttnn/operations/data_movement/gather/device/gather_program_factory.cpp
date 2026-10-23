@@ -4,6 +4,9 @@
 
 #include "gather_device_operation.hpp"
 
+#include <algorithm>
+#include <numeric>
+
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -547,9 +550,19 @@ ProgramDescriptor GatherDeviceOperation::RmSingleRowMultiCore::create_descriptor
         core_grid = attributes.sub_core_grids.value();
     }
 
-    // Split W_index across cores; group_1 holds the larger slice when it doesn't divide evenly.
-    const auto [total_number_of_cores, core_range, core_group_1, core_group_2, w_per_core_g1, w_per_core_g2] =
-        tt::tt_metal::split_work_to_cores(core_grid, W_index, true);
+    // Split W_index across cores in units of w_unit columns, so that each core's byte offset into an
+    // index row and into an output row (w_start * element size) is a multiple of the buffer alignment.
+    // The CB address on the core is aligned, and a NOC transfer needs the same low address bits on
+    // both ends, so an unaligned row offset moves the wrong bytes. group_1 holds the larger slice when
+    // the units don't divide evenly; the last core takes fewer columns when W_index is not a multiple
+    // of w_unit.
+    const uint32_t alignment = std::max(input_index_tensor_buffer->alignment(), output_tensor_buffer->alignment());
+    const uint32_t w_unit = std::lcm(
+        alignment / std::gcd(alignment, input_index_elem_size), alignment / std::gcd(alignment, output_elem_size));
+    const auto [total_number_of_cores, core_range, core_group_1, core_group_2, units_per_core_g1, units_per_core_g2] =
+        tt::tt_metal::split_work_to_cores(core_grid, tt::div_up(W_index, w_unit), true);
+    const uint32_t w_per_core_g1 = units_per_core_g1 * w_unit;
+    const uint32_t w_per_core_g2 = units_per_core_g2 * w_unit;
     const auto work_groups = {std::make_pair(core_group_1, w_per_core_g1), std::make_pair(core_group_2, w_per_core_g2)};
 
     // CB sticks sized for the LARGEST per-core slice (group 1); group 2 uses a shorter slice.
@@ -632,10 +645,11 @@ ProgramDescriptor GatherDeviceOperation::RmSingleRowMultiCore::create_descriptor
 
     uint32_t id = 0;
     uint32_t w_cursor = 0;  // Cumulative w_start across cores (iterating in group order matches split_work_to_cores).
-    for (const auto& [group, w_per_core] : work_groups) {
+    for (const auto& [group, w_per_group_core] : work_groups) {
         for (const auto& range : group.ranges()) {
             for (const auto& core : range) {
                 const uint32_t w_start = w_cursor;
+                const uint32_t w_per_core = std::min(w_per_group_core, W_index - w_cursor);
                 if (w_per_core > 0) {
                     reader_desc.emplace_runtime_args(
                         core, {input_index_tensor_buffer, w_per_core, w_start, id, input_index_per_shard_page_size});

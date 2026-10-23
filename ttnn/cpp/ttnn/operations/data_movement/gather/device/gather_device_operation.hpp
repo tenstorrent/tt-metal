@@ -55,6 +55,13 @@ struct GatherDeviceOperation {
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 };
 
+// True for a BLOCK/WIDTH-sharded placement whose shard row (shard width * element_size) is not a
+// multiple of the buffer alignment. The device stores each shard row at a pitch of the aligned page
+// size, but the RM factories hand `noc_async_*_sharded` the unaligned shard row as both the page
+// pitch and the per-page payload, so the two agree only for aligned shard rows. ttnn::gather moves
+// such tensors to interleaved SRAM before the RM factories run.
+bool has_subaligned_shard_row(const MemoryConfig& memory_config, uint32_t element_size);
+
 Tensor gather(
     const Tensor& input_tensor,
     int8_t dim,
