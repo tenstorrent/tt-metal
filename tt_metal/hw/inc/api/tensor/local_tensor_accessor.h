@@ -14,6 +14,10 @@
 #include "api/tensor/tensor_accessor_args.h"
 #include "api/tensor/tensor_binding_token.h"
 
+// Forward declared from dataflow_api.h / compute/common.h
+template <typename T>
+T get_arg_val(int arg_idx);
+
 /**
  * @brief A minimal accessor for a tensor's node-local L1 region.
  * LocalTensorAccessor is the local-only counterpart to TensorAccessor.
@@ -70,6 +74,23 @@ public:
         // NoC addresses), none of which carries the binding. Note it as both read and written; the slot is the binding
         // id a TensorAccessor built from the same token uses.
         tt_buf_rw::note_read_write<ADDR_CRTA_OFFSET>();
+    }
+
+    // Construct from a Metal 2.0 per-node binding token.
+    template <uint32_t CTA_OFFSET, uint32_t ADDR_RTA_OFFSET>
+    [[nodiscard]] explicit LocalTensorAccessor(
+        tensor_accessor::PerNodeTensorBindingToken<CTA_OFFSET, ADDR_RTA_OFFSET>) noexcept :
+        LocalTensorAccessor(get_arg_val<uint32_t>(ADDR_RTA_OFFSET / sizeof(uint32_t))) {
+        static_assert(
+            !tensor_accessor::PerNodeTensorBindingToken<CTA_OFFSET, ADDR_RTA_OFFSET>::args_t::is_dram,
+            "LocalTensorAccessor requires an L1-resident tensor, but this binding token is for a DRAM "
+            "tensor. A DRAM tensor has no node-local L1 region; use TensorAccessor instead.");
+        static_assert(
+            ADDR_RTA_OFFSET % sizeof(uint32_t) == 0,
+            "PerNodeTensorBindingToken: ADDR_RTA_OFFSET must be 4-byte aligned");
+        // Op-to-op R/W inference keys a binding by its one address, which a per-node tensor doesn't have.
+        // The accesses can't be attributed, so give up on the kernel rather than miss one.
+        tt_buf_rw::note_opaque();
     }
 
     // Construct from the "binding not present" token.
