@@ -543,3 +543,31 @@ def test_a_quick_ab_judges_limit_gates_on_the_limits_it_recorded(mk, monkeypatch
         assert "pcc_state_kv_L01" in table
     else:
         assert "no pcc_layer_L00_limit recorded" in " ".join(g["failing"]) and "Accuracy vs" not in table
+
+
+def test_a_pick_accepted_after_the_final_task_runs_its_full_gate_at_the_end(mk, sandbox):
+    """F188: the final task already passed, so it cannot run a later quick pick's full gate; the end of the run does."""
+    full = record_cmd(device_ms_experts=8.0, err_layer_L00=0.01, err_layer_L00_limit=0.02, pcc_chunk_out=0.99)
+    gate = {"cmd": full, "metrics": {"device_ms_experts": "< 10", "err_layer_L*": "<= limit"}}
+    final = {"id": "X.3", "title": "final", "step": "perf", "deps": [], "gate": {"cmd": record_cmd(n=1)}}
+    o = mk([final, pick(ab_mode="quick", gate=gate, deps=["X.3"])], CHANGE)
+    assert o.run() == HUMAN and o.led.status("X.3") == "PASS"
+    assert decide(o, "P.1", "accept") == 0
+    assert o.run() == DONE, mk.lines[-4:]
+    assert not o.led.state()["P.1"].get("full_pending")
+    assert sum("[P.1] full gate (quick-accepted pick)" in ln for ln in mk.lines) == 1
+
+
+def test_every_real_time_profile_records_op_rows(fx, monkeypatch):
+    """F187 (owner): the per-op rows come with every real-time profile, so the dashboard never shows an older code's
+    op list; the device profiler's slow op mode only when asked."""
+    from models.demos.common.bringup.core.spec import Spec
+    from models.demos.common.bringup.testing.profile import want_ops
+
+    monkeypatch.delenv("BRINGUP_PROFILE_OPS", raising=False)
+    s = Spec.load(fx())
+    assert want_ops(s, rt=True) and not want_ops(s)
+    assert want_ops(Spec.load(fx(perf={"op_profile": True})))
+    assert not want_ops(Spec.load(fx(perf={"op_profile": False})), rt=True)
+    monkeypatch.setenv("BRINGUP_PROFILE_OPS", "1")
+    assert want_ops(s)
