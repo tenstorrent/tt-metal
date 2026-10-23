@@ -155,13 +155,9 @@ def decode_forward(
         nq, nk, nv = QkvNormRope.op(tt_q, tt_k, tt_v, gq, gk, cos_cache, sin_cache, config.rms_norm_eps)
         for t in (tt_q, tt_k, tt_v):
             t.deallocate(True)
-        # The decode SDPA given the height-sharded q deviates from its interleaved-q result (attention output PCC
-        # 0.9985-0.9993 on identical q, per head down to 0.97: tests/unit/test_attention_qkv_stages.py), which
-        # broke the 64-position decode gate (top-1 51 -> 12 of 64); it takes the DRAM form, as the composite path
-        # hands it. k / v stay sharded for the paged cache update (their written rows match the composite's).
-        tt_q = ttnn.to_memory_config(nq, ttnn.DRAM_MEMORY_CONFIG)
-        nq.deallocate(True)
-        tt_k, tt_v = nk, nv
+        # q stays height-sharded into SDPA (same result as the DRAM form: tests/unit/test_attention_qkv_stages.py);
+        # k / v stay sharded for the paged cache update below.
+        tt_q, tt_k, tt_v = nq, nk, nv
     else:
         tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
         tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
@@ -260,10 +256,13 @@ def decode_forward(
     )
     if kv_cache is not None:
         k_cache, v_cache = kv_cache
-        if not is_kv_shared and not fused_qkv:
-            # After HF-style RoPE, tensors may be in DRAM. Move to HEIGHT_SHARDED for cache update.
-            tt_k = ttnn.to_memory_config(tt_k, q_sharded_mem)
-            tt_v = ttnn.to_memory_config(tt_v, q_sharded_mem)
+        if not is_kv_shared:
+            if not fused_qkv:
+                # After HF-style RoPE, tensors may be in DRAM. Move to HEIGHT_SHARDED for cache update. (The fused
+                # op's k / v already are; the earlier `and not fused_qkv` on this branch skipped the whole cache
+                # update for the fused path, so no decode token's K / V ever reached the cache: decode gate 12/64.)
+                tt_k = ttnn.to_memory_config(tt_k, q_sharded_mem)
+                tt_v = ttnn.to_memory_config(tt_v, q_sharded_mem)
 
             if page_table is not None:
                 # Per-device kv-head count of the layer's input view. When the cache
