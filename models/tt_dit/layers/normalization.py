@@ -157,6 +157,7 @@ class DistributedRMSNorm(Module):
         mesh_axis=0,
         mesh_device=None,
         ccl_manager=None,
+        row_capacity=None,
     ):
         super().__init__()
 
@@ -169,6 +170,9 @@ class DistributedRMSNorm(Module):
         self.ccl_manager = ccl_manager
         self.mesh_width = tuple(mesh_device.shape)[mesh_axis]
         self.TILE_SIZE = 32
+        # Largest per-device row count (batch * N, multiple of 32) one cached program and stats pool
+        # serve; None keeps one per row count.
+        self.row_capacity = row_capacity
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -212,6 +216,7 @@ class DistributedRMSNorm(Module):
         per_head_norm=False,
         dynamic_weight_includes_static=False,
         dynamic_tile_row_map=None,
+        row_capacity=None,
     ) -> ttnn.Tensor:
         # per_head_norm selects the normalization semantics when the activation is
         # head-split (num_heads_per_device > 1):
@@ -240,7 +245,11 @@ class DistributedRMSNorm(Module):
                 weight = dynamic_weight
             else:
                 weight = ttnn.multiply(weight, dynamic_weight)
-        weight_key = tuple(weight.shape) if weight is not None else None
+        weight_key = (weight.shape[-1], weight.dtype) if weight is not None else None
+        if row_capacity is None:
+            row_capacity = self.row_capacity
+        # Folded per-device rows (batch * N) the stats buffer is sized for.
+        capacity = row_capacity if row_capacity is not None else x.shape[-3] * x.shape[-2]
 
         # dynamic_bias is the additive half of an adaLN modulation (the `shift`), folded into the same
         # fused op as the scale so the caller needs no separate elementwise add. The device op accepts
@@ -262,15 +271,12 @@ class DistributedRMSNorm(Module):
             self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
             topology=self.ccl_manager.topology,
             persistent_output_buffer=self.ccl_manager.get_fused_norm_stats_buffer(
-                # Key includes everything that changes the stats-buffer geometry:
-                # shape, heads-per-device, RoPE presence, and weight presence (weight is
-                # forwarded to create_stats_buffer and affects its sizing). Guards against
-                # a shared-cache collision between two same-shape modules differing only
-                # in affine geometry.
+                # Everything that changes the stats-buffer geometry (width, row capacity, heads per
+                # device, RoPE and weight presence/width), so modules never share a mismatched buffer.
                 # per_head_norm changes the stats geometry (per-head reduces locally -> no
                 # all-gather scratch), so it MUST be part of the key and forwarded to
                 # create_stats_buffer (which returns None for the per-head/local path).
-                ("rms", tuple(x.shape), num_heads_per_device, per_head_norm, rope_cos is not None, weight_key),
+                ("rms", x.shape[-1], capacity, num_heads_per_device, per_head_norm, rope_cos is not None, weight_key),
                 lambda: ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
                     x,
                     self.mesh_axis,
@@ -282,6 +288,7 @@ class DistributedRMSNorm(Module):
                     transformation_mat=trans_mat,
                     rope_cos=rope_cos,
                     rope_sin=rope_sin,
+                    row_capacity=row_capacity,
                 ),
             ),
             epsilon=self.norm_eps,
@@ -295,6 +302,7 @@ class DistributedRMSNorm(Module):
             rope_cos=rope_cos,
             rope_sin=rope_sin,
             dtype=dtype,
+            row_capacity=row_capacity,
             **extra,
         )
 
