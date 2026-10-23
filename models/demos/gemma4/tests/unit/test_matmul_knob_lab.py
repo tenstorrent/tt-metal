@@ -973,7 +973,8 @@ class ShapeLab:
 
     def stage_2d(self):
         pc = prefill_progcfg(TILE_SIZE, self.k, self.n, max_cols=prefill_max_cols_default())
-        gx, gy = pc.compute_with_storage_grid_size
+        g = pc.compute_with_storage_grid_size  # a CoreCoord (the config was built from a tuple)
+        gx, gy = (int(g.x), int(g.y)) if hasattr(g, "x") else (int(g[0]), int(g[1]))
         cands = []
         for in1, w in (("ws", self.w_ws), ("il", self.w_il)):
             if w is None:
