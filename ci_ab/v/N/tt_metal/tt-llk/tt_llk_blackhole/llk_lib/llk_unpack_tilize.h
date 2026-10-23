@@ -774,8 +774,8 @@ inline void _llk_unpack_tilizeA_B_block_(
     {
         // block_tiles is num_tiles known at compile time. The Y counter walks the face columns of four tiles and every fourth tile moves the base address four
         // tile columns (the scratch value rotated left by 2), which takes two instruction slots per tile less than a base address step per tile. A one face tile
-        // keeps one base address step per tile.
-        if (num_faces == 1)
+        // and a one row face keep one base address step per tile; the unpack is not the bound for a one row face and a faster one only adds L1 contention.
+        if (num_faces == 1 || face_r_dim == 1)
         {
             for (std::uint32_t tile = 0; tile < num_tiles; tile++)
             {
