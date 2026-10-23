@@ -1467,10 +1467,18 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // set it for the whole process): the store-and-forward chain is ~10 cores deep and the sparse op's time per
     // chunk visit measures as reader time PLUS compute time rather than the larger of the two, which a 2-deep
     // buffer cannot decouple across that many hops. Costs Sk_chunk_t * (DHt + vDHt) tiles of L1 per extra page.
+    // M11 (resident): the chain runs the counting protocol (ChainLink::grant / forward_credited: credits and
+    // arrivals as monotonic counters, several transfers in flight per link) over a 3-deep K/V CB, so the upstream
+    // can write two pieces ahead of the piece this core computes. TT_SOL_CHAIN_CREDITS=0 restores the M8
+    // one-outstanding handshake for an A/B (then the default depth is 2 again); TT_SOL_KV_PAGES still overrides.
+    const bool sol_chain_credits =
+        sol_resident && build_kv_chains &&
+        !(std::getenv("TT_SOL_CHAIN_CREDITS") && std::string(std::getenv("TT_SOL_CHAIN_CREDITS")) == "0");
     const uint32_t kv_cb_pages = [&]() -> uint32_t {
         const char* env = std::getenv("TT_SOL_KV_PAGES");
-        const uint32_t pages = env ? static_cast<uint32_t>(std::atoi(env)) : 2u;
-        return (pages >= 2 && pages <= 8 && !v_shares_k_buffer) ? pages : 2u;
+        const uint32_t default_pages = sol_chain_credits ? 3u : 2u;
+        const uint32_t pages = env ? static_cast<uint32_t>(std::atoi(env)) : default_pages;
+        return (pages >= 2 && pages <= 8 && !v_shares_k_buffer) ? pages : default_pages;
     }();
     uint32_t k_tiles = Sk_chunk_t * DHt * (v_shares_k_buffer ? 3 : kv_cb_pages);
     uint32_t v_tiles = Sk_chunk_t * vDHt * kv_cb_pages;
@@ -3368,6 +3376,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         {"sol_resident", sol_resident ? 1u : 0u},
         {"sol_resident_slots", sol_resident ? max_q_per_core : 0u},
         {"sol_res_block_words", sol_resident ? tt::div_up(sol_nb, 32u) : 0u},
+        // M11: the resident piece stream's chain protocol (see kv_cb_pages above): 1 = counting credits.
+        {"sol_chain_credits", sol_chain_credits ? 1u : 0u},
         // M4 static row max (see sol_static_max above): 1 iff sol_row_max is present (resident only). The reader
         // then has a sol_row_max accessor right after sol_pv's and its address at rotated_args_base + 3, with the
         // bias / n_members / my_start / table / member words shifted up by one (no slot otherwise, so every other

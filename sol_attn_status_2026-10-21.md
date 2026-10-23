@@ -1022,6 +1022,22 @@ runs on. What the numbers leave: the matmul work at HiFi2 (~1.15 ms op-level), t
 profile), which the gather (437 us per iteration) sits just under. Not promoted to production; the tt_metal hash
 fix is a real bug fix and stands on its own.
 
+**M11 = the chain's counting protocol (written 2026-10-23, unbuilt; `./run_sol_validation.sh m11` after a
+rebuild).** The chain link gets a second protocol next to the one-outstanding handshake: credits and arrivals as
+monotonic counters (`ChainLink::grant`, `wait_arrival`, `forward_credited`; the sender/receiver semaphore words,
+never reset within a launch, incremented by remote NoC atomics; the sender waits with `wait_min` on its running
+credit count, the receiver on its running arrival count). The resident piece stream grants a credit for every K/V
+page it can reserve ahead of its push, in the link's transfer order K(p), V(p), K(p+1), ... (a cursor that never
+passes the iteration's last piece; a blocking reserve-and-grant right before a wait if the page was not free
+earlier), so with the K/V CBs now 3 deep by default in resident mode the upstream can have two pieces in flight
+while this core computes a third; fetchers forward on credits. `TT_SOL_CHAIN_CREDITS=0` is the A/B back to M8
+(2 pages). Why it should do what M8 and m8x could not: those kept one transfer outstanding per link whatever the
+depth, so a member's slow piece stalled its upstream at once; two pieces of slack per hop absorb one slow piece
+before the stall propagates, and the per-hop handshake latency leaves the critical path. Bounded expectation:
+the slowest-of-8 factor (1.65 on the ~1.1 ms of mean compute) falls toward ~1.3 and the hop latency hides:
+−0.3 to −0.5 ms at tau 1 (4.4 to 4.6 ms, 1.6 to 1.67x). Risk: a hang (every protocol change so far has had one
+first run); the 1024-row check runs first because two pieces per iteration is the shape that caught M8's.
+
 **Expected (written before the measurement):** the exp stage's 0.22 ms and part of the P@V packs hidden, minus the per-member MOP switches:
 −0.25 to −0.35 ms traced at tau 1, i.e. ~4.65 ms (1.58x) from 4.97. The pooled steps use the same code and gain
 in proportion. This does not reach 1.8x (4.09 ms); the remaining compute levers (section 15: the pooled phase and

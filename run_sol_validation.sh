@@ -559,6 +559,27 @@ if want m10; then
     [ -d generated/profiler/.logs ] && cp -r generated/profiler/.logs "profile_m10_logs" 2>/dev/null
 fi
 
+# M11 (perf branch, 2026-10-23): the chain's counting (credit) protocol over a 3-deep K/V CB: a member grants a
+# credit per K/V page it can reserve ahead (ChainLink::grant), the upstream forwards on credits
+# (forward_credited) and bumps an arrival counter; two pieces can be in flight per link while the core computes a
+# third. The 1024-row check (two pieces per iteration, the shape that caught M8's hang) and the 512-row check run
+# first, then the 5 s parity, the traced timings and a profile. Rebuild first (reader kernel + factory changed).
+# TT_SOL_CHAIN_CREDITS=0 is the A/B back to the M8 handshake (2 pages). A hang shows as exit 124 on a step.
+if want m11; then
+    run m11_check 900 pytest "$T" -s -k "4x8sp1tp0nl2 and resident_matches_compact and (r512 or r1024)"
+    run m11_parity 900 pytest "$T" -s -k "4x8 and resident_call_parity and r4736"
+    run m11_trace_dense 900 env SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 \
+        pytest "$B" -s -k "4x8 and nl2 and 768p_5s and dense"
+    for tau in 1.0 2.0 3.0; do
+        run "m11_trace_tau${tau}" 900 env SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 SOL_BENCH_MODE=resident \
+            SOL_BENCH_PREFIX=off SOL_TAU=$tau pytest "$B" -s -k "4x8 and nl2 and 768p_5s and not dense and not agather"
+    done
+    run m11_profile 900 env TT_METAL_DEVICE_PROFILER=1 TT_SOL_STEP_PROFILE=1 SOL_BENCH_PROFILE=1 SOL_BENCH_REPS=1 \
+        SOL_BENCH_MODE=resident SOL_BENCH_PREFIX=off SOL_TAU=1.0 \
+        pytest "$B" -s -k "4x8 and nl2 and 768p_5s and not dense and not agather"
+    [ -d generated/profiler/.logs ] && cp -r generated/profiler/.logs "profile_m11_logs" 2>/dev/null
+fi
+
 # M10 timing only (2026-10-23): the first M10 build passed the correctness set but the 5 s runs overflowed the kernel
 # config buffer (73424 > 70656); outlining the S1/S5 flushes and the P@V issue left it 336 B over (70992), so the
 # resident build now compiles the compute kernel at O2 (factory; ~30 % smaller TRISC binaries, the level every
