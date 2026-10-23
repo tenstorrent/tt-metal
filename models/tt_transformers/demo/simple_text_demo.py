@@ -1293,63 +1293,25 @@ def test_demo_text(
             profiler.end(f"inference_decode_time_{1}", iteration=batch_idx)
             logger.info(f"Skipping decode forward pass when prefill mode is enabled")
 
-        while users_decoding and mode != "prefill":
-            if iteration == 0:  # First iteration also accounts for compile time
-                profiler.start(f"compile_decode", iteration=batch_idx)
-            else:
-                profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
-            # below the collect method also applies teacher forcing which is necessary for exact token matching
-            if token_accuracy:
-                out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
+        # Pipelined decode: with trace and on-device sampling each step feeds its token to the next on the chip, so
+        # queue every step's token read and do the host work for the previous step while the chip runs this one.
+        # The read is queued before the next launch on the same command queue, so it sees this step's output.
+        # Teacher forcing and stress tests need the token on the host before the next step.
+        pipelined_decode = enable_trace and device_sampling_params is not None and not token_accuracy and not stress_test
+        pending_read = None
 
-            # Run decode forward
-            reload_decode_inputs = iteration == 0 or not enable_trace or device_sampling_params is None
-            logits, log_probs = generator.decode_forward(
-                out_tok,
-                current_pos,
-                enable_trace=enable_trace,
-                page_table=page_table,
-                kv_cache=tt_kv_cache,
-                sampling_params=device_sampling_params,
-                prompt_tokens=input_tokens_prefill_pt,
-                output_tokens=out_tok,
-                reload_inputs=reload_decode_inputs,
-                reload_page_table=False,
-                reload_sampling_params=device_sampling_params is not None,
-                reset_sampling_state=device_sampling_params is not None and iteration == 0,
-            )
+        def read_step_tokens(step_read):
+            host_out, read_events = step_read
+            for event in read_events:
+                ttnn.event_synchronize(event)
+            step_tokens, _ = generator.process_decode_output_host(host_out, is_tokens=True)
+            return step_tokens.unsqueeze(1)
 
-            # Get the next token
-            if device_sampling_params is not None:
-                out_tok = logits.unsqueeze(1)
-
-            else:
-                # TODO Fix use case with temperature > 0
-                _, out_tok = sample_host(
-                    logits,
-                    temperature=sampling_params["temperature"],
-                    top_p=sampling_params["top_p"],
-                    on_host=True,
-                )
-
-            if iteration == 0:  # First iteration will account the compile time
-                profiler.end(f"compile_decode", iteration=batch_idx)
-                decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
-            else:
-                profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
-                decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
-
-            # Print perf after every iteration (skip in CI to avoid performance overhead)
-            tokens_per_second_per_user = 1 / decode_iteration_time
-            logger.debug(
-                f"Iteration {iteration}: {1000 * decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({global_batch_size * tokens_per_second_per_user:.1f} tok/s throughput)"
-            )
-
-            if not stress_test:  # During stress test runs we will iterate over the same position for X iterations
-                current_pos += 1
+        def consume_step_tokens(step_tokens):
+            nonlocal users_decoding
             # Save output token to print out later
             for user in range(global_batch_size):
-                user_tok = out_tok[user].item()
+                user_tok = step_tokens[user].item()
                 if (
                     user_tok not in tokenizer.stop_tokens and user_done[user] == False
                 ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
@@ -1373,11 +1335,81 @@ def test_demo_text(
                 text = text.replace("\n", " ")
                 logger.debug("[User {}] {}".format(user, text))
 
+        while users_decoding and mode != "prefill":
+            if iteration == 0:  # First iteration also accounts for compile time
+                profiler.start(f"compile_decode", iteration=batch_idx)
+            else:
+                profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
+            # below the collect method also applies teacher forcing which is necessary for exact token matching
+            if token_accuracy:
+                out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
+
+            # Run decode forward
+            reload_decode_inputs = iteration == 0 or not enable_trace or device_sampling_params is None
+            decode_output = generator.decode_forward(
+                out_tok,
+                current_pos,
+                enable_trace=enable_trace,
+                read_from_device=not pipelined_decode,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                sampling_params=device_sampling_params,
+                prompt_tokens=input_tokens_prefill_pt,
+                output_tokens=out_tok,
+                reload_inputs=reload_decode_inputs,
+                reload_page_table=False,
+                reload_sampling_params=device_sampling_params is not None,
+                reset_sampling_state=device_sampling_params is not None and iteration == 0,
+            )
+
+            # Get the next token
+            if pipelined_decode:
+                step_read = generator.read_decode_output(decode_output, async_read=True)
+                step_tokens = read_step_tokens(pending_read) if pending_read is not None else None
+                pending_read = step_read
+            elif device_sampling_params is not None:
+                logits, log_probs = decode_output
+                out_tok = logits.unsqueeze(1)
+
+            else:
+                logits, log_probs = decode_output
+                # TODO Fix use case with temperature > 0
+                _, out_tok = sample_host(
+                    logits,
+                    temperature=sampling_params["temperature"],
+                    top_p=sampling_params["top_p"],
+                    on_host=True,
+                )
+
+            if iteration == 0:  # First iteration will account the compile time
+                profiler.end(f"compile_decode", iteration=batch_idx)
+                decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
+            else:
+                profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
+                decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
+
+            # Print perf after every iteration (skip in CI to avoid performance overhead)
+            tokens_per_second_per_user = 1 / decode_iteration_time
+            logger.debug(
+                f"Iteration {iteration}: {1000 * decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({global_batch_size * tokens_per_second_per_user:.1f} tok/s throughput)"
+            )
+
+            if not stress_test:  # During stress test runs we will iterate over the same position for X iterations
+                current_pos += 1
+            if not pipelined_decode:
+                consume_step_tokens(out_tok)
+            elif step_tokens is not None:
+                # One step behind: a stop token seen here ends the loop after the step already queued
+                consume_step_tokens(step_tokens)
+
             iteration += 1
 
             # Upper limit of generated tokens for each user
             if iteration >= max_generated_tokens:
                 users_decoding = False
+
+        if pending_read is not None:
+            consume_step_tokens(read_step_tokens(pending_read))
 
         # Final print
         if not users_decoding:
