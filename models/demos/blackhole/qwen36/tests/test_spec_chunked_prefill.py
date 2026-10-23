@@ -239,7 +239,7 @@ def test_spec_chunked_prefill_interleaved(lens, mesh_device, reset_seeds, ensure
     cache = model._prefix_cache
     assert cache is not None, "spec warmup did not build the GdnPrefixStateCache (QWEN36_SPEC_PREFIX_CACHE=1?)"
     tok = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
-    h = ChunkHarness(cls, kv, _prompt_pool(tok, 16384))
+    h = ChunkHarness(cls, kv, _prompt_pool(tok, 32768))  # A 10k + B 7k + C 600 distinct tokens
     eng = h.eng
     la, lb = lens
     ta, tb, tc = h.text(la), h.text(lb), h.text(600)
