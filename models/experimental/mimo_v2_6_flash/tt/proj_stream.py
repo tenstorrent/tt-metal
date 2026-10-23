@@ -292,10 +292,11 @@ class RouterScoreStream:
     CB_X, CB_W, CB_OUT, CB_BIAS, CB_PART, CB_GATHER = 0, 1, 2, 3, 4, 5
     SEM = 0
 
-    def __init__(self, plan, k, n, bias):
-        """``bias``: the experts' score-correction bias, torch [n]."""
+    def __init__(self, plan, k, n, bias, rows=4):
+        """``bias``: the experts' score-correction bias, torch [n]. ``rows``: the user rows (4 or 8)."""
         device = plan.mesh_device
-        self.plan, self.k, self.n = plan, k, n
+        assert rows in (4, 8), rows
+        self.plan, self.k, self.n, self.rows = plan, k, n, rows
         self.banks = device.dram_grid_size().x
         self.kt = k // TILE
         self.kq = self.kt // self.GROUP
@@ -397,6 +398,7 @@ class RouterScoreStream:
                 self.CB_GATHER,
                 self.GROUP,
                 self.SEM,
+                self.rows,
             ],
             writer_rt,
             ttnn.WriterConfigDescriptor(),
@@ -414,6 +416,7 @@ class RouterScoreStream:
                 self.CB_PART,
                 self.CB_GATHER,
                 self.GROUP,
+                self.rows,
             ],
             [[1 if q == 0 else 0] for _, q in self.slots],
             self.compute_config,

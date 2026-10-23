@@ -20,13 +20,14 @@ void kernel_main() {
     constexpr uint32_t cb_h = get_compile_time_arg_val(7);
     constexpr uint32_t cores = get_compile_time_arg_val(8);
     constexpr uint32_t sem_id = get_compile_time_arg_val(9);
+    constexpr uint32_t rows = get_compile_time_arg_val(10);  // user rows per block: 4 or 8
     constexpr uint32_t tile_bytes = 2048;
     constexpr uint32_t fp32_tile_bytes = 4096;
     constexpr uint32_t face_bytes = mimo_moe::kBf16FaceBytes;
-    constexpr uint32_t rows_bytes = 4 * mimo_moe::kFaceDim * 2;  // rows 0-3 of one face: 128 B
+    constexpr uint32_t rows_bytes = rows * mimo_moe::kFaceDim * 2;  // the user rows of one face
     constexpr uint32_t blocks_per_face = face_bytes / rows_bytes;
-    constexpr uint32_t gap_bytes = face_bytes - rows_bytes;                // rows 4-15 of face 0
-    constexpr uint32_t tail_bytes = tile_bytes - face_bytes - rows_bytes;  // rows 4-15 of face 1, faces 2-3
+    constexpr uint32_t gap_bytes = face_bytes - rows_bytes;                // the other rows of face 0
+    constexpr uint32_t tail_bytes = tile_bytes - face_bytes - rows_bytes;  // the other rows of face 1, faces 2-3
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t first = get_arg_val<uint32_t>(1);
@@ -64,12 +65,17 @@ void kernel_main() {
         }
     }
 
-    // Rows 0-3 of the partial (fp32: 4 rows x 16 x 4 B = 256 B in faces 0 and 1) go to rows 4 * index.. of the
-    // gather tile on every core (face 0 / 1 for index < 4, else face 2 / 3), then one increment each.
+    // The user rows of the partial (fp32: rows x 16 x 4 B in faces 0 and 1) go to rows rows * index.. of the gather
+    // tiles on every core (32 / rows cores per tile; tile index / (32 / rows), rows (rows * index) % 32 of it), then
+    // one increment each.
     constexpr uint32_t fp32_face_bytes = 1024;
-    constexpr uint32_t part_rows_bytes = 4 * mimo_moe::kFaceDim * 4;
+    constexpr uint32_t fp32_tile_bytes_g = 4096;
+    constexpr uint32_t part_rows_bytes = rows * mimo_moe::kFaceDim * 4;
+    constexpr uint32_t cores_per_tile = 32 / rows;
     const uint32_t sem_addr = get_semaphore(sem_id);
-    const uint32_t slot = get_write_ptr(cb_gather) + (index / 4) * 2 * fp32_face_bytes + (index % 4) * part_rows_bytes;
+    const uint32_t row0 = rows * (index % cores_per_tile);  // within its gather tile
+    const uint32_t slot = get_write_ptr(cb_gather) + (index / cores_per_tile) * fp32_tile_bytes_g +
+                          (row0 / 16) * 2 * fp32_face_bytes + (row0 % 16) * mimo_moe::kFaceDim * 4;
     cb_wait_front(cb_part, 1);
     const uint32_t part_l1 = get_read_ptr(cb_part);
     for (uint32_t p = 0; p < cores; p++) {

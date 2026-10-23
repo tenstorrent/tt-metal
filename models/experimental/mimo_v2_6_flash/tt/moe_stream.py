@@ -100,6 +100,12 @@ def bank_vcs(cores):
     return vcs
 
 
+def user_rows(users):
+    """The rows the decode streams carry for ``users`` users: tiny [4, 32] tiles up to 4 users, [8, 32] up to 8."""
+    assert 1 <= users <= 8, users
+    return 4 if users <= 4 else 8
+
+
 def stick_bytes(num_pairs):
     """Bytes of the deduplicated stream's expert stick (uint16 [count, ids...] for up to ``num_pairs`` experts), whole
     64-byte DRAM write units."""
@@ -154,7 +160,8 @@ class GateUpStream:
     NUM_BUFFERS = 12
     IN_FLIGHT = 6
     MAX_PACKET = 16384
-    MAX_USERS = 4  # routing stages rows 0-3 of each tile face
+    MAX_USERS = 4  # the pair stream: routing stages rows 0-3 of each tile face
+    MAX_USERS_DEDUP = 8  # the deduplicated stream stages rows 0-7 when it serves more than 4 users
     FP32_TILE_BYTES = 4096
 
     def __init__(
@@ -178,21 +185,22 @@ class GateUpStream:
         assert hidden % (TILE * self.BLOCK_K) == 0
         assert num_experts % TILE == 0
         self.users = num_pairs // topk
-        assert self.users * topk == num_pairs and 1 <= self.users <= self.MAX_USERS and topk <= 16
+        max_users = self.MAX_USERS_DEDUP if self.dedup else self.MAX_USERS
+        assert self.users * topk == num_pairs and 1 <= self.users <= max_users and topk <= 16
         assert num_pairs * 4 <= 1024
         assert self.IN_FLIGHT < self.NUM_BUFFERS <= 15
         self.num_pairs, self.topk = num_pairs, topk
         # The reader routes user 0 and streams its pairs while the writer routes the others; deduplicated, every
         # weight waits for every user's routing, so the two split it.
         self.reader_users = (self.users + 1) // 2 if self.dedup else 1
-        self.rows = DownStream.TINY_ROWS
+        self.rows = user_rows(self.users)
         self.stick_bytes = stick_bytes(num_pairs) if self.dedup else 2 * num_pairs
         self.expert_tiles = num_experts // TILE
         self.norm = 1 if norm_topk_prob else 0
         self.has_scale = 0 if routed_scaling_factor == 1.0 else 1
         self.scale_bits = fp32_bits(routed_scaling_factor)
-        # rows 0-3 of biased and score tiles, 256 B of mask rows, the uint16 id stick
-        stage_bytes = 2 * self.expert_tiles * 512 + 256 + self.stick_bytes
+        # the user rows of the biased and score tiles (faces 0 and 1), 512 B of mask rows, the uint16 id stick
+        stage_bytes = 2 * self.expert_tiles * 2 * self.rows * 64 + 512 + self.stick_bytes
         self.stage_pages = math.ceil(stage_bytes / self.FP32_TILE_BYTES)
 
         self.kt = hidden // TILE
@@ -211,7 +219,7 @@ class GateUpStream:
 
         self.vcs = bank_vcs(self.cores)
 
-        tiny = ttnn.Tile([4, TILE])
+        tiny = ttnn.Tile([self.rows, TILE])
         full = ttnn.Tile([TILE, TILE])
         self.tiny_bytes = tiny.get_tile_size(ttnn.bfloat16)
 
@@ -313,7 +321,7 @@ class GateUpStream:
         if self.dedup:
             sources = ("moe_gate_up_uniq_reader.cpp", "moe_gate_up_uniq_writer.cpp", "moe_gate_up_uniq_compute.cpp")
             reader_ct[1] = self.cb_local
-            reader_ct.append(self.stick_bytes)
+            reader_ct += [self.stick_bytes, self.rows]
             writer_ct += [self.cb_local, self.cb_cnt, self.cb_wt, self.rows]
             compute_ct = [
                 self.cb_x,
@@ -398,9 +406,12 @@ class DownStream:
     IN_FLIGHT = 6
     TINY_ROWS = 4
 
-    def __init__(self, plan, hidden, inter_local, num_pairs, dedup=None):
+    def __init__(self, plan, hidden, inter_local, num_pairs, dedup=None, rows=4):
+        """``rows``: the user rows of the tiny tiles and the compact output (4, or 8 with the deduplicated stream)."""
         device = plan.mesh_device
         self.dedup = DEDUP if dedup is None else dedup
+        assert rows == 4 or (rows == 8 and self.dedup), rows
+        self.rows = rows
         self.cores = list(dram_bank_cores(device))
         self.banks = device.dram_grid_size().x
         assert len(self.cores) == self.banks, (len(self.cores), self.banks)
@@ -413,8 +424,9 @@ class DownStream:
         self.groups = self.cols // self.BLOCK_COLS
         assert self.IN_FLIGHT < self.NUM_BUFFERS <= 15
         self.hidden, self.inter_local, self.num_pairs = hidden, inter_local, num_pairs
-        # Compact output: 8 row blocks of TINY_ROWS rows per tile, so hidden / 8 columns hold all 4 user rows.
-        self.row_blocks = TILE // self.TINY_ROWS
+        # Compact output: TILE / rows row blocks of ``rows`` rows per tile, so hidden * rows / 32 columns hold every
+        # user row.
+        self.row_blocks = TILE // rows
         assert nt % self.row_blocks == 0
         self.compact_tiles = nt // self.row_blocks
         self.compact_width = self.compact_tiles * TILE
@@ -425,7 +437,7 @@ class DownStream:
         self.block_bytes = self.kt * self.group_bytes
         self.row_bytes = self.cols * self.w_tile_bytes
         self.expert_bytes = self.kt * self.row_bytes
-        tiny = ttnn.Tile([self.TINY_ROWS, TILE])
+        tiny = ttnn.Tile([rows, TILE])
         full = ttnn.Tile([TILE, TILE])
         self.tiny_bytes = tiny.get_tile_size(ttnn.bfloat16)
         self.act_page_bytes = self.kt * self.tiny_bytes
@@ -591,8 +603,10 @@ class ReduceExpand:
     CORE_ROW = 5
 
     def __init__(self, plan, hidden, chips, compute_config, rows=4):
+        """``rows``: the user rows of the compact tiles, 4 or 8."""
         device = plan.mesh_device
-        assert rows == 4, "the kernel moves 4-row face blocks"
+        assert rows in (4, 8), rows
+        self.rows = rows
         self.cores = [ttnn.CoreCoord(x, self.CORE_ROW) for x in range(device.dram_grid_size().x)]
         self.hidden = hidden
         self.chips = chips
@@ -603,6 +617,8 @@ class ReduceExpand:
         self.compact_width = self.compact_tiles * TILE
         assert self.compact_tiles % len(self.cores) == 0
         self.tiles_per_core = self.compact_tiles // len(self.cores)
+        # The fused norm's gather tiles: every core's user rows of its partial, 32 / rows cores per tile.
+        self.gather_tiles = -(-len(self.cores) * rows // TILE)
         self.core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(self.cores[0], self.cores[-1])])
         self.compute_config = compute_config
         full = ttnn.Tile([TILE, TILE])
@@ -649,7 +665,7 @@ class ReduceExpand:
             cb32(self.cb_const, 2),
             cb32(self.cb_rs, 1),
             cb32(self.cb_part, 1),
-            cb32(self.cb_gather, 1),
+            cb32(self.cb_gather, self.gather_tiles),
             cb(self.cb_gamma, self.tiles_per_core),
             cb(self.cb_h, self.tiles_per_core),
         ]
@@ -723,13 +739,14 @@ class ReduceExpand:
         if residual is None:
             sources = ("moe_reduce_reader.cpp", "moe_expand_rows.cpp", "moe_reduce_compute.cpp")
             reader_ct = [self.cb_in, self.tiles_per_core, self.compact_tiles, self.chips]
-            writer_ct = [self.cb_sum, self.cb_zero, self.tiles_per_core, self.compact_tiles, self.row_blocks]
+            writer_ct = [self.cb_sum, self.cb_zero, self.tiles_per_core, self.compact_tiles, self.row_blocks, self.rows]
             compute_ct = [self.cb_in, self.cb_sum, self.tiles_per_core, self.chips]
             cbs = self.cbs
         else:
             sources = ("moe_reduce_residual_reader.cpp", "moe_expand_residual.cpp", "moe_reduce_residual_compute.cpp")
             reader_ct = [self.cb_in, self.cb_res, self.tiles_per_core, self.compact_tiles, self.chips, self.row_blocks]
-            writer_ct = [self.cb_sum, self.cb_x, self.tiles_per_core, self.compact_tiles, self.row_blocks]
+            reader_ct.append(self.rows)
+            writer_ct = [self.cb_sum, self.cb_x, self.tiles_per_core, self.compact_tiles, self.row_blocks, self.rows]
             compute_ct = [self.cb_in, self.cb_mid, self.cb_res, self.cb_sum, self.tiles_per_core, self.chips]
             cbs = self.residual_cbs
 
@@ -817,7 +834,7 @@ class ReduceExpand:
         assert out.shape[-1] == self.hidden and residual.shape[-1] == self.hidden and norm_out.shape[-1] == self.hidden
         assert gamma.shape[-1] == self.compact_width
         cores = len(self.cores)
-        assert cores * (TILE // self.row_blocks) == TILE, "each core's user rows fill one block of the gather tile"
+        assert cores * self.rows == self.gather_tiles * TILE, "the cores' user rows fill the gather tiles"
         noc = []
         for c in self.noc_cores:
             noc += [c.x, c.y]
@@ -853,6 +870,8 @@ class ReduceExpand:
             self.cb_gather,
             cores,
             sem_id,
+            self.rows,
+            self.gather_tiles,
         ]
         writer_ct = [
             self.cb_sum,
@@ -865,6 +884,7 @@ class ReduceExpand:
             self.cb_h,
             cores,
             sem_id,
+            self.rows,
         ]
         compute_ct = [
             self.cb_in,
@@ -883,6 +903,7 @@ class ReduceExpand:
             self.cb_h,
             fp32_bits(1.0 / self.hidden),
             fp32_bits(eps),
+            self.gather_tiles,
         ]
         reader = ttnn.KernelDescriptor(
             kernel_source=f"{KERNEL_DIR}/moe_reduce_norm_reader{'' if gathered is not None else '_fabric'}.cpp",
@@ -937,7 +958,7 @@ class FabricRowGather:
         self.cores = list(reduce.cores)
         self.tiles_per_core = reduce.tiles_per_core
         self.compact_tiles = reduce.compact_tiles
-        assert self.tiles_per_core == 2 and len(self.cores) * self.tiles_per_core == self.compact_tiles
+        assert self.tiles_per_core in (2, 4) and len(self.cores) * self.tiles_per_core == self.compact_tiles
         self.core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.cores])
         tile_bytes = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat16)
         self.phase_tiles = self.tiles_per_core * self.chips

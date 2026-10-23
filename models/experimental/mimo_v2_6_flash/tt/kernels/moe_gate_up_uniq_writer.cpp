@@ -62,7 +62,7 @@ void kernel_main() {
     if constexpr (sel_users > 0) {
         cb_reserve_back(cb_stage, stage_pages);
         stage = get_write_ptr(cb_stage);
-        mimo_moe::stage_route_rows<expert_tiles, has_mask>(biased_addr, scores_addr, mask_addr, stage);
+        mimo_moe::stage_route_rows<expert_tiles, has_mask, rows>(biased_addr, scores_addr, mask_addr, stage);
         noc_async_read_barrier();
     }
 
@@ -74,9 +74,9 @@ void kernel_main() {
     cb_reserve_back(cb_sel, 1);
     volatile tt_l1_ptr uint32_t* sel = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_sel));
     for (uint32_t u = first_user; u < users; u++) {
-        mimo_moe::select_user<topk, expert_tiles, norm, has_scale, scale_bits, has_mask>(
+        mimo_moe::select_user<topk, expert_tiles, norm, has_scale, scale_bits, has_mask, rows>(
             stage, u, sel_ids[u], sel_w[u]);
-        active[u] = mimo_moe::user_active<expert_tiles, has_mask>(stage, u);
+        active[u] = mimo_moe::user_active<expert_tiles, has_mask, rows>(stage, u);
         sel[u - first_user] = active[u] ? 1 : 0;
         for (uint32_t i = 0; i < topk; i++) {
             sel[sel_users + (u - first_user) * topk + i] = sel_ids[u][i];

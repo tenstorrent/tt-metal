@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // BRISC (NOC 1): the distinct experts' count from the stick, their h tiny tiles from the row-major activation
-// (page j = expert j's kt [rows, 32] tiles), then
-// rows 0-3 of this core's output columns (tile column t = j * banks + bank) into the compact [1, 1, 32, hidden / 8]
-// output: rows 4c..4c+3 of compact tile t % compact_tiles, c = t / compact_tiles (the row all-reduce then moves only
-// the user rows; moe_expand_rows.cpp puts them back into rows 0-3 of the [32, hidden] result).
+// (page j = expert j's kt [rows, 32] tiles), then the user rows 0..rows-1 (rows 4 or 8) of this core's output
+// columns (tile column t = j * banks + bank) into the compact [1, 1, 32, hidden * rows / 32] output: rows
+// rows * c .. rows * c + rows - 1 of compact tile t % compact_tiles, c = t / compact_tiles (the row all-reduce then
+// moves only the user rows; moe_expand_rows.cpp puts them back into the user rows of the [32, hidden] result).
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "moe_stream_common.hpp"
@@ -27,7 +27,7 @@ void kernel_main() {
     constexpr uint32_t signal_sem = get_compile_time_arg_val(11);
     constexpr uint32_t ids_bytes = get_compile_time_arg_val(12);
     constexpr uint32_t cb_ids = get_compile_time_arg_val(13);
-    constexpr uint32_t tiny_face_bytes = tiny_bytes / 2;  // rows 0-3 of one face
+    constexpr uint32_t tiny_face_bytes = tiny_bytes / 2;  // the user rows of one face
     constexpr uint32_t blocks_per_face = mimo_moe::kBf16FaceBytes / tiny_face_bytes;
     constexpr uint32_t bf16_tile_bytes = 2048;
 

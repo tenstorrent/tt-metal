@@ -3,11 +3,11 @@
 
 // TRISC of the fused reduce + residual + RMSNorm. Per compact tile, exactly moe_reduce_residual_compute.cpp: the
 // chip-ordered fp32 sum of the copies, one bf16 rounding, plus the residual -> y (bf16, to cb_out and cb_y). Then the
-// RMSNorm of y's user rows, all in compact form (row r of a compact tile is user r % 4):
-//   partial = M @ ((sum_t y_t^2) @ J)    J all ones: row sums broadcast over the columns; M[r][c] = (r % 4 == c % 4):
-//                                        each row then holds its user's sum over this core's compact tiles
-//   G: rows 4p..4p+3 = rows 0-3 of core p's partial (sent by every core's writer)
-//   w = rsqrt(M @ G / hidden + eps)                (the same on every core and chip)
+// RMSNorm of y's user rows, all in compact form (row r of a compact tile is user r % rows, rows 4 or 8):
+//   partial = M @ ((sum_t y_t^2) @ J)    J all ones: row sums broadcast over the columns; M[r][c] = (r % rows ==
+//                                        c % rows): each row then holds its user's sum over this core's compact tiles
+//   G: gather tile g, rows rows * q.. = the user rows of core g * 32 / rows + q's partial (sent by every core's writer)
+//   w = rsqrt(sum_g M @ G_g / hidden + eps)        (the same on every core and chip)
 //   h_t = y_t * w * gamma_t                        (gamma packed like the compact tiles)
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
@@ -73,6 +73,7 @@ void kernel_main() {
     constexpr uint32_t cb_h = get_compile_time_arg_val(13);
     constexpr uint32_t inv_hidden_bits = get_compile_time_arg_val(14);
     constexpr uint32_t eps_bits = get_compile_time_arg_val(15);
+    constexpr uint32_t gather_tiles = get_compile_time_arg_val(16);
 
     // FPU adds: the chips' bf16 copies pairwise into fp32 Dest (A + B + Dest), then the bf16-rounded sum plus the
     // residual.
@@ -136,42 +137,66 @@ void kernel_main() {
     mm(cb_const, 1, cb_rs, 0, cb_part);
     cb_pop_front(cb_rs, 1);
 
-    // While the partials travel: y_t * gamma_t into dst 1 + 2t. Then w = rsqrt(M @ G / hidden + eps) into dst 0 (G row
-    // 4p + u holds core p's partial for user u, so M @ G sums the cores in one matmul, the same on every core and
-    // chip) and h_t = (y_t * gamma_t) * w.
-    static_assert(tiles <= 2, "dst holds w, a gamma scratch tile and two h tiles");
+    // w = rsqrt(sum_g M @ G_g / hidden + eps): G_g row rows * q + u holds core q's partial for user u, so the
+    // matmuls sum the cores (the same on every core and chip).
+    auto weights = [&]() {
+        cb_wait_front(cb_gather, gather_tiles);
+        reconfig_data_format(cb_gather, cb_const);
+        matmul_init(cb_const, cb_gather);
+        for (uint32_t g = 0; g < gather_tiles; g++) {
+            matmul_tiles(cb_const, cb_gather, 1, g, 0);
+        }
+        binop_with_scalar_tile_init();
+        mul_unary_tile(0, inv_hidden_bits);
+        add_unary_tile(0, eps_bits);
+        rsqrt_tile_init();
+        rsqrt_tile(0);
+    };
     cb_wait_front(cb_gamma, tiles);
-    tile_regs_acquire();
-    for (uint32_t t = 0; t < tiles; t++) {
-        const uint32_t d = 1 + 2 * t;
-        load(cb_y, t, d);
-        load(cb_gamma, t, 2);
+    if constexpr (tiles <= 2) {
+        // While the partials travel: y_t * gamma_t into dst 1 + 2t; then w into dst 0 and h_t = (y_t * gamma_t) * w.
+        tile_regs_acquire();
+        for (uint32_t t = 0; t < tiles; t++) {
+            const uint32_t d = 1 + 2 * t;
+            load(cb_y, t, d);
+            load(cb_gamma, t, 2);
+            mul_binary_tile_init();
+            mul_binary_tile(d, 2, d);
+        }
+        weights();
         mul_binary_tile_init();
-        mul_binary_tile(d, 2, d);
+        for (uint32_t t = 0; t < tiles; t++) {
+            mul_binary_tile(1 + 2 * t, 0, 1 + 2 * t);
+        }
+        tile_regs_commit();
+        cb_reserve_back(cb_h, tiles);
+        tile_regs_wait();
+        pack_reconfig_data_format(cb_h);
+        for (uint32_t t = 0; t < tiles; t++) {
+            pack_tile(1 + 2 * t, cb_h);
+        }
+        tile_regs_release();
+        cb_push_back(cb_h, tiles);
+    } else {
+        // More tiles than Dest holds (8 user rows): w to cb_rs first, then h_t = y_t * gamma_t * w one tile at a time.
+        tile_regs_acquire();
+        weights();
+        pack_one(cb_rs);
+        cb_wait_front(cb_rs, 1);
+        for (uint32_t t = 0; t < tiles; t++) {
+            tile_regs_acquire();
+            load(cb_y, t, 0);
+            load(cb_gamma, t, 1);
+            mul_binary_tile_init();
+            mul_binary_tile(0, 1, 0);
+            load(cb_rs, 0, 1);
+            mul_binary_tile_init();
+            mul_binary_tile(0, 1, 0);
+            pack_one(cb_h);
+        }
+        cb_pop_front(cb_rs, 1);
     }
-    cb_wait_front(cb_gather, 1);
-    reconfig_data_format(cb_gather, cb_const);
-    matmul_init(cb_const, cb_gather);
-    matmul_tiles(cb_const, cb_gather, 1, 0, 0);
-    binop_with_scalar_tile_init();
-    mul_unary_tile(0, inv_hidden_bits);
-    add_unary_tile(0, eps_bits);
-    rsqrt_tile_init();
-    rsqrt_tile(0);
-    mul_binary_tile_init();
-    for (uint32_t t = 0; t < tiles; t++) {
-        mul_binary_tile(1 + 2 * t, 0, 1 + 2 * t);
-    }
-    tile_regs_commit();
-    cb_reserve_back(cb_h, tiles);
-    tile_regs_wait();
-    pack_reconfig_data_format(cb_h);
-    for (uint32_t t = 0; t < tiles; t++) {
-        pack_tile(1 + 2 * t, cb_h);
-    }
-    tile_regs_release();
-    cb_push_back(cb_h, tiles);
-    cb_pop_front(cb_gather, 1);
+    cb_pop_front(cb_gather, gather_tiles);
     cb_pop_front(cb_const, 2);
     cb_pop_front(cb_gamma, tiles);
     cb_pop_front(cb_y, tiles);

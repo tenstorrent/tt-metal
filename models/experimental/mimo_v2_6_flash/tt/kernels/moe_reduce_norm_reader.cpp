@@ -22,10 +22,12 @@ void kernel_main() {
     constexpr uint32_t cb_gather = get_compile_time_arg_val(8);
     constexpr uint32_t cores = get_compile_time_arg_val(9);
     constexpr uint32_t sem_id = get_compile_time_arg_val(10);
+    constexpr uint32_t rows = get_compile_time_arg_val(11);          // user rows per block: 4 or 8
+    constexpr uint32_t gather_tiles = get_compile_time_arg_val(12);  // tiles of every core's partial rows
     constexpr uint32_t tile_bytes = 2048;
     constexpr uint32_t fp32_tile_bytes = 4096;
     constexpr uint32_t face_bytes = mimo_moe::kBf16FaceBytes;
-    constexpr uint32_t rows_bytes = 4 * mimo_moe::kFaceDim * 2;  // rows 0-3 of one face: 128 B
+    constexpr uint32_t rows_bytes = rows * mimo_moe::kFaceDim * 2;  // the user rows of one face
     constexpr uint32_t blocks_per_face = face_bytes / rows_bytes;
 
     const uint32_t in_addr = get_arg_val<uint32_t>(0);
@@ -76,11 +78,11 @@ void kernel_main() {
         }
     }
 
-    // Every core's writer puts rows 0-3 of its partial into rows 4 * index.. of this core's cb_gather tile, then
-    // increments this core's semaphore.
-    cb_reserve_back(cb_gather, 1);
+    // Every core's writer puts the user rows of its partial into rows rows * index.. of this core's cb_gather tiles
+    // (32 / rows cores per tile), then increments this core's semaphore.
+    cb_reserve_back(cb_gather, gather_tiles);
     volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
     noc_semaphore_wait(sem, cores);
     noc_semaphore_set(sem, 0);
-    cb_push_back(cb_gather, 1);
+    cb_push_back(cb_gather, gather_tiles);
 }

@@ -16,9 +16,10 @@ void kernel_main() {
     constexpr uint32_t compact_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t chips = get_compile_time_arg_val(4);
     constexpr uint32_t row_blocks = get_compile_time_arg_val(5);
+    constexpr uint32_t rows = get_compile_time_arg_val(6);  // user rows per block: 4 or 8
     constexpr uint32_t tile_bytes = 2048;
     constexpr uint32_t face_bytes = mimo_moe::kBf16FaceBytes;
-    constexpr uint32_t rows_bytes = 4 * mimo_moe::kFaceDim * 2;  // rows 0-3 of one face: 128 B
+    constexpr uint32_t rows_bytes = rows * mimo_moe::kFaceDim * 2;  // the user rows of one face
     constexpr uint32_t blocks_per_face = face_bytes / rows_bytes;
 
     const uint32_t in_addr = get_arg_val<uint32_t>(0);

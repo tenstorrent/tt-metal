@@ -39,6 +39,7 @@ void kernel_main() {
     constexpr uint32_t scale_bits = get_compile_time_arg_val(19);
     constexpr bool has_mask = get_compile_time_arg_val(20) == 1;
     constexpr uint32_t stick_bytes = get_compile_time_arg_val(21);  // >= 2 * (pairs + 1), DRAM-write aligned
+    constexpr uint32_t rows = get_compile_time_arg_val(22);         // the user rows of the score tiles: 4 or 8
     constexpr uint32_t users = num_pairs / topk;
     constexpr uint32_t remote_users = users - local_users;
 
@@ -50,10 +51,10 @@ void kernel_main() {
     const uint32_t mask_addr = get_arg_val<uint32_t>(5);
     const uint32_t ids_addr = get_arg_val<uint32_t>(6);
 
-    using Stage = mimo_moe::RouteStage<expert_tiles>;
+    using Stage = mimo_moe::RouteStage<expert_tiles, rows>;
     cb_reserve_back(cb_stage, stage_pages);
     const uint32_t stage = get_write_ptr(cb_stage);
-    mimo_moe::stage_route_rows<expert_tiles, has_mask>(biased_addr, scores_addr, mask_addr, stage);
+    mimo_moe::stage_route_rows<expert_tiles, has_mask, rows>(biased_addr, scores_addr, mask_addr, stage);
     noc_async_read_barrier();
 
     // The local users' selections go to the writer (it weights every distinct expert's rows): cb_local page =
@@ -66,8 +67,8 @@ void kernel_main() {
     for (uint32_t u = 0; u < local_users; u++) {
         uint32_t ids[topk];
         uint32_t weights[topk];
-        mimo_moe::select_user<topk, expert_tiles, norm, has_scale, scale_bits, has_mask>(stage, u, ids, weights);
-        const bool active = mimo_moe::user_active<expert_tiles, has_mask>(stage, u);
+        mimo_moe::select_user<topk, expert_tiles, norm, has_scale, scale_bits, has_mask, rows>(stage, u, ids, weights);
+        const bool active = mimo_moe::user_active<expert_tiles, has_mask, rows>(stage, u);
         local[u] = active ? 1 : 0;
         for (uint32_t i = 0; i < topk; i++) {
             local[local_users + u * topk + i] = ids[i];

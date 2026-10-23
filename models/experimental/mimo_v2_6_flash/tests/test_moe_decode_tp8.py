@@ -3,7 +3,8 @@
 
 """MiMo MoE decode against prefill on the same tokens, one Galaxy row (TP=8), BFP4 experts.
 
-Each step takes 4 real users (layer-1 MoE inputs of the golden prompts) in rows 0-3 of a 32-row tile and runs
+Each step takes 4 (or 8: the deduplicated stream's 8-row tiles) real users (layer-1 MoE inputs of the golden prompts)
+in the first rows of a 32-row tile and runs
 TtMiMoMoE.forward_decode (the streaming path: GateUpStream, DownStream, the compact row all-gather and ReduceExpand)
 and TtMiMoMoE.forward (prefill) on the same tile with the token mask. Every reduction variant of the decode path
 is checked:
@@ -43,7 +44,6 @@ from models.experimental.mimo_v2_6_flash.tt.moe import TtMiMoMoE
 from models.experimental.mimo_v2_6_flash.tt.moe_stream import zero_output
 
 LAYER = 1
-USERS = 4
 STEPS = 4
 RESIDUAL_STD = 0.5
 
@@ -76,15 +76,21 @@ def read_normed(plan, result):
     return read(plan, y), read(plan, h, free=False)
 
 
-def ulps(a, b):
-    """Largest |a - b| in bf16 ulps of the larger magnitude (both bf16-exact)."""
-    mag = torch.maximum(a.abs(), b.abs()).clamp(min=2.0**-100)
+def ulps(a, b, *operands):
+    """Largest |a - b| in bf16 ulps of the larger magnitude (both bf16-exact), or of the largest of ``operands``
+    (the terms a and b are sums of: where they cancel, a few ulps of the terms are many ulps of the result)."""
+    mag = torch.maximum(a.abs(), b.abs())
+    for t in operands:
+        mag = torch.maximum(mag, t.abs())
+    mag = mag.clamp(min=2.0**-100)
     return ((a - b).abs() / torch.exp2(torch.floor(torch.log2(mag)) - 7)).max().item()
 
 
+@pytest.mark.parametrize("users", [4, 8])
 @pytest.mark.parametrize("device_params", [GALAXY_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
-def test_moe_decode_vs_prefill(mesh_device):
+def test_moe_decode_vs_prefill(mesh_device, users):
+    USERS = users
     golden_path()  # skips without the golden file
     torch.manual_seed(0)
     cfg, ckpt = load_config_and_ckpt()
@@ -103,7 +109,7 @@ def test_moe_decode_vs_prefill(mesh_device):
         expert_dtype=ttnn.bfloat4_b,
     )
     moe.set_decode_users(USERS)
-    assert moe.gate_up_stream is not None, "BFP4 experts with 4 users take the streaming decode path"
+    assert moe.gate_up_stream is not None, f"BFP4 experts with {USERS} users take the streaming decode path"
     red = moe.reduce_expand
     assert red.can_norm
     gamma = ckpt.norms(LAYER + 1)["input_layernorm"]  # the next layer's input norm, as in the model
@@ -112,8 +118,9 @@ def test_moe_decode_vs_prefill(mesh_device):
     norm = (red.compact_gamma(plan, gamma), norm_out, eps)
     # Per step: the users' rows and the token mask's users.
     cases = [(inputs[step * USERS : (step + 1) * USERS], [1] * USERS) for step in range(STEPS)]
-    cases.append((inputs[[0, 1, 0, 1]], [1] * USERS))  # users 0 / 2 and 1 / 3 select the same experts
-    cases.append((inputs[4:8], [1, 1, 0, 1]))  # user 2 masked
+    pairs = torch.arange(USERS) % 2  # users 0, 2, ... and 1, 3, ... select the same experts
+    cases.append((inputs[pairs], [1] * USERS))
+    cases.append((inputs[USERS : 2 * USERS], [0 if u == 2 else 1 for u in range(USERS)]))  # user 2 masked
 
     worst_pcc, worst_ulps = 1.0, 0.0
     steps = []  # (x, r, mask, y_fab, h_fab) per step, for the back-to-back run
@@ -146,7 +153,7 @@ def test_moe_decode_vs_prefill(mesh_device):
             assert torch.count_nonzero(out[u]) == 0 and torch.count_nonzero(expected[u]) == 0, f"step {step}: user {u}"
         # bf16(residual + the bf16-rounded sum); the fused reductions sum the chips with FPU adds instead of SFPU
         res_ulps = ulps(y[:USERS], (r[:USERS] + out[:USERS]).bfloat16().float())
-        fused_ulps = ulps(y_ag[:USERS], y[:USERS])
+        fused_ulps = ulps(y_ag[:USERS], y[:USERS], out[:USERS], r[:USERS])
         norm_pcc = pcc(h_ag[:USERS], ref.rms_norm(y_ag[:USERS], gamma, eps))
         logger.info(
             f"step {step}: decode vs prefill per user {[round(p, 5) for p in user_pcc]}; residual {res_ulps:g} ulp, "

@@ -34,6 +34,7 @@ from .common import (
 from .moe_stream import (
     DownStream,
     GateUpStream,
+    DEDUP,
     PendingCompact,
     ReduceExpand,
     fabric_row_gather,
@@ -264,7 +265,8 @@ class TtMiMoMoE:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=rep,
         )
-        if self.expert_dtype == ttnn.bfloat4_b and num_users <= GateUpStream.MAX_USERS:
+        stream_users = GateUpStream.MAX_USERS_DEDUP if DEDUP else GateUpStream.MAX_USERS
+        if self.expert_dtype == ttnn.bfloat4_b and num_users <= stream_users:
             # BFP4 decode: top-k routing, gate|up, SwiGLU and the routing weight in one bank-local DRAM-streaming
             # program. It writes only row u of pair (u, k) into this persistent zeroed activation (the other rows
             # stay zero) and the pairs' uint16 expert ids into ids_buf for the down sparse_matmul.
@@ -283,16 +285,19 @@ class TtMiMoMoE:
             # Down + sum over pairs, bank-local from the interleaved w_down, into a persistent compact
             # [1, 1, 32, hidden / 8] output holding only the user rows; one row all-gather of it, then ReduceExpand
             # sums the chips' copies and restores [1, 1, 32, hidden] with zero padding rows.
-            self.down_stream = DownStream(self.plan, self.hidden, self.inter_local, pairs, self.gate_up_stream.dedup)
+            rows = self.gate_up_stream.rows
+            self.down_stream = DownStream(
+                self.plan, self.hidden, self.inter_local, pairs, self.gate_up_stream.dedup, rows=rows
+            )
             self.act_buf = self.down_stream.activation_buffer(self.plan)
             self.out_buf = self.down_stream.compact_output(self.plan)
             self.reduce_expand = ReduceExpand(
-                self.plan, self.hidden, self.plan.tp, self.down_stream.compute_config, DownStream.TINY_ROWS
+                self.plan, self.hidden, self.plan.tp, self.down_stream.compute_config, rows
             )
             # Router logits, sigmoid and the bias add in one bank-local launch (scores and biased are persistent).
             try:
                 bias = ttnn.to_torch(ttnn.get_device_tensors(self.score_bias)[0]).float().reshape(-1)
-                self.router_scores = RouterScoreStream(self.plan, self.hidden, self.num_experts, bias)
+                self.router_scores = RouterScoreStream(self.plan, self.hidden, self.num_experts, bias, rows=rows)
             except AssertionError:
                 self.router_scores = None
 

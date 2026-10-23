@@ -3,11 +3,11 @@
 
 // One direction (BRISC: forward, NCRISC: backward) of one link of the row all-gather that feeds the fused reduce
 // (ReduceExpand.call_fabric). This sender handles `cores` reduce cores starting at first_core: their compact tiles
-// (core i owns tiles [2i, 2i + 2) of this chip's [1, 1, 32, hidden / 8] compact rows) are read into L1, then each
-// core's two tiles go to every chip `range` hops away in this direction as one fabric multicast packet: a scatter
-// write into slots (tile, this chip) of that core's persistent gather buffer plus an increment of its global
-// semaphore. The forward sender also writes this chip's own slots and increments the local semaphores, so every
-// reduce core waits for `chips` increments.
+// (core i owns tiles [t * i, t * i + t) of this chip's compact rows, t = tiles_per_core: 2, or 4 with 8 user rows)
+// are read into L1, then each two tiles of a core go to every chip `range` hops away in this direction as one fabric
+// multicast packet: a scatter write into slots (tile, this chip) of that core's persistent gather buffer plus an
+// increment of its global semaphore. The forward sender also writes this chip's own slots and increments the local
+// semaphores, so every reduce core waits for `chips * tiles_per_core / 2` increments.
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
@@ -21,7 +21,7 @@ void kernel_main() {
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(0);
     constexpr uint32_t range = get_compile_time_arg_val(1);
     constexpr uint32_t cores = get_compile_time_arg_val(2);
-    constexpr uint32_t tiles_per_core = get_compile_time_arg_val(3);  // 2
+    constexpr uint32_t tiles_per_core = get_compile_time_arg_val(3);  // 2 or 4
     constexpr uint32_t chips = get_compile_time_arg_val(4);
     constexpr bool local_copy = get_compile_time_arg_val(5) == 1;
     constexpr bool src_dram = get_compile_time_arg_val(6) == 1;
@@ -30,7 +30,8 @@ void kernel_main() {
     constexpr uint32_t wait_count = get_compile_time_arg_val(8);
     constexpr uint32_t tile_bytes = 2048;
     constexpr uint32_t core_bytes = tiles_per_core * tile_bytes;
-    static_assert(tiles_per_core == 2, "one scatter packet carries a core's two tiles");
+    constexpr uint32_t packets = tiles_per_core / 2;
+    static_assert(tiles_per_core == 2 * packets, "one scatter packet carries two of a core's tiles");
 
     size_t arg = 0;
     const uint32_t src_addr = get_arg_val<uint32_t>(arg++);
@@ -59,8 +60,8 @@ void kernel_main() {
     }
 
     PacketHeaderPool::reset();
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* headers[cores];
-    for (uint32_t i = 0; i < cores; i++) {
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* headers[cores * packets];
+    for (uint32_t i = 0; i < cores * packets; i++) {
         headers[i] = PacketHeaderPool::allocate_header();
     }
     connection.open_finish();
@@ -68,18 +69,22 @@ void kernel_main() {
 
     // Slot (tile j, chip c) of a core's gather buffer: gather_addr + (j * chips + c) * tile_bytes.
     for (uint32_t i = 0; i < cores; i++) {
-        const uint64_t dst0 = get_noc_addr(core_x[i], core_y[i], gather_addr + (0 * chips + my_chip) * tile_bytes);
-        const uint64_t dst1 = get_noc_addr(core_x[i], core_y[i], gather_addr + (1 * chips + my_chip) * tile_bytes);
-        const uint64_t sem = get_noc_addr(core_x[i], core_y[i], sem_addr);
-        fabric_multicast_noc_fused_scatter_write_atomic_inc(
-            &connection,
-            headers[i],
-            scratch + i * core_bytes,
-            core_bytes,
-            tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader(
-                {dst0, dst1}, sem, {static_cast<uint16_t>(tile_bytes)}, 1, true),
-            1,
-            range);
+        for (uint32_t k = 0; k < packets; k++) {
+            const uint32_t j = 2 * k;
+            const uint64_t dst0 = get_noc_addr(core_x[i], core_y[i], gather_addr + (j * chips + my_chip) * tile_bytes);
+            const uint64_t dst1 =
+                get_noc_addr(core_x[i], core_y[i], gather_addr + ((j + 1) * chips + my_chip) * tile_bytes);
+            const uint64_t sem = get_noc_addr(core_x[i], core_y[i], sem_addr);
+            fabric_multicast_noc_fused_scatter_write_atomic_inc(
+                &connection,
+                headers[i * packets + k],
+                scratch + i * core_bytes + j * tile_bytes,
+                2 * tile_bytes,
+                tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader(
+                    {dst0, dst1}, sem, {static_cast<uint16_t>(tile_bytes)}, 1, true),
+                1,
+                range);
+        }
     }
 
     if constexpr (local_copy) {
@@ -93,7 +98,7 @@ void kernel_main() {
         }
         noc_async_write_barrier();
         for (uint32_t i = 0; i < cores; i++) {
-            noc_semaphore_inc(get_noc_addr(core_x[i], core_y[i], sem_addr), 1);
+            noc_semaphore_inc(get_noc_addr(core_x[i], core_y[i], sem_addr), packets);
         }
         noc_async_atomic_barrier();
     }
