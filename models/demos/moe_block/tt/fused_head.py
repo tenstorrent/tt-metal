@@ -46,6 +46,55 @@ class RoutingSpec:
     torus: tuple = (False, False)
 
 
+# the router placement's cost model (router_placement): per-core matmul rates and the routing chain past the logits
+RTR_RATE = (
+    1.3e12  # (FLOP/s a core, the router's HiFi3 bf16: K3 E 896 on the Galaxy, 316 us for 2 x 640 x 1792 x 896 / 5)
+)
+SE_RATE = 1.18e12  # (the SE path's, effective: K3 E 448 at 640 rows, Galaxy-projected 388 us for ~459 MFLOP a core)
+ENG_OVERHEAD = 3.0  # (the logits phase on the engine vs its FLOPs: K3 E 448 ~35 us measured vs ~11)
+CHAIN_US = 150.0  # (the routing chain past the logits: GLM's chain-bound head 166 us less its ~16 us logits phase)
+
+
+def router_placement(*, E, H, I, G, rows, latent, GX, GY, MT, NCH):
+    """(on the engine?, estimates us). The head ends at max(SE path, routing chain). On the router cores (a row
+    tile each of every owner's rows: 2 x G 32 tokens x E x H / G FLOP a core, whatever the rows) the chain is their
+    matmul + CHAIN_US; on the engine the logits phase (my MT x NCH row tiles x my expert tiles) delays the SE path and
+    starts the chain. Pick the shorter max."""
+    t_rc = 2 * 32 * E * H / RTR_RATE * 1e6
+    etc = -(-(E // 32) // GX)
+    t_eng = ENG_OVERHEAD * 2 * (MT * NCH * 32) * (etc * 32) * (H // G) / RTR_RATE * 1e6
+    flops = 2 * rows * H * 3 * I + (2 * rows * H * latent // G if latent else 0)  # (gate / up / down, the latent)
+    t_se = flops / (GX * GY) / SE_RATE * 1e6
+    rc, eng = max(t_se, t_rc + CHAIN_US), max(t_se + t_eng, t_eng + CHAIN_US)
+    return eng < rc, dict(
+        router_cores=round(rc), engine=round(eng), t_rc=round(t_rc), t_eng=round(t_eng), se=round(t_se)
+    )
+
+
+def head_layouts(rows, G, *, grid_y=10, GX=11, num_links=2, router=True):
+    """The fused head's engine layouts for `rows` (a mesh row's tokens) over TP = G, preferred first: (GY, MT, NCH) -
+    NCH row chunks of CR = GY x MT row tiles, chunk m = block m of every owner (CR / G row tiles of each: whole), MT <=
+    2 (MT 4 doubles a core's L1), the fewest chunks, then the most core rows. With the router chain its cores (a row
+    tile each of the owners' rows: rows / 32 / G) must fit the mover column's free cells or a free row under the
+    engine. The L1 fit is the engine's (SeEngine3 raises) - the caller tries these in order."""
+    RT = rows // 32
+    if rows % 32 or RT % G:
+        return []
+    nrt = RT // G
+    out = []
+    for nch in range(1, nrt + 1):
+        if nrt % nch:
+            continue
+        CR = RT // nch
+        for gy in range(grid_y, 0, -1):
+            if CR % gy or CR // gy > 2:
+                continue
+            if router and not (nrt + 2 * num_links + 1 <= grid_y or (gy < grid_y and nrt <= GX)):
+                continue
+            out.append((gy, CR // gy, nch))
+    return out
+
+
 class HeadSE3:
     """The fused head's x chain, v3 (row-chunk-major, weights resident): x [rows, H / TP] a chip -> the x all-gather a
     row chunk at a time straight into the engine's x-own L1 (tt/x_gather3.py) -> per chunk gate / up -> h -> down ->
@@ -60,8 +109,8 @@ class HeadSE3:
         I,
         glu,
         GX=11,
-        GY=10,
-        MT=2,
+        GY=None,
+        MT=None,
         KB=None,
         num_links=2,
         fidelity=ttnn.MathFidelity.HiFi2,
@@ -101,23 +150,35 @@ class HeadSE3:
         self.plan = None
         if self.rs_mode == "mrs":
             self._warm_rs(rows, H, I)
-        elif self.rs_mode == "fused":
-            from models.demos.moe_block.tt.se_rs import RsPlan
+        grid_y = mesh_device.compute_with_storage_grid_size().y
+        # (the engine's layout: given, or head_layouts' first whose arena fits L1 - at a K step, the largest first)
+        layouts = (
+            [(GY, MT, None)]
+            if GY is not None
+            else head_layouts(rows, G, grid_y=grid_y, GX=GX, num_links=num_links, router=router is not None)
+        )
+        assert layouts, f"HeadSE3: no engine layout for {rows} rows over TP {G}"
+        kbs = [KB] if KB else sorted((d for d in range(1, 17) if klt % d == 0 and (klt // d) % 2 == 0), reverse=True)
+        last_err = None
+        self._GX, self._dims = GX, dict(H=H, I=I, G=G, rows=rows)
 
-            self.plan = RsPlan(
-                G=G,
-                ring=self._ring(),
-                GX=GX,
-                GY=GY,
-                MT=MT,
-                NTH=H // 32,
-                scatter=rs_dim,
-                nv=num_links,
-                pwmax=8 // MT,
-            )
-        for kb in (
-            [KB] if KB else sorted((d for d in range(1, 17) if klt % d == 0 and (klt // d) % 2 == 0), reverse=True)
-        ):
+        def build(GY, MT, kb):  # (the RS plan and the engine at one layout and K step; False: its arena does not fit)
+            nonlocal last_err
+            self._lay = (GY, MT, rows // 32 // (GY * MT))
+            if self.rs_mode == "fused":
+                from models.demos.moe_block.tt.se_rs import RsPlan
+
+                self.plan = RsPlan(
+                    G=G,
+                    ring=self._ring(),
+                    GX=GX,
+                    GY=GY,
+                    MT=MT,
+                    NTH=H // 32,
+                    scatter=rs_dim,
+                    nv=num_links,
+                    pwmax=8 // MT,
+                )
             try:
                 self.eng = SeEngine3(
                     mesh_device,
@@ -141,12 +202,18 @@ class HeadSE3:
                         else None
                     ),
                 )
-                break
+                return True
             except ValueError as err:
                 last_err = err
-                continue
+                return False
+
+        # (auto placement: if no layout fits with the logits on the engine, the router cores - self._rc_only)
+        for self._rc_only in (False, True)[: 2 if router is not None and router.on_engine is None else 1]:
+            if any(build(GY, MT, kb) for (GY, MT, _) in layouts for kb in kbs):
+                break
         else:
-            raise ValueError(f"HeadSE3: no K step fits L1 at {rows} rows ({last_err})")
+            raise ValueError(f"HeadSE3: no layout / K step fits L1 at {rows} rows ({last_err})")
+        GY, MT = self._lay[:2]
         holes = list(l1_hole or [])
         if holes:  # (the arena placed: what this head keeps from here on lands in the hole, above it)
             ttnn.deallocate(holes.pop(0))
@@ -366,13 +433,18 @@ class HeadSE3:
         )
 
     def router_on_engine(self, router, latent):
-        """Where the logits' matmul runs. On the engine's cores at the start, every chip's routing chain starts earlier
-        but gate / up starts later by the router phase (GLM ~16 us, K3 ~35: gate / up's end with no gather wait 89 vs 73
-        / 307 vs 272 us, SE_PROBE=NOXWAIT). Galaxy-projected from the mesh's last launch: GLM (the chain binds) 166 us
-        on the engine vs 191 on the router cores; K3 (the SE path binds) 424 vs 388 - so on where there is no latent."""
+        """Where the logits' matmul runs: RouterSpec.on_engine, or router_placement's choice at the engine's layout. On
+        the engine every chip's routing chain starts earlier but gate / up later by the logits phase (GLM ~16 us, K3 E
+        448 ~35). Measured: GLM (the chain binds) 166 us on the engine vs 191 on the router cores, K3 E 448 (the SE path
+        binds) 424 vs 388 Galaxy-projected; the Galaxy's K3 at E 896 on the router cores 650 us (their 316 us matmul
+        bound it). An engine layout that does not fit L1: the router cores (self._rc_only)."""
         if router.on_engine is not None:
             return router.on_engine
-        return not latent
+        if self._rc_only:
+            return False
+        GY, MT, NCH = self._lay
+        on, _ = router_placement(GX=self._GX, GY=GY, MT=MT, NCH=NCH, latent=latent, **self._dims, E=router.E)
+        return on
 
     def router_w_gate(self, router, latent):
         """The engine's W streams gated on every engine core's partials written (RouterSpec.w_gate). Ungated, the

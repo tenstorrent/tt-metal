@@ -524,13 +524,18 @@ void kernel_main() {
     for (uint32_t j = 0; j < nh; ++j) {
         DeviceZoneScopedN("SE-RHAND");
         cb_wait_front(FINC, j + 1);
-        const uint32_t e = get_arg_val<uint32_t>(h0 + 5 * j), px = get_arg_val<uint32_t>(h0 + 5 * j + 1);
-        const uint32_t py = get_arg_val<uint32_t>(h0 + 5 * j + 2);
-        noc_async_write(hold + e * ET * 4096, get_noc_addr(px, py, get_arg_val<uint32_t>(h0 + 5 * j + 3)), ET * 4096);
+        const uint32_t e = get_arg_val<uint32_t>(h0 + 6 * j), px = get_arg_val<uint32_t>(h0 + 6 * j + 1);
+        const uint32_t py = get_arg_val<uint32_t>(h0 + 6 * j + 2), sw = get_arg_val<uint32_t>(h0 + 6 * j + 5);
+        if (sw) {  // (the port's sub-block slot is shared with an earlier core of my link: once the port sent its)
+            volatile tt_l1_ptr uint32_t* f = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sw);
+            while (*f == 0) invalidate_l1_cache();
+            *f = 0;  // (re-arm: one a call - the next comes after this call's hand-offs)
+        }
+        noc_async_write(hold + e * ET * 4096, get_noc_addr(px, py, get_arg_val<uint32_t>(h0 + 6 * j + 3)), ET * 4096);
         noc_async_write_barrier();
-        noc_semaphore_inc(get_noc_addr(px, py, get_arg_val<uint32_t>(h0 + 5 * j + 4)), 1);
+        noc_semaphore_inc(get_noc_addr(px, py, get_arg_val<uint32_t>(h0 + 6 * j + 4)), 1);
     }
-    const uint32_t t0 = h0 + 5 * nh;
+    const uint32_t t0 = h0 + 6 * nh;
     const uint32_t o_addr = get_arg_val<uint32_t>(t0), page = get_arg_val<uint32_t>(t0 + 1);
     const uint32_t o_l1 = get_arg_val<uint32_t>(t0 + 3);
     const uint32_t words = get_arg_val<uint32_t>(t0 + 4);
@@ -596,17 +601,19 @@ void kernel_main() {
 # fused increment of the downstream router core's arrival word for this source's slot. One dedicated header, flushed per packet.
 LSTREAM = r"""
 struct LStream {
-    uint32_t r0, nu, nc, buf, word, zone, actr, et, rpl, need, u, i, sent;
+    uint32_t r0, nu, nc, buf, word, zone, actr, et, rpl, need, ns, sfree, u, i, sent;
     void init(uint32_t a) {
         r0 = a; nu = get_arg_val<uint32_t>(a); nc = get_arg_val<uint32_t>(a + 1 + 2 * nu);
         const uint32_t t = a + 2 + 2 * nu + nc;
         buf = get_arg_val<uint32_t>(t); word = get_arg_val<uint32_t>(t + 1); zone = get_arg_val<uint32_t>(t + 2);
         actr = get_arg_val<uint32_t>(t + 3); et = get_arg_val<uint32_t>(t + 4); rpl = get_arg_val<uint32_t>(t + 5);
         need = get_arg_val<uint32_t>(t + 6);  // (a sub-block's word when in: 1 hand-off, or et engine tiles)
+        ns = get_arg_val<uint32_t>(t + 7);  // (sub-block slots a unit: core i in slot i % ns, then core i + ns told)
+        sfree = get_arg_val<uint32_t>(t + 8);
         u = 0; i = 0; sent = 0;
     }
     bool done() const { return u >= nu; }
-    static uint32_t len(uint32_t a) { const uint32_t nu = get_arg_val<uint32_t>(a); return 2 + 2 * nu + get_arg_val<uint32_t>(a + 1 + 2 * nu) + 7; }
+    static uint32_t len(uint32_t a) { const uint32_t nu = get_arg_val<uint32_t>(a); return 2 + 2 * nu + get_arg_val<uint32_t>(a + 1 + 2 * nu) + 9; }
     // send what is ready (unit u: an owner chip, multi-hop; core i of my link: its partial of that owner's rows);
     // blocking: until everything is sent
     template <typename C, typename H>
@@ -621,7 +628,7 @@ struct LStream {
                 noc_semaphore_wait_min(wd, need);
             }
             const uint32_t cw = get_arg_val<uint32_t>(r0 + 2 + 2 * nu + i), x = cw & 0xFF, y = (cw >> 8) & 0xFF;
-            const uint32_t src0 = buf + ((u * nc + i) * et) * 4096;
+            const uint32_t src0 = buf + ((u * ns + i % ns) * et) * 4096;
             const uint32_t dst0 = zone + (w0 >> 16) * et * 4096;
             for (uint32_t t0 = 0; t0 < et; t0 += rpl) {
                 const uint32_t n = et - t0 < rpl ? et - t0 : rpl;
@@ -635,6 +642,11 @@ struct LStream {
                 }
                 conn.wait_for_empty_write_slot();
                 conn.send_current_slot_non_blocking(src0 + t0 * 4096, n * 4096, reinterpret_cast<uint32_t>(hdr));
+            }
+            if (i + ns < nc) {  // (the slot's next core may write it once the sub-block left)
+                noc_async_writes_flushed();
+                const uint32_t cn = get_arg_val<uint32_t>(r0 + 2 + 2 * nu + i + ns);
+                noc_semaphore_inc(get_noc_addr(cn & 0xFF, (cn >> 8) & 0xFF, sfree + 16 * u), 1);
             }
             ++i;
         }
@@ -726,8 +738,30 @@ class RouterStream:
         assert o <= abytes, f"router cores need {o} B of the arena's {abytes}"
         # the ports' buffers (in the arena's range there): per port the sub-blocks of its units x cores
         nlink = -(-RB // xg.nv)
-        self.pbuf_sub = (G - 1) * nlink * ET * 4096
-        assert self.pbuf_sub <= abytes
+        # (sub-block slots a unit: every core of the link's, or - on the router cores, too much L1 (K3 E 896 at 1024
+        # rows: 3 x 4 x 28 fp32 tiles = 1.34 MB) - fewer, core i in slot i % NS behind the port's word that core i - NS's
+        # left; on the engine its cores write the sub-blocks themselves, all of them)
+        self.NS = nlink
+        while not on_engine and self.NS > 1 and (G - 1) * self.NS * ET * 4096 > abytes // 2:
+            self.NS -= 1
+        self.pbuf_sub = (G - 1) * self.NS * ET * 4096
+        assert self.pbuf_sub <= abytes, f"the ports' logits sub-blocks: {self.pbuf_sub} B > the arena's {abytes}"
+        self.sfree_words = ttnn.from_torch(  # (the slots' "free" words on the router cores, 16 B a (direction, unit))
+            torch.zeros(len(self.cores), 4 * 8, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.cores]),
+                    [1, 32],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
         self.pbase, self.words = self.base, words
         # (arrivals / the engine's own-block tiles / the engine cores' "partials written", router core 0: the W gate)
         self.sems = [ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(3)]
@@ -824,7 +858,7 @@ class RouterStream:
         straight to their owners (multi-hop unicast; the owner sums them): no relay chain."""
         p = self._pos(coord)
         if self.xg.chips[coord]["rings"][0][("next" if d == "fwd" else "prev")] is None:
-            return [0, 0] + [0] * 7
+            return [0, 0] + [0] * 9
         bs = self._dests(p, d)
         js = self._port_layout(v)
         virt = self.mesh.worker_core_from_logical_core
@@ -836,7 +870,18 @@ class RouterStream:
         rpl = max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // 4096)
         assert len(bs) * len(js) <= 16, "the port's sub-block words: 16 a port"
         need = self.ET if self.on_engine else 1  # (engine tiles straight in, or one hand-off of the sub-block)
-        return out + [self.pbase, self.words, self.base + self.off["arr"], self.arr[0], self.ET, rpl, need]
+        sf = int(self.sfree_words.buffer_address()) + 64 * ("fwd", "bwd").index(d)  # (a direction's units: 4 words)
+        return out + [
+            self.pbase,
+            self.words,
+            self.base + self.off["arr"],
+            self.arr[0],
+            self.ET,
+            rpl,
+            need,
+            min(self.NS, len(js)),
+            sf,
+        ]
 
     def _ra_src(self, coord, ct0):
         if self.ra is None:
@@ -986,9 +1031,12 @@ class RouterStream:
                 d = self._dir(p, bb)
                 u = self._dests(p, d).index(bb)
                 pc = ports[(d, l)]
-                hs += [bb, pc.x, pc.y, self.pbase + (u * len(js) + i) * ET * 4096, self.words + 16 * (u * len(js) + i)]
+                ns = min(self.NS, len(js))  # (this link's slots a unit: the port's walk, LStream)
+                sw = int(self.sfree_words.buffer_address()) + 64 * ("fwd", "bwd").index(d) + 16 * u if i >= ns else 0
+                hs += [bb, pc.x, pc.y, self.pbase + (u * ns + i % ns) * ET * 4096]
+                hs += [self.words + 16 * (u * len(js) + i), sw]
             b_rt[core.x][core.y] = (
-                [len(hs) // 5]
+                [len(hs) // 6]
                 + hs
                 + [int(out.buffer_address()), j, self.scale_bits, b0 + off["out"], b0 + off["words"]]
                 + [b0 + off["best"], b0 + off["route"], int(route.buffer_address()) if route is not None else 0, 32 * j]

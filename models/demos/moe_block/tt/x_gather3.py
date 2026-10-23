@@ -947,7 +947,7 @@ class XGather3:
                 + self.la_block(rs, la, d, v)
             )
             rsb = self.rs_block(rs, d, v) if rs else [0, 0] + [0] * (self.G + RSX)
-            rsb = rsb + (router.port_block(coord, d, v) if router else [0, 0] + [0] * 7)
+            rsb = rsb + (router.port_block(coord, d, v) if router else [0, 0] + [0] * 9)
             lab = self.la_block(rs, la, d, v)
             assert lab[0] == 0 or mine, "the latent needs the gather's fence"
             rab = routing.send_block(coord, ("x", d, v)) if routing is not None else [0]

@@ -129,9 +129,12 @@ class MoEOptions:
     experts_during_dispatch: bool = False
     deterministic: bool = False  # fixed sum order, bit-identical runs (debug)
     # the head: "fused" one program a chip (tt/fused_head.py: x all-gather, shared expert + reduce-scatter, router,
-    # routing exchange + planner, dispatch prep, latent); "ops" a program a stage; "auto": fused where it is built
-    # (640 rows a mesh row: chunk 1280 on the 2x4, the Galaxy's per-chip load)
+    # routing exchange + planner, dispatch prep, latent; its rows in chunks where one does not fit L1); "ops" a program
+    # a stage; "auto": fused where it fits (FusedHead.fits)
     head: Literal["auto", "fused", "ops"] = "auto"
+    # the fused head's router logits: on the engine's cores at the start, on their own router cores, or "auto" (the
+    # head's cost model: tt/fused_head.py router_placement - the router's FLOPs a core vs the SE path)
+    router: Literal["auto", "engine", "router_cores"] = "auto"
     # the tail (latent models): "fused" one program a chip (tt/tail_engine.py: the latent all-gather into the engine's
     # L1, rms norm, up projection, + the shared expert; the combine's rows tilized there); "ops" its ops; "auto": fused
     # where it is built (with the fused head, 640 rows a mesh row)
@@ -366,7 +369,14 @@ class MoEBlock(LightweightModule):
             hole = _l1_hole(mesh_device, FusedHead.HOLE)
             holes = [_l1_hole(mesh_device, FusedHead.HOLE_HEAD) for _ in range(2)]
             self.fused = FusedHead(
-                mesh_device, g, model, weights, holes, deterministic=options.deterministic, accumulators=acc
+                mesh_device,
+                g,
+                model,
+                weights,
+                holes,
+                deterministic=options.deterministic,
+                accumulators=acc,
+                router=options.router,
             )
             self._warm_up_head()
             self.fused.head.settle_arena()
@@ -381,7 +391,7 @@ class MoEBlock(LightweightModule):
         logger.info(
             f"MoEBlock: mesh {g.sp}x{g.tp}, chunk {g.chunk_tokens} ({g.tokens_per_row} rows a mesh row, "
             f"{g.tokens_per_chip} owned a chip), {g.experts_per_chip} experts a chip, routed width {model.routed_width}; "
-            f"head {self.head_mode}{'' if fits is True else f' (fused: {fits})'}; tail "
+            f"head {self.head_mode}{'' if fits is True else f' (fused: {fits})'}{self.fused.describe() if self.fused else ''}; tail "
             f"{'fused' if self.tail else 'ops'}{'' if tfits is True or model.latent_dim is None else f' (fused: {tfits})'}; flat layout "
             f"{self.experts.layout_fields}; dtypes {dtypes}; options {options}"
         )
@@ -715,7 +725,6 @@ class FusedHead:
     buffer, its route words) and the latent down + all-to-all. Its arena and the exchange's share the L1 left: the block
     frees it after the head runs."""
 
-    ROWS = 640  # (rows a mesh row the engine is built for: GY x MT row tiles, one chunk - the RS needs one)
     HOLE = 24 * 1024  # (L1 a core kept above the head's arena for what the exchange keeps: its words, ~17 KB)
     HOLE_HEAD = 8 * 1024  # (two, for what the head keeps after placing its arena, and again: ~5 KB, ~1 KB)
 
@@ -723,8 +732,10 @@ class FusedHead:
     def fits(g: Geometry, model: MoEModel, dtypes: MoEDtypes):
         """True, or why not."""
         act = model.shared_expert_activation
-        if g.tokens_per_row != FusedHead.ROWS:
-            return f"{g.tokens_per_row} rows a mesh row, built for {FusedHead.ROWS}"
+        from models.demos.moe_block.tt.fused_head import head_layouts
+
+        if not head_layouts(g.tokens_per_row, g.tp, num_links=g.links):
+            return f"{g.tokens_per_row} rows a mesh row: no engine layout (row chunks of whole owner blocks)"
         if model.shared_expert_hidden_dim is None:
             return "no shared expert"
         if act.kind == "situ" and (act.beta, act.linear_beta) != (4.0, 25.0):
@@ -743,7 +754,15 @@ class FusedHead:
         return True
 
     def __init__(
-        self, mesh, g: Geometry, model: MoEModel, w: MoEWeights, l1_hole=None, deterministic=False, accumulators=12
+        self,
+        mesh,
+        g: Geometry,
+        model: MoEModel,
+        w: MoEWeights,
+        l1_hole=None,
+        deterministic=False,
+        accumulators=12,
+        router="auto",
     ):
         from ttnn.bringup.combine_rf.lin2d import glu_weight
 
@@ -762,7 +781,13 @@ class FusedHead:
             rs_dim=-1 if latent else -2,  # (K3: the latent up lands the width split, the shared output too)
             rs_mode="fused",
             # (deterministic: the router fin's sum in a fixed order)
-            router=RouterSpec(E=E, K=K, route_scale=model.router.route_scale, ordered=deterministic),
+            router=RouterSpec(
+                E=E,
+                K=K,
+                route_scale=model.router.route_scale,
+                ordered=deterministic,
+                on_engine={"auto": None, "engine": True, "router_cores": False}[router],
+            ),
             latent=latent,
             # (the planner's row capacity: the head's (2 S K + 32 EPC: the router cores' L1), within the exchange's
             # worst case - its plan tensors take a prefix)
@@ -790,6 +815,13 @@ class FusedHead:
             ttnn.DRAM_MEMORY_CONFIG,
         )
         self.head.upload_router(w.router["weight"].float(), w.router["bias"].float())
+
+    def describe(self):
+        """The resolved head: engine layout, chunks, the router's placement."""
+        h = self.head
+        GY, MT, NCH = h._lay
+        on = h.router is not None and h.router.on_engine
+        return f" (engine {h.eng.GX}x{GY} cores, MT {MT}, {NCH} chunk{'s' if NCH > 1 else ''}, router {'on the engine' if on else f'on {len(h.router.cores)} router cores'})"
 
     def attach(self, exchange):
         """The planner writes the exchange's plan tensors (its combine baked their addresses)."""

@@ -270,7 +270,7 @@ def _router_specs():
     kw["ordered"] = bool(o("HSE3_ORDERED"))
     return {
         "glm": RouterSpec(E=288, K=8, route_scale=2.5, **kw),
-        "k3": RouterSpec(E=448, K=16, **kw),
+        "k3": RouterSpec(E=int(os.environ.get("HSE3_K3_E", "448")), K=16, **kw),  # (test-only: 896, the Galaxy's)
     }
 
 
@@ -312,7 +312,8 @@ def _check_routing(head, xs, w_r, b_r, rows_t, rows, name):
         f"HSE3 {name} routing: picks equal {100 * min(agree):.2f}% (worst chip), weights PCC {min(wp):.5f} "
         f"(rows with the same picks)"
     )
-    assert min(agree) > 0.98 and min(wp) > 0.99, (
+    # (E 896: sigmoid scores of random router weights sit near 0.5, the weights near 1 / K - their PCC is low-variance)
+    assert min(agree) > 0.98 and min(wp) > (0.98 if spec.E >= 896 else 0.99), (
         agree,
         wp,
     )  # (the SE reduce-scatter: GLM's rows to their owners, K3's width)
