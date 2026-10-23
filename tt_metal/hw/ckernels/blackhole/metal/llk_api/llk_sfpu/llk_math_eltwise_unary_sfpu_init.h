@@ -51,7 +51,6 @@ void left_shift_init();
 void less_than_equal_zero_init();
 void less_than_zero_init();
 void logical_not_unary_init();
-void mask_init();
 void not_equal_zero_init();
 void power_init();
 void prelu_init();
@@ -193,8 +192,6 @@ inline void llk_math_eltwise_unary_sfpu_init() {
         sfpu::less_than_zero_init();
     } else if constexpr (sfpu_op == SfpuType::logical_not_unary) {
         sfpu::logical_not_unary_init();
-    } else if constexpr (sfpu_op == SfpuType::mask) {
-        sfpu::mask_init();
     } else if constexpr (sfpu_op == SfpuType::negative) {
         sfpu::negative_init();
     } else if constexpr (sfpu_op == SfpuType::not_equal_zero) {
