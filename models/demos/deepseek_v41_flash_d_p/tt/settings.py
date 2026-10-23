@@ -38,6 +38,16 @@ TABLE = {
         "tests/perf/test_matmul_sweep.py), auto where the rule has no entry. Dtypes, compute kernel configs, memory "
         "configs and the op sequence are the same either way",
     ),
+    "WO_A_CONFIG": Setting(
+        "tuned",
+        ("tuned", "auto"),
+        "the program config of the batched attention output matmul (attn.wo_a, one weight per group: 2x1024x4096 . "
+        "2x4096x1024 bfp8 a chip on 2x2, 8 calls a chunk; tt/mm_configs.py, P.24, owner comparison): auto = none "
+        "passed, ttnn picks it (2D multicast, fuse_batch=False, in0_block_w 1: the path before P.24); tuned = the same "
+        "2D-multicast family with fuse_batch=False at the widest in0 block whose CBs fit (32 tiles of K at K 4096): "
+        "bit-identical to auto, 0.476 -> 0.116 ms a call (640 rows: 0.258 -> 0.068). Only with MATMUL_CONFIG=tuned "
+        "(MATMUL_CONFIG=auto passes no config anywhere). Never MatmulMultiCoreReuseProgramConfig (DS41-113)",
+    ),
     "FP32_ACC": Setting(
         "needed",
         ("all", "needed"),
