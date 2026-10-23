@@ -82,7 +82,7 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7): none (fp3
 - `deepseek=True` with `coefficients_given=True` refused.
 - `collapse_pre`: fp32 TILE DRAM, last dim n..32, leading dims as the input's.
 - Engram mode: fp32 TILE DRAM only; one row's partials (n x column groups) <= 64; DRAM-bound at ~0.42 ms for the shape above (two DM batches of 2 B tiles a unit; the weight blocks add a few % reads).
-- Model cases do not cover deepseek_v41_flash_d_p's `mhc_pre_xing_pack` calls (n=4 in `tt/mhc.py`, n=1 in `tt/norm.py`); only its `deepseek=True` coefficient calls (tests/xing_cases.py).
+- deepseek_v41_flash_d_p model cases (tests/xing_cases.py, O.1): its 16 coefficient calls (partials, collapse_pre, bf16 streams) and its bf16 / engram `mhc_pre_xing_pack` calls; the n=1 pack of `tt/norm.py` (NORM_IMPL off only) has none.
 - Known test failures: none recorded.
 
 ## How to call

@@ -38,3 +38,12 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
   device/moe_grouped_topk_device_operation.hpp, device/moe_grouped_topk_device_operation.cpp,
   device/moe_grouped_topk_program_factory.cpp; tests: tests/unit/test_fp32_activation.py (7 cases; the option off
   fails its 5e-5 activation bar at 8.2e-2), tests/source.yaml + source_baseline.json (203 / 203 both)
+
+### Tests: fork model-case suite with the deepseek_v41_flash_d_p case (O.1, 2026-10-23)
+- What: tests/cases.py, reference.py (single-group semantics), test_moe_grouped_topk.py: the router call (2x2, 1024
+  rows a chip, 96 experts, top 6, sqrtsoftplus, fp32_selection + fp32_activation, route_scale 1.5): the selected sets
+  equal float64's on every row clear of the keys' noise (4096 / 4096 clear), the weights within noise_limit (1.7e-3 vs
+  3.4e-3), determinism. No op change.
+- Why: task O.1, every call a model makes to a fork gets a case.
+- Needed by: deepseek_v41_flash_d_p O.1
+- Files: tests/cases.py, tests/reference.py, tests/test_moe_grouped_topk.py

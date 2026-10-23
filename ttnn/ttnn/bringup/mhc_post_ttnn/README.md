@@ -46,7 +46,6 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7): none (fp3
 ## Limits
 - TILE only; every tensor DRAM interleaved; rank 2..4 with equal leading dims; C % 32 == 0; n in 1..5 (n*n must fit one tile row); post / comb fp32; fp32 DEST required.
 - The row-weighted split is tuned on Blackhole p150; untested on Wormhole and other harvesting patterns (changelog.md, Perf 2 findings).
-- No model case for deepseek_v41_flash_d_p's call (`tt/residual.py`, default `comb_transposed=True`); tests/cases.py has glm53 and xing40 only.
 - `stats_weight`: fp32 X (F fp32 or bf16) or bf16 X with bf16 F, n <= 4; one row's partials <= 64; DRAM-bound, its W blocks add ~13 % reads at the 2x2 shape (follow-up: multicast W to the cores of a block); block widths under 8 tiles lose to the per-unit work.
 - Known test failures: none recorded.
 
@@ -63,7 +62,7 @@ Tests: `tests/test_mhc_post_ttnn.py` + `tests/cases.py` (model cases), `tests/un
 ## Used by
 - glm53_flash_d_p: `tt/mhc_fused.py` (default; `GLM_MHC_IMPL=composite` keeps the op chains); O.1 case.
 - xing40_a4b_d_p: `tt/residual.py`, `comb_transposed=False`, fp32 streams (`XING_RESIDUAL_MIX=addcmul` keeps the op chain); task P.2, case in tests/cases.py.
-- deepseek_v41_flash_d_p: `tt/residual.py` (default `comb_transposed=True`; setting RESIDUAL_MIX=addcmul for the chain); P.14 (setting MHC_FUSED=on): `stats_weight` in `tt/residual.py:TtHcResidual.fused` and `tt/engram_add.py` (the engram add as an identity-comb mhc_post, with stats_weight in the all-device model). P.19 (setting GLUE_FOLD=on): `post_col=4, comb_col=8` on the packed mixes and the bf16 attention / MoE sums as F in `tt/residual.py`. P.20 (setting BF16_ACTIVATIONS=on): bf16 streams with `stats_weight` (tt/residual.py, tt/engram_add.py). Model cases for these calls: none yet (task O.1).
+- deepseek_v41_flash_d_p: `tt/residual.py` (default `comb_transposed=True`; setting RESIDUAL_MIX=addcmul for the chain); P.14 (setting MHC_FUSED=on): `stats_weight` in `tt/residual.py:TtHcResidual.fused` and `tt/engram_add.py` (the engram add as an identity-comb mhc_post, with stats_weight in the all-device model). P.19 (setting GLUE_FOLD=on): `post_col=4, comb_col=8` on the packed mixes and the bf16 attention / MoE sums as F in `tt/residual.py`. P.20 (setting BF16_ACTIVATIONS=on): bf16 streams with `stats_weight` (tt/residual.py, tt/engram_add.py). Model cases for these calls: tests/cases.py (O.1, test_mhc_post_ds41).
 
 ## History
 CHANGELOG.md; codegen worklogs: changelog.md, op_design.md, op_requirements.md, verification_report.md, verifier_report.json, l1_ledger.md, self_reflection.md.

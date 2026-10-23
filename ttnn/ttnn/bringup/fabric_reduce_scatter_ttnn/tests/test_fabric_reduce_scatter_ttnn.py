@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """ttnn.bringup.fabric_reduce_scatter against its torch semantics (reference.py), one random-input case per captured
 call (cases.py). Math (a sum of bf16 partials, added in bf16 hop by hop): per chip, PCC, the relative L2 error and
-an elementwise atol + rtol bound against a float64 sum of the same bf16 inputs. Every chip's input differs, so a chip given the
-wrong block or the wrong group's sum fails. Don't-care: nothing.
+an elementwise atol + rtol bound against a float64 sum of the same bf16 inputs; a case with `noise` instead checks rel
+L2 against fork_cases.noise_limit (PCC printed, a diagnostic) (the same sum at the declared formats vs float64, x calib, F139); an `exact`
+case (exact_fp32_add on fp32 partials) compares bit for bit with torch's fp32 sum in rank order. Every chip's input
+differs, so a chip given the wrong block or the wrong group's sum fails. Don't-care: nothing.
 
 The op's own unit suite is tests/unit/."""
 
@@ -16,6 +18,7 @@ import torch
 
 import ttnn
 from models.demos.common.bringup.testing import determinism
+from models.demos.common.bringup.testing.fork_cases import noise_limit
 
 _HERE = Path(__file__).resolve().parent
 
@@ -36,6 +39,10 @@ CASES = _load("cases").CASES
 def _device_params(c):
     p = dict(c["device_params"])
     p["fabric_config"] = getattr(ttnn.FabricConfig, p["fabric_config"])
+    if "fabric_payload_bytes" in p:  # the model's fabric packet payload (harness.device_params)
+        rc = ttnn._ttnn.fabric.FabricRouterConfig()
+        rc.max_packet_payload_size_bytes = int(p.pop("fabric_payload_bytes"))
+        p["fabric_router_config"] = rc
     # A case runs on a box of its own mesh size only: a smaller mesh opened on a bigger box fails the FABRIC_2D router
     # handshake, and the groups depend on the mesh.
     p["require_exact_physical_num_devices"] = True
@@ -53,7 +60,8 @@ def _inputs(mesh_device, c, seed):
     rows, cols = c["mesh"]
     g = torch.Generator().manual_seed(seed)
     _, _, n, w = c["input"]["shape"]
-    host = torch.randn(rows, cols, n, w, generator=g).to(torch.bfloat16)
+    host = torch.randn(rows, cols, n, w, generator=g)
+    host = host if c["input"]["dtype"] == "FLOAT32" else host.to(torch.bfloat16)
     tt_in = ttnn.from_torch(
         host,
         device=mesh_device,
@@ -68,6 +76,9 @@ def _inputs(mesh_device, c, seed):
 
 def _call(c, tt_in):
     kw = {"topology": getattr(ttnn.Topology, c["topology"])} if c["topology"] is not None else {}
+    for k in ("dim", "exact_fp32_add", "cache_descriptors", "program_hash"):
+        if k in c:
+            kw[k] = c[k]
     return ttnn.bringup.fabric_reduce_scatter(tt_in, cluster_axis=c["cluster_axis"], num_links=c["num_links"], **kw)
 
 
@@ -85,9 +96,31 @@ def test_fabric_reduce_scatter_ttnn(mesh_device, device_params, case):
     out = _call(c, tt_in)
     outs = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(out)]
     assert len(outs) == rows * cols
+    dim = c.get("dim", 2)
     for d in range(rows * cols):
-        want = ref.reduce_scatter(xs, (rows, cols), d, cluster_axis=c["cluster_axis"])
+        want = ref.reduce_scatter(xs, (rows, cols), d, cluster_axis=c["cluster_axis"], dim=dim)
+        if c.get("exact"):
+            assert c.get("exact_fp32_add") and c["input"]["dtype"] == "FLOAT32"
+            bs = ref.blocks(xs, (rows, cols), d, cluster_axis=c["cluster_axis"], dim=dim)
+            want32 = bs[0].float()
+            for b in bs[1:]:
+                want32 = want32 + b.float()  # one IEEE fp32 rounding per add, in rank order
+            got32 = outs[d].reshape(want32.shape).float()
+            n_bad = int((got32.view(torch.int32) != want32.view(torch.int32)).sum())
+            print(f"dev {d}: {n_bad} of {want32.numel()} elements differ from the fp32 sum")
+            assert n_bad == 0, f"dev {d}: {n_bad} elements differ from torch's fp32 sum"
+            continue
         got = outs[d].reshape(want.shape).double()
+        if "noise" in c:
+            bs = ref.blocks(xs, (rows, cols), d, cluster_axis=c["cluster_axis"], dim=dim)
+            lim = noise_limit(lambda *t: sum(t), bs, c["noise"]["inputs"], c["noise"]["out"])
+            pcc = _pcc(got, want)
+            rel = float((got - want).norm() / want.norm())
+            print(f"dev {d}: pcc {pcc:.7f} (min {lim['pcc']:.7f}) rel {rel:.3e} (max {lim['rel']:.3e})")
+            assert (
+                rel <= lim["rel"]
+            ), f"dev {d}: rel L2 {rel:.3e} > limit {lim['rel']:.3e} (pcc {pcc:.7f}, a diagnostic)"
+            continue
         pcc = _pcc(got, want)
         err = (got - want).abs()
         rel = float((got - want).norm() / want.norm())

@@ -105,3 +105,84 @@ CASES = [
         "rel": 0.004,
     },
 ]
+
+
+# deepseek_v41_flash_d_p O.1 (scaled 2x2 run, ladder rung last: the last 2048-token chunk, start 53248, of a 55296-token
+# prefill; tt/indexer.py): ring_indexer_score_dsa over the SP ring (axis 0, Linear, 2 links), the TP query sub-shard on
+# axis 1, natural query blocks (device (d, c) scores tokens start + d W + c Sq + [0, Sq), W 1024, Sq 512) over the
+# block-cyclic index-key cache (SP-sharded, TP-replicated: key t on SP rank (r t / W) % SP), 32 heads x 128, HiFi2 +
+# fp32 DEST, k_chunk 32. Ratio 2: the compressed index keys (T = 27648); ratio 1 (T = 55296) with the block epilogue
+# (block_keys 8): the candidate layer's block max (block_max_out + block_max_pin) and the re-index layers' candidate
+# restriction (block_bias). Run by test_ring_indexer_score_dsa_ds41. Limits: future / masked columns -inf and visible
+# ones finite (exact); visible scores within noise_limit (bf16 q / k / gates, bf16 out) with the FPU's operand bits at
+# the call's fidelity (reference.dsa_score(fidelity=)); the block max bit-exact vs the op's own bf16 scores.
+_DS41 = {
+    "model": "deepseek_v41_flash_d_p",
+    "task": "O.1",
+    "op": "ring_indexer_score_dsa",
+    "mesh": [2, 2],
+    "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576, "fabric_payload_bytes": 10880},
+    "heads": 32,
+    "head_dim": 128,
+    "q_rows": 512,
+    "chunk": 2048,
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "num_semaphores": 2,
+    "cluster_axis": 0,
+    "topology": "Linear",
+    "num_links": 2,
+    "chunk_start_idx": 53248,
+    "seq_subshard_axis": 1,
+    "block_cyclic_sp_axis": 0,
+    "block_cyclic_chunk_local": 1024,
+    "natural_query_blocks": True,
+    "program_config": {"q_chunk_size": 64, "k_chunk_size": 32, "head_group_size": 0},
+    "compute_kernel_config": {
+        "math_fidelity": "HiFi2",
+        "math_approx_mode": False,
+        "fp32_dest_acc_en": True,
+        "packer_l1_acc": False,
+        "dst_full_sync_en": False,
+    },
+    "gate_scale": 1.0 / 64,
+    "noise": {"inputs": ["bf16", "bf16", "bf16"], "out": "bf16"},
+}
+
+CASES += [
+    {
+        **_DS41,
+        "id": "deepseek_v41_flash_d_p-2x2-ring-natural-ratio2-q512-t27648-h32-d128-hifi2",
+        "sig": "377a477700",
+        "key_compression_ratio": 2,
+        "t": 27648,
+        "k_local_rows": 13824,
+        "kv_len": 27648,
+        "seed": 1,
+    },
+    {
+        **_DS41,
+        "id": "deepseek_v41_flash_d_p-2x2-ring-natural-ratio1-q512-t55296-h32-d128-hifi2-block-bias-bk8",
+        "sig": "f064b9bda3",
+        "key_compression_ratio": 1,
+        "t": 55296,
+        "k_local_rows": 27648,
+        "kv_len": 55296,
+        "seed": 2,
+        "block_keys": 8,
+        "block_bias": {"shape": [1, 1, 512, 6912], "dtype": "BFLOAT16", "layout": "TILE"},
+    },
+    {
+        **_DS41,
+        "id": "deepseek_v41_flash_d_p-2x2-ring-natural-ratio1-q512-t55296-h32-d128-hifi2-block-max-pin-bk8",
+        "sig": "f5914547b9",
+        "key_compression_ratio": 1,
+        "t": 55296,
+        "k_local_rows": 27648,
+        "kv_len": 55296,
+        "seed": 3,
+        "block_keys": 8,
+        "block_max_out": {"shape": [1, 1, 512, 6912], "dtype": "FLOAT32", "layout": "ROW_MAJOR"},
+        "block_max_pin": True,
+    },
+]

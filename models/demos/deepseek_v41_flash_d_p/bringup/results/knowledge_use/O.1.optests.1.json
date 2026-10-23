@@ -1,0 +1,152 @@
+{
+ "used": [
+  {
+   "id": "K-45",
+   "how": "flat_routed_expert_with_program's extra (a MeshProgramDescriptor) gave a new sig per layer and run: a value repr in ttnn/ttnn/bringup/__init__.py:_stable_arg_reprs (8 sigs -> 1, stable across captures)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-46",
+   "how": "every new case carries its captured sig; the DS41 xing / pack cases live in xing_cases.py and reach cases.py through _xing_cases (engram mode mapped to mhc_pre_xing_pack)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-40",
+   "how": "mhc_post's stats projection checked against the device's own bf16 X' read back; block max checked against the op's own bf16 scores; the expert weights generated at exact block-float values (check_exact) so the reference multiplies what the device holds",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "every fork run and the capture with --no-precompile",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-68",
+   "how": "the new mesh tests keep require_exact_physical_num_devices (2x2 cases on this 2x2 box)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-42",
+   "how": "the srcA 9-bit in1 of DS41-42 is the in1 entry of the FPU_BITS operand model (mhc_post / indexer / flat expert noise floors); mhc_post stats weights rounded to 9 bits as the model loads them",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-16",
+   "how": "the ~3e-4 residual between the HiFi2 / LoFi operand model and the device is this in-tile TF32 rounding (left unmodelled: far below the fidelity effect)",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-44",
+   "how": "expected a TF32-grade stats_out; measured the bf16-input call at 2.8e-8 (bf16 squares exact), so no TF32 model was needed for the rms_norm cases",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-103",
+   "how": "the formats run rounds the flat expert's y / the combine's sums to bf16; the bfp8 packer's ties-away rounding is the remaining ~1.8e-2 between the device and the RNE model (noted, not modelled)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-65",
+   "how": "the exact_fp32_add reduce-scatter case compares bit for bit with torch's fp32 a + b (0 differences)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-49",
+   "how": "the indexer cases lay the keys out as the served ratio-2 / ratio-1 block-cyclic cache with natural query blocks (k_local_positions with tp 1, W / r per SP rank)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-69",
+   "how": "the routed case asserts the captured one-pass geometry (bf16 sums: 1024 home tokens in one pass, 9 accumulators)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-105",
+   "how": "the router case runs fp32_activation as captured and checks the selections on every clear row against float64",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "How a fork case's noise floor models an FPU matmul at LoFi / HiFi2: which operand keeps how many mantissa bits (now DS41-108)",
+  "fork_cases --run-tests stops with fork_tests_failed 1 before running anything when one used fork has no top-level tests/test_*.py (moe_grouped_topk)",
+  "noise_limit's pcc limit is unusable at fp32-level noise (1 - 4 (1 - pcc) ~ 1 - 3e-15): rel L2 is the check, PCC a diagnostic (the skill says so, the helper returns both)",
+  "Fork-call capture of ttnn core handle types (MeshProgramDescriptor) records addresses (K-45 only names fork-owned types)"
+ ],
+ "overseer": [],
+ "cited_only": [
+  "DS41-108",
+  "DS41-109"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "O.1",
+  "role": "optests",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-23T03:33:38",
+  "head": "6c052789ab5",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/fork_calls.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/O.1.optests.1.json",
+   "ttnn/ttnn/bringup/__init__.py",
+   "ttnn/ttnn/bringup/fabric_all_gather_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/fabric_all_gather_ttnn/README.md",
+   "ttnn/ttnn/bringup/fabric_all_gather_ttnn/tests/cases.py",
+   "ttnn/ttnn/bringup/fabric_all_gather_ttnn/tests/test_fabric_all_gather_ttnn.py",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/README.md",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/tests/cases.py",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/tests/reference.py",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/tests/test_fabric_reduce_scatter_ttnn.py",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/README.md",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/cases.py",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/reference.py",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/test_flat_routed_expert_ttnn.py",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/weighted_case.py",
+   "ttnn/ttnn/bringup/indexer_score/CHANGELOG.md",
+   "ttnn/ttnn/bringup/indexer_score/README.md",
+   "ttnn/ttnn/bringup/indexer_score/tests/cases.py",
+   "ttnn/ttnn/bringup/indexer_score/tests/reference.py",
+   "ttnn/ttnn/bringup/indexer_score/tests/test_indexer_score.py",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/README.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/tests/cases.py",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/tests/reference.py",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/tests/test_mhc_post_ttnn.py",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/README.md",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/tests/cases.py",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/tests/reference.py",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/tests/test_mhc_pre_xing.py",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/tests/xing_cases.py",
+   "ttnn/ttnn/bringup/moe_grouped_topk/CHANGELOG.md",
+   "ttnn/ttnn/bringup/moe_grouped_topk/README.md",
+   "ttnn/ttnn/bringup/moe_grouped_topk/tests/cases.py",
+   "ttnn/ttnn/bringup/moe_grouped_topk/tests/reference.py",
+   "ttnn/ttnn/bringup/moe_grouped_topk/tests/test_moe_grouped_topk.py",
+   "ttnn/ttnn/bringup/rms_norm_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/rms_norm_ttnn/tests/cases.py",
+   "ttnn/ttnn/bringup/rms_norm_ttnn/tests/test_rms_norm_ttnn.py"
+  ]
+ }
+}

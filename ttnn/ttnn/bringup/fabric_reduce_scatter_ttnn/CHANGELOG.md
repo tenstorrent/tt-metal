@@ -70,3 +70,13 @@
   passes new), model cases 2 passed (no earlier full-suite count recorded).
 - Needed by: deepseek_v41_flash_d_p P.19 (tt/ccl.py, setting GLUE_FOLD).
 - Files: fabric_reduce_scatter.py, tests/unit/test_fabric_rs_program_hash.py
+
+### Tests: deepseek_v41_flash_d_p cases (O.1, 2026-10-23)
+- What: 6 random-input cases for the calls deepseek_v41_flash_d_p makes (tt/ccl.py sum_cols / tp_sum, 2x2 mesh-row
+  groups, num_links 4, cache_descriptors + program_hash, dim 2 and dim 3, bf16 FPU adds and one exact_fp32_add fp32
+  call); the test passes dim / exact_fp32_add / cache_descriptors / program_hash, a `noise` case checks rel L2 against
+  fork_cases.noise_limit (F139; measured 1.80e-3 vs limit 3.6e-3: one bf16 rounding), the exact case bit for bit vs
+  torch's fp32 a + b (0 differences). reference.py: `dim`, `blocks`. No op change.
+- Why: task O.1, every call a model makes to a fork gets a case.
+- Needed by: deepseek_v41_flash_d_p O.1
+- Files: tests/cases.py, tests/reference.py, tests/test_fabric_reduce_scatter_ttnn.py
