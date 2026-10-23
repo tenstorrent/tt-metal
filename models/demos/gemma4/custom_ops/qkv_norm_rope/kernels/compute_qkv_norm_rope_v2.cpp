@@ -154,6 +154,9 @@ FORCE_INLINE void rope(uint32_t cb_out) {
     cn.pop_front(COLS_T);
 }
 
+// In-place safe: the output CB of a tensor may be bound to its input shard. q / k are read only by row_rsqrt and
+// normalize (which packs to CB_N) before rope packs their output columns; v's normalize reads column c into dest
+// before it packs column c and never reads an earlier column again.
 void kernel_main() {
     compute_kernel_hw_startup(CB_Q, CB_SCALER, CB_QO);
     CircularBuffer cq(CB_Q), ck(CB_K), cv(CB_V);

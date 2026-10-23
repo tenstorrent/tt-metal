@@ -8,8 +8,13 @@ on the height-sharded head tensors ``nlp_create_qkv_heads_decode`` produces.
 TILE, DRAM: one row-0 tile per column), ``cos`` / ``sin`` the position-gathered tables ``[1, 1, 32, D]`` (bf16,
 TILE, DRAM: row ``u`` = user ``u``'s row, the ``ttnn.embedding`` output of the model's per-step gather, so the
 per-step transpose / slice / head-repeat of the composite RoPE are not needed).
-Outputs are fresh tensors in the inputs' sharded memory configs (``q_out, k_out, v_out``), so SDPA takes ``q_out``
-sharded and ``paged_update_cache`` takes ``k_out`` / ``v_out`` as before.
+Outputs are written in place over the input shards by default (``GEMMA4_QKV_NORM_ROPE_INPLACE=1``: the op returns
+``q, k, v`` themselves; the compute consumes every input column before it packs the first output column of that
+tensor, see the kernel), or into fresh tensors in the inputs' sharded memory configs (``=0``). SDPA takes the q
+output sharded and ``paged_update_cache`` takes the k / v outputs as before. In place keeps the attention's L1
+peak at three live head shards per core: with six (inputs plus fresh outputs) the head_dim-512 global layers
+at 32 users pushed the lowest live L1 buffer under the static circular-buffer region of the following
+``paged_update_cache`` program ("statically allocated dataflow buffers clash with L1 buffers").
 
 Per core (user) and tensor: the shard tiles are bound to circular buffers in place (no copy); compute squares
 every column tile (FPU, fp32 dest), reduces the row sums (FPU reduce with a unit scaler), takes
@@ -62,10 +67,17 @@ class QkvNormRope:
         normalized-column CB (``GEMMA4_QKV_NORM_ROPE_KERNEL``, default 2)."""
         return int(os.environ.get("GEMMA4_QKV_NORM_ROPE_KERNEL", "2"))
 
+    @staticmethod
+    def in_place() -> bool:
+        """Outputs over the input shards (``GEMMA4_QKV_NORM_ROPE_INPLACE``, default 1) or fresh output tensors (0)."""
+        return os.environ.get("GEMMA4_QKV_NORM_ROPE_INPLACE", "1") == "1"
+
     @classmethod
-    def op(cls, q, k, v, gq, gk, cos, sin, eps: float, variant: int = None):
+    def op(cls, q, k, v, gq, gk, cos, sin, eps: float, variant: int = None, in_place: bool = None):
+        """Returns ``(q_out, k_out, v_out)``; with ``in_place`` these are ``q, k, v`` themselves."""
         variant = cls.kernel_variant() if variant is None else int(variant)
         assert variant in (1, 2), variant
+        in_place = cls.in_place() if in_place is None else bool(in_place)
         B, D = int(q.shape[1]), int(q.shape[3])
         for name, t in (("q", q), ("k", k), ("v", v)):
             assert t.layout == ttnn.TILE_LAYOUT and t.dtype == ttnn.bfloat16, f"{name} must be bf16 TILE"
@@ -82,9 +94,12 @@ class QkvNormRope:
         cols_t = D // TILE
         half_t = cols_t // 2
         device = q.device()
-        outs = [
-            ttnn.allocate_tensor_on_device(t.shape, t.dtype, t.layout, device, t.memory_config()) for t in (q, k, v)
-        ]
+        if in_place:
+            outs = [q, k, v]
+        else:
+            outs = [
+                ttnn.allocate_tensor_on_device(t.shape, t.dtype, t.layout, device, t.memory_config()) for t in (q, k, v)
+            ]
         q_grid = q.memory_config().shard_spec.grid
         assert k.memory_config().shard_spec.grid == q_grid and v.memory_config().shard_spec.grid == q_grid
         cores = []
@@ -168,5 +183,5 @@ class QkvNormRope:
             ),
         ]
         program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
-        ttnn.generic_op([q, k, v, gq, gk, cos, sin] + outs, program)
+        ttnn.generic_op([q, k, v, gq, gk, cos, sin] + ([] if in_place else outs), program)
         return outs[0], outs[1], outs[2]

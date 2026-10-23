@@ -10,6 +10,7 @@ Uses HF-style ttnn.experimental.rotary_embedding (no transformation matrices).
 import os
 
 import ttnn
+from models.demos.gemma4.custom_ops.qkv_norm_rope import QkvNormRope
 from models.demos.gemma4.custom_ops.rope_decode.op import RopeDecode
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 
@@ -146,20 +147,19 @@ def decode_forward(
         and len(cos_cache.shape) == 4
         and int(cos_cache.shape[1]) == 1
         and not (sequential_kv_write and int(tt_q.shape[1]) > 1)
-        # Sliding layers only (head_dim 256). On the head_dim-512 global layers the op's six live [32, 512] shards
-        # per core (inputs + outputs) push the lowest live L1 buffer under the ~1.26 MB static-buffer region of the
-        # following paged_update_cache / SDPA programs at 32 users ("statically allocated dataflow buffers clash
-        # with L1 buffers"); the global layers take the composite path until the op writes its outputs in place.
-        and int(config.head_dim) <= 256
+        # With fresh (not in-place) outputs the op's six live [32, 512] shards per core push the lowest live L1
+        # buffer under the static circular-buffer region of the following paged_update_cache program on the
+        # head_dim-512 global layers at 32 users ("statically allocated dataflow buffers clash with L1 buffers"),
+        # so that form serves the sliding layers only.
+        and (int(config.head_dim) <= 256 or QkvNormRope.in_place())
     )
     if fused_qkv:
         # norms + RoPE on the sharded head tensors, outputs in the same sharded layout (custom_ops/qkv_norm_rope)
-        from models.demos.gemma4.custom_ops.qkv_norm_rope import QkvNormRope
-
         gq, gk = _gamma_tiles(weights, config.head_dim)
         nq, nk, nv = QkvNormRope.op(tt_q, tt_k, tt_v, gq, gk, cos_cache, sin_cache, config.rms_norm_eps)
-        for t in (tt_q, tt_k, tt_v):
-            t.deallocate(True)
+        for t, o in ((tt_q, nq), (tt_k, nk), (tt_v, nv)):
+            if o is not t:  # fresh-output form: the input shards are dead
+                t.deallocate(True)
         # k / v stay sharded for the paged cache update below (freed right after it); q stays height-sharded into
         # SDPA (same result as the DRAM form: tests/unit/test_attention_qkv_stages.py).
         tt_q, tt_k, tt_v = nq, nk, nv

@@ -60,6 +60,7 @@ def _composite(q, k, v, gq_rm, gk_rm, cos_b, sin_b):
     return outs
 
 
+@pytest.mark.parametrize("in_place", [True, False], ids=["inplace", "fresh_out"])
 @pytest.mark.parametrize("variant", [2, 1], ids=["k2_fpu_rope", "k1_sfpu_rope"])
 @pytest.mark.parametrize(
     "B, Hq, Hkv, D, partial",
@@ -82,7 +83,8 @@ def _composite(q, k, v, gq_rm, gk_rm, cos_b, sin_b):
     ],
 )
 @pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
-def test_qkv_norm_rope_matches_composite(mesh_device, device_params, B, Hq, Hkv, D, partial, variant):
+def test_qkv_norm_rope_matches_composite(mesh_device, device_params, B, Hq, Hkv, D, partial, variant, in_place):
+    """``in_place``: outputs written over the input shards (the model's default form) or fresh output tensors."""
     torch.manual_seed(0)
     q = (torch.randn(1, B, Hq, D) * 3).to(torch.bfloat16)
     k = (torch.randn(1, B, Hkv, D) * 3).to(torch.bfloat16)
@@ -109,7 +111,8 @@ def test_qkv_norm_rope_matches_composite(mesh_device, device_params, B, Hq, Hkv,
         gk.reshape(1, 1, -1, 32), device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
     )
     ref = [ttnn.to_torch(t).float() for t in _composite(tq, tk, tv, gq_rm, gk_rm, tcos, tsin)]
-    outs = QkvNormRope.op(tq, tk, tv, tgq, tgk, tcos_rows, tsin_rows, EPS, variant=variant)
+    outs = QkvNormRope.op(tq, tk, tv, tgq, tgk, tcos_rows, tsin_rows, EPS, variant=variant, in_place=in_place)
+    assert all((o is i) == in_place for o, i in zip(outs, (tq, tk, tv)))
     got = [ttnn.to_torch(t).float() for t in outs]
     # diagnostics first: per tensor, per column tile (q, v) and per head row (q), so a layout bug is localized
     print(
@@ -129,7 +132,9 @@ def test_qkv_norm_rope_matches_composite(mesh_device, device_params, B, Hq, Hkv,
         torch.zeros(1, 1, 32, D, dtype=torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
     tq_i, tk_i, tv_i = (_sharded(t, mesh_device, B) for t in (q, k, v))
-    o_i = ttnn.to_torch(QkvNormRope.op(tq_i, tk_i, tv_i, tgq, tgk, ones, zeros, EPS, variant=variant)[0]).float()
+    o_i = ttnn.to_torch(
+        QkvNormRope.op(tq_i, tk_i, tv_i, tgq, tgk, ones, zeros, EPS, variant=variant, in_place=in_place)[0]
+    ).float()
     g_i = QkvNormRope.golden(q, gq, EPS)
     print(
         f"[B{B} q identity-rope] pcc vs norm golden {_pcc(g_i, o_i):.6f}; per column tile {[round(_pcc(g_i[..., i*32:(i+1)*32], o_i[..., i*32:(i+1)*32]), 4) for i in range(D // 32)]}"
@@ -139,7 +144,9 @@ def test_qkv_norm_rope_matches_composite(mesh_device, device_params, B, Hq, Hkv,
         torch.ones(1, 1, 1, D, dtype=torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
     tq_j, tk_j, tv_j = (_sharded(t, mesh_device, B) for t in (q, k, v))
-    o_j = ttnn.to_torch(QkvNormRope.op(tq_j, tk_j, tv_j, tg1, tg1, ones, zeros, EPS, variant=variant)[0]).float()
+    o_j = ttnn.to_torch(
+        QkvNormRope.op(tq_j, tk_j, tv_j, tg1, tg1, ones, zeros, EPS, variant=variant, in_place=in_place)[0]
+    ).float()
     g_j = QkvNormRope.golden(q, None, EPS)
     print(
         f"[B{B} q gamma=1 identity-rope] pcc vs plain norm {_pcc(g_j, o_j):.6f}; per column tile {[round(_pcc(g_j[..., i*32:(i+1)*32], o_j[..., i*32:(i+1)*32]), 4) for i in range(D // 32)]}"
@@ -166,7 +173,7 @@ def test_qkv_norm_rope_matches_composite(mesh_device, device_params, B, Hq, Hkv,
     tq2, tk2, tv2 = (_sharded(t, mesh_device, B) for t in (q, k, v))
     got2 = [
         ttnn.to_torch(t).float()
-        for t in QkvNormRope.op(tq2, tk2, tv2, tgq, tgk, tcos_rows, tsin_rows, EPS, variant=variant)
+        for t in QkvNormRope.op(tq2, tk2, tv2, tgq, tgk, tcos_rows, tsin_rows, EPS, variant=variant, in_place=in_place)
     ]
     for name, a, b in zip("qkv", got, got2):
         assert torch.equal(a, b), f"cache-hit {name} differs: max|diff| {(a - b).abs().max()}"
