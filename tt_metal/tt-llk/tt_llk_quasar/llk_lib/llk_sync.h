@@ -161,7 +161,11 @@ inline void _llk_sync_advance_dest_section_()
  * at startup: a program with no sections never posts, and the spin would never end.
  *
  * @param sem_index Semaphore id in range [0, 7].
- * @note The semaphore must be 0 when the program starts.
+ * @note Does not consume the post: the caller's own wait and get on the semaphore still see it, so do not add a get
+ *       after the spin.
+ * @note The semaphore must be 0 when the program starts, i.e. the previous program matched every post with a get. In
+ *       tt-metal both halves of UNPACK_MATH run in tile_regs_commit (unpacker post, math get). Do not zero it from the
+ *       spinning thread instead: that SEMINIT can land after the poster's first post and wipe it (#60392).
  */
 inline void _llk_sync_spin_until_posted_(std::uint8_t sem_index)
 {
