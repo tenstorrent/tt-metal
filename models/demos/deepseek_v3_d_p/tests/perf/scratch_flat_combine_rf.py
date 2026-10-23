@@ -9,8 +9,14 @@ latent rows 3584 wide. The combine runs on the cells the flat plan leaves free (
 the flat expert's arena (persistent, owned here); the flat y writers report each local expert to the combine's
 collector, the combine reads an expert's rows once reported. Fake (uninitialised) expert weights: perf only; the first
 fused call is checked against the sum of the y rows it read back (y zeroed before: a combine that reads early sums
-zeros). Times: fused, flat alone (the same op, nothing appended), combine alone. Run WITHOUT TT_MESH_GRAPH_DESC_PATH."""
+zeros). Times: fused, flat alone (the same op, nothing appended), combine alone. Run WITHOUT TT_MESH_GRAPH_DESC_PATH.
 
+The close-out cases take the mesh as a parameter (MESHES: shape, fabric, wrap links where cabled); on a Galaxy the
+smaller meshes are carves (TT_VISIBLE_DEVICES from galaxy_carve.py and the carve's single-mesh descriptor,
+GALAXY_RUNBOOK.md), the 8x4 the whole Galaxy. Their per-chip load stays the Galaxy 8x4's (or K3's 4x4 stage, the
+load4x4 ids) whatever the mesh, so the flat expert's work per chip is the same on every mesh."""
+
+import collections
 import dataclasses
 import itertools
 import os
@@ -30,7 +36,7 @@ from ttnn.bringup.combine_rf.sparse_combine_rf import (
     fused_arena_reserve,
     sparse_combine_rf_prepare,
 )
-from ttnn.bringup.flat_routed_expert_ttnn.closeout_models import CHUNKS, GALAXY, MODELS, fabric_payload, per_chip
+from ttnn.bringup.flat_routed_expert_ttnn.closeout_models import GALAXY, MODELS, fabric_payload, per_chip
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert, act_ref
 from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import layout_from_env
 
@@ -38,10 +44,17 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 
-R, C = 2, 4
-N = R * C
 L = 2
 LINK_GBPS = 25.0
+DRAM_GBS, BFP4_TILE = 512.0, 576  # (as test_flat_bench.py)
+# the close-out meshes: shape, fabric, wrap links (X: along a row, the C axis; Y: along a column, the R axis)
+MESHES = {
+    "2x4": ((2, 4), ttnn.FabricConfig.FABRIC_2D, (False, False)),  # the LoudBox; Galaxy rows 0-1, line descriptor
+    "2x4ring": ((2, 4), ttnn.FabricConfig.FABRIC_2D_TORUS_X, (True, False)),  # Galaxy rows 0-1, the rows' wrap cables
+    "4x4": ((4, 4), ttnn.FabricConfig.FABRIC_2D_TORUS_X, (True, False)),  # Galaxy rows 0-3: LINE x RING
+    "4x4torus": ((4, 4), ttnn.FabricConfig.FABRIC_2D_TORUS_XY, (True, True)),  # rows 2-5, subtorus Galaxies only
+    "8x4": ((8, 4), ttnn.FabricConfig.FABRIC_2D_TORUS_XY, (True, True)),  # the whole Galaxy
+}
 
 
 @dataclasses.dataclass
@@ -74,6 +87,7 @@ class FC:
     arena_reserve_kb: int = None  # None: the flat plan's static CBs and the writers' words (fused_arena_reserve)
     det_repeat: int = 0
     pipe: bool = False
+    trace: bool = False  # (traced replays back to back: wall, and the profiler's device time a replay)
     timing: bool = True
     weights: str = "fake"
     gates: bool = True
@@ -89,10 +103,21 @@ class FC:
     closeout: bool = False  # a close-out case (closeout_cfg): the plan's defaults are checked
     combine_mode: str = None  # combine_auto's mode ("ports apart" / "acc_on_ports"); None: its choice
     a_max: int = 16  # combine_auto's accumulators at most (A_MAX)
+    R: int = 2  # the mesh (default the LoudBox's 2 x 4, no wrap)
+    C: int = 4
+    torus: tuple = (False, False)  # (wrap X, wrap Y) where cabled
+
+    @property
+    def N(self):
+        return self.R * self.C
+
+    @property
+    def wrap(self):  # (as mesh_plan: an axis of 2 has no wrap)
+        return (self.torus[0] and self.C > 2, self.torus[1] and self.R > 2)
 
     @property
     def E(self):
-        return N * self.EPC
+        return self.N * self.EPC
 
 
 def _env_cfg():
@@ -136,18 +161,22 @@ def _env_cfg():
     )
 
 
-def closeout_cfg(model, chunk, routings=("uniform",), **kw):
-    """A close-out case (EXPERTS_COMBINE_CLOSEOUT.md): the model's Galaxy 8x4 per-chip load (experts and home tokens a
-    chip) on the LoudBox 2x4, every choice the planners' defaults (flat: DRISC only, even splits; combine: sized from
+def closeout_cfg(model, chunk, mesh="2x4", routings=("uniform",), load=GALAXY, **kw):
+    """A close-out case (EXPERTS_COMBINE_CLOSEOUT.md): the model's per-chip load on stage `load` (default the Galaxy
+    8x4: experts and home tokens a chip) on the mesh MESHES[mesh], every choice the planners' defaults (flat: DRISC only, even splits; combine: sized from
     the cells and the arena); real weights (one random expert set shared by all chips), correctness only."""
-    md, pc = MODELS[model], per_chip(model, GALAXY, chunk)
+    md, pc = MODELS[model], per_chip(model, load, chunk)
+    (R, C), _, torus = MESHES[mesh]
     return FC(
+        R=R,
+        C=C,
+        torus=torus,
         S=pc["S"],
         K=md["K"],
         EPC=pc["epc"],
         H=md["H"],
         I=md["I"],
-        CAP=N * pc["S"],  # (every token at most once per expert)
+        CAP=R * C * pc["S"],  # (every token at most once per expert)
         ACT=md["act"],
         payload=fabric_payload(md["H"]),
         piece_max=max(7168, 2 * md["H"]),  # (the L1 hand-off: one piece a row)
@@ -165,23 +194,36 @@ _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 _KEYS = itertools.count(1)
 _PARAMS = [
     pytest.param(
-        (R, C),
+        (2, 4),
         fabric2d_device_params(fabric_payload_size=int(os.environ.get("FC_PAYLOAD", "7232")), l1_small_size=0),
         id="fabric2d-mesh-2x4-2link",
     )
 ]
+
+
+def _mesh_params(mesh, payload):
+    shape, fabric, _ = MESHES[mesh]
+    return shape, fabric2d_device_params(fabric_payload_size=payload, l1_small_size=0, fabric_config=fabric)
+
+
+_SCALE_CHUNKS = (5120, 8192, 16384)
+_LOADS = {GALAXY: "", "4x4": "-load4x4"}  # (the 4x4 stage load: K3 only)
 _CLOSEOUT = [
     pytest.param(
-        (R, C),
-        fabric2d_device_params(fabric_payload_size=fabric_payload(MODELS[m]["H"]), l1_small_size=0),
+        *_mesh_params(mesh, fabric_payload(MODELS[m]["H"])),
         m,
         chunk,
-        id=f"{m}-{chunk}",
+        mesh,
+        load,
+        id=f"{m}-{chunk}-{mesh}{_LOADS[load]}",
     )
     for m in MODELS
     if m != "dsv41_flash"  # (host planning only: tests/unit/test_closeout_plans.py)
-    for chunk in CHUNKS
-    if (m, chunk) != ("k27", 16384)  # (K2.7: being deprecated, chunk 5120 only)
+    for chunk in _SCALE_CHUNKS
+    if (m, chunk) == ("k27", 5120) or m != "k27"  # (K2.7: being deprecated, chunk 5120 only)
+    for mesh in MESHES
+    for load in _LOADS
+    if load == GALAXY or m == "k3"
 ]
 
 
@@ -204,7 +246,7 @@ def _chip_ns(mesh_device):
 
 def _ids(name, g, c):
     """[N, S, K] global expert ids per home chip and token."""
-    S, K, E, EPC = c.S, c.K, c.E, c.EPC
+    S, K, E, EPC, N = c.S, c.K, c.E, c.EPC, c.N
     if name == "uniform":
         return torch.stack([torch.stack([torch.randperm(E, generator=g)[:K] for _ in range(S)]) for _ in range(N)])
     if name.startswith("zipf"):
@@ -220,7 +262,7 @@ def _ids(name, g, c):
 def _routing(name, c, seed=0):
     """rows_by_chip (y row, home, t, link, local expert) in expert order, per-chip counts / regions over the global
     experts, rows per chip (padded), the busiest link's rows."""
-    S, K, E, EPC = c.S, c.K, c.E, c.EPC
+    S, K, E, EPC, R, C, N = c.S, c.K, c.E, c.EPC, c.R, c.C, c.N
     g = torch.Generator().manual_seed(seed)
     ids = _ids(name, g, c)
     # gate weights per (home, token, k): softmax over the token's experts, bf16 (gates off: all 1)
@@ -238,7 +280,7 @@ def _routing(name, c, seed=0):
                 src = chips[e // EPC]
                 link = (t + k) % L
                 pend[src].append((e % EPC, o, t, link, int(gbits[o, t, k])))
-                for hc, d in route(src, chips[o], R, C, False, False, link):
+                for hc, d in route(src, chips[o], R, C, *c.wrap, link):
                     load[(hc, d, link)] = load.get((hc, d, link), 0) + 1
     rows, counts, regions, n_rows = (
         {},
@@ -278,19 +320,20 @@ def test_flat_combine_rf(mesh_device, device_params):
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, model, chunk", _CLOSEOUT, indirect=["mesh_device", "device_params"]
+    "mesh_device, device_params, model, chunk, mesh, load", _CLOSEOUT, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.timeout(3600)
-def test_flat_combine_closeout(mesh_device, device_params, model, chunk):
-    """A close-out case: the model's Galaxy per-chip load, the planners' defaults, the fused result checked."""
-    c = closeout_cfg(model, chunk, routings=tuple(os.environ.get("FC_ROUTINGS", "uniform").split(",")))
-    logger.info(f"closeout {model} chunk {chunk}: {c}")
+def test_flat_combine_closeout(mesh_device, device_params, model, chunk, mesh, load):
+    """A close-out case: the model's per-chip load (the Galaxy's, or K3's 4x4 stage), the planners' defaults, on the
+    mesh `mesh`, the fused result checked."""
+    c = closeout_cfg(model, chunk, mesh, routings=tuple(os.environ.get("FC_ROUTINGS", "uniform").split(",")), load=load)
+    logger.info(f"closeout {model} chunk {chunk} on {mesh} (load {load}): {c}")
     _run(mesh_device, c)
 
 
 # the combine's mode A/B (accumulators on the ports or apart, at the same accumulator count, and combine_auto's own
-# choice): pipelined fused calls, uniform routing (needs TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1
-# TT_METAL_PROFILER_CPP_POST_PROCESS=1)
+# choice): pipelined fused calls, uniform routing, chunk 5120 (needs TT_METAL_DEVICE_PROFILER=1
+# TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1)
 _AB = [
     ("glm53", "ports apart", 12),
     ("glm53", "acc_on_ports", 12),
@@ -298,33 +341,80 @@ _AB = [
     ("k3", "ports apart", 16),
     ("k3", "acc_on_ports", 16),
 ]
+# the scaling cases: the planners' defaults (combine_auto's choice), every mesh, chunk and routing
+_SCALE_MODELS = ("k3", "glm53_flash")
+_ROUTINGS = ("uniform", "zipf_spread_1.2", "zipf_packed_1.2")
+_PERF = [(m, mode, a, 5120, "uniform", GALAXY) for m, mode, a in _AB if mode is not None] + [
+    (m, None, 16, chunk, routing, load)
+    for m in _SCALE_MODELS
+    for chunk in _SCALE_CHUNKS
+    for routing in _ROUTINGS
+    for load in _LOADS
+    if load == GALAXY or (m == "k3" and chunk == 5120)
+]
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, model, mode, a_max",
+    "mesh_device, device_params, model, mode, a_max, chunk, routing, mesh, load",
     [
         pytest.param(
-            (R, C),
-            fabric2d_device_params(fabric_payload_size=fabric_payload(MODELS[m]["H"]), l1_small_size=0),
+            *_mesh_params(mesh, fabric_payload(MODELS[m]["H"])),
             m,
             mode,
             a,
-            id=f"{m}-{'auto' if mode is None else mode.replace(' ', '_')}-A{a}",
+            chunk,
+            routing,
+            mesh,
+            load,
+            id=f"{m}-{chunk}-{routing}-{'auto' if mode is None else mode.replace(' ', '_')}-A{a}-{mesh}{_LOADS[load]}",
         )
-        for m, mode, a in _AB
+        for m, mode, a, chunk, routing, load in _PERF
+        for mesh in MESHES
     ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.timeout(3600)
-def test_flat_combine_closeout_perf(mesh_device, device_params, model, mode, a_max):
-    """The combine mode A/B at chunk 5120: the close-out case, timed (pipelined, ITERS calls)."""
-    c = closeout_cfg(model, 5120, combine_mode=mode, a_max=a_max, timing=True, pipe=True, ITERS=12)
-    logger.info(f"closeout perf {model} mode {mode} A <= {a_max}: {c}")
+def test_flat_combine_closeout_perf(mesh_device, device_params, model, mode, a_max, chunk, routing, mesh, load):
+    """The close-out case timed (pipelined, ITERS calls): the combine mode A/B at chunk 5120, and the scaling cases
+    (the planners' defaults over meshes, chunks, routings and K3's 4x4 stage load)."""
+    c = closeout_cfg(
+        model, chunk, mesh, routings=(routing,), load=load, combine_mode=mode, a_max=a_max, timing=True, pipe=True,
+        ITERS=12,
+    )  # fmt: skip
+    logger.info(f"closeout perf {model} chunk {chunk} {routing} on {mesh} (load {load}) mode {mode} A <= {a_max}: {c}")
+    _run(mesh_device, c)
+
+
+_TRACED = [
+    pytest.param(
+        _mesh_params(mesh, fabric_payload(MODELS[m]["H"]))[0],
+        {**_mesh_params(mesh, fabric_payload(MODELS[m]["H"]))[1], "trace_region_size": 64 << 20},
+        m,
+        chunk,
+        mesh,
+        id=f"{m}-{chunk}-uniform-auto-{mesh}",
+    )
+    for m in _SCALE_MODELS
+    for chunk in _SCALE_CHUNKS
+    for mesh in MESHES
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, model, chunk, mesh", _TRACED, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.timeout(3600)
+def test_flat_combine_closeout_traced(mesh_device, device_params, model, chunk, mesh):
+    """The close-out case (defaults, uniform) traced: fused, flat alone and combine alone each captured once and replayed
+    back to back (wall a replay; with TT_METAL_DEVICE_PROFILER=1 also each replay's device time, slowest chip)."""
+    c = closeout_cfg(model, chunk, mesh, timing=True, trace=True)
+    logger.info(f"closeout traced {model} chunk {chunk} on {mesh}: {c}")
     _run(mesh_device, c)
 
 
 def _run(mesh_device, c):
-    assert tuple(mesh_device.shape) == (R, C)
+    N = c.N
+    assert tuple(mesh_device.shape) == (c.R, c.C), (tuple(mesh_device.shape), (c.R, c.C))
     H, I, EPC = c.H, c.I, c.EPC
     if c.weights == "real":  # (finite y for the check: one random expert shared by all)
         g = torch.Generator().manual_seed(1)
@@ -360,6 +450,7 @@ def _check_y(ys, x_host, tidx_t, cnts, regs, op, c, routing, per_chip_rows=96):
     """Sampled y rows of every chip against the bfp4-quantized reference expert (the harness's real weights: one
     expert on every chip); flat row r is x row token_index[r]."""
     g = torch.Generator().manual_seed(1)  # (as _run: the shared expert's weights)
+    N = c.N
     w = [torch.randn(*sh, generator=g) * 0.02 for sh in ((c.H, c.I), (c.H, c.I), (c.I, c.H))]
     q = lambda t: ttnn.to_torch(ttnn.from_torch(t, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()  # noqa: E731
     Wg, Wu, Wd = (q(t) for t in w)
@@ -382,6 +473,7 @@ def _check_y(ys, x_host, tidx_t, cnts, regs, op, c, routing, per_chip_rows=96):
 
 def _flat_combine_rf_routing(mesh_device, op, routing, c):
     S, K, EPC, H, I, CAP, ITERS = c.S, c.K, c.EPC, c.H, c.I, c.CAP, c.ITERS
+    R, C, N, TORUS = c.R, c.C, c.N, c.torus
     torch.manual_seed(0)
     rows, counts, regions, n_rows, busiest = _routing(routing, c)
     floor = busiest * H * 2 / 1e6 / LINK_GBPS * 1e3
@@ -405,7 +497,9 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
     DEVPLAN, DET, PER_DIR_PORTS, L1 = c.devplan, c.det, c.per_dir_ports, c.l1
     assert not DEVPLAN or L1, "the device planner needs the L1 hand-off (l1)"
     RX = DEVPLAN and c.routing_exchange == "a2a" and not DET and not PER_DIR_PORTS and c.token_major
-    rx_res = routing_a2a_reserve(mesh_device, L=L) if RX else None  # (its persistent L1: before the arena's sizing)
+    rx_res = (
+        routing_a2a_reserve(mesh_device, L=L, torus=TORUS) if RX else None
+    )  # (its persistent L1: before the arena's sizing)
     # the arena: every worker core, zero at creation, kept for the test (the combine's state lives in it). It takes all
     # the L1 the allocator has left (the combine sizes its rings from it), less a reserve for the programs' static CBs
     # (the flat expert's non-arena CBs, below the arena: its plan's static_l1_bytes) and the L1 tensors allocated after
@@ -435,7 +529,7 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
     )
     auto = None
     if c.n_acc is None:  # the combine's configuration from the cells and the arena (combine_auto)
-        chips_, _, _ = mesh_plan(mesh_device, L)
+        chips_, _, _ = mesh_plan(mesh_device, L, TORUS)
         port_cells = {(v.x, v.y) for v in place_ports(mesh_device, chips_, cells).values()}
         auto = combine_auto(
             N, S, H, len(cells), len(port_cells), arena_bytes=arena_bytes, l1=L1, depth=c.depth, piece_max=c.piece_max,
@@ -476,7 +570,7 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
             memory_config=dram,
             mesh_mapper=rep,
         )
-        luts, nps = port_luts(mesh_device, L, per_direction=PER_DIR_PORTS)
+        luts, nps = port_luts(mesh_device, L, TORUS, per_direction=PER_DIR_PORTS)
         if RX:  # each chip's own routing ([S / 32, 32 x 2 K] uint16: router_topk's joint rows), exchanged on device
             wb = gates.view(torch.int16).to(torch.int64) & 0xFFFF
             joint = torch.cat([ids.to(torch.int64), wb], -1).reshape(R, C, S // 32, 32 * 2 * K).to(torch.int32)
@@ -495,6 +589,7 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
                 EPC=EPC,
                 A=n_acc,
                 L=L,
+                torus=TORUS,
                 port_luts=luts,
                 n_ports=nps,
                 rows_cap=rows_cap,
@@ -511,6 +606,7 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
                 EPC=EPC,
                 A=n_acc,
                 L=L,
+                torus=TORUS,
                 port_luts=luts,
                 n_ports=nps,
                 rows_cap=rows_cap,
@@ -563,7 +659,7 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
         logger.info(
             f"{routing}: flat role offsets (KB) " + ", ".join(f"{k} {v >> 10}" for k, v in plan["role_offsets"].items())
         )
-    common = dict(num_links=L, n_acc=n_acc, depth=copt["depth"], cells=cells, arena=arena)
+    common = dict(num_links=L, torus=TORUS, n_acc=n_acc, depth=copt["depth"], cells=cells, arena=arena)
     combine_kw = dict(
         piece_max=copt["piece_max"],
         inj_slots=copt["inj_slots"],
@@ -834,6 +930,60 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
 
     if not c.timing:  # (correctness only)
         return
+    if c.trace:  # (each variant captured once, after its eager calls above: every program built and loaded)
+
+        def traced(fn, name, batches=(10, 40, 100)):
+            fn()
+            ttnn.synchronize_device(mesh_device)
+            tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            fn()
+            ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+            prof = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
+            if prof:
+                ttnn.ReadDeviceProfiler(mesh_device)  # (flush the eager calls and the first replay)
+            walls, devs = [], []
+            for n in batches:
+                t0 = time.perf_counter()
+                for _ in range(n):
+                    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+                ttnn.synchronize_device(mesh_device)
+                walls.append((time.perf_counter() - t0) * 1e6 / n)
+                if not prof:
+                    continue
+                ttnn.ReadDeviceProfiler(mesh_device)
+                reps = collections.defaultdict(list)  # replay -> per chip its programs' device sum (us)
+                for programs in (ttnn.get_latest_programs_perf_data() or {}).values():
+                    per = collections.defaultdict(float)
+                    for p_ in programs:
+                        res = (getattr(p_, "program_analyses_results", None) or {}).get(_DURATION_KEY)
+                        uid = p_.program_execution_uid
+                        if res is not None and int(uid.trace_id) == int(tid):
+                            per[int(uid.trace_id_counter)] += float(res.duration) / 1e3
+                    for r_, v in per.items():
+                        reps[r_].append(v)
+                d = sorted(max(v) for v in reps.values())
+                devs.append(d)
+                logger.info(
+                    f"FC_TRACE {routing} {name:13s}: {n} replays back to back: wall {walls[-1]:.0f} us a replay; device "
+                    f"(slowest chip) median {statistics.median(d) if d else 0:.0f} min {d[0] if d else 0:.0f} "
+                    f"max {d[-1] if d else 0:.0f} ({len(d)} replays seen)"
+                )
+            ttnn.release_trace(mesh_device, tid)
+            if not prof:
+                logger.info(f"FC_TRACE {routing} {name:13s}: wall a replay " + " ".join(f"{w:.0f}" for w in walls))
+            return statistics.median(walls), (statistics.median(devs[-1]) if devs and devs[-1] else None)
+
+        w_fused, d_fused = traced(run_fused, "fused")
+        w_flat, d_flat = traced(run_flat, "flat alone")
+        w_comb, d_comb = (None, None) if alone is None else traced(lambda: alone(y, out), "combine alone")
+        fmt = lambda v: "-" if v is None else f"{v:.0f}"  # noqa: E731
+        logger.info(
+            f"FC_TRACE_SUMMARY {routing} {R}x{C} wrap {c.wrap} E{EPC}/chip K{K} S{S} H{H}: wall a replay fused "
+            f"{fmt(w_fused)} flat {fmt(w_flat)} combine {fmt(w_comb)} | device fused {fmt(d_fused)} flat {fmt(d_flat)} "
+            f"combine {fmt(d_comb)} us | combine link floor {floor:.0f} us"
+        )
+        return
     if c.pipe:
         t_fused = pipelined(run_fused, "fused")
         if os.environ.get("FC_DRISC_DUMP"):  # (DRISC per-section cycles of the last fused call: MIMO_FL_DRISC_PROF=1)
@@ -845,10 +995,14 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
             )
             return
         t_comb = pipelined(lambda: alone(y, out), "combine alone")
+        # (the flat expert's DRAM traffic, the busiest chip: its bfp4 weights and its x rows; y stays in L1 with l1)
+        w_bytes = EPC * 3 * (H // 32) * (I // 32) * BFP4_TILE
+        dram = (w_bytes + n_rows * H * 2 * (1 if c.l1 else 2)) / (t_flat * 1e-6) / 1e9 / DRAM_GBS
         logger.info(
-            f"FC_SUMMARY {routing:16s} pipelined: flat {t_flat:.0f} + combine {t_comb:.0f} = {t_flat + t_comb:.0f} serial vs "
-            f"fused {t_fused:.0f} us ({100 * (t_flat + t_comb - t_fused) / t_comb:.0f}% of the combine hidden; fused / flat "
-            f"{t_fused / t_flat:.3f})"
+            f"FC_SUMMARY {routing:16s} {R}x{C} wrap {c.wrap} E{EPC}/chip K{K} S{S} H{H} pipelined: flat {t_flat:.0f} "
+            f"(DRAM {dram:.0%} of {DRAM_GBS:.0f} GB/s) + combine {t_comb:.0f} = {t_flat + t_comb:.0f} serial vs fused "
+            f"{t_fused:.0f} us ({100 * (t_flat + t_comb - t_fused) / t_comb:.0f}% of the combine hidden; fused / flat "
+            f"{t_fused / t_flat:.3f}) | combine link floor {floor:.0f} us (combine / floor {t_comb / floor:.2f})"
         )
         return
     t_fused = timed(run_fused, "fused")
