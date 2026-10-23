@@ -1,0 +1,18 @@
+2026-10-23 17:36:15.229 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+reviewprefill_control_l0 0
+reviewprefill_control_l3 0
+reviewprefill_grid110_l0 0
+reviewprefill_grid110_l3 0
+reviewprefill_grid88_l0 0
+reviewprefill_grid88_l3 0
+reviewprefill_grid88k16_l0 0
+reviewprefill_grid88k16_l3 0
+reviewprefill_l1_l0 0
+reviewprefill_l1_l3 0
+reviewprefill_grid88k16l1_l0 0
+reviewprefill_grid88k16l1_l3 0
+reviewprefill_grid88k10l1_l0 0
+reviewprefill_grid88k10l1_l3 0
+reviewprefill_mix88_l0 0
+reviewprefill_mix88_l3 0

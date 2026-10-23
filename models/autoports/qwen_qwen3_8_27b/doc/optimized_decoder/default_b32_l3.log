@@ -1,0 +1,112 @@
+2026-10-23 17:12:47.143 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+HF_REFERENCE_READY
+2026-10-23 17:12:51.151 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 17:12:51.151 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 17:12:51.151 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 17:12:51.151 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 17:12:51.162 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 17:12:51.162 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 17:12:51.241 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 17:12:51.241 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 17:12:51.241 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 17:12:51.241 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 17:12:51.242 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 17:12:51.442 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 17:12:51.506 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 17:12:51.506 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 17:12:51.506 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 17:12:51.507 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 17:12:51.547 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.9998768533813827
+2026-10-23 17:12:57.433 | critical |          Always | TT_FATAL: Out of Memory: Not enough space to allocate 35651584 B L1 buffer across 110 banks, where each bank needs to store 325632 B, but bank size is 1461120 B (allocated: 1300480 B, free: 160640 B, largest free block: 107392 B). (assert.hpp:104)
+Traceback (most recent call last):
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/run_optimized_decoder.py", line 504, in <module>
+    main()
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/run_optimized_decoder.py", line 381, in main
+    warm = decode()
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/run_optimized_decoder.py", line 357, in decode
+    return decoder.decode_forward(xdt, state=state, page_table=pt, current_pos=pos, cos=cdt, sin=sdt)
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/run_optimized_decoder.py", line 39, in checked
+    return function(*args, **kwargs)
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tt/optimized_decoder.py", line 500, in decode_forward
+    return self._finish(hidden_states, y)
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tt/optimized_decoder.py", line 333, in _finish
+    inter = ttnn.multiply(gu[..., :17408], gu[..., 17408:], input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+  File "/workspace/ttnn/ttnn/decorators.py", line 1316, in _tracked_fast_operation_call
+    return _untracked_fast_operation_call(self, *function_args, **function_kwargs)
+  File "/workspace/ttnn/ttnn/decorators.py", line 1245, in __call__
+    result = self.function(*function_args, **function_kwargs)
+RuntimeError: TT_FATAL @ /workspace/tt_metal/impl/allocator/bank_manager.cpp:514: false
+info:
+Out of Memory: Not enough space to allocate 35651584 B L1 buffer across 110 banks, where each bank needs to store 325632 B, but bank size is 1461120 B (allocated: 1300480 B, free: 160640 B, largest free block: 107392 B).
+backtrace:
+ --- /workspace/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xad6c88) [0x70c464ad6c88]
+ --- tt::tt_metal::BankManager::allocate_buffer(unsigned long, unsigned long, bool, tt::tt_metal::CoreRangeSet const&, std::optional<unsigned int>, ttsl::StrongType<unsigned int, tt::tt_metal::AllocatorIDTag>, std::vector<std::pair<unsigned long, unsigned long>, std::allocator<std::pair<unsigned long, unsigned long> > > const&, std::optional<std::unordered_set<unsigned int, std::hash<unsigned int>, std::equal_to<unsigned int>, std::allocator<unsigned int> > > const&)
+ --- tt::tt_metal::AllocatorImpl::allocate_buffer(tt::tt_metal::Buffer*)
+ --- tt::tt_metal::BufferImpl::allocate_impl(tt::tt_metal::Buffer&)
+ --- tt::tt_metal::BufferImpl::create(tt::tt_metal::IDevice*, unsigned long, unsigned long, tt::tt_metal::BufferType, tt::tt_metal::BufferShardingArgs const&, std::optional<bool>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> >)
+ --- tt::tt_metal::distributed::MeshBuffer::create(std::variant<tt::tt_metal::distributed::ReplicatedBufferConfig, tt::tt_metal::distributed::ShardedBufferConfig> const&, tt::tt_metal::distributed::DeviceLocalBufferConfig const&, tt::tt_metal::distributed::MeshDevice*, std::optional<unsigned long>)
+ --- tt::tt_metal::tensor_impl::allocate_device_buffer(tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::TensorSpec const&)
+ --- tt::tt_metal::allocate_mesh_tensor_on_device_with_topology(tt::tt_metal::distributed::MeshDevice&, tt::tt_metal::TensorSpec, tt::tt_metal::TensorTopology)
+ --- ttnn::create_device_tensor(tt::tt_metal::TensorSpec const&, tt::tt_metal::distributed::MeshDevice*, std::optional<tt::tt_metal::TensorTopology>)
+ --- ttnn::operations::binary_ng::BinaryNgDeviceOperation::create_output_tensors(ttnn::operations::binary_ng::BinaryNgDeviceOperation::operation_attributes_t const&, ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_args_t const&)
+ --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations9binary_ng23BinaryNgDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x84) [0x70c466f94204]
+ --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn4prim9binary_ngERKNS_6TensorES3_NS_10operations6binary12BinaryOpTypeERKSt8optionalIKN2tt8tt_metal8DataTypeEERKS7_INS9_12MemoryConfigEERKS7_IS1_ERKS7_IbESt4spanIKNS4_5unary19BasicUnaryWithParamIJfijEEELm18446744073709551615EESU_SU_S7_ISt7variantIJjifEEERKS7_INS9_12CoreRangeSetEERKS7_IN4ttsl10StrongTypeIhNS9_14SubDeviceIdTagEEEEffb+0xb37) [0x70c466f7f597]
+ --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x1757ed8) [0x70c466f57ed8]
+ --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn8multiplyERKNS_6TensorES2_RKSt8optionalIKN2tt8tt_metal8DataTypeEERKS3_INS5_12MemoryConfigEERKS3_IS0_ESt4spanIKNS_10operations5unary19BasicUnaryWithParamIJfijEEELm18446744073709551615EESO_SO_RKS3_IbERKS3_INS5_12CoreRangeSetEERKS3_IN4ttsl10StrongTypeIhNS5_14SubDeviceIdTagEEEE+0xd4) [0x70c466f457d4]
+ --- /workspace/ttnn/ttnn/_ttnn.so(_ZN4ttnn10operations6binary6detail34multiply_fast_approx_tensor_tensorERKNS_6TensorES5_bRKSt8optionalIKN2tt8tt_metal8DataTypeEERKS6_INS8_12MemoryConfigEERKS6_IS3_ESt4spanIKNS0_5unary19BasicUnaryWithParamIJfijEEELm18446744073709551615EESQ_SQ_RKS6_INS8_12CoreRangeSetEERKS6_IN4ttsl10StrongTypeIhNS8_14SubDeviceIdTagEEEE+0x7c) [0x70c4691bf904]
+ --- /workspace/ttnn/ttnn/_ttnn.so(+0x83afc5) [0x70c46923afc5]
+ --- /workspace/ttnn/ttnn/_ttnn.so(+0x3ca99d) [0x70c468dca99d]
+ --- python(_PyObject_Call_Prepend+0x116) [0x6108f8c95a16]
+ --- python(+0x3b9b7e) [0x6108f8ddcb7e]
+ --- python(_PyEval_EvalFrameDefault+0x8f71) [0x6108f8cf7a41]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x6108f8c94373]
+ --- python(_PyEval_EvalFrameDefault+0x3536f) [0x6108f8d23e3f]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x6108f8c94373]
+ --- python(_PyObject_Call_Prepend+0x116) [0x6108f8c95a16]
+ --- python(+0x3b9b7e) [0x6108f8ddcb7e]
+ --- python(+0x3012e8) [0x6108f8d242e8]
+ --- python(_PyEval_EvalFrameDefault+0x1cfe8) [0x6108f8d0bab8]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x6108f8c94373]
+ --- python(_PyEval_EvalFrameDefault+0x7e12) [0x6108f8cf68e2]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x6108f8c94373]
+ --- python(+0x273829) [0x6108f8c96829]
+ --- python(_PyEval_EvalFrameDefault+0x3536f) [0x6108f8d23e3f]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x6108f8c94373]
+ --- python(+0x3010ec) [0x6108f8d240ec]
+ --- python(_PyEval_EvalFrameDefault+0x1cfe8) [0x6108f8d0bab8]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x6108f8c94373]
+ --- python(+0x3010ec) [0x6108f8d240ec]
+ --- python(_PyEval_EvalFrameDefault+0x1bcc5) [0x6108f8d0a795]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x6108f8c94373]
+ --- python(+0x3010ec) [0x6108f8d240ec]
+ --- python(_PyEval_EvalFrameDefault+0x1bcc5) [0x6108f8d0a795]
+ --- python(+0x3ee472) [0x6108f8e11472]
+ --- python(+0x3ec365) [0x6108f8e0f365]
+ --- python(+0x294312) [0x6108f8cb7312]
+ --- python(+0x3010ec) [0x6108f8d240ec]
+ --- python(_PyEval_EvalFrameDefault+0x1bcc5) [0x6108f8d0a795]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x6108f8c94373]
+ --- python(+0x3010ec) [0x6108f8d240ec]
+ --- python(_PyEval_EvalFrameDefault+0x1bcc5) [0x6108f8d0a795]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x6108f8c94373]
+ --- python(+0x431c2a) [0x6108f8e54c2a]
+ --- python(Py_RunMain+0x173) [0x6108f8e54443]
+ --- python(+0x431fb2) [0x6108f8e54fb2]
+ --- python(+0x35847c) [0x6108f8d7b47c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x70c4ace49d90]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x70c4ace49e40]
+ --- python(+0x35838d) [0x6108f8d7b38d]
+
+2026-10-23 17:12:58.114 | info     |    BuildKernels | JIT cache stats: 180/194 hits (92.8%) [180 cached, 554 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 17:12:58.114 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 17:12:58.128 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 17:12:58.128 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 17:12:58.288 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 17:12:58.288 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 17:12:58.288 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

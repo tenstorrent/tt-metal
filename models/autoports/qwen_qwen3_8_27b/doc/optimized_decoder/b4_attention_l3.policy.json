@@ -1,0 +1,4 @@
+{
+  "fidelity": "LoFi",
+  "attention_dtype": "bfloat4_b"
+}

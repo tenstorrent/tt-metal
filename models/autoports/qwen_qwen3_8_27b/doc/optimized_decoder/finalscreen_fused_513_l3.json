@@ -1,0 +1,61 @@
+{
+  "layer_type": "full_attention",
+  "layer_idx": 3,
+  "batch": 1,
+  "sequence": 513,
+  "weights": "real",
+  "prefill_pcc": 0.9999962658867761,
+  "decode_pcc": 0.9999998568359472,
+  "changed_input_decode_pcc": 0.9999997027192773,
+  "resume_pcc": null,
+  "deterministic": true,
+  "remap_pcc": null,
+  "remap_cache_pcc": null,
+  "input_std": 0.1,
+  "request_results": [],
+  "prefill_pcc_fp32": 0.9999964237213135,
+  "prefill_relative_rmse": 0.003090685000643134,
+  "fusion_equivalence": {
+    "prefill_pcc": null,
+    "decode_pcc": null
+  },
+  "screen_host_traced_us": 2146.7691101133823,
+  "workload_final_decode_pcc": null,
+  "workload_last_decode_host_us": null,
+  "runtime_fallback_audit": true,
+  "provenance": {
+    "tests/run_optimized_decoder.py": "a991f866b4dbf2b50031431ace8c4fa37a707d8134a437da7709e0fda7c9cb73",
+    "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77",
+    "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9",
+    "tt/fused_decoder.py": "41ba2e2fec65d6c5bb7503a6ff1ca7a905a8164f349eb8ef9d8a399dccdefc6e",
+    "tt/optimized_decoder.py": "ff85733835d1d972fb9bb1bdc47cdc761c1a814412d534681834b66d8f05d31a",
+    "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"
+  },
+  "policy": {},
+  "runtime_class": "FusedDecoder",
+  "prefill_host_us": 12232.904089614749,
+  "prefill_traced": true,
+  "prefill_deterministic": true,
+  "activations": "recorded HF preceding layers",
+  "memory": {
+    "before_weights": {
+      "num_banks": 8,
+      "capacity_bytes": 34178731008,
+      "allocated_bytes": 0,
+      "largest_free_per_bank": 4272341376
+    },
+    "after_weights": {
+      "num_banks": 8,
+      "capacity_bytes": 34178731008,
+      "allocated_bytes": 746225664,
+      "largest_free_per_bank": 4179063168
+    },
+    "request_setup": {
+      "num_banks": 8,
+      "capacity_bytes": 34178731008,
+      "allocated_bytes": 758629888,
+      "largest_free_per_bank": 4177512640
+    }
+  },
+  "prefill_compared_tokens": 513
+}

@@ -1,0 +1,12 @@
+{
+  "dram_sharded": true,
+  "fidelity": "LoFi",
+  "mlp_dtype": "bfloat4_b",
+  "attention_dtype": "bfloat4_b",
+  "down_dtype": "bfloat4_b",
+  "block": 1,
+  "sharded_norm": true,
+  "carry_residual": true,
+  "kv_dtype": "bfloat8_b",
+  "cores": 32
+}

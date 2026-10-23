@@ -1,0 +1,455 @@
+2026-10-23 17:10:11.788 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.22, pytest-9.0.3, pluggy-1.7.0 -- /opt/venv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /workspace
+configfile: pytest.ini
+plugins: anyio-4.15.1, split-0.11.0, repeat-0.9.4, benchmark-5.2.3, cov-7.0.0, dash-2.15.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 2 items
+
+models/autoports/qwen_qwen3_8_27b/tests/test_optimized_decoder.py::test_optimized_decoder_contract[0] 2026-10-23 17:10:13.889 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+[transformers] The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+HF_REFERENCE_READY
+2026-10-23 17:10:17.136 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 17:10:17.136 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 17:10:17.136 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 17:10:17.136 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 17:10:17.147 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 17:10:17.147 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 17:10:17.227 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 17:10:17.227 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 17:10:17.227 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 17:10:17.227 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 17:10:17.228 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 17:10:17.424 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 17:10:17.485 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 17:10:17.485 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 17:10:17.485 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 17:10:17.486 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 17:10:17.547 | info     |       LLRuntime | Watcher log file: /workspace/generated/watcher/watcher.log (watcher_server.cpp:313)
+2026-10-23 17:10:17.547 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:631)
+2026-10-23 17:10:17.547 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+REQUEST {'length': 1, 'prefill_pcc': 0.999436247610933, 'decode_pcc': 0.9997591704515488}
+REQUEST {'length': 2, 'prefill_pcc': 0.9995171366122666, 'decode_pcc': 0.9997195505129483}
+REQUEST {'length': 3, 'prefill_pcc': 0.9995446591824876, 'decode_pcc': 0.9997979702695863}
+REQUEST {'length': 4, 'prefill_pcc': 0.9995730350379338, 'decode_pcc': 0.9997886946761428}
+REQUEST {'length': 31, 'prefill_pcc': 0.9997250015379177, 'decode_pcc': 0.9998578854418727}
+REQUEST {'length': 32, 'prefill_pcc': 0.9997278570115574, 'decode_pcc': 0.9998450003885421}
+REQUEST {'length': 33, 'prefill_pcc': 0.9997292399293395, 'decode_pcc': 0.9998261518858353}
+REQUEST {'length': 127, 'prefill_pcc': 0.9997770349178186, 'decode_pcc': 0.9999111154815502}
+REQUEST {'length': 128, 'prefill_pcc': 0.9997777312335828, 'decode_pcc': 0.9998510170724588}
+2026-10-23 17:10:37.171 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 7-0] grow to 2491520 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+Traceback (most recent call last):
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/run_optimized_decoder.py", line 504, in <module>
+    main()
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/run_optimized_decoder.py", line 210, in main
+    rout = decoder.prefill_forward(put(rx), state=request_state, page_table=rpt,
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/run_optimized_decoder.py", line 39, in checked
+    return function(*args, **kwargs)
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tt/optimized_decoder.py", line 505, in prefill_forward
+    h = self._norm(x, self.in_norm)
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tt/optimized_decoder.py", line 301, in _norm
+    x = ttnn.rms_norm(x, weight=w, epsilon=self.config.rms_norm_eps, program_config=pc,
+  File "/workspace/ttnn/ttnn/decorators.py", line 1316, in _tracked_fast_operation_call
+    return _untracked_fast_operation_call(self, *function_args, **function_kwargs)
+  File "/workspace/ttnn/ttnn/decorators.py", line 1245, in __call__
+    result = self.function(*function_args, **function_kwargs)
+RuntimeError: TT_THROW @ /workspace/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception
+info:
+Statically allocated dataflow buffers on core range [0-0 - 7-0] grow to 2491520 B which is beyond max L1 size of 1572864 B
+backtrace:
+ --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29ef56a) [0x74588f3ef56a]
+ --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+ --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+ --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)
+ --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x14dcb18) [0x74588dedcb18]
+ --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x14dc5a9) [0x74588dedc5a9]
+ --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail54create_and_cache_mesh_workload_with_allocation_contextITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim24LayerNormDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x5fb) [0x74588ded442b]
+ --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail17use_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim24LayerNormDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RKNS1_18ProgramCacheLookupERKT0_+0x133) [0x74588ded3b83]
+ --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim24LayerNormDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x81) [0x74588ded1451]
+ --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim24LayerNormDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0xe8) [0x74588dec7cb8]
+ --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn4prim10layer_normERKNS_6TensorEfRKSt8optionalIS2_ES7_S7_RKN2tt8tt_metal12MemoryConfigERKSt7variantIJNS0_29LayerNormDefaultProgramConfigENS0_38LayerNormShardedMultiCoreProgramConfigEEERKNS_19ComputeKernelConfigERKS4_INS9_8DataTypeEENS0_13LayerNormTypeENS0_25DistributedLayerNormStageES7_S7_RKS4_INS_10operations5unary19BasicUnaryWithParamIJfEEEE+0x361) [0x74588dec5dc1]
+ --- ttnn::rms_norm(ttnn::Tensor const&, float, std::optional<ttnn::Tensor const> const&, std::optional<ttnn::Tensor const> const&, std::optional<ttnn::Tensor const> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<std::variant<ttnn::prim::LayerNormDefaultProgramConfig, ttnn::prim::LayerNormShardedMultiCoreProgramConfig> const> const&, std::optional<ttnn::ComputeKernelConfig const>)
+ --- /workspace/ttnn/ttnn/_ttnn.so(+0x606585) [0x745890206585]
+ --- /workspace/ttnn/ttnn/_ttnn.so(+0x3ca99d) [0x74588ffca99d]
+ --- python(_PyObject_Call_Prepend+0x116) [0x64ce0103da16]
+ --- python(+0x3b9b7e) [0x64ce01184b7e]
+ --- python(_PyEval_EvalFrameDefault+0x8f71) [0x64ce0109fa41]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x64ce0103c373]
+ --- python(_PyEval_EvalFrameDefault+0x3536f) [0x64ce010cbe3f]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x64ce0103c373]
+ --- python(_PyObject_Call_Prepend+0x116) [0x64ce0103da16]
+ --- python(+0x3b9b7e) [0x64ce01184b7e]
+ --- python(+0x3012e8) [0x64ce010cc2e8]
+ --- python(_PyEval_EvalFrameDefault+0x1cfe8) [0x64ce010b3ab8]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x64ce0103c373]
+ --- python(_PyEval_EvalFrameDefault+0x7e12) [0x64ce0109e8e2]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x64ce0103c373]
+ --- python(+0x273829) [0x64ce0103e829]
+ --- python(_PyEval_EvalFrameDefault+0x3536f) [0x64ce010cbe3f]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x64ce0103c373]
+ --- python(+0x3010ec) [0x64ce010cc0ec]
+ --- python(_PyEval_EvalFrameDefault+0x1cfe8) [0x64ce010b3ab8]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x64ce0103c373]
+ --- python(+0x3010ec) [0x64ce010cc0ec]
+ --- python(_PyEval_EvalFrameDefault+0x1bcc5) [0x64ce010b2795]
+ --- python(+0x3ee472) [0x64ce011b9472]
+ --- python(+0x3ec365) [0x64ce011b7365]
+ --- python(+0x294312) [0x64ce0105f312]
+ --- python(+0x3010ec) [0x64ce010cc0ec]
+ --- python(_PyEval_EvalFrameDefault+0x1bcc5) [0x64ce010b2795]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x64ce0103c373]
+ --- python(+0x3010ec) [0x64ce010cc0ec]
+ --- python(_PyEval_EvalFrameDefault+0x1bcc5) [0x64ce010b2795]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x64ce0103c373]
+ --- python(+0x431c2a) [0x64ce011fcc2a]
+ --- python(Py_RunMain+0x173) [0x64ce011fc443]
+ --- python(+0x431fb2) [0x64ce011fcfb2]
+ --- python(+0x35847c) [0x64ce0112347c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7458d3ca5d90]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7458d3ca5e40]
+ --- python(+0x35838d) [0x64ce0112338d]
+
+2026-10-23 17:10:37.889 | info     |    BuildKernels | JIT cache stats: 341/482 hits (70.7%) [341 cached, 676 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 17:10:37.889 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 17:10:37.890 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:679)
+2026-10-23 17:10:37.904 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 17:10:37.904 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 17:10:38.071 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 17:10:38.071 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 17:10:38.071 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+FAILED
+models/autoports/qwen_qwen3_8_27b/tests/test_optimized_decoder.py::test_optimized_decoder_contract[3] 2026-10-23 17:10:39.717 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+HF_REFERENCE_READY
+2026-10-23 17:10:42.790 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 17:10:42.790 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 17:10:42.790 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 17:10:42.790 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 17:10:42.801 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 17:10:42.802 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 17:10:42.881 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 17:10:42.881 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 17:10:42.881 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 17:10:42.881 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 17:10:42.882 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 17:10:43.127 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 17:10:43.191 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 17:10:43.191 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 17:10:43.191 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 17:10:43.192 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 17:10:43.253 | info     |       LLRuntime | Watcher log file: /workspace/generated/watcher/watcher.log (watcher_server.cpp:313)
+2026-10-23 17:10:43.254 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:631)
+2026-10-23 17:10:43.254 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+REQUEST {'length': 1, 'prefill_pcc': 0.9998694827703393, 'decode_pcc': 0.9995254989819339}
+REQUEST {'length': 2, 'prefill_pcc': 0.9996435785465296, 'decode_pcc': 0.9998618830489193}
+REQUEST {'length': 3, 'prefill_pcc': 0.999693905415118, 'decode_pcc': 0.9998305541830342}
+REQUEST {'length': 4, 'prefill_pcc': 0.999710908603498, 'decode_pcc': 0.999882064456764}
+REQUEST {'length': 31, 'prefill_pcc': 0.999839976591566, 'decode_pcc': 0.9999129880011534}
+REQUEST {'length': 32, 'prefill_pcc': 0.9998421140759294, 'decode_pcc': 0.9999180251866353}
+REQUEST {'length': 33, 'prefill_pcc': 0.9998437469233321, 'decode_pcc': 0.9999299603211987}
+REQUEST {'length': 127, 'prefill_pcc': 0.9998722985352403, 'decode_pcc': 0.9998444432347258}
+REQUEST {'length': 128, 'prefill_pcc': 0.9998720247371324, 'decode_pcc': 0.999905976003915}
+2026-10-23 17:10:52.854 | critical |          Always | TT_THROW: Statically allocated dataflow buffers on core range [0-0 - 7-0] grow to 2491520 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+Traceback (most recent call last):
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/run_optimized_decoder.py", line 504, in <module>
+    main()
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/run_optimized_decoder.py", line 210, in main
+    rout = decoder.prefill_forward(put(rx), state=request_state, page_table=rpt,
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/run_optimized_decoder.py", line 39, in checked
+    return function(*args, **kwargs)
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tt/optimized_decoder.py", line 505, in prefill_forward
+    h = self._norm(x, self.in_norm)
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tt/optimized_decoder.py", line 301, in _norm
+    x = ttnn.rms_norm(x, weight=w, epsilon=self.config.rms_norm_eps, program_config=pc,
+  File "/workspace/ttnn/ttnn/decorators.py", line 1316, in _tracked_fast_operation_call
+    return _untracked_fast_operation_call(self, *function_args, **function_kwargs)
+  File "/workspace/ttnn/ttnn/decorators.py", line 1245, in __call__
+    result = self.function(*function_args, **function_kwargs)
+RuntimeError: TT_THROW @ /workspace/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception
+info:
+Statically allocated dataflow buffers on core range [0-0 - 7-0] grow to 2491520 B which is beyond max L1 size of 1572864 B
+backtrace:
+ --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x29ef56a) [0x7c1e5a5ef56a]
+ --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+ --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+ --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, std::allocator<std::pair<tt::tt_metal::distributed::MeshCoordinateRange const, tt::tt_metal::experimental::ProgramSpec> > > const&, bool)
+ --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x14dcb18) [0x7c1e590dcb18]
+ --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x14dc5a9) [0x7c1e590dc5a9]
+ --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail54create_and_cache_mesh_workload_with_allocation_contextITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim24LayerNormDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x5fb) [0x7c1e590d442b]
+ --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail17use_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim24LayerNormDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RKNS1_18ProgramCacheLookupERKT0_+0x133) [0x7c1e590d3b83]
+ --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim24LayerNormDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x81) [0x7c1e590d1451]
+ --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim24LayerNormDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0xe8) [0x7c1e590c7cb8]
+ --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn4prim10layer_normERKNS_6TensorEfRKSt8optionalIS2_ES7_S7_RKN2tt8tt_metal12MemoryConfigERKSt7variantIJNS0_29LayerNormDefaultProgramConfigENS0_38LayerNormShardedMultiCoreProgramConfigEEERKNS_19ComputeKernelConfigERKS4_INS9_8DataTypeEENS0_13LayerNormTypeENS0_25DistributedLayerNormStageES7_S7_RKS4_INS_10operations5unary19BasicUnaryWithParamIJfEEEE+0x361) [0x7c1e590c5dc1]
+ --- ttnn::rms_norm(ttnn::Tensor const&, float, std::optional<ttnn::Tensor const> const&, std::optional<ttnn::Tensor const> const&, std::optional<ttnn::Tensor const> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<std::variant<ttnn::prim::LayerNormDefaultProgramConfig, ttnn::prim::LayerNormShardedMultiCoreProgramConfig> const> const&, std::optional<ttnn::ComputeKernelConfig const>)
+ --- /workspace/ttnn/ttnn/_ttnn.so(+0x606585) [0x7c1e5b406585]
+ --- /workspace/ttnn/ttnn/_ttnn.so(+0x3ca99d) [0x7c1e5b1ca99d]
+ --- python(_PyObject_Call_Prepend+0x116) [0x62534c778a16]
+ --- python(+0x3b9b7e) [0x62534c8bfb7e]
+ --- python(_PyEval_EvalFrameDefault+0x8f71) [0x62534c7daa41]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x62534c777373]
+ --- python(_PyEval_EvalFrameDefault+0x3536f) [0x62534c806e3f]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x62534c777373]
+ --- python(_PyObject_Call_Prepend+0x116) [0x62534c778a16]
+ --- python(+0x3b9b7e) [0x62534c8bfb7e]
+ --- python(+0x3012e8) [0x62534c8072e8]
+ --- python(_PyEval_EvalFrameDefault+0x1cfe8) [0x62534c7eeab8]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x62534c777373]
+ --- python(_PyEval_EvalFrameDefault+0x7e12) [0x62534c7d98e2]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x62534c777373]
+ --- python(+0x273829) [0x62534c779829]
+ --- python(_PyEval_EvalFrameDefault+0x3536f) [0x62534c806e3f]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x62534c777373]
+ --- python(+0x3010ec) [0x62534c8070ec]
+ --- python(_PyEval_EvalFrameDefault+0x1cfe8) [0x62534c7eeab8]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x62534c777373]
+ --- python(+0x3010ec) [0x62534c8070ec]
+ --- python(_PyEval_EvalFrameDefault+0x1bcc5) [0x62534c7ed795]
+ --- python(+0x3ee472) [0x62534c8f4472]
+ --- python(+0x3ec365) [0x62534c8f2365]
+ --- python(+0x294312) [0x62534c79a312]
+ --- python(+0x3010ec) [0x62534c8070ec]
+ --- python(_PyEval_EvalFrameDefault+0x1bcc5) [0x62534c7ed795]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x62534c777373]
+ --- python(+0x3010ec) [0x62534c8070ec]
+ --- python(_PyEval_EvalFrameDefault+0x1bcc5) [0x62534c7ed795]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x62534c777373]
+ --- python(+0x431c2a) [0x62534c937c2a]
+ --- python(Py_RunMain+0x173) [0x62534c937443]
+ --- python(+0x431fb2) [0x62534c937fb2]
+ --- python(+0x35847c) [0x62534c85e47c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7c1e9f1b6d90]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7c1e9f1b6e40]
+ --- python(+0x35838d) [0x62534c85e38d]
+
+2026-10-23 17:10:53.549 | info     |    BuildKernels | JIT cache stats: 285/306 hits (93.1%) [285 cached, 479 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 17:10:53.549 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 17:10:53.549 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:679)
+2026-10-23 17:10:53.564 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 17:10:53.564 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 17:10:53.773 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 17:10:53.773 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 17:10:53.773 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+FAILED
+
+=================================== FAILURES ===================================
+______________________ test_optimized_decoder_contract[0] ______________________
+
+layer = 0
+tmp_path = PosixPath('/tmp/pytest-of-mvasiljev/pytest-1/test_optimized_decoder_contrac0')
+
+    @pytest.mark.parametrize('layer', [0, 3])
+    def test_optimized_decoder_contract(layer, tmp_path):
+        base = Path(__file__).resolve().parents[1]
+        label = f'pytest_contract_l{layer}'
+        env = {**os.environ, 'QWEN_OPT_POLICY': '{}'}
+        command = ['bash', str(base/'tests/optimized_run.sh'), 'check', label,
+                   '--layer', str(layer), '--batch', '3', '--seq', '513',
+                   '--recorded', '--resume', '--requests']
+        if layer == 3:
+            command.append('--remap')
+>       subprocess.run(command, env=env, check=True)
+
+models/autoports/qwen_qwen3_8_27b/tests/test_optimized_decoder.py:24: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+input = None, capture_output = False, timeout = None, check = True
+popenargs = (['bash', '/workspace/models/autoports/qwen_qwen3_8_27b/tests/optimized_run.sh', 'check', 'pytest_contract_l0', '--layer', '0', ...],)
+kwargs = {'env': {'CCACHE_TEMPDIR': '/tmp/ccache', 'CPATH': '/opt/openmpi-v5.0.7-ulfm/include', 'DEBIAN_FRONTEND': 'noninteractive', 'HOME': '/', ...}}
+process = <Popen: returncode: 1 args: ['bash', '/workspace/models/autoports/qwen_qwen3...>
+stdout = None, stderr = None, retcode = 1
+
+    def run(*popenargs,
+            input=None, capture_output=False, timeout=None, check=False, **kwargs):
+        """Run command with arguments and return a CompletedProcess instance.
+    
+        The returned instance will have attributes args, returncode, stdout and
+        stderr. By default, stdout and stderr are not captured, and those attributes
+        will be None. Pass stdout=PIPE and/or stderr=PIPE in order to capture them,
+        or pass capture_output=True to capture both.
+    
+        If check is True and the exit code was non-zero, it raises a
+        CalledProcessError. The CalledProcessError object will have the return code
+        in the returncode attribute, and output & stderr attributes if those streams
+        were captured.
+    
+        If timeout is given, and the process takes too long, a TimeoutExpired
+        exception will be raised.
+    
+        There is an optional argument "input", allowing you to
+        pass bytes or a string to the subprocess's stdin.  If you use this argument
+        you may not also use the Popen constructor's "stdin" argument, as
+        it will be used internally.
+    
+        By default, all communication is in bytes, and therefore any "input" should
+        be bytes, and the stdout and stderr will be bytes. If in text mode, any
+        "input" should be a string, and stdout and stderr will be strings decoded
+        according to locale encoding, or by "encoding" if set. Text mode is
+        triggered by setting any of text, encoding, errors or universal_newlines.
+    
+        The other arguments are the same as for the Popen constructor.
+        """
+        if input is not None:
+            if kwargs.get('stdin') is not None:
+                raise ValueError('stdin and input arguments may not both be used.')
+            kwargs['stdin'] = PIPE
+    
+        if capture_output:
+            if kwargs.get('stdout') is not None or kwargs.get('stderr') is not None:
+                raise ValueError('stdout and stderr arguments may not be used '
+                                 'with capture_output.')
+            kwargs['stdout'] = PIPE
+            kwargs['stderr'] = PIPE
+    
+        with Popen(*popenargs, **kwargs) as process:
+            try:
+                stdout, stderr = process.communicate(input, timeout=timeout)
+            except TimeoutExpired as exc:
+                process.kill()
+                if _mswindows:
+                    # Windows accumulates the output in a single blocking
+                    # read() call run on child threads, with the timeout
+                    # being done in a join() on those threads.  communicate()
+                    # _after_ kill() is required to collect that and add it
+                    # to the exception.
+                    exc.stdout, exc.stderr = process.communicate()
+                else:
+                    # POSIX _communicate already populated the output so
+                    # far into the TimeoutExpired exception.
+                    process.wait()
+                raise
+            except:  # Including KeyboardInterrupt, communicate handled that.
+                process.kill()
+                # We don't call process.wait() as .__exit__ does that for us.
+                raise
+            retcode = process.poll()
+            if check and retcode:
+>               raise CalledProcessError(retcode, process.args,
+                                         output=stdout, stderr=stderr)
+E               subprocess.CalledProcessError: Command '['bash', '/workspace/models/autoports/qwen_qwen3_8_27b/tests/optimized_run.sh', 'check', 'pytest_contract_l0', '--layer', '0', '--batch', '3', '--seq', '513', '--recorded', '--resume', '--requests']' returned non-zero exit status 1.
+
+/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/subprocess.py:526: CalledProcessError
+______________________ test_optimized_decoder_contract[3] ______________________
+
+layer = 3
+tmp_path = PosixPath('/tmp/pytest-of-mvasiljev/pytest-1/test_optimized_decoder_contrac1')
+
+    @pytest.mark.parametrize('layer', [0, 3])
+    def test_optimized_decoder_contract(layer, tmp_path):
+        base = Path(__file__).resolve().parents[1]
+        label = f'pytest_contract_l{layer}'
+        env = {**os.environ, 'QWEN_OPT_POLICY': '{}'}
+        command = ['bash', str(base/'tests/optimized_run.sh'), 'check', label,
+                   '--layer', str(layer), '--batch', '3', '--seq', '513',
+                   '--recorded', '--resume', '--requests']
+        if layer == 3:
+            command.append('--remap')
+>       subprocess.run(command, env=env, check=True)
+
+models/autoports/qwen_qwen3_8_27b/tests/test_optimized_decoder.py:24: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+input = None, capture_output = False, timeout = None, check = True
+popenargs = (['bash', '/workspace/models/autoports/qwen_qwen3_8_27b/tests/optimized_run.sh', 'check', 'pytest_contract_l3', '--layer', '3', ...],)
+kwargs = {'env': {'CCACHE_TEMPDIR': '/tmp/ccache', 'CPATH': '/opt/openmpi-v5.0.7-ulfm/include', 'DEBIAN_FRONTEND': 'noninteractive', 'HOME': '/', ...}}
+process = <Popen: returncode: 1 args: ['bash', '/workspace/models/autoports/qwen_qwen3...>
+stdout = None, stderr = None, retcode = 1
+
+    def run(*popenargs,
+            input=None, capture_output=False, timeout=None, check=False, **kwargs):
+        """Run command with arguments and return a CompletedProcess instance.
+    
+        The returned instance will have attributes args, returncode, stdout and
+        stderr. By default, stdout and stderr are not captured, and those attributes
+        will be None. Pass stdout=PIPE and/or stderr=PIPE in order to capture them,
+        or pass capture_output=True to capture both.
+    
+        If check is True and the exit code was non-zero, it raises a
+        CalledProcessError. The CalledProcessError object will have the return code
+        in the returncode attribute, and output & stderr attributes if those streams
+        were captured.
+    
+        If timeout is given, and the process takes too long, a TimeoutExpired
+        exception will be raised.
+    
+        There is an optional argument "input", allowing you to
+        pass bytes or a string to the subprocess's stdin.  If you use this argument
+        you may not also use the Popen constructor's "stdin" argument, as
+        it will be used internally.
+    
+        By default, all communication is in bytes, and therefore any "input" should
+        be bytes, and the stdout and stderr will be bytes. If in text mode, any
+        "input" should be a string, and stdout and stderr will be strings decoded
+        according to locale encoding, or by "encoding" if set. Text mode is
+        triggered by setting any of text, encoding, errors or universal_newlines.
+    
+        The other arguments are the same as for the Popen constructor.
+        """
+        if input is not None:
+            if kwargs.get('stdin') is not None:
+                raise ValueError('stdin and input arguments may not both be used.')
+            kwargs['stdin'] = PIPE
+    
+        if capture_output:
+            if kwargs.get('stdout') is not None or kwargs.get('stderr') is not None:
+                raise ValueError('stdout and stderr arguments may not be used '
+                                 'with capture_output.')
+            kwargs['stdout'] = PIPE
+            kwargs['stderr'] = PIPE
+    
+        with Popen(*popenargs, **kwargs) as process:
+            try:
+                stdout, stderr = process.communicate(input, timeout=timeout)
+            except TimeoutExpired as exc:
+                process.kill()
+                if _mswindows:
+                    # Windows accumulates the output in a single blocking
+                    # read() call run on child threads, with the timeout
+                    # being done in a join() on those threads.  communicate()
+                    # _after_ kill() is required to collect that and add it
+                    # to the exception.
+                    exc.stdout, exc.stderr = process.communicate()
+                else:
+                    # POSIX _communicate already populated the output so
+                    # far into the TimeoutExpired exception.
+                    process.wait()
+                raise
+            except:  # Including KeyboardInterrupt, communicate handled that.
+                process.kill()
+                # We don't call process.wait() as .__exit__ does that for us.
+                raise
+            retcode = process.poll()
+            if check and retcode:
+>               raise CalledProcessError(retcode, process.args,
+                                         output=stdout, stderr=stderr)
+E               subprocess.CalledProcessError: Command '['bash', '/workspace/models/autoports/qwen_qwen3_8_27b/tests/optimized_run.sh', 'check', 'pytest_contract_l3', '--layer', '3', '--batch', '3', '--seq', '513', '--recorded', '--resume', '--requests', '--remap']' returned non-zero exit status 1.
+
+/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/subprocess.py:526: CalledProcessError
+- generated xml file: /workspace/generated/test_reports/most_recent_tests.xml --
+============================= slowest 25 durations =============================
+25.66s call     models/autoports/qwen_qwen3_8_27b/tests/test_optimized_decoder.py::test_optimized_decoder_contract[0]
+15.53s call     models/autoports/qwen_qwen3_8_27b/tests/test_optimized_decoder.py::test_optimized_decoder_contract[3]
+0.14s setup    models/autoports/qwen_qwen3_8_27b/tests/test_optimized_decoder.py::test_optimized_decoder_contract[3]
+0.12s setup    models/autoports/qwen_qwen3_8_27b/tests/test_optimized_decoder.py::test_optimized_decoder_contract[0]
+
+(2 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+FAILED models/autoports/qwen_qwen3_8_27b/tests/test_optimized_decoder.py::test_optimized_decoder_contract[0]
+FAILED models/autoports/qwen_qwen3_8_27b/tests/test_optimized_decoder.py::test_optimized_decoder_contract[3]
+============================== 2 failed in 41.50s ==============================

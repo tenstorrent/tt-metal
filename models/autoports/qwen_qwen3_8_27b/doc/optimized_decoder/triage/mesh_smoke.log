@@ -1,0 +1,26 @@
+2026-10-23 16:08:37.374 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+2026-10-23 16:08:37.949 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 16:08:37.949 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 16:08:37.949 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 16:08:37.949 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 16:08:37.961 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 16:08:37.961 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 16:08:38.040 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 16:08:38.040 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 16:08:38.040 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 16:08:38.040 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 16:08:38.042 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 16:08:38.061 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 16:08:38.062 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 16:08:38.062 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 16:08:38.320 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 16:08:38.320 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 16:08:38.320 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "/workspace/ttnn/ttnn/distributed/distributed.py", line 678, in open_mesh_device
+    dispatch_core_config=dispatch_core_config or ttnn.DispatchCoreConfig(),
+  File "/workspace/ttnn/ttnn/device.py", line 38, in __init__
+    resolved_config = ttnn._ttnn.device.create_dispatch_core_config(
+IndexError: unordered_map::at

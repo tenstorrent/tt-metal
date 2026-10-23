@@ -1,0 +1,7 @@
+{
+  "current_runner_sha256": "ce77bcc7962957af055838233f5e12c16a88c0e15f63ca6e61a4123db5ccd1a3",
+  "reconstructed_prior_sha256": "c5e954d9b9882bdc799ca003bea611140f8a012e04936f44b67807f74c656978",
+  "layer0_recorded_sha256": "c5e954d9b9882bdc799ca003bea611140f8a012e04936f44b67807f74c656978",
+  "delta": "Only adds runtime_class, policy and activations fields in --prefill-only JSON. No execution or validation change; pytest does not use --prefill-only.",
+  "exact_match": true
+}

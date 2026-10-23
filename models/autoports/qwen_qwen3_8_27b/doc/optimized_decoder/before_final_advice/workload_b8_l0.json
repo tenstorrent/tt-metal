@@ -1,0 +1,132 @@
+{
+  "layer_type": "linear_attention",
+  "layer_idx": 0,
+  "batch": 8,
+  "sequence": 4096,
+  "weights": "real",
+  "prefill_pcc": 0.9998106520213749,
+  "decode_pcc": 0.9998596422717813,
+  "changed_input_decode_pcc": 0.9998767470921975,
+  "resume_pcc": null,
+  "deterministic": true,
+  "remap_pcc": null,
+  "remap_cache_pcc": null,
+  "input_std": 0.1,
+  "request_results": [],
+  "prefill_pcc_fp32": 0.9998214840888977,
+  "prefill_relative_rmse": 0.022531569004058838,
+  "fusion_equivalence": {
+    "prefill_pcc": null,
+    "decode_pcc": null
+  },
+  "screen_host_traced_us": 2275.352708529681,
+  "workload_final_decode_pcc": 0.9998450926160228,
+  "workload_last_decode_host_us": 2301.8592037260532,
+  "runtime_fallback_audit": true,
+  "provenance": {
+    "tests/run_optimized_decoder.py": "a991f866b4dbf2b50031431ace8c4fa37a707d8134a437da7709e0fda7c9cb73",
+    "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77",
+    "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9",
+    "tt/fused_decoder.py": "41ba2e2fec65d6c5bb7503a6ff1ca7a905a8164f349eb8ef9d8a399dccdefc6e",
+    "tt/optimized_decoder.py": "9b51783b840ba4c282102b9f6826daf25e08ed985cc91badd7a678dfcaa9ade2",
+    "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"
+  },
+  "policy": {
+    "dram_sharded": true,
+    "fidelity": "LoFi",
+    "mlp_dtype": "bfloat4_b",
+    "attention_dtype": "bfloat4_b",
+    "down_dtype": "bfloat4_b",
+    "block": 4,
+    "sharded_norm": true,
+    "carry_residual": true,
+    "kv_dtype": "bfloat8_b",
+    "packed_mlp": true,
+    "prefill_chunk": 1280,
+    "prefill_grid": [
+      11,
+      10
+    ],
+    "prefill_block": 10,
+    "inplace_recurrence": true,
+    "mix": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2
+    },
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2
+    },
+    "out": {
+      "cores": 64,
+      "block": 3,
+      "prefill_block": 32,
+      "readers": 2
+    },
+    "down": {
+      "cores": 68,
+      "block": 8,
+      "prefill_block": 32,
+      "readers": 2
+    },
+    "l1_intermediates": true,
+    "sdpa_cores": 32,
+    "separate_prefill": true,
+    "prefill_sharded_norm": true,
+    "prefill_norm_block": true,
+    "prefill_sdpa_q": 128,
+    "prefill_sdpa_k": 256,
+    "prefill_sdpa_approx": true,
+    "prefill_subh": 2,
+    "history_tile_tail": true,
+    "policy_name": "p300c_bfp4_lofi_phase_specific_v1",
+    "gate": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2
+    },
+    "up": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2
+    },
+    "prefill_norm_max_tokens": 1280
+  },
+  "runtime_class": "OptimizedDecoder",
+  "prefill_host_us": 169113.0578983575,
+  "prefill_traced": false,
+  "prefill_deterministic": true,
+  "activations": "recorded HF preceding layers",
+  "memory": {
+    "before_weights": {
+      "num_banks": 8,
+      "capacity_bytes": 34178731008,
+      "allocated_bytes": 0,
+      "largest_free_per_bank": 4272341376
+    },
+    "after_weights": {
+      "num_banks": 8,
+      "capacity_bytes": 34178731008,
+      "allocated_bytes": 320553472,
+      "largest_free_per_bank": 4232272192
+    },
+    "request_setup": {
+      "num_banks": 8,
+      "capacity_bytes": 34178731008,
+      "allocated_bytes": 718525952,
+      "largest_free_per_bank": 4182525632
+    }
+  },
+  "prefill_compared_tokens": 128,
+  "performance_workload": {
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "batch": 8,
+    "concurrency": 1,
+    "decode_measurement": "final warmed step at context 4224",
+    "scope": "single layer, supplied hidden activations",
+    "prefill_profiled": false
+  }
+}

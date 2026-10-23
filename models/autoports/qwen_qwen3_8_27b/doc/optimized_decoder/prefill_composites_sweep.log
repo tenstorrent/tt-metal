@@ -1,0 +1,5 @@
+composite_normblock_l0 1
+composite_normblock_l3 1
+composite_sdpa32_128_l3 0
+composite_sdpa128_128_l3 0
+composite_sdpa128_256_l3 0

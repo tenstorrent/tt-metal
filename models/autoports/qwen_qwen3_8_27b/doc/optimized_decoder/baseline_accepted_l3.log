@@ -1,0 +1,80 @@
+2026-10-23 18:33:43.295 | INFO     | __main__:main:222 - Setting profiler artifacts folder to models/autoports/qwen_qwen3_8_27b/doc/optimized_decoder/tracy/baseline_accepted_l3
+2026-10-23 18:33:43.296 | INFO     | __main__:main:374 - Using port 8086
+2026-10-23 18:33:43.296 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-10-23 18:33:43.297 | INFO     | tracy:run_report_setup:112 - Capture command: ('/workspace/build/tools/profiler/bin/tracy-capture -o models/autoports/qwen_qwen3_8_27b/doc/optimized_decoder/tracy/baseline_accepted_l3/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-10-23 18:33:43.300 | INFO     | __main__:run_workload:409 - Test process started
+2026-10-23 18:33:43.530 | INFO     | __main__:main:222 - Setting profiler artifacts folder to models/autoports/qwen_qwen3_8_27b/doc/optimized_decoder/tracy/baseline_accepted_l3
+mkdir -p failed for path /.config/matplotlib: [Errno 13] Permission denied: '/.config'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-k58hbt7h because there was an issue with the default path (/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+2026-10-23 18:33:44.682 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+HF_REFERENCE_READY
+2026-10-23 18:33:54.895 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 18:33:54.895 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 18:33:54.895 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 18:33:54.895 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 18:33:54.906 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 18:33:54.907 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 18:33:54.986 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 18:33:54.986 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 18:33:54.986 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 18:33:54.986 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 18:33:54.988 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 18:33:55.217 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 18:33:55.279 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 18:33:55.279 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 18:33:55.280 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 18:33:55.280 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 18:33:55.326 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-10-23 18:33:55.880 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+PREFILL_PCC 0.9999949339915389
+2026-10-23 18:33:59.555 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-10-23 18:33:59.649 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+EAGER_DECODE_PCC 0.9999993812284752
+2026-10-23 18:34:03.598 | INFO     | tracy:signpost:49 - PERF_DECODE
+2026-10-23 18:34:03.601 | INFO     | tracy:signpost:49 - PERF_DECODE_END
+{"layer_type": "full_attention", "layer_idx": 3, "batch": 1, "sequence": 4096, "weights": "real", "prefill_pcc": 0.9999949339915389, "decode_pcc": 0.9999993812284752, "changed_input_decode_pcc": 0.9999996930998031, "resume_pcc": null, "deterministic": true, "remap_pcc": null, "remap_cache_pcc": null, "input_std": 0.1, "request_results": [], "prefill_pcc_fp32": 1.0, "prefill_relative_rmse": 0.004225520882755518, "fusion_equivalence": {"prefill_pcc": null, "decode_pcc": null}, "screen_host_traced_us": null, "workload_final_decode_pcc": 0.9999993273933024, "workload_last_decode_host_us": 2221.1899049580097, "runtime_fallback_audit": false, "provenance": {"tests/run_optimized_decoder.py": "a991f866b4dbf2b50031431ace8c4fa37a707d8134a437da7709e0fda7c9cb73", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/fused_decoder.py": "41ba2e2fec65d6c5bb7503a6ff1ca7a905a8164f349eb8ef9d8a399dccdefc6e", "tt/optimized_decoder.py": "ff85733835d1d972fb9bb1bdc47cdc761c1a814412d534681834b66d8f05d31a", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "policy": {}, "runtime_class": "FusedDecoder", "prefill_host_us": 94236.48496158421, "prefill_traced": true, "prefill_deterministic": true, "activations": "recorded HF preceding layers", "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 30377131008, "allocated_bytes": 0, "largest_free_per_bank": 3797141376}, "after_weights": {"num_banks": 8, "capacity_bytes": 30377131008, "allocated_bytes": 746225664, "largest_free_per_bank": 3703863168}, "request_setup": {"num_banks": 8, "capacity_bytes": 30377131008, "allocated_bytes": 825250816, "largest_free_per_bank": 3693985024}}, "prefill_compared_tokens": 4096, "performance_workload": {"input_tokens": 4096, "output_tokens": 128, "batch": 1, "concurrency": 1, "decode_measurement": "final warmed step at context 4224", "scope": "single layer, supplied hidden activations", "prefill_profiled": true}}
+2026-10-23 18:34:05.880 | info     |           Metal | Device kernel duration perf summary (device=0): count=7755, min=679ns, avg=73052.4ns, max=1057977ns (profiler_analysis.cpp:729)
+2026-10-23 18:34:05.880 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=105800ns, range=[0..1058000), underflow(<0ns)=0, overflow(>=1058000ns)=0) (profiler_analysis.cpp:772)
+2026-10-23 18:34:05.880 | info     |           Metal |   [           0 ..       105800) |########################################|     6514 (profiler_analysis.cpp:777)
+2026-10-23 18:34:05.880 | info     |           Metal |   [      105800 ..       211600) |#                                       |      244 (profiler_analysis.cpp:777)
+2026-10-23 18:34:05.880 | info     |           Metal |   [      211600 ..       317400) |                                        |       12 (profiler_analysis.cpp:777)
+2026-10-23 18:34:05.880 | info     |           Metal |   [      317400 ..       423200) |#                                       |      238 (profiler_analysis.cpp:777)
+2026-10-23 18:34:05.880 | info     |           Metal |   [      423200 ..       529000) |####                                    |      697 (profiler_analysis.cpp:777)
+2026-10-23 18:34:05.880 | info     |           Metal |   [      529000 ..       634800) |                                        |       11 (profiler_analysis.cpp:777)
+2026-10-23 18:34:05.880 | info     |           Metal |   [      634800 ..       740600) |                                        |        9 (profiler_analysis.cpp:777)
+2026-10-23 18:34:05.880 | info     |           Metal |   [      740600 ..       846400) |                                        |        9 (profiler_analysis.cpp:777)
+2026-10-23 18:34:05.880 | info     |           Metal |   [      846400 ..       952200) |                                        |        9 (profiler_analysis.cpp:777)
+2026-10-23 18:34:05.880 | info     |           Metal |   [      952200 ..      1058000) |                                        |       12 (profiler_analysis.cpp:777)
+2026-10-23 18:34:09.529 | info     |    BuildKernels | JIT cache stats: 151/151 hits (100.0%) [151 cached, 328 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 18:34:09.529 | info     |    BuildKernels | JIT telemetry: 31 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 18:34:09.552 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 18:34:09.552 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 18:34:09.768 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 18:34:09.768 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 18:34:09.768 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 25.41 s
+Zones: 7,184,962
+Elapsed time: 25.21 s
+Saving trace... done!
+Trace size 11.13 MB (6.18% ratio)
+2026-10-23 18:34:10.031 | INFO     | __main__:main:483 - Copying /workspace/generated/profiler/.logs/tracy_profile_log_host.tracy to /workspace/build/profiler/build_wasm/traces/models_autoports_qwen_qwen3_8_27b_tests_2026_10_23_18_34_10.tracy
+2026-10-23 18:34:10.031 | WARNING  | __main__:main:488 - Could not copy /workspace/generated/profiler/.logs/tracy_profile_log_host.tracy to /workspace/build/profiler/build_wasm/traces/models_autoports_qwen_qwen3_8_27b_tests_2026_10_23_18_34_10.tracy: [Errno 2] No such file or directory: '/workspace/generated/profiler/.logs/tracy_profile_log_host.tracy'
+2026-10-23 18:34:10.031 | INFO     | __main__:main:495 - embed.tracy -> traces/models_autoports_qwen_qwen3_8_27b_tests_2026_10_23_18_34_10.tracy
+2026-10-23 18:34:10.031 | INFO     | tracy.serve_wasm:launch_server_subprocess:308 - Tracy WASM web UI disabled (--no-web-server / TRACY_NO_WEB_SERVER); not starting a server.
+2026-10-23 18:34:11.849 | INFO     | tracy:generate_report:162 - Host side ops time report generated at models/autoports/qwen_qwen3_8_27b/doc/optimized_decoder/tracy/baseline_accepted_l3/.logs/tracy_ops_times.csv
+2026-10-23 18:34:11.895 | INFO     | tracy:generate_report:173 - Host side ops data report generated at models/autoports/qwen_qwen3_8_27b/doc/optimized_decoder/tracy/baseline_accepted_l3/.logs/tracy_ops_data.csv
+2026-10-23 18:34:11.895 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+/workspace/tools/tracy/process_ops_logs.py:535: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-10-23 18:34:16.433 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-10-23 18:34:16.434 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+2026-10-23 18:34:24.384 | INFO     | tracy.process_ops_logs:generate_reports:1323 - OPs' perf analysis is finished! Generating reports ...
+2026-10-23 18:34:24.385 | INFO     | tracy.process_ops_logs:generate_reports:1343 - Copying runtime artifacts
+2026-10-23 18:34:24.555 | INFO     | tracy.process_ops_logs:generate_reports:1352 - Generating OPs CSV
+2026-10-23 18:34:30.063 | INFO     | tracy.process_ops_logs:generate_reports:1814 - OPs csv generated at: /workspace/models/autoports/qwen_qwen3_8_27b/doc/optimized_decoder/tracy/baseline_accepted_l3/reports/2026_10_23_18_34_24/ops_perf_results_2026_10_23_18_34_24.csv
+{"source": "models/autoports/qwen_qwen3_8_27b/doc/optimized_decoder/tracy/baseline_accepted_l3/reports/2026_10_23_18_34_24/ops_perf_results_2026_10_23_18_34_24.csv", "device_header": "ARCH: blackhole, CHIP_FREQ[MHz]: 1350, Max Compute Cores: 120", "clock_mhz": 1350.0, "time_basis": "Whole-layer firmware timestamp envelope, including all operations and gaps; device cycles / MHz = us.", "phases": {"prefill": {"device_us": 92975.4637037037, "first_cycle": 4010964677096, "last_cycle": 4011090193972, "device_ops": 1026, "summed_kernel_us": 92403.475, "trace_ids": ["0"], "trace_replay_sessions": ["1"]}, "decode": {"device_us": 2188.5422222222223, "first_cycle": 4016420038770, "last_cycle": 4016422993302, "device_ops": 35, "summed_kernel_us": 2166.049, "trace_ids": ["1"], "trace_replay_sessions": ["132"]}}}

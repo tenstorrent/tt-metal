@@ -1,0 +1,18 @@
+{
+  "layer_type": "full_attention",
+  "batch": 8,
+  "positions": [
+    127,
+    31,
+    1,
+    513,
+    129,
+    32,
+    511,
+    128
+  ],
+  "decode_pcc": 0.9997184934503374,
+  "changed_position_pcc": 0.9999019340821308,
+  "deterministic": true,
+  "runtime_fallback_audit": true
+}

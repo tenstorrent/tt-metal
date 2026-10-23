@@ -45,6 +45,25 @@
       "unchanged_full_path_proof": "fused_decoder/unaffected_full_attention.json",
       "memory_effect": "Saves593920 physical state bytes/request; no change to advertised capacity, weights precision or KV dtype.",
       "scope": "Single-request native context. Larger batches separately validated at4096 tokens; not every batch/context Cartesian combination."
+    },
+    "03-optimized-decoder": {
+      "supported_context": 262144,
+      "capability_reduction": null,
+      "linear_state_layout": "BF16 row-major [B,3,10240]; FP32 tiled [B,48,128,128]",
+      "linear_state_bytes_per_request": 3207168,
+      "full_attention_kv_dtype": "BFP8",
+      "full_attention_kv_bytes_per_token": 2176,
+      "full_attention_kv_bytes_at_max_context": 570425344,
+      "linear_prefill_evidence": "optimized_decoder/context262144_l0.json",
+      "linear_nonaligned_prefill_and_final_decode_evidence": "optimized_decoder/context262142_l0.json",
+      "full_prefill_evidence": "optimized_decoder/context262144_l3.json",
+      "full_nonaligned_prefill_and_final_decode_evidence": "optimized_decoder/context262142_l3.json",
+      "allocated_decoder_setup_bytes": {
+        "linear_attention": 320553472,
+        "full_attention": 311394304
+      },
+      "memory_effect": "BFP4 weights, BFP8 KV; two gate/up representations for phase-specific matmuls, adding100270080 bytes versus packed-only. Decode MLP packs users in tile rows to avoid per-user padding. No context reduction.",
+      "scope": "Single-layer capacity at B1; B8/B16/B32 measured at4096+128. Long fixtures repeat recorded HF activations and compare final128 prefill outputs using the whole prefix, plus two final-position decodes."
     }
   }
 }

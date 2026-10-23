@@ -1,0 +1,14 @@
+prefill_packed512k4_l0 0
+prefill_packed512k4_l3 0
+prefill_packed1024k4_l0 1
+prefill_packed1024k4_l3 1
+prefill_grid11_l0 0
+prefill_grid11_l3 0
+prefill_l1_l0 0
+prefill_l1_l3 0
+prefill_minimal_l0 0
+prefill_minimal_l3 0
+prefill_minimal_k4_l0 0
+prefill_minimal_k4_l3 0
+prefill_minimal_decode_l0 0
+prefill_minimal_decode_l3 0

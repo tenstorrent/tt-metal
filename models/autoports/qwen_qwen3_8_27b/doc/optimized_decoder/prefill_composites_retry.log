@@ -1,0 +1,6 @@
+composite_normblock_retry_l0 0
+composite_normblock_retry_l3 0
+composite_sdpa32_32exact_l3 0
+composite_sdpa32_128approx_l3 0
+composite_sdpa128_128approx_l3 0
+composite_sdpa128_256approx_l3 0

@@ -1,0 +1,73 @@
+mkdir -p failed for path /.config/matplotlib: [Errno 13] Permission denied: '/.config'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-87gfvd7j because there was an issue with the default path (/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_DECODE'.
+Using operations until 'PERF_DECODE_END'.
+Detected data from 1 devices. Merging device data...
+
+🚀 Performance Report 🚀
+========================
+
+ID     Total %  Bound  OP Code                                  Device   Device Time  Op-to-Op Gap  Cores  DRAM      DRAM %  FLOPs        FLOPs %  Math Fidelity            
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 8786    3.7 %         LayerNormDeviceOperation                       0        82 μs                    1                                                 BF16, BF16 => BF16
+ 8787   16.4 %   DRAM  MatmulDeviceOperation 32 x 5120 x 14336        0       358 μs          1 μs     90  413 GB/s  80.7 %  13.1 TFLOPs   10.5 %  HiFi4 BF16 x BF16 => BF16
+ 8788    0.2 %         SliceDeviceOperation                           0         3 μs          1 μs    110                                                       BF16 => BF16
+ 8789    0.2 %         NlpCreateHeadsDeviceOperation                  0         4 μs          1 μs     32                                                       BF16 => BF16
+ 8790    0.3 %         LayerNormDeviceOperation                       0         6 μs          0 μs     24                                                 BF16, BF16 => BF16
+ 8791    0.1 %         SliceDeviceOperation                           0         2 μs          1 μs     48                                                       BF16 => BF16
+ 8792    0.1 %         SliceDeviceOperation                           0         3 μs          1 μs    110                                                       BF16 => BF16
+ 8793    0.3 %         RotaryEmbeddingDeviceOperation                 0         6 μs          1 μs     24                                                 BF16, BF16 => BF16
+ 8794    0.1 %         SliceDeviceOperation                           0         2 μs          1 μs     48                                                       BF16 => BF16
+ 8795    0.1 %         ConcatDeviceOperation                          0         3 μs          0 μs    110                                                 BF16, BF16 => BF16
+ 8796    0.3 %         LayerNormDeviceOperation                       0         6 μs          1 μs      4                                                 BF16, BF16 => BF16
+ 8797    0.1 %         SliceDeviceOperation                           0         1 μs          1 μs      8                                                       BF16 => BF16
+ 8798    0.1 %         SliceDeviceOperation                           0         2 μs          1 μs     24                                                       BF16 => BF16
+ 8799    0.2 %         RotaryEmbeddingDeviceOperation                 0         5 μs          1 μs      4                                                 BF16, BF16 => BF16
+ 8800    0.1 %         SliceDeviceOperation                           0         2 μs          1 μs      8                                                       BF16 => BF16
+ 8801    0.1 %         ConcatDeviceOperation                          0         2 μs          1 μs     32                                                 BF16, BF16 => BF16
+ 8802    0.2 %         PermuteDeviceOperation                         0         3 μs          1 μs    110                                                       BF16 => BF16
+ 8803    0.2 %         PermuteDeviceOperation                         0         3 μs          1 μs     32                                                       BF16 => BF16
+ 8804    0.2 %         PermuteDeviceOperation                         0         3 μs          1 μs     32                                                       BF16 => BF16
+ 8805    0.1 %         InterleavedToShardedDeviceOperation            0         1 μs          1 μs      1                                                       BF16 => BF16
+ 8806    0.3 %         PagedUpdateCacheDeviceOperation                0         6 μs          1 μs      1                                                 BF16, BF16 => BF16
+ 8807    0.1 %         InterleavedToShardedDeviceOperation            0         1 μs          1 μs      1                                                       BF16 => BF16
+ 8808    0.3 %         PagedUpdateCacheDeviceOperation                0         6 μs          1 μs      1                                                 BF16, BF16 => BF16
+ 8809    4.5 %         SdpaDecodeDeviceOperation                      0        99 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 8810    0.2 %         ReshapeViewDeviceOperation                     0         4 μs          1 μs    110                                                       BF16 => BF16
+ 8811    0.2 %         SliceDeviceOperation                           0         3 μs          1 μs    110                                                       BF16 => BF16
+ 8812    0.3 %         BinaryNgDeviceOperation                        0         7 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 8813    7.0 %   DRAM  MatmulDeviceOperation 32 x 6144 x 5120         0       154 μs          0 μs     80  414 GB/s  80.8 %  13.1 TFLOPs   11.8 %  HiFi4 BF16 x BF16 => BF16
+ 8814    0.2 %         BinaryNgDeviceOperation                        0         4 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 8815    3.8 %         LayerNormDeviceOperation                       0        82 μs          1 μs      1                                                 BF16, BF16 => BF16
+ 8816   19.8 %   DRAM  MatmulDeviceOperation 32 x 5120 x 17408        0       434 μs          1 μs    109  414 GB/s  80.8 %  13.1 TFLOPs    8.7 %  HiFi4 BF16 x BF16 => BF16
+ 8817   19.8 %   DRAM  MatmulDeviceOperation 32 x 5120 x 17408        0       433 μs          1 μs    109  415 GB/s  81.1 %  13.2 TFLOPs    8.7 %  HiFi4 BF16 x BF16 => BF16
+ 8818    0.4 %         BinaryNgDeviceOperation                        0         9 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 8819   19.6 %   DRAM  MatmulDeviceOperation 32 x 17408 x 5120        0       430 μs          0 μs     80  418 GB/s  81.7 %  13.3 TFLOPs   12.0 %  HiFi4 BF16 x BF16 => BF16
+ 8820    0.2 %         BinaryNgDeviceOperation                        0         4 μs          1 μs    110                                                 BF16, BF16 => BF16
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+       100.0 %         35 device ops, 0 host ops, 0 signposts               2,171 μs         23 μs         346 GB/s  67.6 %                                                 
+
+💡 Advice 💡
+============
+
+Matmul Optimization
+-------------------
+ 8787   16.4 %   DRAM  MatmulDeviceOperation 32 x 5120 x 14336        0       358 μs          1 μs     90  413 GB/s  80.7 %  13.1 TFLOPs   10.5 %  HiFi4 BF16 x BF16 => BF16
+- Try a DRAM-sharded program config (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) to improve throughput further
+
+ 8813    7.0 %   DRAM  MatmulDeviceOperation 32 x 6144 x 5120         0       154 μs          0 μs     80  414 GB/s  80.8 %  13.1 TFLOPs   11.8 %  HiFi4 BF16 x BF16 => BF16
+- Try a DRAM-sharded program config (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) to improve throughput further
+
+ 8816   19.8 %   DRAM  MatmulDeviceOperation 32 x 5120 x 17408        0       434 μs          1 μs    109  414 GB/s  80.8 %  13.1 TFLOPs    8.7 %  HiFi4 BF16 x BF16 => BF16
+- Try a DRAM-sharded program config (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) to improve throughput further
+
+ 8817   19.8 %   DRAM  MatmulDeviceOperation 32 x 5120 x 17408        0       433 μs          1 μs    109  415 GB/s  81.1 %  13.2 TFLOPs    8.7 %  HiFi4 BF16 x BF16 => BF16
+- Try a DRAM-sharded program config (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) to improve throughput further
+
+ 8819   19.6 %   DRAM  MatmulDeviceOperation 32 x 17408 x 5120        0       430 μs          0 μs     80  418 GB/s  81.7 %  13.3 TFLOPs   12.0 %  HiFi4 BF16 x BF16 => BF16
+- Try a DRAM-sharded program config (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) to improve throughput further
+

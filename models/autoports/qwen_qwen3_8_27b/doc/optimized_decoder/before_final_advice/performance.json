@@ -1,0 +1,70 @@
+{
+  "linear_attention": {
+    "prefill_device_us": 16340.52962962963,
+    "decode_device_us": 816.6762962962963,
+    "prefill_useful_flops": 3163039465472,
+    "decode_dram_bytes": 223195136.0,
+    "peak_flops_per_s": 663552000000000.0,
+    "peak_dram_bytes_per_s": 512000000000.0,
+    "prefill_flops_pct": 29.171819611752312,
+    "decode_dram_pct": 53.378309371408776,
+    "peak_basis": "One p300c Blackhole ASIC:120 physical cores,1.35GHz,4096 FLOP/cycle/core LoFi theoretical peak;512GB/s GDDR6. Runtime storage grid110 cores; matmul reader workers16. No multi-device aggregation.",
+    "traffic_assumptions": "Estimated compulsory physical traffic: BFP4 weights including exponent headers and reader padding read once; BF16 residual input/output; FP32 recurrent and row-major BF16 convolution state read/write, or BFP8 prefix KV read plus token write. Excludes intermediate spills, repeated reads and small constants: lower bound, not bus counters.",
+    "flops_assumptions": "Useful dense matmul work and logical causal attention/recurrence/scalar work; no MoE and no padding counted useful. Mixed BF16 activations, BFP4/LoFi projections, FP32/HiFi4 sensitive recurrence/attention: denominator is chip LoFi peak, not an achievable mixed-kernel ceiling.",
+    "source": "single-layer Tracy; complete firmware timestamp envelope including all operations and internal gaps",
+    "prefill_compute_roofline_us": 4766.829827160494,
+    "decode_dram_roofline_us": 435.928,
+    "prefill_host_us": 17150.438157841563,
+    "decode_host_us": 839.1779847443104,
+    "evidence": [
+      "tracy/final_selected_l0/whole_layer_timing.json",
+      "tracy/final_selected_l0/prefill_perf_report.csv",
+      "tracy/final_selected_l0/decode_perf_report.csv",
+      "final_selected_l0.json",
+      "tests/report_optimized.py"
+    ],
+    "workload": {
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "batch": 1,
+      "concurrency": 1,
+      "decode_measurement": "final warmed step at context 4224",
+      "scope": "single layer, supplied hidden activations",
+      "prefill_profiled": true
+    }
+  },
+  "full_attention": {
+    "prefill_device_us": 18038.953333333335,
+    "decode_device_us": 705.882962962963,
+    "prefill_useful_flops": 3257527418880.0,
+    "decode_dram_bytes": 218601600.0,
+    "peak_flops_per_s": 663552000000000.0,
+    "peak_dram_bytes_per_s": 512000000000.0,
+    "prefill_flops_pct": 27.214589152273636,
+    "decode_dram_pct": 60.48541647865242,
+    "peak_basis": "One p300c Blackhole ASIC:120 physical cores,1.35GHz,4096 FLOP/cycle/core LoFi theoretical peak;512GB/s GDDR6. Runtime storage grid110 cores; matmul reader workers16. No multi-device aggregation.",
+    "traffic_assumptions": "Estimated compulsory physical traffic: BFP4 weights including exponent headers and reader padding read once; BF16 residual input/output; FP32 recurrent and row-major BF16 convolution state read/write, or BFP8 prefix KV read plus token write. Excludes intermediate spills, repeated reads and small constants: lower bound, not bus counters.",
+    "flops_assumptions": "Useful dense matmul work and logical causal attention/recurrence/scalar work; no MoE and no padding counted useful. Mixed BF16 activations, BFP4/LoFi projections, FP32/HiFi4 sensitive recurrence/attention: denominator is chip LoFi peak, not an achievable mixed-kernel ceiling.",
+    "source": "single-layer Tracy; complete firmware timestamp envelope including all operations and internal gaps",
+    "prefill_compute_roofline_us": 4909.227037037037,
+    "decode_dram_roofline_us": 426.95625,
+    "prefill_host_us": 18744.7729986161,
+    "decode_host_us": 721.9528779387474,
+    "evidence": [
+      "tracy/final_selected_l3/whole_layer_timing.json",
+      "tracy/final_selected_l3/prefill_perf_report.csv",
+      "tracy/final_selected_l3/decode_perf_report.csv",
+      "final_selected_l3.json",
+      "tests/report_optimized.py"
+    ],
+    "workload": {
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "batch": 1,
+      "concurrency": 1,
+      "decode_measurement": "final warmed step at context 4224",
+      "scope": "single layer, supplied hidden activations",
+      "prefill_profiled": true
+    }
+  }
+}

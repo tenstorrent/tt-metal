@@ -1,0 +1,14 @@
+# Raw captures stay local; compact tables, CSV, summaries and logs are versioned.
+tracy/**/.logs/
+tracy/**/reports/
+tracy/**/ops.csv
+tracy/**/*.zst
+*.tracy
+# Override repository-wide CSV/log ignores for compact stage evidence.
+!screen_results.csv
+!tracy/**/prefill_perf_report.csv
+!tracy/**/decode_perf_report.csv
+!/*.log
+!triage/*.log
+# Keep verbose isolated-agent transcripts local; reports retain the findings.
+autodebug*.log

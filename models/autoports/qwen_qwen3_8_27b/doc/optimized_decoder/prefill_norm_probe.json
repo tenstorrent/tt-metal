@@ -1,0 +1,38 @@
+[
+  {
+    "kind": "original_nonrectangular",
+    "cores": 40,
+    "finite": true,
+    "output_std": 4.79952923673668e+36,
+    "max_abs": 3.097101230178854e+38,
+    "nonfinite_count": 0,
+    "pcc": 0.6702208367350377
+  },
+  {
+    "kind": "original_nonrectangular",
+    "cores": 80,
+    "finite": true,
+    "output_std": 4.523740727365182e+36,
+    "max_abs": 3.097101230178854e+38,
+    "nonfinite_count": 0,
+    "pcc": 0.6321130759283649
+  },
+  {
+    "kind": "fixed_rectangular",
+    "cores": 40,
+    "finite": true,
+    "output_std": 1.0207920974860716,
+    "max_abs": 50.25,
+    "nonfinite_count": 0,
+    "pcc": 0.999998423261928
+  },
+  {
+    "kind": "fixed_rectangular",
+    "cores": 80,
+    "finite": true,
+    "output_std": 1.0207449864951592,
+    "max_abs": 50.25,
+    "nonfinite_count": 0,
+    "pcc": 0.9999984244005307
+  }
+]

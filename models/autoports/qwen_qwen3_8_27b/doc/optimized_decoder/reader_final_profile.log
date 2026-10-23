@@ -1,0 +1,310 @@
+2026-10-23 18:31:44.727 | INFO     | __main__:main:222 - Setting profiler artifacts folder to models/autoports/qwen_qwen3_8_27b/doc/optimized_decoder/tracy/readers_accepted_l0
+2026-10-23 18:31:44.728 | INFO     | __main__:main:374 - Using port 8086
+2026-10-23 18:31:44.728 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-10-23 18:31:44.730 | INFO     | tracy:run_report_setup:112 - Capture command: ('/workspace/build/tools/profiler/bin/tracy-capture -o models/autoports/qwen_qwen3_8_27b/doc/optimized_decoder/tracy/readers_accepted_l0/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-10-23 18:31:44.733 | INFO     | __main__:run_workload:409 - Test process started
+2026-10-23 18:31:44.964 | INFO     | __main__:main:222 - Setting profiler artifacts folder to models/autoports/qwen_qwen3_8_27b/doc/optimized_decoder/tracy/readers_accepted_l0
+mkdir -p failed for path /.config/matplotlib: [Errno 13] Permission denied: '/.config'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-jl00a8w6 because there was an issue with the default path (/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+2026-10-23 18:31:46.110 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+[transformers] The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+2026-10-23 18:31:49.000 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 18:31:49.000 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 18:31:49.000 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 18:31:49.000 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 18:31:49.011 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 18:31:49.012 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 18:31:49.090 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 18:31:49.090 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 18:31:49.090 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 18:31:49.090 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 18:31:49.092 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 18:31:49.302 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 18:31:49.366 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 18:31:49.366 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 18:31:49.366 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 18:31:49.367 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 18:31:49.413 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-10-23 18:31:49.474 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-10-23 18:31:56.515 | INFO     | tracy:signpost:49 - MICRO_mix_R1_0
+2026-10-23 18:31:56.515 | INFO     | tracy:signpost:49 - MICRO_mix_R1_0_END
+2026-10-23 18:31:56.587 | INFO     | tracy:signpost:49 - MICRO_mix_R2_1
+2026-10-23 18:31:56.588 | INFO     | tracy:signpost:49 - MICRO_mix_R2_1_END
+2026-10-23 18:31:56.657 | INFO     | tracy:signpost:49 - MICRO_mix_R3_2
+2026-10-23 18:31:56.657 | INFO     | tracy:signpost:49 - MICRO_mix_R3_2_END
+2026-10-23 18:31:56.719 | INFO     | tracy:signpost:49 - MICRO_mix_R3_3
+2026-10-23 18:31:56.719 | INFO     | tracy:signpost:49 - MICRO_mix_R3_3_END
+2026-10-23 18:31:56.779 | INFO     | tracy:signpost:49 - MICRO_mix_R2_4
+2026-10-23 18:31:56.779 | INFO     | tracy:signpost:49 - MICRO_mix_R2_4_END
+2026-10-23 18:31:56.841 | INFO     | tracy:signpost:49 - MICRO_mix_R1_5
+2026-10-23 18:31:56.841 | INFO     | tracy:signpost:49 - MICRO_mix_R1_5_END
+2026-10-23 18:31:56.911 | INFO     | tracy:signpost:49 - MICRO_out_R1_0
+2026-10-23 18:31:56.911 | INFO     | tracy:signpost:49 - MICRO_out_R1_0_END
+2026-10-23 18:31:56.980 | INFO     | tracy:signpost:49 - MICRO_out_R2_1
+2026-10-23 18:31:56.981 | INFO     | tracy:signpost:49 - MICRO_out_R2_1_END
+2026-10-23 18:31:57.051 | INFO     | tracy:signpost:49 - MICRO_out_R3_2
+2026-10-23 18:31:57.051 | INFO     | tracy:signpost:49 - MICRO_out_R3_2_END
+2026-10-23 18:31:57.111 | INFO     | tracy:signpost:49 - MICRO_out_R3_3
+2026-10-23 18:31:57.112 | INFO     | tracy:signpost:49 - MICRO_out_R3_3_END
+2026-10-23 18:31:57.171 | INFO     | tracy:signpost:49 - MICRO_out_R2_4
+2026-10-23 18:31:57.172 | INFO     | tracy:signpost:49 - MICRO_out_R2_4_END
+2026-10-23 18:31:57.231 | INFO     | tracy:signpost:49 - MICRO_out_R1_5
+2026-10-23 18:31:57.232 | INFO     | tracy:signpost:49 - MICRO_out_R1_5_END
+2026-10-23 18:31:57.299 | INFO     | tracy:signpost:49 - MICRO_gateup_R1_0
+2026-10-23 18:31:57.300 | INFO     | tracy:signpost:49 - MICRO_gateup_R1_0_END
+2026-10-23 18:31:57.367 | INFO     | tracy:signpost:49 - MICRO_gateup_R2_1
+2026-10-23 18:31:57.368 | INFO     | tracy:signpost:49 - MICRO_gateup_R2_1_END
+Building brisc, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/b37ee4f4898b28de/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=480000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="writer_unary_interleaved_start_id/16898489408860885866/" -DKERNEL_COMPILE_TIME_ARGS=1,2048,1,79,1088,14,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715,117638659,184748547,218303491,33816836,67371780,100926724,168036100,201591556,17108228,50659845,84214789,117769733,184879621,218434565,33947910,67502854,101057798,168167174,201722630,17239302,50790919,84345863,117900807,185010695,218565639,34078984,67633928,101188872,168298248,201853704,17370376,521 -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache4013702089740820285/kernels/writer_unary_interleaved_start_id/16898489408860885866/brisc/brisck.15193265891525459120_272446.o /workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache4013702089740820285/kernels/writer_unary_interleaved_start_id/16898489408860885866/brisc/brisck.15193265891525459120_272446.d
+In file included from /workspace/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /workspace/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /workspace/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:16:
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-FLUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,481,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:481:17: note: in expansion of macro 'SrcLocNameToHash'
+  481 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-DRAM-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,490,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:490:17: note: in expansion of macro 'SrcLocNameToHash'
+  490 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,633,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:633:5: note: in expansion of macro 'SrcLocNameToHash'
+  633 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: BRISC-KERNEL,/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/b37ee4f4898b28de/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=480000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reader_unary_unpad_dims_interleaved_start_id/16140157842263337693/" -DKERNEL_COMPILE_TIME_ARGS=1,2048,1,79,1104,14,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715,117638659,184748547,218303491,33816836,67371780,100926724,168036100,201591556,17108228,50659845,84214789,117769733,184879621,218434565,33947910,67502854,101057798,168167174,201722630,17239302,50790919,84345863,117900807,185010695,218565639,34078984,67633928,101188872,168298248,201853704,17370376,521 -include named_ct_arg_map_generated.h -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache4013702089740820285/kernels/reader_unary_unpad_dims_interleaved_start_id/16140157842263337693/ncrisc/ncrisck.15193265891525459120_272446.o /workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache4013702089740820285/kernels/reader_unary_unpad_dims_interleaved_start_id/16140157842263337693/ncrisc/ncrisck.15193265891525459120_272446.d
+In file included from /workspace/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /workspace/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /workspace/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,633,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:633:5: note: in expansion of macro 'SrcLocNameToHash'
+  633 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+2026-10-23 18:31:57.662 | INFO     | tracy:signpost:49 - MICRO_gateup_R3_2
+2026-10-23 18:31:57.662 | INFO     | tracy:signpost:49 - MICRO_gateup_R3_2_END
+2026-10-23 18:31:57.727 | INFO     | tracy:signpost:49 - MICRO_gateup_R3_3
+2026-10-23 18:31:57.728 | INFO     | tracy:signpost:49 - MICRO_gateup_R3_3_END
+2026-10-23 18:31:57.791 | INFO     | tracy:signpost:49 - MICRO_gateup_R2_4
+2026-10-23 18:31:57.792 | INFO     | tracy:signpost:49 - MICRO_gateup_R2_4_END
+2026-10-23 18:31:57.854 | INFO     | tracy:signpost:49 - MICRO_gateup_R1_5
+2026-10-23 18:31:57.855 | INFO     | tracy:signpost:49 - MICRO_gateup_R1_5_END
+2026-10-23 18:31:57.926 | INFO     | tracy:signpost:49 - MICRO_down_R1_0
+2026-10-23 18:31:57.927 | INFO     | tracy:signpost:49 - MICRO_down_R1_0_END
+2026-10-23 18:31:57.995 | INFO     | tracy:signpost:49 - MICRO_down_R2_1
+2026-10-23 18:31:57.996 | INFO     | tracy:signpost:49 - MICRO_down_R2_1_END
+2026-10-23 18:31:58.064 | INFO     | tracy:signpost:49 - MICRO_down_R3_2
+2026-10-23 18:31:58.065 | INFO     | tracy:signpost:49 - MICRO_down_R3_2_END
+2026-10-23 18:31:58.126 | INFO     | tracy:signpost:49 - MICRO_down_R3_3
+2026-10-23 18:31:58.126 | INFO     | tracy:signpost:49 - MICRO_down_R3_3_END
+2026-10-23 18:31:58.191 | INFO     | tracy:signpost:49 - MICRO_down_R2_4
+2026-10-23 18:31:58.192 | INFO     | tracy:signpost:49 - MICRO_down_R2_4_END
+2026-10-23 18:31:58.254 | INFO     | tracy:signpost:49 - MICRO_down_R1_5
+2026-10-23 18:31:58.254 | INFO     | tracy:signpost:49 - MICRO_down_R1_5_END
+2026-10-23 18:31:58.370 | info     |           Metal | Device kernel duration perf summary (device=0): count=192, min=1247ns, avg=55779.3ns, max=329971ns (profiler_analysis.cpp:729)
+2026-10-23 18:31:58.370 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=32900ns, range=[0..329000), underflow(<0ns)=0, overflow(>=329000ns)=2) (profiler_analysis.cpp:772)
+2026-10-23 18:31:58.370 | info     |           Metal |   [           0 ..        32900) |########################################|      120 (profiler_analysis.cpp:777)
+2026-10-23 18:31:58.370 | info     |           Metal |   [       32900 ..        65800) |####                                    |       12 (profiler_analysis.cpp:777)
+2026-10-23 18:31:58.370 | info     |           Metal |   [       65800 ..        98700) |##                                      |        6 (profiler_analysis.cpp:777)
+2026-10-23 18:31:58.370 | info     |           Metal |   [       98700 ..       131600) |########                                |       24 (profiler_analysis.cpp:777)
+2026-10-23 18:31:58.370 | info     |           Metal |   [      131600 ..       164500) |##                                      |        6 (profiler_analysis.cpp:777)
+2026-10-23 18:31:58.370 | info     |           Metal |   [      164500 ..       197400) |##                                      |        6 (profiler_analysis.cpp:777)
+2026-10-23 18:31:58.370 | info     |           Metal |   [      197400 ..       230300) |####                                    |       12 (profiler_analysis.cpp:777)
+2026-10-23 18:31:58.370 | info     |           Metal |   [      230300 ..       263200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-10-23 18:31:58.370 | info     |           Metal |   [      263200 ..       296100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-10-23 18:31:58.370 | info     |           Metal |   [      296100 ..       329000) |#                                       |        4 (profiler_analysis.cpp:777)
+2026-10-23 18:31:59.236 | info     |    BuildKernels | JIT cache stats: 85/87 hits (97.7%) [85 cached, 34 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 18:31:59.236 | info     |    BuildKernels | JIT telemetry: 34 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 18:31:59.250 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 18:31:59.250 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 18:31:59.452 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 18:31:59.452 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 18:31:59.452 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 13.66 s
+Zones: 267,841
+Elapsed time: 13.41 s
+Saving trace... done!
+Trace size 717.21 KB (10.27% ratio)
+2026-10-23 18:31:59.585 | INFO     | __main__:main:483 - Copying /workspace/generated/profiler/.logs/tracy_profile_log_host.tracy to /workspace/build/profiler/build_wasm/traces/models_autoports_qwen_qwen3_8_27b_tests_2026_10_23_18_31_59.tracy
+2026-10-23 18:31:59.585 | WARNING  | __main__:main:488 - Could not copy /workspace/generated/profiler/.logs/tracy_profile_log_host.tracy to /workspace/build/profiler/build_wasm/traces/models_autoports_qwen_qwen3_8_27b_tests_2026_10_23_18_31_59.tracy: [Errno 2] No such file or directory: '/workspace/generated/profiler/.logs/tracy_profile_log_host.tracy'
+2026-10-23 18:31:59.585 | INFO     | __main__:main:495 - embed.tracy -> traces/models_autoports_qwen_qwen3_8_27b_tests_2026_10_23_18_31_59.tracy
+2026-10-23 18:31:59.586 | INFO     | tracy.serve_wasm:launch_server_subprocess:308 - Tracy WASM web UI disabled (--no-web-server / TRACY_NO_WEB_SERVER); not starting a server.
+2026-10-23 18:31:59.661 | INFO     | tracy:generate_report:162 - Host side ops time report generated at models/autoports/qwen_qwen3_8_27b/doc/optimized_decoder/tracy/readers_accepted_l0/.logs/tracy_ops_times.csv
+2026-10-23 18:31:59.666 | INFO     | tracy:generate_report:173 - Host side ops data report generated at models/autoports/qwen_qwen3_8_27b/doc/optimized_decoder/tracy/readers_accepted_l0/.logs/tracy_ops_data.csv
+2026-10-23 18:31:59.666 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+/workspace/tools/tracy/process_ops_logs.py:535: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-10-23 18:31:59.842 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-10-23 18:31:59.842 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+2026-10-23 18:32:00.110 | INFO     | tracy.process_ops_logs:generate_reports:1323 - OPs' perf analysis is finished! Generating reports ...
+2026-10-23 18:32:00.110 | INFO     | tracy.process_ops_logs:generate_reports:1343 - Copying runtime artifacts
+2026-10-23 18:32:00.119 | INFO     | tracy.process_ops_logs:generate_reports:1352 - Generating OPs CSV
+2026-10-23 18:32:00.276 | INFO     | tracy.process_ops_logs:generate_reports:1814 - OPs csv generated at: /workspace/models/autoports/qwen_qwen3_8_27b/doc/optimized_decoder/tracy/readers_accepted_l0/reports/2026_10_23_18_32_00/ops_perf_results_2026_10_23_18_32_00.csv
+2026-10-23 18:32:00.578 | INFO     | __main__:main:222 - Setting profiler artifacts folder to models/autoports/qwen_qwen3_8_27b/doc/optimized_decoder/tracy/readers_accepted_l3
+2026-10-23 18:32:00.579 | INFO     | __main__:main:374 - Using port 8086
+2026-10-23 18:32:00.579 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-10-23 18:32:00.580 | INFO     | tracy:run_report_setup:112 - Capture command: ('/workspace/build/tools/profiler/bin/tracy-capture -o models/autoports/qwen_qwen3_8_27b/doc/optimized_decoder/tracy/readers_accepted_l3/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-10-23 18:32:00.583 | INFO     | __main__:run_workload:409 - Test process started
+2026-10-23 18:32:00.813 | INFO     | __main__:main:222 - Setting profiler artifacts folder to models/autoports/qwen_qwen3_8_27b/doc/optimized_decoder/tracy/readers_accepted_l3
+mkdir -p failed for path /.config/matplotlib: [Errno 13] Permission denied: '/.config'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-kpw6if3v because there was an issue with the default path (/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+2026-10-23 18:32:01.967 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+2026-10-23 18:32:04.794 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 18:32:04.794 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 18:32:04.795 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 18:32:04.795 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 18:32:04.805 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 18:32:04.806 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 18:32:04.886 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 18:32:04.886 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 18:32:04.886 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 18:32:04.886 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 18:32:04.888 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 18:32:05.104 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 18:32:05.167 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 18:32:05.167 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 18:32:05.167 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 18:32:05.168 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 18:32:05.213 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-10-23 18:32:05.271 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+2026-10-23 18:32:12.534 | INFO     | tracy:signpost:49 - MICRO_mix_R1_0
+2026-10-23 18:32:12.534 | INFO     | tracy:signpost:49 - MICRO_mix_R1_0_END
+2026-10-23 18:32:12.602 | INFO     | tracy:signpost:49 - MICRO_mix_R2_1
+2026-10-23 18:32:12.602 | INFO     | tracy:signpost:49 - MICRO_mix_R2_1_END
+2026-10-23 18:32:12.672 | INFO     | tracy:signpost:49 - MICRO_mix_R3_2
+2026-10-23 18:32:12.672 | INFO     | tracy:signpost:49 - MICRO_mix_R3_2_END
+2026-10-23 18:32:12.733 | INFO     | tracy:signpost:49 - MICRO_mix_R3_3
+2026-10-23 18:32:12.733 | INFO     | tracy:signpost:49 - MICRO_mix_R3_3_END
+2026-10-23 18:32:12.793 | INFO     | tracy:signpost:49 - MICRO_mix_R2_4
+2026-10-23 18:32:12.794 | INFO     | tracy:signpost:49 - MICRO_mix_R2_4_END
+2026-10-23 18:32:12.854 | INFO     | tracy:signpost:49 - MICRO_mix_R1_5
+2026-10-23 18:32:12.855 | INFO     | tracy:signpost:49 - MICRO_mix_R1_5_END
+2026-10-23 18:32:12.922 | INFO     | tracy:signpost:49 - MICRO_out_R1_0
+2026-10-23 18:32:12.922 | INFO     | tracy:signpost:49 - MICRO_out_R1_0_END
+2026-10-23 18:32:12.989 | INFO     | tracy:signpost:49 - MICRO_out_R2_1
+2026-10-23 18:32:12.989 | INFO     | tracy:signpost:49 - MICRO_out_R2_1_END
+2026-10-23 18:32:13.057 | INFO     | tracy:signpost:49 - MICRO_out_R3_2
+2026-10-23 18:32:13.058 | INFO     | tracy:signpost:49 - MICRO_out_R3_2_END
+2026-10-23 18:32:13.118 | INFO     | tracy:signpost:49 - MICRO_out_R3_3
+2026-10-23 18:32:13.118 | INFO     | tracy:signpost:49 - MICRO_out_R3_3_END
+2026-10-23 18:32:13.177 | INFO     | tracy:signpost:49 - MICRO_out_R2_4
+2026-10-23 18:32:13.178 | INFO     | tracy:signpost:49 - MICRO_out_R2_4_END
+2026-10-23 18:32:13.237 | INFO     | tracy:signpost:49 - MICRO_out_R1_5
+2026-10-23 18:32:13.238 | INFO     | tracy:signpost:49 - MICRO_out_R1_5_END
+2026-10-23 18:32:13.307 | INFO     | tracy:signpost:49 - MICRO_gateup_R1_0
+2026-10-23 18:32:13.307 | INFO     | tracy:signpost:49 - MICRO_gateup_R1_0_END
+2026-10-23 18:32:13.377 | INFO     | tracy:signpost:49 - MICRO_gateup_R2_1
+2026-10-23 18:32:13.377 | INFO     | tracy:signpost:49 - MICRO_gateup_R2_1_END
+2026-10-23 18:32:13.451 | INFO     | tracy:signpost:49 - MICRO_gateup_R3_2
+2026-10-23 18:32:13.451 | INFO     | tracy:signpost:49 - MICRO_gateup_R3_2_END
+2026-10-23 18:32:13.517 | INFO     | tracy:signpost:49 - MICRO_gateup_R3_3
+2026-10-23 18:32:13.517 | INFO     | tracy:signpost:49 - MICRO_gateup_R3_3_END
+2026-10-23 18:32:13.579 | INFO     | tracy:signpost:49 - MICRO_gateup_R2_4
+2026-10-23 18:32:13.580 | INFO     | tracy:signpost:49 - MICRO_gateup_R2_4_END
+2026-10-23 18:32:13.642 | INFO     | tracy:signpost:49 - MICRO_gateup_R1_5
+2026-10-23 18:32:13.642 | INFO     | tracy:signpost:49 - MICRO_gateup_R1_5_END
+2026-10-23 18:32:13.712 | INFO     | tracy:signpost:49 - MICRO_down_R1_0
+2026-10-23 18:32:13.713 | INFO     | tracy:signpost:49 - MICRO_down_R1_0_END
+2026-10-23 18:32:13.780 | INFO     | tracy:signpost:49 - MICRO_down_R2_1
+2026-10-23 18:32:13.780 | INFO     | tracy:signpost:49 - MICRO_down_R2_1_END
+2026-10-23 18:32:13.849 | INFO     | tracy:signpost:49 - MICRO_down_R3_2
+2026-10-23 18:32:13.849 | INFO     | tracy:signpost:49 - MICRO_down_R3_2_END
+2026-10-23 18:32:13.910 | INFO     | tracy:signpost:49 - MICRO_down_R3_3
+2026-10-23 18:32:13.911 | INFO     | tracy:signpost:49 - MICRO_down_R3_3_END
+2026-10-23 18:32:13.971 | INFO     | tracy:signpost:49 - MICRO_down_R2_4
+2026-10-23 18:32:13.971 | INFO     | tracy:signpost:49 - MICRO_down_R2_4_END
+2026-10-23 18:32:14.031 | INFO     | tracy:signpost:49 - MICRO_down_R1_5
+2026-10-23 18:32:14.031 | INFO     | tracy:signpost:49 - MICRO_down_R1_5_END
+2026-10-23 18:32:14.149 | info     |           Metal | Device kernel duration perf summary (device=0): count=186, min=1251ns, avg=55418.2ns, max=329639ns (profiler_analysis.cpp:729)
+2026-10-23 18:32:14.149 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=32900ns, range=[0..329000), underflow(<0ns)=0, overflow(>=329000ns)=3) (profiler_analysis.cpp:772)
+2026-10-23 18:32:14.149 | info     |           Metal |   [           0 ..        32900) |########################################|      114 (profiler_analysis.cpp:777)
+2026-10-23 18:32:14.149 | info     |           Metal |   [       32900 ..        65800) |####                                    |       12 (profiler_analysis.cpp:777)
+2026-10-23 18:32:14.149 | info     |           Metal |   [       65800 ..        98700) |######                                  |       18 (profiler_analysis.cpp:777)
+2026-10-23 18:32:14.149 | info     |           Metal |   [       98700 ..       131600) |####                                    |       12 (profiler_analysis.cpp:777)
+2026-10-23 18:32:14.149 | info     |           Metal |   [      131600 ..       164500) |####                                    |       12 (profiler_analysis.cpp:777)
+2026-10-23 18:32:14.149 | info     |           Metal |   [      164500 ..       197400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-10-23 18:32:14.149 | info     |           Metal |   [      197400 ..       230300) |####                                    |       12 (profiler_analysis.cpp:777)
+2026-10-23 18:32:14.149 | info     |           Metal |   [      230300 ..       263200) |                                        |        0 (profiler_analysis.cpp:777)
+2026-10-23 18:32:14.149 | info     |           Metal |   [      263200 ..       296100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-10-23 18:32:14.149 | info     |           Metal |   [      296100 ..       329000) |#                                       |        3 (profiler_analysis.cpp:777)
+2026-10-23 18:32:15.060 | info     |    BuildKernels | JIT cache stats: 87/87 hits (100.0%) [87 cached, 34 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 18:32:15.060 | info     |    BuildKernels | JIT telemetry: 30 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 18:32:15.074 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 18:32:15.074 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 18:32:15.254 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 18:32:15.254 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 18:32:15.254 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 13.54 s
+Zones: 268,660
+Elapsed time: 13.41 s
+Saving trace... done!
+Trace size 719.38 KB (10.27% ratio)
+2026-10-23 18:32:15.410 | INFO     | __main__:main:483 - Copying /workspace/generated/profiler/.logs/tracy_profile_log_host.tracy to /workspace/build/profiler/build_wasm/traces/models_autoports_qwen_qwen3_8_27b_tests_2026_10_23_18_32_15.tracy
+2026-10-23 18:32:15.410 | WARNING  | __main__:main:488 - Could not copy /workspace/generated/profiler/.logs/tracy_profile_log_host.tracy to /workspace/build/profiler/build_wasm/traces/models_autoports_qwen_qwen3_8_27b_tests_2026_10_23_18_32_15.tracy: [Errno 2] No such file or directory: '/workspace/generated/profiler/.logs/tracy_profile_log_host.tracy'
+2026-10-23 18:32:15.410 | INFO     | __main__:main:495 - embed.tracy -> traces/models_autoports_qwen_qwen3_8_27b_tests_2026_10_23_18_32_15.tracy
+2026-10-23 18:32:15.410 | INFO     | tracy.serve_wasm:launch_server_subprocess:308 - Tracy WASM web UI disabled (--no-web-server / TRACY_NO_WEB_SERVER); not starting a server.
+2026-10-23 18:32:15.486 | INFO     | tracy:generate_report:162 - Host side ops time report generated at models/autoports/qwen_qwen3_8_27b/doc/optimized_decoder/tracy/readers_accepted_l3/.logs/tracy_ops_times.csv
+2026-10-23 18:32:15.490 | INFO     | tracy:generate_report:173 - Host side ops data report generated at models/autoports/qwen_qwen3_8_27b/doc/optimized_decoder/tracy/readers_accepted_l3/.logs/tracy_ops_data.csv
+2026-10-23 18:32:15.491 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+/workspace/tools/tracy/process_ops_logs.py:535: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-10-23 18:32:15.667 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-10-23 18:32:15.667 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+2026-10-23 18:32:15.928 | INFO     | tracy.process_ops_logs:generate_reports:1323 - OPs' perf analysis is finished! Generating reports ...
+2026-10-23 18:32:15.929 | INFO     | tracy.process_ops_logs:generate_reports:1343 - Copying runtime artifacts
+2026-10-23 18:32:15.937 | INFO     | tracy.process_ops_logs:generate_reports:1352 - Generating OPs CSV
+2026-10-23 18:32:16.086 | INFO     | tracy.process_ops_logs:generate_reports:1814 - OPs csv generated at: /workspace/models/autoports/qwen_qwen3_8_27b/doc/optimized_decoder/tracy/readers_accepted_l3/reports/2026_10_23_18_32_15/ops_perf_results_2026_10_23_18_32_15.csv

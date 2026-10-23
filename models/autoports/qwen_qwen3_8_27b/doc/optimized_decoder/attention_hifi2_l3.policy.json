@@ -1,0 +1,26 @@
+{
+  "dram_sharded": true,
+  "fidelity": "LoFi",
+  "mlp_dtype": "bfloat4_b",
+  "attention_dtype": "bfloat4_b",
+  "down_dtype": "bfloat4_b",
+  "block": 4,
+  "sharded_norm": true,
+  "carry_residual": true,
+  "kv_dtype": "bfloat8_b",
+  "readers": 2,
+  "packed_mlp": true,
+  "prefill_chunk": 512,
+  "prefill_grid": [
+    8,
+    8
+  ],
+  "prefill_block": 4,
+  "inplace_recurrence": true,
+  "mix": {
+    "fidelity": "HiFi2"
+  },
+  "out": {
+    "fidelity": "HiFi2"
+  }
+}

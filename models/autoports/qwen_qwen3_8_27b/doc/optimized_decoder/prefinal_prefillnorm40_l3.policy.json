@@ -1,0 +1,40 @@
+{
+  "dram_sharded": true,
+  "fidelity": "LoFi",
+  "mlp_dtype": "bfloat4_b",
+  "attention_dtype": "bfloat4_b",
+  "down_dtype": "bfloat4_b",
+  "block": 4,
+  "sharded_norm": true,
+  "carry_residual": true,
+  "kv_dtype": "bfloat8_b",
+  "packed_mlp": true,
+  "prefill_chunk": 512,
+  "prefill_grid": [
+    8,
+    8
+  ],
+  "prefill_block": 4,
+  "inplace_recurrence": true,
+  "mix": {
+    "cores": 80,
+    "block": 2
+  },
+  "gateup": {
+    "cores": 80,
+    "block": 2
+  },
+  "out": {
+    "cores": 64,
+    "block": 3
+  },
+  "down": {
+    "cores": 68,
+    "block": 8
+  },
+  "readers": 2,
+  "l1_intermediates": true,
+  "sdpa_cores": 32,
+  "prefill_sharded_norm": true,
+  "prefill_norm_cores": 40
+}

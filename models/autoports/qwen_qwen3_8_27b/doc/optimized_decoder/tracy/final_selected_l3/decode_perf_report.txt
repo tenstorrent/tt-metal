@@ -1,0 +1,80 @@
+mkdir -p failed for path /.config/matplotlib: [Errno 13] Permission denied: '/.config'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-8_8t2ydk because there was an issue with the default path (/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_DECODE'.
+Using operations until 'PERF_DECODE_END'.
+Detected data from 1 devices. Merging device data...
+
+🚀 Performance Report 🚀
+========================
+
+ID     Total %  Bound  OP Code                                  Device   Device Time  Op-to-Op Gap  Cores  DRAM      DRAM %  FLOPs        FLOPs %  Math Fidelity           
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 6620    0.2 %         InterleavedToShardedDeviceOperation            0         1 μs                    8                                                      BF16 => BF16
+ 6621    1.7 %         LayerNormDeviceOperation                       0         9 μs          3 μs      8                                                BF16, BF16 => BF16
+ 6622    0.6 %         ReshardDeviceOperation                         0         4 μs          1 μs     80                                                      BF16 => BF16
+ 6623   13.3 %   BOTH  MatmulDeviceOperation 32 x 5120 x 14336        0        93 μs          1 μs      8  396 GB/s  77.4 %  50.7 TFLOPs  114.7 %  LoFi BF16 x BFP4 => BF16
+ 6624    0.3 %         ShardedToInterleavedDeviceOperation            0         2 μs          1 μs     75                                                      BF16 => BF16
+ 6625    0.4 %         SliceDeviceOperation                           0         2 μs          1 μs    110                                                      BF16 => BF16
+ 6626    0.5 %         NlpCreateHeadsDeviceOperation                  0         3 μs          1 μs     32                                                      BF16 => BF16
+ 6627    0.9 %         LayerNormDeviceOperation                       0         6 μs          0 μs     24                                                BF16, BF16 => BF16
+ 6628    0.3 %         SliceDeviceOperation                           0         1 μs          1 μs     48                                                      BF16 => BF16
+ 6629    0.3 %         SliceDeviceOperation                           0         2 μs          1 μs    110                                                      BF16 => BF16
+ 6630    0.8 %         RotaryEmbeddingDeviceOperation                 0         5 μs          1 μs     24                                                BF16, BF16 => BF16
+ 6631    0.3 %         SliceDeviceOperation                           0         2 μs          1 μs     48                                                      BF16 => BF16
+ 6632    0.4 %         ConcatDeviceOperation                          0         2 μs          0 μs    110                                                BF16, BF16 => BF16
+ 6633    0.9 %         LayerNormDeviceOperation                       0         6 μs          1 μs      4                                                BF16, BF16 => BF16
+ 6634    0.2 %         SliceDeviceOperation                           0         1 μs          1 μs      8                                                      BF16 => BF16
+ 6635    0.3 %         SliceDeviceOperation                           0         2 μs          1 μs     24                                                      BF16 => BF16
+ 6636    0.6 %         RotaryEmbeddingDeviceOperation                 0         4 μs          1 μs      4                                                BF16, BF16 => BF16
+ 6637    0.3 %         SliceDeviceOperation                           0         1 μs          1 μs      8                                                      BF16 => BF16
+ 6638    0.3 %         ConcatDeviceOperation                          0         1 μs          1 μs     32                                                BF16, BF16 => BF16
+ 6639    0.8 %         PermuteDeviceOperation                         0         5 μs          1 μs    110                                                      BF16 => BF16
+ 6640    0.6 %         PermuteDeviceOperation                         0         3 μs          1 μs     32                                                      BF16 => BF16
+ 6641    0.5 %         PermuteDeviceOperation                         0         3 μs          1 μs     32                                                      BF16 => BF16
+ 6642    0.2 %         InterleavedToShardedDeviceOperation            0         1 μs          1 μs      1                                                      BF16 => BF16
+ 6643    1.1 %         PagedUpdateCacheDeviceOperation                0         6 μs          1 μs      1                                                BFP8, BF16 => BFP8
+ 6644    0.3 %         InterleavedToShardedDeviceOperation            0         1 μs          1 μs      1                                                      BF16 => BF16
+ 6645    1.0 %         PagedUpdateCacheDeviceOperation                0         6 μs          1 μs      1                                                BFP8, BF16 => BFP8
+ 6646   10.2 %         SdpaDecodeDeviceOperation                      0        69 μs          3 μs    110                                                BF16, BFP8 => BF16
+ 6647    0.7 %         ReshapeViewDeviceOperation                     0         4 μs          1 μs    110                                                      BF16 => BF16
+ 6648    0.4 %         SliceDeviceOperation                           0         2 μs          1 μs    110                                                      BF16 => BF16
+ 6649    0.9 %         BinaryNgDeviceOperation                        0         6 μs          1 μs    110                                                BF16, BF16 => BF16
+ 6650    0.3 %         InterleavedToShardedDeviceOperation            0         1 μs          1 μs     64                                                      BF16 => BF16
+ 6651    7.9 %   FLOP  MatmulDeviceOperation 32 x 6144 x 5120         0        55 μs          1 μs      8  284 GB/s  55.5 %  36.4 TFLOPs   82.2 %  LoFi BF16 x BFP4 => BF16
+ 6652    0.3 %         InterleavedToShardedDeviceOperation            0         1 μs          1 μs     54                                                      BF16 => BF16
+ 6653    0.3 %         BinaryNgDeviceOperation                        0         1 μs          0 μs    110                                                BF16, BF16 => BF16
+ 6654    0.3 %         ReshardDeviceOperation                         0         1 μs          1 μs      8                                                      BF16 => BF16
+ 6655    1.4 %         LayerNormDeviceOperation                       0         9 μs          1 μs      8                                                BF16, BF16 => BF16
+ 6656    0.6 %         ReshardDeviceOperation                         0         3 μs          1 μs     80                                                      BF16 => BF16
+ 6657   30.8 %   BOTH  MatmulDeviceOperation 32 x 5120 x 34816        0       217 μs          1 μs      8  411 GB/s  80.3 %  52.7 TFLOPs  119.0 %  LoFi BF16 x BFP4 => BF16
+ 6658    0.6 %         ShardedToInterleavedDeviceOperation            0         3 μs          1 μs     78                                                      BF16 => BF16
+ 6659    0.5 %         SliceDeviceOperation                           0         3 μs          1 μs    110                                                      BF16 => BF16
+ 6660    0.5 %         SliceDeviceOperation                           0         3 μs          1 μs    110                                                      BF16 => BF16
+ 6661    1.7 %         BinaryNgDeviceOperation                        0        11 μs          1 μs    110                                                BF16, BF16 => BF16
+ 6662    0.3 %         InterleavedToShardedDeviceOperation            0         2 μs          1 μs     68                                                      BF16 => BF16
+ 6663   15.0 %   BOTH  MatmulDeviceOperation 32 x 17408 x 5120        0       105 μs          1 μs      8  423 GB/s  82.6 %  54.1 TFLOPs  122.3 %  LoFi BF16 x BFP4 => BF16
+ 6664    0.2 %         BinaryNgDeviceOperation                        0         1 μs          1 μs    110                                                BF16, BF16 => BF16
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+       100.0 %         45 device ops, 0 host ops, 0 signposts                 673 μs         33 μs         277 GB/s  54.0 %                                                
+
+💡 Advice 💡
+============
+
+Matmul Optimization
+-------------------
+ 6623   13.3 %   BOTH  MatmulDeviceOperation 32 x 5120 x 14336        0        93 μs          1 μs      8  396 GB/s  77.4 %  50.7 TFLOPs  114.7 %  LoFi BF16 x BFP4 => BF16
+✅ Optimized
+
+ 6651    7.9 %   FLOP  MatmulDeviceOperation 32 x 6144 x 5120         0        55 μs          1 μs      8  284 GB/s  55.5 %  36.4 TFLOPs   82.2 %  LoFi BF16 x BFP4 => BF16
+✅ Optimized
+
+ 6657   30.8 %   BOTH  MatmulDeviceOperation 32 x 5120 x 34816        0       217 μs          1 μs      8  411 GB/s  80.3 %  52.7 TFLOPs  119.0 %  LoFi BF16 x BFP4 => BF16
+✅ Optimized
+
+ 6663   15.0 %   BOTH  MatmulDeviceOperation 32 x 17408 x 5120        0       105 μs          1 μs      8  423 GB/s  82.6 %  54.1 TFLOPs  122.3 %  LoFi BF16 x BFP4 => BF16
+✅ Optimized
+

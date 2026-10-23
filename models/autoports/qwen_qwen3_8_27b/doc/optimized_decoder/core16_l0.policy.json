@@ -1,0 +1,10 @@
+{
+  "dram_sharded": true,
+  "fidelity": "LoFi",
+  "mlp_dtype": "bfloat4_b",
+  "block": 2,
+  "sharded_norm": true,
+  "carry_residual": true,
+  "kv_dtype": "bfloat8_b",
+  "cores": 16
+}

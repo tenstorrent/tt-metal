@@ -1,0 +1,34 @@
+{
+  "source": "models/autoports/qwen_qwen3_8_27b/doc/optimized_decoder/tracy/profile_c128_l3/reports/2026_10_23_16_24_55/ops_perf_results_2026_10_23_16_24_55.csv",
+  "device_header": "ARCH: blackhole, CHIP_FREQ[MHz]: 1350, Max Compute Cores: 120",
+  "clock_mhz": 1350.0,
+  "time_basis": "Whole-layer firmware timestamp envelope, including all operations and gaps; device cycles / MHz = us.",
+  "phases": {
+    "prefill": {
+      "device_us": 73425.34,
+      "first_cycle": 478244168692,
+      "last_cycle": 478343292901,
+      "device_ops": 1122,
+      "summed_kernel_us": 72067.04,
+      "trace_ids": [
+        ""
+      ],
+      "trace_replay_sessions": [
+        ""
+      ]
+    },
+    "decode": {
+      "device_us": 813.4822222222223,
+      "first_cycle": 487034202302,
+      "last_cycle": 487035300503,
+      "device_ops": 42,
+      "summed_kernel_us": 781.445,
+      "trace_ids": [
+        "0"
+      ],
+      "trace_replay_sessions": [
+        "132"
+      ]
+    }
+  }
+}

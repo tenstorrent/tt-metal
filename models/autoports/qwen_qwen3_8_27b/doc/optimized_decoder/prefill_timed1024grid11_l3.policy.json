@@ -1,0 +1,19 @@
+{
+  "dram_sharded": true,
+  "fidelity": "LoFi",
+  "mlp_dtype": "bfloat4_b",
+  "attention_dtype": "bfloat4_b",
+  "down_dtype": "bfloat4_b",
+  "block": 4,
+  "sharded_norm": true,
+  "carry_residual": true,
+  "kv_dtype": "bfloat8_b",
+  "readers": 2,
+  "packed_mlp": true,
+  "prefill_chunk": 1024,
+  "prefill_grid": [
+    11,
+    10
+  ],
+  "prefill_block": 2
+}

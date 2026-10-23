@@ -1,0 +1,15 @@
+{
+  "dram_sharded": true,
+  "fidelity": "LoFi",
+  "mlp_dtype": "bfloat4_b",
+  "block": 4,
+  "mix": {
+    "block": 5
+  },
+  "gate": {
+    "block": 5
+  },
+  "up": {
+    "block": 5
+  }
+}

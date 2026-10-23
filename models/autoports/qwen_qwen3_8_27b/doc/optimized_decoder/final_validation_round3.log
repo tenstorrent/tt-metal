@@ -1,0 +1,231 @@
+2026-10-23 17:14:04.941 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.22, pytest-9.0.3, pluggy-1.7.0 -- /opt/venv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /workspace
+configfile: pytest.ini
+plugins: anyio-4.15.1, split-0.11.0, repeat-0.9.4, benchmark-5.2.3, cov-7.0.0, dash-2.15.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 2 items
+
+models/autoports/qwen_qwen3_8_27b/tests/test_optimized_decoder.py::test_optimized_decoder_contract[0] 2026-10-23 17:14:07.136 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+[transformers] The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+HF_REFERENCE_READY
+2026-10-23 17:14:10.390 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 17:14:10.390 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 17:14:10.390 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 17:14:10.390 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 17:14:10.401 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 17:14:10.402 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 17:14:10.480 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 17:14:10.480 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 17:14:10.480 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 17:14:10.480 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 17:14:10.481 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 17:14:10.488 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (blackhole_device_firmware.cpp:251)
+2026-10-23 17:14:10.652 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 17:14:10.714 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 17:14:10.714 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 17:14:10.714 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 17:14:10.715 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 17:14:10.776 | info     |       LLRuntime | Watcher log file: /workspace/generated/watcher/watcher.log (watcher_server.cpp:313)
+2026-10-23 17:14:10.777 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:631)
+2026-10-23 17:14:10.777 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+REQUEST {'length': 1, 'prefill_pcc': 0.999436247610933, 'decode_pcc': 0.9997591704515488}
+REQUEST {'length': 2, 'prefill_pcc': 0.9995171366122666, 'decode_pcc': 0.9997195505129483}
+REQUEST {'length': 3, 'prefill_pcc': 0.9995446591824876, 'decode_pcc': 0.9997979702695863}
+REQUEST {'length': 4, 'prefill_pcc': 0.9995730350379338, 'decode_pcc': 0.9997886946761428}
+REQUEST {'length': 31, 'prefill_pcc': 0.9997250015379177, 'decode_pcc': 0.9998578854418727}
+REQUEST {'length': 32, 'prefill_pcc': 0.9997278570115574, 'decode_pcc': 0.9998450003885421}
+REQUEST {'length': 33, 'prefill_pcc': 0.9997292399293395, 'decode_pcc': 0.9998261518858353}
+REQUEST {'length': 127, 'prefill_pcc': 0.9997770349178186, 'decode_pcc': 0.9999111154815502}
+REQUEST {'length': 128, 'prefill_pcc': 0.9997777312335828, 'decode_pcc': 0.9998510170724588}
+REQUEST {'length': 129, 'prefill_pcc': 0.9997780602836538, 'decode_pcc': 0.9998703711652802}
+REQUEST {'length': 385, 'prefill_pcc': 0.9997943762380456, 'decode_pcc': 0.9998651536411999}
+REQUEST {'length': 511, 'prefill_pcc': 0.9997967705589221, 'decode_pcc': 0.9998586698109616}
+REQUEST {'length': 512, 'prefill_pcc': 0.9997967510233278, 'decode_pcc': 0.9998253706258847}
+REQUEST {'length': 513, 'prefill_pcc': 0.9997968285560899, 'decode_pcc': 0.9999206741543313}
+REQUEST {'length': 31, 'prefill_pcc': 0.9997250015379177, 'decode_pcc': 0.9998578854418727}
+PREFILL_PCC 0.9997968285560899
+RESUME_PCC 0.9999982344033504
+EAGER_DECODE_PCC 0.9999206741543313
+{"layer_type": "linear_attention", "layer_idx": 0, "batch": 3, "sequence": 513, "weights": "real", "prefill_pcc": 0.9997968285560899, "decode_pcc": 0.9999206741543313, "changed_input_decode_pcc": 0.9998478150430761, "resume_pcc": 0.9999982344033504, "deterministic": true, "remap_pcc": null, "remap_cache_pcc": null, "input_std": 0.1, "request_results": [{"length": 1, "prefill_pcc": 0.999436247610933, "decode_pcc": 0.9997591704515488}, {"length": 2, "prefill_pcc": 0.9995171366122666, "decode_pcc": 0.9997195505129483}, {"length": 3, "prefill_pcc": 0.9995446591824876, "decode_pcc": 0.9997979702695863}, {"length": 4, "prefill_pcc": 0.9995730350379338, "decode_pcc": 0.9997886946761428}, {"length": 31, "prefill_pcc": 0.9997250015379177, "decode_pcc": 0.9998578854418727}, {"length": 32, "prefill_pcc": 0.9997278570115574, "decode_pcc": 0.9998450003885421}, {"length": 33, "prefill_pcc": 0.9997292399293395, "decode_pcc": 0.9998261518858353}, {"length": 127, "prefill_pcc": 0.9997770349178186, "decode_pcc": 0.9999111154815502}, {"length": 128, "prefill_pcc": 0.9997777312335828, "decode_pcc": 0.9998510170724588}, {"length": 129, "prefill_pcc": 0.9997780602836538, "decode_pcc": 0.9998703711652802}, {"length": 385, "prefill_pcc": 0.9997943762380456, "decode_pcc": 0.9998651536411999}, {"length": 511, "prefill_pcc": 0.9997967705589221, "decode_pcc": 0.9998586698109616}, {"length": 512, "prefill_pcc": 0.9997967510233278, "decode_pcc": 0.9998253706258847}, {"length": 513, "prefill_pcc": 0.9997968285560899, "decode_pcc": 0.9999206741543313}, {"length": 31, "prefill_pcc": 0.9997250015379177, "decode_pcc": 0.9998578854418727}], "prefill_pcc_fp32": 0.9998127222061157, "prefill_relative_rmse": 0.022537289187312126, "fusion_equivalence": {"prefill_pcc": null, "decode_pcc": null}, "screen_host_traced_us": null, "workload_final_decode_pcc": null, "workload_last_decode_host_us": null, "runtime_fallback_audit": true, "provenance": {"tests/run_optimized_decoder.py": "7e1224d91fa9d5ffcccc0e8f4634b54ed8e3fd0d0a1870056ccb75966e272d5a", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/fused_decoder.py": "41ba2e2fec65d6c5bb7503a6ff1ca7a905a8164f349eb8ef9d8a399dccdefc6e", "tt/optimized_decoder.py": "4359cdac595cb737927e738f2c10cc24ad36b21009f54f929c6c77ee430b842a", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "policy": {"dram_sharded": true, "fidelity": "LoFi", "mlp_dtype": "bfloat4_b", "attention_dtype": "bfloat4_b", "down_dtype": "bfloat4_b", "block": 4, "sharded_norm": true, "carry_residual": true, "kv_dtype": "bfloat8_b", "packed_mlp": true, "prefill_chunk": 512, "prefill_grid": [8, 8], "prefill_block": 10, "inplace_recurrence": true, "mix": {"cores": 80, "block": 2, "readers": 2}, "gateup": {"cores": 80, "block": 2, "readers": 2}, "out": {"cores": 64, "block": 3, "prefill_block": 32, "readers": 2}, "down": {"cores": 68, "block": 8, "prefill_block": 32, "readers": 2}, "l1_intermediates": true, "sdpa_cores": 32, "separate_prefill": true, "prefill_sharded_norm": true, "prefill_norm_block": true, "prefill_sdpa_q": 128, "prefill_sdpa_k": 256, "prefill_sdpa_approx": true, "prefill_subh": 2, "history_tile_tail": true, "policy_name": "p300c_bfp4_lofi_phase_specific_v1", "gate": {"cores": 80, "block": 2, "readers": 2}, "up": {"cores": 80, "block": 2, "readers": 2}}, "runtime_class": "OptimizedDecoder", "prefill_host_us": null, "prefill_traced": false, "prefill_deterministic": null, "activations": "recorded HF preceding layers", "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 0, "largest_free_per_bank": 4272341376}, "after_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 320553472, "largest_free_per_bank": 4232272192}, "request_setup": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 398151168, "largest_free_per_bank": 4220593920}}, "prefill_compared_tokens": 513}
+2026-10-23 17:14:41.301 | info     |    BuildKernels | JIT cache stats: 490/736 hits (66.6%) [490 cached, 940 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 17:14:41.301 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 17:14:41.301 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:679)
+2026-10-23 17:14:41.317 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 17:14:41.317 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 17:14:41.500 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 17:14:41.500 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 17:14:41.500 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_optimized_decoder.py::test_optimized_decoder_contract[3] 2026-10-23 17:14:43.137 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+HF_REFERENCE_READY
+2026-10-23 17:14:46.213 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 17:14:46.213 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 17:14:46.213 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 17:14:46.213 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 17:14:46.224 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 17:14:46.225 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 17:14:46.305 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 17:14:46.305 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 17:14:46.305 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 17:14:46.305 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 17:14:46.306 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 17:14:46.556 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 17:14:46.619 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 17:14:46.619 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 17:14:46.619 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 17:14:46.620 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 17:14:46.681 | info     |       LLRuntime | Watcher log file: /workspace/generated/watcher/watcher.log (watcher_server.cpp:313)
+2026-10-23 17:14:46.682 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:631)
+2026-10-23 17:14:46.682 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+REQUEST {'length': 1, 'prefill_pcc': 0.9998694827703393, 'decode_pcc': 0.9995254989819339}
+REQUEST {'length': 2, 'prefill_pcc': 0.9996435785465296, 'decode_pcc': 0.9998618830489193}
+REQUEST {'length': 3, 'prefill_pcc': 0.999693905415118, 'decode_pcc': 0.9998305541830342}
+REQUEST {'length': 4, 'prefill_pcc': 0.999710908603498, 'decode_pcc': 0.999882064456764}
+REQUEST {'length': 31, 'prefill_pcc': 0.999839976591566, 'decode_pcc': 0.9999129880011534}
+REQUEST {'length': 32, 'prefill_pcc': 0.9998421140759294, 'decode_pcc': 0.9999180251866353}
+REQUEST {'length': 33, 'prefill_pcc': 0.9998437469233321, 'decode_pcc': 0.9999299603211987}
+REQUEST {'length': 127, 'prefill_pcc': 0.9998722985352403, 'decode_pcc': 0.9998444432347258}
+REQUEST {'length': 128, 'prefill_pcc': 0.9998720247371324, 'decode_pcc': 0.999905976003915}
+REQUEST {'length': 129, 'prefill_pcc': 0.9998706691763172, 'decode_pcc': 0.9998677945843538}
+REQUEST {'length': 385, 'prefill_pcc': 0.9998775856005435, 'decode_pcc': 0.9998187978971269}
+REQUEST {'length': 511, 'prefill_pcc': 0.9998773920984713, 'decode_pcc': 0.9998142053786159}
+REQUEST {'length': 512, 'prefill_pcc': 0.9998772606297449, 'decode_pcc': -0.056926220065159586}
+Traceback (most recent call last):
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/run_optimized_decoder.py", line 504, in <module>
+    main()
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/run_optimized_decoder.py", line 219, in main
+    assert rpcc >= .995 and rdpcc >= .995
+AssertionError
+2026-10-23 17:15:08.068 | info     |    BuildKernels | JIT cache stats: 377/472 hits (79.9%) [377 cached, 715 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 17:15:08.068 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 17:15:08.068 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:679)
+2026-10-23 17:15:08.083 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 17:15:08.083 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 17:15:08.304 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 17:15:08.304 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 17:15:08.304 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+FAILED
+
+=================================== FAILURES ===================================
+______________________ test_optimized_decoder_contract[3] ______________________
+
+layer = 3
+tmp_path = PosixPath('/tmp/pytest-of-mvasiljev/pytest-2/test_optimized_decoder_contrac1')
+
+    @pytest.mark.parametrize('layer', [0, 3])
+    def test_optimized_decoder_contract(layer, tmp_path):
+        base = Path(__file__).resolve().parents[1]
+        label = f'pytest_contract_l{layer}'
+        env = {**os.environ, 'QWEN_OPT_POLICY': '{}'}
+        command = ['bash', str(base/'tests/optimized_run.sh'), 'check', label,
+                   '--layer', str(layer), '--batch', '3', '--seq', '513',
+                   '--recorded', '--resume', '--requests']
+        if layer == 3:
+            command.append('--remap')
+>       subprocess.run(command, env=env, check=True)
+
+models/autoports/qwen_qwen3_8_27b/tests/test_optimized_decoder.py:24: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+input = None, capture_output = False, timeout = None, check = True
+popenargs = (['bash', '/workspace/models/autoports/qwen_qwen3_8_27b/tests/optimized_run.sh', 'check', 'pytest_contract_l3', '--layer', '3', ...],)
+kwargs = {'env': {'CCACHE_TEMPDIR': '/tmp/ccache', 'CPATH': '/opt/openmpi-v5.0.7-ulfm/include', 'DEBIAN_FRONTEND': 'noninteractive', 'HOME': '/', ...}}
+process = <Popen: returncode: 1 args: ['bash', '/workspace/models/autoports/qwen_qwen3...>
+stdout = None, stderr = None, retcode = 1
+
+    def run(*popenargs,
+            input=None, capture_output=False, timeout=None, check=False, **kwargs):
+        """Run command with arguments and return a CompletedProcess instance.
+    
+        The returned instance will have attributes args, returncode, stdout and
+        stderr. By default, stdout and stderr are not captured, and those attributes
+        will be None. Pass stdout=PIPE and/or stderr=PIPE in order to capture them,
+        or pass capture_output=True to capture both.
+    
+        If check is True and the exit code was non-zero, it raises a
+        CalledProcessError. The CalledProcessError object will have the return code
+        in the returncode attribute, and output & stderr attributes if those streams
+        were captured.
+    
+        If timeout is given, and the process takes too long, a TimeoutExpired
+        exception will be raised.
+    
+        There is an optional argument "input", allowing you to
+        pass bytes or a string to the subprocess's stdin.  If you use this argument
+        you may not also use the Popen constructor's "stdin" argument, as
+        it will be used internally.
+    
+        By default, all communication is in bytes, and therefore any "input" should
+        be bytes, and the stdout and stderr will be bytes. If in text mode, any
+        "input" should be a string, and stdout and stderr will be strings decoded
+        according to locale encoding, or by "encoding" if set. Text mode is
+        triggered by setting any of text, encoding, errors or universal_newlines.
+    
+        The other arguments are the same as for the Popen constructor.
+        """
+        if input is not None:
+            if kwargs.get('stdin') is not None:
+                raise ValueError('stdin and input arguments may not both be used.')
+            kwargs['stdin'] = PIPE
+    
+        if capture_output:
+            if kwargs.get('stdout') is not None or kwargs.get('stderr') is not None:
+                raise ValueError('stdout and stderr arguments may not be used '
+                                 'with capture_output.')
+            kwargs['stdout'] = PIPE
+            kwargs['stderr'] = PIPE
+    
+        with Popen(*popenargs, **kwargs) as process:
+            try:
+                stdout, stderr = process.communicate(input, timeout=timeout)
+            except TimeoutExpired as exc:
+                process.kill()
+                if _mswindows:
+                    # Windows accumulates the output in a single blocking
+                    # read() call run on child threads, with the timeout
+                    # being done in a join() on those threads.  communicate()
+                    # _after_ kill() is required to collect that and add it
+                    # to the exception.
+                    exc.stdout, exc.stderr = process.communicate()
+                else:
+                    # POSIX _communicate already populated the output so
+                    # far into the TimeoutExpired exception.
+                    process.wait()
+                raise
+            except:  # Including KeyboardInterrupt, communicate handled that.
+                process.kill()
+                # We don't call process.wait() as .__exit__ does that for us.
+                raise
+            retcode = process.poll()
+            if check and retcode:
+>               raise CalledProcessError(retcode, process.args,
+                                         output=stdout, stderr=stderr)
+E               subprocess.CalledProcessError: Command '['bash', '/workspace/models/autoports/qwen_qwen3_8_27b/tests/optimized_run.sh', 'check', 'pytest_contract_l3', '--layer', '3', '--batch', '3', '--seq', '513', '--recorded', '--resume', '--requests', '--remap']' returned non-zero exit status 1.
+
+/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/subprocess.py:526: CalledProcessError
+==================================== PASSES ====================================
+- generated xml file: /workspace/generated/test_reports/most_recent_tests.xml --
+============================= slowest 25 durations =============================
+35.90s call     models/autoports/qwen_qwen3_8_27b/tests/test_optimized_decoder.py::test_optimized_decoder_contract[0]
+26.66s call     models/autoports/qwen_qwen3_8_27b/tests/test_optimized_decoder.py::test_optimized_decoder_contract[3]
+0.16s setup    models/autoports/qwen_qwen3_8_27b/tests/test_optimized_decoder.py::test_optimized_decoder_contract[0]
+0.14s setup    models/autoports/qwen_qwen3_8_27b/tests/test_optimized_decoder.py::test_optimized_decoder_contract[3]
+
+(2 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_optimized_decoder.py::test_optimized_decoder_contract[0]
+FAILED models/autoports/qwen_qwen3_8_27b/tests/test_optimized_decoder.py::test_optimized_decoder_contract[3]
+==================== 1 failed, 1 passed in 62.89s (0:01:02) ====================

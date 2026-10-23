@@ -1,0 +1,14 @@
+r2_k10_l0 0
+r2_k10_l3 0
+r2_packed10_l0 1
+r2_packed10_l3 1
+r2_core4_l0 1
+r2_core4_l3 1
+r2_core16_l0 0
+r2_core16_l3 0
+r2_core32_l0 0
+r2_core32_l3 0
+prefill512_l0 0
+prefill512_l3 0
+prefill1024_l0 0
+prefill1024_l3 0

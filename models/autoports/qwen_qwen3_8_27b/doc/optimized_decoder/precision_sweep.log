@@ -1,0 +1,14 @@
+b8_lofi_l0 0
+b8_lofi_l3 0
+b4_gate_up_l0 0
+b4_gate_up_l3 0
+b4_down_l0 0
+b4_down_l3 1
+b4_attention_l0 1
+b4_attention_l3 1
+shard_b4_k2_l0 0
+shard_b4_k2_l3 0
+shard_b4_k4_l0 0
+shard_b4_k4_l3 0
+shard_b4_k5_l0 0
+shard_b4_k5_l3 0

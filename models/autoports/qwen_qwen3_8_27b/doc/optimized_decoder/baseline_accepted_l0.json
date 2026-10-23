@@ -1,0 +1,70 @@
+{
+  "layer_type": "linear_attention",
+  "layer_idx": 0,
+  "batch": 1,
+  "sequence": 4096,
+  "weights": "real",
+  "prefill_pcc": 0.9999967542655084,
+  "decode_pcc": 0.9999992084607712,
+  "changed_input_decode_pcc": 0.9999996906400057,
+  "resume_pcc": null,
+  "deterministic": true,
+  "remap_pcc": null,
+  "remap_cache_pcc": null,
+  "input_std": 0.1,
+  "request_results": [],
+  "prefill_pcc_fp32": 0.9999970197677612,
+  "prefill_relative_rmse": 0.0025534729938954115,
+  "fusion_equivalence": {
+    "prefill_pcc": null,
+    "decode_pcc": null
+  },
+  "screen_host_traced_us": null,
+  "workload_final_decode_pcc": 0.9999972357770153,
+  "workload_last_decode_host_us": 2346.2199606001377,
+  "runtime_fallback_audit": false,
+  "provenance": {
+    "tests/run_optimized_decoder.py": "a991f866b4dbf2b50031431ace8c4fa37a707d8134a437da7709e0fda7c9cb73",
+    "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77",
+    "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9",
+    "tt/fused_decoder.py": "41ba2e2fec65d6c5bb7503a6ff1ca7a905a8164f349eb8ef9d8a399dccdefc6e",
+    "tt/optimized_decoder.py": "ff85733835d1d972fb9bb1bdc47cdc761c1a814412d534681834b66d8f05d31a",
+    "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"
+  },
+  "policy": {},
+  "runtime_class": "FusedDecoder",
+  "prefill_host_us": 83530.89797310531,
+  "prefill_traced": true,
+  "prefill_deterministic": true,
+  "activations": "recorded HF preceding layers",
+  "memory": {
+    "before_weights": {
+      "num_banks": 8,
+      "capacity_bytes": 30377131008,
+      "allocated_bytes": 0,
+      "largest_free_per_bank": 3797141376
+    },
+    "after_weights": {
+      "num_banks": 8,
+      "capacity_bytes": 30377131008,
+      "allocated_bytes": 770294272,
+      "largest_free_per_bank": 3700854592
+    },
+    "request_setup": {
+      "num_banks": 8,
+      "capacity_bytes": 30377131008,
+      "allocated_bytes": 820303360,
+      "largest_free_per_bank": 3694603456
+    }
+  },
+  "prefill_compared_tokens": 4096,
+  "performance_workload": {
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "batch": 1,
+    "concurrency": 1,
+    "decode_measurement": "final warmed step at context 4224",
+    "scope": "single layer, supplied hidden activations",
+    "prefill_profiled": true
+  }
+}

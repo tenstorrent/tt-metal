@@ -1,0 +1,16 @@
+2026-10-23 18:12:53.935 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+paired_final_l0_0_l10 0
+paired_final_l0_1_l11 0
+paired_final_l0_2_l11 0
+paired_final_l0_3_l10 0
+paired_final_l3_0_l10 0
+paired_final_l3_1_l11 0
+paired_final_l3_2_l11 0
+paired_final_l3_3_l10 0
+final_subblock_out_l0 0
+final_subblock_down_l0 0
+final_subblock_out_down_l0 0
+final_subblock_out_l3 0
+final_subblock_down_l3 0
+final_subblock_out_down_l3 0

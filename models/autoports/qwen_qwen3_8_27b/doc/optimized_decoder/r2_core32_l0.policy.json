@@ -1,0 +1,28 @@
+{
+  "dram_sharded": true,
+  "fidelity": "LoFi",
+  "mlp_dtype": "bfloat4_b",
+  "attention_dtype": "bfloat4_b",
+  "down_dtype": "bfloat4_b",
+  "block": 4,
+  "sharded_norm": true,
+  "carry_residual": true,
+  "kv_dtype": "bfloat8_b",
+  "readers": 2,
+  "cores": 32,
+  "mix": {
+    "block": 5
+  },
+  "gate": {
+    "block": 5
+  },
+  "up": {
+    "block": 5
+  },
+  "out": {
+    "block": 6
+  },
+  "down": {
+    "block": 17
+  }
+}

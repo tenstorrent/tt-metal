@@ -1,0 +1,65 @@
+{
+  "dram_sharded": true,
+  "fidelity": "LoFi",
+  "mlp_dtype": "bfloat4_b",
+  "attention_dtype": "bfloat4_b",
+  "down_dtype": "bfloat4_b",
+  "block": 4,
+  "sharded_norm": true,
+  "carry_residual": true,
+  "kv_dtype": "bfloat8_b",
+  "packed_mlp": true,
+  "prefill_chunk": 1024,
+  "prefill_grid": [
+    11,
+    10
+  ],
+  "prefill_block": 8,
+  "inplace_recurrence": true,
+  "mix": {
+    "cores": 80,
+    "block": 2,
+    "readers": 2
+  },
+  "gateup": {
+    "cores": 80,
+    "block": 2,
+    "readers": 2
+  },
+  "out": {
+    "cores": 64,
+    "block": 3,
+    "prefill_block": 24,
+    "readers": 2
+  },
+  "down": {
+    "cores": 68,
+    "block": 8,
+    "prefill_block": 16,
+    "readers": 2
+  },
+  "l1_intermediates": true,
+  "sdpa_cores": 32,
+  "separate_prefill": true,
+  "prefill_sharded_norm": true,
+  "prefill_norm_block": true,
+  "prefill_sdpa_q": 128,
+  "prefill_sdpa_k": 256,
+  "prefill_sdpa_approx": true,
+  "prefill_subh": 2,
+  "history_tile_tail": true,
+  "policy_name": "p300c_bfp4_lofi_phase_specific_v1",
+  "gate": {
+    "cores": 80,
+    "block": 2,
+    "readers": 2
+  },
+  "up": {
+    "cores": 80,
+    "block": 2,
+    "readers": 2
+  },
+  "prefill_norm_max_tokens": 1024,
+  "prefill_l1": false,
+  "prefill_l1_max_tokens": 1024
+}
