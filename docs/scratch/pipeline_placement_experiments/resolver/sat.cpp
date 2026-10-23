@@ -71,7 +71,9 @@ void run(const char* name, const Graph& g, size_t stages) {
     std::fflush(stdout);
 }
 
-int main() {
+// argv[1] == "big" adds the two-4x8-mesh case, which ran over 230 s.
+int main(int argc, char** argv) {
+    const bool big = argc > 1 && std::string(argv[1]) == "big";
     for (auto [r, c] : std::vector<std::pair<size_t, size_t>>{{4, 4}, {4, 8}, {8, 8}}) {
         Graph g;
         add_grid(g, r, c);
@@ -89,6 +91,9 @@ int main() {
         run(("two " + std::to_string(k) + "x" + std::to_string(k) + " meshes, cables same colour").c_str(),
             g,
             2 * k * k);
+    }
+    if (!big) {
+        return 0;
     }
     Graph g;
     size_t a = add_grid(g, 4, 8), b = add_grid(g, 4, 8);

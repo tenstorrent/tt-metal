@@ -29,7 +29,7 @@ cd docs/scratch/pipeline_placement_experiments
 | `tier_b_designed` | `tier_b/run2.py`: the ring each MGD is built for, plus a degree check | fabrics of up to 8 meshes; under a minute |
 | `tier_b_timing` | `tier_b/run3.py`: time of each check, split by outcome | same limits as `tier_b` |
 | `carve` | `carve/carve_bench.py`: ring of rectangles on one grid, DFS vs CaDiCaL | about 10 s |
-| `carve_repo` | `carve/carve_bench_repo.py`: the same on repo-shaped grids | up to 30 s per solver per case; can take minutes |
+| `carve_repo` | `carve/carve_bench_repo.py`: the same on repo-shaped grids | each solve killed after `CARVE_TIMEOUT` (default 30 s); about 35 s with `CARVE_TIMEOUT=5` |
 | `planner` | `carve/carve_probe.py`: blaze's `plan_ring_carve` vs brute force | needs `TT_BLAZE=/path/to/tt-blaze`; seconds |
 | `resolver` | `resolver/bench.cpp`: the resolver search, groups `feas` and `cables` | about 6 s |
 | `resolver_sat` | `resolver/sat.cpp`: a CaDiCaL encoding of the same placement | needs a tt-metal build for CaDiCaL; capped at 60 s |
@@ -41,11 +41,18 @@ The folder is self-contained and can be copied anywhere. Outside a tt-metal chec
 Knobs, as environment variables: `PER_MGD` (pipelines per fabric, default 3), `MAX_MESHES`
 (largest fabric to include, default 8; the blitz rings go to 144), `CASE_TIMEOUT` (seconds per
 case, default 1), `SEED`, `OUT` (output directory, default `./.out`), `BUILD_DIR` (tt-metal build
-used for CaDiCaL, default `build_Debug`), `TT_BLAZE`.
+used for CaDiCaL, default `build_Debug`), `TT_BLAZE`, `CARVE_TIMEOUT` (seconds per carve solve;
+each solve runs in a child process that is killed, since an alarm cannot interrupt CaDiCaL).
 
 **Keep runs small on shared machines.** The large settings used for the results below
 (`PER_MGD=20 MAX_MESHES=1000 CASE_TIMEOUT=3`) took about 16 minutes, mostly in cases that hit the
-cap. The resolver groups `odd` and `big` each take over two minutes and are not run by default.
+cap. The slow cases are opt-in with `big`: `./run_experiments.sh resolver big` (groups `odd` and
+`big`, each over two minutes), `resolver_sat big` (over 230 s), `carve big` and `carve_repo big`
+(one 9x9 case had not finished after 15 minutes). Run those on a spare machine.
+
+Recorded outputs are in `results/`: the full Tier B run, and the quick runs of `resolver`,
+`resolver_sat`, `carve`, `carve_repo` (with `CARVE_TIMEOUT=5`) and `planner` (tt-blaze
+`45d3be26c4`) from 2026-10-22.
 
 ## 1. Tier B: simple checks vs full search
 
@@ -108,8 +115,11 @@ an exact counting pre-check: each h x w rectangle holds exactly one cell with `i
 | 7x7: 1x1, 10x 2x2 (only 9 fit) | 41/49 | no, 2.4 s | no, 2.0 s |
 | 6x6: 1x1, 9x 2x2 | 37/36 | no, 0.001 s | no, 0.25 s |
 
-The lattice check rejects every "no" row above in under 10 microseconds. (The 64/64 row is labelled
-"no room to close" in `carve_bench.py`, but both solvers find a ring.)
+The lattice check rejects every "no" row above in about 20 microseconds.
+
+On repo-shaped grids (`carve_repo`), random 8x8 mixes that fill all 64 slices are hard for both:
+with a 5 s cap, the DFS timed out on 2 of 5 and SAT on 3 of 5. Tight carves are the open case for
+fail-fast, as they are for the resolver in section 4.
 
 **Reading.** SAT is no faster when a carve exists and no better when it does not. The slow "no"
 cases fail on a counting argument that a pre-check settles instantly.
@@ -139,8 +149,10 @@ problem.
 
 ## 4. The resolver in `pipeline_builder.cpp`
 
-**What is checked.** `resolver/search_body.inc` is `resolve_pipeline_placement`'s search, copied
-line for line from `tt_metal/fabric/pipeline_builder.cpp` at `088a531eb93`. `bench.cpp` runs it on
+**What is checked.** `resolve_pipeline_placement`'s search, copied line for line out of
+`tt_metal/fabric/pipeline_builder.cpp` when `run_experiments.sh resolver` builds it (the anonymous
+namespace in `tt::tt_fabric::detail`), so it always measures the current code; the results below
+are from `088a531eb93`. `bench.cpp` runs it on
 synthetic fabrics of 4x2-chip submeshes, each case a ring of single-submesh stages. `sat.cpp` is a
 CaDiCaL encoding of the same placement: one variable per (stage, submesh), consecutive stages on
 adjacent submeshes.

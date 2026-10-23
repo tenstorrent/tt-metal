@@ -1,25 +1,21 @@
 """Ring-of-rectangles carve on one slice grid: DFS with memo vs CaDiCaL.
 
 Problem: stage k takes a rectangle of its shape (in slices), rectangles are disjoint, stage k touches
-stage k+1, and the last stage touches stage 0. Each run is capped at TIMEOUT seconds.
+stage k+1, and the last stage touches stage 0.
+
+Each solve runs in a child process that is killed after CARVE_TIMEOUT seconds (default 20):
+SIGALRM cannot interrupt CaDiCaL inside C code. Usage: carve_bench.py [quick|big].
 """
-import sys, time, signal
+import multiprocessing as mp
+import os
+import sys
+import time
+
 from pysat.solvers import Cadical153
 from pysat.card import CardEnc, EncType
 from pysat.formula import IDPool
 
-TIMEOUT = 60
-
-
-class Timeout(Exception):
-    pass
-
-
-def _alarm(*_):
-    raise Timeout()
-
-
-signal.signal(signal.SIGALRM, _alarm)
+TIMEOUT = float(os.environ.get("CARVE_TIMEOUT", "20"))
 
 
 def positions(R, C, h, w):
@@ -144,36 +140,35 @@ def sat_solve(R, C, shapes):
         return ok, s.accum_stats().get("conflicts", 0) if hasattr(s, "accum_stats") else 0
 
 
+def _child(fn, R, C, shapes, q):
+    t0 = time.perf_counter()
+    ok, _ = fn(R, C, shapes)
+    q.put((ok, time.perf_counter() - t0))
+
+
+def timed(fn, R, C, shapes):
+    """(ok, seconds), or (None, TIMEOUT) when the child is killed."""
+    q = mp.get_context("fork").Queue()
+    p = mp.get_context("fork").Process(target=_child, args=(fn, R, C, shapes, q))
+    p.start()
+    p.join(TIMEOUT)
+    if p.is_alive():
+        p.kill()
+        p.join()
+        return None, TIMEOUT
+    return q.get()
+
+
 def run(name, R, C, shapes):
     res = []
     for label, fn in (("dfs", dfs_solve), ("sat", sat_solve)):
-        signal.alarm(TIMEOUT)
-        t0 = time.perf_counter()
-        try:
-            ok, work = fn(R, C, shapes)
-            dt = time.perf_counter() - t0
+        ok, dt = timed(fn, R, C, shapes)
+        if ok is None:
+            res.append(f"{label} ??? >{TIMEOUT:.0f}s   ")
+        else:
             res.append(f"{label} {'yes' if ok else 'no '} {dt:8.3f}s")
-        except Timeout:
-            res.append(f"{label} ??? >{TIMEOUT}s   ")
-        finally:
-            signal.alarm(0)
     area = sum(h * w for h, w in shapes)
     print(f"{name:<44} area {area:>2}/{R*C:<2} | " + " | ".join(res), flush=True)
-
-
-S1, B, W = (1, 1), (2, 2), (2, 4)
-cases = [
-    ("4x6: 1x1, 4x 2x2, 1x1", 4, 6, [S1] + [B] * 4 + [S1]),
-    ("4x8: 1x1, 6x 2x2, 1x1", 4, 8, [S1] + [B] * 6 + [S1]),
-    ("4x8: 1x1, 2x4, 2x4, 2x2, 1x1", 4, 8, [S1, W, W, B, S1]),
-    ("8x8: 1x1, 14x 2x2, 1x1", 8, 8, [S1] + [B] * 14 + [S1]),
-    ("3x8: 1x1, 5x 2x2 (only 4 fit)", 3, 8, [S1] + [B] * 5),
-    ("5x5: 1x1, 5x 2x2 (only 4 fit)", 5, 5, [S1] + [B] * 5),
-    ("7x7: 1x1, 10x 2x2 (only 9 fit)", 7, 7, [S1] + [B] * 10),
-    ("6x6: 1x1, 8x 2x2, 1x1", 6, 6, [S1] + [B] * 8 + [S1]),
-    ("6x6: 1x1, 9x 2x2 (no room for s0)", 6, 6, [S1] + [B] * 9),
-    ("8x8: 1x1, 15x 2x2 (no room to close)", 8, 8, [S1] + [B] * 15 + [S1] * 3),
-]
 
 
 def lattice_check(R, C, shapes):
@@ -187,16 +182,37 @@ def lattice_check(R, C, shapes):
     return None
 
 
-if len(sys.argv) > 1 and sys.argv[1] == "big":
-    cases = [
-        ("9x9: 1x1, 17x 2x2 (only 16 fit)", 9, 9, [S1] + [B] * 17),
-        ("8x10: 1x1, 2x4 x9 (only 8 fit)", 8, 10, [S1] + [W] * 9),
-        ("8x8: 1x1, 2x4 x4, 2x2 x7 (2x2 lattice: 16 marks, need 15+0)", 8, 8, [S1] + [W] * 4 + [B] * 7),
-    ]
-for c in cases:
-    t0 = time.perf_counter()
-    why = lattice_check(*c[1:])
-    dt = time.perf_counter() - t0
-    if why:
-        print(f"{c[0]:<44} lattice pre-check rejects in {dt*1e6:.0f} us: {why}", flush=True)
-    run(*c)
+S1, B, W = (1, 1), (2, 2), (2, 4)
+QUICK = [
+    ("4x6: 1x1, 4x 2x2, 1x1", 4, 6, [S1] + [B] * 4 + [S1]),
+    ("4x8: 1x1, 6x 2x2, 1x1", 4, 8, [S1] + [B] * 6 + [S1]),
+    ("4x8: 1x1, 2x4, 2x4, 2x2, 1x1", 4, 8, [S1, W, W, B, S1]),
+    ("8x8: 1x1, 14x 2x2, 1x1", 8, 8, [S1] + [B] * 14 + [S1]),
+    ("3x8: 1x1, 5x 2x2 (only 4 fit)", 3, 8, [S1] + [B] * 5),
+    ("5x5: 1x1, 5x 2x2 (only 4 fit)", 5, 5, [S1] + [B] * 5),
+    ("7x7: 1x1, 10x 2x2 (only 9 fit)", 7, 7, [S1] + [B] * 10),
+    ("6x6: 1x1, 8x 2x2, 1x1", 6, 6, [S1] + [B] * 8 + [S1]),
+    ("6x6: 1x1, 9x 2x2 (area 37 > 36)", 6, 6, [S1] + [B] * 9),
+    ("8x8: 1x1, 15x 2x2, 3x 1x1 (fills 64)", 8, 8, [S1] + [B] * 15 + [S1] * 3),
+]
+# Slow: the first case had not finished when the run was stopped after 15 minutes on one core.
+# Run them on a spare machine.
+BIG = [
+    ("9x9: 1x1, 17x 2x2 (only 16 fit)", 9, 9, [S1] + [B] * 17),
+    ("8x10: 1x1, 2x4 x9 (only 8 fit)", 8, 10, [S1] + [W] * 9),
+    ("8x8: 1x1, 2x4 x4, 2x2 x7", 8, 8, [S1] + [W] * 4 + [B] * 7),
+]
+
+
+def main(cases):
+    for c in cases:
+        t0 = time.perf_counter()
+        why = lattice_check(*c[1:])
+        dt = time.perf_counter() - t0
+        if why:
+            print(f"{c[0]:<44} lattice pre-check rejects in {dt*1e6:.0f} us: {why}", flush=True)
+        run(*c)
+
+
+if __name__ == "__main__":
+    main(BIG if sys.argv[1:] == ["big"] else QUICK)

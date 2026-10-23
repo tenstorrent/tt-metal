@@ -5,6 +5,8 @@
 #   ./run_experiments.sh quick       # every experiment at its small size (a few minutes)
 #   ./run_experiments.sh <name>      # one experiment: tier_b | tier_b_designed | tier_b_timing |
 #                                    #   carve | carve_repo | planner | resolver | resolver_sat
+#   ./run_experiments.sh <name> big  # carve, carve_repo, resolver, resolver_sat: the slow cases.
+#                                    #   Minutes to hours; run on a spare machine, not a shared box.
 #
 # Everything runs on CPU and touches no hardware. Outputs go to $OUT (default ./.out, gitignored).
 # Sizes are kept small by default; raise them with the environment knobs listed in README.md.
@@ -62,13 +64,13 @@ tier_b_timing() {
 }
 
 carve() {
-    log "Carve inside one mesh: DFS vs CaDiCaL (standard cases; the 7x7 case takes ~2-3 s per solver)"
-    "$PY" "$HERE/carve/carve_bench.py" | tee "$OUT/carve.txt"
+    log "Carve inside one mesh: DFS vs CaDiCaL (${1:-quick}; each solve killed after ${CARVE_TIMEOUT:-20} s)"
+    "$PY" "$HERE/carve/carve_bench.py" "${1:-quick}" | tee "$OUT/carve.txt"
 }
 
 carve_repo() {
-    log "Carve on repo-shaped slice grids (4x8, 8x4, 2x16, 8x8); each solver capped at 30 s per case"
-    "$PY" "$HERE/carve/carve_bench_repo.py" | tee "$OUT/carve_repo.txt"
+    log "Carve on repo-shaped slice grids (4x8, 8x4, 2x16, 8x8); each solve killed after ${CARVE_TIMEOUT:-30} s"
+    "$PY" "$HERE/carve/carve_bench_repo.py" "${1:-quick}" | tee "$OUT/carve_repo.txt"
 }
 
 planner() {
@@ -77,13 +79,32 @@ planner() {
     TT_BLAZE="$TT_BLAZE" "$PY" "$HERE/carve/carve_probe.py" | tee "$OUT/planner.txt"
 }
 
+# bench.cpp includes the resolver's search verbatim: everything in the anonymous namespace of
+# tt::tt_fabric::detail in pipeline_builder.cpp, through resolve_pipeline_placement. It is copied out
+# of the checkout at build time, so the benchmark always measures the current code.
+extract_resolver() {
+    mkdir -p "$OUT/resolver"
+    awk '
+        /^namespace tt::tt_fabric::detail \{$/ { in_detail = 1; next }
+        in_detail && /^namespace \{$/ { copying = 1 }
+        copying && /^\}  \/\/ namespace tt::tt_fabric::detail$/ { exit }
+        copying { print }
+    ' "$TT_METAL_HOME/tt_metal/fabric/pipeline_builder.cpp" >"$OUT/resolver/search_body.inc"
+    grep -q resolve_pipeline_placement "$OUT/resolver/search_body.inc" ||
+        { echo "could not extract the resolver from pipeline_builder.cpp" >&2; exit 1; }
+}
+
 resolver() {
-    log "pipeline_builder.cpp resolver search (verbatim copy) on synthetic grids; 60 s cap per group"
-    g++ -O2 -std=c++20 -o "$OUT/resolver_bench" "$HERE/resolver/bench.cpp"
-    for group in feas cables; do
+    local groups=(feas cables)
+    [[ "${1:-}" == big ]] && groups=(odd big)
+    log "pipeline_builder.cpp resolver search on synthetic grids, groups ${groups[*]}; 60 s cap per group"
+    extract_resolver
+    g++ -O2 -std=c++20 -I "$OUT/resolver" -o "$OUT/resolver_bench" "$HERE/resolver/bench.cpp"
+    : > "$OUT/resolver.txt"
+    for group in "${groups[@]}"; do
         timeout 60 "$OUT/resolver_bench" "$group" | tee -a "$OUT/resolver.txt" || echo "  ($group: stopped at 60 s)"
     done
-    echo "  skipped: 'odd' (5x7 takes > 120 s) and 'big' (> 120 s); run $OUT/resolver_bench odd|big by hand"
+    [[ "${1:-}" == big ]] || echo "  skipped: 'odd' (5x7 takes > 120 s) and 'big' (> 120 s); run: $0 resolver big"
 }
 
 resolver_sat() {
@@ -94,9 +115,9 @@ resolver_sat() {
         echo "resolver_sat: needs a tt-metal build (BUILD_DIR=$BUILD_DIR) with CaDiCaL; skipping"
         return 0
     fi
-    log "CaDiCaL encoding of the same ring placement; 60 s cap (the last case takes > 230 s)"
+    log "CaDiCaL encoding of the same ring placement ${1:-quick}; 60 s cap (the big case takes > 230 s)"
     g++ -O2 -std=c++20 -I "$src/src" -o "$OUT/resolver_sat" "$HERE/resolver/sat.cpp" "$lib"
-    timeout 60 "$OUT/resolver_sat" | tee "$OUT/resolver_sat.txt" || echo "  (stopped at 60 s)"
+    timeout 60 "$OUT/resolver_sat" "${1:-quick}" | tee "$OUT/resolver_sat.txt" || echo "  (stopped at 60 s)"
 }
 
 quick() {
@@ -113,10 +134,10 @@ case "$cmd" in
     setup) setup ;;
     quick | tier_b | tier_b_designed | tier_b_timing | carve | carve_repo | planner | resolver | resolver_sat)
         need_setup
-        "$cmd"
+        "$cmd" "${@:2}"
         ;;
     *)
-        sed -n '2,10p' "$0"
+        sed -n '2,12p' "$0"
         exit 1
         ;;
 esac
