@@ -18,8 +18,10 @@ import ttnn
 # quads by ~25%. test_performance_wan.py gates on both bounds; test_pipeline_wan.py gates its cold
 # single run on a multiple of the total upper limit.
 #
-# PENDING: the BH 4x8 vae bounds predate the bh_sc1 host-contention fix (#61784, ~0.4 s off the
-# readback); they keep the pre-regression upper limit and an estimated lower until a post-fix run.
+# PENDING: the BH galaxy (4x8 BH, 4x32) bands were measured on the standard bh_sc1 / bh_sc4 pools;
+# their CI legs now run on the high-power pools and get re-derived from those runs. The BH 4x8 vae
+# bounds also predate the bh_sc1 host-contention fix (#61784, ~0.4 s off the readback): they keep the
+# pre-regression upper limit and an estimated lower until then.
 TIMING_LIMITS = {
     ("t2v", (2, 2), 480, "bh"): {
         "encoder": (0.01, 0.16),
