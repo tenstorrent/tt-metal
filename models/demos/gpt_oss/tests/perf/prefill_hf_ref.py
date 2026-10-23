@@ -6,7 +6,7 @@
 Runs the HF GPT-OSS model on the frozen real-text prompt (first L tokens) and stores the last-token logits as
 GOLDENS_DIR/hf_ref_L{L}.pt. Run once; the gate reads the stored vectors.
 
-    HF_MODEL=/home/ttuser/models/gpt-oss-20b python models/demos/gpt_oss/tests/perf/prefill_hf_ref.py --lengths 128,1024
+    HF_MODEL=/path/to/gpt-oss-20b python models/demos/gpt_oss/tests/perf/prefill_hf_ref.py --lengths 128,1024
 
 --full / --last / --last32 / --v4 store multi-position references for prefill_gate.py --mode v2 / v3 / v4.
 """

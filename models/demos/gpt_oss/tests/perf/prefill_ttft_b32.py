@@ -57,7 +57,11 @@ from models.demos.gpt_oss.tests.test_factory import parametrize_mesh_with_fabric
 
 # Per-user KV of the frozen configuration: the largest length at which 32 users fit (fit table, README).
 B32_DEFAULT_KV_LEN = 64 * 1024
-B32_RUNS_DIR = Path(os.getenv("PREFILL_B32_RUNS_DIR", "/home/ttuser/gtobar/tt-ops/runs/gpt-oss-20b-prefill-b32"))
+B32_RUNS_DIR = Path(
+    os.getenv(
+        "PREFILL_B32_RUNS_DIR", str(Path(__file__).resolve().parents[5] / "generated" / "gpt_oss_prefill" / "runs_b32")
+    )
+)
 
 
 def _write(out_path, record):

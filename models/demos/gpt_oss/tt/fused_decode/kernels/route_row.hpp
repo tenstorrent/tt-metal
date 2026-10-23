@@ -74,15 +74,16 @@ inline void route(const uint32_t* b, uint32_t* sel, uint32_t& n, uint32_t& taken
     for (uint32_t e = 0; e < E; ++e) {
         key[e] = key16(b[e]);
     }
-    // one pass keeps the K largest (key, index) by insertion (an equal key goes after the ones already in: the lower
-    // index first); the first K_SEL are routed, the K-th too when it ties the K_SEL-th
-    uint32_t tk[K], ti[K], m = 0;
+    // the K_SEL largest (key, index) by insertion (an equal key goes after the ones already in: the lower index
+    // first), then every other expert tied with the K_SEL-th in ascending index order, at most K in all: the same
+    // routed set and order as keeping the K largest, at K_SEL-wide insertion cost
+    uint32_t tk[K_SEL], ti[K_SEL], m = 0;
     for (uint32_t e = 0; e < E; ++e) {
         const uint32_t v = key[e];
-        if (m == K && v <= tk[K - 1]) {
+        if (m == K_SEL && v <= tk[K_SEL - 1]) {
             continue;
         }
-        uint32_t p = m < K ? m : K - 1;
+        uint32_t p = m < K_SEL ? m : K_SEL - 1;
         while (p > 0 && tk[p - 1] < v) {
             tk[p] = tk[p - 1];
             ti[p] = ti[p - 1];
@@ -90,19 +91,25 @@ inline void route(const uint32_t* b, uint32_t* sel, uint32_t& n, uint32_t& taken
         }
         tk[p] = v;
         ti[p] = e;
-        if (m < K) {
+        if (m < K_SEL) {
             ++m;
         }
     }
     const uint32_t kth = tk[K_SEL - 1];
     n = 0;
     taken = 0;
-    for (; n < m && tk[n] >= kth; ++n) {
+    for (; n < m; ++n) {
         sel[n] = ti[n];
         taken |= 1u << ti[n];
     }
+    for (uint32_t e = 0; e < E && n < K; ++e) {
+        if (key[e] == kth && !((taken >> e) & 1u)) {
+            sel[n++] = e;
+            taken |= 1u << e;
+        }
+    }
     // softmax over the selected, fixed point: e_k = 2^((l_k - max) log2 e) (Q30), w_k = e_k / sum
-    const int32_t qmax = q16(b[ti[0]]);
+    const int32_t qmax = q16(b[sel[0]]);
     uint32_t ex[K];
     uint64_t sum = 0;
     for (uint32_t k = 0; k < n; ++k) {

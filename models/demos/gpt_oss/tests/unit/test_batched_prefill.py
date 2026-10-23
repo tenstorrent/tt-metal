@@ -199,9 +199,11 @@ def _model_ctx(mesh_device):
         pytest.skip("model-level batched prefill checks need HF_MODEL with the real checkpoint (weights, tokenizer)")
     if json.loads((Path(checkpoint) / "config.json").read_text())["num_local_experts"] != ROUTED_PREFILL_NUM_EXPERTS:
         pytest.skip(f"batched prefill is built for {ROUTED_PREFILL_NUM_EXPERTS} experts (gpt-oss-20b)")
-    from models.demos.gpt_oss.tests.perf.prefill_common import build_prefill_generator_b32
+    from models.demos.gpt_oss.tests.perf.prefill_common import build_prefill_generator_b32, load_or_build_prompt_tokens
 
     ctx = build_prefill_generator_b32(mesh_device, MODEL_KV_LEN)
+    # the real-text prompt stream (b32_prompt_tokens "text"): built from the repo's tech reports on first use
+    load_or_build_prompt_tokens(ctx["tokenizer"], create=True)
     # Record the batch size of every model forward, to prove which path (batched or per user) ran.
     model = ctx["model"][0]
     ctx["forward_batches"] = calls = []

@@ -18,7 +18,10 @@ from loguru import logger
 
 PREFILL_LENGTHS = [128, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]
 FAST_GATE_LENGTHS = [128, 1024, 8192]
-RUNS_DIR = Path(os.getenv("PREFILL_RUNS_DIR", "/home/ttuser/gtobar/tt-ops/runs/gpt-oss-20b-prefill"))
+# (the run records and goldens: PREFILL_RUNS_DIR, default under the repo's git-ignored generated/)
+RUNS_DIR = Path(
+    os.getenv("PREFILL_RUNS_DIR", str(Path(__file__).resolve().parents[5] / "generated" / "gpt_oss_prefill" / "runs"))
+)
 GOLDENS_DIR = Path(os.getenv("PREFILL_GOLDENS_DIR", str(RUNS_DIR / "baseline" / "goldens")))
 PAGE_BLOCK_SIZE = 64
 # Real-text corpus for the accuracy gate: the repo's tech reports (prose plus code), tokenized once and frozen
