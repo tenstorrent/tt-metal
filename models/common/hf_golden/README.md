@@ -32,6 +32,7 @@ the dtype, the layers it exists on and what it is.
 | `generate_golden_k2_horizon.py` | IFM/K2-Horizon-375B-A23B | repo remote code (GQA + partial RoPE + MoE), plain bf16 |
 | `generate_golden_nemotron_3_ultra.py` | nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16 | transformers `nemotron_h` (Mamba-2 + latent MoE + NoPE GQA), needs `--with kernels==0.12.3` |
 | `generate_golden_llama_3_1_8b_instruct.py` | meta-llama/Llama-3.1-8B-Instruct | transformers `llama` |
+| `generate_golden_qwen3_8_27b.py` | Qwen/Qwen3.8-27B | transformers `qwen3_5` (Gated DeltaNet + gated GQA), torch GDN reference |
 | `generate_golden_whole_model.py` | Qwen/Qwen3.8-27B, Mistral-Medium-3.5 | whole model, one forward (see below) |
 
 Not covered yet:
@@ -142,6 +143,14 @@ sliding layers keep every position (make_cache: DynamicCache(config) would keep 
 over the same 10100 tokens: 8.358 BOS, 8.428 raw, 8.623 chat). isl 56320 on CPU (64-core EPYC 9354P) with
 `--prefill-chunk 5120 --attn-chunk 4096`: 18.5 min, 4.9 GB host peak, 22 GB on disk; its first 10240 rows equal the
 isl 10240 run with the same flags bit for bit (99/99 tensors), ppl 6.842 over all 56318 tokens.
+
+**Qwen3.8-27B:** chat prefix up to a no-think assistant turn, as Flash-Next (wikitext ppl at isl 10240 over the same
+10100 tokens: 7.430 chat, 7.445 raw, 8.175 `<|endoftext|>`; no BOS). transformers 5.12's cache holds the Gated
+DeltaNet recurrent state in bf16, rounding it at every `--prefill-chunk` boundary and in the trace; the script keeps it
+fp32 (`make_cache`), so chunked bf16 runs equal one whole forward bit for bit. It refuses to run with fla /
+causal_conv1d installed: the torch GDN reference only. isl 56320 on CPU with `--prefill-chunk 5120 --attn-chunk 4096`:
+29.5 min, 5.3 GB host peak, 40 GB on disk; its first 10240 rows equal the isl 10240 run bit for bit (195/195
+tensors), ppl 6.400 over all 56264 tokens.
 
 **`--device cuda` under torch 2.11:** `torch.cuda.set_device` rejects a device without an index; pass `cuda:0`.
 
