@@ -96,9 +96,7 @@ inline void llk_math_topk_xl_pack_supplied_indices(
     SAN_HOOK(unsupported());
     static_assert(is_fp32_dest_acc_en, "supplied-index packing requires FP32 DEST accumulation");
     static_assert(Dst == DstSync::SyncHalf || Dst == DstSync::SyncFull, "invalid DEST synchronization scope");
-    LLK_ASSERT(
-        (cfg_read(ALU_ACC_CTRL_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_Fp32_enabled_MASK) != 0,
-        "supplied-index packing requires runtime FP32 DEST accumulation");
+    LLK_ASSERT(llk_assert_fp32_dest_acc_en, "supplied-index packing requires runtime FP32 DEST accumulation");
     constexpr std::uint32_t tiles = K == 2048 ? 2 : 1;
     // Check the starts as well as the ends so adding the second tile cannot wrap an invalid index.
     _llk_math_eltwise_sfpu_assert_dst_index_<Dst>(scores, "score start out of range");
