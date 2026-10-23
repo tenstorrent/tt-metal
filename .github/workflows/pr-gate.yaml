@@ -632,10 +632,13 @@ jobs:
 
   # Quasar LLK tests on ttsim, two shards (llk_pr_gate_tests.yaml, sim_quasar_xl).
   # Sanity runs the same shards. The skip list is the script default.
+  # Disabled on merge_group: it was holding up the merge queue for too long.
+  # Still runs on PR gate and push-to-main.
   llk-quasar-tests:
     needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
     if: ${{
         github.event.action != 'destroyed' &&
+        github.event_name != 'merge_group' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
         (github.ref_name == 'main' ||
          needs.find-changed-files.outputs.llk-quasar-changed == 'true' ||
