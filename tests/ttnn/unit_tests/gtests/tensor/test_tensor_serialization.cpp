@@ -256,13 +256,18 @@ TEST_F(TensorSerializationFlatbufferTest, DeviceShardIsLabelledAsOneDeviceTensor
     auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*mesh_device_, /*dim=*/0);
     Tensor sharded_tensor = ttnn::distributed::distribute_tensor(input_tensor, *mapper, *mesh_device_);
     ASSERT_TRUE(sharded_tensor.storage_type() == ttnn::StorageType::DEVICE);
-    const TensorTopology sharded_label = sharded_tensor.tensor_topology();
+    // The mapper's label: dim 0 split over every device, in row-major mesh order.
+    const auto coords = sharded_tensor.device_storage().get_coords();
+    const TensorTopology sharded_label(
+        MeshShape(num_devices),
+        {ttnn::distributed::MeshMapperConfig::Shard{0}},
+        std::vector<MeshCoordinate>(coords.begin(), coords.end()));
+    ASSERT_EQ(sharded_tensor.tensor_topology(), sharded_label);
 
     // Each shard is labelled as the one-device tensor it is, on the device and on the host, and the tensor it was
     // taken from keeps its label.
     std::vector<Tensor> shards = ttnn::distributed::get_device_tensors(sharded_tensor);
     ASSERT_THAT(shards, SizeIs(num_devices));
-    const auto coords = sharded_tensor.device_storage().get_coords();
     for (int i = 0; i < num_devices; i++) {
         const TensorTopology expected_label(
             MeshShape(1), {ttnn::distributed::MeshMapperConfig::Replicate{}}, std::vector<MeshCoordinate>{coords[i]});
