@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt_stl/reflection.hpp>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
 #include <ttnn/tensor/tensor.hpp>
@@ -23,6 +24,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "metal/common/const_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
@@ -1524,4 +1526,18 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Rejected) {
     EXPECT_THROW(run(0U, 48U), std::exception) << "k_chunk_size must be a tile multiple";
     EXPECT_THROW(run(96U, 0U), std::exception) << "q_chunk_size must divide the sequence length";
     EXPECT_THROW(run(0U, 2U * S), std::exception) << "k_chunk_size must divide the sequence length";
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ChangeProgramHash) {
+    // The op hashes its attributes by reflection; the chunk knobs must take part, or a second config on
+    // the same shapes would silently reuse the first config's cached program.
+    using Params = ttml::metal::ops::sdpa_fw::device::SDPAForwardParams;
+    const Params base{.mask_type = ttml::metal::AttentionMaskType::Causal};
+    Params q_changed = base;
+    q_changed.program_config.q_chunk_size = 128U;
+    Params k_changed = base;
+    k_changed.program_config.k_chunk_size = 128U;
+    EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(q_changed));
+    EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(k_changed));
+    EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(q_changed), ttsl::hash::hash_objects_with_default_seed(k_changed));
 }
