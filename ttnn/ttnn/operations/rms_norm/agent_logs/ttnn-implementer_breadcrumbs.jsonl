@@ -1,0 +1,1 @@
+{"event":"test_run","status":"pass","test":"test_rms_norm_debug.py","detail":"12/12 incl R2 W-split; fixed mcast NoC mismatch (writer is NOC_1)","ts":"2026-10-23T07:21:04+00:00"}
