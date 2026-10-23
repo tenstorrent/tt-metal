@@ -294,6 +294,11 @@ DRAM_ACTIVATION_LEVELS = _C3_C4_LEVELS
 # output width in tiles, as a width slice is whole tiles wide: 7 for this conv's 200-wide output.
 DRAM_CONV_SLICES = 8
 
+# Width slices for a layer's non-DCN 3x3 conv2s, by layer (0 is layer1), over DRAM_CONV_SLICES:
+# their 64- and 128-channel inputs fit L1 in 2 and 1 slices, and every slice pays its own slice,
+# halo and write-back ops.
+CONV2_DRAM_CONV_SLICES = {0: 2, 1: 1}
+
 # Layers whose downsample and non-DCN conv2s are block sharded (layer3, layer4) and FPN levels
 # whose output conv is (C3, C4). Height sharded, each core of tiny's layer4 conv2 would hold its
 # whole 512-channel 3x3 weight, more than L1.
@@ -320,6 +325,7 @@ def tt_resnet_kwargs():
     return dict(
         dram_activation_stages=DRAM_ACTIVATION_STAGES,
         dram_conv_slices=DRAM_CONV_SLICES,
+        conv2_dram_conv_slices=CONV2_DRAM_CONV_SLICES,
         block_sharded_stages=BLOCK_SHARDED_STAGES,
         fp32_acc_stages=FP32_ACC_STAGES,
         dcn_sharded_input_stages=DCN_SHARDED_INPUT_STAGES,
