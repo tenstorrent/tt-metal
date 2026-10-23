@@ -68,7 +68,8 @@ def _routing_specs():
     from models.demos.moe_block.tt.fused_head import RoutingSpec
 
     prep = not os.environ.get("HSE3_NOPREP")  # (test-only: the routing without dispatch prep)
-    return {"glm": RoutingSpec(A=12, prep=prep), "k3": RoutingSpec(A=16, prep=prep)}  # (the combine's accumulators)
+    tor = (_FABRIC == "FABRIC_2D_TORUS_X", False)  # (the dispatch's ports: a TP ring's wrap links too)
+    return {"glm": RoutingSpec(A=12, prep=prep, torus=tor), "k3": RoutingSpec(A=16, prep=prep, torus=tor)}
 
 
 class _LazyR(dict):
@@ -166,6 +167,7 @@ def _check_plan(head, rows, name):
             rt.nps[ch],
             rt.luts[ch],
             rt.rows_cap,
+            wrap=(rt.wrap_x, rt.wrap_y),  # (a ring's first hops: the planner's n_inj / n_ret and table hops)
             token_major=True,
         )
         for k in ("counts", "regions", "token_index", "table", "plan"):
@@ -531,6 +533,16 @@ def test_head_se3(mesh_device, device_params):
             for d, t in enumerate(ttnn.get_device_tensors(head.eng.ewords)):
                 m = ttnn.to_torch(t).reshape(-1, 64)[:, 60].tolist()
                 logger.info(f"GATE_DBG dev {d}: masks {sorted(set(hex(v) for v in m))} r {m[:12]}")
+        if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":  # (traced: replays back to back, no launch skew)
+            from models.demos.moe_block.tests.test_moe_block import replay_device_times
+
+            ttnn.synchronize_device(mesh_device)
+            tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            yt_ = head.run(xts[0], w)
+            ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+            replay_device_times(mesh_device, tid, f"head {name}", batches=(4, 4))
+            ttnn.release_trace(mesh_device, tid)
+            ttnn.deallocate(yt_)
         if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":  # (the skew-corrected projection's map: each mesh row's
             # devices by TP position, next to the profile - tests/galaxy_projection.py)
             import json

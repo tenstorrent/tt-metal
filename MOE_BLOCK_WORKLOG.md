@@ -1454,3 +1454,13 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   the partner's partials) end at ~113.
 - Profiler gotcha: zones hash name + file + line into 16 bits, and TL-S at chlkc_pack 166 collided with
   PROFILER-DRAM-PUSH (TT_THROW at the read). moe_block_runs/zonehash.py finds such collisions.
+
+### Head on the ring of 4 (K3 E 896 fold 8)
+- test_head_se3 on the ring failed its planner check on the wrap pair only (chips 0 and 3: plan words 255 / 263, a
+  0xFF port id, then token_index / table). The test's RoutingSpec had no torus, so port_luts gave no wrap ports, and
+  plan_reference got no wrap. Both fixed in the test; the block already passes torus. Bit-exact on all 4 chips.
+- Traced head mode in test_head_se3 (replay_device_times; batches of 4 replays fit the profiler's buffers).
+- Ring head: 480 us traced (479.8 / 480.8; eager 505-510); the router on its own cores 570.
+- One replay, slow chip: router MM on the engine 0-48, gate / up 48-324 (~275 us), chain (RPLAN) ends ~276-294,
+  down + RS 320-476 (127-156 us). Down's compute ~74 us. The RS is 1.72 MB a link: ~73 us at 23.6 GB/s, ~90 at the
+  audit's ~19. The latent all-to-all is ~215 KB a link (<= 5 us to gain).
