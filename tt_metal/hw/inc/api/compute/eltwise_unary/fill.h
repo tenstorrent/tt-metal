@@ -27,6 +27,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void fill_tile(uint32_t idst, float param0) {
+    MATH(SFPU_UNARY_INIT(fill));
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_fill_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, param0));
 }

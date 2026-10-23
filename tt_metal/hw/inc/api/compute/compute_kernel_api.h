@@ -251,6 +251,7 @@ ALWI void tanh_tile(uint32_t idst) {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void square_tile(uint32_t idst) {
 #ifndef ARCH_QUASAR
+    MATH(SFPU_UNARY_INIT(square));
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_square, (APPROX, is_fp32_dest_acc_en), idst, VectorMode::RC));
 #else

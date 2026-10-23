@@ -42,6 +42,7 @@ ALWI void rsqrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (
 // clang-format on
 template <RsqrtMode mode = RsqrtMode::Default, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void rsqrt_tile(uint32_t idst) {
+    rsqrt_tile_init();
     [[maybe_unused]] constexpr bool FAST_APPROX = mode == RsqrtMode::Fast;
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,

@@ -33,6 +33,7 @@ enum { ADD_UNARY = 0, SUB_UNARY = 1, MUL_UNARY = 2, DIV_UNARY = 3, RSUB_UNARY = 
 #ifndef ARCH_QUASAR
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void add_unary_tile(uint32_t idst, uint32_t param1) {
+    MATH(SFPU_UNARY_INIT(unused));
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

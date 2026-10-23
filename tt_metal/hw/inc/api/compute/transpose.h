@@ -108,6 +108,10 @@ ALWI void transpose_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void transpose_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
     LLK_SAN_FUNCTION();
+#ifndef ARCH_QUASAR
+    reconfig_data_format_srca(icb);
+    transpose_init<is_fp32_dest_acc_en>(icb);
+#endif
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t dst_format = get_operand_dst_format(icb);
 

@@ -221,7 +221,8 @@ ALWI void mul_reuse_dest_init(uint32_t icb, uint32_t call_line = __builtin_LINE(
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void mul_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+ALWI void mul_tiles(
+    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, bool acc_to_dest = true) {
     // static bool first = true; // TODO(AP): static initializer causes a hang, possibly investigate
     // if (first)
     //  one possible solution is to add a local context in the kernel, pass it around and store init flags in it
@@ -232,7 +233,7 @@ ALWI void mul_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
     // first = false;
 
     reconfig_data_format(icb0, icb1);
-    mul_init(icb0, icb1);
+    mul_init(icb0, icb1, acc_to_dest);
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWMUL,

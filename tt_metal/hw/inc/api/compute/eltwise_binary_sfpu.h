@@ -146,6 +146,7 @@ ALWI void sub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         odst,
         VectorMode::RC)));
 #else
+    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::SUB))));
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

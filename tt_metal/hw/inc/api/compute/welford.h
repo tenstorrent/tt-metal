@@ -98,6 +98,7 @@ ALWI void welford_update(
     // Check limits on the reciprocal lookup table.
     ASSERT((reciprocal_size == 0) || (start_idx < reciprocal_size));
 
+    welford_init<WelfordInitMode::PreserveStats>();
     MATH((llk_math_welfords_sfpu_calculate_welfords_tile_<reciprocal_size>(input_dst_idx, start_idx, reciprocal_lut)));
 }
 
@@ -123,6 +124,7 @@ ALWI void welford_update_rows(
     // Check limits on the start row and number of rows.
     ASSERT(start_row + num_rows <= TILE_WIDTH);
 
+    welford_init<WelfordInitMode::PreserveStats>();
     MATH((llk_math_welfords_sfpu_calculate_welfords_partial_tile_<reciprocal_size>(
         input_dst_idx, start_idx, start_row, num_rows, reciprocal_lut)));
 }
@@ -139,6 +141,7 @@ ALWI void welford_update_rows(
  * @return None. The mean and m2 values are stored in the tile in the dst reg.
  */
 ALWI void welford_save_state(uint32_t mean_dst_idx) {
+    welford_init<WelfordInitMode::PreserveStats>();
     MATH((llk_math_welfords_sfpu_store_mean_m2_to_dst(mean_dst_idx)));
 }
 
@@ -152,6 +155,7 @@ ALWI void welford_save_state(uint32_t mean_dst_idx) {
  * @return None. The mean and m2 values are loaded into the SFPU.
  */
 ALWI void welford_restore_state(uint32_t mean_dst_idx) {
+    welford_init<WelfordInitMode::PreserveStats>();
     MATH((llk_math_welfords_sfpu_load_mean_m2_from_dst(mean_dst_idx)));
 }
 /**
@@ -183,6 +187,7 @@ ALWI void welford_finalize_to_row(
     // Check limits on the reciprocal lookup table.
     ASSERT((reciprocal_size == 0) || (scale_idx < reciprocal_size));
 
+    welford_init<WelfordInitMode::PreserveStats>();
     MATH((llk_math_welfords_sfpu_store_mean_var_to_dst_row<reciprocal_size>(mean_dst_idx, scale_idx, reciprocal_lut)));
 }
 
@@ -214,6 +219,7 @@ ALWI void welford_finalize_to_face(
     // Check limits on the reciprocal lookup table.
     ASSERT((reciprocal_size == 0) || (scale_idx < reciprocal_size));
 
+    welford_init<WelfordInitMode::PreserveStats>();
     MATH((llk_math_welfords_sfpu_store_mean_var_to_dst_raw<reciprocal_size>(mean_dst_idx, scale_idx, reciprocal_lut)));
 }
 
@@ -224,10 +230,12 @@ ALWI void welford_finalize_to_face(
  * -------------------------------------------------------------------------------------------------
  */
 ALWI void welford_save_state(uint32_t mean_dst_idx, uint32_t group_id) {
+    welford_init<WelfordInitMode::PreserveStats>();
     MATH((llk_math_welfords_sfpu_store_mean_m2_to_dst(mean_dst_idx, group_id)));
 }
 
 ALWI void welford_restore_state(uint32_t mean_dst_idx, uint32_t group_id) {
+    welford_init<WelfordInitMode::PreserveStats>();
     MATH((llk_math_welfords_sfpu_load_mean_m2_from_dst(mean_dst_idx, group_id)));
 }
 
@@ -240,6 +248,7 @@ ALWI void welford_finalize_to_face(
     // Check limits on the reciprocal lookup table.
     ASSERT((reciprocal_size == 0) || (scale_idx < reciprocal_size));
 
+    welford_init<WelfordInitMode::PreserveStats>();
     MATH((llk_math_welfords_sfpu_store_mean_var_to_dst_raw<reciprocal_size>(
         mean_dst_idx, group_id, scale_idx, reciprocal_lut)));
 }
