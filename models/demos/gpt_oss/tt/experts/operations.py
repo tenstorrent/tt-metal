@@ -5,7 +5,13 @@
 
 import ttnn
 
+from .. import opt_switches
 from .config import ExpertConfig
+
+
+def use_decode_ar():
+    """GPT_OSS_OPT_DECODE_AR: one-op decode TP all-reduce (decode_tp_all_reduce)."""
+    return opt_switches.on("DECODE_AR")
 
 
 def apply_swiglu(gate, up, config: ExpertConfig):
@@ -99,6 +105,18 @@ def apply_tensor_parallel_allreduce(tensor, mesh_config, mesh_device, seq_len, c
     tensor.deallocate(True)
 
     return tensor_allreduced
+
+
+def decode_tp_all_reduce(tensor, mesh_config, ccl_manager, hidden_size, slot):
+    """GPT_OSS_OPT_DECODE_AR=1 (callers use it only when use_decode_ar()): decode
+    TP all-reduce of a one-token [1, 1, 1, hidden] partial sum with the one-op all_reduce_async of the batched decode
+    layer (batched_decode.DecodeAllReduce: width-sharded over 30 cores, persistent scratch buffer + global semaphore
+    per call site) instead of ttnn.all_reduce; returned as BF8 L1 interleaved."""
+    all_reduce = ccl_manager.get_batched_decode_all_reduce(hidden_size, mesh_config.tp_axis)
+    reduced = all_reduce(tensor, slot)
+    out = ttnn.to_memory_config(reduced, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+    reduced.deallocate(True)
+    return out
 
 
 def apply_sequence_parallel_allgather(tensor, mesh_config, ccl_manager):
