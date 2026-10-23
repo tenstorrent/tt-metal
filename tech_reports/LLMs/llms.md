@@ -575,7 +575,7 @@ Here are some useful details regarding attention OPs for efficient and bug-free 
    - `q_chunk_size`: The size of a chunk to process at a time for Q.
    - `k_chunk_size`: The size of a chunk to process at a time for K and V.
    - `exp_approx_mode`: Whether to use the exponential approximation mode for softmax.
-   - `max_cores_per_head_batch`: The maximum number of cores to use for each head batch in flash decode.
+   - `max_cores_per_head_batch`: The maximum number of cores to use for each head batch in flash decode (default 16). Decode only: prefill (flash attention) ops reject it.
 
 Flash attention processes Q, K, V in chunks of size `q_chunk_size` and `k_chunk_size`. The chunk size must be a power of two and a multiple of 32. By default, the chunk size is set to 512, but you should experiment with different values to find the best performance. Flash attention is parallelized on the cores specified in `compute_with_storage_grid_size`. For example, if you are running on a grid size of 8x8, then flash attention is parallelized over 64 cores. The parallelization is divided by batch, then by head, then by the number of Q chunks.
 

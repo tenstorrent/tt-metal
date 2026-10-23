@@ -54,8 +54,17 @@ public:
             1,
             Sq_chunk_t,
             Sk_chunk_t,
-            DHt);
+            DHt,
+            std::nullopt,
+            tensor_args.v_head_dim(args.latent_v_head_dim) / tt::constants::TILE_WIDTH);
         desc.cbs = program_.cbs;
+        causal_ = args.is_causal;
+        wormhole_ = tensor_args.input_q.device()->arch() == tt::ARCH::WORMHOLE_B0;
+        // Chunked prefill (Q shorter than the K/V shard): the device's Q slab and the chunk group, in tiles.
+        if (tensor_args.is_chunked() && !args.is_cross) {
+            chunked_q_tiles_ = tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT;
+            chunk_group_tiles_ = chunked_q_tiles_ * args.all_gather_operation_attributes.ring_size;
+        }
         grid_ = grid;
         Sq_chunk_t_ = Sq_chunk_t;
         Sk_chunk_t_ = Sk_chunk_t;
@@ -164,14 +173,24 @@ public:
         // STANDARD's and FAST's fused chunks stream their ring checkpoints: compute overlaps the state save/restore
         // of multi-Q workers with its chunks instead of waiting.
         ring_recipes::set_named_arg(recipe_args, "recipe_ring_stream_state", fused() && !fp32() ? 1 : 0);
+        // Causal (and balanced) rings: diagonal masking, skipped K chunks and Q chunks (streaming/recipe_ring.hpp).
+        ring_recipes::set_named_arg(recipe_args, "recipe_ring_causal", ring_causal() ? 1 : 0);
+        // Chunked prefill masks every step in the sequence's frame (streaming/recipe_ring.hpp).
+        ring_recipes::set_named_arg(recipe_args, "recipe_ring_chunked", chunked_q_tiles_);
+        ring_recipes::set_named_arg(recipe_args, "recipe_ring_group_tiles", chunk_group_tiles_);
         args.insert(args.end(), recipe_args.begin(), recipe_args.end());
     }
 
-    // Math builds at -O2 (ring_joint_sdpa_recipe.cpp); fused chunks' and ACCURATE's code overflows the kernel config
-    // buffer at -O3, so their unpack and pack build at -O2 as well (as in the exp ring factory).
+    // Blackhole unpack and pack (ring_joint_sdpa_recipe.cpp builds math, and every Wormhole thread, at its own level):
+    // -O2 for fused chunks, ACCURATE and the causal ring step, whose code overflows the kernel config buffer at -O3.
+    // Wormhole keeps the default: its link-time inlining needs it (the math LLK's address-mode setup takes constants).
     std::optional<tt::tt_metal::KernelBuildOptLevel> compute_opt_level() const override {
-        return fused() || accurate() ? ring_recipes::recipe_opt_level(tt::tt_metal::KernelBuildOptLevel::O2)
-                                     : std::nullopt;
+        if (wormhole_) {
+            return std::nullopt;
+        }
+        return fused() || accurate() || ring_causal()
+                   ? ring_recipes::recipe_opt_level(tt::tt_metal::KernelBuildOptLevel::O2)
+                   : std::nullopt;
     }
 
     std::optional<tt::tt_metal::KernelDescriptor::ConfigDescriptor> compute_config() const override {
@@ -188,9 +207,14 @@ private:
     bool accurate() const {
         return ring_recipes::named_arg(program_.kernels.front().named_compile_time_args, "recipe_accurate") != 0;
     }
+    bool ring_causal() const { return causal_ || chunked_q_tiles_ != 0; }
 
     mutable tt::tt_metal::ProgramDescriptor program_;  // finalize_cbs may drop the fused chunks
     tt::tt_metal::CoreRangeSet grid_;
+    bool causal_ = false;
+    bool wormhole_ = false;
+    uint32_t chunked_q_tiles_ = 0;
+    uint32_t chunk_group_tiles_ = 0;
     uint32_t Sq_chunk_t_ = 0;
     uint32_t Sk_chunk_t_ = 0;
 };

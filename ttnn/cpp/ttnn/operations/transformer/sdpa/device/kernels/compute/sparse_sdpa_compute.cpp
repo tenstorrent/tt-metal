@@ -17,9 +17,9 @@
 #include "api/compute/bcast.h"  // add_tiles_bcast_rows (mask add)
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_common.hpp"
 constexpr bool EXP_APPROX_MODE = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::MATH_APPROX_MODE) != 0;
-// compute_streaming.hpp needs declarations from compute_common.hpp (LightweightMaskContext, reduce helpers,
+// compute_streaming.hpp needs declarations from sdpa_block_ops.hpp (LightweightMaskContext, reduce helpers,
 // DEST_AUTO_LIMIT); include it first. Only compute_streaming primitives are used.
-#include "compute_common.hpp"
+#include "sdpa_block_ops.hpp"
 #include "compute_streaming.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"

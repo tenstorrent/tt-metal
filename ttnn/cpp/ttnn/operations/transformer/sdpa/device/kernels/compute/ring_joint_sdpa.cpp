@@ -15,7 +15,8 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack.h"
 #include <tt-metalium/constants.hpp>
-#include "compute_common.hpp"
+#include "sdpa_block_ops.hpp"
+#include "sdpa_legacy_loops.hpp"
 #include "compute_streaming.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_mla_packing_plan.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
@@ -29,7 +30,7 @@ template <bool kv_pad_rotation_enabled>
 constexpr void assert_kv_pad_rotation_streaming_only() {
     static_assert(
         !kv_pad_rotation_enabled,
-        "kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by "
+        "kv_actual_isl requires the ring-joint streaming compute path; the legacy sdpa_ring path selected by "
         "fp32_dest_acc_en=true is not supported.");
 }
 
