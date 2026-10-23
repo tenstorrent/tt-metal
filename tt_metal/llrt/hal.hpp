@@ -205,6 +205,10 @@ enum class TensixDebugReg : uint8_t {
     BRISC_INT_NO,
     // PIC hardware IRQ 3 (ECC errors and watchdog); reads 1 while raised
     PIC_HW_INT_3,
+    // PIC table of interrupt handler addresses, one word per BRISC_INT_NO value
+    PIC_INT_PCS,
+    // Watchdog control; bit 2 raises IRQ 3 until cleared
+    WDT_CNTL,
     // Number of debug register entries
     COUNT,
 };

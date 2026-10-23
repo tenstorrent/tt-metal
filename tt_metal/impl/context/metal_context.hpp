@@ -223,7 +223,8 @@ public:
     // Hang detection
     void on_dispatch_timeout_detected();
 
-    // Set when a Tensix core is found halted on an L1 ECC error; device close then skips dispatch teardown.
+    // Set when a Tensix BRISC is found with a halt record. Until the next init, halt checks throw at once and device
+    // close skips dispatch teardown.
     bool l1_ecc_halt_detected() const { return l1_ecc_halt_detected_.load(std::memory_order_acquire); }
     void set_l1_ecc_halt_detected(bool detected) { l1_ecc_halt_detected_.store(detected, std::memory_order_release); }
 

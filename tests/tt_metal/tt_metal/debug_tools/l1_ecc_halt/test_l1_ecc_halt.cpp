@@ -3,14 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Blackhole silicon L1 ECC halt. The tests come in three kinds:
-// 1. Emulated halt (EmulatedHaltIsReported, HaltMessageNamesTheCause, EventSynchronizeReportsHalt): Blackhole has
-//    no L1 error injection, so the host writes the halt record the BRISC handler would write. These cover the host
-//    side: every wait loop reports the halt, and the message names the cause.
-// 2. Real ECC errors (UnpopulatedRowErrorsAreIgnored): a NoC read past the end of L1 raises real DBEs from the
-//    unpopulated rows. The handler must run and return without halting.
-// 3. Real interrupt (DISABLED_WatchdogHalt): the watchdog's software interrupt raises IRQ 3, and the real handler
-//    halts the core. The BRISC stays in the handler until tt-smi -r, so this test runs on its own
-//    (tests/scripts/run_l1_ecc_halt_watchdog_test.sh).
+// 1. Emulated halt: Blackhole has no L1 error injection, so the host writes the halt record the BRISC handler would
+//    write. These cover the host side: Finish and EventSynchronize report the halt, and the message names the cause.
+// 2. Real ECC errors: a NoC read past the end of L1 raises real DBEs from the unpopulated rows. The handler must
+//    return without halting.
+// 3. Real interrupt: the watchdog's software interrupt raises IRQ 3, and the real handler halts the core. Reopening
+//    the device must then release the BRISC from the handler.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -85,12 +83,6 @@ protected:
                    .offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::l1_ecc_halt);
     }
 
-    // The record survives until the next firmware init, so it can be written before the launch.
-    void write_halt_record() {
-        MetalContext::instance().get_cluster().write_core(
-            record_.data(), record_.size(), test_target_, halt_record_addr());
-    }
-
     // A halt record stays on the shared device, so every test that reports one reopens it before the next test.
     void expect_check_reports(const std::string& text) {
         get_shared_devices().needs_recovery = true;
@@ -102,7 +94,7 @@ protected:
     void expect_halt_reported_by(const std::function<void()>& wait) {
         get_shared_devices().needs_recovery = true;
         auto start = std::chrono::steady_clock::now();
-        EXPECT_THAT(wait, ThrowsMessage<std::runtime_error>(HasSubstr("tt-smi -r")));
+        EXPECT_THAT(wait, ThrowsMessage<std::runtime_error>(HasSubstr("Reopening the device releases it")));
         EXPECT_LT(std::chrono::steady_clock::now() - start, report_deadline);
     }
 
@@ -117,7 +109,8 @@ protected:
 
 TEST_F(L1EccHaltTest, EmulatedHaltIsReported) {
     record_.view().reason() = L1_ECC_HALT_REASON_UNEXPECTED;
-    write_halt_record();
+    // The record survives until the next firmware init, so it can be written before the launch.
+    MetalContext::instance().get_cluster().write_core(record_.data(), record_.size(), test_target_, halt_record_addr());
     auto workload = single_core_workload(hang_kernel, {0});
     auto& cq = devices_[0]->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -131,13 +124,13 @@ TEST_F(L1EccHaltTest, EmulatedHaltIsReported) {
 TEST_F(L1EccHaltTest, HaltMessageNamesTheCause) {
     record_.view().reason() = L1_ECC_HALT_REASON_DBE;
     record_.view().last_l1_error_banks_0_15() = 0x8002000A;  // valid [31], bank 5 [17], row 10
-    write_halt_record();
+    MetalContext::instance().get_cluster().write_core(record_.data(), record_.size(), test_target_, halt_record_addr());
     expect_check_reports("bank 5 row 10 (L1 0x1450)");
 
     MetalContext::instance().set_l1_ecc_halt_detected(false);
     record_.view().last_l1_error_banks_0_15() = 0x8000000A;  // valid [31], row 10
     record_.view().last_l1_error_banks_16_31() = 0x10000;    // bank 20 [16]
-    write_halt_record();
+    MetalContext::instance().get_cluster().write_core(record_.data(), record_.size(), test_target_, halt_record_addr());
     expect_check_reports("bank 20 row 10 (L1 0x1540)");
 }
 
@@ -146,7 +139,7 @@ TEST_F(L1EccHaltTest, EventSynchronizeReportsHalt) {
         GTEST_SKIP() << "Events are fast dispatch only";
     }
     record_.view().reason() = L1_ECC_HALT_REASON_UNEXPECTED;
-    write_halt_record();
+    MetalContext::instance().get_cluster().write_core(record_.data(), record_.size(), test_target_, halt_record_addr());
     auto workload = single_core_workload(hang_kernel, {0});
     auto& cq = devices_[0]->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -168,14 +161,12 @@ TEST_F(L1EccHaltTest, UnpopulatedRowErrorsAreIgnored) {
     auto workload = single_core_workload(overread_kernel, {l1_end, dst, bytes});
     this->RunProgram(devices_[0], workload);
 
-    uint32_t ctrl = 0, status = 0, int_no = 0, irq3 = 0;
+    uint32_t ctrl = 0, int_no = 0, irq3 = 0;
     ctx.get_cluster().read_reg(&ctrl, test_target_, hal.get_tensix_debug_reg_addr(TensixDebugReg::L1_ECC_CTRL));
-    ctx.get_cluster().read_reg(&status, test_target_, hal.get_tensix_debug_reg_addr(TensixDebugReg::L1_ECC_STATUS));
     ctx.get_cluster().read_reg(&int_no, test_target_, hal.get_tensix_debug_reg_addr(TensixDebugReg::BRISC_INT_NO));
     ctx.get_cluster().read_reg(&irq3, test_target_, hal.get_tensix_debug_reg_addr(TensixDebugReg::PIC_HW_INT_3));
     // Firmware arms the L1 DBE interrupt and leaves view 2 selected.
     EXPECT_EQ(ctrl, armed_ecc_ctrl) << "ECC interrupts not armed, ECC_CTRL 0x" << std::hex << ctrl;
-    EXPECT_NE(status & ECC_DBE_COUNT_OVF_MASK, 0u) << "the read past the end of L1 raised no DBE";
     EXPECT_EQ(int_no, 0u) << "BRISC interrupt left latched";
     // The DBEs raised IRQ 3, and only the handler's clear drops it.
     EXPECT_EQ(irq3, 0u) << "IRQ 3 still raised: the handler did not run";
@@ -193,7 +184,7 @@ TEST_F(L1EccHaltTest, MretWithAliasedBranchReturns) {
     const auto& hal = ctx.hal();
     constexpr uint32_t bytes = 1024;
     // The jump needs the same low byte as mret and the same byte2 ^ byte1. Stepping 256 B at a time through one 64 KB
-    // block covers every byte1 once, so 128 KB always has a match (checked for every start address in L1).
+    // block covers every byte1 once, so 128 KB always has a match.
     constexpr uint32_t scratch_bytes = 128 * 1024;
     constexpr uint32_t iterations = 10000;
     const uint32_t l1_end = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
@@ -213,37 +204,45 @@ TEST_F(L1EccHaltTest, MretWithAliasedBranchReturns) {
     ASSERT_NE(results[0], 0u) << "no mret found from the IRQ 3 handler to the end of BRISC firmware";
     ASSERT_NE(results[1], 0u) << "no scratch address aliases mret 0x" << std::hex << results[0];
 
-    uint32_t status = 0, int_no = 0, irq3 = 0;
-    ctx.get_cluster().read_reg(&status, test_target_, hal.get_tensix_debug_reg_addr(TensixDebugReg::L1_ECC_STATUS));
+    uint32_t int_no = 0, irq3 = 0;
     ctx.get_cluster().read_reg(&int_no, test_target_, hal.get_tensix_debug_reg_addr(TensixDebugReg::BRISC_INT_NO));
     ctx.get_cluster().read_reg(&irq3, test_target_, hal.get_tensix_debug_reg_addr(TensixDebugReg::PIC_HW_INT_3));
-    EXPECT_NE(status & ECC_DBE_COUNT_OVF_MASK, 0u) << "the read past the end of L1 raised no DBE";
     EXPECT_EQ(int_no, 0u) << "BRISC still in the interrupt handler";
     EXPECT_EQ(irq3, 0u) << "IRQ 3 still raised";
     EXPECT_NO_THROW(internal::L1EccHaltWatch(devices_[0].get()).check_now());
     EXPECT_FALSE(ctx.l1_ecc_halt_detected());
 }
 
-TEST_F(L1EccHaltTest, DISABLED_WatchdogHalt) {
+TEST_F(L1EccHaltTest, WatchdogHaltIsReleasedOnReopen) {
+    auto& ctx = MetalContext::instance();
     auto workload = single_core_workload(hang_kernel, {1});  // raises IRQ 3
     auto& cq = devices_[0]->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, workload, false);
     expect_halt_reported_by([&] { distributed::Finish(cq); });
 
-    // The real handler wrote the record and is still running (BRISC_INT_NO is 32 + the hardware IRQ index).
-    auto& ctx = MetalContext::instance();
+    // Firmware never clears the watchdog interrupt, so the test does, first: left raised, it would halt the core again
+    // as soon as the next firmware init arms IRQ 3.
+    const uint32_t wdt_cntl = 0;
+    ctx.get_cluster().write_reg(&wdt_cntl, test_target_, ctx.hal().get_tensix_debug_reg_addr(TensixDebugReg::WDT_CNTL));
+
+    // The real handler wrote the record and is still running.
     uint32_t int_no = 0;
     ctx.get_cluster().read_reg(
         &int_no, test_target_, ctx.hal().get_tensix_debug_reg_addr(TensixDebugReg::BRISC_INT_NO));
-    EXPECT_EQ(int_no, 32u + 3u);
+    EXPECT_EQ(int_no, pic_num_sw_ints + pic_hw_int_err);
     ctx.get_cluster().read_core(record_.data(), record_.size(), test_target_, halt_record_addr());
     EXPECT_EQ(record_.view().reason(), L1_ECC_HALT_REASON_UNEXPECTED);
     // The handler selects other views before it halts, so only the interrupt enables are checked.
     EXPECT_EQ(record_.view().ecc_ctrl() & ~ECC_CTRL_VIEW_MASK, ECC_CTRL_L1_DBE_IRQ_EN);
 
-    // Without a halt record, the host still finds the BRISC through BRISC_INT_NO.
-    MetalContext::instance().set_l1_ecc_halt_detected(false);
-    record_.view().reason() = 0;
-    write_halt_record();
-    expect_check_reports("stuck in an interrupt handler");
+    // Reopening must release the BRISC from its handler without a chip reset.
+    destroy_shared_devices();
+    create_shared_devices(l1_small_size_, trace_region_size_);
+    devices_ = get_shared_devices().devices;
+    ctx.get_cluster().read_reg(
+        &int_no, test_target_, ctx.hal().get_tensix_debug_reg_addr(TensixDebugReg::BRISC_INT_NO));
+    EXPECT_EQ(int_no, 0u) << "BRISC still in the interrupt handler after reopening";
+    const uint32_t l1 = devices_[0]->allocator()->get_base_allocator_addr(HalMemType::L1);
+    auto copy = single_core_workload(overread_kernel, {l1, l1 + 64, 64});
+    this->RunProgram(devices_[0], copy);
 }

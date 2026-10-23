@@ -14,6 +14,7 @@ using namespace tt::tt_metal::blackhole::tensix;
 #include "blackhole/bh_hal_tensix_asserts.hpp"
 #include "dev_mem_map.h"
 #include "hal_types.hpp"
+#include "hostdev/l1_ecc_halt_constants.h"
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
 #include "tensix.h"
@@ -158,7 +159,10 @@ HalCoreInfoType create_tensix_mem_map() {
     tensix_debug_regs[ttsl::as_underlying_type<TensixDebugReg>(TensixDebugReg::BRISC_INT_NO)] =
         static_cast<uint32_t>(reinterpret_cast<uintptr_t>(RISC_PIC_BRISC_INT_NO));
     tensix_debug_regs[ttsl::as_underlying_type<TensixDebugReg>(TensixDebugReg::PIC_HW_INT_3)] =
-        static_cast<uint32_t>(reinterpret_cast<uintptr_t>(RISC_PIC_HW_INTS + 3));
+        static_cast<uint32_t>(reinterpret_cast<uintptr_t>(RISC_PIC_HW_INTS + pic_hw_int_err));
+    tensix_debug_regs[ttsl::as_underlying_type<TensixDebugReg>(TensixDebugReg::PIC_INT_PCS)] =
+        static_cast<uint32_t>(reinterpret_cast<uintptr_t>(RISC_PIC_INT_PCS));
+    tensix_debug_regs[ttsl::as_underlying_type<TensixDebugReg>(TensixDebugReg::WDT_CNTL)] = RISCV_DEBUG_REG_WDT_CNTL;
 
     static_assert(sizeof(mailboxes_t) <= MEM_MAILBOX_SIZE);
     return {

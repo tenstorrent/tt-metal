@@ -14,13 +14,12 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/endpoints.h"
+#include "hostdev/l1_ecc_halt_constants.h"
 
 namespace {
 
-// Encoding of the mret instruction.
-constexpr uint32_t mret_insn = 0x30200073;
-// RISC_PIC_INT_PCS index of the IRQ 3 handler address: the 32 software IRQs come first, then hardware IRQs 0-3.
-constexpr uint32_t pic_irq3_handler = 32 + 3;
+// RISC_PIC_INT_PCS index of the IRQ 3 handler address.
+constexpr uint32_t pic_irq3_handler = pic_num_sw_ints + pic_hw_int_err;
 // Scratch bytes kept for the two result words; the jump is placed after them.
 constexpr uint32_t results_bytes = 16;
 
@@ -44,7 +43,7 @@ void kernel_main() {
     // The IRQ 3 handler and its mret are in BRISC firmware.
     constexpr uint32_t firmware_end = MEM_BRISC_FIRMWARE_BASE + MEM_BRISC_FIRMWARE_SIZE;
     uint32_t mret_pc = RISC_PIC_INT_PCS[pic_irq3_handler];
-    while (mret_pc < firmware_end && *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mret_pc) != mret_insn) {
+    while (mret_pc < firmware_end && *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mret_pc) != riscv_mret_insn) {
         mret_pc += 4;
     }
     if (mret_pc >= firmware_end) {

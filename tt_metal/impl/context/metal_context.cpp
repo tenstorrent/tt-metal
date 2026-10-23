@@ -189,8 +189,7 @@ void MetalContext::initialize(
             }
         }
     }
-    // Firmware init either fails (a BRISC still halted, which needs tt-smi -r) or re-arms every core with a zeroed
-    // record.
+    // run_launch_phase below releases any BRISC still halted and zeroes every halt record.
     set_l1_ecc_halt_detected(false);
 
     initialized_ = true;

@@ -16,6 +16,7 @@
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
 #include "hal_types.hpp"
+#include "hostdev/l1_ecc_halt_constants.h"
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
@@ -427,7 +428,11 @@ void Hal::initialize_bh(
             ((addr >= NOC1_REGS_START_ADDR) && (addr < NOC1_REGS_START_ADDR + 0x1000)) ||
             (addr == RISCV_DEBUG_REG_SOFT_RESET_0) ||
             (addr == RISCV_DEBUG_REG_ECC_CTRL || addr == RISCV_DEBUG_REG_ECC_STATUS ||
-             addr == reinterpret_cast<uintptr_t>(RISC_PIC_BRISC_INT_NO)) ||  // L1 ECC halt checks
+             addr == reinterpret_cast<uintptr_t>(RISC_PIC_BRISC_INT_NO) ||
+             addr == RISCV_DEBUG_REG_WDT_CNTL) ||  // L1 ECC halt checks
+            // Releasing a latched BRISC at init
+            ((addr >= reinterpret_cast<uintptr_t>(RISC_PIC_INT_PCS)) &&
+             (addr < reinterpret_cast<uintptr_t>(RISC_PIC_INT_PCS + pic_num_sw_ints + pic_num_hw_ints))) ||
             (addr == RISCV_DEBUG_REG_WALL_CLOCK_L ||
              addr == RISCV_DEBUG_REG_WALL_CLOCK_H) ||  // read by the streaming profiler's clock sync
             (addr == IERISC_RESET_PC ||

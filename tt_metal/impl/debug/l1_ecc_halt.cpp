@@ -8,8 +8,6 @@
 #include <chrono>
 #include <cstdint>
 #include <string>
-#include <thread>
-#include <utility>
 #include <vector>
 
 #include <fmt/format.h>
@@ -30,9 +28,8 @@ namespace {
 constexpr auto l1_ecc_check_interval = std::chrono::seconds(10);
 constexpr uint32_t l1_ecc_polls_per_clock_read = 1024;
 static_assert(std::has_single_bit(l1_ecc_polls_per_clock_read));
-// A false error keeps BRISC in the handler for well under a microsecond, so a BRISC still in it after this long is
-// stuck.
-constexpr auto brisc_stuck_recheck_delay = std::chrono::milliseconds(10);
+// A released BRISC returns from the handler within its first few instructions.
+constexpr auto brisc_release_timeout = std::chrono::milliseconds(100);
 
 // Mock devices have no registers to read, and ttsim exits on any ECC register access.
 bool is_blackhole_silicon(const MetalContext& ctx) {
@@ -48,11 +45,9 @@ bool is_halt_reason(uint32_t reason) {
     return reason == L1_ECC_HALT_REASON_DBE || reason == L1_ECC_HALT_REASON_UNEXPECTED;
 }
 
-uint64_t halt_record_addr(const MetalContext& ctx) {
+uint64_t mailbox_field_addr(const MetalContext& ctx, dev_msgs::mailboxes_t::Field field) {
     return ctx.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX) +
-           ctx.hal()
-               .get_dev_msgs_factory(HalProgrammableCoreType::TENSIX)
-               .offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::l1_ecc_halt);
+           ctx.hal().get_dev_msgs_factory(HalProgrammableCoreType::TENSIX).offset_of<dev_msgs::mailboxes_t>(field);
 }
 
 // "bank B row R (L1 0x...)" from ECC_STATUS views 3 (banks 0-15) and 6 (banks 16-31). Assumes the default L1 bank
@@ -79,31 +74,22 @@ std::string halt_cause(const auto& view) {
 
 void check_chips(MetalContext& ctx, const std::vector<ChipId>& device_ids) {
     if (ctx.l1_ecc_halt_detected()) {
-        TT_THROW("A Tensix core halted on an ECC error (reported above). Reset the chip with tt-smi -r.");
+        TT_THROW("A Tensix core halted on an ECC error (reported above). Reopening the device releases it.");
     }
     const auto& factory = ctx.hal().get_dev_msgs_factory(HalProgrammableCoreType::TENSIX);
     auto record = factory.create<dev_msgs::l1_ecc_halt_msg_t>();
-    const uint64_t record_addr = halt_record_addr(ctx);
-    const uint32_t brisc_int_no_addr = ctx.hal().get_tensix_debug_reg_addr(TensixDebugReg::BRISC_INT_NO);
-    // Cores whose BRISC is inside an interrupt handler without a halt record, for example after the record's stores
-    // never landed.
-    std::vector<std::pair<ChipId, CoreCoord>> in_handler;
+    const uint64_t record_addr = mailbox_field_addr(ctx, dev_msgs::mailboxes_t::Field::l1_ecc_halt);
     for (ChipId device_id : device_ids) {
         for (const CoreCoord& core : ctx.get_cluster().get_virtual_worker_cores(device_id)) {
             ctx.get_cluster().read_core(record.data(), record.size(), tt_cxy_pair(device_id, core), record_addr);
             auto view = record.view();
             if (!is_halt_reason(view.reason())) {
-                uint32_t int_no = 0;
-                ctx.get_cluster().read_reg(&int_no, tt_cxy_pair(device_id, core), brisc_int_no_addr);
-                if (int_no != 0) {
-                    in_handler.emplace_back(device_id, core);
-                }
                 continue;
             }
             ctx.set_l1_ecc_halt_detected(true);
             TT_THROW(
                 "Chip {} core {}: BRISC halted on {} (program {}, L1 DBE count {}, L1 SBE count {}, ECC_CTRL 0x{:x}). "
-                "Reset the chip with tt-smi -r.",
+                "Reopening the device releases it.",
                 device_id,
                 core.str(),
                 halt_cause(view),
@@ -113,42 +99,78 @@ void check_chips(MetalContext& ctx, const std::vector<ChipId>& device_ids) {
                 view.ecc_ctrl());
         }
     }
-    if (in_handler.empty()) {
-        return;
-    }
-    std::this_thread::sleep_for(brisc_stuck_recheck_delay);
-    for (const auto& [device_id, core] : in_handler) {
-        uint32_t int_no = 0;
-        ctx.get_cluster().read_reg(&int_no, tt_cxy_pair(device_id, core), brisc_int_no_addr);
-        if (int_no != 0) {
-            ctx.set_l1_ecc_halt_detected(true);
-            TT_THROW(
-                "Chip {} core {}: BRISC is stuck in an interrupt handler (BRISC_INT_NO {}) without an L1 ECC halt "
-                "record. Reset the chip with tt-smi -r.",
-                device_id,
-                core.str(),
-                int_no);
-        }
-    }
 }
 
 }  // namespace
 
-void check_no_halted_brisc_at_init(MetalContext& ctx, ChipId device_id) {
-    // A BRISC halted by an earlier process blocks firmware init whether or not the feature is on.
+std::vector<LatchedBrisc> find_latched_briscs(MetalContext& ctx, ChipId device_id) {
+    std::vector<LatchedBrisc> latched;
     if (!is_blackhole_silicon(ctx)) {
+        return latched;
+    }
+    const uint32_t brisc_int_no_addr = ctx.hal().get_tensix_debug_reg_addr(TensixDebugReg::BRISC_INT_NO);
+    auto record = ctx.hal().get_dev_msgs_factory(HalProgrammableCoreType::TENSIX).create<dev_msgs::l1_ecc_halt_msg_t>();
+    const uint64_t record_addr = mailbox_field_addr(ctx, dev_msgs::mailboxes_t::Field::l1_ecc_halt);
+    for (const CoreCoord& core : ctx.get_cluster().get_virtual_worker_cores(device_id)) {
+        const tt_cxy_pair target(device_id, core);
+        uint32_t int_no = 0;
+        ctx.get_cluster().read_reg(&int_no, target, brisc_int_no_addr);
+        // The release writes PIC_INT_PCS[int_no]; an unreachable core reads all ones.
+        if (int_no == 0 || int_no >= pic_num_sw_ints + pic_num_hw_ints) {
+            continue;
+        }
+        ctx.get_cluster().read_core(record.data(), record.size(), target, record_addr);
+        if (is_halt_reason(record.view().reason())) {
+            log_warning(
+                tt::LogMetal,
+                "Chip {} core {}: BRISC halted on {} in an earlier process. Releasing it.",
+                device_id,
+                core.str(),
+                halt_cause(record.view()));
+        }
+        latched.push_back({core, int_no});
+    }
+    return latched;
+}
+
+void release_latched_briscs(MetalContext& ctx, ChipId device_id, const std::vector<LatchedBrisc>& latched) {
+    // The PIC keeps a BRISC's interrupt latched across the RISC reset, and the BRISC takes it again right after it is
+    // released, before firmware has a stack. Pointing that interrupt at code that only returns frees the PIC; firmware
+    // init then installs its own handler.
+    if (latched.empty()) {  // also the only case off Blackhole silicon, which has no Tensix debug registers
+        return;
+    }
+    const uint32_t int_pcs_addr = ctx.hal().get_tensix_debug_reg_addr(TensixDebugReg::PIC_INT_PCS);
+    const uint32_t wdt_cntl_addr = ctx.hal().get_tensix_debug_reg_addr(TensixDebugReg::WDT_CNTL);
+    constexpr uint32_t wdt_off = 0;
+    const auto release_addr =
+        static_cast<uint32_t>(mailbox_field_addr(ctx, dev_msgs::mailboxes_t::Field::brisc_int_release));
+    for (const auto& [core, int_no] : latched) {
+        const tt_cxy_pair target(device_id, core);
+        ctx.get_cluster().write_core(brisc_int_release_code, sizeof(brisc_int_release_code), target, release_addr);
+        ctx.get_cluster().write_reg(&release_addr, target, int_pcs_addr + (int_no * sizeof(uint32_t)));
+        // The watchdog interrupt survives the RISC reset; left raised, the core halts again once firmware arms IRQ 3.
+        ctx.get_cluster().write_reg(&wdt_off, target, wdt_cntl_addr);
+    }
+}
+
+void check_briscs_released(MetalContext& ctx, ChipId device_id, const std::vector<LatchedBrisc>& latched) {
+    if (latched.empty()) {
         return;
     }
     const uint32_t brisc_int_no_addr = ctx.hal().get_tensix_debug_reg_addr(TensixDebugReg::BRISC_INT_NO);
-    for (const CoreCoord& core : ctx.get_cluster().get_virtual_worker_cores(device_id)) {
+    const auto deadline = std::chrono::steady_clock::now() + brisc_release_timeout;
+    for (const LatchedBrisc& brisc : latched) {
         uint32_t int_no = 0;
-        ctx.get_cluster().read_reg(&int_no, tt_cxy_pair(device_id, core), brisc_int_no_addr);
+        do {
+            ctx.get_cluster().read_reg(&int_no, tt_cxy_pair(device_id, brisc.core), brisc_int_no_addr);
+        } while (int_no != 0 && std::chrono::steady_clock::now() < deadline);
         if (int_no != 0) {
             TT_THROW(
-                "Chip {} core {}: BRISC is still halted in an interrupt handler (BRISC_INT_NO {}), most likely from "
-                "an L1 ECC halt in an earlier process. Reset the chip with tt-smi -r.",
+                "Chip {} core {}: BRISC is still inside an interrupt handler (BRISC_INT_NO {}) after it was released "
+                "at init. Reset the chip with tt-smi -r.",
                 device_id,
-                core.str(),
+                brisc.core.str(),
                 int_no);
         }
     }
@@ -159,7 +181,7 @@ void clear_l1_ecc_halt_records(MetalContext& ctx, ChipId device_id) {
         return;
     }
     auto zeros = ctx.hal().get_dev_msgs_factory(HalProgrammableCoreType::TENSIX).create<dev_msgs::l1_ecc_halt_msg_t>();
-    const uint64_t record_addr = halt_record_addr(ctx);
+    const uint64_t record_addr = mailbox_field_addr(ctx, dev_msgs::mailboxes_t::Field::l1_ecc_halt);
     for (const CoreCoord& core : ctx.get_cluster().get_virtual_worker_cores(device_id)) {
         ctx.get_cluster().write_core(zeros.data(), zeros.size(), tt_cxy_pair(device_id, core), record_addr);
     }
@@ -171,13 +193,13 @@ void report_l1_ecc_at_close(MetalContext& ctx, ChipId device_id) {
     }
     const auto& factory = ctx.hal().get_dev_msgs_factory(HalProgrammableCoreType::TENSIX);
     auto record = factory.create<dev_msgs::l1_ecc_halt_msg_t>();
-    const uint64_t record_addr = halt_record_addr(ctx);
+    const uint64_t record_addr = mailbox_field_addr(ctx, dev_msgs::mailboxes_t::Field::l1_ecc_halt);
     for (const CoreCoord& core : ctx.get_cluster().get_virtual_worker_cores(device_id)) {
         ctx.get_cluster().read_core(record.data(), record.size(), tt_cxy_pair(device_id, core), record_addr);
         if (is_halt_reason(record.view().reason())) {
             log_error(
                 tt::LogMetal,
-                "Chip {} core {}: BRISC is halted on {}. Reset the chip with tt-smi -r.",
+                "Chip {} core {}: BRISC is halted on {}; the next device open releases it.",
                 device_id,
                 core.str(),
                 halt_cause(record.view()));
