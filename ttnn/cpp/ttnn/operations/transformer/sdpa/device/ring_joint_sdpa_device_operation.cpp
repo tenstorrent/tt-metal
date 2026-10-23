@@ -551,8 +551,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "RingJointSDPA attention_sink requires streaming compute; set fp32_dest_acc_en=false");
     }
 
-    // M4 static row max: resident mode replaces the running row max with sol_row_max; no other mode (and no
-    // non-Sol run: sol_resident_mode is false without the sol tensors) reads it.
+    // Deprecated sol_row_max: still accepted by resident mode only (and ignored by compute); no other mode (and no
+    // non-Sol run: sol_resident_mode is false without the sol tensors) takes it.
     TT_FATAL(
         !tensor_args.sol_row_max.has_value() || tensor_args.sol_resident_mode(args.sol_mode),
         "sol_row_max is accepted by sol_mode=resident only (got {} for sol_mode {})",

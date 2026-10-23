@@ -206,14 +206,10 @@ struct RingJointSDPAInputs {
     //                   negative for exact and padding blocks). When absent the reader generates the same
     //                   tile rows on device from the mask row and the block geometry (sol_bias_gen.hpp), which
     //                   is the production path; the tensor form stays for A/B validation of the generator.
-    //   sol_row_max     REQUIRED by sol_mode="resident", rejected by every other mode (M4, static row max). bf16 tile
-    //                   [1, NH, q_rows_pad, 32] (q_rows_pad = the local Q shard's padded row count), one tile column:
-    //                   column 0 of each row holds a fixed upper bound of that query row's RAW (unscaled) logits,
-    //                   ||q_row|| * max_over_all_keys ||k|| + ln(64) / scale (the largest pooled-column bias the op
-    //                   adds); the other 31 columns are zero. The max key norm is global across the SP ring, so
-    //                   every device holds the same scalar. Resident compute uses it instead of a running row max:
-    //                   flash attention with a fixed m >= true max is exact up to rounding (bf16 intermediates),
-    //                   and it drops the per-step max reduce, the alpha exp and the running-sum/output rescale.
+    //   sol_row_max     DEPRECATED, ignored. Optional bf16 tile [1, NH, q_rows_pad, 32] (q_rows_pad = the local Q
+    //                   shard's padded row count); accepted by sol_mode="resident" only and shape-validated, but
+    //                   resident compute no longer reads it: it always runs a (lazy) running row max. Its a-priori
+    //                   bound was too loose for bf16 intermediates. Kept so existing callers keep working; omit it.
     std::optional<Tensor> sol_block_mask;
     std::optional<Tensor> sol_pooled_k;
     std::optional<Tensor> sol_pooled_v;
@@ -222,7 +218,8 @@ struct RingJointSDPAInputs {
 
     bool sol_enabled() const { return sol_block_mask.has_value(); }
     bool sol_bias_generated() const { return sol_enabled() && !sol_bias.has_value(); }
-    // Static row max (M4): present iff sol_row_max was supplied; validation ties it to resident mode.
+    // Deprecated sol_row_max supplied (resident only). Only selects the reader's runtime-arg layout; compute ignores
+    // it.
     bool sol_static_max() const { return sol_enabled() && sol_row_max.has_value(); }
     // Exact-set granularity. "chunk": the mask is [1, NH, nqc_pad, nkc_pad] over K CHUNKS; the reader streams every
     // chunk through the chained path (minus chain-wide skips) and compute drains the chunks the mask drops.

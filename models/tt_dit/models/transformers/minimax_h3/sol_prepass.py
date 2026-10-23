@@ -321,8 +321,8 @@ class SolPrepass:
         # emit_bias=False: the ring op generates the pooled-column bias on device (production path once the
         # kernel build carries sol_bias_gen.hpp). TT_SOL_EMIT_BIAS flips the default for A/B runs.
         self.emit_bias = (os.environ.get("TT_SOL_EMIT_BIAS", "1") == "1") if emit_bias is None else bool(emit_bias)
-        # row_max=True: also return "row_max", the static per-query-row logit bound the ring op's resident mode
-        # (sol_mode="resident", M4) takes as sol_row_max (compute_row_max). The model sets it for resident mode.
+        # row_max=True: also return "row_max", the static per-query-row logit bound (compute_row_max) the ring op's
+        # resident mode accepts as the deprecated sol_row_max input. The op ignores it; the model leaves it off.
         self.row_max = bool(row_max)
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager

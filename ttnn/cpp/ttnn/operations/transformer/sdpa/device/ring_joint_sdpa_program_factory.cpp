@@ -1126,12 +1126,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // per-chunk accumulators live in an L1 FIFO (the staging CBs, max_q_per_core + 1 entries deep) for the whole
     // op, so there is no per-chunk DRAM save/restore and the chain streams each shard once per core.
     const bool sol_resident = tensor_args.sol_resident_mode(args.sol_mode);
-    // M4. sol_static_max: the optional sol_row_max tensor is present (resident only); it is plumbed to the reader
+    // sol_static_max: the deprecated sol_row_max tensor is present (resident only); it is plumbed to the reader
     // (accessor + address) but not used by compute: its a-priori bound was too loose for bf16 (0.992 at 1184
-    // rows), and M5's frozen first-step max was wrong outright (the pack-thread approximate exp saturates for
-    // inputs above +0.72, so the subtracted max must be an upper bound of the scores). Resident compute therefore
-    // always runs the running max (row max merged with the stored max once per chunk per piece); there is no
-    // switch for anything else.
+    // rows), and a frozen first-step max is wrong outright (the pack-thread approximate exp saturates for inputs
+    // above +0.72, so the subtracted max must be an upper bound of the scores). Resident compute therefore always
+    // runs the running max (row max merged with the stored max once per chunk per piece).
     const bool sol_static_max = tensor_args.sol_static_max();
     if (tensor_args.sol_enabled()) {
         // Emitted once per program creation (the kernels are created with these named args). The Sol tests read this
@@ -3432,14 +3431,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         reader_kernel.defines.emplace_back("SOL_PACK_DEBUG", "1");
         compute_kernel.defines.emplace_back("SOL_PACK_DEBUG", "1");
     }
-    // Resident-mode (M3) bisection switch: TT_SOL_RES_CHUNK_MAJOR=1 runs one step per resident chunk in chunk order
-    // (that chunk's run table) instead of one step per kept block over the chunks keeping it. Same in-place slot
-    // state, so a difference between the two isolates the block-major grouping from the state handling. Not in the
-    // program hash: set it for the whole process.
-    if (sol_resident && std::getenv("TT_SOL_RES_CHUNK_MAJOR") &&
-        std::string(std::getenv("TT_SOL_RES_CHUNK_MAJOR")) == "1") {
-        compute_kernel.defines.emplace_back("SOL_RES_CHUNK_MAJOR", "1");
-    }
     // Resident-mode diagnostic: TT_SOL_DEBUG=1 makes the reader print one line per (core, ring iteration) with the
     // kept / union bits and the number of K/V entries it pushed (select cores and chips with TT_METAL_DPRINT_*).
     // Any mode: also the per-ring-iteration arrival-semaphore trace ("SYNC ...") in the reader.
@@ -3466,19 +3457,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             compute_kernel.defines.emplace_back("SOL_STEP_PROFILE_FINE", "1");
         }
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
-    }
-    // Resident-step ablation, timing only (results wrong): TT_SOL_ABLATE=qk|exp|pack5|pv|stats|pack1 skips that
-    // stage's instructions in the compact step while every CB, DEST and token operation stays (compute_streaming.hpp,
-    // kAblate*). Not hashed: set it for the whole process.
-    if (sol_resident && std::getenv("TT_SOL_ABLATE")) {
-        std::string knob = std::getenv("TT_SOL_ABLATE");
-        for (auto& ch : knob) {
-            ch = (ch >= 'a' && ch <= 'z') ? static_cast<char>(ch - 'a' + 'A') : ch;
-        }
-        if (!knob.empty()) {
-            compute_kernel.defines.emplace_back("SOL_ABLATE_" + knob, "1");
-            log_warning(tt::LogOp, "RingJoint resident: ablation SOL_ABLATE_{} on (timing only, results wrong)", knob);
-        }
     }
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,

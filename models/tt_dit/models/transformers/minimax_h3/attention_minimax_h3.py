@@ -547,8 +547,8 @@ class MiniMaxH3Attention(Module):
                 mode=self._sol_prepass_mode,
                 # compact / pack / resident generate the pooled-column bias on device: skip the ~87 MB bias write
                 emit_bias=not (self._sol_compact_family or self.sol_mode == "resident"),
-                # resident (M4) freezes each chunk's running max after its first step on device; the pre-pass's
-                # a-priori per-row bound (row_max=True -> sol_row_max) is accepted by the op but no longer used.
+                # resident runs its own (lazy) running row max on device; the pre-pass's a-priori per-row bound
+                # (row_max=True -> sol_row_max) is deprecated: accepted by the op but ignored.
                 row_max=False,
             )
         scale = self.head_dim**-0.5
@@ -567,7 +567,7 @@ class MiniMaxH3Attention(Module):
         ):  # compact / pack / resident generate the bias on device and reject a tensor
             kwargs["sol_bias"] = out["bias"]
         if self.sol_mode == "resident" and out.get("row_max") is not None:
-            kwargs["sol_row_max"] = out["row_max"]  # optional, resident only (unused since the frozen max)
+            kwargs["sol_row_max"] = out["row_max"]  # deprecated: resident only, accepted but ignored by the op
         if self._sol_compact_family or self.sol_mode == "resident":
             # Explicit op mode (sol-vid2's `sol_mode` keyword). The docstring never lists keyword names, so probe the raw
             # binding: calling it with no arguments raises a TypeError whose text lists the accepted keywords. Compact
