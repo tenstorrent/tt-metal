@@ -195,7 +195,7 @@ TEST(OverlappedAllocators, CPU_FixedAddressOwnershipAndBounds) {
 }
 
 TEST(OverlappedAllocators, CPU_FixedAddressUsesFreeListAlignment) {
-    // L1 managers use 16 B alignment, but their free lists align to the larger DRAM alignment.
+    // Legacy L1 managers check 16 B alignment, but their free lists align to the larger DRAM alignment.
     constexpr DeviceAddr block_size = 1024;
     constexpr DeviceAddr address = 4096;
     constexpr uint32_t l1_alignment = 16;
