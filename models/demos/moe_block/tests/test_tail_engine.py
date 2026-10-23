@@ -20,7 +20,6 @@ from models.demos.moe_block.tests.test_moe_block import pcc, per_chip_programs
 from models.demos.moe_block.tt.tail_engine import TailEngine
 
 R, C = 2, 4
-ROWS = 640
 
 
 @pytest.mark.parametrize(
@@ -28,8 +27,9 @@ ROWS = 640
     [((R, C), fabric2d_device_params(fabric_payload_size=fabric_payload(KIMI_K3.latent_dim), l1_small_size=0))],
     indirect=True,
 )
+@pytest.mark.parametrize("ROWS", [640, 1024])  # (rows a mesh row: chunk 1280 / 2048 on the 2x4)
 @pytest.mark.timeout(1800)
-def test_tail_engine(mesh_device, device_params):
+def test_tail_engine(mesh_device, device_params, ROWS):
     m = KIMI_K3
     H, Hr, Ho = m.emb_dim, m.latent_dim, m.emb_dim // C
     g_ = torch.Generator().manual_seed(0)
@@ -37,8 +37,9 @@ def test_tail_engine(mesh_device, device_params):
     gn = 1.0 + torch.randn(Hr, generator=g_) * 0.1
     eng = TailEngine(mesh_device, rows=ROWS, Hr=Hr, Ho=Ho, chunks=C, eps=m.norm_eps)
     logger.info(
-        f"tail_engine: grid {eng.GX} x {eng.GY} (K halves of {eng.KH} tiles), column widths {sorted(set(eng.pn))}, "
-        f"arena {eng.arena_bytes >> 10} KB"
+        f"tail_engine: {ROWS} rows, grid {eng.GX} x {eng.GY} (K halves of {eng.KH} tiles), column widths "
+        f"{sorted(set(eng.pn))}, steps a pair {eng.nst} (own {eng.nown}), ring slots {eng.NSLOT}, arena "
+        f"{eng.arena_bytes >> 10} KB"
     )
     w = eng.upload([w_up.T[:, (d % C) * Ho : (d % C + 1) * Ho].contiguous() for d in range(R * C)], gn)
     mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(0, 1))

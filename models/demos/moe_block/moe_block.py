@@ -425,10 +425,15 @@ class MoEBlock(LightweightModule):
             self._taps = dict(rows_dev=ttnn.clone(rows))
         elif self.keep_taps:  # (host copies: the exchange consumes the routing rows)
             self._taps = dict(rows=[ttnn.to_torch(t) for t in ttnn.get_device_tensors(rows)])
-        y_own = self.exchange(own, rows, hook=self.stage_hook)  # owners' sums [S/N, Hr]
+        y_own = self.exchange(own, rows, hook=self.stage_hook, tilize=self.tail is None)  # owners' sums [S/N, Hr]
         ttnn.deallocate(own)
         if rows.is_allocated():
             ttnn.deallocate(rows)
+        if self.tail is not None:
+            y = self.tail(y_own, se)
+            ttnn.deallocate(se)
+            self._mark("tail")
+            return y
         return self._tail(y_own, se)
 
     def _warm_up(self):
@@ -444,7 +449,19 @@ class MoEBlock(LightweightModule):
         ttnn.deallocate(own)
         ttnn.deallocate(rows)
         ttnn.deallocate(x0)
-        out = self._tail(z((g.tokens_per_chip, m.routed_width)), se, mark=False)
+        if self.tail is not None:  # (the fused tail on the combine's row-major layout)
+            y0 = ttnn.from_torch(
+                torch.zeros(1, 1, g.tokens_per_chip, m.routed_width),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                mesh_mapper=rep,
+            )
+            out = self.tail(y0, se)
+            ttnn.deallocate(y0)
+            ttnn.deallocate(se)
+        else:
+            out = self._tail(z((g.tokens_per_chip, m.routed_width)), se, mark=False)
         ttnn.deallocate(out)
         ttnn.synchronize_device(mesh)
 
@@ -804,13 +821,13 @@ class FusedTail:
 
     @staticmethod
     def fits(g: Geometry, model: MoEModel, head_mode):
-        """True, or why not."""
+        """True, or why not. Either head: both land the shared expert's output width split ([S/SP, H/TP])."""
         if model.latent_dim is None:
             return "no latent"
-        if head_mode != "fused":
-            return "the fused head (its shared expert's output, width split)"
-        if g.tokens_per_row != FusedHead.ROWS:
-            return f"{g.tokens_per_row} rows a mesh row: built for {FusedHead.ROWS} (one row tile a core a K half)"
+        if g.links != 2:
+            return f"{g.links} links (a link a K half)"
+        if (model.emb_dim // g.tp) % 32 or model.latent_dim % 64:
+            return "whole tiles of H / TP and of each latent K half"
         return True
 
     def __init__(self, mesh, g: Geometry, model: MoEModel, w: MoEWeights, topology):
@@ -1048,8 +1065,9 @@ class TokenExchange:
         )
         self.builds += 1
 
-    def __call__(self, own, rows, hook=None):
-        """own: the owners' rows [1, 1, S/N, Hr] TILE; rows: the joint routing rows -> [S/N, Hr] TILE."""
+    def __call__(self, own, rows, hook=None, tilize=True):
+        """own: the owners' rows [1, 1, S/N, Hr] TILE; rows: the joint routing rows -> [S/N, Hr] TILE (tilize False: the
+        combine's row-major output, persistent)."""
         if self.block is None or not self.block.arena_fits():
             if self.block is not None:
                 from loguru import logger
@@ -1057,7 +1075,7 @@ class TokenExchange:
                 logger.warning("MoEBlock exchange: L1 moved the arena, rebuilding")
             self.build()
         x2 = ttnn.reshape(own, [self.g.tokens_per_chip, self.model.routed_width])
-        return self.block.routed(x2, rows, None, self.experts.op, hook=hook)
+        return self.block.routed(x2, rows, None, self.experts.op, hook=hook, tilize=tilize)
 
     def prepped(self, prep, hook=None, tilize=True):
         """The fused head did the routing gather, the planner (into this block's plan tensors) and the dispatch prep:

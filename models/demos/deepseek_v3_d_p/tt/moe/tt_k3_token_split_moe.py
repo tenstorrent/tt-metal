@@ -1366,7 +1366,7 @@ class TtK3TokenSplitMoE:
         ttnn.deallocate(a)
         return y
 
-    def routed(self, x, ids, wts, op, hook=None, shared=None):
+    def routed(self, x, ids, wts, op, hook=None, shared=None, tilize=True):
         """routed_only: x [S, H] bf16 TILE (this chip's own tokens), ids uint16 / wts bf16 [S, K] (the caller's top-k;
         weights already normalized / scaled) and op (a FlatRoutedExpert of this block's plan: the layer's weights) ->
         the routed experts' sum [S, H] bf16 TILE (a fresh tensor). shared (shared_tp: the layer's TtSharedTpRow): plus
@@ -1438,6 +1438,9 @@ class TtK3TokenSplitMoE:
         if gi is not getattr(self, "_rg_out", None):
             ttnn.deallocate(gi)
         mark("experts_combine")
+        if not tilize:  # (the combine's row-major output itself: the caller's fused tail tilizes it)
+            assert own_se is None
+            return self.out
         y = self.tilize(ttnn.reshape(self.out, [self.S, self.d.H]))
         mark("tilize")
         if own_se is not None:

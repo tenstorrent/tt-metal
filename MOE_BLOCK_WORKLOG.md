@@ -1260,3 +1260,23 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   row) - GLM-Flash (288 experts, 9 a chip): fused head; K3 (896, 28 a chip): fused head + fused tail; a forward's
   programs built and enqueued on all 32 chips. 2 pass; the head / tail mock builds 3 pass.
 - LoudBox 2x4 line unchanged: accumulators 16 / 12, PCC K3 0.99610 / GLM 0.98668, traced back to back 2997 / 1695 us.
+
+### Step 2 (tail): rows as a planned parameter
+- The tail engine maps the call's row tiles (t = c RT + R in chunk-position order) round-robin over its PAIRS = GY / 2
+  row pairs: pair t % PAIRS, step t / PAIRS. RT = PAIRS (640 rows a mesh row, TP 4): a step a chunk - today's mapping;
+  1024 rows (RT 8): 7 / 7 / 6 / 6 / 6 steps. W' K ranges by pair. Per step a landing slot, a ring slot and an E slot
+  (NSLOT: a slot a step where L1 has room, else fewer with the row's FREE credits - the steps done by every core of
+  the row - before a ring slot's share multicast and before an E slot's unicasts). The per-step counters (landed,
+  shares in, E tiles in) moved from program semaphores (16 max) to persistent count-up words compared with the call
+  count (as the landed words were): no re-arm. Own rows: one tilize per own step. Ports walk a block's row tiles to
+  (pair, step) on the receiving chip.
+- 640: 4 steps a pair, 4 slots, arena 1199 KB; 159.5 us (148-158 before: neutral within run-to-run). 1024: 4 slots
+  (credited), arena 1295 KB; 212 us standalone. 200-call soaks: min PCC 0.999914 / 0.999883.
+- The fused tail no longer needs the fused head (both heads land the shared expert's output width split): MoEOptions
+  .tail auto picks it for any latent model with 2 links; the ops path's exchange returns the combine's row-major rows
+  (routed(tilize=False)). K3 block at chunk 2048 (ops head, fused tail): tail 212.8 us (ops 373), block 4531 -> 4412
+  device, traced 4375 -> 4219 us; chunk 1280 unchanged (tail 156.6, traced 2993). Soaks 150 + 150 traced at both.
+- Protocol models: the gather model at RT 2 / 5 / 8 (PAIRS 2 / 5 / 5), line + ring, G 2-8; a new engine-row model
+  (GX cores a half, partners, NSLOT ring / E slots with FREE credits, the share token, the exchange, the compute's
+  CB room): steps 4-7 at 2-4 slots, no deadlock, no slot overwritten in use; without the credits it trips (111 pass).
+  Mock Galaxy: the tail engine built + enqueued at 640 and 1024 rows.
