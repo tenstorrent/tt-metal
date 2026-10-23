@@ -95,7 +95,7 @@ def dropped_columns_for_arch(arch: ChipArchitecture) -> set:
 
 
 def legacy_column_aliases(arch: ChipArchitecture, test_name: str) -> dict:
-    """Catalog ``aliases`` (old column -> current) of ``test_name``; {} without an entry."""
+    """Catalog ``aliases`` (old column -> current) of ``test_name``, which may be a previous test name."""
     catalog = (
         PERF_TEST_SCHEMAS_QSR if arch == ChipArchitecture.QUASAR else PERF_TEST_SCHEMAS
     )
@@ -107,15 +107,20 @@ def legacy_column_aliases(arch: ChipArchitecture, test_name: str) -> dict:
         ),
         {},
     )
-    return dict(entry.get("aliases", {}))
+    # An old name that is still a live column of this test is not an alias any more.
+    live = set(entry.get("columns", ()))
+    return {
+        old: new for old, new in entry.get("aliases", {}).items() if old not in live
+    }
 
 
 def apply_column_aliases(df, aliases):
-    """Rename legacy columns to their current names; an existing current column wins."""
-    applied = {old: new for old, new in aliases.items() if old in df.columns}
-    renames = {old: new for old, new in applied.items() if new not in df.columns}
-    df = df.drop(columns=[old for old in applied if old not in renames])
-    return df.rename(columns=renames), applied
+    """Rename legacy columns to their current names; a column is never dropped or overwritten."""
+    renames = {}
+    for old, new in aliases.items():
+        if old in df.columns and new not in df.columns and new not in renames.values():
+            renames[old] = new
+    return df.rename(columns=renames), renames
 
 
 _BOOL_MAP = {
@@ -330,7 +335,7 @@ def convert_csvs_to_parquet(
         # Legacy names first, so the checks below see current names.
         df, renamed = apply_column_aliases(df, legacy_column_aliases(arch, name))
         if renamed:
-            diagnostics["renamed_columns"][name] = renamed
+            diagnostics["renamed_columns"].setdefault(name, {}).update(renamed)
         # Drop columns the published table intentionally omits (see
         # DROPPED_COLUMNS on the arch schema), before the unknown-column check
         # so they are not flagged as accidental drift.
