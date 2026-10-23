@@ -69,6 +69,26 @@ inline void simple_raw_terminal_pair()
     }
 }
 
+template <std::uint32_t EqualValue, std::uint32_t Hold, std::uint32_t Advance>
+inline void simple_bh_gated_joint_row_tail()
+{
+    TTI_SFPSETCC(0, ckernel::p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_NE0); // 16
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0xFF80); // 17
+    TTI_SFPENCC(0, 0, 0, 0);                                                  // 18
+    TTI_SFPSETCC(0, ckernel::p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0); // 19
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0x0000); // 20
+    TTI_SFPENCC(0, 0, 0, 0);                                                  // 21
+    TTI_SFP_STOCH_RND(
+        sfpi::SFPSTOCHRND_RND_EVEN,
+        0,
+        ckernel::p_sfpu::LREG0,
+        ckernel::p_sfpu::LREG2,
+        ckernel::p_sfpu::LREG2,
+        sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);           // 22
+    TTI_SFPNOP;                                          // 23: RNE/store dependency
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG2, 0, Advance, 0); // 24
+}
+
 template <
     bool OriginHalfTie,
     bool RawTerminal,

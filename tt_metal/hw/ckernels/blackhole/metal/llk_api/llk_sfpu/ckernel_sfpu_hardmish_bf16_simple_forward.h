@@ -5,6 +5,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_hardmish_bf16_replay_window.h"
 #include "sfpu/ckernel_sfpu_hardmish_bf16_simple_forward.h"
 #include "sfpu/ckernel_sfpu_hardmish_bf16_simple_algebraic.h"
 namespace ckernel::sfpu::bf16::hardmish {

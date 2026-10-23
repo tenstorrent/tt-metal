@@ -35,6 +35,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "llrt/hal.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -107,6 +108,7 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
     switch (arch) {
         case tt::ARCH::WORMHOLE_B0: unharvested_logical_grid_size = CoreCoord(8, 10); break;
         case tt::ARCH::BLACKHOLE: unharvested_logical_grid_size = CoreCoord(14, 10); break;
+        case tt::ARCH::QUASAR: unharvested_logical_grid_size = CoreCoord(8, 4); break;
         default: TT_THROW("Unsupported arch {}", get_umd_arch_name());
     }
     auto logical_grid_size = mesh_device->logical_grid_size();
@@ -657,7 +659,7 @@ TEST_F(MeshDeviceFixture, TensixTestNocStreamRegs) {
 
 TEST_F(MeshDeviceFixture, ActiveEthTestNocStreamRegs) {
     auto mesh_device = this->devices_[0];
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     // Skip if no active ethernet cores on this device
     if (device->get_active_ethernet_cores(true).empty()) {
@@ -672,7 +674,7 @@ TEST_F(MeshDeviceFixture, ActiveEthTestNocStreamRegs) {
 
 TEST_F(MeshDeviceFixture, IdleEthTestNocStreamRegs) {
     auto mesh_device = this->devices_[0];
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     // Skip if no idle ethernet cores on this device
     if (device->get_inactive_ethernet_cores().empty()) {
