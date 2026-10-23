@@ -22,6 +22,7 @@
 #include "cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_joint_ksplit.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_joint_floaters.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
@@ -399,6 +400,21 @@ void kernel_main() {
                           : logical_nt;
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
     bool seen_active_iter = false;
+#ifdef RJ_FLOATERS
+    // Floaters (ring_joint_floaters.hpp), after the K-split band and expansion rank: [donated fraction per ring
+    // iteration], then [visit count][visits: iteration, unit, band, frac].
+#ifdef RJ_DONATE_TAIL
+    constexpr bool donate_tail = true;
+#else
+    constexpr bool donate_tail = false;
+#endif
+    const uint32_t floater_args = rotated_args_base + 2;
+    [[maybe_unused]] const uint32_t visit_count = get_arg_val<uint32_t>(floater_args + ring_joint::kDonationIters);
+    // Home: ring iterations whose donated piece holds chunks (a floater partial with state to merge).
+    [[maybe_unused]] uint32_t donated_nonempty_mask = 0;
+    // Floater: a visit's state sits staged in half A until the writer has saved it.
+    [[maybe_unused]] bool visit_staged = false;
+#endif
     auto arrival_preview = fused_op_indexer.seq;
     // Chosen at compile time, and the guard below folds packed_sources to false in the classic ring's
     // binary so it carries none of the packed-source path.
@@ -497,6 +513,11 @@ void kernel_main() {
             packed_sources ? packed_kv.chunk_count()
                            : (do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks);
         ring_joint::KSplitRange ksplit_k_range = ring_joint::kKSplitAll;
+#ifdef RJ_FLOATER_CORE
+        ring_joint::KSplitRange visit_ranges[ring_joint::kFloaterMaxVisitsPerIter];
+        uint32_t visit_units[ring_joint::kFloaterMaxVisitsPerIter];
+        uint32_t step_visits = 0;
+#endif
         // Interleaved steps split every core's K range; the host gate leaves no core outside the K split.
         ASSERT(!ring_interleave || ksplit_active || q_per_core == 0);
         if constexpr (ksplit_enabled) {
@@ -509,8 +530,28 @@ void kernel_main() {
                     chunk_size_t,
                     q_local_padded_Nt,
                     Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, ksplit_causal_end_nt);
-                ksplit_k_range = ring_joint::interleaved_piece(
-                    ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count, ring_id), istep.piece, istep.pieces);
+                ring_joint::KSplitRange band_range =
+                    ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count, ring_id);
+#ifdef RJ_FLOATER_CORE
+                for (uint32_t v = 0; istep.piece == 0 && v < visit_count; ++v) {
+                    const uint32_t a =
+                        floater_args + ring_joint::kDonationIters + 1 + v * ring_joint::kFloaterVisitArgs;
+                    if (get_arg_val<uint32_t>(a) == ring_iter) {
+                        visit_ranges[step_visits] = ring_joint::donated_piece(
+                            ring_joint::ksplit_range(num_valid, get_arg_val<uint32_t>(a + 2), ksplit_count, ring_id),
+                            get_arg_val<uint32_t>(a + 3),
+                            donate_tail);
+                        visit_units[step_visits++] = get_arg_val<uint32_t>(a + 1);
+                    }
+                }
+#elif defined(RJ_FLOATERS)
+                const uint32_t donated = get_arg_val<uint32_t>(floater_args + ring_iter);
+                if (ring_joint::donated_cut(band_range, donated) > 0) {
+                    donated_nonempty_mask |= 1u << ring_iter;
+                }
+                band_range = ring_joint::kept_after_donation(band_range, donated, donate_tail);
+#endif
+                ksplit_k_range = ring_joint::interleaved_piece(band_range, istep.piece, istep.pieces);
                 if (ksplit_active) {
                     ksplit_max_valid = num_valid > ksplit_max_valid ? num_valid : ksplit_max_valid;
                 }
@@ -641,107 +682,160 @@ void kernel_main() {
         const bool skip_first_half_q = !has_sliding_window && (ring_index >= ring_id ? false : is_balanced);
 
         if constexpr (use_streaming_compute) {
-            sdpa_ring_v2<
-                Sq_chunk_t,
-                Sk_chunk_t,
-                0,  // Skt — not used for ring
-                DHt,
-                vDHt,
-                scale_fp32,
-                qk_subblock_h,
-                qk_subblock_w,
-                out_subblock_h,
-                out_subblock_w,
-                cb_q_in,
-                cb_k_in,
-                cb_v_in,
-                cb_qk_im,
-                cb_identity_scale_in,
-                cb_exp_max_diff,
-                cb_col_identity,
-                cb_recip_scratch,
-                cb_mask_in,
-                cb_scale_in,
-                cb_max_in,
-                cb_max_out,
-                cb_prev_out,
-                cb_out,
-                cb_out,  // cb_normalized_out — output goes directly to cb_out
-                cb_sum_out,
-                cb_sum_in,
-                cb_signal,
-                needs_lightweight_mask,
-                is_causal,
-                is_balanced,
-                chunked_enabled,
-                kv_local_padded_Nt,
-                q_local_padded_Nt,
-                chunk_size_t,
-                global_n_has_padding,
-                local_n_has_padding,
-                joint_has_padding,
-                has_straddle && is_causal && is_balanced,
-                false,  // use_l1_state_fifo — compile-time off: no FIFO branch overhead here
-                kv_pad_rotation_enabled,
-                v_cb_physical_width_t,
-                v_shares_k_buffer,
-                kt_inplace_v,
-                sliding_window_size,
-                circular_kv_slab_count,
-                ring_size,
-                use_attention_sink,
-                cb_attention_sink,
-                has_gathered_joint_k,
-                Lt_local,
-                rotated_q_split_enabled,
-                dense_causal_skip,
-                kv_region_Nt,
-                (GROUPED_KV_SOURCE_COUNT > 1),
-                DHt_qk,
-                k_expand ? cb_wuk : INVALID_CB,
-                k_expand ? kexp_latent_tiles : 0,
-                k_expand ? wuk_tiles : 0,
-                k_expand ? cb_kexp_own : INVALID_CB,
-                k_expand ? cb_kexp_peer : INVALID_CB>(
-                // Rotated: iterate [0, my_count) as POSITIONS, each mapped to its flat chunk id via
-                // the fixed base range or moving remainder ID. Static: [start, end) is already flat.
-                rotated_q_split_enabled ? 0u : global_q_start,
-                rotated_q_split_enabled ? rotated_my_count : global_q_end,
-                iter_num_kv_chunks,
-                num_q_chunks,
-                ring_iter,
-                ring_id,
-                num_local_k_chunks,
-                logical_nt,
-                ring_iter_needs_global_n_mask,
-                ring_iter_needs_joint_n_mask,
-                local_n_needs_masking,
-                global_n_mask_chunk_id,
-                local_n_mask_chunk_id,
-                joint_n_mask_chunk_id,
-                acc_state,
-                is_last_ring_iter,
-                // Rotated: NOT this iteration's count. q_per_core only selects L1-persistent vs
-                // DRAM-round-trip accumulators, and that choice must be the same on every iteration
-                // and must match the reader and writer. The fixed slot count (base + 1 >= 2) is.
-                rotated_q_split_enabled ? rotated_max_slots : q_per_core,
-                lw_mask,
-                skip_first_half_q,
-                use_zigzag_balancing,
-                chunked_context,
-                seg_active ? !seg_state_valid : is_first_active_iter,
-                logical_lt,
-                /*q_base_tiles=*/0,
-                rotated_slots,
-                ksplit_k_range.begin,
-                ksplit_k_range.end,
-                ksplit_active ? ksplit_idx : 0,
-                ksplit_active ? ksplit_count : 1,
-                packed_sources ? packed_source_ids : nullptr,
-                packed_sources ? source_group_size : 0,
-                packed_schedule.rows(ring_iter),
-                padded_q_slots,
-                k_expand_rank);
+            // A floater runs one fresh call per visit of this step; every other core runs one call.
+            uint32_t passes = 1;
+#ifdef RJ_FLOATER_CORE
+            passes = step_visits;
+#endif
+            for (uint32_t pass = 0; pass < passes; ++pass) {
+                uint32_t call_q_start = rotated_q_split_enabled ? 0u : global_q_start;
+                uint32_t call_q_end = rotated_q_split_enabled ? rotated_my_count : global_q_end;
+                uint32_t call_q_per_core = rotated_q_split_enabled ? rotated_max_slots : q_per_core;
+                uint32_t call_padded_q_slots = padded_q_slots;
+                bool call_first = seg_active ? !seg_state_valid : is_first_active_iter;
+                bool call_last = is_last_ring_iter;
+                ring_joint::KSplitRange call_k_range = ksplit_k_range;
+#ifdef RJ_FLOATER_CORE
+                if (visit_staged) {
+                    // The writer frees cb_signal only once the staged state is saved: then reclaim half A.
+                    CircularBuffer(cb_signal).reserve_back(1);
+                    sdpa_cb_pop_front_out_of_line(cb_max_A, Sq_chunk_t);
+                    sdpa_cb_pop_front_out_of_line(cb_sum_A, Sq_chunk_t);
+                    sdpa_cb_pop_front_out_of_line(cb_out_im_A, Sq_chunk_t * vDHt);
+                    acc_state.prev = {cb_sum_A, cb_max_A, cb_out_im_A};
+                    acc_state.cur = {cb_sum_B, cb_max_B, cb_out_im_B};
+                    visit_staged = false;
+                }
+                call_q_start = visit_units[pass];
+                call_q_end = call_q_start + 1;
+                call_q_per_core = 1;
+                call_padded_q_slots = 0;
+                call_first = true;
+                call_last = false;
+                call_k_range = visit_ranges[pass];
+                if (call_k_range.empty()) {
+                    // No chunks, no state: the writer still saves the slot and signals, and the home discards it.
+                    CircularBuffer(cb_signal).reserve_back(1);
+                    CircularBuffer(cb_signal).push_back(1);
+                    continue;
+                }
+#endif
+                sdpa_ring_v2<
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    0,  // Skt — not used for ring
+                    DHt,
+                    vDHt,
+                    scale_fp32,
+                    qk_subblock_h,
+                    qk_subblock_w,
+                    out_subblock_h,
+                    out_subblock_w,
+                    cb_q_in,
+                    cb_k_in,
+                    cb_v_in,
+                    cb_qk_im,
+                    cb_identity_scale_in,
+                    cb_exp_max_diff,
+                    cb_col_identity,
+                    cb_recip_scratch,
+                    cb_mask_in,
+                    cb_scale_in,
+                    cb_max_in,
+                    cb_max_out,
+                    cb_prev_out,
+                    cb_out,
+                    cb_out,  // cb_normalized_out — output goes directly to cb_out
+                    cb_sum_out,
+                    cb_sum_in,
+                    cb_signal,
+                    needs_lightweight_mask,
+                    is_causal,
+                    is_balanced,
+                    chunked_enabled,
+                    kv_local_padded_Nt,
+                    q_local_padded_Nt,
+                    chunk_size_t,
+                    global_n_has_padding,
+                    local_n_has_padding,
+                    joint_has_padding,
+                    has_straddle && is_causal && is_balanced,
+                    false,  // use_l1_state_fifo — compile-time off: no FIFO branch overhead here
+                    kv_pad_rotation_enabled,
+                    v_cb_physical_width_t,
+                    v_shares_k_buffer,
+                    kt_inplace_v,
+                    sliding_window_size,
+                    circular_kv_slab_count,
+                    ring_size,
+                    use_attention_sink,
+                    cb_attention_sink,
+                    has_gathered_joint_k,
+                    Lt_local,
+                    rotated_q_split_enabled,
+                    dense_causal_skip,
+                    kv_region_Nt,
+                    (GROUPED_KV_SOURCE_COUNT > 1),
+                    DHt_qk,
+                    k_expand ? cb_wuk : INVALID_CB,
+                    k_expand ? kexp_latent_tiles : 0,
+                    k_expand ? wuk_tiles : 0,
+                    k_expand ? cb_kexp_own : INVALID_CB,
+                    k_expand ? cb_kexp_peer : INVALID_CB>(
+                    // Rotated: iterate [0, my_count) as POSITIONS, each mapped to its flat chunk id via
+                    // the fixed base range or moving remainder ID. Static: [start, end) is already flat.
+                    call_q_start,
+                    call_q_end,
+                    iter_num_kv_chunks,
+                    num_q_chunks,
+                    ring_iter,
+                    ring_id,
+                    num_local_k_chunks,
+                    logical_nt,
+                    ring_iter_needs_global_n_mask,
+                    ring_iter_needs_joint_n_mask,
+                    local_n_needs_masking,
+                    global_n_mask_chunk_id,
+                    local_n_mask_chunk_id,
+                    joint_n_mask_chunk_id,
+                    acc_state,
+                    call_last,
+                    // Rotated: NOT this iteration's count. q_per_core only selects L1-persistent vs
+                    // DRAM-round-trip accumulators, and that choice must be the same on every iteration
+                    // and must match the reader and writer. The fixed slot count (base + 1 >= 2) is.
+                    call_q_per_core,
+                    lw_mask,
+                    skip_first_half_q,
+                    use_zigzag_balancing,
+                    chunked_context,
+                    call_first,
+                    logical_lt,
+                    /*q_base_tiles=*/0,
+                    rotated_slots,
+                    call_k_range.begin,
+                    call_k_range.end,
+                    ksplit_active ? ksplit_idx : 0,
+                    ksplit_active ? ksplit_count : 1,
+                    packed_sources ? packed_source_ids : nullptr,
+                    packed_sources ? source_group_size : 0,
+                    packed_schedule.rows(ring_iter),
+                    call_padded_q_slots,
+                    k_expand_rank);
+#ifdef RJ_FLOATER_CORE
+                // Stage the visit's state in half A for the writer to save; Q and W_UK leave with the visit.
+                configure_single_tile_pack(cb_max_A);
+                if (acc_state.prev.out != cb_out_im_A) {
+                    copy_block(acc_state.prev.max, cb_max_A, Sq_chunk_t);
+                    copy_block(acc_state.prev.sum, cb_sum_A, Sq_chunk_t);
+                    copy_block(acc_state.prev.out, cb_out_im_A, Sq_chunk_t * vDHt);
+                }
+                sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt_qk);
+                sdpa_cb_pop_front_out_of_line(cb_wuk, wuk_tiles);
+                CircularBuffer(cb_signal).reserve_back(1);
+                CircularBuffer(cb_signal).push_back(1);
+                visit_staged = true;
+#endif
+            }
             if constexpr (has_sliding_window && ksplit_enabled) {
                 // Sliding bands split the unit's work plan, which can be shorter than the band count near the
                 // sequence start: an empty band stages no state.
@@ -873,7 +967,12 @@ void kernel_main() {
     [[maybe_unused]] constexpr uint32_t ksplit_cb_sum_in = ksplit_enabled ? cb_sum_in : cb_out;
     // K split epilogue: acc_state.prev holds this core's unnormalized state. Only primitives the K loop already
     // instantiates are used, since the program is at the kernel config buffer limit.
-    if constexpr (ksplit_enabled) {
+#ifdef RJ_FLOATER_CORE
+    constexpr bool floater_core = true;  // runs no unit of its own: no K-split role
+#else
+    constexpr bool floater_core = false;
+#endif
+    if constexpr (ksplit_enabled && !floater_core) {
         if (ksplit_active) {
             // A single-chunk slice runs only a first K step, which leaves the packer at the QKT@V subblock width;
             // copy_block and max_block_sfpi pack one tile per pack_tile.
@@ -886,7 +985,50 @@ void kernel_main() {
                     sdpa_cb_pop_front_out_of_line(cb_wuk, wuk_tiles);
                 }
             }
-            if (ksplit_idx != ksplit_count - 1) {
+            const bool reducer = ksplit_idx == ksplit_count - 1;
+            // Partials the writer lands in the restore CBs, in this order: the floaters' partials of this
+            // core's donated pieces in ring order, then on the reducer the senders' bands. One merge site keeps the
+            // epilogue small (the program is at the kernel config buffer limit); a partial without state is discarded.
+            uint32_t floater_partials = 0;
+            [[maybe_unused]] uint32_t floater_iters[ring_joint::kDonatedPieces] = {};
+#ifdef RJ_FLOATERS
+            // An inactive ring iteration runs on no core, so its piece has no floater partial (the writer skips it
+            // too).
+            for (uint32_t it = 0; it < ring_joint::kDonationIters && floater_partials < ring_joint::kDonatedPieces;
+                 ++it) {
+                if (get_arg_val<uint32_t>(floater_args + it) != 0 && ((active_ring_iter_mask >> it) & 1u) != 0) {
+                    floater_iters[floater_partials++] = it;
+                }
+            }
+#endif
+            const uint32_t partials = floater_partials + (reducer ? ksplit_count - 1 : 0);
+            const AccumulatorHalf incoming = {ksplit_cb_sum_in, cb_max_in, cb_prev_out};
+            for (uint32_t p = 0; p < partials; ++p) {
+                bool has_state;
+#ifdef RJ_FLOATERS
+                if (p < floater_partials) {
+                    has_state = (donated_nonempty_mask >> floater_iters[p]) & 1u;
+                } else
+#endif
+                {
+                    const uint32_t sender = p - floater_partials;
+                    has_state =
+                        !(has_sliding_window ? ring_joint::sliding_ksplit_range(ksplit_max_valid, sender, ksplit_count)
+                                             : ring_joint::ksplit_range(ksplit_max_valid, sender, ksplit_count))
+                             .empty();
+                }
+                if (!has_state) {
+                    for (uint32_t cb : {cb_max_in, ksplit_cb_sum_in}) {
+                        CircularBuffer(cb).wait_front(Sq_chunk_t);
+                        sdpa_cb_pop_front_out_of_line(cb, Sq_chunk_t);
+                    }
+                    CircularBuffer(cb_prev_out).wait_front(out_tiles);
+                    sdpa_cb_pop_front_out_of_line(cb_prev_out, out_tiles);
+                    continue;
+                }
+                merge_into_prev(incoming);
+            }
+            if (!reducer) {
                 // Sender: leave the state in half A, where the reducer reads it, and signal the writer. An empty
                 // slice stages no state; the reducer discards it using the same chunk counts.
                 if (seen_active_iter && acc_state.prev.out != cb_out_im_A) {
@@ -900,22 +1042,6 @@ void kernel_main() {
                 // Reducer: its slice holds the diagonal chunk, so its own state always exists.
                 ASSERT(seen_active_iter);
                 constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
-                const AccumulatorHalf incoming = {ksplit_cb_sum_in, cb_max_in, cb_prev_out};
-                for (uint32_t sender = 0; sender + 1 < ksplit_count; ++sender) {
-                    const auto sender_range = has_sliding_window
-                                                  ? ring_joint::sliding_ksplit_range(ksplit_max_valid, sender, ksplit_count)
-                                                  : ring_joint::ksplit_range(ksplit_max_valid, sender, ksplit_count);
-                    if (sender_range.empty()) {
-                        for (uint32_t cb : {cb_max_in, ksplit_cb_sum_in}) {
-                            CircularBuffer(cb).wait_front(Sq_chunk_t);
-                            sdpa_cb_pop_front_out_of_line(cb, Sq_chunk_t);
-                        }
-                        CircularBuffer(cb_prev_out).wait_front(out_tiles);
-                        sdpa_cb_pop_front_out_of_line(cb_prev_out, out_tiles);
-                        continue;
-                    }
-                    merge_into_prev(incoming);
-                }
                 normalize_row_streaming<
                     false,
                     vDHt,

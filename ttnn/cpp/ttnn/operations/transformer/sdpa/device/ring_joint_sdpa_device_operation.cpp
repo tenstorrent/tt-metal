@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_floaters.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -1204,6 +1205,31 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_hit(
     validate_runtime_patched_scalars(args, tensor_args);
 }
 
+namespace {
+
+// Whether the expanded-K floaters may run (kernels/ring_joint_floaters.hpp): a validated shape on the 11x10 grid
+// of the 8-chip ring. The factory makes the final decision, and needs the scratch output for it.
+bool ring_joint_floaters_may_run(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+    namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
+    if (!tensor_args.has_k_expand() || !args.program_config.has_value() ||
+        args.program_config->compute_with_storage_grid_size != CoreCoord(11, 10) ||
+        args.all_gather_operation_attributes.ring_size != 8 || args.all_gather_operation_attributes.num_links != 2 ||
+        args.ccl_core_grid_offset != CoreCoord(11, 0) || args.is_balanced || args.has_sliding_window() ||
+        tensor_args.joint_q.has_value() || tensor_args.attention_sink.has_value() ||
+        tensor_args.input_q.logical_shape()[0] != 1) {
+        return false;
+    }
+    ring_joint::FloaterSchedule schedule{};
+    for (uint32_t bands = 2; bands <= args.program_config->max_k_splits; ++bands) {
+        if (ring_joint::floater_schedule(tensor_args.input_q.logical_shape()[1], bands, schedule)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
 RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     const auto& input = tensor_args.input_q;
@@ -1229,23 +1255,36 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     // head dim as v head dim
     out_shape[3] = v_head_dim;
 
-    return {
+    RingJointSDPAResultSpec specs = {
         tt::tt_metal::TensorSpec(
             out_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
         tt::tt_metal::TensorSpec(
             joint_output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
         tt::tt_metal::TensorSpec(
             stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
+    if (ring_joint_floaters_may_run(args, tensor_args)) {
+        // Floater scratch: per home core (4 per home block) and donated piece, the partial's max, sum and out tiles,
+        // one float32 tile page each, in DRAM.
+        namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
+        const uint32_t sq_tiles = args.program_config->q_chunk_size / tt::constants::TILE_HEIGHT;
+        const uint32_t slot_tiles = 2 * sq_tiles + sq_tiles * tt::div_up(v_head_dim, tt::constants::TILE_WIDTH);
+        const uint32_t slots = ring_joint::kFloaterHomeBlocks * 4 * ring_joint::kDonatedPieces;
+        specs.emplace_back(
+            ttnn::Shape({1, 1, slots * slot_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH}),
+            TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), MemoryConfig{}));
+    }
+    return specs;
 }
 
 RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     auto output_specs = compute_output_specs(args, tensor_args);
-    return {
-        create_device_tensor(output_specs[RING_JOINT_SDPA_OUTPUT_IDX], tensor_args.input_q.device()),
-        create_device_tensor(output_specs[RING_JOINT_SDPA_JOINT_OUTPUT_IDX], tensor_args.input_q.device()),
-        create_device_tensor(output_specs[RING_JOINT_SDPA_STATS_OUTPUT_IDX], tensor_args.input_q.device()),
-    };
+    RingJointSDPAResult outputs;
+    outputs.reserve(output_specs.size());
+    for (const auto& spec : output_specs) {
+        outputs.push_back(create_device_tensor(spec, tensor_args.input_q.device()));
+    }
+    return outputs;
 }
 
 ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(

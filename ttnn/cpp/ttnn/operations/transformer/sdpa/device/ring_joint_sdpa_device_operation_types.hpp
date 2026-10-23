@@ -263,8 +263,11 @@ inline bool indexed_kv_cache_active(const RingJointSDPAParams& args, const RingJ
 constexpr size_t RING_JOINT_SDPA_OUTPUT_IDX = 0;
 constexpr size_t RING_JOINT_SDPA_JOINT_OUTPUT_IDX = 1;
 constexpr size_t RING_JOINT_SDPA_STATS_OUTPUT_IDX = 2;
+// Present only when the expanded-K floaters may run (kernels/ring_joint_floaters.hpp): the floaters' partial
+// states, two slots per home core.
+constexpr size_t RING_JOINT_SDPA_FLOATER_SCRATCH_IDX = 3;
 
-// RingJointSDPAResult is a vector of 3 tensors: [output, joint_output, stats_output]
+// RingJointSDPAResult is a vector of 3 tensors: [output, joint_output, stats_output], plus the floater scratch
 using RingJointSDPAResult = Tensors;
 
 // RingJointSDPAResultSpec is a vector of 3 TensorSpecs: [output, joint_output, stats_output]

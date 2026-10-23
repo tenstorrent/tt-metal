@@ -9009,10 +9009,11 @@ if MESH_CONFIG.is_galaxy:
         ("kimi_k2_7_expanded_k", 8, 48.86, 0.05),
     ]
 else:
-    # The Blackhole LoudBox ring (sp=8 tp=1), production fabric packets: K3 4.29 ms, K2.7 2.92 ms, repeatable within 0.5%.
+    # The Blackhole LoudBox ring (sp=8 tp=1), production fabric packets, with the floaters
+    # (kernels/ring_joint_floaters.hpp): K3 3.77 ms, K2.7 2.73 ms, repeatable within 0.5% (a fresh mesh runs ~0.5% slower).
     EXPANDED_K_CHUNKED_PERF_CHECK_CONFIGS = [
-        ("kimi_k3_expanded_k", 8, 54.10, 0.015),
-        ("kimi_k2_7_expanded_k", 8, 52.97, 0.015),
+        ("kimi_k3_expanded_k", 8, 61.30, 0.015),
+        ("kimi_k2_7_expanded_k", 8, 56.60, 0.015),
     ]
 
 

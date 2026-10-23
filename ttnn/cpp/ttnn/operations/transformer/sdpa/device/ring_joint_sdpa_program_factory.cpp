@@ -6,6 +6,7 @@
 #include "kernels/chunked_q_mapping.hpp"
 #include "kernels/dataflow/chunked_prefill_utils.hpp"
 #include "kernels/ring_joint_ksplit.hpp"
+#include "kernels/ring_joint_floaters.hpp"
 #include "kernels/ring_mla_packing_plan.hpp"
 #include "kernels/sliding_window_geometry.hpp"
 #include "kernels/sliding_window_work_plan.hpp"
@@ -201,6 +202,9 @@ constexpr uint32_t kAllGatherReaderBackwardKernelIndex =
     kFirstAllGatherKernelIndex + ag_rt::kReaderBackwardKernelOffset;
 constexpr uint32_t kAllGatherWriterBackwardKernelIndex =
     kFirstAllGatherKernelIndex + ag_rt::kWriterBackwardKernelOffset;
+// Expanded-K floaters (kernels/ring_joint_floaters.hpp): the floaters' reader, writer and compute follow the dense
+// gather's.
+constexpr uint32_t kFloaterReaderKernelIndex = kAllGatherWriterBackwardKernelIndex + 1;
 // Sliding halos append one reader/writer pair per exchange, in plan_halo_exchanges order.
 constexpr uint32_t kNeighborHaloReaderKernelIndex = 3;
 constexpr uint32_t kNeighborHaloWriterKernelIndex = 4;
@@ -665,7 +669,6 @@ void apply_ring_joint_scalar_runtime_args(
     const RingJointRuntimePlan runtime_plan = build_runtime_plan(args, tensor_args, ring_write_plan);
     const RingWorkMasks& ring_work_masks = runtime_plan.ring_work_plan.masks;
     const RingJointRuntimeArgLayout layout = get_runtime_arg_layout(args, tensor_args);
-    const uint32_t num_cores = layout.grid_size.x * layout.grid_size.y;
     const uint32_t kv_cache_batch_idx = args.cache_batch_idx().value_or(0);
 
     // Gather inputs (K, plus V when it isn't the latent-V alias of K). Shared by the indexed-slot
@@ -872,22 +875,6 @@ void apply_ring_joint_scalar_runtime_args(
         }
     }
 
-    // Resolve each kernel's argument grid once per dispatch. Keep these references local:
-    // descriptor application may change the backing storage before the next cache hit.
-    auto& compute_grid_args = GetRuntimeArgs(program, kComputeKernelIndex);
-    auto& reader_grid_args = GetRuntimeArgs(program, kReaderKernelIndex);
-    auto* writer_grid_args = patch_kv_pad_rotation ? &GetRuntimeArgs(program, kWriterKernelIndex) : nullptr;
-    const auto validate_grid = [&](const auto& grid_args) {
-        TT_FATAL(grid_args.size() >= layout.grid_size.x, "RingJoint runtime argument grid is missing columns");
-        for (uint32_t x = 0; x < layout.grid_size.x; ++x) {
-            TT_FATAL(grid_args[x].size() >= layout.grid_size.y, "RingJoint runtime argument grid is missing rows");
-        }
-    };
-    validate_grid(compute_grid_args);
-    validate_grid(reader_grid_args);
-    if (writer_grid_args != nullptr) {
-        validate_grid(*writer_grid_args);
-    }
     // These fields occupy adjacent slots in the descriptor. Validate the layout once,
     // then check and write each complete block on every core, including inactive receivers.
     TT_FATAL(
@@ -917,36 +904,56 @@ void apply_ring_joint_scalar_runtime_args(
         runtime_plan.kv_pad_q_mapping.q_post_wrap_start_tile,
         runtime_plan.kv_pad_q_mapping.q_valid_tile_count,
         ring_work_masks.active_ring_iter_mask};
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        const CoreCoord core = {i % layout.grid_size.x, i / layout.grid_size.x};
-
-        // Patch EVERY core, exactly as the create-time build sets these scalars on all cores
-        // unconditionally. A core with no Q chunks (global_q_start == global_q_end) is NOT dead: in the
-        // GQA / shared-K row-wide multicast path it runs padded handshake iterations (loop_q_count =
-        // *_max_q_per_core) so the injector's mcast rectangle never targets a silent worker. Every such
-        // iteration is gated by active_ring_iter_mask (ring_joint_reader.cpp), so a stale mask makes the
-        // padded receiver skip a ring iter the injector still multicasts to — the injector then blocks
-        // forever waiting for that receiver's ready signal. Previously these cores were skipped on the
-        // assumption their scalars were dead; that held only while every dispatch shared the create-time
-        // logical_n. When logical_n grows across dispatches that reuse one cached program (chunked-prefill
-        // accumulation), the create-miss mask is stale for later hits, deadlocking the mcast handshake
-        // (RingJointSDPA hang, all-gather eth reads left undrained).
-        auto& compute_args = compute_grid_args[core.x][core.y];
-
-        auto& reader_args = reader_grid_args[core.x][core.y];
-        if (patch_indexed_kv_cache) {
-            write_runtime_arg(
-                reader_args, layout.reader_kv_cache_batch_idx, kv_cache_batch_idx, "reader.kv_cache_batch_idx");
+    // The SDPA kernels, and with floaters (ring_joint_floaters.hpp) their kernel group after the
+    // dense gather's four kernels. A floater program's home kernels leave out the last grid column (all floaters), so
+    // their argument grid is narrower than the SDPA grid.
+    std::vector<std::array<uint32_t, 3>> kernel_sets = {{kReaderKernelIndex, kWriterKernelIndex, kComputeKernelIndex}};
+    if (GetRuntimeArgs(program, kReaderKernelIndex).size() < layout.grid_size.x) {
+        kernel_sets.push_back(
+            {kFloaterReaderKernelIndex, kFloaterReaderKernelIndex + 1, kFloaterReaderKernelIndex + 2});
+    }
+    for (const auto& kernels : kernel_sets) {
+        // Resolve each kernel's argument grid once per dispatch. Keep these references local:
+        // descriptor application may change the backing storage before the next cache hit.
+        auto& reader_grid_args = GetRuntimeArgs(program, kernels[0]);
+        auto* writer_grid_args = patch_kv_pad_rotation ? &GetRuntimeArgs(program, kernels[1]) : nullptr;
+        auto& compute_grid_args = GetRuntimeArgs(program, kernels[2]);
+        TT_FATAL(
+            compute_grid_args.size() == reader_grid_args.size() &&
+                (writer_grid_args == nullptr || writer_grid_args->size() == reader_grid_args.size()),
+            "RingJoint runtime argument grids disagree");
+        for (uint32_t x = 0; x < reader_grid_args.size(); ++x) {
+            TT_FATAL(
+                compute_grid_args[x].size() == reader_grid_args[x].size() &&
+                    (writer_grid_args == nullptr || (*writer_grid_args)[x].size() == reader_grid_args[x].size()),
+                "RingJoint runtime argument grid columns disagree");
+            for (uint32_t y = 0; y < reader_grid_args[x].size(); ++y) {
+                auto& reader_args = reader_grid_args[x][y];
+                // Patch EVERY core the kernel runs on, exactly as the create-time build sets these scalars on all its
+                // cores unconditionally. A core with no Q chunks (global_q_start == global_q_end) is NOT dead: in the
+                // GQA / shared-K row-wide multicast path it runs padded handshake iterations (loop_q_count =
+                // *_max_q_per_core) so the injector's mcast rectangle never targets a silent worker. Every such
+                // iteration is gated by active_ring_iter_mask (ring_joint_reader.cpp), so a stale mask makes the
+                // padded receiver skip a ring iter the injector still multicasts to — the injector then blocks
+                // forever waiting for that receiver's ready signal. When logical_n grows across dispatches that reuse
+                // one cached program (chunked-prefill accumulation), the create-miss mask is stale for later hits.
+                if (reader_args.size() == 0) {
+                    continue;  // not one of this kernel's cores
+                }
+                if (patch_indexed_kv_cache) {
+                    write_runtime_arg(
+                        reader_args, layout.reader_kv_cache_batch_idx, kv_cache_batch_idx, "reader.kv_cache_batch_idx");
+                }
+                if (!patch_kv_pad_rotation) {
+                    continue;
+                }
+                write_runtime_arg_block(reader_args, layout.reader_logical_nt, reader_values, "reader.scalars");
+                write_runtime_arg_block(
+                    (*writer_grid_args)[x][y], layout.writer_logical_nt, writer_values, "writer.scalars");
+                write_runtime_arg_block(
+                    compute_grid_args[x][y], layout.compute_logical_nt, compute_values, "compute.scalars");
+            }
         }
-        if (!patch_kv_pad_rotation) {
-            continue;
-        }
-
-        write_runtime_arg_block(reader_args, layout.reader_logical_nt, reader_values, "reader.scalars");
-
-        auto& writer_args = (*writer_grid_args)[core.x][core.y];
-        write_runtime_arg_block(writer_args, layout.writer_logical_nt, writer_values, "writer.scalars");
-        write_runtime_arg_block(compute_args, layout.compute_logical_nt, compute_values, "compute.scalars");
     }
 }
 
@@ -1558,6 +1565,54 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         ksplit_count = ksplit_requested;
     }
     log_debug(tt::LogOp, "ring_joint K split: {}", ksplit_count);
+
+    // Floaters (kernels/ring_joint_floaters.hpp). On the validated expanded-K shapes the K split's 24 home blocks
+    // of 2x2 cores fill a 10x10 sub-grid, leaving the 25th block, the last grid column and the gather column below its
+    // workers idle: 20 cores, five floater groups of 4 that take over pieces of the homes' bands. The gather's workers
+    // are the top 2 x num_links cores of column grid.x (column-major from (grid.x, 0)).
+    const auto& floater_ag_attrs = args.all_gather_operation_attributes;
+    ring_joint::FloaterSchedule floater_schedule{};
+    const bool floaters = k_expand && ksplit_count > 1 && !has_sliding_window && !use_attention_sink &&
+                          num_q_chunks == 2 && ring_joint::floater_schedule(NH, ksplit_count, floater_schedule) &&
+                          (NH / 2) * ksplit_count == ring_joint::kFloaterHomeBlocks && grid_size == CoreCoord(11, 10) &&
+                          ring_size == 8 && args.ccl_core_grid_offset == CoreCoord(grid_size.x, 0) &&
+                          floater_ag_attrs.num_links == 2 &&
+                          floater_ag_attrs.core_allocation_strategy == ttnn::ccl::CoreAllocationStrategy::COL_MAJOR &&
+                          output_tensors.size() > RING_JOINT_SDPA_FLOATER_SCRATCH_IDX;
+    if (floaters) {
+        // Homes merge the partials in the order of their pieces' iterations; every piece donates something.
+        for (uint32_t piece = 0; piece < ring_joint::kDonatedPieces; ++piece) {
+            TT_FATAL(
+                floater_schedule.fracs[piece] > 0 && floater_schedule.iters[piece] < ring_size &&
+                    (piece == 0 || floater_schedule.iters[piece - 1] < floater_schedule.iters[piece]),
+                "ring_joint floaters: invalid schedule for {} heads x {} bands",
+                NH,
+                ksplit_count);
+        }
+        TT_FATAL(ring_size <= ring_joint::kDonationIters, "ring_joint floaters: ring of {}", ring_size);
+    }
+    const uint32_t gather_workers = 2 * floater_ag_attrs.num_links;
+    // The gather column's cores below its workers join the program as extra cores (indices num_cores..).
+    const uint32_t floater_column_cores = floaters ? grid_size.y - gather_workers : 0;
+    if (floaters) {
+        core_grid_set = CoreRangeSet(std::vector<CoreRange>{
+            core_grid, CoreRange({grid_size.x, gather_workers}, {grid_size.x, grid_size.y - 1})});
+        // The fused-op receivers and the semaphores made above span the SDPA cores: extend them.
+        for (uint32_t y = gather_workers; y < grid_size.y; ++y) {
+            sdpa_fused_op_signaler->fused_op_receiver_cores_noc.push_back(
+                mesh_device->worker_core_from_logical_core(CoreCoord{grid_size.x, y}));
+        }
+        sdpa_fused_op_signaler->num_fused_op_cores_to_signal =
+            sdpa_fused_op_signaler->fused_op_receiver_cores_noc.size();
+        for (auto& semaphore : desc.semaphores) {
+            semaphore.core_ranges = core_grid_set;
+        }
+    }
+    const uint32_t num_cores_all = num_cores + floater_column_cores;
+    auto logical_core = [&](uint32_t i) {
+        return i < num_cores ? CoreCoord{i % grid_size.x, i / grid_size.x}
+                             : CoreCoord{grid_size.x, gather_workers + (i - num_cores)};
+    };
 
     // Progressive readiness (RingAttentionSliceReadiness): the gather sends every full slice, its own and the ones it
     // relays, in parts that each hold a share of every K-split band, with a marker after each, so a remote ring step
@@ -2343,12 +2398,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         }
     };
 
-    std::vector<CoreWork> core_work(num_cores);
-    std::vector<ChainConfig> head_chain_configs(use_head_chain ? num_cores : 0);  // MHA K/V or separate-V V
+    std::vector<CoreWork> core_work(num_cores_all);
+    std::vector<ChainConfig> head_chain_configs(use_head_chain ? num_cores_all : 0);  // MHA K/V or separate-V V
     std::vector<ChainConfig> batch_chain_configs(
-        enable_kv_chains && k_uses_batch_chain ? num_cores : 0);  // Shared K for separate-V/latent modes
+        enable_kv_chains && k_uses_batch_chain ? num_cores_all : 0);  // Shared K for separate-V/latent modes
     std::vector<ChainConfig> gqa_chain_configs(
-        enable_kv_chains && gqa_grouped_kv ? num_cores : 0);  // Grouped K/V for GQA
+        enable_kv_chains && gqa_grouped_kv ? num_cores_all : 0);  // Grouped K/V for GQA
+    for (uint32_t i = num_cores; i < num_cores_all; ++i) {        // the floaters' gather-column cores own no unit
+        core_work[i].physical_core = device->worker_core_from_logical_core(logical_core(i));
+    }
     // Per-head V chain segments, indexed band * NH + head: under a K split each band streams its own K/V slice, so its
     // V chains stay in-band. Sliding attention reads K/V independently on every core and builds no chains.
     std::vector<std::vector<HeadSegmentRef>> head_segments(use_head_chain ? NH * ksplit_count : 0);
@@ -2381,6 +2439,92 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         return std::pair<uint32_t, uint32_t>{head, q_chunk};
     };
 
+    // Floater layout: home block g is the 2x2 block at (2 (g % 5), 2 (g / 5)) holding head pair g % (NH / 2) of band
+    // g / (NH / 2); its core k = (r, c) owns unit (2 pair + r) * 2 + c (head 2 pair + r, Q chunk c), so a head's two Q
+    // chunks (an expansion pair, one V chain) share a row.
+    constexpr uint32_t home_block_cols = 5;
+    constexpr uint32_t kNoGroup = std::numeric_limits<uint32_t>::max();
+    auto block_core = [&](uint32_t g, uint32_t k) {
+        return (2 * (g / home_block_cols) + k / 2) * grid_size.x + 2 * (g % home_block_cols) + k % 2;
+    };
+    std::vector<uint32_t> home_band(num_cores_all, 0);
+    std::vector<uint32_t> home_unit(num_cores_all, total_q_chunks);
+    std::vector<uint32_t> unit_home(floaters ? ksplit_count * total_q_chunks : 0, 0);
+    // A home core's scratch slots: kDonatedPieces from (g * 4 + k) * kDonatedPieces.
+    std::vector<uint32_t> home_slot(num_cores_all, 0);
+    if (floaters) {
+        for (uint32_t g = 0; g < ring_joint::kFloaterHomeBlocks; ++g) {
+            for (uint32_t k = 0; k < 4; ++k) {
+                const uint32_t core = block_core(g, k);
+                home_slot[core] = (g * 4 + k) * ring_joint::kDonatedPieces;
+                home_band[core] = g / (NH / 2);
+                home_unit[core] = (2 * (g % (NH / 2)) + k / 2) * 2 + k % 2;
+                unit_home[home_band[core] * total_q_chunks + home_unit[core]] = core;
+            }
+        }
+    }
+    // Floater groups: the 25th block, the last column's rows 0-3 and 4-7, the gather column's rows 4-7, and the 2x2 of
+    // both columns' rows 8-9. Group core k mirrors home core k of the block it visits (its expansion pairs are (0, 1)
+    // and (2, 3)); the visits go round-robin over the groups in ring order, each home block's two pieces.
+    struct FloaterVisit {
+        uint32_t iter, block, frac, piece;
+    };
+    std::vector<std::array<uint32_t, 4>> floater_groups;
+    std::vector<std::vector<FloaterVisit>> floater_visits;
+    std::vector<uint32_t> floater_group_of(num_cores_all, kNoGroup);
+    std::vector<uint32_t> floater_k_of(num_cores_all, 0);
+    if (floaters) {
+        const uint32_t x = grid_size.x - 1;
+        auto at = [&](uint32_t cy) { return cy * grid_size.x + x; };
+        floater_groups = {
+            {block_core(24, 0), block_core(24, 1), block_core(24, 2), block_core(24, 3)},
+            {at(0), at(1), at(2), at(3)},
+            {at(4), at(5), at(6), at(7)},
+            {num_cores, num_cores + 1, num_cores + 2, num_cores + 3},
+            {at(8), num_cores + 4, at(9), num_cores + 5}};
+        floater_visits.resize(floater_groups.size());
+        uint32_t next = 0;
+        for (uint32_t piece = 0; piece < ring_joint::kDonatedPieces; ++piece) {
+            for (uint32_t g = 0; g < ring_joint::kFloaterHomeBlocks; ++g) {
+                floater_visits[next++ % floater_groups.size()].push_back(
+                    {floater_schedule.iters[piece], g, floater_schedule.fracs[piece], piece});
+            }
+        }
+        for (uint32_t f = 0; f < floater_groups.size(); ++f) {
+            for (uint32_t piece = 0; piece < ring_joint::kDonatedPieces; ++piece) {
+                const auto visits_in_iter =
+                    std::count_if(floater_visits[f].begin(), floater_visits[f].end(), [&](const FloaterVisit& visit) {
+                        return visit.iter == floater_schedule.iters[piece];
+                    });
+                TT_FATAL(
+                    visits_in_iter <= ring_joint::kFloaterMaxVisitsPerIter,
+                    "ring_joint floaters: group {} has {} visits in ring iteration {}",
+                    f,
+                    visits_in_iter,
+                    floater_schedule.iters[piece]);
+            }
+            for (uint32_t k = 0; k < 4; ++k) {
+                floater_group_of[floater_groups[f][k]] = f;
+                floater_k_of[floater_groups[f][k]] = k;
+            }
+        }
+    }
+    // K split: core (x, y) is in band y / rows_per_split and owns unit (y % rows_per_split) * grid.x + x (with
+    // floaters: its home block's band and unit). Idle cores report band 0; they own no unit.
+    auto ksplit_band = [&](uint32_t core_idx) -> uint32_t {
+        if (floaters) {
+            return home_band[core_idx];
+        }
+        const uint32_t band = core_idx / grid_size.x / ksplit_rows_per_split;
+        return band < ksplit_count ? band : 0;
+    };
+    auto ksplit_core = [&](uint32_t band, uint32_t core_idx) -> uint32_t {
+        if (floaters) {
+            return unit_home[band * total_q_chunks + home_unit[core_idx]];
+        }
+        const uint32_t local_row = core_idx / grid_size.x % ksplit_rows_per_split;
+        return (band * ksplit_rows_per_split + local_row) * grid_size.x + core_idx % grid_size.x;
+    };
     // Describe a core's flat Q range for K/V chain construction.
     auto append_head_work = [&](uint32_t core_idx, uint32_t flat_chunk, uint32_t remaining) {
         auto& work = core_work.at(core_idx);
@@ -2389,7 +2533,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             const uint32_t take = std::min(remaining, num_q_chunks - q_chunk_idx);
             work.head_work.push_back(CoreHeadWork{.head = head_idx, .q_chunk_count = take});
             if (use_head_chain) {
-                const uint32_t band = ksplit_count > 1 ? core_idx / grid_size.x / ksplit_rows_per_split : 0;
+                const uint32_t band = ksplit_count > 1 ? ksplit_band(core_idx) : 0;
                 const uint32_t segment_idx = band * NH + head_idx;
                 TT_FATAL(
                     segment_idx < head_segments.size(),
@@ -2404,21 +2548,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         }
     };
 
-    // K split: core (x, y) is in band y / rows_per_split and owns unit (y % rows_per_split) * grid.x + x. Idle cores
-    // of rows past the last band report band 0; they own no unit.
-    auto ksplit_band = [&](uint32_t core_idx) {
-        const uint32_t band = core_idx / grid_size.x / ksplit_rows_per_split;
-        return band < ksplit_count ? band : 0;
-    };
-    auto ksplit_core = [&](uint32_t band, uint32_t core_idx) {
-        const uint32_t local_row = core_idx / grid_size.x % ksplit_rows_per_split;
-        return (band * ksplit_rows_per_split + local_row) * grid_size.x + core_idx % grid_size.x;
-    };
     for (uint32_t i = 0; ksplit_count > 1 && i < num_cores; ++i) {
         const uint32_t x = i % grid_size.x;
         const uint32_t y = i / grid_size.x;
-        const uint32_t unit = (y % ksplit_rows_per_split) * grid_size.x + x;
-        const bool owns_unit = y / ksplit_rows_per_split < ksplit_count && unit < total_q_chunks;
+        const uint32_t unit = floaters ? home_unit[i] : (y % ksplit_rows_per_split) * grid_size.x + x;
+        const bool owns_unit = (floaters || y / ksplit_rows_per_split < ksplit_count) && unit < total_q_chunks;
         auto& work = core_work.at(i);
         work.physical_core = device->worker_core_from_logical_core(CoreCoord{x, y});
         work.global_q_start = owns_unit ? unit : total_q_chunks;
@@ -2730,8 +2864,40 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         std::vector<RowWideChainMcastSelection> row_mcast_selections;
         row_mcast_selections.reserve(grid_size.y);
         std::deque<uint32_t> recent_cols;  // FIFO of <= grid.x-1 most-recent claimed phys_x
-
-        for (uint32_t row = 0; row < grid_size.y; ++row) {
+        // Floaters: one K multicast per home block and per floater group instead of per row; a floater group's injector
+        // forwards on every visit (several Q slots per step).
+        auto configure_group_mcast = [&](const std::array<uint32_t, 4>& group, uint32_t forwarded_q_slots) {
+            CoreCoord lo = logical_core(group[0]);
+            CoreCoord hi = lo;
+            for (uint32_t ci : group) {
+                const CoreCoord c = logical_core(ci);
+                lo = CoreCoord{std::min(lo.x, c.x), std::min(lo.y, c.y)};
+                hi = CoreCoord{std::max(hi.x, c.x), std::max(hi.y, c.y)};
+            }
+            for (uint32_t ci : group) {
+                auto& cfg = batch_chain_configs[ci];
+                cfg = ChainConfig{};
+                cfg.participates = true;
+                cfg.mcast_start = device->worker_core_from_logical_core(lo);
+                cfg.mcast_end = device->worker_core_from_logical_core(hi);
+                cfg.injector_physical = core_work[group[0]].physical_core;
+                cfg.is_injector = ci == group[0];
+                cfg.is_sink = !cfg.is_injector;
+                cfg.mcast_num_dests = cfg.is_injector ? group.size() - 1 : 0;
+                cfg.next_core_q_chunks = cfg.is_injector ? forwarded_q_slots : 0;
+                k_chain_max_q[ci] = 1;
+            }
+        };
+        if (floaters) {
+            for (uint32_t g = 0; g < ring_joint::kFloaterHomeBlocks; ++g) {
+                configure_group_mcast({block_core(g, 0), block_core(g, 1), block_core(g, 2), block_core(g, 3)}, 1);
+            }
+            for (const auto& group : floater_groups) {
+                configure_group_mcast(group, std::numeric_limits<uint32_t>::max());
+            }
+            k_mcast_enabled = true;
+        }
+        for (uint32_t row = 0; !floaters && row < grid_size.y; ++row) {
             const std::optional<RowWideChainMcastSelection> selection = select_row_wide_chain_mcast(row, recent_cols);
             if (!selection.has_value()) {
                 // Idle row: drop any linear-chain role so its cores neither read nor forward K.
@@ -2742,7 +2908,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             }
             row_mcast_selections.push_back(*selection);
         }
-        if (row_mcast_selections.empty()) {
+        if (floaters) {
+            // Configured per group above.
+        } else if (row_mcast_selections.empty()) {
             k_mcast_fallback_reason = "no row has work";
         } else {
             k_mcast_enabled = true;
@@ -2959,8 +3127,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         args->push_back(rotated_max_slots_ct);
     }
     // Each core's rank in its head pair and its peer: head_segments[band * NH + head] lists the pair's cores.
-    std::vector<uint32_t> kexp_rank(num_cores, 0);
-    std::vector<uint32_t> kexp_peer(num_cores, 0);
+    std::vector<uint32_t> kexp_rank(num_cores_all, 0);
+    std::vector<uint32_t> kexp_peer(num_cores_all, 0);
     if (k_expand) {
         for (const auto& segs : head_segments) {
             if (segs.empty()) {
@@ -2970,6 +3138,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             for (uint32_t r = 0; r < 2; ++r) {
                 kexp_rank[segs[r].core_idx] = r;
                 kexp_peer[segs[r].core_idx] = segs[1 - r].core_idx;
+            }
+        }
+        // Floaters expand in their group's pairs (0, 1) and (2, 3).
+        for (const auto& group : floater_groups) {
+            for (uint32_t k = 0; k < 4; ++k) {
+                kexp_rank[group[k]] = k % 2;
+                kexp_peer[group[k]] = group[k ^ 1];
             }
         }
     }
@@ -3246,6 +3421,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         !has_sliding_window && !seg_accum && use_streaming_compute) {
         defines["RING_INTERLEAVE"] = "1";
     }
+    if (floaters) {
+        defines["RJ_FLOATERS"] = "1";
+        if (floater_schedule.donate_tail) {
+            defines["RJ_DONATE_TAIL"] = "1";
+        }
+    }
     // Convert std::map<string,string> defines to KernelDescriptor::Defines vector form.
     KernelDescriptor::Defines kernel_defines(defines.begin(), defines.end());
 
@@ -3378,9 +3559,59 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
     }
 
+    // The floaters run their own kernel group (RJ_FLOATER_CORE) and the homes the main one, so each binary
+    // carries only its role's code (the program sits at the kernel config buffer limit). The floater kernels follow the
+    // gather's, so the indices the cache-hit patching relies on stay put.
+    KernelDescriptor floater_reader_kernel{};
+    KernelDescriptor floater_writer_kernel{};
+    KernelDescriptor floater_compute_kernel{};
+    if (floaters) {
+        std::vector<CoreRange> floater_ranges;
+        std::vector<CoreRange> home_ranges;
+        for (uint32_t c = 0; c < num_cores_all; ++c) {
+            (floater_group_of[c] != kNoGroup ? floater_ranges : home_ranges).emplace_back(logical_core(c));
+        }
+        floater_reader_kernel = reader_kernel;
+        floater_writer_kernel = writer_kernel;
+        floater_compute_kernel = compute_kernel;
+        for (auto* kernel : {&floater_reader_kernel, &floater_writer_kernel, &floater_compute_kernel}) {
+            kernel->core_ranges = CoreRangeSet(floater_ranges);
+            kernel->defines.emplace_back("RJ_FLOATER_CORE", "1");
+        }
+        for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
+            kernel->core_ranges = CoreRangeSet(home_ranges);
+        }
+    }
+
     // Set reader rt args
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i % grid_size.x, i / grid_size.x};
+    for (uint32_t i = 0; i < num_cores_all; ++i) {
+        const CoreCoord core = logical_core(i);
+        // Floaters, for reader and compute: [donated fraction per ring iteration], then [visit count][visits:
+        // iteration, unit, band, frac]. Floater core k runs the unit of home core k of each visited block.
+        const bool floater = floaters && floater_group_of[i] != kNoGroup;
+        auto append_floater_args = [&](CheckedRuntimeArgList& floater_args) {
+            const bool home = floaters && home_unit[i] < total_q_chunks;
+            for (uint32_t it = 0; it < ring_joint::kDonationIters; ++it) {
+                uint32_t frac = 0;
+                for (uint32_t piece = 0; home && piece < ring_joint::kDonatedPieces; ++piece) {
+                    frac = floater_schedule.iters[piece] == it ? floater_schedule.fracs[piece] : frac;
+                }
+                floater_args.push_back(frac);
+            }
+            if (!floater) {
+                floater_args.push_back(0u);
+                return;
+            }
+            const auto& visits = floater_visits[floater_group_of[i]];
+            floater_args.push_back(static_cast<uint32_t>(visits.size()));
+            for (const auto& visit : visits) {
+                const uint32_t h = block_core(visit.block, floater_k_of[i]);
+                floater_args.push_back(visit.iter);
+                floater_args.push_back(home_unit[h]);
+                floater_args.push_back(home_band[h]);
+                floater_args.push_back(visit.frac);
+            }
+        };
 
         // Prefer the computed even distribution above for chain construction
         const auto& work = core_work.at(i);
@@ -3492,7 +3723,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             reader_args.push_back(peer_phys.x);
             reader_args.push_back(peer_phys.y);
         }
-        reader_kernel.emplace_runtime_args(core, reader_args.args);
+        if (floaters) {
+            append_floater_args(reader_args);
+        }
+        (floater ? floater_reader_kernel : reader_kernel).emplace_runtime_args(core, reader_args.args);
 
         // Writer args
         CheckedRuntimeArgList writer_args;
@@ -3548,7 +3782,32 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 }
             }
         }
-        writer_kernel.emplace_runtime_args(core, writer_args.args);
+        if (floaters) {
+            // Floaters: [scratch], then a home's slots and donated ring iterations (one per piece), or a floater's
+            // [visit count][visits: iteration, slot, home x, home y, home semaphore ordinal] (the floaters' bits follow
+            // the K-split senders').
+            writer_args.push_back(output_tensors.at(RING_JOINT_SDPA_FLOATER_SCRATCH_IDX).buffer());
+            if (floater) {
+                const auto& visits = floater_visits[floater_group_of[i]];
+                writer_args.push_back(static_cast<uint32_t>(visits.size()));
+                for (const auto& visit : visits) {
+                    const uint32_t h = block_core(visit.block, floater_k_of[i]);
+                    writer_args.push_back(visit.iter);
+                    writer_args.push_back(home_slot[h] + visit.piece);
+                    writer_args.push_back(core_work[h].physical_core.x);
+                    writer_args.push_back(core_work[h].physical_core.y);
+                    writer_args.push_back(ksplit_count + 1 + visit.piece);
+                }
+            } else {
+                for (uint32_t piece = 0; piece < ring_joint::kDonatedPieces; ++piece) {
+                    writer_args.push_back(home_slot[i] + piece);
+                }
+                for (uint32_t piece = 0; piece < ring_joint::kDonatedPieces; ++piece) {
+                    writer_args.push_back(floater_schedule.iters[piece]);
+                }
+            }
+        }
+        (floater ? floater_writer_kernel : writer_kernel).emplace_runtime_args(core, writer_args.args);
 
         // Compute args
         CheckedRuntimeArgList compute_args;
@@ -3603,7 +3862,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         if (k_expand) {
             compute_args.push_back(kexp_rank[i]);
         }
-        compute_kernel.emplace_runtime_args(core, compute_args.args);
+        if (floaters) {
+            append_floater_args(compute_args);
+        }
+        (floater ? floater_compute_kernel : compute_kernel).emplace_runtime_args(core, compute_args.args);
     }
 
     // Push the SDPA kernels into desc before invoking the all-gather helper so
@@ -3917,6 +4179,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 : RingAttentionSliceReadiness{});
     }
 
+    if (floaters) {
+        TT_FATAL(
+            desc.kernels.size() == kFloaterReaderKernelIndex,
+            "ring_joint floaters: their kernels must follow the dense gather's (index {}, not {})",
+            kFloaterReaderKernelIndex,
+            desc.kernels.size());
+        desc.kernels.push_back(std::move(floater_reader_kernel));
+        desc.kernels.push_back(std::move(floater_writer_kernel));
+        desc.kernels.push_back(std::move(floater_compute_kernel));
+    }
     return desc;
 }
 
@@ -3927,7 +4199,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 // depend on the mesh coordinate, so descriptors cannot be shared across coords. Returning
 // a WorkloadDescriptor (rather than a per-coord ProgramDescriptor) keeps the framework on
 // its no-rebuild cache-hit fast path; the dynamic scalar runtime args (indexed kv-cache /
-// kv-pad rotation) are still re-applied every dispatch by override_runtime_arguments below.
+// kv-pad floaters) are still re-applied every dispatch by override_runtime_arguments below.
 tt::tt_metal::WorkloadDescriptor RingJointSDPAProgramFactory::create_workload_descriptor(
     const RingJointSDPAParams& args,
     const RingJointSDPAInputs& tensor_args,

@@ -75,13 +75,18 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
 }
 
 #ifdef TRISC_MATH
+// max(in0, in1), floored at a finite value: a row masked out of both merged states (max -inf) then merges to zero
+// weight instead of exp(-inf - -inf) = NaN, while any finite max is unchanged.
 inline void sdpa_max_sfpi(const std::uint32_t in0, const std::uint32_t in1, const std::uint32_t out) {
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
+    constexpr float kMergeMaxFloor = -3.0e38f;  // finite in bf16 and fp32
 #pragma GCC unroll 8
     for (int d = 0; d < 8; d++) {
         sfpi::vFloat a = sfpi::dst_reg[in0 * dst_tile_size_sfpi];
         const sfpi::vFloat b = sfpi::dst_reg[in1 * dst_tile_size_sfpi];
         v_if(b > a) { a = b; }
+        v_endif;
+        v_if(a < kMergeMaxFloor) { a = kMergeMaxFloor; }
         v_endif;
         sfpi::dst_reg[out * dst_tile_size_sfpi] = a;
         sfpi::dst_reg++;
