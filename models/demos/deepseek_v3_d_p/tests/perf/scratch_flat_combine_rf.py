@@ -54,6 +54,9 @@ MESHES = {
     "4x4": ((4, 4), ttnn.FabricConfig.FABRIC_2D_TORUS_X, (True, False)),  # Galaxy rows 0-3: LINE x RING
     "4x4torus": ((4, 4), ttnn.FabricConfig.FABRIC_2D_TORUS_XY, (True, True)),  # rows 2-5, subtorus Galaxies only
     "8x4": ((8, 4), ttnn.FabricConfig.FABRIC_2D_TORUS_XY, (True, True)),  # the whole Galaxy
+    # (a LoudBox 2x2 square as a 1x4: p150_x4_line_1x4 / p150_x4_ring_1x4 and the square's TT_VISIBLE_DEVICES)
+    "1x4": ((1, 4), ttnn.FabricConfig.FABRIC_2D, (False, False)),
+    "1x4ring": ((1, 4), ttnn.FabricConfig.FABRIC_2D_TORUS_X, (True, False)),
 }
 
 

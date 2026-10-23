@@ -1405,3 +1405,15 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - Open: the experts + combine program at SP 1 hangs (ring: first call; line: in back-to-back replays; both squares;
   Tensix readers too - MoEOptions.experts_drisc off); the same per-chip load on the 2x4 passes.
 - MoEOptions.experts_drisc (typed A/B); fewer planner instances than router cores handled (no instance there).
+
+### Ring tail (ring of 4, K3 640 rows): what it waits on, first fixes
+- Zones (TP-RUNIT / TP-SUNIT / TP-RWAIT on the ports, TL-RMREAD / TL-WGATE added): MM 8.3 us a step (~80% HiFi2
+  peak, 4 steps a core); the gather's own-block sends start only after the own rows' tilize (their DRAM reads: 32
+  640-B strided segments a core, 13-26 us behind the W' bursts), then run ~17-19 GB/s a link (80% of 23.6); the far
+  block's relayed half lands ~70-85 us; the W' load (6.8 MB a chip) 30-80 us on NOC0 with the gather's reads and the
+  half-column multicasts.
+- Fixes: (1) every core's own-row reads before any W' load (a lead count + a multicast go): reads 4.8 us median,
+  tilized <= 9 us; A/B 146.9 / 143.3 -> 129.1 / 134.9 us. (2) W' loads in K order a wave at a time (core p after
+  its half column's range p - 1): 140.3 / 133.8 -> 124.1 / 121.1. (OUT behind the next step and batched landed-word
+  polls: neutral, kept.) Ring tail 640: ~121-125 us (median of 5, slowest chip), 1024: 180 us; soak 400 calls each.
+- Next: W' bandwidth (DRISC job / bank readers ~500 GB/s vs ~150 now), then per-step overhead (S + OUT + SQ ~4-5 us).

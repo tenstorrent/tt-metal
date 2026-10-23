@@ -53,7 +53,7 @@ constexpr uint32_t PAIRS = get_compile_time_arg_val(9), NSTMAX = get_compile_tim
 // (SX: the partner's exchanges (cumulative: it sends in step order); SFREE: the row's cores' steps done; SW: W' K
 // ranges in, a bit each (1 << r added by range r's reader). The per-step words - landed (my share), SA (the row's
 // shares), SP (the row's E tiles) - count up over calls, at words + 16 (kind NSTMAX + s); my call count after them)
-constexpr uint32_t SX = 0, SFREE = 1, SW = 2;
+constexpr uint32_t SX = 0, SFREE = 1, SW = 2, SG = 3, SGO = 4;  // (SG / SGO: the W' loads' gate - BRISC)
 constexpr uint32_t CB_W = 0, CB_A = 1, CB_PART = 2, CB_PMY = 3, CB_ONES = 4, CB_XSEND = 6, CB_XRECV = 8, CB_SE = 9;
 constexpr uint32_t CB_OUT = 10, CB_L0 = 11, CB_RM = 12;
 FORCE_INLINE volatile tt_l1_ptr uint32_t* sem(uint32_t i) {
@@ -79,6 +79,10 @@ void kernel_main() {
     const uint32_t z_addr = get_arg_val<uint32_t>(a++), ak0 = get_arg_val<uint32_t>(a++), ak1 = get_arg_val<uint32_t>(a++);
     const uint32_t se_addr = get_arg_val<uint32_t>(a++), NTO = get_arg_val<uint32_t>(a++), f0 = get_arg_val<uint32_t>(a++);
     const uint32_t fn = get_arg_val<uint32_t>(a++), nst = get_arg_val<uint32_t>(a++), nown = get_arg_val<uint32_t>(a++);
+    // (the W' loads' gate: the lead core (its NoC), the engine's NoC rectangle, its cores, am I the lead)
+    const uint32_t gw = get_arg_val<uint32_t>(a++), gx0 = get_arg_val<uint32_t>(a++), gy0 = get_arg_val<uint32_t>(a++);
+    const uint32_t gx1 = get_arg_val<uint32_t>(a++), gy1 = get_arg_val<uint32_t>(a++), gn = get_arg_val<uint32_t>(a++);
+    const uint32_t glead = get_arg_val<uint32_t>(a++);
     const uint32_t ord = a;
     const auto zg = TensorAccessor(z_args, z_addr, KT * 64);  // (a page: one latent row)
     const auto sg = TensorAccessor(s_args, se_addr, 2048);
@@ -100,9 +104,38 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(CB_RM, n);
     };
-    if (nown > 0) own(0);  // (the NCRISC multicasts it while W' loads)
+    if (nown > 0) {
+        DeviceZoneScopedN("TL-RMREAD");
+        own(0);  // (the NCRISC multicasts it while W' loads)
+    }
+#ifdef TL_WGATE
+    {  // every engine core's first own rows read before any W' load: the rows' small strided reads queued behind the
+       // W' bursts in the DRAM took 13-26 us, holding the gather's first sends (the ports read the tilized rows)
+        DeviceZoneScopedN("TL-WGATE");
+        noc_semaphore_inc(get_noc_addr(gw & 0xFFFF, gw >> 16, get_semaphore(SG)), 1);
+        volatile tt_l1_ptr uint32_t* go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SGO));
+        if (glead) {
+            volatile tt_l1_ptr uint32_t* cnt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SG));
+            noc_semaphore_wait(cnt, gn);
+            *cnt = 0;  // (re-arm: every core's one increment landed)
+            *go = 1;
+            noc_semaphore_set_multicast_loopback_src(get_semaphore(SGO), get_noc_multicast_addr(gx0, gy0, gx1, gy1, get_semaphore(SGO)), gn);
+            noc_async_write_barrier();
+        }
+        while (*go == 0) invalidate_l1_cache();
+        *go = 0;  // (re-arm: one set a call)
+    }
+#endif
     {  // W': my K range of my half column's [K half][pn] (one contiguous bank region: one burst), then down the half column
         DeviceZoneScopedN("TL-WLOAD");
+#ifdef TL_WSTAGGER
+        // (in K order a wave at a time: my half column's range p - 1 in first - the chip's DRAM serves the ranges the
+        // compute takes next, not all 110 bursts at once)
+        if (p > 0) {
+            volatile tt_l1_ptr uint32_t* swv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SW));
+            while (!((*swv >> (p - 1)) & 1)) invalidate_l1_cache();
+        }
+#endif
         const uint32_t src = get_write_ptr(CB_W) + wk0 * pn * WTB, bytes = (wk1 - wk0) * pn * WTB;
         noc_async_read(get_noc_addr_from_bank_id<true>(wbank, w_addr + woff), src, bytes);
         noc_async_read_barrier();
@@ -296,6 +329,57 @@ void kernel_main() {
         cb_pop_front(CB_RM, n);
     }
     cb_wait_front(CB_ONES, 1);
+    // out = (mine + the partner's) x s + se for the oldest step not yet out - run behind the next step's squares,
+    // matmul and sums (the partner's half and its sum of squares land meanwhile: the exchange's round trip off the
+    // step's critical path)
+    auto out_step = [&]() {
+        {
+            DeviceZoneScopedN("TL-OUT");
+            cb_wait_front(CB_XRECV, XT);
+            cb_wait_front(CB_SQM, 1);
+            cb_wait_front(CB_ACCM, fn);
+            cb_wait_front(CB_SE, fn);
+            cb_reserve_back(CB_OUT, fn);
+            tile_regs_acquire();
+            // (DEST: s 0, mine 1 .., the partner's sum of squares 4, its partials 5 .., then se 4 ..)
+            reconfig_data_format_srca(CB_SQM);
+            copy_init(CB_SQM);
+            copy_tile(CB_SQM, 0, 0);
+            reconfig_data_format_srca(CB_XRECV);
+            copy_init(CB_XRECV);
+            copy_tile(CB_XRECV, XT - 1, 4);
+            for (uint32_t j = 0; j < fn; ++j) copy_tile(CB_XRECV, j, 5 + j);
+            add_binary_tile_init();
+            add_binary_tile(0, 4, 0);
+            binop_with_scalar_tile_init();
+            mul_unary_tile(0, INV_HR);
+            add_unary_tile(0, NORM_EPS);
+            rsqrt_tile_init();
+            rsqrt_tile(0);
+            reconfig_data_format_srca(CB_ACCM);
+            copy_init(CB_ACCM);
+            for (uint32_t j = 0; j < fn; ++j) copy_tile(CB_ACCM, j, 1 + j);
+            add_binary_tile_init();
+            for (uint32_t j = 0; j < fn; ++j) add_binary_tile(1 + j, 5 + j, 1 + j);
+            mul_binary_tile_init();
+            for (uint32_t j = 0; j < fn; ++j) mul_binary_tile(1 + j, 0, 1 + j);
+            reconfig_data_format_srca(CB_SE);
+            copy_init(CB_SE);
+            for (uint32_t j = 0; j < fn; ++j) copy_tile(CB_SE, j, 4 + j);
+            add_binary_tile_init();
+            for (uint32_t j = 0; j < fn; ++j) add_binary_tile(1 + j, 4 + j, 1 + j);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_data_format(CB_OUT);
+            for (uint32_t j = 0; j < fn; ++j) pack_tile(1 + j, CB_OUT);
+            tile_regs_release();
+            cb_push_back(CB_OUT, fn);
+            cb_pop_front(CB_XRECV, XT);
+            cb_pop_front(CB_SQM, 1);
+            cb_pop_front(CB_ACCM, fn);
+            cb_pop_front(CB_SE, fn);
+        }
+    };
     for (uint32_t s = 0; s < nst; ++s) {
         cb_wait_front(CB_A, KH);
         {  // my share's squares accumulated elementwise in DEST (fp32, SFPU): E = sum_k z_k * z_k
@@ -362,53 +446,9 @@ void kernel_main() {
             cb_push_back(CB_SQM, 1);
             cb_pop_front(CB_PART, GX);
         }
-        {  // out = (mine + the partner's) x s + se, s = rsqrt((my half's + its half's sum of squares) / Hr + eps)
-            DeviceZoneScopedN("TL-OUT");
-            cb_wait_front(CB_XRECV, XT);
-            cb_wait_front(CB_SQM, 1);
-            cb_wait_front(CB_ACCM, fn);
-            cb_wait_front(CB_SE, fn);
-            cb_reserve_back(CB_OUT, fn);
-            tile_regs_acquire();
-            // (DEST: s 0, mine 1 .., the partner's sum of squares 4, its partials 5 .., then se 4 ..)
-            reconfig_data_format_srca(CB_SQM);
-            copy_init(CB_SQM);
-            copy_tile(CB_SQM, 0, 0);
-            reconfig_data_format_srca(CB_XRECV);
-            copy_init(CB_XRECV);
-            copy_tile(CB_XRECV, XT - 1, 4);
-            for (uint32_t j = 0; j < fn; ++j) copy_tile(CB_XRECV, j, 5 + j);
-            add_binary_tile_init();
-            add_binary_tile(0, 4, 0);
-            binop_with_scalar_tile_init();
-            mul_unary_tile(0, INV_HR);
-            add_unary_tile(0, NORM_EPS);
-            rsqrt_tile_init();
-            rsqrt_tile(0);
-            reconfig_data_format_srca(CB_ACCM);
-            copy_init(CB_ACCM);
-            for (uint32_t j = 0; j < fn; ++j) copy_tile(CB_ACCM, j, 1 + j);
-            add_binary_tile_init();
-            for (uint32_t j = 0; j < fn; ++j) add_binary_tile(1 + j, 5 + j, 1 + j);
-            mul_binary_tile_init();
-            for (uint32_t j = 0; j < fn; ++j) mul_binary_tile(1 + j, 0, 1 + j);
-            reconfig_data_format_srca(CB_SE);
-            copy_init(CB_SE);
-            for (uint32_t j = 0; j < fn; ++j) copy_tile(CB_SE, j, 4 + j);
-            add_binary_tile_init();
-            for (uint32_t j = 0; j < fn; ++j) add_binary_tile(1 + j, 4 + j, 1 + j);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_reconfig_data_format(CB_OUT);
-            for (uint32_t j = 0; j < fn; ++j) pack_tile(1 + j, CB_OUT);
-            tile_regs_release();
-            cb_push_back(CB_OUT, fn);
-            cb_pop_front(CB_XRECV, XT);
-            cb_pop_front(CB_SQM, 1);
-            cb_pop_front(CB_ACCM, fn);
-            cb_pop_front(CB_SE, fn);
-        }
+        if (s > 0) out_step();  // (step s - 1's)
     }
+    if (nst) out_step();
 }
 """
 
@@ -440,7 +480,7 @@ FORCE_INLINE void walk(uint32_t part, uint32_t pos, uint32_t ak, F&& f) {
 """
 
 _PORT_READER = (
-    '#include <cstdint>\n#include "api/dataflow/dataflow_api.h"\n'
+    '#include <cstdint>\n#include "api/dataflow/dataflow_api.h"\n#include "tools/profiler/kernel_profiler.hpp"\n'
     + _PORT_CT
     + r"""
 // NoC0: my units' shares from this chip's owners (once landed / tilized there), into the CB
@@ -467,19 +507,42 @@ void kernel_main() {
         cb_push_back(CBP, PG * RP);
         b = 0;
     };
+    // (the shares' landed words polled a unit at a time: every not-yet-seen share's word in one batch of NoC reads,
+    // one barrier - one round trip a share in turn was the gather's pace; a share still not in is then waited alone)
+    bool seen[RT * GX];
+    const uint32_t pbuf = poll + 64 + 64;  // (16 B a share, past the poll word and the group counts)
     for (uint32_t u = 0; u < n; ++u) {
+        DeviceZoneScopedN("TP-RUNIT");
         const uint32_t w = get_arg_val<uint32_t>(units + u), part = w & 0xFF, pos = w >> 8;
+        for (uint32_t i = 0; i < RT * GX; ++i) seen[i] = false;
+        auto poll_all = [&]() {
+            for (uint32_t r = 0; r < RT; ++r) {
+                const uint32_t t = pos * RT + r;
+                for (uint32_t c = 0; c < GX; ++c) {
+                    if (seen[r * GX + c] || (part == 1 && c >= GX / 2) || (part == 2 && c < GX / 2)) continue;
+                    noc_async_read(get_noc_addr(get_arg_val<uint32_t>(xs + c), get_arg_val<uint32_t>(ys + t % PAIRS),
+                                                sl + 16 * (t / PAIRS)), pbuf + 16 * (r * GX + c), 4);
+                }
+            }
+            noc_async_read_barrier();
+            invalidate_l1_cache();
+            for (uint32_t i = 0; i < RT * GX; ++i)
+                if (!seen[i] && *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pbuf + 16 * i) >= ep) seen[i] = true;
+        };
         walk(part, pos, ak, [&](uint32_t pr, uint32_t s, uint32_t cx, uint32_t k0, uint32_t t0, uint32_t m, bool) {
             const uint32_t ox = get_arg_val<uint32_t>(xs + cx), oy = get_arg_val<uint32_t>(ys + pr);
-            if (t0 == k0) {  // (the share landed / tilized at its owner here: its landed word, over the NoC)
+            const uint32_t si = (s * PAIRS + pr - pos * RT) * GX + cx;
+            if (t0 == k0 && !seen[si]) {  // (the share landed / tilized at its owner here: its landed word, over the NoC)
+                if (b == 0) poll_all();  // (no reads in flight of mine: the batch's barrier waits for its words only)
                 auto in = [&]() {
                     noc_async_read(get_noc_addr(ox, oy, sl + 16 * s), poll, 4);
                     noc_async_read_barrier();
                     invalidate_l1_cache();  // (the copy just landed: not the cached word)
                     return *pw >= ep;
                 };
-                if (!in()) {
+                if (!seen[si] && !in()) {
                     if (b > 0) flush();
+                    DeviceZoneScopedN("TP-RWAIT");  // (a share not landed / tilized yet)
                     while (!in()) {
                     }
                 }
@@ -557,6 +620,7 @@ void kernel_main() {
         gi = 0;
     };
     for (uint32_t u = 0; u < n; ++u) {
+        DeviceZoneScopedN("TP-SUNIT");
         const uint32_t w = get_arg_val<uint32_t>(units + u), part = w & 0xFF, pos = w >> 8;  // (pos: there)
         walk(part, pos, ak, [&](uint32_t pr, uint32_t s, uint32_t cx, uint32_t k0, uint32_t t0, uint32_t m, bool last) {
             if (gi == gn) next_group();
@@ -857,7 +921,8 @@ class TailEngine:
         # the ports' staging (carved at the arena's start on the port cores) and their poll word after it
         PG = 8  # (packets a port group: 4 158 us, 8 148, 12 151)
         PSTAGE = 2 * PG * self.RP
-        assert PSTAGE * 2048 + 64 + 64 <= self.arena_bytes
+        # (then the poll word, the group counts (CB 1), the shares' polled words: 16 B a (row tile, column))
+        assert PSTAGE * 2048 + 64 + 64 + RT * GX * 16 <= self.arena_bytes
         d = ttnn.cb_descriptor_from_sharded_tensor(
             0, self.arena, address_offset=0, total_size=PSTAGE * 2048, core_ranges=self.port_crs
         )
@@ -872,6 +937,8 @@ class TailEngine:
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
         wkb = [k0 for k0, _ in self.wk] + [self.KH]
         b_rt, n_rt, c_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        g0, g1 = virt(0, 0), virt(GX - 1, GY - 1)  # (the W' gate: lead core (0, 0), the engine's NoC rectangle)
+        gate = [g0.x | g0.y << 16, min(g0.x, g1.x), min(g0.y, g1.y), max(g0.x, g1.x), max(g0.y, g1.y), GX * GY]
         for cx in range(GX):
             pn = self.pn[cx]
             for cy in range(GY):
@@ -882,28 +949,33 @@ class TailEngine:
                 ak0, ak1 = self.ak[cx]
                 wk0, wk1 = self.wk[p]
                 reg = self._region(h, cx, p)
-                b_rt[cx0 + cx][cy] = [
-                    p,
-                    pn,
-                    self.kh[h][0],
-                    int(w.buffer_address()),
-                    reg % self.nbank,
-                    (reg // self.nbank) * self.wreg * self.wtb,
-                    wk0,
-                    wk1,
-                    v.x,
-                    yt,
-                    yb,
-                    int(y.buffer_address()),
-                    ak0,
-                    ak1,
-                    int(se.buffer_address()),
-                    self.NTO,
-                    self.n0[cx] + fo,
-                    fn,
-                    self.nst[p],
-                    self.nown[p],
-                ] + list(order)
+                b_rt[cx0 + cx][cy] = (
+                    [
+                        p,
+                        pn,
+                        self.kh[h][0],
+                        int(w.buffer_address()),
+                        reg % self.nbank,
+                        (reg // self.nbank) * self.wreg * self.wtb,
+                        wk0,
+                        wk1,
+                        v.x,
+                        yt,
+                        yb,
+                        int(y.buffer_address()),
+                        ak0,
+                        ak1,
+                        int(se.buffer_address()),
+                        self.NTO,
+                        self.n0[cx] + fo,
+                        fn,
+                        self.nst[p],
+                        self.nown[p],
+                    ]
+                    + gate
+                    + [int(cx == 0 and cy == 0)]
+                    + list(order)
+                )
                 n_rt[cx0 + cx][cy] = (
                     [
                         p,
@@ -988,7 +1060,7 @@ class TailEngine:
         pct = [RT, GX, self.RP, self.SHMAX, self.KT, PG, PAIRS]
         prog.kernels = [
             ttnn.KernelDescriptor(
-                kernel_source=_BRISC,
+                kernel_source="#define TL_WGATE\n#define TL_WSTAGGER\n" + _BRISC,
                 source_type=st,
                 core_ranges=self.crs,
                 compile_time_args=ct + acc(y) + acc(se),
@@ -1029,7 +1101,7 @@ class TailEngine:
             ),
         ]
         prog.cbs = cbs
-        prog.semaphores = [ttnn.SemaphoreDescriptor(id=i, core_ranges=self.crs, initial_value=0) for i in range(3)]
+        prog.semaphores = [ttnn.SemaphoreDescriptor(id=i, core_ranges=self.crs, initial_value=0) for i in range(5)]
         prog.custom_program_hash = ttnn.compute_program_descriptor_hash(prog)
         return prog
 
