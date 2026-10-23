@@ -142,65 +142,40 @@ def derive_ring_walk_route(
     return tuple(route)
 
 
-def parse_chip_unique_ids(descriptor: Mapping[str, Any], chips_with_mmio: Mapping[int, int]) -> dict[int, int]:
-    """Return process-local logical-chip ID -> the chip's 64-bit ASIC unique ID (``chip_unique_ids``), exactly the
-    four local chips, distinct."""
-
-    if type(descriptor) is not dict or type(chips_with_mmio) is not dict:
-        raise PhysicalRouteError("route inputs must be exact objects")
-    raw = descriptor.get("chip_unique_ids")
-    if type(raw) is not dict:
-        raise PhysicalRouteError("cluster descriptor chip_unique_ids must be a mapping")
-    unique_ids: dict[int, int] = {}
-    for chip_id, unique_id in raw.items():
-        chip_id = _require_exact_int(chip_id, label="chip_unique_ids chip ID")
-        unique_ids[chip_id] = _require_exact_int(unique_id, label="chip_unique_ids ASIC unique ID")
-    if set(unique_ids) != set(chips_with_mmio) or len(set(unique_ids.values())) != len(unique_ids):
-        raise PhysicalRouteError(
-            f"chip_unique_ids must name the four local chips once each: {unique_ids}, chips={sorted(chips_with_mmio)}"
-        )
-    return unique_ids
-
-
 def derive_fabric_line_route(
     descriptor: Mapping[str, Any],
     chips_with_mmio: Mapping[int, int],
-    fabric_node_unique_id: Callable[[int, int], int],
-    *,
-    mesh_id: int = 0,
+    fabric_node_chip_id: Callable[[int], int],
 ) -> tuple[int, int, int, int]:
-    """Return the four chips in the order the fabric embedded the 1x4 LINE mesh graph descriptor: the physical chip
-    of fabric node (mesh_id, 0), then (mesh_id, 1), (mesh_id, 2), (mesh_id, 3).
+    """Return the four chips in the order the fabric embedded the 1x4 LINE mesh graph descriptor: the local chip of
+    fabric chip 0 of the host's mesh, then fabric chips 1, 2, 3.
 
     A 1x4 LINE descriptor over a four-chip ring uses three of the four links, and the fabric's topology solver picks
     which three: the QuietBox (4x p150) came out as chips (0, 2, 1, 3), a QuietBox 2 (2x p300c) as (1, 0, 3, 2)
     (2026-09-18).  The collectives are Linear along the mesh row, so the mesh must be opened in exactly this order:
     any other ethernet path through the ring puts a mesh neighbour pair on a link the fabric line does not carry
-    and the first all_gather fails ("Could not find any forwarding direction").  ``fabric_node_unique_id(mesh_id,
-    chip_id)`` is ``ttnn.cluster.get_chip_unique_id_from_fabric_node_id`` (no mesh needs to be open; the control plane
-    initializes from the descriptor ``TT_MESH_GRAPH_DESC_PATH`` names); the ASIC unique IDs are mapped back to the
-    descriptor's local chip IDs through ``chip_unique_ids``.  The result is checked to be a bijection over the four
-    local chips and an ethernet path (consecutive chips linked).  Deterministic: the fabric mapping is a function of
-    the cluster descriptor and the mesh graph descriptor, not of any open order.
+    and the first all_gather fails ("Could not find any forwarding direction").  ``fabric_node_chip_id(chip_id)`` is
+    that fabric chip's process-local chip ID, read from the system mesh with no mesh open
+    (``SystemMeshDescriptor().get_device_id`` at coordinate (0, chip_id): the system mesh gives its k-th coordinate
+    fabric chip k and the chip the control plane maps that node to; the control plane initializes from the descriptor
+    ``TT_MESH_GRAPH_DESC_PATH`` names, and FABRIC_1D keeps the fabric-disabled mapping).  The result is checked to be
+    a bijection over the four local chips and an ethernet path (consecutive chips linked).  Deterministic: the fabric
+    mapping is a function of the cluster descriptor and the mesh graph descriptor, not of any open order.
     """
 
     adjacency = _ethernet_adjacency(descriptor, chips_with_mmio)
     if sorted(len(neighbors) for neighbors in adjacency.values()) != [2, 2, 2, 2]:
         # the ring profile's promise; refused before the fabric is asked anything (the same check as the ring walk)
         raise PhysicalRouteError(f"local ethernet graph is not one four-chip ring: {adjacency}")
-    unique_ids = parse_chip_unique_ids(descriptor, chips_with_mmio)
-    chip_of_unique = {unique_id: chip_id for chip_id, unique_id in unique_ids.items()}
-    if type(mesh_id) is not int:
-        raise PhysicalRouteError("mesh_id must be an exact integer")
     route: list[int] = []
     for fabric_chip_id in range(4):
-        unique_id = fabric_node_unique_id(mesh_id, fabric_chip_id)
-        if type(unique_id) is not int or unique_id not in chip_of_unique:
+        chip_id = fabric_node_chip_id(fabric_chip_id)
+        if type(chip_id) is not int or chip_id not in chips_with_mmio:
             raise PhysicalRouteError(
-                f"fabric node (mesh {mesh_id}, chip {fabric_chip_id}) resolves to ASIC unique ID {unique_id!r}, "
-                f"not one of the four local chips {unique_ids}"
+                f"fabric chip {fabric_chip_id} resolves to chip {chip_id!r}, "
+                f"not one of the four local chips {sorted(chips_with_mmio)}"
             )
-        route.append(chip_of_unique[unique_id])
+        route.append(chip_id)
     if len(set(route)) != 4:
         raise PhysicalRouteError(f"fabric nodes do not map to four distinct local chips: {route}")
     for left, right in zip(route, route[1:]):

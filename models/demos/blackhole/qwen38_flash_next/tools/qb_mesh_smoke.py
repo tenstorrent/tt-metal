@@ -238,6 +238,7 @@ def main() -> int:
         f"[info] ethernet graph kind actual={graph_kind} expected=line adjacency={report['topology']['ethernet_adjacency']}",
         flush=True,
     )
+    descriptor = ttnn._ttnn.multi_device.SystemMeshDescriptor()
     try:
         route = physical_route.derive_canonical_line_route(document, chips_with_mmio)
         report["topology"]["route_derivation"] = "physical_route.derive_canonical_line_route"
@@ -246,7 +247,7 @@ def main() -> int:
         route = physical_route.derive_fabric_line_route(
             document,
             chips_with_mmio,
-            lambda mesh_id, chip_id: int(ttnn.cluster.get_chip_unique_id_from_fabric_node_id(mesh_id, chip_id)),
+            lambda chip_id: int(descriptor.get_device_id(ttnn.MeshCoordinate(0, chip_id))),
         )
         walk = _ring_walk(adjacency)
         report["topology"]["ring_walk_route"] = list(walk)
@@ -265,7 +266,6 @@ def main() -> int:
         collective_topology="Linear",
     )
 
-    descriptor = ttnn._ttnn.multi_device.SystemMeshDescriptor()
     physical_shape = tuple(int(value) for value in descriptor.local_shape())
     all_local = bool(descriptor.all_local())
     report["topology"]["system_mesh_local_shape"] = list(physical_shape)

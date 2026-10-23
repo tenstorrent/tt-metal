@@ -1964,8 +1964,8 @@ def template_decoder(template: Any) -> Callable[[list[int]], str]:
 
 
 def resolve_route(hardware_profile: ResidentHardwareProfile) -> tuple[ResidentHardwareProfile, dict]:
-    """The profile with its route: derived from the cluster descriptor (no device is opened; a ring also asks the
-    fabric's control plane for its line order) and adopted when the profile leaves it ``None`` (the p150 line and the
+    """The profile with its route: derived from the cluster descriptor (no device is opened; a ring also reads the
+    fabric's line order from the system mesh) and adopted when the profile leaves it ``None`` (the p150 line and the
     QuietBox 2: recorded, not pinned), checked against the pinned one otherwise."""
 
     import yaml
@@ -1985,10 +1985,11 @@ def resolve_route(hardware_profile: ResidentHardwareProfile) -> tuple[ResidentHa
         # carry the line, and the mesh must open in that order (QuietBox (0, 2, 1, 3) = its ring walk; QuietBox 2
         # (1, 0, 3, 2), 2026-09-18, where the ring walk (0, 1, 2, 3) put a mesh neighbour pair on the unused link
         # and the first all_gather failed).  The walk is recorded next to the route for comparison.
+        system_mesh = ttnn._ttnn.multi_device.SystemMeshDescriptor()
         route = physical_route.derive_fabric_line_route(
             document,
             chips_with_mmio,
-            lambda mesh_id, chip_id: int(ttnn.cluster.get_chip_unique_id_from_fabric_node_id(mesh_id, chip_id)),
+            lambda chip_id: int(system_mesh.get_device_id(ttnn.MeshCoordinate(0, chip_id))),
         )
         ring_walk = physical_route.derive_ring_walk_route(document, chips_with_mmio)
         derivation["route_derivation"] = physical_route.derive_fabric_line_route.__name__
