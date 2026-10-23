@@ -68,3 +68,5 @@ Reproduction: docker exec qwen38-functional-build bash models/autoports/qwen_qwe
 - Fresh independent xhigh closure review returned **clean-pass**, no required work: `STAGE_REVIEW.md`. Initial and history-slice findings are fixed and independently rereviewed.
 - Exact local telemetry packet: `/home/mvasiljev/agentic-research-data/experiment-26/bringup-logs/qwen38-27b/20261023-astra-medium-exp26-clean/telemetry/packets/2afbed0c-78d4-425a-abb4-e5dcd018a314.json`. Whole-layer headline4096+128 B1, both real layer types, unknown dataset counts explained.
 - Only stage-owned fused runtime/tests/docs changed; functional runtime remains unchanged. No later stage started. No push performed.
+
+- Local implementation/evidence checkpoint: repo `/home/mvasiljev/tt-metal`, branch `exp26-qwen38-bringup`, SHA `9696987a60659a56b79f8928bfdbe8f2c4db7a25`. The following documentation-only commit records this SHA; its own SHA is recorded in the external packet and final handoff.
