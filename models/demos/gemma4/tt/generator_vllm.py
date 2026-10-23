@@ -2352,6 +2352,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                     kwargs.get("empty_slots"),
                     self.model_args[0].max_batch_size,
                     prefill_seq_lens_plan[0] if prefill_seq_lens_plan else None,
+                    mesh_shape=getattr(self.model[0].mesh_device, "shape", None),
                 )
             )
         )

@@ -81,10 +81,28 @@ GEMMA4_TRACE_BATCHED_PREFILL_ENV = "GEMMA4_TRACE_BATCHED_PREFILL"
 GEMMA4_TRACE_BATCHED_PREFILL_BUCKETS_ENV = "GEMMA4_TRACE_BATCHED_PREFILL_BUCKETS"
 
 
-def batched_prefill_trace_buckets() -> set:
-    """``{(padded_batch, kernel_len), ...}`` of the opt-in batched prefill trace buckets (empty when off). A bucket
-    must be a supported padded batch above 1, a trace ISL, and under the batched kernel token limit."""
-    if os.environ.get(GEMMA4_TRACE_BATCHED_PREFILL_ENV, "0") != "1":
+def batched_prefill_trace_default(mesh_shape=None) -> bool:
+    """The batched prefill trace buckets when ``GEMMA4_TRACE_BATCHED_PREFILL`` is unset: on for the Blackhole 4-chip
+    column mesh (served QB2 26B, 2026-10-23: the 32-user 128-token ramp 2865 -> 1266 ms TTFT with the 32 x 128 bucket
+    replaying in ~1.07 s per 31-user call, TPOT 30.4 ms; traced == eager on all 32 first tokens), off elsewhere."""
+    env = os.environ.get(GEMMA4_TRACE_BATCHED_PREFILL_ENV)
+    if env is not None and env.strip() != "":
+        return env.strip() == "1"
+    from models.common.utility_functions import is_blackhole
+    from models.demos.gemma4.tt.mesh_orientation import is_column_mesh
+
+    try:
+        blackhole = is_blackhole()
+    except Exception:  # noqa: BLE001 - arch undeterminable (host-only unit tests): keep the opt-in default
+        return False
+    return bool(blackhole) and is_column_mesh(mesh_shape) and int(mesh_shape[0]) == 4
+
+
+def batched_prefill_trace_buckets(mesh_shape=None) -> set:
+    """``{(padded_batch, kernel_len), ...}`` of the batched prefill trace buckets (empty when off, see
+    ``batched_prefill_trace_default``). A bucket must be a supported padded batch above 1, a trace ISL, and under the
+    batched kernel token limit."""
+    if not batched_prefill_trace_default(mesh_shape):
         return set()
     raw = os.environ.get(GEMMA4_TRACE_BATCHED_PREFILL_BUCKETS_ENV, "32x128")
     buckets = set()
@@ -103,10 +121,10 @@ def batched_prefill_trace_buckets() -> set:
     return buckets
 
 
-def batched_prefill_trace_bucket(batch_size, empty_slots, max_batch_size, prefill_seq_len) -> bool:
+def batched_prefill_trace_bucket(batch_size, empty_slots, max_batch_size, prefill_seq_len, mesh_shape=None) -> bool:
     """True when a cold batched call of ``batch_size`` users (device slots ``empty_slots``) whose prompts pad to
     ``prefill_seq_len`` pads to a configured traced bucket, i.e. the stock batched path will replay a trace."""
-    buckets = batched_prefill_trace_buckets()
+    buckets = batched_prefill_trace_buckets(mesh_shape)
     if not buckets or prefill_seq_len is None or int(batch_size) <= 1:
         return False
     padded = batched_prefill_padded_batch(int(batch_size), empty_slots, int(max_batch_size))
@@ -117,7 +135,7 @@ def _record_batched_bucket_traces(generator) -> None:
     """Record the prepared batched buckets of ``batched_prefill_trace_buckets`` right after the warmup's single-user
     recordings (the shared recorder keeps batched preparations for a first-use capture; a capture after boot runs
     beside the live decode traces, so the bucket is recorded here, inside the boot window)."""
-    buckets = batched_prefill_trace_buckets()
+    buckets = batched_prefill_trace_buckets(getattr(generator.model[0].mesh_device, "shape", None))
     prepared_all = getattr(generator, "_prepared_prefill_traces", None)
     if not buckets or not prepared_all:
         return
@@ -1126,7 +1144,7 @@ def _warmup_gemma4_prefill_sweep(
 
     # GEMMA4_TRACE_BATCHED_PREFILL buckets: their batch size joins the sweep at their ISL only (batched_prefill_trace_buckets)
     bucket_batches: dict = {}
-    for bucket_batch, bucket_len in batched_prefill_trace_buckets():
+    for bucket_batch, bucket_len in batched_prefill_trace_buckets(getattr(model_args.mesh_device, "shape", None)):
         if bucket_batch <= max_batch_size and bucket_batch <= user_cap:
             bucket_batches.setdefault(bucket_len, set()).add(bucket_batch)
     if bucket_batches:

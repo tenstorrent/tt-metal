@@ -88,11 +88,20 @@ def test_short_prefill_stash_skipped_only_in_the_traced_bounded_short_bucket(mon
     assert gt.short_prefill_stash_skipped(1024, 1, bounded=True, trace_mode=True)
 
 
-def test_batched_prefill_trace_buckets_off_by_default(monkeypatch):
+def test_batched_prefill_trace_buckets_default_follows_the_mesh(monkeypatch):
+    from models.common.utility_functions import is_blackhole
+
     monkeypatch.delenv(gt.GEMMA4_TRACE_BATCHED_PREFILL_ENV, raising=False)
     monkeypatch.delenv(gt.GEMMA4_TRACE_BATCHED_PREFILL_BUCKETS_ENV, raising=False)
+    # no mesh shape / a row mesh / the Galaxy: off unless GEMMA4_TRACE_BATCHED_PREFILL=1
     assert gt.batched_prefill_trace_buckets() == set()
+    assert gt.batched_prefill_trace_buckets((1, 4)) == set()
+    assert gt.batched_prefill_trace_buckets((8, 4)) == set()
     assert not gt.batched_prefill_trace_bucket(31, list(range(31)), 32, 128)
+    # the validated Blackhole 4-chip column mesh: the 32 x 128 bucket
+    assert gt.batched_prefill_trace_buckets((4, 1)) == ({(32, 128)} if is_blackhole() else set())
+    monkeypatch.setenv(gt.GEMMA4_TRACE_BATCHED_PREFILL_ENV, "0")
+    assert gt.batched_prefill_trace_buckets((4, 1)) == set()
 
 
 def test_batched_prefill_trace_buckets_opt_in(monkeypatch):
