@@ -120,13 +120,17 @@ class ParallelFeedForward(Module):
         default_block_size=None,
         force_transpose: bool = True,
         use_persistent_buffer: bool = True,
+        matmul_config=None,
+        num_workers_per_link=None,
+        transpose_core_grid: bool | None = None,
     ) -> ttnn.Tensor:
         """
         Expects x to be replicated.
         Return output fractured on columns.
 
-        `default_block_size` and `force_transpose` are forwarded to ff1 only, for callers that have
-        measured block sizes for their ff1 shape; ff2 keeps the generic path.
+        `default_block_size`, `force_transpose` and the frozen `matmul_config` / `num_workers_per_link` /
+        `transpose_core_grid` are forwarded to ff1 only, for callers that have measured block sizes for their
+        ff1 shape; ff2 keeps the generic path.
         """
         ff1_out = self.ff1(
             x,
@@ -135,6 +139,9 @@ class ParallelFeedForward(Module):
             default_block_size=default_block_size,
             force_transpose=force_transpose,
             use_persistent_buffer=use_persistent_buffer,
+            matmul_config=matmul_config,
+            num_workers_per_link=num_workers_per_link,
+            transpose_core_grid=transpose_core_grid,
         )
         return self.ff2(
             ff1_out, compute_kernel_config=compute_kernel_config, use_persistent_buffer=use_persistent_buffer
@@ -152,6 +159,10 @@ class ParallelFeedForward(Module):
         core_grid=None,
         force_transpose: bool = True,
         use_persistent_buffer: bool = True,
+        matmul_config=None,
+        num_workers_per_link=None,
+        transpose_core_grid: bool | None = None,
+        mmrs_config=None,
     ) -> ttnn.Tensor:
         """Fused FFN forward with addcmul fused at the RS final write step.
 
@@ -159,7 +170,8 @@ class ParallelFeedForward(Module):
         Both addcmul_a and addcmul_b are already at their per-TP-device [D/tp] slice —
         no AllGather or scatter matmul is required.
 
-        `default_block_size` and `force_transpose` are forwarded to ff1 only, as in `forward`.
+        `default_block_size`, `force_transpose` and the frozen ff1 config go to ff1 only, as in `forward`;
+        `mmrs_config` is ff2's frozen fused MM+RS blocking.
         """
         ff1_out = self.ff1(
             x,
@@ -169,6 +181,9 @@ class ParallelFeedForward(Module):
             core_grid=core_grid,
             force_transpose=force_transpose,
             use_persistent_buffer=use_persistent_buffer,
+            matmul_config=matmul_config,
+            num_workers_per_link=num_workers_per_link,
+            transpose_core_grid=transpose_core_grid,
         )
         return self.ff2.forward_fused_addcmul(
             ff1_out,
@@ -177,4 +192,5 @@ class ParallelFeedForward(Module):
             scalar=scalar,
             compute_kernel_config=compute_kernel_config,
             use_persistent_buffer=use_persistent_buffer,
+            mmrs_config=mmrs_config,
         )
