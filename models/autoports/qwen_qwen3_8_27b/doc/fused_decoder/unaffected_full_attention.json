@@ -1,0 +1,33 @@
+{
+  "before": "models/autoports/qwen_qwen3_8_27b/doc/fused_decoder/candidate15.py",
+  "after": "models/autoports/qwen_qwen3_8_27b/tt/fused_decoder.py",
+  "before_sha256": "a55fbb2aa851882004a4be715e28b6ca49697690be07c6b61a0c4d97074e5e46",
+  "after_sha256": "41ba2e2fec65d6c5bb7503a6ff1ca7a905a8164f349eb8ef9d8a399dccdefc6e",
+  "changed_methods": [
+    "allocate_state",
+    "_delta"
+  ],
+  "unchanged_methods": [
+    "from_state_dict",
+    "snapshot",
+    "_linear",
+    "_norm",
+    "_finish",
+    "_rope",
+    "_attention",
+    "decode_forward",
+    "prefill_forward"
+  ],
+  "full_attention_control_flow": "Only linear-state allocation branch and _delta changed. Full-attention methods, weight setup, paged allocation branch, normalization, MLP, prefill/decode orchestration and snapshots are AST-identical.",
+  "reused_full_evidence": [
+    "final_full.json",
+    "watcher_layer3.json",
+    "final_layer3_262142.json",
+    "final_layer3_262144.json",
+    "ragged_decode.json",
+    "workload_layer3_b8.json",
+    "workload_layer3_b16.json",
+    "workload_layer3_b32.json",
+    "synthetic_pytest.xml (full_attention rows)"
+  ]
+}

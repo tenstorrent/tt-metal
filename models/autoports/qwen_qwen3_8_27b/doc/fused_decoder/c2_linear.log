@@ -1,0 +1,1735 @@
+2026-10-23 14:35:50.433 | INFO     | __main__:main:222 - Setting profiler artifacts folder to models/autoports/qwen_qwen3_8_27b/doc/fused_decoder/tracy/c2_linear
+2026-10-23 14:35:50.433 | INFO     | __main__:main:374 - Using port 8086
+2026-10-23 14:35:50.433 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-10-23 14:35:50.435 | INFO     | tracy:run_report_setup:112 - Capture command: ('/workspace/build/tools/profiler/bin/tracy-capture -o models/autoports/qwen_qwen3_8_27b/doc/fused_decoder/tracy/c2_linear/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-10-23 14:35:50.438 | INFO     | __main__:run_workload:409 - Test process started
+2026-10-23 14:35:50.665 | INFO     | __main__:main:222 - Setting profiler artifacts folder to models/autoports/qwen_qwen3_8_27b/doc/fused_decoder/tracy/c2_linear
+mkdir -p failed for path /.config/matplotlib: [Errno 13] Permission denied: '/.config'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-p0x8u68u because there was an issue with the default path (/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+2026-10-23 14:35:51.813 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+[transformers] The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+HF_REFERENCE_READY
+2026-10-23 14:35:56.965 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:35:56.965 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:35:56.965 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:35:56.965 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:35:56.976 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:35:56.976 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:35:57.056 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:35:57.056 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:35:57.056 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:35:57.056 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:35:57.057 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:35:57.261 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:35:57.324 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:35:57.324 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:35:57.325 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:35:57.325 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:35:57.371 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-10-23 14:35:57.941 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+Building ncrisc, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/b37ee4f4898b28de/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=4800000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DGDN_FUSED_RECEIVER=1 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reader_chunk_gdn_scan/14778725587717624500/" -DKERNEL_COMPILE_TIME_ARGS=1,4,4,4,2,4096,0,2,1,17,12288,2,1195658753 -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/reader_chunk_gdn_scan/14778725587717624500/ncrisc/ncrisck.13758792584634479528_115476.o /workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/reader_chunk_gdn_scan/14778725587717624500/ncrisc/ncrisck.13758792584634479528_115476.d
+In file included from /workspace/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /workspace/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /workspace/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,633,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:633:5: note: in expansion of macro 'SrcLocNameToHash'
+  633 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/reader_chunk_gdn_scan.cpp: In lambda function:
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: rx_reserve,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/reader_chunk_gdn_scan.cpp,471,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/reader_chunk_gdn_scan.cpp:471:13: note: in expansion of macro 'DeviceZoneScopedN'
+  471 |             DeviceZoneScopedN("rx_reserve");
+      |             ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/reader_chunk_gdn_scan.cpp: In function 'void kernel_main()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: rx_s0,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/reader_chunk_gdn_scan.cpp,520,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/reader_chunk_gdn_scan.cpp:520:9: note: in expansion of macro 'DeviceZoneScopedN'
+  520 |         DeviceZoneScopedN("rx_s0");
+      |         ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: rx_wait_valid,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/reader_chunk_gdn_scan.cpp,526,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/reader_chunk_gdn_scan.cpp:526:13: note: in expansion of macro 'DeviceZoneScopedN'
+  526 |             DeviceZoneScopedN("rx_wait_valid");
+      |             ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -Os -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/b073fe2c92899132/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=4800000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DGDN_FUSED_PRODUCER=1 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reader_chunk_gdn_prep/9692530148271489804/" -DKERNEL_COMPILE_TIME_ARGS=1,4,4,2,2048,2,2048,2,2048,2,4096,2,4096,1,1 -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/reader_chunk_gdn_prep/9692530148271489804/ncrisc/ncrisck.13758792584634479528_115476.o /workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/reader_chunk_gdn_prep/9692530148271489804/ncrisc/ncrisck.13758792584634479528_115476.d
+In file included from /workspace/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /workspace/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /workspace/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,633,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:633:5: note: in expansion of macro 'SrcLocNameToHash'
+  633 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/reader_chunk_gdn_prep.cpp: In function 'void kernel_main()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: rd_kick,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/reader_chunk_gdn_prep.cpp,278,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/reader_chunk_gdn_prep.cpp:278:9: note: in expansion of macro 'DeviceZoneScopedN'
+  278 |         DeviceZoneScopedN("rd_kick");
+      |         ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: rd_item,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/reader_chunk_gdn_prep.cpp,294,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/reader_chunk_gdn_prep.cpp:294:13: note: in expansion of macro 'DeviceZoneScopedN'
+  294 |             DeviceZoneScopedN("rd_item");
+      |             ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/b37ee4f4898b28de/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=4800000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="writer_chunk_gdn_scan/7704546922125210777/" -DKERNEL_COMPILE_TIME_ARGS=1,4,4,4,2,4096,2,4096 -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/writer_chunk_gdn_scan/7704546922125210777/brisc/brisck.13758792584634479528_115476.o /workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/writer_chunk_gdn_scan/7704546922125210777/brisc/brisck.13758792584634479528_115476.d
+In file included from /workspace/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /workspace/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /workspace/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:16:
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-FLUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,481,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:481:17: note: in expansion of macro 'SrcLocNameToHash'
+  481 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-DRAM-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,490,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:490:17: note: in expansion of macro 'SrcLocNameToHash'
+  490 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,633,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:633:5: note: in expansion of macro 'SrcLocNameToHash'
+  633 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/writer_chunk_gdn_scan.cpp: In function 'void kernel_main()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: ow_wait_cb,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/writer_chunk_gdn_scan.cpp,46,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/writer_chunk_gdn_scan.cpp:46:13: note: in expansion of macro 'DeviceZoneScopedN'
+   46 |             DeviceZoneScopedN("ow_wait_cb");
+      |             ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: ow_write,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/writer_chunk_gdn_scan.cpp,49,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/writer_chunk_gdn_scan.cpp:49:9: note: in expansion of macro 'DeviceZoneScopedN'
+   49 |         DeviceZoneScopedN("ow_write");
+      |         ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: BRISC-KERNEL,/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc0, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/runtime/sfpi/include -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/9d0d9caa9762b930/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=4800000 -DPROCESSOR_INDEX=2 -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="chunk_gdn_scan/10287599434839837533/" -DKERNEL_COMPILE_TIME_ARGS=1,4,4,4 -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/chunk_gdn_scan/10287599434839837533/trisc0/trisck.13758792584634479528_115476.o /workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/chunk_gdn_scan/10287599434839837533/trisc0/trisck.13758792584634479528_115476.d
+In file included from /workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:13,
+                 from /workspace/tt_metal/hw/inc/api/compute/cb_api.h:15,
+                 from /workspace/tt_metal/hw/inc/api/compute/common.h:11,
+                 from /workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_scan.cpp:16,
+                 from ../chlkc_unpack.cpp:4,
+                 from /workspace/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h: In function 'void llk_wait_tiles(int, int32_t)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: CB-COMPUTE-WAIT-FRONT,/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h,19,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1052:5: note: in expansion of macro 'DO_PRAGMA'
+ 1052 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:19:5: note: in expansion of macro 'DeviceZoneScopedSumN1'
+   19 |     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp: In function 'void prep_chunk(const GdnPrepCbs&, uint32_t, uint32_t)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_norm,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,807,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:807:9: note: in expansion of macro 'GDN_ZONE'
+  807 |         GDN_ZONE("pp_norm");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_p1,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,834,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:834:9: note: in expansion of macro 'GDN_ZONE'
+  834 |         GDN_ZONE("pp_p1");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_decay,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,850,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:850:9: note: in expansion of macro 'GDN_ZONE'
+  850 |         GDN_ZONE("pp_decay");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_lmask,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,861,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:861:9: note: in expansion of macro 'GDN_ZONE'
+  861 |         GDN_ZONE("pp_lmask");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_negn,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,876,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:876:9: note: in expansion of macro 'GDN_ZONE'
+  876 |         GDN_ZONE("pp_negn");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_tinv,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,891,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:891:9: note: in expansion of macro 'GDN_ZONE'
+  891 |         GDN_ZONE("pp_tinv");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_kd,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,969,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:969:9: note: in expansion of macro 'GDN_ZONE'
+  969 |         GDN_ZONE("pp_kd");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_intra,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,990,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:990:9: note: in expansion of macro 'GDN_ZONE'
+  990 |         GDN_ZONE("pp_intra");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_qdecay,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,999,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:999:9: note: in expansion of macro 'GDN_ZONE'
+  999 |         GDN_ZONE("pp_qdecay");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_kdec,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1004,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1004:9: note: in expansion of macro 'GDN_ZONE'
+ 1004 |         GDN_ZONE("pp_kdec");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_dl,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1030,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1030:9: note: in expansion of macro 'GDN_ZONE'
+ 1030 |         GDN_ZONE("pp_dl");
+      |         ^~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp: In function 'void scan_step(const GdnScanCbs&, uint32_t, uint32_t)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_diff,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1068,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1068:9: note: in expansion of macro 'GDN_ZONE'
+ 1068 |         GDN_ZONE("st_diff");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_vnew,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1099,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1099:9: note: in expansion of macro 'GDN_ZONE'
+ 1099 |         GDN_ZONE("st_vnew");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_o,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1113,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1113:9: note: in expansion of macro 'GDN_ZONE'
+ 1113 |         GDN_ZONE("st_o");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_snew,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1146,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1146:9: note: in expansion of macro 'GDN_ZONE'
+ 1146 |         GDN_ZONE("st_snew");
+      |         ^~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_scan.cpp: In function 'void kernel_main()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: scan_wait_in,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_scan.cpp,81,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_scan.cpp:81:13: note: in expansion of macro 'DeviceZoneScopedN'
+   81 |             DeviceZoneScopedN("scan_wait_in");
+      |             ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: scan_step,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_scan.cpp,92,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_scan.cpp:92:13: note: in expansion of macro 'DeviceZoneScopedN'
+   92 |             DeviceZoneScopedN("scan_step");
+      |             ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,91,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:91:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   91 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/runtime/sfpi/include -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/9d0d9caa9762b930/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=4800000 -DPROCESSOR_INDEX=4 -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="chunk_gdn_prep/6669700985196300369/" -DKERNEL_COMPILE_TIME_ARGS=1,4,4,1,1035273459,897988541 -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/chunk_gdn_prep/6669700985196300369/trisc2/trisck.13758792584634479528_115476.o /workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/chunk_gdn_prep/6669700985196300369/trisc2/trisck.13758792584634479528_115476.d
+In file included from /workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:14,
+                 from /workspace/tt_metal/hw/inc/api/compute/cb_api.h:12,
+                 from /workspace/tt_metal/hw/inc/api/compute/common.h:11,
+                 from /workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_prep.cpp:22,
+                 from ../chlkc_pack.cpp:4,
+                 from /workspace/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:21,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h: In function 'void llk_wait_for_free_tiles(int32_t, int32_t)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: CB-COMPUTE-RESERVE-BACK,/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h,21,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1057:5: note: in expansion of macro 'DO_PRAGMA'
+ 1057 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:21:5: note: in expansion of macro 'DeviceZoneScopedSumN2'
+   21 |     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp: In function 'void prep_chunk(const GdnPrepCbs&, uint32_t, uint32_t)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_norm,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,807,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:807:9: note: in expansion of macro 'GDN_ZONE'
+  807 |         GDN_ZONE("pp_norm");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_p1,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,834,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:834:9: note: in expansion of macro 'GDN_ZONE'
+  834 |         GDN_ZONE("pp_p1");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_decay,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,850,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:850:9: note: in expansion of macro 'GDN_ZONE'
+  850 |         GDN_ZONE("pp_decay");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_lmask,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,861,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:861:9: note: in expansion of macro 'GDN_ZONE'
+  861 |         GDN_ZONE("pp_lmask");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_negn,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,876,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:876:9: note: in expansion of macro 'GDN_ZONE'
+  876 |         GDN_ZONE("pp_negn");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_tinv,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,891,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:891:9: note: in expansion of macro 'GDN_ZONE'
+  891 |         GDN_ZONE("pp_tinv");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_kd,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,969,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:969:9: note: in expansion of macro 'GDN_ZONE'
+  969 |         GDN_ZONE("pp_kd");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_intra,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,990,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:990:9: note: in expansion of macro 'GDN_ZONE'
+  990 |         GDN_ZONE("pp_intra");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_qdecay,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,999,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:999:9: note: in expansion of macro 'GDN_ZONE'
+  999 |         GDN_ZONE("pp_qdecay");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_kdec,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1004,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1004:9: note: in expansion of macro 'GDN_ZONE'
+ 1004 |         GDN_ZONE("pp_kdec");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_dl,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1030,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1030:9: note: in expansion of macro 'GDN_ZONE'
+ 1030 |         GDN_ZONE("pp_dl");
+      |         ^~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp: In function 'void scan_step(const GdnScanCbs&, uint32_t, uint32_t)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_diff,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1068,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1068:9: note: in expansion of macro 'GDN_ZONE'
+ 1068 |         GDN_ZONE("st_diff");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_vnew,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1099,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1099:9: note: in expansion of macro 'GDN_ZONE'
+ 1099 |         GDN_ZONE("st_vnew");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_o,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1113,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1113:9: note: in expansion of macro 'GDN_ZONE'
+ 1113 |         GDN_ZONE("st_o");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_snew,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1146,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1146:9: note: in expansion of macro 'GDN_ZONE'
+ 1146 |         GDN_ZONE("st_snew");
+      |         ^~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_prep.cpp: In function 'void kernel_main()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: prep_wait_in,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_prep.cpp,120,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_prep.cpp:120:13: note: in expansion of macro 'DeviceZoneScopedN'
+  120 |             DeviceZoneScopedN("prep_wait_in");
+      |             ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: prep_item,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_prep.cpp,129,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_prep.cpp:129:13: note: in expansion of macro 'DeviceZoneScopedN'
+  129 |             DeviceZoneScopedN("prep_item");
+      |             ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,91,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:91:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   91 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/b37ee4f4898b28de/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=4800000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="writer_chunk_gdn_fused/17932712292689015241/" -DKERNEL_COMPILE_TIME_ARGS=1,4,4,2,1,2,1,17,12288,1,0,1195658753 -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/writer_chunk_gdn_fused/17932712292689015241/brisc/brisck.13758792584634479528_115476.o /workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/writer_chunk_gdn_fused/17932712292689015241/brisc/brisck.13758792584634479528_115476.d
+In file included from /workspace/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /workspace/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /workspace/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:16:
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-FLUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,481,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:481:17: note: in expansion of macro 'SrcLocNameToHash'
+  481 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-DRAM-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,490,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:490:17: note: in expansion of macro 'SrcLocNameToHash'
+  490 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,633,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:633:5: note: in expansion of macro 'SrcLocNameToHash'
+  633 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/writer_chunk_gdn_fused.cpp: In function 'void kernel_main()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: tx_wait_cb,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/writer_chunk_gdn_fused.cpp,274,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/writer_chunk_gdn_fused.cpp:274:13: note: in expansion of macro 'DeviceZoneScopedN'
+  274 |             DeviceZoneScopedN("tx_wait_cb");
+      |             ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: tx_wait_credit,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/writer_chunk_gdn_fused.cpp,304,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/writer_chunk_gdn_fused.cpp:304:13: note: in expansion of macro 'DeviceZoneScopedN'
+  304 |             DeviceZoneScopedN("tx_wait_credit");
+      |             ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: tx_issue,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/writer_chunk_gdn_fused.cpp,335,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/writer_chunk_gdn_fused.cpp:335:13: note: in expansion of macro 'DeviceZoneScopedN'
+  335 |             DeviceZoneScopedN("tx_issue");
+      |             ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: tx_barrier,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/writer_chunk_gdn_fused.cpp,383,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/writer_chunk_gdn_fused.cpp:383:13: note: in expansion of macro 'DeviceZoneScopedN'
+  383 |             DeviceZoneScopedN("tx_barrier");
+      |             ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: tx_valid,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/writer_chunk_gdn_fused.cpp,404,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/dataflow/writer_chunk_gdn_fused.cpp:404:13: note: in expansion of macro 'DeviceZoneScopedN'
+  404 |             DeviceZoneScopedN("tx_valid");
+      |             ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: BRISC-KERNEL,/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc0, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/runtime/sfpi/include -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/9d0d9caa9762b930/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=4800000 -DPROCESSOR_INDEX=2 -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="chunk_gdn_prep/6669700985196300369/" -DKERNEL_COMPILE_TIME_ARGS=1,4,4,1,1035273459,897988541 -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/chunk_gdn_prep/6669700985196300369/trisc0/trisck.13758792584634479528_115476.o /workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/chunk_gdn_prep/6669700985196300369/trisc0/trisck.13758792584634479528_115476.d
+In file included from /workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:13,
+                 from /workspace/tt_metal/hw/inc/api/compute/cb_api.h:15,
+                 from /workspace/tt_metal/hw/inc/api/compute/common.h:11,
+                 from /workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_prep.cpp:22,
+                 from ../chlkc_unpack.cpp:4,
+                 from /workspace/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h: In function 'void llk_wait_tiles(int, int32_t)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: CB-COMPUTE-WAIT-FRONT,/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h,19,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1052:5: note: in expansion of macro 'DO_PRAGMA'
+ 1052 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:19:5: note: in expansion of macro 'DeviceZoneScopedSumN1'
+   19 |     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp: In function 'void prep_chunk(const GdnPrepCbs&, uint32_t, uint32_t)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_norm,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,807,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:807:9: note: in expansion of macro 'GDN_ZONE'
+  807 |         GDN_ZONE("pp_norm");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_p1,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,834,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:834:9: note: in expansion of macro 'GDN_ZONE'
+  834 |         GDN_ZONE("pp_p1");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_decay,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,850,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:850:9: note: in expansion of macro 'GDN_ZONE'
+  850 |         GDN_ZONE("pp_decay");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_lmask,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,861,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:861:9: note: in expansion of macro 'GDN_ZONE'
+  861 |         GDN_ZONE("pp_lmask");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_negn,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,876,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:876:9: note: in expansion of macro 'GDN_ZONE'
+  876 |         GDN_ZONE("pp_negn");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_tinv,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,891,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:891:9: note: in expansion of macro 'GDN_ZONE'
+  891 |         GDN_ZONE("pp_tinv");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_kd,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,969,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:969:9: note: in expansion of macro 'GDN_ZONE'
+  969 |         GDN_ZONE("pp_kd");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_intra,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,990,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:990:9: note: in expansion of macro 'GDN_ZONE'
+  990 |         GDN_ZONE("pp_intra");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_qdecay,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,999,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:999:9: note: in expansion of macro 'GDN_ZONE'
+  999 |         GDN_ZONE("pp_qdecay");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_kdec,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1004,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1004:9: note: in expansion of macro 'GDN_ZONE'
+ 1004 |         GDN_ZONE("pp_kdec");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_dl,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1030,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1030:9: note: in expansion of macro 'GDN_ZONE'
+ 1030 |         GDN_ZONE("pp_dl");
+      |         ^~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp: In function 'void scan_step(const GdnScanCbs&, uint32_t, uint32_t)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_diff,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1068,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1068:9: note: in expansion of macro 'GDN_ZONE'
+ 1068 |         GDN_ZONE("st_diff");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_vnew,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1099,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1099:9: note: in expansion of macro 'GDN_ZONE'
+ 1099 |         GDN_ZONE("st_vnew");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_o,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1113,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1113:9: note: in expansion of macro 'GDN_ZONE'
+ 1113 |         GDN_ZONE("st_o");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_snew,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1146,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1146:9: note: in expansion of macro 'GDN_ZONE'
+ 1146 |         GDN_ZONE("st_snew");
+      |         ^~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_prep.cpp: In function 'void kernel_main()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: prep_wait_in,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_prep.cpp,120,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_prep.cpp:120:13: note: in expansion of macro 'DeviceZoneScopedN'
+  120 |             DeviceZoneScopedN("prep_wait_in");
+      |             ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: prep_item,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_prep.cpp,129,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_prep.cpp:129:13: note: in expansion of macro 'DeviceZoneScopedN'
+  129 |             DeviceZoneScopedN("prep_item");
+      |             ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,91,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:91:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   91 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/runtime/sfpi/include -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/9d0d9caa9762b930/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=4800000 -DPROCESSOR_INDEX=4 -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="chunk_gdn_scan/10287599434839837533/" -DKERNEL_COMPILE_TIME_ARGS=1,4,4,4 -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/chunk_gdn_scan/10287599434839837533/trisc2/trisck.13758792584634479528_115476.o /workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/chunk_gdn_scan/10287599434839837533/trisc2/trisck.13758792584634479528_115476.d
+In file included from /workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:14,
+                 from /workspace/tt_metal/hw/inc/api/compute/cb_api.h:12,
+                 from /workspace/tt_metal/hw/inc/api/compute/common.h:11,
+                 from /workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_scan.cpp:16,
+                 from ../chlkc_pack.cpp:4,
+                 from /workspace/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:21,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h: In function 'void llk_wait_for_free_tiles(int32_t, int32_t)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: CB-COMPUTE-RESERVE-BACK,/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h,21,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1057:5: note: in expansion of macro 'DO_PRAGMA'
+ 1057 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:21:5: note: in expansion of macro 'DeviceZoneScopedSumN2'
+   21 |     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp: In function 'void prep_chunk(const GdnPrepCbs&, uint32_t, uint32_t)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_norm,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,807,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:807:9: note: in expansion of macro 'GDN_ZONE'
+  807 |         GDN_ZONE("pp_norm");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_p1,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,834,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:834:9: note: in expansion of macro 'GDN_ZONE'
+  834 |         GDN_ZONE("pp_p1");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_decay,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,850,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:850:9: note: in expansion of macro 'GDN_ZONE'
+  850 |         GDN_ZONE("pp_decay");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_lmask,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,861,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:861:9: note: in expansion of macro 'GDN_ZONE'
+  861 |         GDN_ZONE("pp_lmask");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_negn,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,876,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:876:9: note: in expansion of macro 'GDN_ZONE'
+  876 |         GDN_ZONE("pp_negn");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_tinv,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,891,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:891:9: note: in expansion of macro 'GDN_ZONE'
+  891 |         GDN_ZONE("pp_tinv");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_kd,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,969,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:969:9: note: in expansion of macro 'GDN_ZONE'
+  969 |         GDN_ZONE("pp_kd");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_intra,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,990,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:990:9: note: in expansion of macro 'GDN_ZONE'
+  990 |         GDN_ZONE("pp_intra");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_qdecay,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,999,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:999:9: note: in expansion of macro 'GDN_ZONE'
+  999 |         GDN_ZONE("pp_qdecay");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_kdec,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1004,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1004:9: note: in expansion of macro 'GDN_ZONE'
+ 1004 |         GDN_ZONE("pp_kdec");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_dl,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1030,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1030:9: note: in expansion of macro 'GDN_ZONE'
+ 1030 |         GDN_ZONE("pp_dl");
+      |         ^~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp: In function 'void scan_step(const GdnScanCbs&, uint32_t, uint32_t)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_diff,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1068,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1068:9: note: in expansion of macro 'GDN_ZONE'
+ 1068 |         GDN_ZONE("st_diff");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_vnew,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1099,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1099:9: note: in expansion of macro 'GDN_ZONE'
+ 1099 |         GDN_ZONE("st_vnew");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_o,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1113,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1113:9: note: in expansion of macro 'GDN_ZONE'
+ 1113 |         GDN_ZONE("st_o");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_snew,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1146,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1146:9: note: in expansion of macro 'GDN_ZONE'
+ 1146 |         GDN_ZONE("st_snew");
+      |         ^~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_scan.cpp: In function 'void kernel_main()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: scan_wait_in,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_scan.cpp,81,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_scan.cpp:81:13: note: in expansion of macro 'DeviceZoneScopedN'
+   81 |             DeviceZoneScopedN("scan_wait_in");
+      |             ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: scan_step,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_scan.cpp,92,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_scan.cpp:92:13: note: in expansion of macro 'DeviceZoneScopedN'
+   92 |             DeviceZoneScopedN("scan_step");
+      |             ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,91,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:91:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   91 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/runtime/sfpi/include -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/9d0d9caa9762b930/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=4800000 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="chunk_gdn_scan/10287599434839837533/" -DKERNEL_COMPILE_TIME_ARGS=1,4,4,4 -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/chunk_gdn_scan/10287599434839837533/trisc1/trisck.13758792584634479528_115476.o /workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/chunk_gdn_scan/10287599434839837533/trisc1/trisck.13758792584634479528_115476.d
+In file included from /workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_scan.cpp:17,
+                 from ../chlkc_math.cpp:4,
+                 from /workspace/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp: In function 'void prep_chunk(const GdnPrepCbs&, uint32_t, uint32_t)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_norm,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,807,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:807:9: note: in expansion of macro 'GDN_ZONE'
+  807 |         GDN_ZONE("pp_norm");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_p1,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,834,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:834:9: note: in expansion of macro 'GDN_ZONE'
+  834 |         GDN_ZONE("pp_p1");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_decay,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,850,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:850:9: note: in expansion of macro 'GDN_ZONE'
+  850 |         GDN_ZONE("pp_decay");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_lmask,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,861,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:861:9: note: in expansion of macro 'GDN_ZONE'
+  861 |         GDN_ZONE("pp_lmask");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_negn,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,876,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:876:9: note: in expansion of macro 'GDN_ZONE'
+  876 |         GDN_ZONE("pp_negn");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_tinv,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,891,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:891:9: note: in expansion of macro 'GDN_ZONE'
+  891 |         GDN_ZONE("pp_tinv");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_kd,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,969,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:969:9: note: in expansion of macro 'GDN_ZONE'
+  969 |         GDN_ZONE("pp_kd");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_intra,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,990,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:990:9: note: in expansion of macro 'GDN_ZONE'
+  990 |         GDN_ZONE("pp_intra");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_qdecay,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,999,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:999:9: note: in expansion of macro 'GDN_ZONE'
+  999 |         GDN_ZONE("pp_qdecay");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_kdec,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1004,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1004:9: note: in expansion of macro 'GDN_ZONE'
+ 1004 |         GDN_ZONE("pp_kdec");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_dl,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1030,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1030:9: note: in expansion of macro 'GDN_ZONE'
+ 1030 |         GDN_ZONE("pp_dl");
+      |         ^~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp: In function 'void scan_step(const GdnScanCbs&, uint32_t, uint32_t)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_diff,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1068,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1068:9: note: in expansion of macro 'GDN_ZONE'
+ 1068 |         GDN_ZONE("st_diff");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_vnew,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1099,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1099:9: note: in expansion of macro 'GDN_ZONE'
+ 1099 |         GDN_ZONE("st_vnew");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_o,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1113,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1113:9: note: in expansion of macro 'GDN_ZONE'
+ 1113 |         GDN_ZONE("st_o");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_snew,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1146,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1146:9: note: in expansion of macro 'GDN_ZONE'
+ 1146 |         GDN_ZONE("st_snew");
+      |         ^~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_scan.cpp: In function 'void kernel_main()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: scan_wait_in,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_scan.cpp,81,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_scan.cpp:81:13: note: in expansion of macro 'DeviceZoneScopedN'
+   81 |             DeviceZoneScopedN("scan_wait_in");
+      |             ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: scan_step,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_scan.cpp,92,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_scan.cpp:92:13: note: in expansion of macro 'DeviceZoneScopedN'
+   92 |             DeviceZoneScopedN("scan_step");
+      |             ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,91,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:91:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   91 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/runtime/sfpi/include -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/9d0d9caa9762b930/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=4800000 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="chunk_gdn_prep/6669700985196300369/" -DKERNEL_COMPILE_TIME_ARGS=1,4,4,1,1035273459,897988541 -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/chunk_gdn_prep/6669700985196300369/trisc1/trisck.13758792584634479528_115476.o /workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/chunk_gdn_prep/6669700985196300369/trisc1/trisck.13758792584634479528_115476.d
+In file included from /workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_prep.cpp:23,
+                 from ../chlkc_math.cpp:4,
+                 from /workspace/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:16:
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp: In function 'void prep_chunk(const GdnPrepCbs&, uint32_t, uint32_t)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_norm,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,807,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:807:9: note: in expansion of macro 'GDN_ZONE'
+  807 |         GDN_ZONE("pp_norm");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_p1,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,834,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:834:9: note: in expansion of macro 'GDN_ZONE'
+  834 |         GDN_ZONE("pp_p1");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_decay,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,850,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:850:9: note: in expansion of macro 'GDN_ZONE'
+  850 |         GDN_ZONE("pp_decay");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_lmask,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,861,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:861:9: note: in expansion of macro 'GDN_ZONE'
+  861 |         GDN_ZONE("pp_lmask");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_negn,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,876,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:876:9: note: in expansion of macro 'GDN_ZONE'
+  876 |         GDN_ZONE("pp_negn");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_tinv,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,891,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:891:9: note: in expansion of macro 'GDN_ZONE'
+  891 |         GDN_ZONE("pp_tinv");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_kd,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,969,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:969:9: note: in expansion of macro 'GDN_ZONE'
+  969 |         GDN_ZONE("pp_kd");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_intra,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,990,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:990:9: note: in expansion of macro 'GDN_ZONE'
+  990 |         GDN_ZONE("pp_intra");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_qdecay,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,999,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:999:9: note: in expansion of macro 'GDN_ZONE'
+  999 |         GDN_ZONE("pp_qdecay");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_kdec,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1004,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1004:9: note: in expansion of macro 'GDN_ZONE'
+ 1004 |         GDN_ZONE("pp_kdec");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: pp_dl,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1030,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1030:9: note: in expansion of macro 'GDN_ZONE'
+ 1030 |         GDN_ZONE("pp_dl");
+      |         ^~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp: In function 'void scan_step(const GdnScanCbs&, uint32_t, uint32_t)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_diff,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1068,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1068:9: note: in expansion of macro 'GDN_ZONE'
+ 1068 |         GDN_ZONE("st_diff");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_vnew,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1099,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1099:9: note: in expansion of macro 'GDN_ZONE'
+ 1099 |         GDN_ZONE("st_vnew");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_o,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1113,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1113:9: note: in expansion of macro 'GDN_ZONE'
+ 1113 |         GDN_ZONE("st_o");
+      |         ^~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: st_snew,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp,1146,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:42:24: note: in expansion of macro 'DeviceZoneScopedN'
+   42 | #define GDN_ZONE(name) DeviceZoneScopedN(name)
+      |                        ^~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_math.hpp:1146:9: note: in expansion of macro 'GDN_ZONE'
+ 1146 |         GDN_ZONE("st_snew");
+      |         ^~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_prep.cpp: In function 'void kernel_main()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: prep_wait_in,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_prep.cpp,120,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_prep.cpp:120:13: note: in expansion of macro 'DeviceZoneScopedN'
+  120 |             DeviceZoneScopedN("prep_wait_in");
+      |             ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: prep_item,/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_prep.cpp,129,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:988:5: note: in expansion of macro 'DO_PRAGMA'
+  988 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_prep.cpp:129:13: note: in expansion of macro 'DeviceZoneScopedN'
+  129 |             DeviceZoneScopedN("prep_item");
+      |             ^~~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,91,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:91:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   91 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/b37ee4f4898b28de/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=4800000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNEEDS_PADDING=1 -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="writer_unary_transpose_hc_interleaved_tiled_padding_aware/6715830563072505354/" -DKERNEL_COMPILE_TIME_ARGS=2,4096 -include named_ct_arg_map_generated.h -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/writer_unary_transpose_hc_interleaved_tiled_padding_aware/6715830563072505354/brisc/brisck.13758792584634479528_115476.o /workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/writer_unary_transpose_hc_interleaved_tiled_padding_aware/6715830563072505354/brisc/brisck.13758792584634479528_115476.d
+In file included from /workspace/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /workspace/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /workspace/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:16:
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-FLUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,481,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:481:17: note: in expansion of macro 'SrcLocNameToHash'
+  481 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-DRAM-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,490,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:490:17: note: in expansion of macro 'SrcLocNameToHash'
+  490 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,633,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:633:5: note: in expansion of macro 'SrcLocNameToHash'
+  633 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: BRISC-KERNEL,/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+PREFILL_PCC 0.9999574277608478
+2026-10-23 14:36:03.238 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-10-23 14:36:03.371 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+EAGER_DECODE_PCC 0.9999742270345005
+2026-10-23 14:36:09.527 | INFO     | tracy:signpost:49 - PERF_DECODE
+2026-10-23 14:36:09.530 | INFO     | tracy:signpost:49 - PERF_DECODE_END
+{"layer_type": "linear_attention", "layer_idx": 0, "batch": 1, "sequence": 4096, "weights": "real", "prefill_pcc": 0.9999574277608478, "decode_pcc": 0.9999742270345005, "changed_input_decode_pcc": 0.9999214821441956, "resume_pcc": null, "deterministic": true, "remap_pcc": null, "remap_cache_pcc": null, "input_std": 0.1, "request_results": [], "prefill_pcc_fp32": 0.9999634623527527, "prefill_relative_rmse": 0.00934313889592886, "runtime_fallback_audit": false, "provenance": {"tests/run_fused_decoder.py": "9147a787bdd26e9bd7327b1ec0b1fc7d076401928db758e9a011464f1da14466", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/fused_decoder.py": "547f3a30618b45a863ca1e59a1bf6a1e31154df1a4c5f70afdaaca0ee9e9d607", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 30377131008, "allocated_bytes": 0, "largest_free_per_bank": 3797141376}, "after_weights": {"num_banks": 8, "capacity_bytes": 30377131008, "allocated_bytes": 770260992, "largest_free_per_bank": 3700858752}, "request_setup": {"num_banks": 8, "capacity_bytes": 30377131008, "allocated_bytes": 821253120, "largest_free_per_bank": 3694484736}}, "prefill_compared_tokens": 4096, "performance_workload": {"input_tokens": 4096, "output_tokens": 128, "batch": 1, "concurrency": 1, "decode_measurement": "final warmed step at context 4224", "scope": "single layer, supplied hidden activations", "prefill_profiled": true}}
+2026-10-23 14:36:16.033 | info     |           Metal | Device kernel duration perf summary (device=0): count=15765, min=862ns, avg=38075.2ns, max=488670ns (profiler_analysis.cpp:729)
+2026-10-23 14:36:16.033 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=48800ns, range=[0..488000), underflow(<0ns)=0, overflow(>=488000ns)=1) (profiler_analysis.cpp:772)
+2026-10-23 14:36:16.033 | info     |           Metal |   [           0 ..        48800) |########################################|    13149 (profiler_analysis.cpp:777)
+2026-10-23 14:36:16.033 | info     |           Metal |   [       48800 ..        97600) |###                                     |     1108 (profiler_analysis.cpp:777)
+2026-10-23 14:36:16.033 | info     |           Metal |   [       97600 ..       146400) |                                        |      132 (profiler_analysis.cpp:777)
+2026-10-23 14:36:16.033 | info     |           Metal |   [      146400 ..       195200) |##                                      |      586 (profiler_analysis.cpp:777)
+2026-10-23 14:36:16.033 | info     |           Metal |   [      195200 ..       244000) |                                        |        2 (profiler_analysis.cpp:777)
+2026-10-23 14:36:16.033 | info     |           Metal |   [      244000 ..       292800) |#                                       |      197 (profiler_analysis.cpp:777)
+2026-10-23 14:36:16.033 | info     |           Metal |   [      292800 ..       341600) |                                        |        0 (profiler_analysis.cpp:777)
+2026-10-23 14:36:16.033 | info     |           Metal |   [      341600 ..       390400) |                                        |        0 (profiler_analysis.cpp:777)
+2026-10-23 14:36:16.033 | info     |           Metal |   [      390400 ..       439200) |#                                       |      390 (profiler_analysis.cpp:777)
+2026-10-23 14:36:16.033 | info     |           Metal |   [      439200 ..       488000) |#                                       |      200 (profiler_analysis.cpp:777)
+2026-10-23 14:36:24.793 | info     |    BuildKernels | JIT cache stats: 295/306 hits (96.4%) [295 cached, 193 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:36:24.794 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:36:24.826 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:36:24.826 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:36:24.966 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:36:24.967 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:36:24.967 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 33.45 s
+Zones: 24,244,412
+Elapsed time: 33.22 s
+Saving trace... done!
+Trace size 35.42 MB (5.87% ratio)
+2026-10-23 14:36:25.316 | INFO     | __main__:main:483 - Copying /workspace/generated/profiler/.logs/tracy_profile_log_host.tracy to /workspace/build/profiler/build_wasm/traces/models_autoports_qwen_qwen3_8_27b_tests_2026_10_23_14_36_25.tracy
+2026-10-23 14:36:25.316 | WARNING  | __main__:main:488 - Could not copy /workspace/generated/profiler/.logs/tracy_profile_log_host.tracy to /workspace/build/profiler/build_wasm/traces/models_autoports_qwen_qwen3_8_27b_tests_2026_10_23_14_36_25.tracy: [Errno 2] No such file or directory: '/workspace/generated/profiler/.logs/tracy_profile_log_host.tracy'
+2026-10-23 14:36:25.317 | INFO     | __main__:main:495 - embed.tracy -> traces/models_autoports_qwen_qwen3_8_27b_tests_2026_10_23_14_36_25.tracy
+2026-10-23 14:36:25.317 | INFO     | tracy.serve_wasm:launch_server_subprocess:308 - Tracy WASM web UI disabled (--no-web-server / TRACY_NO_WEB_SERVER); not starting a server.
+2026-10-23 14:36:31.165 | INFO     | tracy:generate_report:162 - Host side ops time report generated at models/autoports/qwen_qwen3_8_27b/doc/fused_decoder/tracy/c2_linear/.logs/tracy_ops_times.csv
+2026-10-23 14:36:31.305 | INFO     | tracy:generate_report:173 - Host side ops data report generated at models/autoports/qwen_qwen3_8_27b/doc/fused_decoder/tracy/c2_linear/.logs/tracy_ops_data.csv
+2026-10-23 14:36:31.305 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+/workspace/tools/tracy/process_ops_logs.py:535: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-10-23 14:36:46.219 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-10-23 14:36:46.221 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+2026-10-23 14:37:09.017 | INFO     | tracy.process_ops_logs:generate_reports:1323 - OPs' perf analysis is finished! Generating reports ...
+2026-10-23 14:37:09.017 | INFO     | tracy.process_ops_logs:generate_reports:1343 - Copying runtime artifacts
+2026-10-23 14:37:09.738 | INFO     | tracy.process_ops_logs:generate_reports:1352 - Generating OPs CSV
+2026-10-23 14:37:19.954 | INFO     | tracy.process_ops_logs:generate_reports:1814 - OPs csv generated at: /workspace/models/autoports/qwen_qwen3_8_27b/doc/fused_decoder/tracy/c2_linear/reports/2026_10_23_14_37_09/ops_perf_results_2026_10_23_14_37_09.csv
+{"source": "models/autoports/qwen_qwen3_8_27b/doc/fused_decoder/tracy/c2_linear/reports/2026_10_23_14_37_09/ops_perf_results_2026_10_23_14_37_09.csv", "device_header": "ARCH: blackhole, CHIP_FREQ[MHz]: 1350, Max Compute Cores: 120", "clock_mhz": 1350.0, "time_basis": "Whole-layer firmware timestamp envelope, including all operations and gaps; device cycles / MHz = us.", "phases": {"prefill": {"device_us": 131040.01185185186, "first_cycle": 2399046661404, "last_cycle": 2399223565420, "device_ops": 1955, "summed_kernel_us": 129576.267, "trace_ids": [""], "trace_replay_sessions": [""]}, "decode": {"device_us": 2614.402222222222, "first_cycle": 2407533919772, "last_cycle": 2407537449215, "device_ops": 89, "summed_kernel_us": 2562.661, "trace_ids": ["0"], "trace_replay_sessions": ["132"]}}}

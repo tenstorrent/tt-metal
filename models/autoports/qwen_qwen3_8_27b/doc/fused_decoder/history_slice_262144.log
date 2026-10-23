@@ -1,0 +1,29 @@
+2026-10-23 15:44:51.508 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+[transformers] The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+HF_REFERENCE_READY
+2026-10-23 15:45:55.839 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 15:45:55.839 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 15:45:55.839 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 15:45:55.839 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 15:45:55.850 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 15:45:55.851 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 15:45:55.931 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 15:45:55.931 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 15:45:55.931 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 15:45:55.931 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 15:45:55.932 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 15:45:56.152 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 15:45:56.215 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 15:45:56.215 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 15:45:56.215 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 15:45:56.216 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 15:45:56.256 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.9999164842514845
+2026-10-23 15:46:07.259 | info     |    BuildKernels | JIT cache stats: 127/127 hits (100.0%) [127 cached, 4141 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 15:46:07.259 | info     |    BuildKernels | JIT telemetry: 31 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 15:46:07.282 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 15:46:07.282 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 15:46:07.461 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 15:46:07.461 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 15:46:07.461 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

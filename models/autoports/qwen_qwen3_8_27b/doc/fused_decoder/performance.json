@@ -1,0 +1,371 @@
+{
+  "workload": {
+    "input_tokens": 4096,
+    "output_tokens": 128,
+    "batch": 1,
+    "concurrency": 1
+  },
+  "scope": "Single decoder layer with supplied hidden activations; not token generation.",
+  "layer_types": {
+    "linear_attention": {
+      "prefill_device_us": 83008.77777777778,
+      "decode_device_us": 2325.657037037037,
+      "prefill_useful_flops": 3163039465472,
+      "decode_dram_bytes": 773206016,
+      "peak_flops_per_s": 165888000000000.0,
+      "peak_dram_bytes_per_s": 512000000000.0,
+      "prefill_flops_pct": 22.970244616403054,
+      "decode_dram_pct": 64.93511192535954,
+      "peak_basis": "One Blackhole p300c ASIC:120 physical cores at1.35GHz,4096 FLOP/cycle/core divided by4 for HiFi4;512GB/s DRAM. Runtime compute grid110 cores. No multi-device aggregation.",
+      "traffic_assumptions": "BF16 dense weights once per independent batch plane of the [B,1,H] matmul geometry; FP32 recurrent state and three-row row-major BF16 convolution state read/write, residual input/output. Excludes intermediate spills, repeated reads within a plane and small norms/gates: estimated lower-bound traffic, not measured bus utilization. Includes physical padding of the a/b projection columns.",
+      "flops_assumptions": "Dense active work, no MoE/sparsity;2 FLOPs per multiply/add; causal attention pairs or recurrent updates plus approximate scalar norms/gates/activation work. Scalar transcendentals counted as one operation. No padding counted as useful work.",
+      "source": "single-layer Tracy; whole-layer device firmware timestamp envelope including gaps",
+      "evidence": [
+        "tracy/history_slice_final/whole_layer_timing.json",
+        "tracy/history_slice_final/ops.csv",
+        "history_slice_final.json"
+      ],
+      "before": {
+        "prefill_device_us": 284743.5407407407,
+        "decode_device_us": 2660.428148148148
+      },
+      "speedup": {
+        "prefill": 3.4302822950004836,
+        "decode": 1.1439468957717087
+      }
+    },
+    "full_attention": {
+      "prefill_device_us": 93214.92444444445,
+      "decode_device_us": 2187.32,
+      "prefill_useful_flops": 3257527418880.0,
+      "decode_dram_bytes": 761815040,
+      "peak_flops_per_s": 165888000000000.0,
+      "peak_dram_bytes_per_s": 512000000000.0,
+      "prefill_flops_pct": 21.066270519643698,
+      "decode_dram_pct": 68.02479746904886,
+      "peak_basis": "One Blackhole p300c ASIC:120 physical cores at1.35GHz,4096 FLOP/cycle/core divided by4 for HiFi4;512GB/s DRAM. Runtime compute grid110 cores. No multi-device aggregation.",
+      "traffic_assumptions": "BF16 dense weights once per independent batch plane of the [B,1,H] matmul geometry; prefix KV read once, one KV token write, residual input/output. Excludes intermediate spills, repeated reads within a plane, norms and page metadata: estimated lower-bound traffic, not measured bus utilization.",
+      "flops_assumptions": "Dense active work, no MoE/sparsity;2 FLOPs per multiply/add; causal attention pairs or recurrent updates plus approximate scalar norms/gates/activation work. Scalar transcendentals counted as one operation. No padding counted as useful work.",
+      "source": "single-layer Tracy; whole-layer device firmware timestamp envelope including gaps",
+      "evidence": [
+        "tracy/final_full/whole_layer_timing.json",
+        "tracy/final_full/ops.csv",
+        "final_full.json"
+      ],
+      "before": {
+        "prefill_device_us": 108787.72962962963,
+        "decode_device_us": 2456.268888888889
+      },
+      "speedup": {
+        "prefill": 1.167063431934298,
+        "decode": 1.12295818119383
+      }
+    }
+  },
+  "supplemental_batches": {
+    "linear_attention": {
+      "8": {
+        "workload": {
+          "input_tokens": 4096,
+          "output_tokens": 128,
+          "batch": 8,
+          "concurrency": 1,
+          "decode_measurement": "final warmed step at context 4224",
+          "scope": "single layer, supplied hidden activations",
+          "prefill_profiled": false
+        },
+        "final_step_host_us": 13760.973000898957,
+        "warmed_trace_screen_host_us": 13745.087820570916,
+        "source": "host wall time around blocking trace execution; not device time",
+        "evidence": "history_slice_workload_b8.json"
+      },
+      "16": {
+        "workload": {
+          "input_tokens": 4096,
+          "output_tokens": 128,
+          "batch": 16,
+          "concurrency": 1,
+          "decode_measurement": "final warmed step at context 4224",
+          "scope": "single layer, supplied hidden activations",
+          "prefill_profiled": false
+        },
+        "final_step_host_us": 26940.041920170188,
+        "warmed_trace_screen_host_us": 26906.479420140386,
+        "source": "host wall time around blocking trace execution; not device time",
+        "evidence": "history_slice_workload_b16.json"
+      },
+      "32": {
+        "workload": {
+          "input_tokens": 4096,
+          "output_tokens": 128,
+          "batch": 32,
+          "concurrency": 1,
+          "decode_measurement": "final warmed step at context 4224",
+          "scope": "single layer, supplied hidden activations",
+          "prefill_profiled": false
+        },
+        "final_step_host_us": 53468.68489868939,
+        "warmed_trace_screen_host_us": 53412.71659126505,
+        "source": "host wall time around blocking trace execution; not device time",
+        "evidence": "history_slice_workload_b32.json"
+      }
+    },
+    "full_attention": {
+      "8": {
+        "workload": {
+          "input_tokens": 4096,
+          "output_tokens": 128,
+          "batch": 8,
+          "concurrency": 1,
+          "decode_measurement": "final warmed step at context 4224",
+          "scope": "single layer, supplied hidden activations",
+          "prefill_profiled": false
+        },
+        "final_step_host_us": 12536.327121779323,
+        "warmed_trace_screen_host_us": 12571.190770249814,
+        "source": "host wall time around blocking trace execution; not device time",
+        "evidence": "workload_layer3_b8.json"
+      },
+      "16": {
+        "workload": {
+          "input_tokens": 4096,
+          "output_tokens": 128,
+          "batch": 16,
+          "concurrency": 1,
+          "decode_measurement": "final warmed step at context 4224",
+          "scope": "single layer, supplied hidden activations",
+          "prefill_profiled": false
+        },
+        "final_step_host_us": 24447.7279484272,
+        "warmed_trace_screen_host_us": 24523.69963983074,
+        "source": "host wall time around blocking trace execution; not device time",
+        "evidence": "workload_layer3_b16.json"
+      },
+      "32": {
+        "workload": {
+          "input_tokens": 4096,
+          "output_tokens": 128,
+          "batch": 32,
+          "concurrency": 1,
+          "decode_measurement": "final warmed step at context 4224",
+          "scope": "single layer, supplied hidden activations",
+          "prefill_profiled": false
+        },
+        "final_step_host_us": 48810.94419397414,
+        "warmed_trace_screen_host_us": 48778.985319659114,
+        "source": "host wall time around blocking trace execution; not device time",
+        "evidence": "workload_layer3_b32.json"
+      }
+    }
+  },
+  "operation_audit": {
+    "linear_attention": {
+      "prefill": {
+        "SliceDeviceOperation": {
+          "count": 160,
+          "kernel_us": 688.4600000000004
+        },
+        "LayerNormDeviceOperation": {
+          "count": 64,
+          "kernel_us": 5238.546
+        },
+        "MatmulDeviceOperation": {
+          "count": 160,
+          "kernel_us": 64673.875999999975
+        },
+        "QkvCausalConv1dSiluOperation": {
+          "count": 32,
+          "kernel_us": 1224.8039999999999
+        },
+        "UntilizeDeviceOperation": {
+          "count": 32,
+          "kernel_us": 1285.94
+        },
+        "CopyDeviceOperation": {
+          "count": 64,
+          "kernel_us": 573.895
+        },
+        "TypecastDeviceOperation": {
+          "count": 96,
+          "kernel_us": 464.2580000000001
+        },
+        "BinaryNgDeviceOperation": {
+          "count": 192,
+          "kernel_us": 2449.804999999998
+        },
+        "UnaryDeviceOperation": {
+          "count": 64,
+          "kernel_us": 238.76499999999996
+        },
+        "ChunkGdnDeviceOperation": {
+          "count": 32,
+          "kernel_us": 3084.0009999999997
+        },
+        "SigmoidGatedRmsNormOperation": {
+          "count": 32,
+          "kernel_us": 885.8219999999999
+        },
+        "ConcatDeviceOperation": {
+          "count": 3,
+          "kernel_us": 421.756
+        }
+      },
+      "decode": {
+        "LayerNormDeviceOperation": {
+          "count": 5,
+          "kernel_us": 177.337
+        },
+        "MatmulDeviceOperation": {
+          "count": 5,
+          "kernel_us": 1855.1
+        },
+        "FillPadDeviceOperation": {
+          "count": 1,
+          "kernel_us": 8.396
+        },
+        "QkvCausalConv1dSiluOperation": {
+          "count": 1,
+          "kernel_us": 17.472
+        },
+        "SliceDeviceOperation": {
+          "count": 8,
+          "kernel_us": 17.021
+        },
+        "UntilizeWithUnpaddingDeviceOperation": {
+          "count": 1,
+          "kernel_us": 3.117
+        },
+        "ConcatDeviceOperation": {
+          "count": 1,
+          "kernel_us": 2.147
+        },
+        "CopyDeviceOperation": {
+          "count": 2,
+          "kernel_us": 19.067
+        },
+        "TypecastDeviceOperation": {
+          "count": 6,
+          "kernel_us": 9.37
+        },
+        "BinaryNgDeviceOperation": {
+          "count": 7,
+          "kernel_us": 29.836
+        },
+        "UnaryDeviceOperation": {
+          "count": 3,
+          "kernel_us": 10.205
+        },
+        "ReshapeViewDeviceOperation": {
+          "count": 7,
+          "kernel_us": 73.65700000000001
+        },
+        "TransposeDeviceOperation": {
+          "count": 6,
+          "kernel_us": 17.421
+        },
+        "RepeatInterleaveCodegenDeviceOperation": {
+          "count": 2,
+          "kernel_us": 8.713000000000001
+        },
+        "GenericOpDeviceOperation": {
+          "count": 1,
+          "kernel_us": 42.653
+        }
+      }
+    },
+    "full_attention": {
+      "prefill": {
+        "SliceDeviceOperation": {
+          "count": 319,
+          "kernel_us": 1596.4660000000001
+        },
+        "LayerNormDeviceOperation": {
+          "count": 128,
+          "kernel_us": 5864.742999999997
+        },
+        "MatmulDeviceOperation": {
+          "count": 160,
+          "kernel_us": 63066.423999999985
+        },
+        "NlpCreateHeadsDeviceOperation": {
+          "count": 32,
+          "kernel_us": 350.4320000000001
+        },
+        "RotaryEmbeddingDeviceOperation": {
+          "count": 64,
+          "kernel_us": 422.8280000000001
+        },
+        "ConcatDeviceOperation": {
+          "count": 67,
+          "kernel_us": 777.025
+        },
+        "PagedFillCacheDeviceOperation": {
+          "count": 64,
+          "kernel_us": 148.94000000000003
+        },
+        "SDPAOperation": {
+          "count": 32,
+          "kernel_us": 17519.971
+        },
+        "NLPConcatHeadsDeviceOperation": {
+          "count": 32,
+          "kernel_us": 291.6700000000001
+        },
+        "BinaryNgDeviceOperation": {
+          "count": 128,
+          "kernel_us": 2339.2939999999994
+        }
+      },
+      "decode": {
+        "LayerNormDeviceOperation": {
+          "count": 4,
+          "kernel_us": 175.678
+        },
+        "MatmulDeviceOperation": {
+          "count": 5,
+          "kernel_us": 1804.3719999999998
+        },
+        "SliceDeviceOperation": {
+          "count": 8,
+          "kernel_us": 17.308000000000003
+        },
+        "NlpCreateHeadsDeviceOperation": {
+          "count": 1,
+          "kernel_us": 3.536
+        },
+        "RotaryEmbeddingDeviceOperation": {
+          "count": 2,
+          "kernel_us": 10.329
+        },
+        "ConcatDeviceOperation": {
+          "count": 2,
+          "kernel_us": 4.567
+        },
+        "PermuteDeviceOperation": {
+          "count": 3,
+          "kernel_us": 9.854
+        },
+        "InterleavedToShardedDeviceOperation": {
+          "count": 2,
+          "kernel_us": 1.436
+        },
+        "PagedUpdateCacheDeviceOperation": {
+          "count": 2,
+          "kernel_us": 12.082
+        },
+        "SdpaDecodeDeviceOperation": {
+          "count": 1,
+          "kernel_us": 98.287
+        },
+        "ReshapeViewDeviceOperation": {
+          "count": 1,
+          "kernel_us": 4.459
+        },
+        "BinaryNgDeviceOperation": {
+          "count": 4,
+          "kernel_us": 23.175
+        }
+      }
+    }
+  }
+}

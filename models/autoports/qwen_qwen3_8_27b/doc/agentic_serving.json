@@ -1,5 +1,5 @@
 {
-  "stage": "01-functional-decoder",
+  "stage": "02-fused-decoder",
   "workload": {
     "target_concurrency": 32,
     "working_set_tokens": 32768,
@@ -18,37 +18,102 @@
     16,
     32
   ],
-  "stage_scope": "Single-layer functional decoder, no scheduler or full-model pool. Target workload is a planning estimate.",
+  "stage_scope": "Single fused decoder layer; no serving scheduler or full-model pool.",
   "batch_evidence": {
     "1": [
-      "functional_decoder/profile_linear_b1_complete.json",
-      "functional_decoder/profile_full_b1.json"
+      "fused_decoder/history_slice_final.json",
+      "fused_decoder/final_full.json"
     ],
     "8": [
-      "functional_decoder/profile_linear_b8.json",
-      "functional_decoder/profile_full_b8.json"
+      "fused_decoder/history_slice_workload_b8.json",
+      "fused_decoder/workload_layer3_b8.json"
     ],
     "16": [
-      "functional_decoder/profile_linear_b16.json",
-      "functional_decoder/profile_full_b16.json"
+      "fused_decoder/history_slice_workload_b16.json",
+      "fused_decoder/workload_layer3_b16.json"
     ],
     "32": [
-      "functional_decoder/profile_linear_b32_decode.json",
-      "functional_decoder/profile_full_b32.json"
+      "fused_decoder/history_slice_workload_b32.json",
+      "fused_decoder/workload_layer3_b32.json"
     ]
   },
-  "performance_evidence": "functional_decoder/performance.json",
-  "prefix_contract_evidence": "functional_decoder/README.md#prefix-cache-and-trace-ownership",
+  "performance_evidence": "fused_decoder/performance.json",
+  "prefix_contract_evidence": "fused_decoder/README.md#api-state-and-context",
   "memory_evidence": [
-    "functional_decoder/linear_watcher_requests.json:memory",
-    "functional_decoder/full_watcher_requests.json:memory"
+    "fused_decoder/watcher_linear_history_slice.json:memory",
+    "fused_decoder/watcher_layer3.json:memory"
   ],
-  "status": "functional_decoder_validated",
+  "status": "fused_decoder_clean_pass",
   "performance_status": "complete",
   "trace_allocation_evidence": [
-    "functional_decoder/final_validation.log",
-    "functional_decoder/linear_watcher_requests.json",
-    "functional_decoder/full_watcher_requests.json",
-    "functional_decoder/ragged_decode.json"
-  ]
+    "fused_decoder/final_validation.log",
+    "fused_decoder/history_slice_validation.log",
+    "fused_decoder/watcher_linear_history_slice.json",
+    "fused_decoder/watcher_layer3.json",
+    "fused_decoder/ragged_decode.json"
+  ],
+  "previous_stages": {
+    "01-functional-decoder": {
+      "stage": "01-functional-decoder",
+      "workload": {
+        "target_concurrency": 32,
+        "working_set_tokens": 32768,
+        "typical_context_tokens": 4096,
+        "source": "planning estimate; default batch set and agent long-prefix workload, not measured"
+      },
+      "batch_sizes": [
+        1,
+        8,
+        16,
+        32
+      ],
+      "tested_batch_sizes": [
+        1,
+        8,
+        16,
+        32
+      ],
+      "stage_scope": "Single-layer functional decoder, no scheduler or full-model pool. Target workload is a planning estimate.",
+      "batch_evidence": {
+        "1": [
+          "functional_decoder/profile_linear_b1_complete.json",
+          "functional_decoder/profile_full_b1.json"
+        ],
+        "8": [
+          "functional_decoder/profile_linear_b8.json",
+          "functional_decoder/profile_full_b8.json"
+        ],
+        "16": [
+          "functional_decoder/profile_linear_b16.json",
+          "functional_decoder/profile_full_b16.json"
+        ],
+        "32": [
+          "functional_decoder/profile_linear_b32_decode.json",
+          "functional_decoder/profile_full_b32.json"
+        ]
+      },
+      "performance_evidence": "functional_decoder/performance.json",
+      "prefix_contract_evidence": "functional_decoder/README.md#prefix-cache-and-trace-ownership",
+      "memory_evidence": [
+        "functional_decoder/linear_watcher_requests.json:memory",
+        "functional_decoder/full_watcher_requests.json:memory"
+      ],
+      "status": "functional_decoder_validated",
+      "performance_status": "complete",
+      "trace_allocation_evidence": [
+        "functional_decoder/final_validation.log",
+        "functional_decoder/linear_watcher_requests.json",
+        "functional_decoder/full_watcher_requests.json",
+        "functional_decoder/ragged_decode.json"
+      ]
+    }
+  },
+  "performance_note": "B1 uses whole-layer device envelopes. B8/B16/B32 use4096+128 supplied-hidden-input workload and separately labeled host-wall traced latency; no host time is substituted for device/roofline fields.",
+  "state_memory": {
+    "linear_bytes_per_request": 3207168,
+    "full_kv_bytes_per_token": 4096,
+    "weight_copies": 1,
+    "trace_region_size": 0,
+    "scope": "Layer state, not a full-model serving memory ledger."
+  }
 }

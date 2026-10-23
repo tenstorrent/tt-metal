@@ -1,0 +1,106 @@
+2026-10-23 14:34:40.334 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+HF_REFERENCE_READY
+2026-10-23 14:34:42.905 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:34:42.905 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:34:42.905 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:34:42.905 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:34:42.916 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:34:42.916 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:34:42.996 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:34:42.996 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:34:42.996 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:34:42.996 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:34:42.998 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:34:43.252 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:34:43.314 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:34:43.314 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:34:43.314 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:34:43.315 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:34:43.387 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.9998244721543411
+RESUME_PCC 1.0
+2026-10-23 14:34:46.893 | critical |          Always | TT_FATAL: All dimensions must be the same size except for the dimension along which the contenation is taking place. (assert.hpp:104)
+Traceback (most recent call last):
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/run_fused_decoder.py", line 359, in <module>
+    main()
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/run_fused_decoder.py", line 285, in main
+    warm = decode()
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/run_fused_decoder.py", line 261, in decode
+    return decoder.decode_forward(xdt, state=state, page_table=pt, current_pos=pos, cos=cdt, sin=sdt)
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/run_fused_decoder.py", line 37, in checked
+    return function(*args, **kwargs)
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tt/fused_decoder.py", line 239, in decode_forward
+    y = self._attention(h, state, page_table=page_table, current_pos=current_pos, cos=cos, sin=sin)
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tt/fused_decoder.py", line 189, in _attention
+    q = self._rope(ttnn.permute(q, (0, 2, 1, 3)), cos, sin)
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tt/fused_decoder.py", line 182, in _rope
+    return ttnn.concat([rotated, rest], dim=-1)
+  File "/workspace/ttnn/ttnn/decorators.py", line 1316, in _tracked_fast_operation_call
+    return _untracked_fast_operation_call(self, *function_args, **function_kwargs)
+  File "/workspace/ttnn/ttnn/decorators.py", line 1245, in __call__
+    result = self.function(*function_args, **function_kwargs)
+RuntimeError: TT_FATAL @ /workspace/ttnn/cpp/ttnn/operations/data_movement/concat/concat.cpp:319: shapes_match
+info:
+All dimensions must be the same size except for the dimension along which the contenation is taking place.
+backtrace:
+ --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0xb8c7b9) [0x77cca278c7b9]
+ --- ttnn::concat(std::vector<ttnn::Tensor, std::allocator<ttnn::Tensor> > const&, int, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<ttnn::Tensor> const&, unsigned int, std::optional<tt::tt_metal::CoreRangeSet> const&)
+ --- /workspace/ttnn/ttnn/_ttnn.so(+0x5cb818) [0x77cca53cb818]
+ --- /workspace/ttnn/ttnn/_ttnn.so(+0x3ca99d) [0x77cca51ca99d]
+ --- python(_PyObject_Call_Prepend+0x116) [0x575abbfe2a16]
+ --- python(+0x3b9b7e) [0x575abc129b7e]
+ --- python(_PyEval_EvalFrameDefault+0x8f71) [0x575abc044a41]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x575abbfe1373]
+ --- python(_PyEval_EvalFrameDefault+0x3536f) [0x575abc070e3f]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x575abbfe1373]
+ --- python(_PyObject_Call_Prepend+0x116) [0x575abbfe2a16]
+ --- python(+0x3b9b7e) [0x575abc129b7e]
+ --- python(+0x3012e8) [0x575abc0712e8]
+ --- python(_PyEval_EvalFrameDefault+0x1cfe8) [0x575abc058ab8]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x575abbfe1373]
+ --- python(_PyEval_EvalFrameDefault+0x7e12) [0x575abc0438e2]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x575abbfe1373]
+ --- python(+0x273829) [0x575abbfe3829]
+ --- python(+0x3010ec) [0x575abc0710ec]
+ --- python(_PyEval_EvalFrameDefault+0x1cfe8) [0x575abc058ab8]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x575abbfe1373]
+ --- python(+0x273829) [0x575abbfe3829]
+ --- python(_PyEval_EvalFrameDefault+0x3536f) [0x575abc070e3f]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x575abbfe1373]
+ --- python(+0x3010ec) [0x575abc0710ec]
+ --- python(_PyEval_EvalFrameDefault+0x1cfe8) [0x575abc058ab8]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x575abbfe1373]
+ --- python(+0x3010ec) [0x575abc0710ec]
+ --- python(_PyEval_EvalFrameDefault+0x1bcc5) [0x575abc057795]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x575abbfe1373]
+ --- python(+0x3010ec) [0x575abc0710ec]
+ --- python(_PyEval_EvalFrameDefault+0x1bcc5) [0x575abc057795]
+ --- python(+0x3ee472) [0x575abc15e472]
+ --- python(+0x3ec365) [0x575abc15c365]
+ --- python(+0x294312) [0x575abc004312]
+ --- python(+0x3010ec) [0x575abc0710ec]
+ --- python(_PyEval_EvalFrameDefault+0x1bcc5) [0x575abc057795]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x575abbfe1373]
+ --- python(+0x3010ec) [0x575abc0710ec]
+ --- python(_PyEval_EvalFrameDefault+0x1bcc5) [0x575abc057795]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x575abbfe1373]
+ --- python(+0x431c2a) [0x575abc1a1c2a]
+ --- python(Py_RunMain+0x173) [0x575abc1a1443]
+ --- python(+0x431fb2) [0x575abc1a1fb2]
+ --- python(+0x35847c) [0x575abc0c847c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x77cce924ad90]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x77cce924ae40]
+ --- python(+0x35838d) [0x575abc0c838d]
+
+2026-10-23 14:34:47.573 | info     |    BuildKernels | JIT cache stats: 180/188 hits (95.7%) [180 cached, 119 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:34:47.573 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:34:47.586 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:34:47.586 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:34:47.855 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:34:47.855 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:34:47.855 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

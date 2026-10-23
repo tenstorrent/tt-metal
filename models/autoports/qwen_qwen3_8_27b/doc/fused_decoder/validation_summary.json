@@ -1,0 +1,59 @@
+{
+  "source_sha256": "41ba2e2fec65d6c5bb7503a6ff1ca7a905a8164f349eb8ef9d8a399dccdefc6e",
+  "status": "validation_passed_review_clean_pass",
+  "kinds": {
+    "linear_attention": {
+      "real_evidence": [
+        "watcher_linear_history_slice.json",
+        "history_slice_262142.json",
+        "history_slice_262144.json",
+        "history_slice_odd_batch.json",
+        "history_slice_workload_b8.json",
+        "history_slice_workload_b16.json",
+        "history_slice_workload_b32.json"
+      ],
+      "synthetic_count": 9,
+      "synthetic_evidence": [
+        "synthetic_linear_history_slice/test_synthetic_fused_decoder_13/result.json",
+        "synthetic_linear_history_slice/test_synthetic_fused_decoder_32/result.json",
+        "synthetic_linear_history_slice/test_synthetic_fused_decoder_30/result.json",
+        "synthetic_linear_history_slice/test_synthetic_fused_decoder_10/result.json",
+        "synthetic_linear_history_slice/test_synthetic_fused_decoder_12/result.json",
+        "synthetic_linear_history_slice/test_synthetic_fused_decoder_31/result.json",
+        "synthetic_linear_history_slice/test_synthetic_fused_decoder_20/result.json",
+        "synthetic_linear_history_slice/test_synthetic_fused_decoder_11/result.json",
+        "synthetic_linear_history_slice/test_synthetic_fused_decoder_33/result.json"
+      ]
+    },
+    "full_attention": {
+      "real_evidence": [
+        "watcher_layer3.json",
+        "final_layer3_262142.json",
+        "final_layer3_262144.json",
+        "ragged_decode.json",
+        "workload_layer3_b8.json",
+        "workload_layer3_b16.json",
+        "workload_layer3_b32.json"
+      ],
+      "synthetic_count": 9,
+      "synthetic_evidence": [
+        "synthetic_cases/test_synthetic_fused_decoder_13/result.json",
+        "synthetic_cases/test_synthetic_fused_decoder_37/result.json",
+        "synthetic_cases/test_synthetic_fused_decoder_31/result.json",
+        "synthetic_cases/test_synthetic_fused_decoder_15/result.json",
+        "synthetic_cases/test_synthetic_fused_decoder_17/result.json",
+        "synthetic_cases/test_synthetic_fused_decoder_11/result.json",
+        "synthetic_cases/test_synthetic_fused_decoder_33/result.json",
+        "synthetic_cases/test_synthetic_fused_decoder_35/result.json",
+        "synthetic_cases/test_synthetic_fused_decoder_21/result.json"
+      ]
+    }
+  },
+  "trace_allocation_configuration": {
+    "TT_METAL_TRACE_ALLOC_TRACKING": "1",
+    "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE": "0",
+    "exemptions": false
+  },
+  "unaffected_full_attention_proof": "unaffected_full_attention.json",
+  "stage_review": "STAGE_REVIEW.md"
+}

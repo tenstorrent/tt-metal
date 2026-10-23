@@ -1,0 +1,364 @@
+2026-10-23 15:02:57.053 | INFO     | __main__:main:222 - Setting profiler artifacts folder to models/autoports/qwen_qwen3_8_27b/doc/fused_decoder/tracy/final_full
+2026-10-23 15:02:57.054 | INFO     | __main__:main:374 - Using port 8086
+2026-10-23 15:02:57.054 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-10-23 15:02:57.055 | INFO     | tracy:run_report_setup:112 - Capture command: ('/workspace/build/tools/profiler/bin/tracy-capture -o models/autoports/qwen_qwen3_8_27b/doc/fused_decoder/tracy/final_full/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-10-23 15:02:57.058 | INFO     | __main__:run_workload:409 - Test process started
+2026-10-23 15:02:57.289 | INFO     | __main__:main:222 - Setting profiler artifacts folder to models/autoports/qwen_qwen3_8_27b/doc/fused_decoder/tracy/final_full
+mkdir -p failed for path /.config/matplotlib: [Errno 13] Permission denied: '/.config'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-5qdzw2qp because there was an issue with the default path (/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+2026-10-23 15:02:58.446 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+HF_REFERENCE_READY
+2026-10-23 15:03:03.490 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 15:03:03.490 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 15:03:03.491 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 15:03:03.491 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 15:03:03.502 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 15:03:03.502 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 15:03:03.580 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 15:03:03.580 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 15:03:03.580 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 15:03:03.580 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 15:03:03.581 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 15:03:03.851 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 15:03:03.914 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 15:03:03.914 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 15:03:03.914 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 15:03:03.914 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 15:03:03.960 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+2026-10-23 15:03:04.491 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:50)
+Building ncrisc, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/b37ee4f4898b28de/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=4800000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reader_bmm_tile_layout_in0_sender_padding_metal2/1194311506471897528/" -DKERNEL_COMPILE_TIME_ARGS=2,2048 -include named_ct_arg_map_generated.h -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/reader_bmm_tile_layout_in0_sender_padding_metal2/1194311506471897528/ncrisc/ncrisck.18068648236282445629_126313.o /workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/reader_bmm_tile_layout_in0_sender_padding_metal2/1194311506471897528/ncrisc/ncrisck.18068648236282445629_126313.d
+In file included from /workspace/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /workspace/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /workspace/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,633,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:633:5: note: in expansion of macro 'SrcLocNameToHash'
+  633 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/b37ee4f4898b28de/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=4800000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DSKIP_MCAST=1 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reader_bmm_tile_layout_in1_sender_writer_padding_metal2/13169618178073459894/" -DKERNEL_COMPILE_TIME_ARGS=2,2048,2,2048 -include named_ct_arg_map_generated.h -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/reader_bmm_tile_layout_in1_sender_writer_padding_metal2/13169618178073459894/brisc/brisck.18068648236282445629_126313.o /workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/reader_bmm_tile_layout_in1_sender_writer_padding_metal2/13169618178073459894/brisc/brisck.18068648236282445629_126313.d
+In file included from /workspace/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /workspace/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /workspace/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:16:
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-FLUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,481,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:481:17: note: in expansion of macro 'SrcLocNameToHash'
+  481 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-DRAM-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,490,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:490:17: note: in expansion of macro 'SrcLocNameToHash'
+  490 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,633,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:633:5: note: in expansion of macro 'SrcLocNameToHash'
+  633 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: BRISC-KERNEL,/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/b37ee4f4898b28de/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=4800000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reader_tm_tile_layout_nlp_create_qkv_heads/11127365649991519473/" -DKERNEL_COMPILE_TIME_ARGS=2,2048 -include named_ct_arg_map_generated.h -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/reader_tm_tile_layout_nlp_create_qkv_heads/11127365649991519473/ncrisc/ncrisck.18068648236282445629_126313.o /workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/reader_tm_tile_layout_nlp_create_qkv_heads/11127365649991519473/ncrisc/ncrisck.18068648236282445629_126313.d
+In file included from /workspace/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /workspace/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /workspace/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,633,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:633:5: note: in expansion of macro 'SrcLocNameToHash'
+  633 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/b37ee4f4898b28de/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=4800000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="writer_tm_tile_layout_nlp_create_qkv_heads/14420554444553213927/" -DKERNEL_COMPILE_TIME_ARGS=2,2048,2,2048,2,2048 -include named_ct_arg_map_generated.h -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/writer_tm_tile_layout_nlp_create_qkv_heads/14420554444553213927/brisc/brisck.18068648236282445629_126313.o /workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/writer_tm_tile_layout_nlp_create_qkv_heads/14420554444553213927/brisc/brisck.18068648236282445629_126313.d
+In file included from /workspace/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /workspace/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /workspace/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:16:
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-FLUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,481,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:481:17: note: in expansion of macro 'SrcLocNameToHash'
+  481 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-DRAM-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,490,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:490:17: note: in expansion of macro 'SrcLocNameToHash'
+  490 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,633,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:633:5: note: in expansion of macro 'SrcLocNameToHash'
+  633 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: BRISC-KERNEL,/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+PREFILL_PCC 0.9999623096280231
+2026-10-23 15:03:07.964 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-10-23 15:03:08.059 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+Building ncrisc, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/b37ee4f4898b28de/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=4800000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reader_bmm_tile_layout_in0_sender_padding_metal2/3242794543899399335/" -DKERNEL_COMPILE_TIME_ARGS=2,2048 -include named_ct_arg_map_generated.h -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/reader_bmm_tile_layout_in0_sender_padding_metal2/3242794543899399335/ncrisc/ncrisck.18068648236282445629_126313.o /workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/reader_bmm_tile_layout_in0_sender_padding_metal2/3242794543899399335/ncrisc/ncrisck.18068648236282445629_126313.d
+In file included from /workspace/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /workspace/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /workspace/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,633,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:633:5: note: in expansion of macro 'SrcLocNameToHash'
+  633 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/b37ee4f4898b28de/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=4800000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DSKIP_MCAST=1 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reader_bmm_tile_layout_in1_sender_writer_padding_metal2/5343290552945159533/" -DKERNEL_COMPILE_TIME_ARGS=2,2048,2,2048 -include named_ct_arg_map_generated.h -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/reader_bmm_tile_layout_in1_sender_writer_padding_metal2/5343290552945159533/brisc/brisck.18068648236282445629_126313.o /workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/reader_bmm_tile_layout_in1_sender_writer_padding_metal2/5343290552945159533/brisc/brisck.18068648236282445629_126313.d
+In file included from /workspace/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /workspace/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /workspace/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:16:
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-FLUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,481,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:481:17: note: in expansion of macro 'SrcLocNameToHash'
+  481 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-DRAM-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,490,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:490:17: note: in expansion of macro 'SrcLocNameToHash'
+  490 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,633,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:633:5: note: in expansion of macro 'SrcLocNameToHash'
+  633 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: BRISC-KERNEL,/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/b37ee4f4898b28de/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=4800000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reader_tm_tile_layout_nlp_create_qkv_heads/7018437723587926335/" -DKERNEL_COMPILE_TIME_ARGS=2,2048 -include named_ct_arg_map_generated.h -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/reader_tm_tile_layout_nlp_create_qkv_heads/7018437723587926335/ncrisc/ncrisck.18068648236282445629_126313.o /workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/reader_tm_tile_layout_nlp_create_qkv_heads/7018437723587926335/ncrisc/ncrisck.18068648236282445629_126313.d
+In file included from /workspace/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /workspace/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /workspace/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,633,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:633:5: note: in expansion of macro 'SrcLocNameToHash'
+  633 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: NCRISC-KERNEL,/workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/b37ee4f4898b28de/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=4800000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="writer_tm_tile_layout_nlp_create_qkv_heads/6241573495670585669/" -DKERNEL_COMPILE_TIME_ARGS=2,2048,2,2048,2,2048 -include named_ct_arg_map_generated.h -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/writer_tm_tile_layout_nlp_create_qkv_heads/6241573495670585669/brisc/brisck.18068648236282445629_126313.o /workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/writer_tm_tile_layout_nlp_create_qkv_heads/6241573495670585669/brisc/brisck.18068648236282445629_126313.d
+In file included from /workspace/tt_metal/hw/inc/internal/dataflow/dataflow_api_raw.h:8,
+                 from /workspace/tt_metal/hw/inc/api/dataflow/dataflow_api.h:16,
+                 from /workspace/tt_metal/hw/inc/internal/firmware_common.h:23,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:16:
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-FLUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,481,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:481:17: note: in expansion of macro 'SrcLocNameToHash'
+  481 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-DRAM-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,490,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:490:17: note: in expansion of macro 'SrcLocNameToHash'
+  490 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp,633,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:42:5: note: in expansion of macro 'DO_PRAGMA'
+   42 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:633:5: note: in expansion of macro 'SrcLocNameToHash'
+  633 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:32:22: note: '#pragma message: BRISC-KERNEL,/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/workspace/tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1047:5: note: in expansion of macro 'DO_PRAGMA'
+ 1047 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+EAGER_DECODE_PCC 0.9999839681706097
+2026-10-23 15:03:11.910 | INFO     | tracy:signpost:49 - PERF_DECODE
+2026-10-23 15:03:11.912 | INFO     | tracy:signpost:49 - PERF_DECODE_END
+{"layer_type": "full_attention", "layer_idx": 3, "batch": 1, "sequence": 4096, "weights": "real", "prefill_pcc": 0.9999623096280231, "decode_pcc": 0.9999839681706097, "changed_input_decode_pcc": 0.999990073549747, "resume_pcc": null, "deterministic": true, "remap_pcc": null, "remap_cache_pcc": null, "input_std": 0.1, "request_results": [], "prefill_pcc_fp32": 1.0, "prefill_relative_rmse": 0.008694241754710674, "fusion_equivalence": {"prefill_pcc": null, "decode_pcc": null}, "screen_host_traced_us": null, "workload_last_decode_host_us": 2210.4340605437756, "runtime_fallback_audit": false, "provenance": {"tests/run_fused_decoder.py": "f25fa2b9be1944f9c8bb579bf5d319d37a89ddb5c939036b22e0435c7bfd2f3c", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/fused_decoder.py": "a55fbb2aa851882004a4be715e28b6ca49697690be07c6b61a0c4d97074e5e46", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 30377131008, "allocated_bytes": 0, "largest_free_per_bank": 3797141376}, "after_weights": {"num_banks": 8, "capacity_bytes": 30377131008, "allocated_bytes": 746225664, "largest_free_per_bank": 3703863168}, "request_setup": {"num_banks": 8, "capacity_bytes": 30377131008, "allocated_bytes": 825250816, "largest_free_per_bank": 3693985024}}, "prefill_compared_tokens": 4096, "performance_workload": {"input_tokens": 4096, "output_tokens": 128, "batch": 1, "concurrency": 1, "decode_measurement": "final warmed step at context 4224", "scope": "single layer, supplied hidden activations", "prefill_profiled": true}}
+2026-10-23 15:03:14.015 | info     |           Metal | Device kernel duration perf summary (device=0): count=6725, min=679ns, avg=70479.6ns, max=1060131ns (profiler_analysis.cpp:729)
+2026-10-23 15:03:14.015 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=106000ns, range=[0..1060000), underflow(<0ns)=0, overflow(>=1060000ns)=1) (profiler_analysis.cpp:772)
+2026-10-23 15:03:14.015 | info     |           Metal |   [           0 ..       106000) |########################################|     5676 (profiler_analysis.cpp:777)
+2026-10-23 15:03:14.015 | info     |           Metal |   [      106000 ..       212000) |#                                       |      207 (profiler_analysis.cpp:777)
+2026-10-23 15:03:14.015 | info     |           Metal |   [      212000 ..       318000) |                                        |        8 (profiler_analysis.cpp:777)
+2026-10-23 15:03:14.015 | info     |           Metal |   [      318000 ..       424000) |#                                       |      203 (profiler_analysis.cpp:777)
+2026-10-23 15:03:14.015 | info     |           Metal |   [      424000 ..       530000) |####                                    |      597 (profiler_analysis.cpp:777)
+2026-10-23 15:03:14.015 | info     |           Metal |   [      530000 ..       636000) |                                        |        8 (profiler_analysis.cpp:777)
+2026-10-23 15:03:14.015 | info     |           Metal |   [      636000 ..       742000) |                                        |        6 (profiler_analysis.cpp:777)
+2026-10-23 15:03:14.015 | info     |           Metal |   [      742000 ..       848000) |                                        |        6 (profiler_analysis.cpp:777)
+2026-10-23 15:03:14.015 | info     |           Metal |   [      848000 ..       954000) |                                        |        6 (profiler_analysis.cpp:777)
+2026-10-23 15:03:14.015 | info     |           Metal |   [      954000 ..      1060000) |                                        |        7 (profiler_analysis.cpp:777)
+2026-10-23 15:03:17.141 | info     |    BuildKernels | JIT cache stats: 143/151 hits (94.7%) [143 cached, 328 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 15:03:17.141 | info     |    BuildKernels | JIT telemetry: 35 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 15:03:17.164 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 15:03:17.164 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 15:03:17.357 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 15:03:17.357 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 15:03:17.357 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 19.24 s
+Zones: 6,080,543
+Elapsed time: 19.01 s
+Saving trace... done!
+Trace size 9478.79 KB (6.08% ratio)
+2026-10-23 15:03:17.530 | INFO     | __main__:main:483 - Copying /workspace/generated/profiler/.logs/tracy_profile_log_host.tracy to /workspace/build/profiler/build_wasm/traces/models_autoports_qwen_qwen3_8_27b_tests_2026_10_23_15_03_17.tracy
+2026-10-23 15:03:17.530 | WARNING  | __main__:main:488 - Could not copy /workspace/generated/profiler/.logs/tracy_profile_log_host.tracy to /workspace/build/profiler/build_wasm/traces/models_autoports_qwen_qwen3_8_27b_tests_2026_10_23_15_03_17.tracy: [Errno 2] No such file or directory: '/workspace/generated/profiler/.logs/tracy_profile_log_host.tracy'
+2026-10-23 15:03:17.530 | INFO     | __main__:main:495 - embed.tracy -> traces/models_autoports_qwen_qwen3_8_27b_tests_2026_10_23_15_03_17.tracy
+2026-10-23 15:03:17.530 | INFO     | tracy.serve_wasm:launch_server_subprocess:308 - Tracy WASM web UI disabled (--no-web-server / TRACY_NO_WEB_SERVER); not starting a server.
+2026-10-23 15:03:18.993 | INFO     | tracy:generate_report:162 - Host side ops time report generated at models/autoports/qwen_qwen3_8_27b/doc/fused_decoder/tracy/final_full/.logs/tracy_ops_times.csv
+2026-10-23 15:03:19.032 | INFO     | tracy:generate_report:173 - Host side ops data report generated at models/autoports/qwen_qwen3_8_27b/doc/fused_decoder/tracy/final_full/.logs/tracy_ops_data.csv
+2026-10-23 15:03:19.032 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+/workspace/tools/tracy/process_ops_logs.py:535: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-10-23 15:03:22.729 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-10-23 15:03:22.730 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+2026-10-23 15:03:29.376 | INFO     | tracy.process_ops_logs:generate_reports:1323 - OPs' perf analysis is finished! Generating reports ...
+2026-10-23 15:03:29.376 | INFO     | tracy.process_ops_logs:generate_reports:1343 - Copying runtime artifacts
+2026-10-23 15:03:29.504 | INFO     | tracy.process_ops_logs:generate_reports:1352 - Generating OPs CSV
+2026-10-23 15:03:33.730 | INFO     | tracy.process_ops_logs:generate_reports:1814 - OPs csv generated at: /workspace/models/autoports/qwen_qwen3_8_27b/doc/fused_decoder/tracy/final_full/reports/2026_10_23_15_03_29/ops_perf_results_2026_10_23_15_03_29.csv
+{"source": "models/autoports/qwen_qwen3_8_27b/doc/fused_decoder/tracy/final_full/reports/2026_10_23_15_03_29/ops_perf_results_2026_10_23_15_03_29.csv", "device_header": "ARCH: blackhole, CHIP_FREQ[MHz]: 1350, Max Compute Cores: 120", "clock_mhz": 1350.0, "time_basis": "Whole-layer firmware timestamp envelope, including all operations and gaps; device cycles / MHz = us.", "phases": {"prefill": {"device_us": 93214.92444444445, "first_cycle": 2876069680830, "last_cycle": 2876195520978, "device_ops": 1026, "summed_kernel_us": 92377.793, "trace_ids": [""], "trace_replay_sessions": [""]}, "decode": {"device_us": 2187.32, "first_cycle": 2881393430700, "last_cycle": 2881396383582, "device_ops": 35, "summed_kernel_us": 2165.083, "trace_ids": ["0"], "trace_replay_sessions": ["132"]}}}

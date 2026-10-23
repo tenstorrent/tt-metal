@@ -28,5 +28,23 @@
       "nonaligned_prefill_context": 262142
     }
   },
-  "comparison_scope": "All TT outputs computed; long HF reference compares final128 outputs using entire prefix. Decode compares all outputs at positions262142 and262143."
+  "comparison_scope": "All TT outputs computed; long HF reference compares final128 outputs using entire prefix. Decode compares all outputs at positions262142 and262143.",
+  "stage_evidence": {
+    "02-fused-decoder": {
+      "supported_context": 262144,
+      "capability_reduction": null,
+      "linear_state_layout": "BF16 row-major [B,3,10240] convolution history; FP32 tiled [B,48,128,128] recurrent state",
+      "linear_state_bytes_per_request": 3207168,
+      "functional_linear_state_bytes_per_request": 3801088,
+      "full_attention_kv_dtype": "BF16",
+      "full_attention_kv_bytes_per_token": 4096,
+      "linear_prefill_evidence": "fused_decoder/history_slice_262144.json",
+      "linear_nonaligned_prefill_and_final_decode_evidence": "fused_decoder/history_slice_262142.json",
+      "full_prefill_evidence": "fused_decoder/final_layer3_262144.json",
+      "full_nonaligned_prefill_and_final_decode_evidence": "fused_decoder/final_layer3_262142.json",
+      "unchanged_full_path_proof": "fused_decoder/unaffected_full_attention.json",
+      "memory_effect": "Saves593920 physical state bytes/request; no change to advertised capacity, weights precision or KV dtype.",
+      "scope": "Single-request native context. Larger batches separately validated at4096 tokens; not every batch/context Cartesian combination."
+    }
+  }
 }

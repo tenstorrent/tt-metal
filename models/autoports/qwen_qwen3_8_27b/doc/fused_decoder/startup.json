@@ -1,0 +1,29 @@
+{
+  "stage": "02-fused-decoder",
+  "model": "Qwen/Qwen3.8-27B",
+  "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "base_commit": "2d41497c996",
+  "branch": "exp26-qwen38-bringup",
+  "available_physical_device_ids": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "device_family": "Blackhole p300c",
+  "selected_mesh": {
+    "shape": [
+      1,
+      1
+    ],
+    "physical_device_ids": [
+      0
+    ]
+  },
+  "container": "qwen38-functional-build",
+  "environment_source": "Prior functional stage environment; installed package environment.py validated; enabled inventory in .codex/config.toml",
+  "hardware_listing_command": "docker exec qwen38-functional-build timeout 60 tt-smi -ls --local",
+  "resets": 0,
+  "acceptance_pcc": 0.995,
+  "advertised_context": 262144
+}
