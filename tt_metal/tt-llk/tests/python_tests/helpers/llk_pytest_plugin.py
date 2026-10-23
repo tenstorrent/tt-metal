@@ -56,6 +56,8 @@ _SIMULATOR_PATH = os.environ.get("TT_METAL_SIMULATOR") or os.environ.get(
     "TT_UMD_SIMULATOR_PATH"
 )
 _IS_XDIST_WORKER = "PYTEST_XDIST_WORKER" in os.environ
+# Skips ttexalens after setup_build fills the paths, and the session-end perf combine.
+_HARDWARE_FREE = os.environ.get("LLK_HARDWARE_FREE") == "1"
 _SHOULD_RUN_SIMULATOR = _IS_XDIST_WORKER or (
     "--run-simulator" in sys.argv and "--compile-producer" not in sys.argv
 )
@@ -565,7 +567,7 @@ def pytest_configure(config):
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
-    if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+    if not _HARDWARE_FREE and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         if TestConfig.TEST_TARGET.run_simulator:
             if _SIMULATOR_PATH is None:
                 pytest.exit(
@@ -1255,7 +1257,7 @@ def pytest_sessionfinish(session):
 
     _finish_ulp_emit(session)
 
-    if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+    if not _HARDWARE_FREE and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         combine_perf_reports()
 
         # This was set by pytest CLI argument in pytest_configure call

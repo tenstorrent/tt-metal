@@ -1096,7 +1096,7 @@ R≠C≠W (both `C ≥ W` and `C < W`), not only at equal thread counts.
 
 **`num_tiles_per_cycle` stays 1, and this is now a hard constraint, not a simplification.**
 `stride_in_entries = max(R,C)`, but the kernel's intra-chunk tile indices step by **1** (unpack
-`rd_entry_idx + tile_index`, pack `wr_entry_idx + wr_entry_ptr++`) while the slot advance is
+`cursor_entry_idx + tile_index`, pack `cursor_entry_idx + wr_entry_ptr++`) while the slot advance is
 `num_tiles × stride_size_tiles`. At `n > 1` with `stride > 1`, tiles 1..n-1 are read from and written into
 **other threads' slots** — silent corruption, no hang. It works today only because everything is
 single-threaded. `stride_in_entries` is computed **per DFB** from that DFB's own endpoints (`dataflow_buffer.cpp:1140`), so
@@ -1107,12 +1107,12 @@ receives DEST p); the unpack index still steps by one entry. Measured on craq-si
 borrowed (W = 1), C = 2 and 4, n = 2, 4 and 8: slot p of a batch holds the result of tile floor(p/s), 720 of
 720 tiles, so only the first tile of each batch is right. On the NoC path (W = 2) the counts match; the
 mapping there is not checked tile by tile. The likely cause is the unpack: `llk_unpack_AB` reads input tile p
-of a batch at `rd_entry_idx + p`, which the cursor converter maps to slot floor(p/s). No experiment has
+of a batch at `cursor_entry_idx + p`, which the cursor converter maps to slot floor(p/s). No experiment has
 confirmed it yet. The tests pin the count, one right tile per batch.
 **2026-10-16: main fixed the single-operand unpack** (#60151: `llk_unpack_A` now steps by `stride_size_tiles`). The
 SFPU kernel copies both operands through it, and its batches above ring stride 1 are now exact: on craq-sim, every
 rule case of multiply and divide, with and without activations. That confirms the cause: `llk_unpack_AB` still
-reads tile p of a batch at `rd_entry_idx + p`, so the FPU kernel keeps one right tile per batch, and the tests pin
+reads tile p of a batch at `cursor_entry_idx + p`, so the FPU kernel keeps one right tile per batch, and the tests pin
 only its count.
 Naming only `max(R,C)` admits `R=1, C=1, W=2, n=8`, which packs tiles 1..7 into writer-thread-1's slots; that
 is F3 (sharded, the phase that wants `n=8`) crossed with any `W>1`. Alternatively pass a `STRIDE_TILES` CTA

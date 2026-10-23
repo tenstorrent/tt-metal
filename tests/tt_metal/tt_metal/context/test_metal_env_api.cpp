@@ -250,7 +250,8 @@ TEST(MetalEnv, ConfigureFabricThrowsAfterSystemMesh) {
 
 TEST(MetalEnv, ConfigureFabricThrowsAfterCreateMeshDevice) {
     MetalEnv env(wormhole_mock_descriptor());
-    auto mesh = env.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape{1u, 1u}));
+    auto mesh =
+        distributed::MeshDevice::open_mesh_device(env, distributed::MeshDeviceConfig(distributed::MeshShape{1u, 1u}));
     EXPECT_THROW(env.configure_fabric({.fabric_config = tt_fabric::FabricConfig::FABRIC_1D}), std::runtime_error);
     mesh->close();
     EXPECT_THROW(env.configure_fabric({.fabric_config = tt_fabric::FabricConfig::FABRIC_1D}), std::runtime_error);
@@ -344,8 +345,10 @@ TEST(MetalEnv, FailedCreateMeshDeviceDoesNotLeakContext) {
         MetalEnv env({.mock_cluster_desc_path = mock_path});
         // Fatals inside MeshDeviceImpl::create, after the context exists and before ownership transfers.
         EXPECT_THROW(
-            env.create_mesh_device(distributed::MeshDeviceConfig(
-                /*mesh_shape=*/std::nullopt, /*offset=*/std::nullopt, /*physical_device_ids=*/{0})),
+            distributed::MeshDevice::open_mesh_device(
+                env,
+                distributed::MeshDeviceConfig(
+                    /*mesh_shape=*/std::nullopt, /*offset=*/std::nullopt, /*physical_device_ids=*/{0})),
             std::runtime_error);
     }
 
@@ -359,7 +362,7 @@ TEST(MetalEnv, FailedCreateUnitMeshDeviceDoesNotLeakContext) {
     for (int i = 0; i < 3; ++i) {
         MetalEnv env({.mock_cluster_desc_path = mock_path});
         // Device 99 is not in the 1-chip mock cluster, so opening it fails.
-        EXPECT_THROW(env.create_unit_mesh(99), std::runtime_error);
+        EXPECT_THROW(distributed::MeshDevice::open_unit_mesh(env, 99), std::runtime_error);
     }
 
     EXPECT_EQ(next_free_context_id(mock_path).get(), baseline.get());
@@ -371,7 +374,7 @@ TEST(MetalEnv, FailedCreateUnitMeshesDoesNotLeakContext) {
 
     for (int i = 0; i < 3; ++i) {
         MetalEnv env({.mock_cluster_desc_path = mock_path});
-        EXPECT_THROW(env.create_unit_meshes({}), std::runtime_error);
+        EXPECT_THROW(distributed::MeshDevice::open_unit_meshes(env, {}), std::runtime_error);
     }
 
     EXPECT_EQ(next_free_context_id(mock_path).get(), baseline.get());

@@ -216,6 +216,12 @@ def should_pad_sampling_logits_to_power_of_2(
     return per_device_vocab > 0 and (per_device_vocab & (per_device_vocab - 1)) != 0
 
 
+def disables_batched_prefill(base_model_name: str, device_name: str) -> bool:
+    return (base_model_name == "Qwen3-32B" and device_name == "P150x4") or (
+        base_model_name == "Llama-3.1-8B" and device_name in ("P100", "P150", "P300", "P150x4", "P150x8")
+    )
+
+
 class MathFidelitySetting(Enum):
     LOFI = "lofi"
     HIFI2 = "hifi2"
@@ -247,6 +253,7 @@ class ModelOptimizations:
         else:
             if (
                 base_model_name.startswith("Llama-3")
+                or base_model_name.startswith("Llama-Krikri")
                 or base_model_name.startswith("Mistral-7B")
                 or base_model_name.startswith("Phi-3-mini")
                 or base_model_name.startswith("phi-4")
@@ -451,14 +458,14 @@ def parse_optimizations(string):
 
         return string[open_brace + 1 : close_brace].strip()
 
-    precision_dict = extract_config(precision_start, "precision_cfg") if precision_start != -1 else {}
-    fidelity_dict = extract_config(fidelity_start, "fidelity_cfg") if fidelity_start != -1 else {}
+    precision_dict = extract_config(precision_start, "precision_cfg") if precision_start != -1 else ""
+    fidelity_dict = extract_config(fidelity_start, "fidelity_cfg") if fidelity_start != -1 else ""
 
     # Create ModelOptimizations instance with the parsed configs
     settings = {"TensorPrecision": {}, "OpFidelity": {}}
 
     # Parse precision config
-    for pair in precision_dict.split(","):
+    for pair in precision_dict.split(",") if precision_dict else []:
         if ":" not in pair:
             raise ValueError("Invalid format - missing ':' separator")
         key, value = pair.split(":")
@@ -471,7 +478,7 @@ def parse_optimizations(string):
         settings["TensorPrecision"][key] = PrecisionSetting(value)
 
     # Parse fidelity config
-    for pair in fidelity_dict.split(","):
+    for pair in fidelity_dict.split(",") if fidelity_dict else []:
         if ":" not in pair:
             raise ValueError("Invalid format - missing ':' separator")
         key, value = pair.split(":")
@@ -756,21 +763,27 @@ class ModelArgs:
         # Set the max number of tokens for each prefill chunk based on the model and device
         self.max_prefill_chunk_size = self.get_max_prefill_chunk_size()
         # TODO: Enable batched_prefill once this is fixed: https://github.com/tenstorrent/tt-metal/issues/47238
-        # Prefill logits are batch-variant on multi-chip Blackhole: the
+        # Prefill logits are batch-variant on Blackhole: the
         # float-reduction order in the prefill matmul/attention depends on the
         # batched-token count, so identical same-seed requests that land in
         # different-sized prefill batches get slightly different logits. Seeded
         # sampling under concurrency then diverges (tt-inference-server#4004,
         # test_non_uniform_seeding). Forcing per-user batch-1 prefill removes the
         # variance. Workaround until the prefill kernels are batch-invariant.
-        # Disabled for Qwen3-32B (P150x4) and Llama-3.1-8B (P300/P150x4/P150x8).
-        self.disable_batched_prefill = (self.base_model_name == "Qwen3-32B" and self.device_name == "P150x4") or (
-            self.base_model_name == "Llama-3.1-8B" and self.device_name in ("P150", "P300", "P150x4", "P150x8")
-        )
+        self.disable_batched_prefill = disables_batched_prefill(self.base_model_name, self.device_name)
 
         if (
             self.base_model_name
-            in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-27b", "gemma-3-4b", "Phi-4"]
+            in [
+                "Llama-3.1-8B",
+                "Llama-Krikri-8B",
+                "Llama-3.2-11B",
+                "Mistral-7B",
+                "gemma-3-27b",
+                "gemma-3-4b",
+                "Phi-4",
+                "Qwen2.5-3B",
+            ]
             and self.device_name == "N150"
         ) or (
             self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B", "olmOCR-2-7B", "Phi-4"]
@@ -1458,8 +1471,10 @@ class ModelArgs:
                 # a measured fit, not an assertion that 4 is throughput-optimal.
                 in0_block_w=(
                     4
-                    if self.device_name == "N150"
-                    and self.base_model_name == "Llama-3.1-8B"
+                    if (
+                        (self.device_name == "N150" and self.base_model_name in ("Llama-3.1-8B", "Llama-Krikri-8B"))
+                        or (self.device_name == "P100" and self.base_model_name == "Llama-3.1-8B")
+                    )
                     and seq_len >= self.prefill_len_cutoff
                     else None
                 ),
@@ -2887,7 +2902,7 @@ class ModelArgs:
     def _get_hidden_activation_type(self, config):
         activation_map = {
             "gelu": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0),
-            "gelu_pytorch_tanh": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0),
+            "gelu_pytorch_tanh": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH, 1.0),
             "relu": ttnn.UnaryOpType.RELU,
             "silu": ttnn.UnaryOpType.SILU,
             "swish": ttnn.UnaryOpType.SILU,
@@ -3840,8 +3855,9 @@ class ModelArgs:
         Raises:
             AssertionError: If it's not possible to find such a grid configuration.
         """
-        max_rows = 8 if is_wormhole_b0() else 10
-        max_cols = 8 if is_wormhole_b0() else 12
+        # Harvested Blackhole boards (p150b: 11 columns) have a smaller grid than 10x12.
+        max_rows = 8 if is_wormhole_b0() else min(10, self.max_grid_size.y)
+        max_cols = 8 if is_wormhole_b0() else min(12, self.max_grid_size.x)
         max_cores = max_rows * max_cols
 
         # Find all possible numbers of cores that divide N and are less than or equal to max_cores

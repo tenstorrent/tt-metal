@@ -392,7 +392,9 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         distribution_key(
             output_spec, tensor_args.output_tensor.has_value() ? &*tensor_args.output_tensor : nullptr, "output"),
         src_shard_vol,
-        dst_shard_vol);
+        dst_shard_vol,
+        // The DRAM read flow selects kernel defines, dataflow buffers and semaphores.
+        get_dram_read_plan(attributes.op_chain, input_tensor, output_spec, attributes.worker_grid).flow);
 }
 
 bool UnaryDeviceOperation::skip_launch(
@@ -422,7 +424,7 @@ Tensor unary(
         optional_output_tensor.has_value() ? optional_output_tensor->memory_config() : (output_memory_config);
 
     auto worker_grid = ttnn::operations::unary::get_worker_grid(
-        input, optional_output_tensor, std::optional<MemoryConfig>(output_memory_config), sub_core_grids);
+        op_chain, input, optional_output_tensor, std::optional<MemoryConfig>(output_memory_config), sub_core_grids);
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .op_chain = op_chain,

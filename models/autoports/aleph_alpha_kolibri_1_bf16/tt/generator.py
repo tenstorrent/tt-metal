@@ -9,6 +9,7 @@ from collections import Counter
 from dataclasses import dataclass
 
 import torch
+from tt_transformers.modules.sampling.sampling_1d import Sampling1D
 
 # vLLM hands over one page table per layer, but layers of the same KV-cache group carry identical
 # tables. Upload each distinct table once per refresh and fill the other layers' device tables with
@@ -24,7 +25,6 @@ except ImportError:  # Serving images (TTI/CI) do not ship the bring-up runtime.
 import ttnn
 from models.autoports.aleph_alpha_kolibri_1_bf16.tt.checkpoint import CONTEXT
 from models.autoports.aleph_alpha_kolibri_1_bf16.tt.model import DRAM, KolibriModel
-from models.common.modules.sampling.sampling_1d import Sampling1D
 
 
 @dataclass
