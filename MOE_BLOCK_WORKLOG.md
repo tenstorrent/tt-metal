@@ -1501,3 +1501,6 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - Logits-vs-x priority on the ring (HeadSE3.logits_priority): x first 453-455 us traced vs logits first 479-483.
   The chain (RPLAN) still ends ~90 us before the SE path (~+20 for the Galaxy's N 32 routing). Now x first for a latent
   model on a ring; lines unchanged. Default ring head 447-454 us, soak 300 calls, mock Galaxy K3 builds.
+- Tail lever 1 (each pair's steps ordered by when its rows land - per-chip step tables in the engine and ports,
+  own rows first; bwd rows walked last first): traced 640 114-118 / 1024 194-198 us; without the reversal 123-125 /
+  175. The base is 117-120 / 172-179: no consistent win. Not kept (moe_block_runs/tail_arrival_order.patch).
