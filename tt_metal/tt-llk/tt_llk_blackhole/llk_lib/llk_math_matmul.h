@@ -260,10 +260,11 @@ inline void matmul_configure_addrmod(
             }
             else
             {
+                // the row form keeps the tile base in the carriage return register, so the body returns to it instead of to 0
                 addr_mod_t {
                     .srca = {.incr = 16, .clr = 0, .cr = 0},
                     .srcb = {.incr = 16, .clr = 0, .cr = 0},
-                    .dest = {.incr = 0, .clr = 1, .cr = 0},
+                    .dest = {.incr = 0, .clr = row_form ? 0 : 1, .cr = row_form ? 1 : 0},
                 }
                     .set(ADDR_MOD_4);
             }
@@ -347,7 +348,7 @@ inline void matmul_configure_addrmod(
  * @param in1_tile_c_dim: Column dimension of an in1 tile.
  * @param partial_face: True when the tile has fewer than the full set of faces.
  */
-template <MathFidelity math_fidelity, int in1_order = 0>
+template <MathFidelity math_fidelity, int in1_order = 0, bool load_only = false>
 inline void matmul_configure_mop(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
@@ -481,6 +482,11 @@ inline void matmul_configure_mop(
                 }
             }
         });
+
+    if constexpr (load_only)
+    {
+        return;
+    }
 
     // TODO: can we commonize this?
     constexpr std::uint32_t inner_loops = high_fidelity ? to_underlying(math_fidelity) : 1;
@@ -688,6 +694,59 @@ inline void matmul_configure_mop_rows(const std::uint32_t ct_dim, const std::uin
     const std::uint32_t tile_end        = TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_3, 0);
     ckernel_template tmp(
         reuse_a ? ct_dim : rt_dim, inner_loops, lltt::replay_insn(ckernel::math::replay_buf_offset, 15), TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
+    tmp.set_last_inner_loop_instr(tile_end);
+    tmp.set_last_outer_loop_instr(tile_end);
+    tmp.program();
+    matmul_rows_dest_stride = dest_stride;
+}
+
+// Whether the row form serves the in0 tiles of at most 16 rows by 32 columns: one MOP per reuse row, the body of
+// @ref matmul_configure_mop without its phase end, which the MOP issues (the phase end of every phase, the tile end on the last).
+inline bool matmul_tiny_rows_supported(
+    const std::uint32_t in0_tile_r_dim,
+    const std::uint32_t in0_tile_c_dim,
+    const std::uint32_t in1_tile_r_dim,
+    const std::uint32_t in1_tile_c_dim,
+    const std::uint32_t transpose,
+    const bool allow_16_rows)
+{
+    const bool is_in0_16x32 = (in0_tile_r_dim <= (allow_16_rows ? FACE_R_DIM : FACE_R_DIM / 2)) && (in0_tile_c_dim > FACE_C_DIM);
+    const bool is_in1_32x16 = (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim <= FACE_C_DIM);
+    return is_in0_16x32 && !is_in1_32x16 && !transpose;
+}
+
+template <MathFidelity math_fidelity, int in1_order = 0>
+inline void matmul_configure_mop_rows_tiny(
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t in0_tile_r_dim,
+    const std::uint32_t in0_tile_c_dim,
+    const std::uint32_t in1_tile_r_dim,
+    const std::uint32_t in1_tile_c_dim,
+    const bool partial_face)
+{
+    constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
+    const bool reuse_a           = ct_dim >= rt_dim;
+
+    matmul_configure_mop<math_fidelity, in1_order, true>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    {
+        constexpr addr_mod_t tile_end {
+            .srca = {.incr = 0, .clr = 1, .cr = 1},
+            .srcb = {.incr = 0, .clr = 1, .cr = 1},
+        };
+        TTI_SETC16(ADDR_MOD_AB_SEC3_SrcAIncr_ADDR32, tile_end.src_val());
+        TTI_SETC16(ADDR_MOD_BIAS_SEC3_BiasIncr_ADDR32, tile_end.bias.val());
+    }
+    const std::uint32_t dest_stride = matmul_row_dest_stride(ct_dim, rt_dim);
+    matmul_set_row_tile_end_dest(dest_stride);
+
+    constexpr std::uint32_t inner_loops = high_fidelity ? to_underlying(math_fidelity) : 1;
+    const std::uint32_t tile_end        = TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_3, 0);
+    ckernel_template tmp(
+        reuse_a ? ct_dim : rt_dim,
+        inner_loops,
+        lltt::replay_insn(ckernel::math::replay_buf_offset, partial_face ? 3 : 7),
+        TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
     tmp.set_last_inner_loop_instr(tile_end);
     tmp.set_last_outer_loop_instr(tile_end);
     tmp.program();
@@ -983,6 +1042,7 @@ inline void matmul_configure_mop_throttled(
  * @tparam row_mop: One MOP per reuse row with THROTTLE_LEVEL 0 and full 32x32 tiles; _llk_math_matmul_ must pass the same value.
  * @tparam tile_mop: One MOP and one DEST offset write per output tile instead of the default one MOP per reuse row for
  *         full 32x32 tiles at THROTTLE_LEVEL 0; _llk_math_matmul_ must pass the same value.
+ * @tparam tiny_16_rows: Lets the row form serve 16 row in0 tiles (8 rows and fewer always); false at DestSync.Half with a 32-bit DEST, where it is slower.
  * @tparam in1_order: For in1 32x16 tiles, 1 alternates the DEST row groups and 0 keeps the pair order; 1 needs in1 32x16 and
  *         in0 other than 16x32.
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_matmul_init_ which feeds SrcA/SrcB.
@@ -991,7 +1051,7 @@ inline void matmul_configure_mop_throttled(
  *       _llk_math_matmul_ asserts this precondition under LLK asserts, so a prior op that left PRESERVE
  *       must be followed by this init (or a format-changing reconfig) before the matmul.
  */
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false, bool tile_mop = false, int in1_order = 0>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false, bool tile_mop = false, int in1_order = 0, bool tiny_16_rows = false>
 inline void _llk_math_matmul_init_(
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
@@ -1053,6 +1113,12 @@ inline void _llk_math_matmul_init_(
         {
             matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, true>(transpose);
             matmul_configure_mop_rows<math_fidelity>(ct_dim, rt_dim);
+        }
+        else if (matmul_tiny_rows_supported(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, transpose, tiny_16_rows))
+        {
+            matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, true, in1_order>(
+                transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_configure_mop_rows_tiny<math_fidelity, in1_order>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
         else
         {
