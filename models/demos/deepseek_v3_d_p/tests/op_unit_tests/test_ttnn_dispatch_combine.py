@@ -27,6 +27,7 @@ from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM2
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
+from models.demos.deepseek_v3_d_p.tests.chunk_params import with_sp4_depth
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params, torus_y_device_params
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -443,7 +444,7 @@ def _ci_unsupported_param_combos_dispatch_combine(**params):
 @pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_dispatch_combine)
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
-    dispatch_combine_shape_params(),
+    with_sp4_depth(dispatch_combine_shape_params()),
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",

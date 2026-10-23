@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSe
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
+from models.demos.deepseek_v3_d_p.tests.chunk_params import with_sp4_depth
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     torus_x_device_params,
@@ -61,48 +62,55 @@ def shared_expert_sub_device(mesh_device):
 
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, hidden_dim, activation",
-    [
-        # Every case runs the one prefill ISL, so the matmul program configs come out shaped the
-        # way prefill builds them.
-        (PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK27Config.EMB_SIZE, KimiK27Config.MOE_INTERMEDIATE_SIZE, ACTIVATION_SILU),
-        # Kimi-K3: one shared-expert MLP at moe_intermediate_size * num_shared_experts = 3072 * 2.
-        # Worth its own case because every prior model has num_shared_experts == 1, so hidden_dim and
-        # the shared intermediate coincided and 6144 was never exercised here.
-        (
-            PREFILL_CHUNK_TOKENS_PER_CHIP,
-            KimiK3Config.EMB_SIZE,
-            KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE,
-            ACTIVATION_SILU,
-        ),
-        # ...and the same shape on the activation the K3 checkpoint actually uses. The sub-device
-        # below confines the expert the way TtMoe does, so this exercises ttnn.situ_glu in its
-        # sub_core_grids form -- the only form the model ever builds.
-        (
-            PREFILL_CHUNK_TOKENS_PER_CHIP,
-            KimiK3Config.EMB_SIZE,
-            KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE,
-            ACTIVATION_SITU,
-        ),
-        # DeepSeek-V4-Pro is the only model whose down projection is 24 K-tiles rather than 16 or 48,
-        # so it is the only one where the matmul K block resolves to 12. No MoE test carries a
-        # v4_pro variant, which leaves this the only cover for that branch.
-        (
-            PREFILL_CHUNK_TOKENS_PER_CHIP,
-            DeepSeekV4ProConfig.EMB_SIZE,
-            DeepSeekV4ProConfig.MOE_INTERMEDIATE_SIZE,
-            ACTIVATION_SILU,
-        ),
-        # ...and the same shape on the activation the V4 checkpoints actually use.
-        (
-            PREFILL_CHUNK_TOKENS_PER_CHIP,
-            DeepSeekV4ProConfig.EMB_SIZE,
-            DeepSeekV4ProConfig.MOE_INTERMEDIATE_SIZE,
-            ACTIVATION_CLAMPED_SILU_GLU,
-        ),
-    ],
-    # Ids name what differs from the case above (the 6144 shared intermediate, the activation, the
-    # v4_pro shape).
-    ids=["isl_5k", "isl_5k-k3-6144", "isl_5k-k3-6144-situ", "isl_5k-v4pro-3072", "isl_5k-v4pro-3072-clamped"],
+    with_sp4_depth(
+        [
+            # Every case runs the one prefill ISL, so the matmul program configs come out shaped the
+            # way prefill builds them.
+            (
+                PREFILL_CHUNK_TOKENS_PER_CHIP,
+                KimiK27Config.EMB_SIZE,
+                KimiK27Config.MOE_INTERMEDIATE_SIZE,
+                ACTIVATION_SILU,
+            ),
+            # Kimi-K3: one shared-expert MLP at moe_intermediate_size * num_shared_experts = 3072 * 2.
+            # Worth its own case because every prior model has num_shared_experts == 1, so hidden_dim and
+            # the shared intermediate coincided and 6144 was never exercised here.
+            (
+                PREFILL_CHUNK_TOKENS_PER_CHIP,
+                KimiK3Config.EMB_SIZE,
+                KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE,
+                ACTIVATION_SILU,
+            ),
+            # ...and the same shape on the activation the K3 checkpoint actually uses. The sub-device
+            # below confines the expert the way TtMoe does, so this exercises ttnn.situ_glu in its
+            # sub_core_grids form -- the only form the model ever builds.
+            (
+                PREFILL_CHUNK_TOKENS_PER_CHIP,
+                KimiK3Config.EMB_SIZE,
+                KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE,
+                ACTIVATION_SITU,
+            ),
+            # DeepSeek-V4-Pro is the only model whose down projection is 24 K-tiles rather than 16 or 48,
+            # so it is the only one where the matmul K block resolves to 12. No MoE test carries a
+            # v4_pro variant, which leaves this the only cover for that branch.
+            (
+                PREFILL_CHUNK_TOKENS_PER_CHIP,
+                DeepSeekV4ProConfig.EMB_SIZE,
+                DeepSeekV4ProConfig.MOE_INTERMEDIATE_SIZE,
+                ACTIVATION_SILU,
+            ),
+            # ...and the same shape on the activation the V4 checkpoints actually use.
+            (
+                PREFILL_CHUNK_TOKENS_PER_CHIP,
+                DeepSeekV4ProConfig.EMB_SIZE,
+                DeepSeekV4ProConfig.MOE_INTERMEDIATE_SIZE,
+                ACTIVATION_CLAMPED_SILU_GLU,
+            ),
+        ],
+        # Ids name what differs from the case above (the 6144 shared intermediate, the activation, the
+        # v4_pro shape).
+        ids=["isl_5k", "isl_5k-k3-6144", "isl_5k-k3-6144-situ", "isl_5k-v4pro-3072", "isl_5k-v4pro-3072-clamped"],
+    ),
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, tp_axis",
