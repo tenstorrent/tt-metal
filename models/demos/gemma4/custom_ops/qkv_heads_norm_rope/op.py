@@ -11,11 +11,14 @@ tile, ``N = (hq + 2 hkv) * D`` laid out ``[q heads | k heads | v heads]``), ``gq
 shard ``[32, D]`` with the heads on the rows: the layout ``nlp_create_qkv_heads_decode`` emits, so SDPA and
 ``paged_update_cache`` take them unchanged).
 
-Per core (user) the reader gathers the user's row of every head's column tiles into the head-row tiles of the
-norm / RoPE compute of ``custom_ops/qkv_norm_rope`` (its v2 compute and writer kernels are reused unchanged):
-``x^2`` on the FPU, FPU row reduce, ``rsqrt(sum / D + eps)`` on the SFPU, ``x * inv * gamma``, NeoX RoPE on the
-FPU with the user's cos / sin row broadcast. This replaces ``to_memory_config (DRAM -> L1), nlp_create_qkv_heads_
-decode`` + the ``qkv_norm_rope`` program (or the composite's ``to_memory_config x3, rms_norm x3, the q and k RoPE,
+One work unit per core = (user, tensor): 3 B cores (3 at batch 1, 96 at batch 32), so a batch-1 step spreads the
+three tensors over three cores instead of one (the per-user form of ``qkv_norm_rope`` ran all three on one core,
+~70 us vs ~46 us for the composite chain at batch 1). The reader gathers the user's row of every head's column
+tiles of its tensor into head-row tiles; the compute is the v2 compute of ``custom_ops/qkv_norm_rope`` for one
+tensor (``x^2`` on the FPU, FPU row reduce, ``rsqrt(sum / D + eps)`` on the SFPU, ``x * inv * gamma``, NeoX RoPE
+on the FPU with the user's cos / sin row broadcast; v: norm only); the writer ships the tiles to the user's output
+shard over the NoC. This replaces ``to_memory_config (DRAM -> L1), nlp_create_qkv_heads_decode`` + the
+``qkv_norm_rope`` program (or the composite's ``to_memory_config x3, rms_norm x3, the q and k RoPE,
 to_memory_config x2``): the head tensors are never materialized before the norm.
 """
 
@@ -27,7 +30,6 @@ import torch
 import ttnn
 
 KERNEL_DIR = Path(__file__).resolve().parent / "kernels"
-QKV_KERNEL_DIR = Path(__file__).resolve().parent.parent / "qkv_norm_rope" / "kernels"
 TILE = 32
 
 
@@ -46,17 +48,9 @@ def heads_sharded_memory_config(device, batch: int, head_dim: int):
 
 
 class QkvHeadsNormRope:
-    # reader-filled head tiles
-    CB_Q, CB_K, CB_V = 0, 1, 2
-    # tensor-backed output shards
-    CB_QO, CB_KO, CB_VO = 16, 17, 18
-    # streamed inputs
-    CB_GQ, CB_GK, CB_COS, CB_SIN = 3, 4, 5, 6
-    CB_SCALER = 7
-    # intermediates
-    CB_SQ = 8
-    CB_INV = 9
-    CB_N = 10
+    CB_X, CB_OUT = 0, 16
+    CB_G, CB_COS, CB_SIN, CB_SCALER = 3, 5, 6, 7
+    CB_SQ, CB_INV, CB_N = 8, 9, 10
 
     @staticmethod
     def golden(x: torch.Tensor, hq: int, hkv: int, head_dim: int, gq, gk, eps: float, cos, sin):
@@ -109,79 +103,73 @@ class QkvHeadsNormRope:
             ttnn.allocate_tensor_on_device(ttnn.Shape([1, B, h, D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, mem)
             for h in (hq, hkv, hkv)
         ]
-        grid = mem.shard_spec.grid
-        cores = []
-        for rng in grid.ranges():
-            for y in range(rng.start.y, rng.end.y + 1):
-                for xx in range(rng.start.x, rng.end.x + 1):
-                    cores.append(ttnn.CoreCoord(xx, y))
-        assert len(cores) == B, f"{len(cores)} shard cores for {B} users"
+        grid = device.compute_with_storage_grid_size()
+        n_units = 3 * B
+        assert n_units <= grid.x * grid.y, f"{n_units} units for {grid.x * grid.y} cores"
+        cores = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(n_units)]  # row-major, as the shards
+        core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+        shard_noc = [device.worker_core_from_logical_core(cores[u]) for u in range(B)]
         tile_bytes = TILE * TILE * 2
         f32_tile = TILE * TILE * 4
 
         def cb(idx, pages, page=tile_bytes, fmt=ttnn.bfloat16):
             return ttnn.CBDescriptor(
                 total_size=pages * page,
-                core_ranges=grid,
+                core_ranges=core_set,
                 format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=fmt, page_size=page)],
             )
 
         cbs = [
-            cb(cls.CB_Q, cols_t),
-            cb(cls.CB_K, cols_t),
-            cb(cls.CB_V, cols_t),
-            ttnn.cb_descriptor_from_sharded_tensor(cls.CB_QO, outs[0]),
-            ttnn.cb_descriptor_from_sharded_tensor(cls.CB_KO, outs[1]),
-            ttnn.cb_descriptor_from_sharded_tensor(cls.CB_VO, outs[2]),
-            cb(cls.CB_GQ, cols_t),
-            cb(cls.CB_GK, cols_t),
+            cb(cls.CB_X, cols_t),
+            cb(cls.CB_OUT, cols_t),
+            cb(cls.CB_G, cols_t),
             cb(cls.CB_COS, cols_t),
             cb(cls.CB_SIN, cols_t),
             cb(cls.CB_SCALER, 2),
             cb(cls.CB_SQ, cols_t, page=f32_tile, fmt=ttnn.float32),
             cb(cls.CB_INV, 1, page=f32_tile, fmt=ttnn.float32),
-            cb(cls.CB_N, cols_t),  # the v2 compute: bf16 normalized columns between the norm and the RoPE stage
+            cb(cls.CB_N, cols_t),
         ]
-        reader_ct = [cls.CB_Q, cls.CB_K, cls.CB_V, cls.CB_GQ, cls.CB_GK, cls.CB_COS, cls.CB_SIN, cls.CB_SCALER,
-                     cols_t, hq, hkv]  # fmt: skip
+        reader_ct = [cls.CB_X, cls.CB_G, cls.CB_COS, cls.CB_SIN, cls.CB_SCALER, cols_t, hq, hkv]
         for t in (x, gq, gk, cos, sin):
             reader_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
-        writer_ct = [cls.CB_QO, cls.CB_KO, cls.CB_VO, cols_t]
+        writer_ct = [cls.CB_OUT, cols_t]
         eps_bits = struct.unpack("<I", struct.pack("<f", float(eps)))[0]
         inv_d_bits = struct.unpack("<I", struct.pack("<f", 1.0 / D))[0]
         compute_ct = [
-            cls.CB_Q, cls.CB_K, cls.CB_V, cls.CB_QO, cls.CB_KO, cls.CB_VO, cls.CB_GQ, cls.CB_GK, cls.CB_COS, cls.CB_SIN,
-            cls.CB_SCALER, cls.CB_SQ, cls.CB_INV, cols_t, half_t, eps_bits, inv_d_bits, cls.CB_N,
+            cls.CB_X, cls.CB_OUT, cls.CB_G, cls.CB_COS, cls.CB_SIN, cls.CB_SCALER, cls.CB_SQ, cls.CB_INV, cols_t, half_t,
+            eps_bits, inv_d_bits, cls.CB_N,
         ]  # fmt: skip
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        for u, core in enumerate(cores):
+        for i, core in enumerate(cores):
+            u, t = i // 3, i % 3
             reader_rt[core.x][core.y] = [
                 x.buffer_address(), gq.buffer_address(), gk.buffer_address(), cos.buffer_address(),
-                sin.buffer_address(), u,
+                sin.buffer_address(), u, t,
             ]  # fmt: skip
-            writer_rt[core.x][core.y] = [0]
-            compute_rt[core.x][core.y] = [0]
+            writer_rt[core.x][core.y] = [outs[t].buffer_address(), shard_noc[u].x, shard_noc[u].y]
+            compute_rt[core.x][core.y] = [t]
         compute_cfg = ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, dst_full_sync_en=True
         )
         kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "reader_qkv_heads_norm_rope.cpp"),
-                core_ranges=grid,
+                core_ranges=core_set,
                 compile_time_args=reader_ct,
                 runtime_args=reader_rt,
                 config=ttnn.ReaderConfigDescriptor(),
             ),
             ttnn.KernelDescriptor(
-                kernel_source=str(QKV_KERNEL_DIR / "writer_qkv_norm_rope.cpp"),
-                core_ranges=grid,
+                kernel_source=str(KERNEL_DIR / "writer_qkv_heads_norm_rope.cpp"),
+                core_ranges=core_set,
                 compile_time_args=writer_ct,
                 runtime_args=writer_rt,
                 config=ttnn.WriterConfigDescriptor(),
             ),
             ttnn.KernelDescriptor(
-                kernel_source=str(QKV_KERNEL_DIR / "compute_qkv_norm_rope_v2.cpp"),
-                core_ranges=grid,
+                kernel_source=str(KERNEL_DIR / "compute_qkv_heads_norm_rope.cpp"),
+                core_ranges=core_set,
                 compile_time_args=compute_ct,
                 runtime_args=compute_rt,
                 config=compute_cfg,
