@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
+#include "tt_metal/distributed/h2d_socket_impl.hpp"
 #include <internal/service/service_core_manager.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
@@ -24,7 +25,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
-#include <umd/device/io_window/io_window.hpp>
+#include <tt-umd/io_window/io_window.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <algorithm>
 #include <cstdlib>
@@ -59,7 +60,7 @@ void advance_h2d_simulator_socket_device(MeshDevice* mesh_device, const MeshCoor
 
 }  // namespace
 
-void H2DSocket::enable_mock_flow_control(const MeshDevice& mesh_device) {
+void H2DSocketImpl::enable_mock_flow_control(const MeshDevice& mesh_device) {
     // Emule executes the receiver, so only Mock needs synthetic acknowledgements.
     if (mesh_device.impl().metal_env().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
         return;
@@ -70,7 +71,7 @@ void H2DSocket::enable_mock_flow_control(const MeshDevice& mesh_device) {
     bytes_acked_ptr_ = &bytes_sent_;
 }
 
-H2DSocket::PinnedBufferInfo H2DSocket::init_bytes_acked_buffer(
+H2DSocketImpl::PinnedBufferInfo H2DSocketImpl::init_bytes_acked_buffer(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoordinateRangeSet& device_range,
     uint32_t pcie_alignment,
@@ -110,7 +111,7 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_bytes_acked_buffer(
         .addr_hi = static_cast<uint32_t>(noc_addr.value().addr >> 32)};
 }
 
-H2DSocket::PinnedBufferInfo H2DSocket::init_host_data_buffer(
+H2DSocketImpl::PinnedBufferInfo H2DSocketImpl::init_host_data_buffer(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoordinateRangeSet& device_range,
     uint32_t pcie_alignment,
@@ -145,7 +146,7 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_host_data_buffer(
         .addr_hi = static_cast<uint32_t>(noc_addr.value().addr >> 32)};
 }
 
-void H2DSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device) {
+void H2DSocketImpl::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device) {
     validate_host_socket_allocation(*mesh_device, recv_core_);
     uint32_t config_buffer_size = sizeof(receiver_socket_md);
     auto num_cores = 1;
@@ -182,7 +183,7 @@ void H2DSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
         MeshBuffer::create(config_mesh_buffer_specs, config_buffer_specs, mesh_device.get(), preallocated_addr);
 }
 
-void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t pcie_alignment) {
+void H2DSocketImpl::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t pcie_alignment) {
     if (h2d_mode_ != H2DMode::HOST_PUSH) {
         // DEVICE_PULL: data FIFO lives in pinned host memory; no device-side L1
         // allocation needed.
@@ -263,7 +264,7 @@ void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device,
     write_ptr_ = 0;
 }
 
-void H2DSocket::write_socket_metadata(
+void H2DSocketImpl::write_socket_metadata(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const PinnedBufferInfo& bytes_acked_info,
     const PinnedBufferInfo& data_info) {
@@ -306,7 +307,7 @@ void H2DSocket::write_socket_metadata(
     }
 }
 
-void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device) {
+void H2DSocketImpl::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device) {
     TT_FATAL(mesh_device, "init_receiver_tlb requires a MeshDevice (owner path only; connectors use PCIeCoreWriter).");
 
     auto& env = mesh_device->impl().metal_env();
@@ -399,7 +400,7 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
     }
 }
 
-H2DSocket::H2DSocket(
+H2DSocketImpl::H2DSocketImpl(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoreCoord& recv_core,
     BufferType buffer_type,
@@ -461,7 +462,7 @@ H2DSocket::H2DSocket(
     connector_state_->clean_shutdown = 1;
 }
 
-H2DSocket::H2DSocket(
+H2DSocketImpl::H2DSocketImpl(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoreCoord& recv_core,
     uint32_t fifo_size,
@@ -524,7 +525,7 @@ H2DSocket::H2DSocket(
         static_cast<uint64_t>(config_buffer_address_) + dram_l1_noc_offset_);
 }
 
-H2DSocket::H2DSocket(
+H2DSocketImpl::H2DSocketImpl(
     MeshDevice& mesh_device,
     const MeshCoreCoord& recv_l2cpu,
     uint32_t fifo_size,
@@ -678,7 +679,7 @@ H2DSocket::H2DSocket(
     connector_state_->clean_shutdown = 1;
 }
 
-H2DSocket::~H2DSocket() noexcept {
+H2DSocketImpl::~H2DSocketImpl() noexcept {
     try {
         barrier(1000);
     } catch (const std::exception& e) {
@@ -724,7 +725,7 @@ H2DSocket::~H2DSocket() noexcept {
     }
 }
 
-void H2DSocket::reserve_bytes(uint32_t num_bytes) {
+void H2DSocketImpl::reserve_bytes(uint32_t num_bytes) {
     uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
     while (bytes_free < num_bytes) {
         advance_h2d_simulator_socket_device(mesh_device_, recv_core_.device_coord);
@@ -735,7 +736,7 @@ void H2DSocket::reserve_bytes(uint32_t num_bytes) {
     }
 }
 
-bool H2DSocket::has_space(std::optional<uint32_t> num_bytes_to_check) {
+bool H2DSocketImpl::has_space(std::optional<uint32_t> num_bytes_to_check) {
     validate_host_socket_access(rank_owns_endpoint_, recv_core_);
     TT_FATAL(page_size_ > 0, "Page size must be set before checking for data.");
     uint32_t num_bytes = num_bytes_to_check.value_or(page_size_);
@@ -755,7 +756,7 @@ bool H2DSocket::has_space(std::optional<uint32_t> num_bytes_to_check) {
     return bytes_free >= num_bytes;
 }
 
-bool H2DSocket::acked_past(uint32_t watermark) {
+bool H2DSocketImpl::acked_past(uint32_t watermark) {
     validate_host_socket_access(rank_owns_endpoint_, recv_core_);
     // in_flight = bytes_sent_ - bytes_acked_ (unsigned, always <= fifo_size_)
     // bytes_since_watermark = bytes_sent_ - watermark (unsigned, in [0, fifo_size_])
@@ -771,7 +772,7 @@ bool H2DSocket::acked_past(uint32_t watermark) {
     return bytes_sent_ - bytes_acked_ <= bytes_since_watermark;
 }
 
-void H2DSocket::push_bytes(uint32_t num_bytes) {
+void H2DSocketImpl::push_bytes(uint32_t num_bytes) {
     if (write_ptr_ + num_bytes >= fifo_curr_size_) {
         write_ptr_ = write_ptr_ + num_bytes - fifo_curr_size_;
         bytes_sent_ += num_bytes + fifo_size_ - fifo_curr_size_;
@@ -788,13 +789,13 @@ void H2DSocket::push_bytes(uint32_t num_bytes) {
     }
 }
 
-void H2DSocket::notify_receiver() {
+void H2DSocketImpl::notify_receiver() {
     uint32_t bytes_sent_addr = config_buffer_address_ + offsetof(receiver_socket_md, bytes_sent);
     pcie_writer(&bytes_sent_, sizeof(bytes_sent_), bytes_sent_addr);
     tt_driver_atomics::sfence();
 }
 
-void H2DSocket::set_page_size(uint32_t page_size) {
+void H2DSocketImpl::set_page_size(uint32_t page_size) {
     TT_FATAL(pcie_alignment_ > 0, "PCIe alignment not initialized.");
     TT_FATAL(page_size % pcie_alignment_ == 0, "Page size must be PCIE-aligned.");
     TT_FATAL(page_size <= fifo_size_, "Page size must be less than or equal to the FIFO size.");
@@ -824,7 +825,7 @@ void H2DSocket::set_page_size(uint32_t page_size) {
     }
 }
 
-void H2DSocket::barrier(std::optional<uint32_t> timeout_ms) {
+void H2DSocketImpl::barrier(std::optional<uint32_t> timeout_ms) {
     if (mesh_device_ && !mesh_device_->is_local(recv_core_.device_coord)) {
         return;
     }
@@ -858,7 +859,7 @@ void H2DSocket::barrier(std::optional<uint32_t> timeout_ms) {
     }
 }
 
-void H2DSocket::write(void* data, uint32_t num_pages) {
+void H2DSocketImpl::write(void* data, uint32_t num_pages) {
     validate_host_socket_access(rank_owns_endpoint_, recv_core_);
     TT_FATAL(page_size_ > 0, "Page size must be set before writing.");
     uint32_t num_bytes = num_pages * page_size_;
@@ -877,7 +878,7 @@ void H2DSocket::write(void* data, uint32_t num_pages) {
     this->notify_receiver();
 }
 
-bool H2DSocket::try_write_impl(void* data, uint32_t num_pages) {
+bool H2DSocketImpl::try_write(void* data, uint32_t num_pages) {
     validate_host_socket_access(rank_owns_endpoint_, recv_core_);
     TT_FATAL(page_size_ > 0, "Page size must be set before writing.");
     uint32_t num_bytes = num_pages * page_size_;
@@ -909,13 +910,7 @@ bool H2DSocket::try_write_impl(void* data, uint32_t num_pages) {
     return true;
 }
 
-std::vector<MeshCoreCoord> H2DSocket::get_active_cores() const { return {recv_core_}; }
-
-MeshDevice* H2DSocket::get_mesh_device() const { return mesh_device_; }
-
-H2DMode H2DSocket::get_h2d_mode() const { return h2d_mode_; }
-
-HDSocketDescriptor H2DSocket::populate_descriptor() const {
+HDSocketDescriptor H2DSocketImpl::populate_descriptor() const {
     validate_host_socket_access(rank_owns_endpoint_, recv_core_);
     TT_FATAL(is_owner_, "Only the owner process can populate a socket descriptor.");
     // The descriptor schema has no fields for the L2CPU LIM addresses, so a connector
@@ -933,7 +928,7 @@ HDSocketDescriptor H2DSocket::populate_descriptor() const {
     return desc;
 }
 
-std::string H2DSocket::export_descriptor(const std::string& socket_id) {
+std::string H2DSocketImpl::export_descriptor(const std::string& socket_id) {
     auto desc = populate_descriptor();
     descriptor_path_ = descriptor_path_for_socket("h2d", socket_id);
     desc.write_to_file(descriptor_path_);
@@ -941,14 +936,8 @@ std::string H2DSocket::export_descriptor(const std::string& socket_id) {
     return descriptor_path_;
 }
 
-std::unique_ptr<H2DSocket> H2DSocket::connect(const std::string& socket_id, std::optional<uint32_t> timeout_ms) {
-    auto desc = HDSocketDescriptor::wait_and_read(
-        descriptor_path_for_socket("h2d", socket_id), "h2d", timeout_ms.value_or(10000));
-    return connect_from_descriptor(desc);
-}
-
-std::unique_ptr<H2DSocket> H2DSocket::connect_from_descriptor(const HDSocketDescriptor& desc) {
-    auto socket = std::unique_ptr<H2DSocket>(new H2DSocket());
+std::unique_ptr<H2DSocketImpl> H2DSocketImpl::connect_from_descriptor(const HDSocketDescriptor& desc) {
+    auto socket = std::unique_ptr<H2DSocketImpl>(new H2DSocketImpl());
     socket->is_owner_ = false;
     socket->fifo_size_ = desc.fifo_size;
     socket->config_buffer_address_ = desc.config_buffer_address;
@@ -1013,6 +1002,85 @@ std::unique_ptr<H2DSocket> H2DSocket::connect_from_descriptor(const HDSocketDesc
 
     return socket;
 }
+
+// ---------------------------------------------------------------------------
+// H2DSocket: thin handle forwarding to H2DSocketImpl.
+// ---------------------------------------------------------------------------
+
+H2DSocket::H2DSocket(std::unique_ptr<H2DSocketImpl> impl) : pimpl_(std::move(impl)) {}
+
+H2DSocket::H2DSocket(
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    const MeshCoreCoord& recv_core,
+    BufferType buffer_type,
+    uint32_t fifo_size,
+    H2DMode h2d_mode) :
+    pimpl_(std::make_unique<H2DSocketImpl>(mesh_device, recv_core, buffer_type, fifo_size, h2d_mode)) {}
+
+H2DSocket::H2DSocket(
+    MeshDevice& mesh_device,
+    const MeshCoreCoord& recv_l2cpu,
+    uint32_t fifo_size,
+    uint32_t config_buffer_address,
+    uint32_t data_fifo_address,
+    H2DMode h2d_mode) :
+    pimpl_(std::make_unique<H2DSocketImpl>(
+        mesh_device, recv_l2cpu, fifo_size, config_buffer_address, data_fifo_address, h2d_mode)) {}
+
+H2DSocket::H2DSocket(
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    const MeshCoreCoord& recv_core,
+    uint32_t fifo_size,
+    uint32_t config_l1_local_addr,
+    uint32_t data_l1_local_addr,
+    uint64_t dram_l1_noc_offset) :
+    pimpl_(std::make_unique<H2DSocketImpl>(
+        mesh_device, recv_core, fifo_size, config_l1_local_addr, data_l1_local_addr, dram_l1_noc_offset)) {}
+
+// Out of line so the unique_ptr<H2DSocketImpl> destructor sees the complete type.
+H2DSocket::~H2DSocket() noexcept = default;
+
+std::unique_ptr<H2DSocket> H2DSocket::connect(const std::string& socket_id, std::optional<uint32_t> timeout_ms) {
+    auto desc = HDSocketDescriptor::wait_and_read(
+        descriptor_path_for_socket("h2d", socket_id), "h2d", timeout_ms.value_or(10000));
+    return connect_from_descriptor(desc);
+}
+
+std::unique_ptr<H2DSocket> H2DSocket::connect_from_descriptor(const HDSocketDescriptor& desc) {
+    return std::unique_ptr<H2DSocket>(new H2DSocket(H2DSocketImpl::connect_from_descriptor(desc)));
+}
+
+std::string H2DSocket::export_descriptor(const std::string& socket_id) { return pimpl_->export_descriptor(socket_id); }
+
+HDSocketDescriptor H2DSocket::populate_descriptor() const { return pimpl_->populate_descriptor(); }
+
+uint32_t H2DSocket::get_page_size() const { return pimpl_->get_page_size(); }
+
+uint32_t H2DSocket::get_config_buffer_address() const { return pimpl_->get_config_buffer_address(); }
+
+uint32_t H2DSocket::get_fifo_size() const { return pimpl_->get_fifo_size(); }
+
+uint32_t H2DSocket::get_bytes_sent() const { return pimpl_->get_bytes_sent(); }
+
+bool H2DSocket::had_clean_prior_shutdown() const { return pimpl_->had_clean_prior_shutdown(); }
+
+bool H2DSocket::has_space(std::optional<uint32_t> num_bytes_to_check) { return pimpl_->has_space(num_bytes_to_check); }
+
+bool H2DSocket::acked_past(uint32_t watermark) { return pimpl_->acked_past(watermark); }
+
+void H2DSocket::set_page_size(uint32_t page_size) { pimpl_->set_page_size(page_size); }
+
+void H2DSocket::write(void* data, uint32_t num_pages) { pimpl_->write(data, num_pages); }
+
+bool H2DSocket::try_write_impl(void* data, uint32_t num_pages) { return pimpl_->try_write(data, num_pages); }
+
+void H2DSocket::barrier(std::optional<uint32_t> timeout_ms) { pimpl_->barrier(timeout_ms); }
+
+std::vector<MeshCoreCoord> H2DSocket::get_active_cores() const { return {pimpl_->get_recv_core()}; }
+
+MeshDevice* H2DSocket::get_mesh_device() const { return pimpl_->get_mesh_device(); }
+
+H2DMode H2DSocket::get_h2d_mode() const { return pimpl_->get_h2d_mode(); }
 
 }  // namespace tt::tt_metal::distributed
 

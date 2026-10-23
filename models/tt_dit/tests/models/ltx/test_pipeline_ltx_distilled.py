@@ -189,6 +189,7 @@ def test_pipeline_distilled(
             topology=topology,
             output_path=output_filename,
             prompt=prompt,
+            report_model="ltx-2.3-fast-i2v" if image_path else "ltx-2.3-fast-t2v",
         )
 
     vbench_thresholds_by_height = {
@@ -531,6 +532,14 @@ def test_pipeline_distilled_i2v(mesh_device, sp_axis, tp_axis, num_links, dynami
     # i2v conditioned on that frame
     i2v = tmp_path / "i2v.mp4"
     _gen(i2v, [(str(cond), 0, strength)])
+    # Publish the Fast I2V generation rate for the dashboard (#58596). This test generates through
+    # _gen and never calls print_ltx_timing_table, so report directly from the i2v run's timings.
+    # No-op outside CI (report_generation_rate -> report_vision_fps guards on IS_CI_ENV).
+    i2v_timings = getattr(pipeline, "last_timings", None)
+    if i2v_timings:
+        from models.demos.utils.common_demo_utils import report_generation_rate
+
+        report_generation_rate("ltx-2.3-fast-i2v", sum(secs for _, secs in i2v_timings), num_frames, batch_size=1)
     if os.environ.get("LTX_I2V_OUT"):
         shutil.copy(str(i2v), os.environ["LTX_I2V_OUT"])
 
