@@ -15,6 +15,10 @@
 
 namespace ttnn::operations::ccl {
 
+namespace all_gather_plan {
+struct AgPlan;
+}
+
 struct AllGatherDeviceOperation {
     using operation_attributes_t = AllGatherParams;
     using tensor_args_t = AllGatherInputs;
@@ -40,6 +44,21 @@ tt::tt_metal::TensorSpec compute_output_specs_helper(
     int32_t gather_dim_from_end,
     uint32_t num_devices,
     const std::optional<MemoryConfig>& memory_config);
+
+// Params (machine and fabric facts included, no choice yet) and inputs of one call.
+std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
+    const Tensor& input_tensor,
+    const std::optional<ttnn::Tensor>& persistent_output_tensor,
+    int32_t dim,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const AgForce& force);
+
+// Plans the call (all_gather_plan.hpp) and stores the choice in params; the caller takes composite when the plan says
+// so. The output spec is the persistent output's when there is one.
+all_gather_plan::AgPlan plan_all_gather(AllGatherParams& params, const AllGatherInputs& inputs);
 
 }  // namespace ttnn::operations::ccl
 
