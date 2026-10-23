@@ -2074,6 +2074,29 @@
   team: train
   budget_type: e2e
 
+- name: Galaxy Llama 8B TP=4 FSDP=8 train e2e tests
+  cmd: |
+    export HF_HOME=/mnt/models/huggingface
+    SUMMARY="${PIPELINE_DIR}/tt_train_summary.md"
+    rc=0
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc "
+      ./tt-train/scripts/setup_pth.sh
+      python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames llama_8b_tp4_fsdp8_shakespeare --output-dir ${PIPELINE_DIR}/tt-train-metrics --summary-file ${SUMMARY}
+    " || rc=$?
+    if [ -s "$SUMMARY" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+      cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+    fi
+    exit $rc
+  model: "[tt-train] llama_8b_tp4_fsdp8"
+  skus:
+    bh_sc1_high_power:
+      timeout: 30
+      tier: 3
+      release_ready: false
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  budget_type: e2e
+
 # ── VibeVoice ──────────────────────────────────────────────────────
 - name: VibeVoice-1.5B e2e accuracy tests (P150 1x1)
   cmd: |
