@@ -77,6 +77,7 @@ ttnn:
     bh_p150b_civ2_viommu: 45
     sim_wh_n150: 40
     sim_bh_p150: 40
+    sim_quasar: 30  # three Quasar ttsim smoke groups (resnet50 ops, llama32_1b graph ops, yolo ops), 10 each
   sanity:
     wh_n300_civ2: 580
     bh_p100: 545
