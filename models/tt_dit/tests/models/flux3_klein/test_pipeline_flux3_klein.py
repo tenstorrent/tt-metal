@@ -161,7 +161,11 @@ from .test_vae_flux3_klein import PSNR_DEC_FLOOR, PSNR_DEC_FLOOR_896x1120, cache
 # reference's own sensitivity (docs/STATUS.md M4). They gate the recorded-text rows (P1) and the base device-text rows
 # (P2 / P3 base: measured 28.37 dB with the device text vs 28.40 recorded, -0.03 dB, inside the margin;
 # logs/m67_builder_pipeline_4x8.log:1703, logs/m67_verifier_pipeline_4x8.log:321).
-PSNR_INTERIM = {"base": 27.0, "distilled": 31.5}
+# 2026-10-21: the ring SDPA's approximate exp (transformer_block_flux3_klein.py) moved the distilled recorded-text row
+# from 32.86 to 31.45 dB vs golden.png (measured, bin/probes/probe_sdpa_modes.py --golden; the user inspected both
+# renders and accepted the approximation for a 2.6x faster 4K step). The distilled gate is re-set below that
+# measurement with the same margin the original had under its measurement (31.5 under 32.86 -> 30.0 under 31.45).
+PSNR_INTERIM = {"base": 27.0, "distilled": 30.0}
 # The distilled DEVICE-text row (P2 / P3 distilled) is NOT gated vs golden.png: golden.png is the trajectory of the
 # RECORDED text, and the device text differs from it (concat pcc 0.999986, M5). Its proper reference is the CPU
 # reference sampler run on the SAME device text (cached_reference_sampling below). Measured 2026-10-17 on the 4x8 ring
@@ -209,10 +213,17 @@ mesh_rows = pytest.mark.parametrize(
 
 
 def golden_for(variant: str) -> GoldenCase:
+    """The variant's first TEXT-TO-IMAGE golden (no references): the edit goldens (1_figurine, 2_3_mugprint,
+    3_bandana, added with M8) sort before man_dog, and P1 renders the golden's text WITHOUT its references, which is
+    not that golden's request (2026-10-21: 12.97 / 14.28 dB 'failures' on 1_figurine)."""
     for case_dir in golden_cases():
-        if case_model(case_dir) == variant:
-            return load_golden_case(case_dir)
-    pytest.skip(f"no complete {variant} case under {GOLDENS_ENV}")
+        if case_model(case_dir) != variant:
+            continue
+        golden = load_golden_case(case_dir)
+        if golden.replay.get("references") or golden.replay.get("prepared_reference_sizes"):
+            continue
+        return golden
+    pytest.skip(f"no complete text-to-image {variant} case under {GOLDENS_ENV}")
 
 
 def golden_png(golden: GoldenCase):

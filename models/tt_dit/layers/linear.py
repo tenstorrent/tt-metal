@@ -28,6 +28,12 @@ MATH_FIDELITY = {
     ttnn.float32: ttnn.MathFidelity.HiFi4,
 }
 
+# Scoped override (MEASUREMENT runs, e.g. the Klein bfp8 timing of 2026-10-22): while ``DTYPE_OVERRIDE`` is set, every
+# Linear constructed with the default bf16 weight dtype takes this dtype instead, and ``FIDELITY_OVERRIDE`` (if set)
+# replaces the matmul fidelity. The caller sets both around ONE model's construction and resets them to None.
+DTYPE_OVERRIDE = None
+FIDELITY_OVERRIDE = None
+
 # Activation strings accepted by Linear / ColParallelLinear `activation_fn`,
 # mapped to the values the matmul fused-activation path expects. Each value is
 # either a bare ttnn.UnaryOpType (no parameter) or a (UnaryOpType, param0)
@@ -107,6 +113,8 @@ class Linear(Module):
             self.fused_activation_fn = _FUSED_GELU_VARIANTS[self.activation_fn]
             self.activation_fn = None
         self.mesh_device = mesh_device
+        if DTYPE_OVERRIDE is not None and dtype == ttnn.bfloat16:
+            dtype = DTYPE_OVERRIDE
 
         """
         NOTE: This is the special config which attains good correctness
@@ -114,7 +122,7 @@ class Linear(Module):
         """
         self.compute_config = compute_kernel_config or ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=MATH_FIDELITY.get(dtype, ttnn.MathFidelity.HiFi2),
+            math_fidelity=FIDELITY_OVERRIDE or MATH_FIDELITY.get(dtype, ttnn.MathFidelity.HiFi2),
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
