@@ -186,3 +186,10 @@ Both final prefill and decode device times improve over the earlier final_select
 ### Independent signoff
 
 `$stage-review` returned **clean-pass**, with no required work and no hard-check gaps. The report inspected final implementation,17 validation records, hash-exact fused controls, raw profile windows,48 reader trials, optimization candidates, docs and the compact packet. Ten anomalies are fixed or controlled. Source/tests compile and source/documentation diff checks pass. Remaining limitations are layer-only scope, setup-only memory snapshots, and separate max-context/larger-batch coverage; no deferred decoder optimization is claimed. See `stage_review.md`.
+
+### Local commit record
+
+- Implementation, tests, reviewed evidence and clean-pass state: `8435f1802a9193775618335834ddcd6746773e33`.
+- Parent fused-stage checkpoint: `22612a5fc90813932f3212bc3d8d842fa9142706`.
+- A report-only follow-up records this implementation SHA. Its SHA is recorded in the required external telemetry packet and final handoff (a commit cannot contain its own hash).
+- Commits use command-scoped `Codex <codex@localhost>`, matching prior stage commits because this checkout has no configured author identity. No global Git configuration was changed. Never pushed.
