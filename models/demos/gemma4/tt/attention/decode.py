@@ -373,7 +373,9 @@ def decode_forward(
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=sdpa_grid,
         q_chunk_size=32,
-        k_chunk_size=64,
+        # GEMMA4_SDPA_DECODE_K_CHUNK: K chunk of the decode SDPA (default 64; a multiple of 32, bounded by L1 at
+        # head_dim 512) for the knob sweep; the page block (64) stays the paged read unit either way.
+        k_chunk_size=int(os.environ.get("GEMMA4_SDPA_DECODE_K_CHUNK", "64")),
         exp_approx_mode=False,
         **_sdpa_max_cores_per_head_kwargs(),
     )

@@ -95,6 +95,11 @@ def _get_lm_head_program_config(mesh_device, m: int, k: int, n: int):
     in0_block_w = 32
     while in0_block_w > 1 and k_tiles % in0_block_w != 0:
         in0_block_w //= 2
+    # GEMMA4_LM_HEAD_IN0_BLOCK_W: K-block override for the sweep (must divide the K tiles; 31B 168 tiles -> 8 by the
+    # power-of-two rule above, 12 / 14 / 21 / 24 / 28 are the other candidates).
+    env_block = int(os.environ.get("GEMMA4_LM_HEAD_IN0_BLOCK_W", "0"))
+    if env_block > 0 and k_tiles % env_block == 0:
+        in0_block_w = env_block
 
     out_subblock_w = min(per_core_n, 4)
     while out_subblock_w > 1 and per_core_n % out_subblock_w != 0:
