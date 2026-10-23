@@ -81,6 +81,7 @@
 #include "ttnn/operations/reduction/reduction_nanobind.hpp"
 #include "ttnn/operations/sliding_window/sliding_window_nanobind.hpp"
 #include "ttnn/operations/toy_scaled_add/toy_scaled_add_nanobind.hpp"
+#include "ttnn/operations/matmul_reduce_scatter/matmul_reduce_scatter_nanobind.hpp"
 #include "ttnn/operations/transformer/transformer_nanobind.hpp"
 #include "ttnn/operations/uniform/uniform_nanobind.hpp"
 #include "ttnn/operations/rand/rand_nanobind.hpp"
@@ -229,6 +230,8 @@ void py_module(nb::module_& mod) {
 
     auto m_toy_scaled_add = mod.def_submodule("toy_scaled_add", "toy_scaled_add operation");
     toy_scaled_add::bind_toy_scaled_add_operation(m_toy_scaled_add);
+    auto m_matmul_reduce_scatter = mod.def_submodule("matmul_reduce_scatter", "matmul_reduce_scatter operation");
+    matmul_reduce_scatter::bind_matmul_reduce_scatter_operation(m_matmul_reduce_scatter);
 }
 }  // namespace ttnn::operations
 

@@ -1,6 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import sys
+import types
+
 from .matmul_reduce_scatter import (
     EXCLUSIONS,
     INPUT_TAGGERS,
@@ -10,8 +13,16 @@ from .matmul_reduce_scatter import (
     validate,
 )
 
-# Test hooks (read / written at call time through this package module, so monkeypatch.setattr works):
-#   _FORCE_XBLOCK_RESIDENCY: None (choose_k_block decides) | True | False
-#   _LAST_PLAN: overwritten on every call with the regime / schedule / grid the call used.
-_FORCE_XBLOCK_RESIDENCY = None
-_LAST_PLAN = {}
+# _LAST_PLAN: read through this package module, the regime / schedule / grid the last call of the C++ op used.
+
+
+class _Package(types.ModuleType):
+    def __getattr__(self, name):
+        if name == "_LAST_PLAN":
+            import ttnn
+
+            return ttnn._ttnn.operations.matmul_reduce_scatter._last_plan()
+        raise AttributeError(f"module {self.__name__!r} has no attribute {name!r}")
+
+
+sys.modules[__name__].__class__ = _Package

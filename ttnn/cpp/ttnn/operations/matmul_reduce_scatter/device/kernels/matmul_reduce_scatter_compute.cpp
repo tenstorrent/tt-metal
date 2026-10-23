@@ -63,10 +63,10 @@
 #include "api/compute/eltwise_binary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/operations/matmul_reduce_scatter/device/kernels/matmul_reduce_scatter_args.hpp"
 
 namespace ckl = compute_kernel_lib;
-
-constexpr uint32_t ROLE_COPY = 0, ROLE_ADD_FWD = 1, ROLE_ADD_BWD = 2, ROLE_ADD_BOTH = 3;
+namespace mrs = matmul_reduce_scatter;
 
 template <uint32_t cb_hold, uint32_t cb_finished, uint32_t cb_arr_fwd, uint32_t cb_arr_bwd, uint32_t P>
 ALWI void finish_block(uint32_t role) {
@@ -75,11 +75,11 @@ ALWI void finish_block(uint32_t role) {
     constexpr auto shape = IterationShape::tiles(P);
     // FPU adds into fp32 DEST; the hold reaches DEST through srcA (no UnpackToDestFp32). This separate finish runs only
     // for lagged / post-lag / late entries and must repeat the fused finish's op sequence exactly (determinism).
-    if (role == ROLE_COPY) {
+    if (role == mrs::role::COPY) {
         copy<input(cb_hold), output(cb_finished)>(shape);
-    } else if (role == ROLE_ADD_FWD) {
+    } else if (role == mrs::role::ADD_FWD) {
         add<input(cb_hold), input(cb_arr_fwd), output(cb_finished)>(shape);
-    } else if (role == ROLE_ADD_BWD) {
+    } else if (role == mrs::role::ADD_BWD) {
         add<input(cb_hold), input(cb_arr_bwd), output(cb_finished)>(shape);
     } else {
         eltwise_chain(
@@ -91,23 +91,25 @@ ALWI void finish_block(uint32_t role) {
 }
 
 void kernel_main() {
-    constexpr uint32_t cb_act_k_window = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_weight_k_window = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_partial_hold = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_finished = get_compile_time_arg_val(3);
-    constexpr uint32_t cb_arrivals_fwd = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_arrivals_bwd = get_compile_time_arg_val(5);
-    constexpr uint32_t win_n = get_compile_time_arg_val(6);  // W window row stride (tiles): one wave's nominal width
-    constexpr uint32_t kb = get_compile_time_arg_val(7);
-    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(8);
-    constexpr uint32_t P = get_compile_time_arg_val(9);              // slot tiles (the largest wave)
-    constexpr uint32_t num_entries = get_compile_time_arg_val(10);   // G x num_waves
-    constexpr uint32_t num_waves = get_compile_time_arg_val(11);
-    constexpr uint32_t super_block = get_compile_time_arg_val(12);  // K-windows per DEST-resident pack (divides nkb)
-    constexpr uint32_t cb_zero = get_compile_time_arg_val(13);      // one bf16 zero tile (the writer fills it)
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(14);   // the entry walk runs once per output chunk
-    constexpr uint32_t n_inner = get_compile_time_arg_val(15);      // chunks per outer (resident-axis) index
-    constexpr bool resident = get_compile_time_arg_val(16) != 0;
+    using namespace mrs::compute_ct;
+    constexpr uint32_t cb_act_k_window = get_compile_time_arg_val(CB_ACT_K_WINDOW);
+    constexpr uint32_t cb_weight_k_window = get_compile_time_arg_val(CB_WEIGHT_K_WINDOW);
+    constexpr uint32_t cb_partial_hold = get_compile_time_arg_val(CB_PARTIAL_HOLD);
+    constexpr uint32_t cb_finished = get_compile_time_arg_val(CB_FINISHED);
+    constexpr uint32_t cb_arrivals_fwd = get_compile_time_arg_val(CB_ARRIVALS_FWD);
+    constexpr uint32_t cb_arrivals_bwd = get_compile_time_arg_val(CB_ARRIVALS_BWD);
+    constexpr uint32_t win_n =
+        get_compile_time_arg_val(WIN_N);  // W window row stride (tiles): one wave's nominal width
+    constexpr uint32_t kb = get_compile_time_arg_val(KB);
+    constexpr uint32_t num_k_blocks = get_compile_time_arg_val(NUM_K_BLOCKS);
+    constexpr uint32_t P = get_compile_time_arg_val(mrs::compute_ct::P);     // slot tiles (the largest wave)
+    constexpr uint32_t num_entries = get_compile_time_arg_val(NUM_ENTRIES);  // G x num_waves
+    constexpr uint32_t num_waves = get_compile_time_arg_val(NUM_WAVES);
+    constexpr uint32_t super_block = get_compile_time_arg_val(SUPER_BLOCK);  // K-windows per DEST-resident pack
+    constexpr uint32_t cb_zero = get_compile_time_arg_val(CB_ZERO);          // one bf16 zero tile (the writer fills it)
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(NUM_CHUNKS);  // the entry walk runs once per output chunk
+    constexpr uint32_t n_inner = get_compile_time_arg_val(N_INNER);        // chunks per outer (resident-axis) index
+    constexpr bool resident = get_compile_time_arg_val(RESIDENT) != 0;
     static_assert(super_block >= 1 && num_k_blocks % super_block == 0, "super-block must divide the K-blocks");
     // runtime args: per wave rows | cols << 8 | sb_h << 16 | sb_w << 24, then per entry role | lag << 8
     constexpr uint32_t roles_idx = num_waves;
@@ -126,10 +128,10 @@ void kernel_main() {
                 const uint16_t rec = (uint16_t)reg_read((uint32_t)get_cb_tiles_received_ptr(cb));
                 return (uint16_t)(rec - (uint16_t)get_local_cb_interface(cb).tiles_acked) >= P;
             };
-            if (role == ROLE_ADD_FWD || role == ROLE_ADD_BOTH) {
+            if (role == mrs::role::ADD_FWD || role == mrs::role::ADD_BOTH) {
                 ready &= landed(cb_arrivals_fwd) ? 1u : 0u;
             }
-            if (role == ROLE_ADD_BWD || role == ROLE_ADD_BOTH) {
+            if (role == mrs::role::ADD_BWD || role == mrs::role::ADD_BOTH) {
                 ready &= landed(cb_arrivals_bwd) ? 1u : 0u;
             }
 #ifdef FF_FORCE_LATE  // test-only: every arrival entry takes the late branch (determinism / bit-equality check)
@@ -179,10 +181,10 @@ void kernel_main() {
                 any = true;
             }
             if (with_arrivals) {
-                if (role == ROLE_ADD_FWD || role == ROLE_ADD_BOTH) {
+                if (role == mrs::role::ADD_FWD || role == mrs::role::ADD_BOTH) {
                     reuse_add(cb_arrivals_fwd);
                 }
-                if (role == ROLE_ADD_BWD || role == ROLE_ADD_BOTH) {
+                if (role == mrs::role::ADD_BWD || role == mrs::role::ADD_BOTH) {
                     reuse_add(cb_arrivals_bwd);
                 }
             }
@@ -207,7 +209,7 @@ void kernel_main() {
         ckernel::matmul_block_init(cb_act_k_window, cb_weight_k_window, false, sb_w, sb_h, kb);
         const uint32_t S = fill ? 1 : super_block;  // an operand fill arrives at DRAM pace: pack per window
         const uint32_t n_super = num_k_blocks / S;
-        const bool has_arrival = role != ROLE_COPY;
+        const bool has_arrival = role != mrs::role::COPY;
         const bool hold_prev = n_super > 1;  // earlier super-blocks to add in the last one
         // a fused chain start with one super-block never touches the hold
         const bool use_hold = !(fusable && !has_arrival && !hold_prev);
@@ -279,10 +281,10 @@ void kernel_main() {
                     if (fusable && has_arrival && last_super && first_sb) {
                         if (arrivals_landed(role)) {
                             fused = true;
-                            if (role == ROLE_ADD_FWD || role == ROLE_ADD_BOTH) {
+                            if (role == mrs::role::ADD_FWD || role == mrs::role::ADD_BOTH) {
                                 fwd_buf.wait_front(P);  // landed: returns at once
                             }
-                            if (role == ROLE_ADD_BWD || role == ROLE_ADD_BOTH) {
+                            if (role == mrs::role::ADD_BWD || role == mrs::role::ADD_BOTH) {
                                 bwd_buf.wait_front(P);
                             }
                             PACK((pack_reconfig_data_format(cb_finished)));
@@ -333,10 +335,10 @@ void kernel_main() {
                 hold_buf.wait_front(P);
                 hold_buf.pop_front(P);
             }
-            if (role == ROLE_ADD_FWD || role == ROLE_ADD_BOTH) {
+            if (role == mrs::role::ADD_FWD || role == mrs::role::ADD_BOTH) {
                 fwd_buf.pop_front(P);
             }
-            if (role == ROLE_ADD_BWD || role == ROLE_ADD_BOTH) {
+            if (role == mrs::role::ADD_BWD || role == mrs::role::ADD_BOTH) {
                 bwd_buf.pop_front(P);
             }
         } else if (!(fusable && hold_prev)) {  // (a fusable entry with earlier super-blocks pushed its slot already)
@@ -354,7 +356,8 @@ void kernel_main() {
         for (uint32_t e = 0; e < num_entries; ++e) {
             const uint32_t word = get_arg_val<uint32_t>(roles_idx + e);
             const uint32_t role = word & 0xFF;
-            const bool lag = (word >> 8) & 1;  // host: arrival expected late -> finish behind the next matmul
+            const bool lag =
+                (word >> mrs::role::LAG_SHIFT) & 1;  // host: arrival expected late -> finish behind the next matmul
             const bool fusable = !lag && pending == NONE;
             const bool fused = matmul_entry(e, chunk_fill && e == 0, fusable, role);
             if (pending != NONE) {

@@ -26,8 +26,10 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "ttnn/cpp/ttnn/operations/matmul_reduce_scatter/device/kernels/matmul_reduce_scatter_args.hpp"
 
 using namespace tt::tt_fabric;
+namespace mrs = matmul_reduce_scatter;
 
 // One hop: 2D fabrics route by destination fabric node, 1D fabrics by hop count (ROUTING_MODE from the build).
 inline void route_one_hop(volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint16_t chip_id, uint16_t mesh_id) {
@@ -42,39 +44,46 @@ inline void route_one_hop(volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint16_t c
 }
 
 void kernel_main() {
-    constexpr uint32_t cb_port_chunks = get_compile_time_arg_val(0);
-    constexpr uint32_t P = get_compile_time_arg_val(1);
-    constexpr uint32_t chunk_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t group = get_compile_time_arg_val(3);
-    constexpr uint32_t tile_bytes = get_compile_time_arg_val(4);
+    namespace ct = mrs::port_ct;
+    namespace rt = mrs::port_sender_rt;
+    namespace common = mrs::port_sender_common;
+    constexpr uint32_t cb_port_chunks = get_compile_time_arg_val(ct::CB_PORT_CHUNKS);
+    constexpr uint32_t P = get_compile_time_arg_val(ct::P);
+    constexpr uint32_t chunk_tiles = get_compile_time_arg_val(ct::CHUNK_TILES);
+    constexpr uint32_t group = get_compile_time_arg_val(ct::GROUP);
+    constexpr uint32_t tile_bytes = get_compile_time_arg_val(ct::TILE_BYTES);
     constexpr uint32_t chunk_bytes = chunk_tiles * tile_bytes;
     constexpr uint32_t num_headers = group;
     constexpr uint32_t slot_bytes = P * tile_bytes;
-    constexpr uint32_t num_waves = get_compile_time_arg_val(8);  // entry e is wave e mod num_waves
+    constexpr uint32_t num_waves = get_compile_time_arg_val(ct::NUM_WAVES);  // entry e is wave e mod num_waves
     // 1: every unit's last chunk per core carries the arrival increment; 0: only the block's last wave does (its
     // flush covers the earlier waves' chunks to the same core)
-    constexpr bool inc_every_wave = get_compile_time_arg_val(9) != 0;
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(10);
-    constexpr uint32_t zone_sets = get_compile_time_arg_val(12);
+    constexpr bool inc_every_wave = get_compile_time_arg_val(ct::INC_EVERY_WAVE) != 0;
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(ct::NUM_CHUNKS);
+    constexpr uint32_t zone_sets = get_compile_time_arg_val(ct::ZONE_SETS);
 
-    size_t arg = 0;
-    const uint32_t zone_base = get_arg_val<uint32_t>(arg++);     // downstream zone of this direction (staging + offset)
-    const uint32_t arrival_addr = get_arg_val<uint32_t>(arg++);  // global arr_d on the downstream matmul cores
-    const uint32_t ready_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t send_ready = get_arg_val<uint32_t>(arg++);
-    const uint32_t ready_x = get_arg_val<uint32_t>(arg++);
-    const uint32_t ready_y = get_arg_val<uint32_t>(arg++);
-    const uint16_t dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg++));
-    const uint16_t dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg++));
-    const uint32_t num_cores = get_arg_val<uint32_t>(arg++);
-    const uint32_t num_units = get_arg_val<uint32_t>(arg++);
-    const uint32_t credit_addr = get_arg_val<uint32_t>(arg++);   // global credit counter (same address on every port)
-    const uint32_t wait_credits = get_arg_val<uint32_t>(arg++);  // credits this port waits for this call
-    const uint32_t expect = get_arg_val<uint32_t>(arg++);        // `freed` reports per consumed chunk
-    const uint32_t fwd_total = get_arg_val<uint32_t>(arg++);     // credits this port forwards this call
-    const uint32_t ring_slots = get_arg_val<uint32_t>(arg++);    // downstream zone slots of this direction
-    const uint32_t down_per_chunk0 = get_arg_val<uint32_t>(arg++);  // downstream arrivals per chunk, half 0 / 1
-    const uint32_t down_per_chunk1 = get_arg_val<uint32_t>(arg++);
+    // downstream zone of this direction (staging + offset)
+    const uint32_t zone_base =
+        get_common_arg_val<uint32_t>(common::STAGING_ADDR) + get_arg_val<uint32_t>(rt::ZONE_OFFSET);
+    const uint32_t arrival_addr = get_arg_val<uint32_t>(rt::ARRIVAL_ADDR);  // global arr_d on the downstream cores
+    const uint32_t ready_addr = get_common_arg_val<uint32_t>(common::READY_ADDR);
+    const uint32_t send_ready = get_arg_val<uint32_t>(rt::SEND_READY);
+    const uint32_t ready_x = get_arg_val<uint32_t>(rt::READY_X);
+    const uint32_t ready_y = get_arg_val<uint32_t>(rt::READY_Y);
+    const uint16_t dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(rt::DST_MESH_ID));
+    const uint16_t dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(rt::DST_CHIP_ID));
+    const uint32_t num_cores = get_arg_val<uint32_t>(rt::NUM_CORES);
+    const uint32_t num_units = get_arg_val<uint32_t>(rt::NUM_UNITS);
+    // global credit counter (same address on every port)
+    const uint32_t credit_addr = get_common_arg_val<uint32_t>(common::CREDIT_ADDR);
+    const uint32_t wait_credits = get_arg_val<uint32_t>(rt::WAIT_CREDITS);  // credits this port waits for this call
+    const uint32_t expect = get_arg_val<uint32_t>(rt::EXPECT);              // `freed` reports per consumed chunk
+    const uint32_t fwd_total = get_arg_val<uint32_t>(rt::FWD_TOTAL);        // credits this port forwards this call
+    const uint32_t ring_slots = get_arg_val<uint32_t>(rt::RING_SLOTS);      // downstream zone slots of this direction
+    // downstream arrivals per chunk, half 0 / 1
+    const uint32_t down_per_chunk0 = get_arg_val<uint32_t>(rt::DOWN_PER_CHUNK0);
+    const uint32_t down_per_chunk1 = get_arg_val<uint32_t>(rt::DOWN_PER_CHUNK1);
+    size_t arg = rt::COUNT;
     const uint32_t wave_tiles_idx = arg;  // per wave: tiles one core sends (<= P), dense at the front of its slot
     const uint32_t cores_idx = arg + num_waves;
     const uint32_t units_idx = cores_idx + num_cores;
@@ -97,7 +106,7 @@ void kernel_main() {
     conn.open();
 
     // chunk credits (see header): forward one per chunk of the peer's arrivals my matmul cores consumed
-    volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(2));
+    volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(mrs::sem::FREED));
     volatile tt_l1_ptr uint32_t* credits = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credit_addr);
     uint32_t forwarded = 0;
     auto forward_poll = [&]() {
