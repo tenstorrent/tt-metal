@@ -206,8 +206,8 @@ class MiniMaxH3ViTAttention(Module):
             logical = ttnn.Shape([batch, self.num_heads, valid_len, self.head_dim])
             query, key, value = (ttnn.reshape(t, logical, padded) for t in (query, key, value))
 
-        # The recipe writes [b, h, s, d] (it masks the sub-tile valid_len keys itself), and the heads are
-        # concatenated after it.
+        # The recipe masks the sub-tile valid_len keys itself and writes the heads side by side,
+        # [b, 1, valid_len, h * d], so no separate nlp_concat_heads pass.
         attended = ttnn.transformer.scaled_dot_product_attention(
             query,
             key,
@@ -216,10 +216,8 @@ class MiniMaxH3ViTAttention(Module):
             is_causal=False,
             program_config=self.sdpa_program_config,
             precision=self.sdpa_precision,
+            output_concat_heads=True,
         )
-        if attended.shape[-2] != seq_len:
-            attended = ttnn.reshape(attended, padded, padded)
-        attended = ttnn.experimental.nlp_concat_heads(attended)
         dim = self.num_heads * self.head_dim
         full = ttnn.Shape([batch, 1, seq_len, dim])
         if attended.shape[-2] != seq_len:
