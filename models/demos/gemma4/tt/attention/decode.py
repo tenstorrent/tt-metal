@@ -146,6 +146,11 @@ def decode_forward(
         and len(cos_cache.shape) == 4
         and int(cos_cache.shape[1]) == 1
         and not (sequential_kv_write and int(tt_q.shape[1]) > 1)
+        # Sliding layers only (head_dim 256). On the head_dim-512 global layers the op's six live [32, 512] shards
+        # per core (inputs + outputs) push the lowest live L1 buffer under the ~1.26 MB static-buffer region of the
+        # following paged_update_cache / SDPA programs at 32 users ("statically allocated dataflow buffers clash
+        # with L1 buffers"); the global layers take the composite path until the op writes its outputs in place.
+        and int(config.head_dim) <= 256
     )
     if fused_qkv:
         # norms + RoPE on the sharded head tensors, outputs in the same sharded layout (custom_ops/qkv_norm_rope)
@@ -155,15 +160,9 @@ def decode_forward(
         nq, nk, nv = QkvNormRope.op(tt_q, tt_k, tt_v, gq, gk, cos_cache, sin_cache, config.rms_norm_eps)
         for t in (tt_q, tt_k, tt_v):
             t.deallocate(True)
-        # k / v stay sharded for the paged cache update below. q stays height-sharded into SDPA on the sliding
-        # layers (same result as the DRAM form: tests/unit/test_attention_qkv_stages.py); on the global layers
-        # (head_dim 512) the SDPA program's static buffers plus the sharded q, k, v shards overflow L1 at 32 users
-        # ("statically allocated dataflow buffers clash with L1 buffers"), so q takes the DRAM form there.
-        tt_q = nq
-        if config.head_dim >= 512:
-            tt_q = ttnn.to_memory_config(nq, ttnn.DRAM_MEMORY_CONFIG)
-            nq.deallocate(True)
-        tt_k, tt_v = nk, nv
+        # k / v stay sharded for the paged cache update below (freed right after it); q stays height-sharded into
+        # SDPA (same result as the DRAM form: tests/unit/test_attention_qkv_stages.py).
+        tt_q, tt_k, tt_v = nq, nk, nv
     else:
         tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
         tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
