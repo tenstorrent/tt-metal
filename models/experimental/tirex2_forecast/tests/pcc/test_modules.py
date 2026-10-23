@@ -227,3 +227,19 @@ def test_variate(device, tt_model, b):
     attn = df.linear(a.transpose(1, 2).reshape(tokens, rows, 512), w.w_o)
     got_attn = dbg["attn"][:tokens, 0, :rows]
     assert report(f"variate{b}.attn", attn, got_attn, 0.999) >= 0.999
+
+
+def test_log_sigmoid_fp32(device):
+    """The gates' log-sigmoid runs in fp32 as ``log(sigmoid(max(x, -80)))`` (``ttnn.log_sigmoid`` and a bf16
+    softplus are inaccurate; PLAN section 9). Check it over |x| <= 40, past the gate ranges seen in the goldens."""
+    import ttnn
+
+    from models.experimental.tirex2_forecast.tt import layers
+    from models.experimental.tirex2_forecast.tt.common import upload
+
+    x = torch.linspace(-40, 40, 32 * 4096).reshape(1, 1, 128, 1024)
+    got = ttnn.to_torch(layers.log_sigmoid(upload(device, x, dtype=ttnn.float32))).double()
+    exp = torch.nn.functional.logsigmoid(x.double())
+    err = float((got - exp).abs().max())
+    print(f"[PCC] log_sigmoid fp32: max abs err {err:.3e} over [-40, 40]")
+    assert err <= 1e-5

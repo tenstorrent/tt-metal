@@ -98,13 +98,14 @@
   "input_generator": {
     "function": "make_series(n, length, seed, nan_frac=0.005) in tests/golden/make_goldens.py",
     "description": "scale 10**U(-1,2) x (level + trend + daily/weekly sines + AR(1) noise), 0.5 % interior NaNs",
+    "bench_function": "make_series_mix(n, length, seed, nan_frac=0.005) for bench_*: realistic mix (kinds ['seasonal_walk', 'intermittent', 'level_shift', 'smooth_trend', 'noisy_seasonal'], weights [0.4, 0.15, 0.15, 0.15, 0.15]); see its docstring",
     "seeds": {
       "single": 1,
       "model16": 2,
       "multivar4": 3,
-      "bench_paper": 10,
-      "bench_long_context": 11,
-      "bench_multivariate": 12,
+      "bench_paper": 30,
+      "bench_long_context": 31,
+      "bench_multivariate": 32,
       "e2e64": 20,
       "pad_check": [
         100,
@@ -121,14 +122,14 @@
       "n": 1024,
       "context": 2048,
       "horizon": 64,
-      "seed": 10
+      "seed": 30
     },
     "long_context": {
       "kind": "uni",
       "n": 32,
       "context": 8192,
       "horizon": 928,
-      "seed": 11
+      "seed": 31
     },
     "multivariate": {
       "kind": "multi",
@@ -136,29 +137,29 @@
       "covariates": 7,
       "context": 2048,
       "horizon": 64,
-      "seed": 12
+      "seed": 32
     }
   },
   "timings_s": {
     "single": 2.4261985877528787,
     "model16": 15.782257216982543,
     "multivar4": 17.755121001973748,
-    "bench": 926.8100655609742,
+    "bench": 1144.86521884799,
     "e2e64": 50.98023295076564,
     "pad": 2.875490647740662
   },
   "files": {
     "bench_long_context.pt": {
-      "sha256": "d2e3a793ce562c5c80aebfccf187a9646b34ff0d43b33e62d52febb3f512d441",
-      "bytes": 4357593
+      "sha256": "476327fd9766eb52a65f06116c97548e181b550da6b8c91bea9713143c12435a",
+      "bytes": 3190617
     },
     "bench_multivariate.pt": {
-      "sha256": "9841a451f3dc2d4e6dd66539d95c5a5e1903cfa9e34d0bb2d0a500fdfa99147c",
-      "bytes": 48409753
+      "sha256": "10afbdae01e26e181ee71c10186c1296ea0e37b5822063d94ea41331e9f1a9af",
+      "bytes": 11054098
     },
     "bench_paper.pt": {
-      "sha256": "621e4a9e23d6f8436c0fd9c01165b6b5954f811e5acfa14cee3552dea022d817",
-      "bytes": 50474053
+      "sha256": "b35cf1c8d1afb3cfe8fdfb571fbb412a40aa513b62eae54a707d10dc71b5b42e",
+      "bytes": 13126789
     },
     "e2e64.pt": {
       "sha256": "983244b07fb32dc2fc2fcbb4d0ef602f4ebd59683ef2bf7be03064ba81bf2684",
@@ -193,5 +194,5 @@
       "bytes": 63709075
     }
   },
-  "generated": "2026-10-23 14:25:00"
+  "generated": "2026-10-23 16:18:42"
 }

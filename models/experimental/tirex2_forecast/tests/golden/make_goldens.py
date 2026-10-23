@@ -99,6 +99,58 @@ def make_series(n: int, length: int, seed: int, nan_frac: float = 0.005) -> torc
     return x.to(torch.float32)
 
 
+MIX_KINDS = ("seasonal_walk", "intermittent", "level_shift", "smooth_trend", "noisy_seasonal")
+MIX_WEIGHTS = (0.4, 0.15, 0.15, 0.15, 0.15)
+
+
+def make_series_mix(n: int, length: int, seed: int, nan_frac: float = 0.005):
+    """``([n, length] series, [n] kind index)``: a realistic mix for the bench goldens (PLAN section 9).
+
+    Kinds (weights): 40 % random walk + daily/weekly seasonality + white noise near SNR 1; 15 % intermittent
+    demand (90 % zeros, log-normal spikes); 15 % level shifts (piecewise-constant levels, 1-4 jumps, noise);
+    15 % smooth linear/quadratic trends with little noise; 15 % noisy seasonal with a drifting amplitude and a
+    missing segment. Each series has its own scale (1e-1 .. 1e3) and offset; 0.5 % interior NaNs.
+    """
+    g = torch.Generator().manual_seed(seed)
+    t = torch.arange(length, dtype=torch.float64)
+    u = lambda *s: torch.rand(*s, generator=g, dtype=torch.float64)
+    rn = lambda *s: torch.randn(*s, generator=g, dtype=torch.float64)
+    kinds = torch.multinomial(torch.tensor(MIX_WEIGHTS), n, replacement=True, generator=g)
+    out = torch.empty(n, length, dtype=torch.float64)
+    for r in range(n):
+        k = MIX_KINDS[int(kinds[r])]
+        p1, p2 = 2 * math.pi * float(u(1)), 2 * math.pi * float(u(1))
+        season = float(u(1) + 0.5) * torch.sin(2 * math.pi * t / 24 + p1) + float(u(1)) * torch.sin(
+            2 * math.pi * t / 168 + p2
+        )
+        if k == "seasonal_walk":
+            walk = rn(length).cumsum(0) * float(0.05 + 0.2 * u(1))
+            x = walk + season + rn(length) * float(season.std())  # noise std ~ seasonal std: SNR ~ 1
+        elif k == "intermittent":
+            x = (u(length) < float(0.05 + 0.1 * u(1))).double() * torch.exp(rn(length) * 0.7 + 1.0)
+        elif k == "level_shift":
+            cuts = torch.sort((u(int(1 + 4 * u(1))) * length).long()).values
+            levels = rn(len(cuts) + 1) * 3
+            idx = torch.searchsorted(cuts, torch.arange(length))
+            x = levels[idx] + rn(length) * float(0.2 + 0.5 * u(1))
+        elif k == "smooth_trend":
+            tt = t / length
+            x = float(rn(1)) * 3 * tt + float(rn(1)) * 2 * tt**2 + 0.3 * season + rn(length) * 0.05
+        else:  # noisy_seasonal
+            amp = 1 + 0.5 * torch.sin(2 * math.pi * t / length * float(1 + 2 * u(1)))
+            x = amp * season + rn(length) * float(0.5 + u(1))
+            start = int(u(1) * (length - 200))
+            x[start : start + int(20 + 100 * u(1))] = float("nan")
+        out[r] = x
+    scale = 10 ** (4 * u(n, 1) - 1)
+    offset = (u(n, 1) - 0.3) * 10
+    x = scale * (out + offset)
+    nan = u(n, length) < nan_frac
+    nan[:, -1] = False
+    x[nan] = float("nan")
+    return x.to(torch.float32), kinds
+
+
 def sha256(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -272,10 +324,12 @@ def gen_slstm_short(fm, norm_inputs: dict, out: Path, t0: int = 192, steps: int 
     torch.save(res, out / "slstm_short.pt")
 
 
-def multivariate_inputs(groups: int, covariates: int, length: int, seed: int):
+def multivariate_inputs(groups: int, covariates: int, length: int, seed: int, mix: bool = False):
     from tirex2 import TimeseriesType
 
-    x = make_series(groups * (1 + covariates), length, seed=seed).reshape(groups, 1 + covariates, length)
+    rows = groups * (1 + covariates)
+    x = make_series_mix(rows, length, seed=seed)[0] if mix else make_series(rows, length, seed=seed)
+    x = x.reshape(groups, 1 + covariates, length)
     # Couple the target to its covariates so variate attention has something to read
     x[:, 0] = x[:, 0] + 0.5 * torch.nan_to_num(x[:, 1:].mean(1))
     ts = [TimeseriesType(target=g[:1], past_covariates=g[1:], future_covariates=None) for g in x]
@@ -321,21 +375,23 @@ def gen_multivar4(fm, out: Path):
     )
 
 
+# Bench inputs use the realistic mix (make_series_mix); the seeds of the first (smooth) set were 10, 11, 12.
 BENCH = {
-    "paper": dict(kind="uni", n=1024, context=2048, horizon=64, seed=10),
-    "long_context": dict(kind="uni", n=32, context=8192, horizon=928, seed=11),
-    "multivariate": dict(kind="multi", n=128, covariates=7, context=2048, horizon=64, seed=12),
+    "paper": dict(kind="uni", n=1024, context=2048, horizon=64, seed=30),
+    "long_context": dict(kind="uni", n=32, context=8192, horizon=928, seed=31),
+    "multivariate": dict(kind="multi", n=128, covariates=7, context=2048, horizon=64, seed=32),
 }
 
 
 def gen_bench(fm, name: str, out: Path):
     spec = BENCH[name]
     m = fm.model
+    kinds = None
     if spec["kind"] == "uni":
-        x = make_series(spec["n"], spec["context"], seed=spec["seed"])
+        x, kinds = make_series_mix(spec["n"], spec["context"], seed=spec["seed"])
         ts = univariate(x)
     else:
-        x, ts = multivariate_inputs(spec["n"], spec["covariates"], spec["context"], seed=spec["seed"])
+        x, ts = multivariate_inputs(spec["n"], spec["covariates"], spec["context"], seed=spec["seed"], mix=True)
     horizon = spec["horizon"]
     readout = list(range(READOUT_FIRST, READOUT_FIRST + math.ceil(horizon / 32)))
     cap = Capture(m, blocks=(), cell_io=False, head_tokens=readout)
@@ -343,12 +399,14 @@ def gen_bench(fm, name: str, out: Path):
     start = time.perf_counter()
     q_one = forecast(fm, ts, horizon, False)
     cpu_s = time.perf_counter() - start
-    data = {k: cap.data[k] for k in ("x_padded", "head_out")}
+    data = {"head_out": cap.data["head_out"]}
+    loc, scale = scaler_stats(cap.data["x_padded"])  # the padded input itself is derivable; not saved
     cap.close()
-    loc, scale = scaler_stats(data["x_padded"])
     torch.save(
         {
             "spec": spec,
+            "kinds": kinds,
+            "kind_names": MIX_KINDS,
             "context": x,
             "horizon": horizon,
             "readout_tokens": readout,
@@ -482,6 +540,8 @@ def write_manifest(out: Path, manifest: Path, timings: dict):
         "input_generator": {
             "function": "make_series(n, length, seed, nan_frac=0.005) in tests/golden/make_goldens.py",
             "description": "scale 10**U(-1,2) x (level + trend + daily/weekly sines + AR(1) noise), 0.5 % interior NaNs",
+            "bench_function": "make_series_mix(n, length, seed, nan_frac=0.005) for bench_*: realistic mix "
+            f"(kinds {list(MIX_KINDS)}, weights {list(MIX_WEIGHTS)}); see its docstring",
             "seeds": {
                 "single": 1,
                 "model16": 2,

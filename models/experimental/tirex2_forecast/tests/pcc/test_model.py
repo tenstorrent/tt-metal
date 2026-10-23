@@ -58,18 +58,32 @@ def run(tt, context, horizon, group_ids=None, target_mask=None):
     return head, q
 
 
-def check_forecast(name, head, q, g_head, g_q, scale, target_mask, precision="accuracy"):
+# Proposed floors for the PLAN section 9 metrics (set at G1), from the round-0 measurements in GATE.md.
+SPREAD_FLOOR = {"accuracy": 0.998, "performance": 0.995}
+ROW_MIN_FLOOR = {"accuracy": 0.98, "performance": 0.95}  # pcc_row_min_var: rows whose band is not flat
+FLAT_ERR_BOUND = {"accuracy": 0.05, "performance": 0.15}  # normalized units, rows with a flat band
+
+
+def check_forecast(name, head, q, g_head, g_q, scale, target_mask, precision="accuracy", loc=None, horizon=64):
+    from models.experimental.tirex2_forecast.tests.pcc import metrics as M
+
     f_norm, f_final = FLOORS[precision]
-    p_norm = report(f"{name}.pcc_normalized", g_head, head, f_norm)
-    p_final = report(f"{name}.pcc_final", g_q, q, f_final)
-    med_err = float(((q[:, 4] - g_q[:, 4]).abs().amax(-1) / scale[target_mask].reshape(-1)).max())
+    m = M.gate_metrics(head, g_head, q, g_q, scale[target_mask])
+    print(f"[PCC] {name}: {M.fmt(m)}")
     print(
-        f"[PCC] {name}.median: worst |err| / scale {med_err:.3e} (contract {CONTRACT_MEDIAN}, "
-        f"provisional bound {MEDIAN_BOUND[precision]})"
+        f"[PCC] {name}: floors normalized {f_norm}, final {f_final}, spread {SPREAD_FLOOR[precision]}, "
+        f"row_min_var {ROW_MIN_FLOOR[precision]}, flat_max_err {FLAT_ERR_BOUND[precision]}, "
+        f"median (contract {CONTRACT_MEDIAN}, provisional {MEDIAN_BOUND[precision]})"
     )
-    assert p_norm >= f_norm and p_final >= f_final
-    assert med_err <= MEDIAN_BOUND[precision]
-    return p_norm, p_final, med_err
+    if loc is not None:
+        c = M.collapsed_metrics(g_head, g_q, loc, scale, horizon, target_mask)
+        print(f"[PCC] {name}.collapsed: {M.fmt(c)}")
+        assert c["pcc_spread"] < SPREAD_FLOOR[precision] and c["pcc_row_min_var"] < ROW_MIN_FLOOR[precision]
+    assert m["pcc_normalized"] >= f_norm and m["pcc_final"] >= f_final
+    assert m["pcc_spread"] >= SPREAD_FLOOR[precision] and m["pcc_row_min_var"] >= ROW_MIN_FLOOR[precision]
+    assert m["flat_max_err"] <= FLAT_ERR_BOUND[precision]
+    assert m["median_err"] <= MEDIAN_BOUND[precision]
+    return m
 
 
 @pytest.mark.parametrize("precision", ["accuracy", "performance"])
@@ -100,7 +114,7 @@ def test_multivariate_4x8(device):
     tt = model(device)
     head, q = run(tt, g["context"].reshape(-1, T), g["horizon"], gid, tm)
     tok = df.readout_tokens(g["horizon"])
-    check_forecast("multivar4", head, q, g["head_out"][:, tok], g["q_one"], g["scale"], tm)
+    check_forecast("multivar4", head, q, g["head_out"][:, tok], g["q_one"], g["scale"], tm, loc=g["loc"])
 
 
 def test_long_context_h928(device):
@@ -108,7 +122,64 @@ def test_long_context_h928(device):
     g = golden("bench_long_context")
     tt = model(device, variate=False)
     head, q = run(tt, g["context"], g["horizon"])
-    check_forecast("long_context", head, q, g["head_out"], g["q_one"], g["scale"], torch.ones(32, dtype=torch.bool))
+    check_forecast(
+        "long_context",
+        head,
+        q,
+        g["head_out"],
+        g["q_one"],
+        g["scale"],
+        torch.ones(32, dtype=torch.bool),
+        loc=g["loc"],
+        horizon=g["horizon"],
+    )
+
+
+def test_single_series(device):
+    """One univariate series x 2048 -> 64 (one real row among 31 dummy rows)."""
+    g = golden("single")
+    tt = model(device, variate=False)
+    head, q = run(tt, g["context"], g["horizon"])
+    tok = df.readout_tokens(g["horizon"])
+    check_forecast("single", head, q, g["head_out"][:, tok], g["q_one"], g["scale"], torch.ones(1, dtype=torch.bool))
+
+
+@pytest.mark.parametrize("row", [0, 7])
+def test_single_long_context(device, row):
+    """One series of the long-context bench alone (8192 -> 928): rows are independent, so its golden is a row."""
+    g = golden("bench_long_context")
+    tt = model(device, variate=False)
+    head, q = run(tt, g["context"][row : row + 1], g["horizon"])
+    check_forecast(
+        f"long_context[row {row}]",
+        head,
+        q,
+        g["head_out"][row : row + 1],
+        g["q_one"][row : row + 1],
+        g["scale"][row : row + 1],
+        torch.ones(1, dtype=torch.bool),
+    )
+
+
+@pytest.mark.parametrize("precision", ["accuracy", "performance"])
+def test_paper_rows(device, precision):
+    """64 rows of the paper bench (realistic input mix: walks, intermittent, level shifts, trends)."""
+    g = golden("bench_paper")
+    rows = slice(0, 64)
+    tt = model(device, precision, variate=False)
+    head, q = run(tt, g["context"][rows], g["horizon"])
+    check_forecast(
+        f"paper64[{precision}]",
+        head,
+        q,
+        g["head_out"][rows],
+        g["q_one"][rows],
+        g["scale"][rows],
+        torch.ones(64, dtype=torch.bool),
+        precision,
+        loc=g["loc"][rows],
+        horizon=g["horizon"],
+    )
 
 
 def test_sign_flip_16(device):
@@ -144,7 +215,7 @@ def test_ragged_groups(device):
     prep = df.prepare(src, 64, gid, tm)
     ref_head = df.forward(host_weights(), prep)[:, df.readout_tokens(64)]
     ref_q = df.postprocess(ref_head, prep)
-    check_forecast("ragged", head, q, ref_head, ref_q, prep.scale, tm)
+    check_forecast("ragged", head, q, ref_head, ref_q, prep.scale, tm, loc=prep.loc)
 
 
 def test_trace_matches_eager():

@@ -1,0 +1,97 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Gate metrics of a forecast against the upstream goldens (CONTRACT section 3, PLAN section 9).
+
+All head metrics use the head output at the read-out tokens in normalized space, ``[rows, n, 288]`` with 288 =
+9 quantiles x 32 steps (quantile-major):
+
+    pcc_normalized  PCC over every value
+    pcc_spread      PCC of the head output minus its mean over the quantile axis (the band shape; blind to
+                    per-row offsets, which dominate pcc_normalized on trending inputs)
+    pcc_row_p01     1st percentile of the per-row PCC
+    pcc_row_min     minimum per-row PCC
+    pcc_row_min_var minimum per-row PCC over rows whose upstream head output varies (std >= FLAT_STD); a flat
+                    row (e.g. an intermittent series forecast as a constant band, std ~0.003) has a per-row PCC
+                    set by rounding noise, so it is checked by ``flat_max_err`` instead
+    flat_max_err    worst absolute error (normalized units) over the flat rows (0 when there are none)
+    pcc_final       PCC of the single-pass [targets, 9, H] forecast after inverse scaling and band calibration
+    median_err      worst |median error| / scale over target rows
+
+``collapsed(head)`` replaces every quantile by the mean over quantiles: the failure mode these metrics must
+catch (t0-gamma's ``pcc_normalized`` scored 0.99965 on it).
+"""
+
+from __future__ import annotations
+
+import torch
+
+from models.experimental.tirex2_forecast.reference import dataflow as df
+
+Q, P = df.QUANTILES, df.PATCH
+FLAT_STD = 0.05  # normalized units: 5 % of the series' own scale
+
+
+def pearson(a: torch.Tensor, b: torch.Tensor) -> float:
+    a, b = a.double().flatten(), b.double().flatten()
+    a, b = a - a.mean(), b - b.mean()
+    den = float(a.norm() * b.norm())
+    return float((a * b).sum()) / den if den > 0 else 0.0
+
+
+def spread(head: torch.Tensor) -> torch.Tensor:
+    h = head.reshape(*head.shape[:-1], Q, P)
+    return (h - h.mean(-2, keepdim=True)).reshape(head.shape)
+
+
+def collapsed(head: torch.Tensor) -> torch.Tensor:
+    h = head.reshape(*head.shape[:-1], Q, P)
+    return h.mean(-2, keepdim=True).expand_as(h).reshape(head.shape)
+
+
+def row_pccs(exp: torch.Tensor, got: torch.Tensor) -> torch.Tensor:
+    e = exp.double().reshape(exp.shape[0], -1)
+    g = got.double().reshape(got.shape[0], -1)
+    e, g = e - e.mean(1, keepdim=True), g - g.mean(1, keepdim=True)
+    den = e.norm(dim=1) * g.norm(dim=1)
+    return torch.where(den > 0, (e * g).sum(1) / den.clamp_min(1e-300), torch.zeros_like(den))
+
+
+def forecast_from_head(head: torch.Tensor, loc, scale, horizon: int, target_mask) -> torch.Tensor:
+    q = df.band_calibration(df.head_to_quantiles(head, loc, scale, horizon))
+    return q[target_mask]
+
+
+def gate_metrics(head, g_head, q, g_q, scale_targets) -> dict:
+    rows = row_pccs(g_head, head)
+    std = g_head.double().reshape(g_head.shape[0], -1).std(1)
+    flat = std < FLAT_STD
+    err = (head.double() - g_head.double()).abs().reshape(g_head.shape[0], -1).amax(1)
+    med_err = (q[:, Q // 2] - g_q[:, Q // 2]).abs().amax(-1) / scale_targets.reshape(-1)
+    return {
+        "pcc_normalized": pearson(g_head, head),
+        "pcc_spread": pearson(spread(g_head), spread(head)),
+        "pcc_row_p01": float(torch.quantile(rows, 0.01)),
+        "pcc_row_min": float(rows.min()),
+        "pcc_row_min_var": float(rows[~flat].min()) if bool((~flat).any()) else 1.0,
+        "flat_rows": int(flat.sum()),
+        "flat_max_err": float(err[flat].max()) if bool(flat.any()) else 0.0,
+        "pcc_final": pearson(g_q, q),
+        "median_err": float(med_err.max()),
+    }
+
+
+def collapsed_metrics(g_head, g_q, loc, scale, horizon, target_mask) -> dict:
+    """The gate metrics of the golden head output with every quantile collapsed to the quantile mean."""
+    c = collapsed(g_head)
+    qc = forecast_from_head(c, loc, scale, horizon, target_mask)
+    return gate_metrics(c, g_head, qc, g_q, scale[target_mask])
+
+
+def fmt(m: dict) -> str:
+    def one(k, v):
+        if isinstance(v, int):
+            return f"{k} {v}"
+        return f"{k} {v:.3e}" if k in ("median_err", "flat_max_err") else f"{k} {v:.6f}"
+
+    return "  ".join(one(k, v) for k, v in m.items())

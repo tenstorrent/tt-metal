@@ -28,7 +28,8 @@ import torch
 
 from models.experimental.tirex2_forecast.reference import dataflow as df
 from models.experimental.tirex2_forecast.tests.golden.goldens import golden, have_goldens
-from models.experimental.tirex2_forecast.tests.pcc.helpers import host_weights, pcc
+from models.experimental.tirex2_forecast.tests.pcc import metrics as M
+from models.experimental.tirex2_forecast.tests.pcc.helpers import host_weights
 
 STEADY_ITERS = 5
 DEVICE_SETTLE_S = 0.3  # idle before each timed device-only forward (duty-cycle drift, see the skill)
@@ -122,10 +123,9 @@ def test_forward_perf(device, shape, precision):
     if dump := os.environ.get("MODEL_PERF_DUMP"):
         Path(dump).mkdir(parents=True, exist_ok=True)
         torch.save({"head": head, "q": q}, Path(dump) / f"{shape}-{precision}.pt")
-    pcc_norm = pcc(g["head_out"], head)
-    pcc_final = pcc(g["q_one"], q)
-    scale = prep.scale[prep.target_mask].reshape(-1)
-    median_err = float(((q[:, 4] - g["q_one"][:, 4]).abs().amax(-1) / scale).max())
+    metrics = M.gate_metrics(head, g["head_out"], q, g["q_one"], prep.scale[prep.target_mask])
+    collapsed = M.collapsed_metrics(g["head_out"], g["q_one"], prep.loc, prep.scale, horizon, prep.target_mask)
+    pcc_norm, pcc_final, median_err = metrics["pcc_normalized"], metrics["pcc_final"], metrics["median_err"]
     traced.release()
 
     print(
@@ -136,7 +136,8 @@ def test_forward_perf(device, shape, precision):
         f"\n  device_s:  {device_s:.4f}  (median of {STEADY_ITERS}, {DEVICE_SETTLE_S} s idle before each)"
         f"\n  split:     prepare {prepare_s:.4f}  upload {upload_s:.4f}  postprocess {postprocess_s:.4f}"
         f"\n  cpu_s:     {g['cpu_s']:.2f}  ({g['threads']} threads)"
-        f"\n  pcc:       normalized {pcc_norm:.6f}  final {pcc_final:.6f}  median |err|/scale {median_err:.3e}"
+        f"\n  metrics:   {M.fmt(metrics)}"
+        f"\n  collapsed: {M.fmt(collapsed)}  (quantiles collapsed to their mean; must fail every floor)"
     )
     _record(
         {
@@ -155,9 +156,8 @@ def test_forward_perf(device, shape, precision):
             "upload_s": upload_s,
             "postprocess_s": postprocess_s,
             "split_runs": [dict(zip(("prepare_s", "upload_s", "device_s", "postprocess_s"), s)) for s in splits],
-            "pcc_normalized": pcc_norm,
-            "pcc_final": pcc_final,
-            "median_err": median_err,
+            **metrics,
+            **{f"collapsed_{k}": v for k, v in collapsed.items()},
             "cpu_s": g["cpu_s"],
             "speedup_vs_cpu": g["cpu_s"] / statistics.median(steady),
             "chip": os.environ.get("TTQ_CHIP_SERIAL"),
