@@ -68,6 +68,7 @@ class HeadSE3:
         router=None,
         latent=None,
         routing=None,
+        l1_hole=None,
     ):
         """rs_dim (-2: rows to their owners, GLM; -1: the width, K3): the down + SE reduce-scatter - rs_mode "fused":
         in this program (se_rs: h from the L1 gate / up left it in, bf16 partials into the next chip's same core, fp32
@@ -78,7 +79,10 @@ class HeadSE3:
         down on the gathered x (column split, extra engine passes) and its all-to-all to the owners, the owners'
         [rows / TP, Hr] in self.outputs["latent"]. routing (RoutingSpec, with router): the routing exchange + combine
         planner (tt/routing_stream.py) on the router cores, the gather's ports and the watcher's RISCs - combine_plan's
-        per-chip tables in self.routing.outs."""
+        per-chip tables in self.routing.outs. l1_hole: two L1 tensors (above the arena), freed right after it is placed
+        and after it is placed again over the mover column (the L1 this head keeps - the gather's semaphores, mailboxes,
+        the router's and the routing's buffers - then sits above the arena, not stranded below it, where a caller that
+        frees the arena between calls has other programs' circular buffers)."""
         from models.demos.moe_block.tt.se_engine3 import SeEngine3
         from models.demos.moe_block.tt.x_gather3 import XGather3
 
@@ -141,6 +145,9 @@ class HeadSE3:
                 continue
         else:
             raise ValueError(f"HeadSE3: no K step fits L1 at {rows} rows ({last_err})")
+        holes = list(l1_hole or [])
+        if holes:  # (the arena placed: what this head keeps from here on lands in the hole, above it)
+            ttnn.deallocate(holes.pop(0))
         movers = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(GX, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         if self.rs_mode == "mrs":
             ttnn.deallocate(self.eng.arena)
@@ -216,6 +223,9 @@ class HeadSE3:
             self.eng.alloc_arena(
                 extra=free[: rows // 32 // G] + [ttnn.CoreCoord(*c) for c in sorted(used - wset)] + [watcher]
             )
+            if holes:  # (placed again: the router's and the routing's buffers into the second hole, above it)
+                ttnn.deallocate(holes.pop(0))
+
             self.router = RouterStream(
                 mesh_device,
                 self.xg,
@@ -267,7 +277,7 @@ class HeadSE3:
         self.rows, self.H, self.I, self.rs_dim, self.num_links = rows, H, I, rs_dim, num_links
         self.latent = latent
         self.outputs = {}
-        self.state = dict(key=None)
+        self.state = dict(key=None, arena=None)
 
     def upload(self, w_gu, w_down, w_latent=None):
         """w_gu / w_down per device (row-major mesh order). With rs_dim: (engine weights, W_down [I, H] bf8 a chip)."""
@@ -366,7 +376,39 @@ class HeadSE3:
     def upload_router(self, w_router, bias):
         self.rw = self.router.upload(w_router, bias)
 
+    def _rebind(self):
+        """The cached programs' arena-backed CBs (the engine's, the router cores') onto the arena tensor taken again at
+        the same address (a CB binds its buffer: a freed one is no use) - not a rebuild of every chip's program."""
+        tmpl = ttnn.cb_descriptor_from_sharded_tensor(0, self.eng.arena)
+        md = ttnn.MeshProgramDescriptor()
+        for (r, c), prog, on in self.state["progs"]:
+            cbs = list(prog.cbs)
+            for i in on:
+                cbs[i].set_buffer_from_cb(tmpl)
+            prog.cbs = cbs
+            md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = prog
+        self.state.update(desc=md, arena=self.eng.arena)
+
+    def settle_arena(self):
+        """Take the arena once more and give it back, filling any free L1 right above its range (see
+        SeEngine3.realloc_arena): before the L1 it shares with another op is placed."""
+        if not self.eng.arena.is_allocated():
+            self.eng.realloc_arena(settle=True)
+            if self.router is not None:
+                self.router.arena = self.eng.arena
+        self.free_arena()
+
+    def free_arena(self):
+        """Give the arena's L1 back between calls (a caller sharing the L1 left with another op): run() takes it
+        again, at the same address."""
+        if self.eng.arena.is_allocated():
+            ttnn.deallocate(self.eng.arena)
+
     def run(self, x, w):
+        if self.rs_mode == "fused" and not self.eng.arena.is_allocated():
+            self.eng.realloc_arena()
+            if self.router is not None:  # (its CBs are carved from the arena too)
+                self.router.arena = self.eng.arena
         if self.rs_mode == "fused":
             G = self.plan.G
             self.outputs = {}
@@ -428,9 +470,12 @@ class HeadSE3:
             self.mesh,
             ttnn.DRAM_MEMORY_CONFIG,
         )
-        key = (int(x.buffer_address()), int(y.buffer_address()), int(w.buffer_address()), id(self.eng.arena))
+        key = (int(x.buffer_address()), int(y.buffer_address()), int(w.buffer_address()), self.eng.base)
         key += tuple(int(t.buffer_address()) for t in self.outputs.values())
+        if self.state["key"] == key and self.state["arena"] is not self.eng.arena:
+            self._rebind()  # (the arena taken again at its address: only the CBs bound to it change)
         if self.state["key"] != key:
+            progs = []
             md = ttnn.MeshProgramDescriptor()
             e = self.eng
             for coord in self.xg.chips:
@@ -506,7 +551,14 @@ class HeadSE3:
                 prog.kernels = k0 + k1
                 r, c = coord
                 md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = prog
-            self.state["key"], self.state["desc"] = key, md
+                base = self.eng.base  # (which CBs the arena backs: _rebind's - a freed buffer reports no address)
+                on = [
+                    i
+                    for i, cb in enumerate(prog.cbs)
+                    if cb.has_buffer() and base in (cb.buffer_address(), cb.buffer_address() - cb.address_offset)
+                ]
+                progs.append((coord, prog, on))
+            self.state.update(key=key, desc=md, progs=progs, arena=self.eng.arena)
         io = [x, w, y, self.eng.arena]
         io += list(self.outputs.values()) + (list(self.rw) if self.router is not None else [])
         if self.routing is not None:

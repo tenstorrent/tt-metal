@@ -1355,6 +1355,25 @@ class TtK3TokenSplitMoE:
             y = y2
         return y
 
+    def routed_prepped(self, prep, op, hook=None):
+        """routed_only, with the routing gather, the planner and the dispatch prep done upstream (the MoE block's fused
+        head): the plan already in self.planner.outs, prep = (the dispatch buffer [1, 1, N S, H] with this chip's own
+        rows, the route words) -> the routed experts' sum [S, H] bf16 TILE (a fresh tensor)."""
+        assert self.routed_only and self.sparse_dispatch
+        mark = hook or (lambda _: None)
+        arena = self.alloc_arena()
+        mark("arena_zero")
+        xg = self.dispatch(
+            None, prep
+        )  # (also the barrier: every chip zeroed its arena before any chip's experts start)
+        mark("dispatch")
+        self.experts_combine(xg, self.planner.outs, arena, op)
+        ttnn.deallocate(arena)
+        mark("experts_combine")
+        y = self.tilize(ttnn.reshape(self.out, [self.S, self.d.H]))
+        mark("tilize")
+        return y
+
     def __call__(self, x, keep=False, hook=None):
         """x: [S, H] bf16 TILE per chip. Returns y [S, H] (and the intermediates with keep=True). hook(stage name),
         if given, is called after every stage (e.g. to read the profiler per stage)."""

@@ -995,3 +995,29 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - The chain (dev 6, LoudBox): logits in 60, fin + sigmoid + top-K to 96 (floor 14), rows 92, the planner's
   pre-exchange to ~110 (RA_DBG: home counts 2.4, totals exchange 3.9, staging 7-9), the exchange, post-arrival
   20-24 (headers / sources / ranges 4.5, then 6, 8.5). Not cut yet.
+
+### The fused head in MoEBlock.forward (MoEOptions.head: auto | fused | ops)
+- MoEBlock builds HeadSE3 (FusedHead) where it is built for the load (640 rows a mesh row: chunk 1280 on the 2x4,
+  the Galaxy's per-chip load; "auto" falls back to the ops head elsewhere - logged): the head does the x all-gather,
+  the shared expert + its reduce-scatter, the router + top-K + joint rows, the routing exchange + the combine planner
+  (writing the exchange's own plan tensors: its combine baked their addresses; A must agree - FusedHead.A 12 / 16,
+  asserted), the dispatch prep (the dispatch buffer's own rows, the route words) and K3's latent down + all-to-all.
+  The exchange then runs from the dispatch (TtK3TokenSplitMoE.routed_prepped: arena zero, dispatch, experts +
+  combine, tilize); the tail as before.
+- L1: the head's arena (GLM 1.22 MB, K3 1.30 MB a core) and the exchange's (~1.13 MB) alternate in the L1 left, each
+  allocated for its own call at the address its programs baked. Placement is top-down, so the build order matters:
+  the tail's one-time L1 first; L1 holes above the head's arena for what the exchange keeps (its words) and for what
+  the head keeps after placing its arena (twice - the gather's / router's / routing's semaphores and mailboxes; left
+  below the arena they sat in the other programs' static CB range: K3's clash); the arena settled once (free L1
+  right above it filled, else a later placement lands higher). The head's cached programs survive the per-call arena:
+  only its arena-backed CBs are rebound (else every chip's program was rebuilt each call - 175 ms of host), and x is
+  copied into one buffer (the programs bake x's address).
+- Correctness (3 calls on fresh x + 300-call soaks, every 25th checked): PCC vs host with the device's routing GLM
+  0.9866-0.9868, K3 0.9960-0.9963 - the same as the ops head; routing picks equal to the host's 98.2-98.6% (GLM) /
+  97.1-97.6% (K3) vs the ops head's 99.0-99.6 / 98.4-98.8 (the fused router's precision: the borderline picks).
+- Per stage, LoudBox device time (slowest chip, median of 5), chunk 1280:
+  GLM fused: head 293.5 (x copy + the head) | arena_zero 5.1 | dispatch 140.5 | experts_combine 1312.4 | tilize 8.2
+  | add 11.0 | tail_a2a 47.2 = 1818 us, 8 programs (ops head: 10 head stages 487 us, 2002 total).
+  K3 fused: head 532.5 | arena_zero 5.1 | dispatch 133.7 | experts_combine 2300.3 | tilize 7.8 | tail_ag 82.6 |
+  latent_up 162.6 | add 17.3 = 3242 us, 10 programs (ops head: 11 stages 1130 us, 3848 total).
+  Head Galaxy-projected (tests/galaxy_projection.py on the head's own profile): GLM 161-164, K3 384-388.

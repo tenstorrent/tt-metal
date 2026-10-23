@@ -22,6 +22,7 @@ from models.demos.moe_block.moe_block import (
     KIMI_K3,
     MoEBlock,
     MoEModel,
+    MoEOptions,
     MoEWeights,
     WeightCache,
     act_host,
@@ -150,7 +151,9 @@ def test_moe_block(mesh_device, device_params, model, chunk):
     T, H = chunk, m.emb_dim
     w = random_weights(m)
     t0 = time.perf_counter()
-    block = MoEBlock(mesh_device, m, chunk, w, WeightCache(path=None, layer=0))
+    # (MOE_HEAD: the head as one fused program, a program a stage, or where built - test-only)
+    opts = MoEOptions(head=os.environ.get("MOE_HEAD", "auto"))
+    block = MoEBlock(mesh_device, m, chunk, w, WeightCache(path=None, layer=0), options=opts)
     logger.info(f"MoEBlock {model}: built in {time.perf_counter() - t0:.1f} s")
     g = block.geometry
     mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(2, 3))
@@ -190,6 +193,25 @@ def test_moe_block(mesh_device, device_params, model, chunk):
             f"{pcc(torch.sort(wts_d, 1)[0], torch.sort(wts_r, 1)[0]):.5f}; exchange builds {block.exchange.builds}"
         )
         assert p_dev > 0.98, f"block output off (PCC {p_dev:.5f})"
+    # soak (MOE_SOAK=N, test-only): N more calls over a pool of fresh inputs, every MOE_SOAK_CHECK-th (25) and the
+    # last checked against its own reference
+    soak, every = int(os.environ.get("MOE_SOAK", "0")), int(os.environ.get("MOE_SOAK_CHECK", "25"))
+    pool = list(range(NX))
+    for i in range(soak):
+        k = pool[i % NX]
+        block.keep_taps = i % every == every - 1 or i == soak - 1
+        out = block(xts[k])
+        if block.keep_taps:
+            ttnn.synchronize_device(mesh_device)
+            y = ttnn.to_torch(out, mesh_composer=composer).reshape(T, H).float()
+            ids_d, wts_d = device_routing(block.taps()["rows"], g.tokens_per_chip, m.top_k)
+            p_dev = pcc(y, reference(xs[k], w, m, ids=ids_d, wts=wts_d)[0])
+            logger.info(f"MoEBlock {model} soak call {i + 1}: PCC vs host (device routing) {p_dev:.5f}")
+            assert p_dev > 0.98, f"soak call {i + 1}: block output off (PCC {p_dev:.5f})"
+        elif i % 50 == 49:
+            ttnn.synchronize_device(mesh_device)
+            logger.info(f"MoEBlock {model} soak progress: {i + 1}")
+        ttnn.deallocate(out)
     # timing: per stage (the programs between two stage marks), slowest chip
     if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
         per_chip_programs(mesh_device)

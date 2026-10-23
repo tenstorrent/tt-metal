@@ -1172,6 +1172,7 @@ class SeEngine3:
         mover column's other buffers live in it too)."""
         o = self.arena_bytes
         crs = self.crs
+        self.arena_extra = tuple(extra)  # (realloc_arena: the same cores again)
         if extra:
             crs = ttnn.CoreRangeSet(list(crs.ranges()) + [ttnn.CoreRange(c, c) for c in extra])
         n = self.GX * self.GY + len(extra)
@@ -1185,6 +1186,34 @@ class SeEngine3:
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard),
         )
         self.base = int(self.arena.buffer_address())
+        return self.arena
+
+    def realloc_arena(self, settle=False):
+        """The arena again (a caller that shares the L1 left with another op frees it between calls): it must land where
+        the programs baked it. settle (once, before the caller's other op places its L1): free L1 right above the old
+        range (L1 is placed top-down) is filled first - kept in self.fillers - so it lands there."""
+        base = self.base
+        self.alloc_arena(self.arena_extra)
+        if settle and self.base > base:
+            ttnn.deallocate(self.arena)
+            gap = self.base - base
+            grid = self.mesh.compute_with_storage_grid_size()
+            crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+            self.__dict__.setdefault("fillers", []).append(
+                ttnn.allocate_tensor_on_device(
+                    ttnn.Shape([grid.x * grid.y, gap // 4]),
+                    ttnn.uint32,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                    self.mesh,
+                    ttnn.MemoryConfig(
+                        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                        ttnn.BufferType.L1,
+                        ttnn.ShardSpec(crs, [1, gap // 4], ttnn.ShardOrientation.ROW_MAJOR),
+                    ),
+                )
+            )
+            self.alloc_arena(self.arena_extra)
+        assert self.base == base, f"se_engine3: the arena landed at {self.base}, not {base}: L1 allocated since"
         return self.arena
 
     def dram_bytes(self):
