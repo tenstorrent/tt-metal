@@ -314,8 +314,7 @@ def convert_csvs_to_parquet(
     build_run_batch to align + stamp provenance + compact. ``provenance["arch"]``
     selects the published table (WH/BH vs Quasar).
 
-    Columns the catalog lists in ``aliases`` are read under their legacy name and
-    stored under the current one; renames are reported, not treated as drift.
+    Legacy column names (catalog ``aliases``) are renamed to current names first and reported.
 
     With strict=True (default) the conversion must be lossless: if any column
     would be dropped (not in the schema) or any value coerced to NULL, it raises
