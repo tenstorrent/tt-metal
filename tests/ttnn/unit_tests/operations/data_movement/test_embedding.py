@@ -917,6 +917,7 @@ def _run_fused_gather(
     embeddings_type=ttnn.EmbeddingsType.GENERIC,
     pad_token=None,
     weights_layout=ttnn.ROW_MAJOR_LAYOUT,
+    runtime_rows=True,
 ):
     input_tensor = ttnn.from_torch(indices, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=weights_layout, device=device)
@@ -926,7 +927,7 @@ def _run_fused_gather(
         padding_idx=pad_token,
         embeddings_type=embeddings_type,
         layout=ttnn.TILE_LAYOUT,
-        native_untilize=weights_layout == ttnn.TILE_LAYOUT,  # the H3 call form: a TILE table untilized row-free
+        runtime_rows=runtime_rows,  # the H3 call form; a TILE table is then untilized row-free as well
     )
     expected = torch.nn.functional.embedding(indices, torch_weights)
     assert_equal(expected, ttnn.to_torch(output).reshape(expected.shape))
@@ -983,7 +984,7 @@ def test_embedding_fused_width_or_dtype_change_misses(device):
         indices = torch.randint(0, 250, (batch, sentence_size))  # every index exact in a bfloat16 index tensor
         input_tensor = _indices_to_device(indices, index_dtype, ttnn.ROW_MAJOR_LAYOUT, device)
         weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-        output = ttnn.embedding(input_tensor, weights, layout=ttnn.TILE_LAYOUT)
+        output = ttnn.embedding(input_tensor, weights, layout=ttnn.TILE_LAYOUT, runtime_rows=True)
         expected = torch.nn.functional.embedding(indices, torch_weights)
         assert_equal(expected, ttnn.to_torch(output).reshape(expected.shape))
 
@@ -997,6 +998,25 @@ def test_embedding_fused_width_or_dtype_change_misses(device):
     device.disable_and_clear_program_cache()
     device.enable_program_cache()
     assert_program_cache_flat(device, run, variants, miss_indices=(2, 3, 4))
+
+
+@pytest.mark.parametrize("weights_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["rm_table", "tile_table"])
+def test_embedding_fused_default_rows_miss_bit_exact(device, weights_layout):
+    """Without the flag the index length and the table rows stay in the hash (main's program and split):
+    every new length or table misses, down to a decode-sized [1, 32] index, and the output is bit-exact."""
+    torch.manual_seed(0)
+    from tests.ttnn.utils_for_testing import assert_program_cache_flat
+
+    def run(variant):
+        sentence_size, table_rows = variant
+        torch_weights = torch_random((table_rows, 128), -0.1, 0.1, dtype=torch.bfloat16)
+        indices = torch.randint(0, table_rows, (1, sentence_size))
+        _run_fused_gather(device, indices, torch_weights, weights_layout=weights_layout, runtime_rows=False)
+
+    variants = [(256, 512), (1024, 512), (32, 512), (256, 4096)]
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    assert_program_cache_flat(device, run, variants, miss_indices=(1, 2, 3))
 
 
 @pytest.mark.parametrize(
