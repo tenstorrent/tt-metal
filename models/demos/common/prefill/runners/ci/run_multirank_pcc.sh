@@ -18,8 +18,10 @@ set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 MODEL="${1:?${USAGE}}"
 RUN_NAME="${MODEL}${VARIANT}"
 # First entry is the default; membership is the validation. These models support sc1 only.
+# sc4_4x4 is Kimi-K3 as 8 stages of 4x4 (two per galaxy) instead of 4 of 8x4.
 case "${MODEL}" in
   mistral4|gptoss120b) MODEL_CONFIGS="sc1" ;;
+  kimi_k3)             MODEL_CONFIGS="sc4 sc1 sc4_4x4" ;;
   *)                   MODEL_CONFIGS="sc4 sc1" ;;
 esac
 CONFIG="${2:-${MODEL_CONFIGS%% *}}"
@@ -57,6 +59,8 @@ PRODUCER_USERS="${PREFILL_PRODUCER_NUM_USERS:-1}"
 TCP_INTERFACE="${PREFILL_TCP_INTERFACE:-ens5f0np0}"
 # Non-zero for a pipeline-parallel model: the rank count its binding fixes. Set in the case block.
 PP_RANKS=0
+# Non-zero for a 4x4 layout: the galaxy count, each probed for its tray-half chip map.
+PP_4X4_HOSTS=0
 # PCC verdicts, rank logs and any rank binding, kept for the run's artifact upload.
 EVIDENCE_DIR="${PREFILL_SUMMARIES}/pcc/${RUN_NAME}"
 MTP_PCC_THRESHOLD=""
@@ -141,6 +145,19 @@ case "${MODEL}" in
       PRODUCER_ENV="export PREFILL_DFLASH_PCC=${DFLASH_PCC_THRESHOLD};"
       TABLE_WAIT_DEFAULT=7200
     fi
+    if [ "${CONFIG}" = sc4_4x4 ]; then
+      # Two ranks per galaxy: a pre-generated binding from per-host probes, not tt-run discovery,
+      # which places one mesh per host.
+      PP_RANKS=8
+      PP_4X4_HOSTS=4
+      # The cache the runner resolves for a [4,4] SP-axis-1 stage on 16 visible chips. Checked
+      # non-empty: weight_cache_path mkdirs it, so a failed run leaves an empty one behind.
+      K3_CACHE="${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill}"
+      PP_CACHE_DIR="${K3_CACHE}/kimi_k3_bh_16dev/4x4_sp1"
+      RUNNER_ENV+=" export PREFILL_TTNN_CACHE='${K3_CACHE}';"
+      # The producer does not see the binding's global_env; its row count is the SP factor.
+      PRODUCER_ENV+=" export PREFILL_SP=4; export PREFILL_TP=4;"
+    fi
     ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
@@ -199,6 +216,11 @@ if [ "${CONFIG}" = sc1 ]; then
   # is applied with setdefault, so an explicit export is what shrinks it.
   [ -n "${SC1_NUM_LAYERS}" ] && NUM_LAYERS_ENV="export PREFILL_NUM_LAYERS=${SC1_NUM_LAYERS};"
 fi
+if [ "${PP_4X4_HOSTS}" -ne 0 ]; then
+  # The 4x4 binding's global_env carries a PREFILL_MAX_SEQ_LEN for hand runs, and tt-run's env beats
+  # the manifest's; pin the runner to the window the producer is about to send.
+  RUNNER_OVERRIDES="export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN};"
+fi
 if [ -n "${PREFILL_NUM_USERS:-}" ]; then
   NUM_USERS=${PREFILL_NUM_USERS}
   RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_NUM_USERS=${NUM_USERS};"
@@ -222,7 +244,7 @@ SC4_CHUNKS=$((SC4_REQUEST_LEN / CHUNK_SIZE))
 # one config yields the same chunk twice, and the summary drops chunks past a short window.
 PROBE_CHUNKS="${PROBE_CHUNKS:-$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((100000 / CHUNK_SIZE))" \
   "$((256000 / CHUNK_SIZE))" "$((SC1_CHUNKS / 2 - 1))" "$((SC1_CHUNKS - 1))" "$((SC4_CHUNKS / 2 - 1))" \
-  "$((SC4_CHUNKS - 1))" | sort -n -u | paste -sd,)}"
+  "$((SC4_CHUNKS - 1))" | sort -n -u | paste -sd, -)}"
 
 
 mkdir -p "${PIPELINE_DIR}"
@@ -324,7 +346,45 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-if [ "${PP_RANKS}" -ne 0 ]; then
+if [ "${PP_4X4_HOSTS}" -ne 0 ]; then
+  # Rank 2k is host k's top tray half and 2k+1 its bottom, chained along the hostfile's order, which
+  # must be the cabled host ring (c07u02, c07u08, c07u14, c07u20 on aisle C, 120c pod6): the mesh graph descriptor
+  # chains mesh k to k+1. Every host is probed, since each galaxy enumerates its halves differently.
+  IFS=, read -r -a HOST_LIST <<< "${RESOLVED_HOSTS}"
+  [ "${#HOST_LIST[@]}" -eq "${PP_4X4_HOSTS}" ] || {
+    echo "${MODEL}/${CONFIG} requires exactly ${PP_4X4_HOSTS} Galaxy hosts in ${TTRUN_DIR}/hostfile, in ring order; got '${RESOLVED_HOSTS}'" >&2; exit 2;
+  }
+  PROBE_HOSTS=$(printf '%s:1,' "${HOST_LIST[@]}")
+  HOSTS=$(printf '%s:2,' "${HOST_LIST[@]}")
+  PROBE_HOSTS=${PROBE_HOSTS%,}
+  HOSTS=${HOSTS%,}
+  EXPECTED_RANKS=${PP_RANKS}
+  PROBE_DIR="${MR_DIR}/probe"
+  mkdir -p "${PROBE_DIR}"
+  BINDING="${MR_DIR}/${MODEL}_${CONFIG}_binding.yaml"
+  # --map-by slot with one slot per host: MPI rank k runs on host k and names its probe after k.
+  "${MPIRUN}" -np "${PP_4X4_HOSTS}" --host "${PROBE_HOSTS}" --map-by slot --bind-to none --allow-run-as-root \
+    bash -lc "set -e; cd '${TT_METAL_HOME}'; \
+      [ -n \"\$(ls -A '${PP_CACHE_DIR}' 2>/dev/null)\" ] || { echo \"\$(hostname): no 4x4 weight cache at ${PP_CACHE_DIR} (or set PREFILL_TTNN_CACHE)\" >&2; exit 1; }; \
+      export PYTHONPATH='${TT_METAL_HOME}'; \
+      export TT_METAL_OPERATION_TIMEOUT_SECONDS=0; \
+      export TT_MESH_GRAPH_DESC_PATH='${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto'; \
+      exec python3 models/demos/deepseek_v3_d_p/utils/gen_pipeline_binding.py --layout 4x4 \
+        --out '${PROBE_DIR}'/host\${OMPI_COMM_WORLD_RANK}.yaml"
+  ASSEMBLE_ARGS=""
+  for i in "${!HOST_LIST[@]}"; do
+    ASSEMBLE_ARGS+=" --probe '${PROBE_DIR}/host${i}.yaml' --host '${HOST_LIST[$i]}'"
+  done
+  # On a worker, like the power probe: the controller is not guaranteed PyYAML.
+  "${MPIRUN}" -np 1 --host "${HOST_LIST[0]}:1" --bind-to none --allow-run-as-root \
+    bash -lc "cd '${TT_METAL_HOME}' && PYTHONPATH='${TT_METAL_HOME}' \
+      python3 models/demos/deepseek_v3_d_p/utils/assemble_pipeline_binding.py assemble ${ASSEMBLE_ARGS} --out '${BINDING}'"
+  TTRUN_ARGS=(--rank-binding "${BINDING}")
+  RUNNER_PLACEMENT="--host ${HOSTS} --map-by slot"
+  # Each producer rank reads its own stage's map (device_map_r<rank>.json); none can reach the others.
+  RUNNER_ENV+=" export PREFILL_MIGRATION_DEVICE_MAP_PATH='${MR_DIR}/device_map.json';"
+  PRODUCER_ENV+=" export PREFILL_MIGRATION_DEVICE_MAP_PATH='${MR_DIR}/device_map.json';"
+elif [ "${PP_RANKS}" -ne 0 ]; then
   # The CI controller has no chips: probe the allocated worker, and never reuse the template's
   # device IDs, since column enumeration is host-specific.
   [ -n "${RESOLVED_HOSTS}" ] && [[ "${RESOLVED_HOSTS}" != *,* ]] || {
