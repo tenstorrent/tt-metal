@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/experimental/fixed_address_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/allocator_mode.hpp>
@@ -233,17 +234,6 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
     MeshDevice* mesh_device,
     std::optional<DeviceAddr> address) {
     return create_impl(mesh_buffer_config, device_local_config, mesh_device, address, false);
-}
-
-std::shared_ptr<MeshBuffer> MeshBuffer::allocate_at_address(
-    const MeshBufferConfig& mesh_buffer_config,
-    const DeviceLocalBufferConfig& device_local_config,
-    MeshDevice* mesh_device,
-    DeviceAddr address) {
-    TT_FATAL(
-        device_local_config.buffer_type == BufferType::L1 || device_local_config.buffer_type == BufferType::L1_SMALL,
-        "Fixed-address allocation requires an L1 buffer");
-    return create_impl(mesh_buffer_config, device_local_config, mesh_device, address, true);
 }
 
 std::shared_ptr<MeshBuffer> MeshBuffer::create_impl(
@@ -612,3 +602,18 @@ std::shared_ptr<MeshBuffer> AnyBuffer::get_mesh_buffer() const {
 }
 
 }  // namespace tt::tt_metal::distributed
+
+namespace tt::tt_metal::experimental::fixed_address_allocation {
+
+std::shared_ptr<distributed::MeshBuffer> allocate_at_address(
+    const distributed::MeshBufferConfig& mesh_buffer_config,
+    const distributed::DeviceLocalBufferConfig& device_local_config,
+    distributed::MeshDevice* mesh_device,
+    DeviceAddr address) {
+    TT_FATAL(
+        device_local_config.buffer_type == BufferType::L1 || device_local_config.buffer_type == BufferType::L1_SMALL,
+        "Fixed-address allocation requires an L1 buffer");
+    return distributed::MeshBuffer::create_impl(mesh_buffer_config, device_local_config, mesh_device, address, true);
+}
+
+}  // namespace tt::tt_metal::experimental::fixed_address_allocation
