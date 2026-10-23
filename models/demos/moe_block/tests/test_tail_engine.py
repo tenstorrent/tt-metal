@@ -37,8 +37,8 @@ def test_tail_engine(mesh_device, device_params):
     gn = 1.0 + torch.randn(Hr, generator=g_) * 0.1
     eng = TailEngine(mesh_device, rows=ROWS, Hr=Hr, Ho=Ho, chunks=C, eps=m.norm_eps)
     logger.info(
-        f"tail_engine: grid {eng.GX} x {eng.GY}, slices {eng.NS} (widths {sorted(set(eng.pn))}), arena "
-        f"{eng.arena_bytes >> 10} KB"
+        f"tail_engine: grid {eng.GX} x {eng.GY} (K halves of {eng.KH} tiles), column widths {sorted(set(eng.pn))}, "
+        f"arena {eng.arena_bytes >> 10} KB"
     )
     w = eng.upload([w_up.T[:, (d % C) * Ho : (d % C + 1) * Ho].contiguous() for d in range(R * C)], gn)
     mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(0, 1))
@@ -49,27 +49,10 @@ def test_tail_engine(mesh_device, device_params):
         se = (torch.randn(R, C, ROWS, Ho, generator=g_) * 0.5).to(torch.bfloat16)
         zt = ttnn.from_torch(z, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper)
         st = ttnn.from_torch(se, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper)
-        eng.keep_arena = probe_dump = os.environ.get("TL_DUMP") == "1"
         out = eng.run(zt, w, st)
         y = ttnn.to_torch(out, mesh_composer=composer).float()
-        if probe_dump:  # (chip 0, core (0, 0): PART / PMY row 0 of row tile 0, chunk 0 vs the expected partials)
-            ar = (
-                ttnn.to_torch(ttnn.get_device_tensors(eng.arena)[0]).view(torch.int32).reshape(-1, eng.arena_bytes // 4)
-            )
-            core0 = ar[0].view(torch.float32)
-            zf = z[0, 0].float()
-            o = eng.off
-            row0 = lambda base: [round(core0[(base + i * 4096) // 4].item(), 2) for i in range(eng.NH)]  # noqa: E731
-            exp = [round(zf[0, k0 * 32 : k1 * 32].pow(2).sum().item(), 2) for k0, k1 in eng.ak]
-            logger.info(f"DUMP part c0 row0: {row0(o['part'])}")
-            logger.info(f"DUMP part c1 row0: {row0(o['part'] + eng.NH * 4096)}")
-            logger.info(f"DUMP expected c0 row0: {exp}")
-            logger.info(
-                f"DUMP pmy row0 {core0[o['pmy'] // 4].item():.2f}; full row0 sumsq {zf[0].pow(2).sum().item():.2f}"
-            )
-            eng.free_arena()
         worst = 1.0
-        probe = eng.probe
+        probe = 0
         for r in range(R):
             for c in range(C):
                 zf = z[r, c].float()

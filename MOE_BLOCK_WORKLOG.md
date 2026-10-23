@@ -1141,3 +1141,13 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   reads crowd W'), later chunks no wait. Its first version hung: the chunk-3 owner's BRISC waited for chunk 0's slot to
   be freed before loading its se tiles, which chunk 0's output needs (triage: that BRISC in the FREE wait, the others in
   CB_SE reserves) - fixed by loading se(c) before own(c + NSLOT); reverted for (ii)'s start.
+- K split between the halves (the engine rewritten): core row r takes K tiles 0-55 of row tile r, row r + 5 tiles 56-111,
+  both over all 56 output columns (column_split over 11: 5 or 6 a core); partners (same column, other half) swap the
+  fp32 partials of each other's finished columns + their half's sum of squares (XSEND -> XRECV, a 16 KB column unicast
+  a chunk), each finishing ~half its columns. Each z tile now has one destination core (no duplicate reads; step B's
+  gather lands each K tile once), each A tile is reused over 5-6 W tiles: the matmul is math-bound - 11.2 -> 8.3 us a
+  chunk. z's ring a slot a chunk (4: no FREE credits). Semaphores folded to 12 (the 16 limit): W' ranges a bit each in
+  one word (1 << r added), the partner's exchanges one cumulative count.
+- LoudBox (12 x 10 grid, 110 engine cores): device time 120-135 us (slowest chip; chip 0's kernels end ~104), chunk
+  cadence ~15 us = matmul 8.3 + finish (s, partner add, x s, + se: ~20 tile ops) 3.6 + squares / s 2. PCC 0.99993+,
+  300-call soak min 0.999910.
