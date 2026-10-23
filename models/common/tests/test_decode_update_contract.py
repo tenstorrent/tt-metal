@@ -16,6 +16,7 @@ from models.common.sampling.generator import (
     SeedManager,
     _hash_request_seed_to_device_seed,
 )
+from models.common.tests.vllm_stubs import stub_vllm_if_missing
 from models.common.warmup.warmup_utils import WarmupForwardMixin
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.generator import Generator
@@ -402,7 +403,7 @@ def test_shared_generator_rejects_cross_lane_sampling_remap(expect_error):
 )
 def test_adapter_forwards_deferred_decode(adapter_path, forwarded_width, monkeypatch):
     """A device grammar adapter hands the deferred decode to the shared Generator."""
-    pytest.importorskip("vllm")
+    stub_vllm_if_missing(monkeypatch)
     module_name, class_name = adapter_path.split(":")
     adapter = getattr(importlib.import_module(module_name), class_name)
     forwarded = []
