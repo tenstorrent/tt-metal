@@ -13,6 +13,13 @@
 
 using namespace ckernel;
 
+// Per-launch MOP outer loop count override: outer[5:0] goes in bits [14:9] of zmask_lo8_or_loop_count (above the
+// 9-bit inner count), outer[9:6] in loop_count.
+constexpr std::uint32_t PACK_MOP_MAX_OUTER_LOOP      = 1023;
+constexpr std::uint32_t PACK_MOP_OUTER_LOOP_LO_BITS  = 6;
+constexpr std::uint32_t PACK_MOP_OUTER_LOOP_LO_MASK  = 0x3F;
+constexpr std::uint32_t PACK_MOP_OUTER_LOOP_LO_SHIFT = 9;
+
 /**
  * @brief Builds the MOP for packing contiguous tiles from the math destination register via Packer 0.
  *
@@ -74,7 +81,7 @@ inline void _llk_pack_init_(const std::uint8_t buf_desc_id, const TensorShape& t
 inline void _llk_pack_(
     const std::uint32_t start_math_dest_tile_idx, const std::uint32_t start_l1_tile_idx, const TensorShape& tensor_shape, const std::uint32_t num_tiles = 0)
 {
-    LLK_ASSERT(num_tiles <= 1023, "Pack tile count must fit the 10-bit MOP outer loop count");
+    LLK_ASSERT(num_tiles <= PACK_MOP_MAX_OUTER_LOOP, "Pack tile count must fit the 10-bit MOP outer loop count");
     //(TODO) RT: for the best performance, setting counters should be placed in a REPLAY buffer
     // in the mop_config, but for back compatibility with APIs, the counter functions must
     // be programmable with users offset idx
@@ -102,7 +109,6 @@ inline void _llk_pack_(
     }
     else
     {
-        // Double-loop MOP: outer[9:6] goes in loop_count, outer[5:0] in bits [14:9].
-        TT_MOP(1, 0, num_tiles >> 6, (num_tiles & 0x3F) << 9);
+        TT_MOP(1 /*mop_type*/, 0 /*done*/, num_tiles >> PACK_MOP_OUTER_LOOP_LO_BITS, (num_tiles & PACK_MOP_OUTER_LOOP_LO_MASK) << PACK_MOP_OUTER_LOOP_LO_SHIFT);
     }
 }
