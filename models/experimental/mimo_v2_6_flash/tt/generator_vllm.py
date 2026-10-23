@@ -56,6 +56,8 @@ host with each request's own sampling (temperature, top-p, penalties, ...). Eith
 losslessly. A verify and a draft each copy one packed int32 tensor of their tokens and positions (plus the RoPE cos /
 sin with MIMO_DEVICE_ROPE=0); their traces derive every other input from it on device
 (tt/spec_inputs.py). A step that verifies nothing decodes as above, a sampled request's on the sampled decode trace.
+The verify and the MTP draft run only as traces, which ``warmup_model_decode`` captures with the decode trace, so
+``spec_plan`` refuses a launch whose tt options capture no decode traces (``_untraced_decode``).
 
 The draft is chained behind the verify (tt/spec_chain.py, reference/spec_chain.py): an argmax_ids verify accepts on
 device too, every request greedy (its committed tokens are the plugin's greedy walk over the ids), and on a lane that
@@ -161,6 +163,23 @@ ASYNC_SPEC = os.environ.get("MIMO_ASYNC_SPEC", "1") == "1"
 # chains onto it; by default it returns a handle and is read a step later (VerifyHandle), and the plugin may chain the
 # next verify onto it.
 SPEC_DEFER = os.environ.get("MIMO_SPEC_DEFER", "1") == "1"
+
+
+def _untraced_decode(vllm_config):
+    """Why the plugin captures no decode traces for this launch, or None. Its warmup captures them when the operator's
+    tt options (``additional_config["tt"]``, as its worker reads them) keep trace_mode "all" or "decode_only" and
+    enable_model_warmup true, the defaults."""
+    additional = getattr(vllm_config, "additional_config", None)
+    tt = additional.get("tt") if isinstance(additional, dict) else None
+    tt = tt if isinstance(tt, dict) else {}
+    trace_mode, warmup = tt.get("trace_mode", "all"), tt.get("enable_model_warmup", True)
+    if trace_mode in ("all", "decode_only") and warmup:
+        return None
+    return (
+        "MiMo verifies and drafts only by replaying the traces warmup_model_decode captures: launch with the tt "
+        f"options trace_mode 'all' or 'decode_only' and enable_model_warmup true (got trace_mode {trace_mode!r}, "
+        f"enable_model_warmup {warmup!r})"
+    )
 
 
 def _model_path(hf_config):
@@ -433,13 +452,17 @@ class MiMoV2ForCausalLM:
 
     @classmethod
     def spec_plan(cls, vllm_config, max_num_seqs, requested_k):
-        """MTP drafts up to MAX_DRAFTS tokens: the last committed token and its drafts fill one verify pass."""
+        """MTP drafts up to MAX_DRAFTS tokens: the last committed token and its drafts fill one verify pass. A launch
+        that captures no decode traces serves no draft length (``_untraced_decode``)."""
         from vllm_tt_plugin.spec_decode import SpecPlan, SpecReject
 
         if SPEC_DECODE != "mtp":
             return SpecReject(
                 reason="MiMo drafts with its MTP layer: launch with MIMO_SPEC_DECODE=mtp", supported_k=(MAX_DRAFTS,)
             )
+        untraced = _untraced_decode(vllm_config)
+        if untraced is not None:
+            return SpecReject(reason=untraced)
         if requested_k < 1:
             return SpecReject(reason=f"num_speculative_tokens {requested_k} < 1", supported_k=(MAX_DRAFTS,))
         k = min(requested_k, MAX_DRAFTS)

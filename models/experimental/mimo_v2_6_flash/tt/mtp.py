@@ -440,10 +440,19 @@ class TtMiMoMTP:
             ttnn.release_trace(self.model.mesh_device, self.backfill_trace)
             self.backfill_trace = None
 
+    def _require_trace(self):
+        """A draft replays the captured program (there is no eager draft)."""
+        if self.trace is None:
+            raise RuntimeError(
+                "an MTP draft before warmup_model_decode captured the draft trace (it captures it with enable_trace: "
+                "the plugin's trace_mode 'all' or 'decode_only', with enable_model_warmup)"
+            )
+
     def enqueue_backfill(self, slot, a):
         """Fill every layer's ring from the history of the request in lane ``slot`` before a draft whose first row is
         at ``a`` (non-blocking; enqueue the draft right after it): the window a - MTP_WINDOW + 1 .. a - 1, and with
         every layer the stash rows a - 2, a - 1 the draft then re-runs (those of them its commit leaves stale)."""
+        self._require_trace()  # captured with the draft trace (capture_trace)
         assert self.backfill_trace is not None and 0 <= slot < SPEC_SLOTS
         self.history.upload_backfill(slot, a)
         ttnn.execute_trace(self.model.mesh_device, self.backfill_trace, cq_id=0, blocking=False)
@@ -453,6 +462,7 @@ class TtMiMoMTP:
         hidden. ``tokens`` per slot (the tokens committed there), ``plan`` the true positions
         (reference.spec_decode.MtpInputs). Copies the packed upload, and the cos / sin without the decode RoPE
         tables."""
+        self._require_trace()
         assert not self.multi, "every layer: enqueue_layers"
         m = self.model
         # The RoPE indices read rows of the device tables, which end at max_seq_len.
@@ -471,6 +481,7 @@ class TtMiMoMTP:
         """Every layer: draft after the replica's last decode or verify step (non-blocking) from the commit of
         ``accepted`` tokens ``committed_tokens`` at ``committed_positions`` of the lane's DraftSource ``source``: copies
         its description (reference.spec_inputs.pack_mtp_layers); the plan step plans the passes on device."""
+        self._require_trace()
         assert self.multi, "one layer: enqueue"
         m = self.model
         assert int(committed_positions[int(accepted) - 1]) < m.max_seq_len
@@ -487,6 +498,7 @@ class TtMiMoMTP:
         """Draft right behind a verify pass and its accept trace (non-blocking): the accept trace's chain step wrote
         the packed upload's buffer from the pass's accepted count and committed tokens, so nothing is copied. Needs the
         decode RoPE tables (without them the host copies the draft's cos / sin: ``enqueue``)."""
+        self._require_trace()
         assert self.model.rope_tables is not None, "a chained draft reads its cos / sin from the decode RoPE tables"
         ttnn.execute_trace(self.model.mesh_device, self.trace["id"], cq_id=0, blocking=False)
 
