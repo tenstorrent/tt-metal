@@ -17,16 +17,16 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t Mt = get_arg(args::Mt);
-    uint32_t Kt = get_arg(args::Kt);
-    uint32_t Nt = get_arg(args::Nt);
-    uint32_t MtKt = get_arg(args::MtKt);  // if 0
-    uint32_t KtNt = get_arg(args::KtNt);
-    uint32_t batch = get_arg(args::batch);
-    uint32_t bcast_B = get_arg(args::bcast_B);  // if 1 we broadcast B to batch
-    uint32_t output_tile_start_id = get_arg(args::output_tile_start_id);
-    uint32_t num_output_tiles = get_arg(args::num_output_tiles);
-    uint32_t MtNt = get_arg(args::MtNt);
+    const uint32_t Mt = get_arg(args::Mt);
+    const uint32_t Kt = get_arg(args::Kt);
+    const uint32_t Nt = get_arg(args::Nt);
+    const uint32_t MtKt = get_arg(args::MtKt);  // if 0
+    const uint32_t KtNt = get_arg(args::KtNt);
+    const uint32_t batch = get_arg(args::batch);
+    const uint32_t bcast_B = get_arg(args::bcast_B);  // if 1 we broadcast B to batch
+    const uint32_t output_tile_start_id = get_arg(args::output_tile_start_id);
+    const uint32_t num_output_tiles = get_arg(args::num_output_tiles);
+    const uint32_t MtNt = get_arg(args::MtNt);
 
     constexpr uint32_t in0_last_ktile_w = get_arg(args::in0_last_ktile_w);
     constexpr uint32_t in0_last_ktile_h = get_arg(args::in0_last_ktile_h);
@@ -54,7 +54,7 @@ void kernel_main() {
     const auto s0 = TensorAccessor(tensor::in0);
     const auto s1 = TensorAccessor(tensor::in1);
 
-    Noc noc;
+    const Noc noc;
 
     for (uint32_t n = 0; n < num_output_tiles; n++) {
         for (uint32_t kt = 0; kt < Kt; kt++) {

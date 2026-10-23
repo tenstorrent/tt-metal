@@ -102,8 +102,8 @@ void kernel_main() {
     // by the compute kernel's packer and drained here.
     DataflowBuffer dfb_in1(dfb::in1);
     DataflowBuffer dfb_out(dfb::out);
-    Semaphore sender_sem(sem::in1_mcast_sender);
-    Semaphore receiver_sem(sem::in1_mcast_receiver);
+    Semaphore<> sender_sem(sem::in1_mcast_sender);
+    Semaphore<> receiver_sem(sem::in1_mcast_receiver);
 #ifdef FUSE_BIAS
     // bias is filled here from the sender's multicast and consumed by the compute kernel's bias add.
     DataflowBuffer dfb_in3(dfb::bias);

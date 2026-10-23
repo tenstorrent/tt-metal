@@ -92,9 +92,9 @@ void kernel_main() {
     DataflowBuffer dfb_in2(dfb_id_in2);
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
-    Semaphore sender_sem(sem::in0_mcast_sender);
+    Semaphore<> sender_sem(sem::in0_mcast_sender);
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    Semaphore receiver_sem(sem::in0_mcast_receiver);
+    Semaphore<> receiver_sem(sem::in0_mcast_receiver);
 
     constexpr uint32_t num_remote_senders = (num_blocks_inner_dim + num_blocks_per_shard - 1) / num_blocks_per_shard;
     uint32_t remote_sender_noc_x[num_remote_senders];

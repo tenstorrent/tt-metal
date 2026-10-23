@@ -160,8 +160,8 @@ void kernel_main() {
 
     const Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);
-    Semaphore sender_sem(sem::in0_mcast_sender);
-    Semaphore receiver_sem(sem::in0_mcast_receiver);
+    Semaphore<> sender_sem(sem::in0_mcast_sender);
+    Semaphore<> receiver_sem(sem::in0_mcast_receiver);
 
 #ifdef IN0_SHARDED
     // In case we need to send multiple blocks per shard, the resident shard is the in0_sharded buffer and
@@ -313,7 +313,7 @@ void kernel_main() {
                         uint32_t in0_write_offset = 0;
 
 #ifndef SKIP_MCAST
-                        uint32_t in0_start_address =
+                        const uint32_t in0_start_address =
                             dfb_in0.get_write_ptr();  // copy start address of block, to be used for mcasting
 #endif                                                // SKIP_MCAST
 

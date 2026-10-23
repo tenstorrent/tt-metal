@@ -403,7 +403,7 @@ void kernel_main() {
                             in0_index,
                             in1_index,
                             dst_index,
-                            in1_transpose_tile,
+                            static_cast<uint32_t>(in1_transpose_tile),
                             out_subblock_w,
                             out_subblock_h,
                             in0_block_w);
