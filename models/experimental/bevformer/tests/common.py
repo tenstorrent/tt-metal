@@ -54,7 +54,9 @@ from models.experimental.bevformer.model_config import (
     PC_RANGE,
     RAW_IMAGE_SIZE,
     RESNET_KWARGS,
+    SCA_NUM_POINTS,
     SPATIAL_SHAPES,
+    TSA_NUM_POINTS,
     fpn_spatial_shapes,
     padded_image_size,
 )
@@ -262,8 +264,9 @@ class DatasetPreset:
         pc_range: (x_min, y_min, z_min, x_max, y_max, z_max) in metres.
         num_cams: Cameras.
         input_size: Image size, (width, height).
-        embed_dims, num_heads, num_levels, num_points: The deformable attention's sizes. Every
-            BEV pillar samples ``NUM_POINTS_IN_PILLAR`` heights.
+        embed_dims, num_heads, num_levels, num_points: The spatial cross-attention's deformable
+            attention sizes. Every BEV pillar samples ``NUM_POINTS_IN_PILLAR`` heights.
+        tsa_num_points: The temporal self-attention's points per head.
     """
 
     name: str
@@ -274,6 +277,7 @@ class DatasetPreset:
     num_heads: int
     num_levels: int
     num_points: int
+    tsa_num_points: int
 
     @property
     def spatial_shapes(self):
@@ -288,10 +292,16 @@ class DatasetPreset:
 
 
 _CARLA_PC_RANGE = (-50.0, -50.0, -5.0, 50.0, 50.0, 3.0)
-_TINY = dict(embed_dims=128, num_heads=4, num_levels=1, num_points=4)
-# The base presets: BEVFormer-base's attention sizes over the four camera levels, with the
-# decoder's points per head and level.
-_BASE = dict(embed_dims=EMBED_DIMS, num_heads=NUM_HEADS, num_levels=NUM_LEVELS, num_points=DECODER_NUM_POINTS)
+_TINY = dict(embed_dims=128, num_heads=4, num_levels=1, num_points=4, tsa_num_points=4)
+# The base presets: BEVFormer-base's encoder attention sizes over the four camera levels, so the
+# checkpoint's encoder weights fit them.
+_BASE = dict(
+    embed_dims=EMBED_DIMS,
+    num_heads=NUM_HEADS,
+    num_levels=NUM_LEVELS,
+    num_points=SCA_NUM_POINTS,
+    tsa_num_points=TSA_NUM_POINTS,
+)
 
 PRESETS = {
     "nuscenes_tiny": DatasetPreset("nuscenes_v1.0_full_640x360", PC_RANGE, NUM_CAMS, (640, 360), **_TINY),
