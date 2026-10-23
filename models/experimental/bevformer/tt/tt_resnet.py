@@ -406,11 +406,12 @@ class TTResNet:
             slice_type=ttnn.Op2DDRAMSliceHeight, num_slices=stem_maxpool_height_slices
         )
 
-        # The max pool emits a bfloat16 ROW_MAJOR tensor and every layer emits bfloat16 TILE.
+        # The max pool and every layer emit bfloat16 TILE: layer1's first block feeds its input to
+        # two linears, conv1 and the downsample, which would each tilize a ROW_MAJOR one.
         # Activations stay bfloat16: outlier channels lose their neighbours to bfloat8_b's shared
         # block exponent.
         layer_input_dtype = ttnn.bfloat16
-        layer_input_layout = ttnn.ROW_MAJOR_LAYOUT
+        layer_input_layout = ttnn.TILE_LAYOUT
         self.output_dtypes = []
         self.res_layers = []
         for i in range(self.num_layers):
@@ -492,7 +493,11 @@ class TTResNet:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ceil_mode=False,
             dram_slice_config=self.maxpool_slice_config,
+            output_layout=ttnn.TILE_LAYOUT,
         )
+        # The pool writes NHWC tiles with its 400-wide rows padded; flattening them copies, so it
+        # happens once here rather than in both of layer1's first linears.
+        x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[-1]))
         signpost(header="ResNet Stem End")
 
         outs = []
