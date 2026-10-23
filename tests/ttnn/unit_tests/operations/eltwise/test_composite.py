@@ -297,10 +297,15 @@ def test_unary_composite_trilu_non_finite_ttnn(
     # kept as a regression guard: its SFPU multiply already forces x * 0 = 0, so it passed
     # before the fix and must keep passing.
     #
-    # The other tril/triu tests never feed a non-finite value: test_unary_category6_bfloat16.py
-    # samples bf16 without special values, and test_tril_triu_integer_dtype.py draws its float
-    # cases from [-4, 4) and its integer cases from arange. Both use tiled inputs; the
-    # row-major case here also runs the tilize in front of the float32 select.
+    # The row-major (30, 50) cases also cover the mask itself: it is built tiled on the host, and
+    # for a row-major input that is not tile aligned that build failed until the mask shape was
+    # padded to the tile.
+    #
+    # The other tril/triu unit tests never feed a non-finite value: test_unary_category6_bfloat16.py
+    # and test_unary_category6_float32.py sample bf16 values without special values, and
+    # test_tril_triu_integer_dtype.py draws its float cases from [-4, 4) and its integer cases from
+    # arange. All three use tiled inputs; the row-major case here also runs the tilize in front of
+    # the float32 select.
     in_data = torch.full(input_shapes, fill, dtype=torch_dtype)
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=layout, device=device)
 

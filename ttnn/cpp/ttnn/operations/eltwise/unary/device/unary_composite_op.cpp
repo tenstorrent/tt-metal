@@ -15,6 +15,7 @@
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -317,34 +318,25 @@ static Tensor trilu_mask(
     const Tensor& input_a, std::int32_t diag, bool upper, const std::optional<MemoryConfig>& output_mem_config) {
     const auto mem = output_mem_config.value_or(input_a.memory_config());
     const DataType dt = input_a.dtype();
+    // A row-major input carries no tile padding, but the mask is built tiled: pad its last two
+    // dims to the tile so the host-side tilize in index_trilu does not change the physical shape.
+    const auto padded = ttnn::operations::data_movement::pad_to_tile_shape(input_a.padded_shape());
     if (dt == DataType::INT32) {
         return upper ? ttnn::index_triu<std::int32_t>(
-                           input_a.logical_shape(), input_a.padded_shape(), diag, dt, Layout::TILE, input_a.device(), mem)
+                           input_a.logical_shape(), padded, diag, dt, Layout::TILE, input_a.device(), mem)
                      : ttnn::index_tril<std::int32_t>(
-                           input_a.logical_shape(), input_a.padded_shape(), diag, dt, Layout::TILE, input_a.device(), mem);
+                           input_a.logical_shape(), padded, diag, dt, Layout::TILE, input_a.device(), mem);
     }
     if (dt == DataType::UINT32) {
         return upper ? ttnn::index_triu<std::uint32_t>(
-                           input_a.logical_shape(), input_a.padded_shape(), diag, dt, Layout::TILE, input_a.device(), mem)
+                           input_a.logical_shape(), padded, diag, dt, Layout::TILE, input_a.device(), mem)
                      : ttnn::index_tril<std::uint32_t>(
-                           input_a.logical_shape(), input_a.padded_shape(), diag, dt, Layout::TILE, input_a.device(), mem);
+                           input_a.logical_shape(), padded, diag, dt, Layout::TILE, input_a.device(), mem);
     }
     return upper ? ttnn::index_triu<::bfloat16>(
-                       input_a.logical_shape(),
-                       input_a.padded_shape(),
-                       diag,
-                       DataType::BFLOAT16,
-                       Layout::TILE,
-                       input_a.device(),
-                       mem)
+                       input_a.logical_shape(), padded, diag, DataType::BFLOAT16, Layout::TILE, input_a.device(), mem)
                  : ttnn::index_tril<::bfloat16>(
-                       input_a.logical_shape(),
-                       input_a.padded_shape(),
-                       diag,
-                       DataType::BFLOAT16,
-                       Layout::TILE,
-                       input_a.device(),
-                       mem);
+                       input_a.logical_shape(), padded, diag, DataType::BFLOAT16, Layout::TILE, input_a.device(), mem);
 }
 
 // Zero what the mask drops. A float32 multiply runs on the SFPU with fp32 dest, where nothing
