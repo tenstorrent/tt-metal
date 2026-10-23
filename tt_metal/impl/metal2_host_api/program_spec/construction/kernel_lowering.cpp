@@ -15,9 +15,11 @@
 #include <variant>
 #include <vector>
 
+#include <experimental/fabric/control_plane.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
+#include "impl/context/metal_context.hpp"
 #include "impl/metal2_host_api/helpers.hpp"
 
 namespace tt::tt_metal::experimental {
@@ -72,12 +74,19 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
         kernel_spec.unique_id);
     const auto& gen1 = *dm_config.config_1xx;
 
+    auto defines = to_defines_map(kernel_spec.compiler_options.defines);
+    // The watcher's NoC sanitizer checks that the two kernels sharing a dedicated NOC keep to disjoint
+    // command buffers; only kernels built with this define run the check (internal/debug/sanitize.h).
+    if (gen1.dedicated_noc_sharing == DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC) {
+        defines["DEDICATED_NOC_SHARED"] = "1";
+    }
+
     return DataMovementConfig{
         .processor = gen1.processor,
         .noc = gen1.noc,
         .noc_mode = gen1.noc_mode,
         .compile_args = {},  // only named_compile_args is used
-        .defines = to_defines_map(kernel_spec.compiler_options.defines),
+        .defines = std::move(defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
         .opt_level = kernel_spec.compiler_options.opt_level,
         .compiler_include_paths = kernel_spec.compiler_options.include_paths,
@@ -384,6 +393,11 @@ LoweredKernel LowerKernel(
         if (kernel_spec.is_data_movement_kernel()) {
             auto config = MakeGen1DataMovementConfig(kernel_spec);
             config.compile_args = std::move(compile_args);
+            // As CreateKernel: fabric routing mode and packet-header sizing, for kernels that talk to the fabric.
+            for (const auto& [name, value] :
+                 MetalContext::instance(context_id).get_control_plane().get_fabric_kernel_defines()) {
+                config.defines.emplace(name, value);
+            }
             kernel = std::make_shared<DataMovementKernel>(
                 context_id,
                 kernel_src,

@@ -6,7 +6,9 @@
 namespace ckernel::sfpu::ttpoly::logsigmoid {
 using namespace ::sfpi;
 using ::sfpi::DataLayout;
-template <typename Reciprocal>
+// Held takes Blackhole's Newton constant 2 as an immediate of the call instead of Prgm0
+// (sfpu_reciprocal_init's).
+template <typename Reciprocal, bool Held = false>
 inline vFloat correction_finite_reciprocal(vFloat x, [[maybe_unused]] Reciprocal reciprocal) {
     return reciprocal(x);
 }

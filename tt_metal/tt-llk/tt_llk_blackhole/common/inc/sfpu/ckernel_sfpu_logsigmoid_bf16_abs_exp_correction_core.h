@@ -25,7 +25,18 @@ constexpr float correction_exp_scale(int degree)
 
 // Exponent leaf shared by the exp_hw_eval compositions. MULT may be an
 // immediate, a programmable constant or a DST value.
-template <std::uint32_t DEG, bool SquareStore, bool SquareFold, bool ResidualPool, bool ResidualFold, bool SkipClamp, bool SplitScaleBias, typename Mult>
+// PoolHeld takes ResidualPool's two upper coefficients as immediates of the call, the values
+// init_abs_exp_correction would program in Prgm1/2.
+template <
+    std::uint32_t DEG,
+    bool SquareStore,
+    bool SquareFold,
+    bool ResidualPool,
+    bool ResidualFold,
+    bool SkipClamp,
+    bool SplitScaleBias,
+    typename Mult,
+    bool PoolHeld = false>
 inline vFloat correction_exp_leaf(vFloat x, Mult MULT, float bias, const float* c)
 {
     vFloat xlog2;
@@ -83,6 +94,10 @@ inline vFloat correction_exp_leaf(vFloat x, Mult MULT, float bias, const float* 
     {
         p = c[DEG] * correction_exp_scale(DEG);
     }
+    else if constexpr (ResidualPool && PoolHeld)
+    {
+        p = ResidualFold ? c[DEG] * correction_exp_scale(DEG) : c[DEG];
+    }
     else if constexpr (ResidualPool)
     {
         p = vConstFloatPrgm1;
@@ -108,6 +123,17 @@ inline vFloat correction_exp_leaf(vFloat x, Mult MULT, float bias, const float* 
         else if constexpr (SquareFold)
         {
             p = p * f + c[k] * correction_exp_scale(k);
+        }
+        else if constexpr (ResidualPool && PoolHeld)
+        {
+            if (k == (int)DEG - 1)
+            {
+                p = p * f + (ResidualFold ? c[k] * correction_exp_scale(k) : c[k]);
+            }
+            else
+            {
+                p = p * f + c[k];
+            }
         }
         else if constexpr (ResidualPool)
         {
@@ -191,29 +217,78 @@ inline void abs_exp_residual_pins()
     TTI_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, bits7 & 0xffffu);
 }
 
-template <typename Config, std::uint32_t Hold>
-inline void abs_exp_residual_core()
+// The exponent leaf's coefficient of degree kExpDegree - Below, pre-scaled as init_abs_exp_correction
+// programs it in Prgm1 (Below 0) or Prgm2 (Below 1).
+template <typename Config, std::uint32_t Below>
+constexpr std::uint32_t abs_exp_held_coefficient()
 {
-    constexpr std::uint32_t kCorrectionC0 = __builtin_bit_cast(std::uint32_t, Config::kNumerator[0]);
+    constexpr std::uint32_t degree = Config::kExpDegree - Below;
+    return __builtin_bit_cast(std::uint32_t, Config::kExpCoefficients[degree] * correction_exp_scale(degree));
+}
+
+// Held loads the multiplier and the two upper exponent coefficients into L3 and L2 per row, in
+// slots the Prgm0..2 form leaves as NOPs and two more, instead of reading them from Prgm0..2.
+// The slots abs_exp_residual_core_head issues: the part of the row a window too short for all of it records.
+template <typename Config, std::uint32_t Hold, bool Held = false>
+inline constexpr std::uint32_t abs_exp_residual_core_head_slots = 13u + ((Held) ? 2u : 0u);
+
+template <typename Config, std::uint32_t Hold, bool Held = false>
+inline void abs_exp_residual_core_head()
+{
+    constexpr std::uint32_t kMultiplierReg = Held ? ckernel::p_sfpu::LREG3 : ckernel::p_sfpu::LREG12;
     TTI_SFPLOAD(ckernel::p_sfpu::LREG0, 0, Hold, 0);
     TTI_SFPSETSGN(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, 1); // |x|
+    if constexpr (Held)
+    {
+        constexpr std::uint32_t kMultiplierBits = __builtin_bit_cast(std::uint32_t, Config::kMultiplier);
+        TTI_SFPLOADI(ckernel::p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_UPPER, kMultiplierBits >> 16);
+        TTI_SFPLOADI(ckernel::p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_LOWER, kMultiplierBits & 0xffffu);
+    }
     TTI_SFPLOADI(ckernel::p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, (Config::kBoundBits >> 16));
     TTI_SFPSWAP(0, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG0,
                 1); // coordinate=min(|x|, bound)
     // A separate MUL then ADDI, not a fused MAD: fusing the exponent bias into
     // the multiply changes one BF16 output after final rounding.
-    TTI_SFPMUL(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG12, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG0,
+    TTI_SFPMUL(ckernel::p_sfpu::LREG0, kMultiplierReg, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG0,
                0); // xlog2=coordinate*(-log2e)
-    TTI_SFPNOP;    // replay bypasses the MUL -> ADDI scoreboard stall
+    // replay bypasses the MUL -> ADDI scoreboard stall
+    if constexpr (Held)
+    {
+        TTI_SFPLOADI(ckernel::p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, (abs_exp_held_coefficient<Config, 0>() >> 16));
+    }
+    else
+    {
+        TTI_SFPNOP;
+    }
     TTI_SFPADDI(0x42fe, ckernel::p_sfpu::LREG0,
                 0); // xlog2 += exact 127.0 exponent bias
-    TTI_SFPNOP;
+    if constexpr (Held)
+    {
+        TTI_SFPLOADI(ckernel::p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, (abs_exp_held_coefficient<Config, 0>() & 0xffffu));
+    }
+    else
+    {
+        TTI_SFPNOP;
+    }
     TTI_SFPEXEXP(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1, 0);
     TTI_SFPEXMAN(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, 0);
     TTI_SFPSHFT(0, 1, 0, 0);
     TTI_SFPEXMAN(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1, sfpi::SFPEXMAN_MOD1_PAD9);
     TTI_SFPCAST(ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG1, 0);
-    TTI_SFPMAD(ckernel::p_sfpu::LREG13, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG14, ckernel::p_sfpu::LREG2, 0);
+}
+
+template <typename Config, std::uint32_t Hold, bool Held = false>
+inline void abs_exp_residual_core_tail()
+{
+    constexpr std::uint32_t kCorrectionC0 = __builtin_bit_cast(std::uint32_t, Config::kNumerator[0]);
+    constexpr std::uint32_t kC2Reg        = Held ? ckernel::p_sfpu::LREG2 : ckernel::p_sfpu::LREG13;
+    constexpr std::uint32_t kC1Reg        = Held ? ckernel::p_sfpu::LREG3 : ckernel::p_sfpu::LREG14;
+    if constexpr (Held)
+    {
+        TTI_SFPLOADI(ckernel::p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_UPPER, (abs_exp_held_coefficient<Config, 1>() >> 16));
+        TTI_SFPLOADI(ckernel::p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_LOWER, (abs_exp_held_coefficient<Config, 1>() & 0xffffu));
+    }
+    TTI_SFPMAD(kC2Reg, ckernel::p_sfpu::LREG1, kC1Reg, ckernel::p_sfpu::LREG2, 0);
     TTI_SFPLOAD(ckernel::p_sfpu::LREG3, sfpi::SFPLOAD_MOD0_FMT_UINT16, Hold,
                 0); // raw BH DST word, fills the exponent Horner hazard slot
     TTI_SFPMAD(ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG1, 0);

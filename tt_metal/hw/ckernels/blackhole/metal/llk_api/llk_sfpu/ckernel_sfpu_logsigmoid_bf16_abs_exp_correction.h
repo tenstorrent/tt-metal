@@ -8,6 +8,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_logsigmoid_bf16_replay_window.h"
 #include "ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_logsigmoid_bf16_min_max.h"
 #include "sfpu/ckernel_sfpu_logsigmoid_bf16_mirrored_terminals.h"
@@ -15,13 +16,8 @@
 #include "sfpu/ckernel_sfpu_logsigmoid_bf16_abs_exp_correction_core.h"
 #include "sfpu/ckernel_sfpu_logsigmoid_bf16_abs_exp_correction.h"
 namespace ckernel::sfpu::bf16::logsigmoid {
+// The call loads every constant it reads, as stock's reads none its init sets. Wormhole's
+// reciprocal still reads its Newton constant from Prgm0.
 template <typename Config>
-inline void init_abs_exp_correction() {
-    sfpi::vConstFloatPrgm0 = Config::kMultiplier;
-    sfpi::vConstFloatPrgm1 =
-        Config::kExpCoefficients[Config::kExpDegree] * ttpoly::logsigmoid::correction_exp_scale(Config::kExpDegree);
-    sfpi::vConstFloatPrgm2 = Config::kExpCoefficients[Config::kExpDegree - 1] *
-                             ttpoly::logsigmoid::correction_exp_scale(Config::kExpDegree - 1);
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-}
+inline void init_abs_exp_correction() {}
 }  // namespace ckernel::sfpu::bf16::logsigmoid

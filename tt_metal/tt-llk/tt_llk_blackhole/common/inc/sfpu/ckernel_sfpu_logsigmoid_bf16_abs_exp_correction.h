@@ -12,6 +12,7 @@
 #include "ckernel_sfpu_logsigmoid_bf16_finite_reciprocal.h"
 #include "ckernel_sfpu_logsigmoid_bf16_min_max.h"
 #include "ckernel_sfpu_logsigmoid_bf16_mirrored_terminals.h"
+#include "ckernel_sfpu_logsigmoid_bf16_replay_window.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu::bf16::logsigmoid
@@ -22,15 +23,20 @@ inline void calculate_abs_exp_correction()
     static_assert(Iterations == 32, "parked correction coefficients require the complete tile");
     {
         ttpoly::logsigmoid::abs_exp_residual_pins<Config>();
-        constexpr std::uint32_t slots = 27u + (__builtin_bit_cast(std::uint32_t, Config::kNumerator[0]) == 0x3f800000u ? 0u : 1u);
-        TTI_REPLAY(0, slots, 1, 1);
-        ttpoly::logsigmoid::abs_exp_residual_core<Config, ADDR_MOD_7>();
-        ttpoly::logsigmoid::abs_exp_residual_suffix<Config, ADDR_MOD_6>();
+        constexpr std::uint32_t slots = 31u + (__builtin_bit_cast(std::uint32_t, Config::kNumerator[0]) == 0x3f800000u ? 0u : 1u);
+        constexpr std::uint32_t head  = ttpoly::logsigmoid::abs_exp_residual_core_head_slots<Config, ADDR_MOD_7, true>;
+        auto row_head                 = [&] { ttpoly::logsigmoid::abs_exp_residual_core_head<Config, ADDR_MOD_7, true>(); };
+        auto row_tail                 = [&] { ttpoly::logsigmoid::abs_exp_residual_core_tail<Config, ADDR_MOD_7, true>(); };
+        record_split<0, slots, head>(row_head, row_tail);
+        // Rows are addressed through ADDR_MOD_7 alone; the DEST counter steps one row after each store.
+        ttpoly::logsigmoid::abs_exp_residual_suffix<Config, ADDR_MOD_7>();
+        TTI_INCRWC(0, 2, 0, 0);
 #pragma GCC unroll 32
         for (int row = 1; row < Iterations; ++row)
         {
-            TTI_REPLAY(0, slots, 0, 0);
-            ttpoly::logsigmoid::abs_exp_residual_suffix<Config, ADDR_MOD_6>();
+            replay_split<0, slots, head>(row_head, row_tail);
+            ttpoly::logsigmoid::abs_exp_residual_suffix<Config, ADDR_MOD_7>();
+            TTI_INCRWC(0, 2, 0, 0);
         }
         return;
     }
@@ -43,7 +49,10 @@ inline void calculate_abs_exp_correction()
             x, Config::kMultiplier, 127.0f, Config::kExpCoefficients);
     };
     auto reciprocal = [](sfpi::vFloat x)
-    { return ttpoly::logsigmoid::correction_finite_reciprocal(x, [](sfpi::vFloat v) { return sfpu_reciprocal_iter<1>(v); }); };
+    {
+        auto iteration = [](sfpi::vFloat v) { return sfpu_reciprocal_iter<1>(v); };
+        return ttpoly::logsigmoid::correction_finite_reciprocal<decltype(iteration), true>(x, iteration);
+    };
     for (int row = 0; row < Iterations; ++row)
     {
         sfpi::vFloat raw = sfpi::dst_reg[row];
