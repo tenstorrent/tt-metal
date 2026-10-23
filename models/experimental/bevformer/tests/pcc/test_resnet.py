@@ -32,8 +32,7 @@ def reference_and_parameters():
 
 def _layer_kwargs(parameters, i):
     """The per-layer arguments TTResNet gives layer ``i`` for ``parameters``."""
-    config = dict(parameters.tt_kwargs)
-    del config["stem_act_block_h"]
+    config = {k: v for k, v in parameters.tt_kwargs.items() if not k.startswith("stem_")}
     return TTResNet.layer_kwargs(i, **config)
 
 
