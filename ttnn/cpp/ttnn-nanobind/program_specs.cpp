@@ -10,7 +10,6 @@
 #include <functional>
 #include <optional>
 #include <string>
-#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -21,6 +20,7 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
+#include <reflect>
 
 #include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn-nanobind/metal2_casters.hpp"
@@ -52,42 +52,16 @@ namespace m2 = tt::tt_metal::experimental;
 
 namespace {
 
-// Compile-time field count of an aggregate via C++20 parenthesised aggregate initialisation:
-// T is constructible from N stand-in arguments exactly when it has at least N fields. The
-// stand-in converts to anything except T itself, so a copy constructor never counts as a field.
-// Known limits: a C-array member counts as one field per element only when braces are used, so
-// it is not counted here, and a struct with a user-declared constructor counts that
-// constructor's arity instead of its fields. Neither shape exists in the bound headers.
-template <typename T>
-struct AnyFieldOf {
-    template <typename U>
-        requires(!std::is_same_v<std::remove_cvref_t<U>, T>)
-    operator U() const;
-};
-
-template <typename T, std::size_t>
-using any_field_t = AnyFieldOf<T>;
-
-template <typename T, std::size_t N>
-constexpr bool constructible_from_n_fields_v = []<std::size_t... I>(std::index_sequence<I...>) {
-    return std::is_constructible_v<T, any_field_t<T, I>...>;
-}(std::make_index_sequence<N>{});
-
-// A field deliberately left unbound (deprecated, or holding a non-owning reference) still counts:
-// bump N and say why next to the binding.
-#define TTNN_M2_ASSERT_FIELD_COUNT(TYPE, N)                                                                    \
-    static_assert(                                                                                             \
-        constructible_from_n_fields_v<TYPE, N>,                                                                \
-        #TYPE " has fewer than " #N                                                                            \
-              " fields: a field was removed or renamed in tt_metal; update the binding "                       \
-              "below, the field list in tests/ttnn/unit_tests/operations/debug/test_metal2_bindings.py and "   \
-              "this count");                                                                                   \
-    static_assert(                                                                                             \
-        !constructible_from_n_fields_v<TYPE, N + 1>,                                                           \
-        #TYPE " has more than " #N                                                                             \
-              " fields: a field was added in tt_metal; bind it (or document why not) "                         \
-              "below, add it to tests/ttnn/unit_tests/operations/debug/test_metal2_bindings.py and bump this " \
-              "count")
+// Field-count sentinel: the struct's field count is pinned next to its binding, so a field
+// added or removed in tt_metal fails this build instead of silently going unbound. A field
+// deliberately left unbound (deprecated, or holding a non-owning reference) still counts: bump
+// N and say why next to the binding. Same idiom as reduce_op_device_operation.cpp.
+#define TTNN_M2_ASSERT_FIELD_COUNT(TYPE, N)                                                    \
+    static_assert(                                                                             \
+        reflect::size<TYPE>() == (N),                                                          \
+        #TYPE                                                                                  \
+        " gained or lost a field in tt_metal: update the binding below and the field list in " \
+        "tests/ttnn/unit_tests/operations/debug/test_metal2_bindings.py, then update this count")
 
 using DM1XX = m2::DataMovementHardwareConfig::DataMovement1XXConfig;
 using DM2XX = m2::DataMovementHardwareConfig::DataMovement2XXConfig;
