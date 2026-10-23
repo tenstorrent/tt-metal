@@ -12,8 +12,8 @@ Inherited chunking keeps arbitrary logical lengths and append positions valid.
 import math
 
 import ttnn
-from models.demos.muse_glimmer_30b_qb2.tt.optimized_decoder import OptimizedDecoder
 from models.demos.gpt_oss.tt.ccl import CCLManager
+from models.demos.muse_glimmer_30b_qb2.tt.optimized_decoder import OptimizedDecoder
 
 
 class MeshCCLManager(CCLManager):

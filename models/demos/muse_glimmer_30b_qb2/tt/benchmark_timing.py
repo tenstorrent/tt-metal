@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Passive completion audit: never invent a boundary for an unfinished prefill.
 
