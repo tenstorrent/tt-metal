@@ -202,23 +202,29 @@ class TTResLayer:
 
     def __call__(self, x):
         if self.per_camera:
-            return self._per_camera(x)
+            return self.run_per_camera([self], x)
         for block in self.layer:
             x = block(x)
         return x
 
-    def _per_camera(self, x):
-        rows = self.camera_rows
+    @staticmethod
+    def run_per_camera(layers, x):
+        """Consecutive per-camera ``layers`` on the DRAM batch ``x``, one camera at a time: its rows go
+        into L1, pass through every block of every layer there, and the last layer's output is
+        gathered back into one DRAM batch. Only that output crosses DRAM."""
+        first = layers[0]
+        rows = first.camera_rows
         outs = []
-        for camera in range(self.batch_size):
+        for camera in range(first.batch_size):
             y = ttnn.slice(
                 x,
                 [0, 0, camera * rows, 0],
-                [1, 1, (camera + 1) * rows, self.in_channels],
-                memory_config=self.layer[0].input_memory_config,
+                [1, 1, (camera + 1) * rows, first.in_channels],
+                memory_config=first.layer[0].input_memory_config,
             )
-            for block in self.layer:
-                y = block(y)
+            for layer in layers:
+                for block in layer.layer:
+                    y = block(y)
             outs.append(ttnn.sharded_to_interleaved(y, ttnn.DRAM_MEMORY_CONFIG))
             ttnn.deallocate(y)
         out = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -228,29 +234,40 @@ class TTResLayer:
 
 
 class TTCameraBottleneck:
-    """A stride-1 bottleneck without DCN on one camera, every tensor in L1.
+    """A bottleneck without DCN on one camera, every tensor in L1.
 
     The whole-batch block (TTBottleneck) moves each of its tensors through DRAM, several times over in
     its width slices and layout changes, which bounds it by DRAM bandwidth. One camera's
     activations fit in L1, so here they stay there: every tensor is height-sharded over the grid
     with the same rows per core, the 1x1 convs run as linears on those shards, conv2 as an L1
-    conv2d, and the residual add writes into conv3's output. ``conv_pth`` holds a DRAM layer's
-    weights (``create_resnet_parameters``): Linear weights for the 1x1 convs, conv2d's for conv2.
+    conv2d, and the residual add writes into conv3's output. A strided block (a layer's first,
+    whose 1x1 conv1 and downsample share the stride) takes that subsample of its input in L1 first.
+    ``conv_pth`` holds a DRAM layer's weights (``create_resnet_parameters``): Linear weights for the
+    1x1 convs, conv2d's for conv2.
     """
 
     def __init__(
         self, conv_args, conv_pth, device, fp32_acc=False, conv2_act_block_h=None, weights_dtype=ttnn.bfloat8_b
     ):
         assert "conv_offset" not in conv_pth.conv2, "a per-camera block has no DCN"
-        conv2_args = conv_args.conv2
-        for conv in (conv_args.conv1, conv2_args, *((conv_args.downsample[0],) if "downsample" in conv_pth else ())):
-            assert tuple(conv.stride) == (1, 1), f"a per-camera block runs at stride 1, got {tuple(conv.stride)}"
+        conv1_args, conv2_args = conv_args.conv1, conv_args.conv2
+        self.stride = tuple(conv1_args.stride)
+        assert tuple(conv2_args.stride) == (
+            1,
+            1,
+        ), f"a per-camera block's conv2 runs at stride 1, got {conv2_args.stride}"
+        if "downsample" in conv_pth:
+            assert tuple(conv_args.downsample[0].stride) == self.stride, "conv1 and the downsample share a stride"
+        else:
+            assert self.stride == (1, 1), f"a block without a downsample runs at stride 1, got {self.stride}"
         self.device = device
+        self.in_channels = conv1_args.in_channels
+        self.input_height, self.input_width = conv1_args.input_height, conv1_args.input_width
         self.height, self.width = conv2_args.input_height, conv2_args.input_width
         grid = device.compute_with_storage_grid_size()
         self.grid = grid
-        rows_t = math.ceil(self.height * self.width / ttnn.TILE_SIZE)
-        self.shard_tiles = math.ceil(rows_t / (grid.x * grid.y))
+        self.input_shard_tiles = self._shard_tiles(self.input_height * self.input_width)
+        self.shard_tiles = self._shard_tiles(self.height * self.width)
         self.fp32_acc = fp32_acc
         math_fidelity = ttnn.MathFidelity.HiFi2 if ttnn.get_arch_name() == "blackhole" else ttnn.MathFidelity.LoFi
         self.compute_config = ttnn.init_device_compute_kernel_config(
@@ -261,7 +278,7 @@ class TTCameraBottleneck:
             math_approx_mode=True,
         )
         relu = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
-        self.input_memory_config = self._sharded(conv_args.conv1.in_channels)
+        self.input_memory_config = self._sharded(self.in_channels, self.input_shard_tiles)
         self.conv1 = self._linear(conv_args.conv1, conv_pth.conv1, relu)
         self.conv3 = self._linear(conv_args.conv3, conv_pth.conv3, None)
         self.downsample = (
@@ -295,11 +312,16 @@ class TTCameraBottleneck:
         )
         ttnn.deallocate(self._conv2(warmup))
 
-    def _sharded(self, channels):
+    def _shard_tiles(self, rows):
+        """Tile rows per core for ``rows`` rows height-sharded over the grid."""
+        return math.ceil(math.ceil(rows / ttnn.TILE_SIZE) / (self.grid.x * self.grid.y))
+
+    def _sharded(self, channels, shard_tiles=None):
         """The block's layout: one camera's rows height-sharded over the grid, ``shard_tiles`` tile
-        rows per core."""
+        rows per core, the block's own by default."""
+        shard_tiles = self.shard_tiles if shard_tiles is None else shard_tiles
         return ttnn.create_sharded_memory_config(
-            shape=(self.shard_tiles * ttnn.TILE_SIZE, channels),
+            shape=(shard_tiles * ttnn.TILE_SIZE, channels),
             core_grid=ttnn.CoreGrid(y=self.grid.y, x=self.grid.x),
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -358,7 +380,27 @@ class TTCameraBottleneck:
         )
         return y
 
+    def _subsample(self, x):
+        """The block input at the block's stride, in the block's layout. ROW_MAJOR, where the
+        strided slice copies whole channel rows."""
+        rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(x)
+        flat = ttnn.sharded_to_interleaved(rm, ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(rm)
+        nhwc = [1, self.input_height, self.input_width, self.in_channels]
+        sub = ttnn.slice(
+            ttnn.reshape(flat, nhwc), [0, 0, 0, 0], nhwc, [1, *self.stride, 1], memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        ttnn.deallocate(flat)
+        tiled = ttnn.to_layout(ttnn.reshape(sub, (1, 1, self.height * self.width, self.in_channels)), ttnn.TILE_LAYOUT)
+        ttnn.deallocate(sub)
+        out = ttnn.to_memory_config(tiled, self._sharded(self.in_channels))
+        ttnn.deallocate(tiled)
+        return out
+
     def __call__(self, x):
+        if self.stride != (1, 1):
+            x = self._subsample(x)
         # The downsample first, while L1 holds only the block input: its output and conv3's are the
         # block's two wide tensors, and freeing a narrow one between them would split the room
         # the second needs.
@@ -698,11 +740,24 @@ class TTResNet:
         signpost(header="ResNet Stem End")
 
         outs = []
-        for i, res_layer in enumerate(self.res_layers):
-            signpost(header=f"ResNet Layer{i + 1} Start")
-            x = res_layer(x)
-            signpost(header=f"ResNet Layer{i + 1} End")
-            if i in self.out_indices:
+        i = 0
+        while i < self.num_layers:
+            # Consecutive per-camera layers run together, so the activations between them stay in
+            # L1; only the last one's output is gathered into DRAM.
+            j = i
+            while self.res_layers[i].per_camera and j + 1 < self.num_layers and self.res_layers[j + 1].per_camera:
+                j += 1
+            assert not set(range(i, j)) & set(self.out_indices), "only a per-camera run's last layer can be an output"
+            # A run of chained layers is one region, named by its span.
+            region = f"ResNet Layer{i + 1}" if i == j else f"ResNet Layer{i + 1}-{j + 1}"
+            signpost(header=f"{region} Start")
+            if self.res_layers[i].per_camera:
+                x = TTResLayer.run_per_camera(self.res_layers[i : j + 1], x)
+            else:
+                x = self.res_layers[i](x)
+            signpost(header=f"{region} End")
+            if j in self.out_indices:
                 outs.append(x)
+            i = j + 1
         signpost(header="TTNN ResNet Forward End")
         return tuple(outs)
