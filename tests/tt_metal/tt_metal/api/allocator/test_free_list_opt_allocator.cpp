@@ -6,6 +6,7 @@
 #include <gmock/gmock.h>
 #include <cstddef>
 #include <optional>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -107,6 +108,13 @@ TEST(FreeListOptTest, CPU_AllocateAtAddress) {
     auto e = allocator.allocate_at_address(0, 1_KiB);
     ASSERT_TRUE(e.has_value());
     ASSERT_EQ(e.value(), 0);
+}
+
+TEST(FreeListOptTest, CPU_AllocateAtAddressRejectsMisalignedAddress) {
+    auto allocator = tt::tt_metal::allocator::FreeListOpt(1_GiB, 0, 1_KiB, 1_KiB);
+    EXPECT_THROW(allocator.allocate_at_address(512, 1_KiB), std::runtime_error);
+    EXPECT_EQ(allocator.get_statistics().total_allocated_bytes, 0);
+    ASSERT_THAT(allocator.allocate_at_address(1_KiB, 1_KiB), ::testing::Optional(1_KiB));
 }
 
 TEST(FreeListOptTest, CPU_AllocateAtAddressInteractions) {
