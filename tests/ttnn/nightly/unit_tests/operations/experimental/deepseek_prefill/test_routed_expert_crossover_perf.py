@@ -73,8 +73,8 @@ _KNEE_TOKENS = 512
 MAX_TOKENS = _ISL_ALLOCATED_TOKENS
 WEIGHT_SCALE = 0.02
 
-# Best-of-both device duration in ns per (model, active): ONE sweep on a BH p150b (2026-09-15),
-# each case a median of _ITERS dispatches per op. Recalibrate on the perf runner (DDR-speed
+# Best-of-both device duration in ns per (model, active): the midpoint of three sweeps on a BH p150b
+# (2026-10-23), each case a median of _ITERS dispatches per op. Recalibrate on the perf runner (DDR-speed
 # dependent): each case logs an "RT-CAL" line in this dict's format. A case with no entry measures,
 # logs its line and skips rather than asserting -- an empty slot must not report green.
 #
@@ -82,48 +82,48 @@ WEIGHT_SCALE = 0.02
 # other, so the winner flips between runs while the minimum does not. The winner is logged per case
 # instead, against the one the model's threshold picks.
 _EXPECTED_NS: dict[tuple[str, int], int] = {
-    ("kimi_k2_7", 0): 3_027,
-    ("kimi_k2_7", 128): 94_711,
-    ("kimi_k2_7", 256): 116_901,
-    ("kimi_k2_7", 512): 161_644,
-    ("kimi_k2_7", 768): 224_481,
-    ("kimi_k2_7", 1024): 294_517,
-    ("kimi_k2_7", 2048): 580_342,
-    ("kimi_k2_7", 4096): 1_150_448,
-    ("kimi_k2_7", 5120): 1_435_379,
-    ("glm_53", 0): 3_055,
-    ("glm_53", 128): 85_743,
-    ("glm_53", 256): 108_096,
-    ("glm_53", 512): 143_664,
-    ("glm_53", 768): 196_770,
-    ("glm_53", 1024): 257_645,
-    ("glm_53", 2048): 507_790,
-    ("glm_53", 4096): 1_005_379,
-    ("glm_53", 5120): 1_258_299,
+    ("kimi_k2_7", 0): 1_867,
+    ("kimi_k2_7", 128): 87_636,
+    ("kimi_k2_7", 256): 112_661,
+    ("kimi_k2_7", 512): 149_541,
+    ("kimi_k2_7", 768): 198_755,
+    ("kimi_k2_7", 1024): 260_801,
+    ("kimi_k2_7", 2048): 509_041,
+    ("kimi_k2_7", 4096): 1_004_707,
+    ("kimi_k2_7", 5120): 1_252_154,
+    ("glm_53", 0): 1_864,
+    ("glm_53", 128): 78_288,
+    ("glm_53", 256): 102_060,
+    ("glm_53", 512): 131_879,
+    ("glm_53", 768): 174_690,
+    ("glm_53", 1024): 228_570,
+    ("glm_53", 2048): 443_845,
+    ("glm_53", 4096): 874_393,
+    ("glm_53", 5120): 1_093_465,
 }
 
 # Same measurement and key as _EXPECTED_NS, with the weights DRAM ND-sharded. Its own table because
 # the placement moves BOTH ops, so the minimum it gates is a different number -- and it moves them by
 # different amounts, which is the crossover itself shifting.
 _NDSHARD_EXPECTED_NS: dict[tuple[str, int], int] = {
-    ("kimi_k2_7", 0): 3_000,
-    ("kimi_k2_7", 128): 85_495,
-    ("kimi_k2_7", 256): 106_977,
-    ("kimi_k2_7", 512): 156_427,
-    ("kimi_k2_7", 768): 225_476,
-    ("kimi_k2_7", 1024): 294_425,
-    ("kimi_k2_7", 2048): 579_184,
-    ("kimi_k2_7", 4096): 1_149_750,
-    ("kimi_k2_7", 5120): 1_437_132,
-    ("glm_53", 0): 3_048,
-    ("glm_53", 128): 77_648,
-    ("glm_53", 256): 97_732,
-    ("glm_53", 512): 138_846,
-    ("glm_53", 768): 198_238,
-    ("glm_53", 1024): 257_887,
-    ("glm_53", 2048): 506_324,
-    ("glm_53", 4096): 1_006_251,
-    ("glm_53", 5120): 1_257_201,
+    ("kimi_k2_7", 0): 1_847,
+    ("kimi_k2_7", 128): 74_849,
+    ("kimi_k2_7", 256): 100_943,
+    ("kimi_k2_7", 512): 137_664,
+    ("kimi_k2_7", 768): 200_410,
+    ("kimi_k2_7", 1024): 265_532,
+    ("kimi_k2_7", 2048): 511_437,
+    ("kimi_k2_7", 4096): 1_001_561,
+    ("kimi_k2_7", 5120): 1_247_367,
+    ("glm_53", 0): 1_826,
+    ("glm_53", 128): 66_104,
+    ("glm_53", 256): 90_139,
+    ("glm_53", 512): 121_765,
+    ("glm_53", 768): 173_376,
+    ("glm_53", 1024): 232_393,
+    ("glm_53", 2048): 447_251,
+    ("glm_53", 4096): 875_507,
+    ("glm_53", 5120): 1_089_990,
 }
 
 
