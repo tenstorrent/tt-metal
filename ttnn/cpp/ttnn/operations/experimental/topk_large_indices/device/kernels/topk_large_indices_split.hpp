@@ -89,8 +89,7 @@ constexpr bool can_prefetch(const std::uint32_t num_chunks) {
 }
 
 // K 1024 and 2048 rows of two or more chunks run chunks 0 and 1 side by side up to stage 6 (HEAD_STEPS); slot 2 on
-// follows, with chunk 1's stages 7 and 8 two steps early. K 512 rows keep decode_step's order. A K 1024 row runs here
-// from three chunks (compute.cpp), so only K 2048 takes the paired head with exactly two.
+// follows, with chunk 1's stages 7 and 8 two steps early. K 512 rows keep decode_step's order.
 constexpr std::uint32_t HEAD_STEPS = 14;
 
 template <std::uint32_t K>

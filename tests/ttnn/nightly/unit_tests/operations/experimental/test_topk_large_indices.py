@@ -1669,3 +1669,63 @@ def test_topk_large_indices_metadata_values_share_one_cached_program(device, num
         assert max(entries) == min(entries)
     finally:
         device.clear_program_cache()
+
+
+def _make_ordered_winner_rows(num_rows: int, n: int, k: int, order: str, seed: int) -> torch.Tensor:
+    """k distinct winners at random positions of each row, zeros elsewhere. The winner values rise ("ascending") or
+    fall ("descending") with the position, or are shuffled ("random")."""
+    generator = torch.Generator().manual_seed(seed)
+    hi16 = (0x3F80 + np.arange(k, dtype=np.uint32)).astype(np.uint32)
+    winner_values = torch.from_numpy((hi16 << 16).view(np.float32).copy()).to(torch.bfloat16)
+    values = torch.zeros((num_rows, n), dtype=torch.bfloat16)
+    for row in range(num_rows):
+        positions = torch.randperm(n, generator=generator)[:k].sort().values
+        if order == "ascending":
+            row_values = winner_values
+        elif order == "descending":
+            row_values = winner_values.flip(0)
+        else:
+            row_values = winner_values[torch.randperm(k, generator=generator)]
+        values[row, positions] = row_values
+    return values
+
+
+@pytest.mark.parametrize("valid", ["full_width", "scalar_valid_length", "tensor_valid_length"])
+@pytest.mark.parametrize("order", ["ascending", "descending"])
+@pytest.mark.parametrize("layout", ["one_core", "whole_rows", "tree"])
+@pytest.mark.parametrize(
+    "k,n",
+    [(1024, 2048), (1024, 2048 - 9), (1024, 1024 + 100), (768, 2048 - 300)],
+    ids=["k1024_n2048", "k1024_trimmed", "k1024_short_second_chunk", "k768_trimmed"],
+)
+def test_topk_large_indices_k1024_two_chunk_rows_exact_indices(device, k, n, layout, order, valid):
+    # A K 1024 row of exactly two chunks runs split across MATH and PACK with the paired head. one_core holds three
+    # whole rows (the next row's first chunk is copied early), whole_rows gives every core two, and tree leaves
+    # rows over that split into column segments while the whole rows stay two chunks.
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    sub_core_grids = None
+    if layout == "one_core":
+        num_rows, sub_core_grids = 3, _rect_core_grid(0, 0, 0)
+    elif layout == "whole_rows":
+        num_rows = 2 * num_cores
+    else:
+        num_rows = num_cores + 5
+
+    # With a valid length the row is wider than the search: the winners fill the first n columns, and a third chunk
+    # of larger values beyond it must never show up.
+    width = n if valid == "full_width" else n + 1024
+    torch_input = torch.zeros((num_rows, width), dtype=torch.bfloat16)
+    torch_input[:, :n] = _make_ordered_winner_rows(num_rows, n, k, order, seed=n + k + num_rows)
+    if valid != "full_width":
+        stale_hi16 = (0x3F80 + k + np.arange(1024, dtype=np.uint32)).astype(np.uint32)
+        torch_input[:, n:] = torch.from_numpy((stale_hi16 << 16).view(np.float32).copy()).to(torch.bfloat16)
+
+    kwargs = {"sub_core_grids": sub_core_grids} if sub_core_grids is not None else {}
+    if valid == "scalar_valid_length":
+        kwargs["valid_length"] = n
+    elif valid == "tensor_valid_length":
+        kwargs["valid_length_tensor"] = _make_valid_length_metadata(device, n)
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, **kwargs)
+
+    _assert_topk_matches_torch(torch_input[:, :n], tt_indices, k)
