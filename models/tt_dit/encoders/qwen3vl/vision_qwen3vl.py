@@ -501,7 +501,12 @@ class Qwen3VlVisionMLP(Module):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.linear_fc1.forward(x)
-        x = ttnn.gelu(x) if self._act.startswith("gelu") else ttnn.silu(x)
+        if self._act in ("gelu_pytorch_tanh", "gelu_new"):
+            x = ttnn.gelu(x, variant=ttnn.GeluVariant.Tanh)
+        elif self._act.startswith("gelu"):
+            x = ttnn.gelu(x)
+        else:
+            x = ttnn.silu(x)
         # `RowParallelLinear` reduce-scatters, so its result is fractured on columns; the residual add
         # and the next LayerNorm both need the full width back (cf. `Qwen3VlMlp` in model_qwen3vl.py).
         return _row_parallel_seq_forward(self.linear_fc2, x, self._p)
@@ -865,11 +870,9 @@ class Qwen3VlVisionPatchMerger(Module):
     independently over `hidden_size`, while post-shuffle normalizes the concatenated group of four over
     `hidden_size * merge ** 2`. Different statistics, so the two are not interchangeable.
 
-    The reference uses `nn.GELU()` here -- the exact erf form -- where the block MLP uses
-    `gelu_pytorch_tanh`. Both map to `ttnn.gelu`'s default (accurate) mode: the two torch forms differ
-    by at most 4.7e-4, which is ~23x below the 1.1e-2 bf16 quantization noise floor, so the distinction
-    is not observable at this precision. Do not switch to `fast_and_approximate_mode=True`, which is
-    2.4e-2 and would be.
+    The reference uses `nn.GELU()` here -- the exact erf form, `ttnn.gelu`'s default -- where the
+    block MLP uses `gelu_pytorch_tanh` (`GeluVariant.Tanh`). Do not switch to
+    `fast_and_approximate_mode=True`: that is a piecewise-linear LUT (~2.4e-2 error), not tanh.
     """
 
     def __init__(

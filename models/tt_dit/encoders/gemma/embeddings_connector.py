@@ -68,12 +68,12 @@ class ConnectorBlock(Module):
             dim, num_heads, bias=True, dtype=ttnn.float32, mesh_device=mesh_device, mesh_axis=tp_axis
         )
 
-        # Feed-forward (GELU gated)
+        # Feed-forward (GELU gated); reference FeedForward uses "gelu-approximate"
         self.ff1 = ColParallelLinear(
             dim,
             ff_dim,
             bias=True,
-            activation_fn="gelu",
+            activation_fn="gelu_tanh",
             mesh_device=mesh_device,
             mesh_axis=tp_axis,
             dtype=lin_dtype,
