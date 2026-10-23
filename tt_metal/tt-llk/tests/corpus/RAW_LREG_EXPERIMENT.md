@@ -1,6 +1,58 @@
 # Raw LREG lifetime experiment — 2026-10-07
 
-## Current conclusion
+## SFPI-only integration status — 2026-10-23
+
+This local epoch retains upstream `0e540ef96caa`, not the moving latest main.
+The normal SFPI 7.89.0[1050] release pin remains a compatibility default;
+it does not select or validate the experimental compiler/API stack.
+
+The LLK harness selects **both** its driver and headers through `tests/sfpi`
+(`compiler/bin` and `include`). The tested local overlay is
+`/tmp/alignment-sfpi-pkg.BFJlYE`: its SFPI headers resolve to
+`/home/ttuser/sfpi-align-20261022/include`, with matching generated builtin
+declarations. It is a local overlay, not a new release artifact. Extra `-B`
+options select the backend but do not replace those headers. The setup script
+downloads the pinned release and can replace an experimental overlay.
+
+Use the existing target-only ABI preflight first: it sets
+`TT_LLK_REQUIRE_RAW_LREG_METADATA` for WH/BH/QSR Tensix and checks actual
+metadata/ownership plus rejection by an unsupported host compiler. Do not put
+that define in the harness's global extra options: they also reach scalar
+BRISC, which correctly has no SFPU effect builtin. The recorded local commands
+below use the existing test environment and do not install or download anything:
+
+```sh
+set -e
+cd /home/ttuser/tt-metal-sfpi-clean.JiCHaV/tt_metal/tt-llk/tests
+abi_output=$(mktemp -d /tmp/sfpi-abi.XXXXXX)
+COMPILER_PATH=/home/ttuser/sfpi-gcc-build.gwrxQL/gcc/ \
+CPLUS_INCLUDE_PATH=/tmp/alignment-tensix-decls.Cgq80f:/opt/tenstorrent/sfpi/compiler/riscv-tt-elf/include/c++/15.1.0:/opt/tenstorrent/sfpi/compiler/riscv-tt-elf/include/c++/15.1.0/riscv-tt-elf:/opt/tenstorrent/sfpi/compiler/riscv-tt-elf/include \
+bash corpus/test_raw_lreg_metadata_abi.sh \
+  /home/ttuser/sfpi-gcc-build.gwrxQL/gcc/xg++ \
+  /home/ttuser/sfpi-align-20261022/include "$abi_output"
+
+CHIP_ARCH=blackhole \
+LLK_HOME=/home/ttuser/tt-metal-sfpi-clean.JiCHaV/tt_metal/tt-llk \
+PYTHONPATH=/tmp/alignment-llk-deps.yNAmql:/home/ttuser/tt-metal-sfpi-clean.JiCHaV/tt_metal/tt-llk/tests/python_tests:/home/ttuser/tt-metal-sfpi-clean.JiCHaV/tt_metal/tt-llk/tools/python \
+TT_LLK_EXTRA_COMPILER_OPTIONS='-B/home/ttuser/sfpi-gcc-build.gwrxQL/gcc/ -B/opt/tenstorrent/sfpi/compiler/bin/' \
+RUNNER_TEMP="$(mktemp -d /tmp/sfpi-clean-silicon.XXXXXX)" \
+/home/ttuser/tt-metal/tt_metal/tt-llk/tests/.venv/bin/python -m pytest -q \
+  python_tests/test_sfpu_binary_campaign.py python_tests/test_topk_campaign.py \
+  python_tests/test_sfpu_unary_campaign.py python_tests/test_raw_lreg_device.py \
+  -k 'test_fresh_cpp_binary_max_min or (test_topk_threaded_merge_exact and Float16_b and Descending and ascending and 32 and not stress) or (test_reciprocal_semantic and semantic and bf16-dst16 and No) or config_handoff'
+```
+
+This epoch passed the ABI preflight, host/target metadata gates and these 14
+selected Blackhole correctness cases; it is not a full silicon sweep or timing
+result. Header tree: `ee378aa6c6c7f62ce503d044142b40f5cc4f9c7b`.
+Actual `cc1plus` SHA256:
+`a6df6f810bb96ce6c0944d05f212b3222ab7bfc10e60511d53b909f9c290053a`.
+The source/ELF/build paths and initial unreproduced QSR probe failure are retained
+in `/home/ttuser/sfpi-alignment.UbW4Dy/sfpi-direct-metal-clean-receipt.json`;
+the scoped probe investigation is `/tmp/sfpi-clean-qsr-metadata.88oex9`.
+Capability macros alone do not attest this exact corrected compiler revision.
+
+## Historical conclusion (2026-10-07)
 
 Existing read/write builtins can express a working explicit-state alternative
 for the tested regions, even with the live-in pass disabled. Independent pairs
