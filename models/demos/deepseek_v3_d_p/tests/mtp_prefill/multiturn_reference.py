@@ -4,7 +4,8 @@
 
 """The free-running CPU reference ``test_mtp_multiturn_pcc`` checks, and its stored copy.
 
-Causal, so one run over the longest conversation serves every schedule. Build the stored copy (pretrained) with
+Causal, so one run over the longest conversation serves every schedule. A pretrained case that finds no stored copy
+computes every level and stores it when ``$TT_GLM53_MTP_REF_CACHE`` is writable; to build it without a device, run
 ``python3 -m models.demos.deepseek_v3_d_p.tests.mtp_prefill.multiturn_reference``.
 """
 
@@ -124,13 +125,27 @@ def load_reference(path: Path) -> dict:
     return torch.load(path, mmap=True, weights_only=True)
 
 
+def prepare_store(path: Path) -> bool:
+    """Whether a new file can go at ``path``. A missing directory is created open to all: CI and people share it."""
+    try:
+        if not path.parent.is_dir():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.parent.chmod(0o777)
+        return os.access(path.parent, os.W_OK | os.X_OK)
+    except OSError:
+        return False
+
+
 def save_reference(ref: dict, path: Path) -> None:
-    """Write under a temporary name in the same directory, then rename: a reader never sees a partial file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """Write under a temporary name, then hard-link: a reader never sees a partial file, and a stored copy, which
+    other hosts may have mapped, is never replaced."""
     tmp = path.with_name(f".{path.name}.{socket.gethostname()}.{os.getpid()}.tmp")
     try:
         torch.save(ref, tmp)
-        os.replace(tmp, path)
+        tmp.chmod(0o644)  # readable by all, whatever the writer's umask
+        os.link(tmp, path)
+    except FileExistsError:
+        pass  # another run stored it first
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -142,6 +157,11 @@ def main():
     mtp_cfg = MTPConfig.from_pretrained(checkpoint)
     layer_idx = mtp_cfg.mtp_layer_idx
     path = stored_reference_path(layer_idx)
+    if path.exists():
+        logger.info(f"{path} is already stored; delete it to rebuild")
+        return
+    if not prepare_store(path):
+        raise SystemExit(f"cannot write to {path.parent}")
     t0 = time.monotonic()
     config_only = glm_5_3_hf_config()
     mtp_state_dict = {k: v.to(torch.bfloat16) for k, v in load_mtp_state_dict(checkpoint, layer_idx=layer_idx).items()}
@@ -155,7 +175,7 @@ def main():
         num_levels=MAX_LEVELS,
     )
     save_reference(ref, path)
-    logger.info(f"wrote {path}, {path.stat().st_size / 2**30:.2f} GiB, in {time.monotonic() - t0:.0f}s")
+    logger.info(f"stored {path}, {path.stat().st_size / 2**30:.2f} GiB, in {time.monotonic() - t0:.0f}s")
 
 
 if __name__ == "__main__":
