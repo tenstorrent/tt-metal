@@ -194,7 +194,7 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
     // -- only its element count must be (enforced by can_alias_shards).
     const uint32_t shard_tiles = can_alias_shards ? static_cast<uint32_t>(shard_of(grad_output)->numel() / TILE_HW) : 0;
 
-    IDevice* device = input.device();
+    auto* device = input.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
