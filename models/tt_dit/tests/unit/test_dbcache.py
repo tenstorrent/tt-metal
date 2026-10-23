@@ -41,7 +41,7 @@ def test_max_continuous_cached_steps_forces_compute():
     assert _run(ctx, [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]) == ["x", "C", "C", "x", "C", "C", "x"]
 
 
-def test_computed_step_resets_continuous_cache_streak():
+def test_cache_streak_restarts_after_computed_step():
     ctx = DBCacheContext(DBCacheConfig(max_warmup_steps=1, residual_diff_threshold=0.1, max_continuous_cached_steps=2))
     # A computed step breaks the streak (as in cache-dit), so cache hits separated by computed steps
     # never exhaust the cap: the cap only bites on the third consecutive cached step.
