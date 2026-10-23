@@ -36,8 +36,10 @@ inline bool bf16_dest_erfinv() {
     return false;
 #endif
 }
+// Each call records replay slots 0-31, overwriting what an init recorded there (matmul and reduce
+// record from replay_buf_offset = 16).
 template <int ITERATIONS = 8>
-inline void calculate_erfinv_bf16() {
+__attribute__((noinline)) inline void calculate_erfinv_bf16() {
     ckernel::sfpu::bf16::erfinv::calculate<ckernel::sfpu::ErfinvBf16Config, ITERATIONS>();
 }
 
