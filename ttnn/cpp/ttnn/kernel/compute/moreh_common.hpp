@@ -50,10 +50,24 @@ template <uint32_t Dfb>
 inline constexpr auto moreh_output =
     ckl::output(Dfb, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, moreh_data_format_reconfig);
 
+// Quasar: the packer's L1 destination (BFD) is baked by pack_init; pack_reconfig_data_format only
+// reprograms the format gasket, and the chain / reduce helpers never re-run pack_init. Every helper
+// below that packs to a DFB retargets the packer first, else pack_tile trips the LLK re-init guard
+// (or, with asserts off, keeps writing into the previous output ring). No-op on WH/BH.
+template <uint32_t DfbOut>
+ALWI void moreh_pack_retarget() {
+#ifdef ARCH_QUASAR
+    pack_init(DfbOut);
+#endif
+}
+
 template <typename IDFB>
 ALWI void pack_tile_with_dt(uint32_t ifrom_dst, IDFB icb) {
 #if defined FP32_DEST_ACC_EN
     pack_reconfig_data_format(icb.get_id());
+#endif
+#ifdef ARCH_QUASAR
+    pack_init(icb.get_id());  // see moreh_pack_retarget
 #endif
     pack_tile(ifrom_dst, icb.get_id());
 }
@@ -184,6 +198,7 @@ ALWI void mul_tiles_to_dfb(
     uint32_t itile1 = 0,
     uint32_t pop0 = 1,
     uint32_t pop1 = 1) {
+    moreh_pack_retarget<DfbOut>();
     dfb0.wait_front(itile0 + 1);
     dfb1.wait_front(itile1 + 1);
 
@@ -209,6 +224,7 @@ ALWI void mul_tiles_and_negative_to_dfb(
     uint32_t itile1 = 0,
     uint32_t pop0 = 1,
     uint32_t pop1 = 1) {
+    moreh_pack_retarget<DfbOut>();
     dfb0.wait_front(itile0 + 1);
     dfb1.wait_front(itile1 + 1);
 
@@ -238,6 +254,7 @@ ALWI void mul_tiles_and_mask_tile_to_dfb(
     uint32_t pop0 = 1,
     uint32_t pop1 = 1,
     uint32_t popm = 1) {
+    moreh_pack_retarget<DfbOut>();
     dfb0.wait_front(itile0 + 1);
     dfb1.wait_front(itile1 + 1);
     dfb_mask.wait_front(mtile + 1);
@@ -269,6 +286,7 @@ ALWI void mul_tiles_bcast_to_dfb(
     uint32_t itile1 = 0,
     uint32_t pop0 = 1,
     uint32_t pop1 = 1) {
+    moreh_pack_retarget<DfbOut>();
     dfb0.wait_front(itile0 + 1);
     dfb1.wait_front(itile1 + 1);
 
@@ -295,6 +313,7 @@ ALWI void mul_tiles_bcast_rows_to_dfb(
     uint32_t itile1 = 0,
     uint32_t pop0 = 1,
     uint32_t pop1 = 1) {
+    moreh_pack_retarget<DfbOut>();
     mul_tiles_bcast_to_dfb<ckl::BroadcastDim::Row, Dfb0, Dfb1, DfbOut>(dfb0, dfb1, dfb_out, itile0, itile1, pop0, pop1);
 }
 
@@ -307,11 +326,13 @@ ALWI void mul_tiles_bcast_cols_to_dfb(
     uint32_t itile1 = 0,
     uint32_t pop0 = 1,
     uint32_t pop1 = 1) {
+    moreh_pack_retarget<DfbOut>();
     mul_tiles_bcast_to_dfb<ckl::BroadcastDim::Col, Dfb0, Dfb1, DfbOut>(dfb0, dfb1, dfb_out, itile0, itile1, pop0, pop1);
 }
 
 template <uint32_t DfbIn, uint32_t DfbOut>
 ALWI void copy_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
+    moreh_pack_retarget<DfbOut>();
     dfb_in.wait_front(itile + 1);
 
     ckl::eltwise_chain(
@@ -324,9 +345,9 @@ ALWI void copy_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint
     }
 }
 
-#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
 template <uint32_t DfbIn, uint32_t DfbOut>
 ALWI void sign_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
+    moreh_pack_retarget<DfbOut>();
     dfb_in.wait_front(itile + 1);
 
     ckl::eltwise_chain(
@@ -339,7 +360,6 @@ ALWI void sign_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint
         dfb_in.pop_front(pop);
     }
 }
-#endif  // !ARCH_QUASAR
 
 template <uint32_t Dfb0, uint32_t Dfb1, uint32_t DfbOut>
 ALWI void add_tiles_to_dfb(
@@ -350,6 +370,7 @@ ALWI void add_tiles_to_dfb(
     uint32_t itile1 = 0,
     uint32_t pop0 = 1,
     uint32_t pop1 = 1) {
+    moreh_pack_retarget<DfbOut>();
     dfb0.wait_front(itile0 + 1);
     dfb1.wait_front(itile1 + 1);
 
@@ -375,6 +396,7 @@ ALWI void mask_tile_to_dfb(
     uint32_t mtile = 0,
     uint32_t pop = 1,
     uint32_t popm = 1) {
+    moreh_pack_retarget<DfbOut>();
     dfb_in.wait_front(itile + 1);
     dfb_mask.wait_front(mtile + 1);
 
@@ -406,6 +428,7 @@ ALWI void mask_posinf_tile_to_dfb(
     uint32_t mtile = 0,
     uint32_t pop = 1,
     uint32_t popm = 1) {
+    moreh_pack_retarget<DfbOut>();
     dfb_in.wait_front(itile + 1);
     dfb_mask.wait_front(mtile + 1);
 
@@ -433,6 +456,7 @@ ALWI void sub_tiles_bcast_to_dfb(
     uint32_t itile1 = 0,
     uint32_t pop0 = 1,
     uint32_t pop1 = 1) {
+    moreh_pack_retarget<DfbOut>();
     dfb0.wait_front(itile0 + 1);
     dfb1.wait_front(itile1 + 1);
 
@@ -459,6 +483,7 @@ ALWI void sub_tiles_bcast_cols_to_dfb(
     uint32_t itile1 = 0,
     uint32_t pop0 = 1,
     uint32_t pop1 = 1) {
+    moreh_pack_retarget<DfbOut>();
     sub_tiles_bcast_to_dfb<ckl::BroadcastDim::Col, Dfb0, Dfb1, DfbOut>(dfb0, dfb1, dfb_out, itile0, itile1, pop0, pop1);
 }
 
@@ -471,6 +496,7 @@ ALWI void sub_tiles_bcast_rows_to_dfb(
     uint32_t itile1 = 0,
     uint32_t pop0 = 1,
     uint32_t pop1 = 1) {
+    moreh_pack_retarget<DfbOut>();
     sub_tiles_bcast_to_dfb<ckl::BroadcastDim::Row, Dfb0, Dfb1, DfbOut>(dfb0, dfb1, dfb_out, itile0, itile1, pop0, pop1);
 }
 
@@ -483,12 +509,14 @@ ALWI void sub_tiles_to_dfb(
     uint32_t itile1 = 0,
     uint32_t pop0 = 1,
     uint32_t pop1 = 1) {
+    moreh_pack_retarget<DfbOut>();
     sub_tiles_bcast_to_dfb<ckl::BroadcastDim::None, Dfb0, Dfb1, DfbOut>(
         dfb0, dfb1, dfb_out, itile0, itile1, pop0, pop1);
 }
 
 template <bool Negative, uint32_t DfbIn, uint32_t DfbOut>
 ALWI void exp_tile_to_dfb_impl(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
+    moreh_pack_retarget<DfbOut>();
     dfb_in.wait_front(itile + 1);
 
     if constexpr (Negative) {
@@ -513,11 +541,13 @@ ALWI void exp_tile_to_dfb_impl(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, 
 
 template <uint32_t DfbIn, uint32_t DfbOut>
 ALWI void exp_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
+    moreh_pack_retarget<DfbOut>();
     exp_tile_to_dfb_impl<false, DfbIn, DfbOut>(dfb_in, dfb_out, itile, pop);
 }
 
 template <uint32_t DfbIn, uint32_t DfbOut>
 ALWI void rexp_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
+    moreh_pack_retarget<DfbOut>();
     exp_tile_to_dfb_impl<true, DfbIn, DfbOut>(dfb_in, dfb_out, itile, pop);
 }
 
@@ -530,6 +560,7 @@ ALWI void exp_tile_and_mask_tile_to_dfb_impl(
     uint32_t mtile = 0,
     uint32_t pop = 1,
     uint32_t popm = 1) {
+    moreh_pack_retarget<DfbOut>();
     dfb_in.wait_front(itile + 1);
     dfb_mask.wait_front(mtile + 1);
 
@@ -569,6 +600,7 @@ ALWI void exp_tile_and_mask_tile_to_dfb(
     uint32_t mtile = 0,
     uint32_t pop = 1,
     uint32_t popm = 1) {
+    moreh_pack_retarget<DfbOut>();
     exp_tile_and_mask_tile_to_dfb_impl<false, DfbIn, DfbMask, DfbOut>(
         dfb_in, dfb_mask, dfb_out, itile, mtile, pop, popm);
 }
@@ -582,12 +614,14 @@ ALWI void rexp_tile_and_mask_tile_to_dfb(
     uint32_t mtile = 0,
     uint32_t pop = 1,
     uint32_t popm = 1) {
+    moreh_pack_retarget<DfbOut>();
     exp_tile_and_mask_tile_to_dfb_impl<true, DfbIn, DfbMask, DfbOut>(
         dfb_in, dfb_mask, dfb_out, itile, mtile, pop, popm);
 }
 
 template <uint32_t DfbIn, uint32_t DfbOut>
 ALWI void recip_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
+    moreh_pack_retarget<DfbOut>();
     dfb_in.wait_front(itile + 1);
 
     ckl::eltwise_chain(
@@ -601,9 +635,9 @@ ALWI void recip_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uin
     }
 }
 
-#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
 template <uint32_t DfbIn, uint32_t DfbOut>
 ALWI void log_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint32_t itile = 0, uint32_t pop = 1) {
+    moreh_pack_retarget<DfbOut>();
     dfb_in.wait_front(itile + 1);
 
     ckl::eltwise_chain(
@@ -616,9 +650,8 @@ ALWI void log_tile_to_dfb(DataflowBuffer& dfb_in, DataflowBuffer& dfb_out, uint3
         dfb_in.pop_front(pop);
     }
 }
-#endif  // !ARCH_QUASAR
 
-#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
+#ifndef ARCH_QUASAR  // PowerIterative has no Quasar LLK yet (power_iterative_tile is BH/WH-only)
 template <
     bool AbsX,
     bool RecipFinal,
@@ -637,6 +670,7 @@ ALWI void power_tile_to_dfb_impl(
     DataflowBuffer& dfb_out,
     uint32_t p,
     bool p_is_negative) {
+    moreh_pack_retarget<DfbOut>();
     // x^p
     ckl::eltwise_chain(
         ckl::IterationShape::one_tile(),
@@ -681,7 +715,7 @@ ALWI void power_tile_to_dfb_impl(
 }
 #endif  // !ARCH_QUASAR
 
-#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
+#ifndef ARCH_QUASAR  // PowerIterative has no Quasar LLK yet (power_iterative_tile is BH/WH-only)
 template <
     uint32_t DfbX,
     uint32_t DfbXpow,
@@ -703,7 +737,7 @@ ALWI void power_tile_to_dfb(
 }
 #endif  // !ARCH_QUASAR
 
-#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
+#ifndef ARCH_QUASAR  // PowerIterative has no Quasar LLK yet (power_iterative_tile is BH/WH-only)
 template <
     uint32_t DfbX,
     uint32_t DfbXpow,
@@ -725,7 +759,7 @@ ALWI void power_tile_with_abs_x_to_dfb(
 }
 #endif  // !ARCH_QUASAR
 
-#ifndef ARCH_QUASAR  // compute_kernel_lib Abs, Sign, Log and PowerIterative are not ported to Quasar
+#ifndef ARCH_QUASAR  // PowerIterative has no Quasar LLK yet (power_iterative_tile is BH/WH-only)
 template <
     uint32_t DfbX,
     uint32_t DfbXpow,
@@ -973,6 +1007,9 @@ ALWI void copy_tile_to_dst(IDFB icb, uint32_t itile = 0, uint32_t dst = 0, bool 
 
 template <typename ODFB>
 ALWI void pack_tile_from_dst(ODFB ocb, uint32_t dst = 0) {
+#ifdef ARCH_QUASAR
+    pack_init(ocb.get_id());  // see moreh_pack_retarget
+#endif
     constexpr uint32_t onetile = 1;
     ocb.reserve_back(onetile);
     pack_reconfig_data_format(ocb.get_id());

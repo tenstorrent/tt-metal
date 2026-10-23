@@ -34,6 +34,13 @@ template <
 ALWI void calc_numeric_stable(DFB0& dfb_in_obj, DFB1& dfb_max_scaler_obj, DFB2& dfb_max_obj, DFB3& dfb_out_obj) {
     // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
     // Note: The library handles waiting for scaler tile internally
+#ifdef ARCH_QUASAR
+    // Quasar: the packer's L1 destination (BFD) is baked by pack_init; pack_reconfig_data_format only
+    // reprograms the format gasket, and the chain / reduce helpers never re-run pack_init. Retarget the
+    // packer at every output switch, else pack_tile trips the LLK re-init guard (or, with asserts off,
+    // keeps writing into the previous output ring and this DFB is never written).
+    pack_init(dfb_max_id);
+#endif
     compute_kernel_lib::reduce<
         PoolType::MAX,
         ReduceDim::REDUCE_ROW,
@@ -43,6 +50,9 @@ ALWI void calc_numeric_stable(DFB0& dfb_in_obj, DFB1& dfb_max_scaler_obj, DFB2& 
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(compute_kernel_lib::ReduceInputBlockShape::row(block_w));
 
     // calculate x-max(x)
+#ifdef ARCH_QUASAR
+    pack_init(dfb_out_id);  // Quasar: retarget the packer from dfb_max back to the exps ring (see above)
+#endif
     ckl::eltwise_chain(
         ckl::IterationShape::tiles(block_w).block_size(subblock_w),
         ckl::BinaryFpu<
@@ -101,6 +111,23 @@ void kernel_main() {
     [[maybe_unused]] constexpr std::uint32_t block_w_unpadded = block_w;
 #endif
 
+#ifdef ARCH_QUASAR
+    // in0 borrows the resident input shard and is bound to this kernel as both producer and consumer;
+    // nothing ever pushes it, which Gen1 tolerates (the per-row pops below only move a local read
+    // pointer) but underflows Quasar's tile counters. Post the whole shard once up front; dummy_pack is
+    // the no-write PACR that TEN-4746 requires between reserve_back and push_back (same idiom as
+    // rotary_embedding_llama_sharded.cpp).
+    {
+        DataflowBuffer dfb_in0_obj(dfb::in0);
+        dfb_in0_obj.reserve_back(block_h * block_w);
+        dummy_pack(dfb::in0);
+        dfb_in0_obj.push_back(block_h * block_w);
+        // The push lands on the pack thread; wait on the unpack thread so the first row's pop (the
+        // chains below wait on nothing) cannot overtake it.
+        dfb_in0_obj.wait_front(block_h * block_w);
+    }
+#endif
+
 #ifdef FUSED_SCALE_MASK
     DataflowBuffer dfb_fused_scale_obj(dfb::fused_scale);
     DataflowBuffer dfb_fused_attn_obj(dfb::fused_attn);
@@ -117,6 +144,9 @@ void kernel_main() {
         dummy_pack(dfb::in0);
         dfb_in0_obj.push_back(block_w);
 #ifdef FUSED_SCALE_MASK
+#ifdef ARCH_QUASAR
+        pack_init(dfb::scale_mask);  // Quasar: retarget the packer to the scale-mask ring (see calc_numeric_stable)
+#endif
         if constexpr (block_w_unpadded > 0) {
             ckl::mul<
                 ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
@@ -145,6 +175,9 @@ void kernel_main() {
                 dfb_scale_mask_obj});
 #endif
 
+#ifdef ARCH_QUASAR
+        pack_init(dfb_x_id);  // Quasar: retarget the packer from dfb::scale_mask to dfb_x (see calc_numeric_stable)
+#endif
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(block_w).block_size(subblock_w),
             ckl::BinaryFpu<
@@ -200,6 +233,9 @@ void kernel_main() {
         calc_numeric_stable<block_w, subblock_w, dfb::in0, dfb::max_scaler, dfb::max, dfb::exps>(
             dfb_in0_obj, dfb_max_scaler_obj, dfb_max_obj, dfb_exps_obj);
 #else
+#ifdef ARCH_QUASAR
+        pack_init(dfb::exps);  // Quasar: retarget the packer (the previous row ended on dfb::out0)
+#endif
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(block_w).block_size(subblock_w),
             ckl::CopyTile<
@@ -214,6 +250,9 @@ void kernel_main() {
         // PRELOADED is correct for sharded - all tiles loaded at once
         // Auto-detects FP32 mode from ENABLE_FP32_DEST_ACC define
         dfb_exps_obj.wait_front(block_w);
+#ifdef ARCH_QUASAR
+        pack_init(dfb::recip_sum_exps);  // Quasar: retarget the packer to the reduce output (see calc_numeric_stable)
+#endif
         compute_kernel_lib::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
@@ -235,6 +274,9 @@ void kernel_main() {
                 }
             });
 
+#ifdef ARCH_QUASAR
+        pack_init(dfb::out0);  // Quasar: retarget the packer to the output (see calc_numeric_stable)
+#endif
         ckl::mul<
             ckl::input(dfb::exps, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
             ckl::input(dfb::recip_sum_exps, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
