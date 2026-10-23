@@ -48,6 +48,8 @@ inline void _llk_pack_gather_compress_mop_config_(const std::uint32_t buf_desc_i
 inline void _llk_pack_gather_compress_init_(const std::uint32_t buf_desc_id, const std::uint32_t num_vectors = 1)
 {
     static_assert(TENSIX_GATHER == 1, "Gather/compress needs a Tensix built with the gather unit (TENSIX_GATHER); build for the saturn variant");
+    TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, p_pacr::PACK0, 0);
+    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_FACE_ROW_SEL, p_pacr::PACK0, 0);
     _llk_pack_gather_compress_mop_config_(buf_desc_id, num_vectors);
 }
 
