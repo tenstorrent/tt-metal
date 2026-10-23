@@ -129,53 +129,72 @@ LINEAR_CASES = {
 }
 
 
-@pytest.mark.parametrize("preset", PRESETS)
-@pytest.mark.parametrize("case", list(LINEAR_CASES))
-def test_wan_linear(device, preset, case):
-    K, N, approx, gelu = LINEAR_CASES[case]
-    M = PRESET_M[preset]
-    activation = ttnn.UnaryOpType.GELU_TANH if gelu else None
-    call, (x, w, b) = linear_case(device, M, K, N, approx, activation)
-    out = ttnn.to_torch(call())
-    check_quality(torch_linear(x, w, b, gelu), out)
-
-
-@pytest.mark.parametrize("preset", PRESETS)
-def test_wan_qkv_split(device, preset):
-    M = PRESET_M[preset]
-    K, N, chunks = DIM, QKV_N, 3
+def split_case(device, M, K, N, chunks):
     x, w, b = torch_inputs(M, K, N)
     tt_x, tt_w, tt_b = to_tt(device, x), to_tt(device, w), to_tt(device, b)
-    outs = ttnn.experimental.minimal_matmul_split(
-        tt_x,
-        tt_w,
-        chunks=chunks,
-        dim=-1,
-        bias_tensor=tt_b,
-        compute_kernel_config=compute_config(device, True),
-        config=matmul_config(device, M, K, N),
-    )
-    golden = torch.chunk(torch_linear(x, w, b), chunks, dim=-1)
-    assert len(outs) == chunks
+    cfg = matmul_config(device, M, K, N)
+    ckc = compute_config(device, True)
+
+    def call():
+        return ttnn.experimental.minimal_matmul_split(
+            tt_x, tt_w, chunks=chunks, dim=-1, bias_tensor=tt_b, compute_kernel_config=ckc, config=cfg
+        )
+
+    return call, (x, w, b)
+
+
+# The torch references and device uploads live in fixtures so that the per-test timeout covers only the op and the
+# comparison.
+@pytest.fixture
+def linear_prepared(device, preset, case):
+    K, N, approx, gelu = LINEAR_CASES[case]
+    activation = ttnn.UnaryOpType.GELU_TANH if gelu else None
+    call, (x, w, b) = linear_case(device, PRESET_M[preset], K, N, approx, activation)
+    return call, torch_linear(x, w, b, gelu)
+
+
+@pytest.fixture
+def qkv_prepared(device, preset):
+    call, (x, w, b) = split_case(device, PRESET_M[preset], DIM, QKV_N, 3)
+    return call, torch.chunk(torch_linear(x, w, b), 3, dim=-1)
+
+
+@pytest.fixture
+def cross_kv_prepared(device):
+    call, (x, w, b) = split_case(device, CROSS_KV_M, DIM, CROSS_KV_N, 2)
+    return call, torch.chunk(torch_linear(x, w, b), 2, dim=-1)
+
+
+@pytest.fixture
+def out_addcmul_prepared(device, preset):
+    return addcmul_case(device, PRESET_M[preset], DIM, OUT_N)
+
+
+@pytest.fixture
+def out_addcmul_full_gate_prepared(device):
+    return addcmul_case(device, PRESET_M["2x4"], DIM, OUT_N, full_gate=True)
+
+
+@pytest.mark.parametrize("preset", PRESETS)
+@pytest.mark.parametrize("case", list(LINEAR_CASES))
+def test_wan_linear(linear_prepared, preset, case):
+    call, golden = linear_prepared
+    check_quality(golden, ttnn.to_torch(call()))
+
+
+@pytest.mark.parametrize("preset", PRESETS)
+def test_wan_qkv_split(qkv_prepared, preset):
+    call, golden = qkv_prepared
+    outs = call()
+    assert len(outs) == len(golden)
     for g, o in zip(golden, outs):
         check_quality(g, ttnn.to_torch(o))
 
 
-def test_wan_cross_kv_split(device):
-    M, K, N, chunks = CROSS_KV_M, DIM, CROSS_KV_N, 2
-    x, w, b = torch_inputs(M, K, N)
-    tt_x, tt_w, tt_b = to_tt(device, x), to_tt(device, w), to_tt(device, b)
-    outs = ttnn.experimental.minimal_matmul_split(
-        tt_x,
-        tt_w,
-        chunks=chunks,
-        dim=-1,
-        bias_tensor=tt_b,
-        compute_kernel_config=compute_config(device, True),
-        config=matmul_config(device, M, K, N),
-    )
-    golden = torch.chunk(torch_linear(x, w, b), chunks, dim=-1)
-    assert len(outs) == chunks
+def test_wan_cross_kv_split(cross_kv_prepared):
+    call, golden = cross_kv_prepared
+    outs = call()
+    assert len(outs) == len(golden)
     for g, o in zip(golden, outs):
         check_quality(g, ttnn.to_torch(o))
 
@@ -199,13 +218,13 @@ def addcmul_case(device, M, K, N, full_gate=False):
 
 
 @pytest.mark.parametrize("preset", PRESETS)
-def test_wan_out_addcmul(device, preset):
-    call, golden = addcmul_case(device, PRESET_M[preset], DIM, OUT_N)
+def test_wan_out_addcmul(out_addcmul_prepared, preset):
+    call, golden = out_addcmul_prepared
     check_quality(golden, ttnn.to_torch(call()))
 
 
-def test_wan_out_addcmul_full_gate(device):
-    call, golden = addcmul_case(device, PRESET_M["2x4"], DIM, OUT_N, full_gate=True)
+def test_wan_out_addcmul_full_gate(out_addcmul_full_gate_prepared):
+    call, golden = out_addcmul_full_gate_prepared
     check_quality(golden, ttnn.to_torch(call()))
 
 
@@ -227,34 +246,13 @@ def test_wan_linear_perf(device, preset, case):
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("preset", PRESETS)
 def test_wan_qkv_split_perf(device, preset):
-    M = PRESET_M[preset]
-    K, N = DIM, QKV_N
-    x, w, b = torch_inputs(M, K, N)
-    tt_x, tt_w, tt_b = to_tt(device, x), to_tt(device, w), to_tt(device, b)
-    cfg = matmul_config(device, M, K, N)
-    ckc = compute_config(device, True)
-
-    def call():
-        return ttnn.experimental.minimal_matmul_split(
-            tt_x, tt_w, chunks=3, dim=-1, bias_tensor=tt_b, compute_kernel_config=ckc, config=cfg
-        )
-
+    call, _ = split_case(device, PRESET_M[preset], DIM, QKV_N, 3)
     report(f"qkv_split-{preset}", profile_ns(device, call, perf_n()))
 
 
 @pytest.mark.timeout(600)
 def test_wan_cross_kv_split_perf(device):
-    M, K, N = CROSS_KV_M, DIM, CROSS_KV_N
-    x, w, b = torch_inputs(M, K, N)
-    tt_x, tt_w, tt_b = to_tt(device, x), to_tt(device, w), to_tt(device, b)
-    cfg = matmul_config(device, M, K, N)
-    ckc = compute_config(device, True)
-
-    def call():
-        return ttnn.experimental.minimal_matmul_split(
-            tt_x, tt_w, chunks=2, dim=-1, bias_tensor=tt_b, compute_kernel_config=ckc, config=cfg
-        )
-
+    call, _ = split_case(device, CROSS_KV_M, DIM, CROSS_KV_N, 2)
     report("cross_kv_split-2x4", profile_ns(device, call, perf_n()))
 
 
