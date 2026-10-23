@@ -1915,3 +1915,11 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - testing/ops_lint.py stock_problems: calls come from the parsed AST (dotted name of each Call); strings, docstrings
   and comments never count; an unparsable file falls back to the line pattern. Selftest
   test_a_stock_op_named_in_a_string_is_not_a_call.
+
+## F175: the final task runs the newest pick's full gate first; byte-key records stay valid (2026-10-23)
+- DeepSeek-V4.1 X.3: the pending quick-accepted picks' full gates ran oldest first (P.17), so the shared gate re-ran 18
+  units that P.22's agent had just passed on the same code (gate --check). Now the newest pick runs first (its delta),
+  the older picks with the same command take its result.
+- F173 changed the under-test key's formula, which made every earlier record stale on an identical tree. The key now
+  comes as (semantic, bytes); a record matching either is kept; new records carry the semantic one. Selftests
+  test_a_record_made_under_the_byte_key_stays_valid_on_an_identical_tree, the F122 test (newest first).

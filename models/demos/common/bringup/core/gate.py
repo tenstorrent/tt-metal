@@ -569,7 +569,7 @@ def _kept(d: dict | None, under: str, cmd: str, uenv: dict, limits: dict, whole:
     return (
         bool(d)
         and d.get("verdict") == "PASS"
-        and d.get("under_test") == under
+        and d.get("under_test") in ((under,) if isinstance(under, str) else tuple(under))  # F175: (semantic, bytes)
         and d.get("cmd") == stamps.sha16(cmd)
         and d.get("env") == stamps.env_key(uenv)
         and unit_ok(limits, d.get("metrics") or {}, whole)
@@ -604,7 +604,12 @@ def run_units(
         if store is not None
         else [(u, c, None, None) for u, c in gate_units(task, tasks)]
     )
-    under = stamps.under_test_key(spec.repo, spec, under_test_paths(task, tasks)) if delta is not None else ""
+    unders = (  # F175: (semantic, bytes): a record written before F173 carries the byte key of an identical tree
+        stamps.under_test_key(spec.repo, spec, under_test_paths(task, tasks), with_bytes=True)
+        if delta is not None
+        else ("", "")
+    )
+    under = unders[0]
     rc, reused, stop = 0, [], False
     sids = {u: sid for u, _, _, sid in plan if sid}
     n = len(plan)
@@ -616,7 +621,7 @@ def run_units(
                 continue
             uenv = dict(env, **{M.TASK_ENV: unit_base(u)})  # F166: a split unit runs as its task
             d = delta.get(u) if delta is not None and not fresh and u not in rerun else None
-            if only is None and _kept(d, under, cmd, uenv, limits, len(plan) == 1):
+            if only is None and _kept(d, unders, cmd, uenv, limits, len(plan) == 1):
                 _merge_metrics(results, tid, d["metrics"])
                 srec = store.get(u, d.get("sid")) if store is not None and d.get("sid") else None
                 if srec:
@@ -641,7 +646,8 @@ def run_units(
                 if store is not None:
                     st, sid = next((x[2], x[3]) for x in unit_stamps(spec, task, env, tasks) if x[0] == u)
                 if delta is not None:
-                    under = stamps.under_test_key(spec.repo, spec, under_test_paths(task, tasks))
+                    unders = stamps.under_test_key(spec.repo, spec, under_test_paths(task, tasks), with_bytes=True)
+                    under = unders[0]
             if len(plan) > 1:
                 f.write(f"# {u}\n$ {cmd}\n")
             f.flush()
@@ -712,7 +718,7 @@ def delta_status(spec: Spec, ledger: Ledger, tid: str) -> list[tuple[str, str]]:
     tasks = ledger.tasks()
     task = tasks[tid]
     delta = stamps.Delta(spec.run_dir(run_name(ledger)), tid)
-    under = stamps.under_test_key(spec.repo, spec, under_test_paths(task, tasks))
+    under = stamps.under_test_key(spec.repo, spec, under_test_paths(task, tasks), with_bytes=True)  # F175
     limits = task["gate"].get("metrics") or {}
     env = gate_env(spec, ledger, tid)
     units = gate_units(task, tasks)
