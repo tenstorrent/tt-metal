@@ -1,0 +1,15 @@
+{
+  "layer_type": "linear_attention",
+  "batch": 1,
+  "sequence": 262144,
+  "prefill_pcc": 0.99993896484375,
+  "compared_tokens": 128,
+  "weights": "real",
+  "provenance": {
+    "tests/run_decoder.py": "89c46df60a486bd3f9eb902603b15b29d433009941fd66a73469b0d0e5bd7193",
+    "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77",
+    "tt/functional_decoder.py": "e843748bd41908b43565470155d21c784669f28cef42d2976361a4193ee193db",
+    "tt/kernels/fp32_recurrence.cpp": "89df91a22f9cd4d3d7d06eb28009d995f905d9a28105f75faf5bad67b7ee8796"
+  },
+  "runtime_fallback_audit": true
+}

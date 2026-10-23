@@ -1,0 +1,8 @@
+[transformers] The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+2026-10-23 13:05:28.399 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+Traceback (most recent call last):
+  File "<stdin>", line 18, in <module>
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/run_decoder.py", line 21, in pcc
+    return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
+RuntimeError: stack expects each tensor to be equal size, but got [5120] at entry 0 and [655360] at entry 1

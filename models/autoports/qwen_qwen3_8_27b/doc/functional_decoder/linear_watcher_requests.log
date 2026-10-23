@@ -1,0 +1,45 @@
+2026-10-23 13:31:49.180 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+[transformers] The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+HF_REFERENCE_READY
+2026-10-23 13:31:51.868 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 13:31:51.868 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 13:31:51.868 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 13:31:51.868 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 13:31:51.879 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 13:31:51.879 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 13:31:51.959 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 13:31:51.959 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 13:31:51.959 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 13:31:51.959 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 13:31:51.961 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 13:31:52.109 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (blackhole_device_firmware.cpp:251)
+2026-10-23 13:31:52.109 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 13:31:52.170 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 13:31:52.170 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 13:31:52.170 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 13:31:52.171 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 13:31:52.708 | info     |       LLRuntime | Watcher log file: /workspace/models/autoports/qwen_qwen3_8_27b/doc/functional_decoder/watcher_linear/generated/watcher/watcher.log (watcher_server.cpp:313)
+2026-10-23 13:31:52.709 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:631)
+2026-10-23 13:31:52.709 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+REQUEST {'length': 1, 'prefill_pcc': 0.999997079372406, 'decode_pcc': 0.9999908208847046}
+REQUEST {'length': 31, 'prefill_pcc': 0.9999148845672607, 'decode_pcc': 0.9999783635139465}
+REQUEST {'length': 32, 'prefill_pcc': 0.999976634979248, 'decode_pcc': 0.9999797940254211}
+REQUEST {'length': 33, 'prefill_pcc': 0.9999179244041443, 'decode_pcc': 0.999983549118042}
+REQUEST {'length': 127, 'prefill_pcc': 0.9999528527259827, 'decode_pcc': 0.9999763369560242}
+REQUEST {'length': 128, 'prefill_pcc': 0.999957799911499, 'decode_pcc': 0.9999108910560608}
+REQUEST {'length': 129, 'prefill_pcc': 0.9999455213546753, 'decode_pcc': 0.999994695186615}
+REQUEST {'length': 385, 'prefill_pcc': 0.9999643564224243, 'decode_pcc': 0.9999951720237732}
+REQUEST {'length': 31, 'prefill_pcc': 0.9999534487724304, 'decode_pcc': 0.9999935030937195}
+PREFILL_PCC 0.9999480247497559
+RESUME_PCC 1.0
+EAGER_DECODE_PCC 0.9999708533287048
+{"layer_type": "linear_attention", "layer_idx": 0, "batch": 1, "sequence": 385, "weights": "real", "prefill_pcc": 0.9999480247497559, "decode_pcc": 0.9999708533287048, "changed_input_decode_pcc": 0.9999778866767883, "resume_pcc": 1.0, "deterministic": true, "remap_pcc": null, "remap_cache_pcc": null, "input_std": 0.012563, "request_results": [{"length": 1, "prefill_pcc": 0.999997079372406, "decode_pcc": 0.9999908208847046}, {"length": 31, "prefill_pcc": 0.9999148845672607, "decode_pcc": 0.9999783635139465}, {"length": 32, "prefill_pcc": 0.999976634979248, "decode_pcc": 0.9999797940254211}, {"length": 33, "prefill_pcc": 0.9999179244041443, "decode_pcc": 0.999983549118042}, {"length": 127, "prefill_pcc": 0.9999528527259827, "decode_pcc": 0.9999763369560242}, {"length": 128, "prefill_pcc": 0.999957799911499, "decode_pcc": 0.9999108910560608}, {"length": 129, "prefill_pcc": 0.9999455213546753, "decode_pcc": 0.999994695186615}, {"length": 385, "prefill_pcc": 0.9999643564224243, "decode_pcc": 0.9999951720237732}, {"length": 31, "prefill_pcc": 0.9999534487724304, "decode_pcc": 0.9999935030937195}], "runtime_fallback_audit": true, "provenance": {"tests/run_decoder.py": "7da30c7c187fb690bb7c09fb06595ce593dd2f0492e1f1d922018b1058430dd2", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "e843748bd41908b43565470155d21c784669f28cef42d2976361a4193ee193db", "tt/kernels/fp32_recurrence.cpp": "89df91a22f9cd4d3d7d06eb28009d995f905d9a28105f75faf5bad67b7ee8796"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 0, "largest_free_per_bank": 4272341376}, "after_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 770129920, "largest_free_per_bank": 4176075136}, "request_setup": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 791447552, "largest_free_per_bank": 4173263104}}, "prefill_compared_tokens": 385}
+2026-10-23 13:32:53.444 | info     |    BuildKernels | JIT cache stats: 0/602 hits (0.0%) [0 cached, 691 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 13:32:53.444 | info     |    BuildKernels | JIT telemetry: 58 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 13:32:53.444 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:679)
+2026-10-23 13:32:53.458 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 13:32:53.458 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 13:32:53.715 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 13:32:53.715 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 13:32:53.715 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

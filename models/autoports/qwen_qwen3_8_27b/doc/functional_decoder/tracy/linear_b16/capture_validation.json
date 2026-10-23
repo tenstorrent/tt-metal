@@ -1,0 +1,20 @@
+{
+  "prefill": {
+    "device_ops": 11171,
+    "missing_cpp_rows": 0,
+    "all_firmware_timestamps_match": true
+  },
+  "decode": {
+    "device_ops": 286,
+    "missing_cpp_rows": 0,
+    "all_firmware_timestamps_match": true
+  },
+  "classification": "Late optional GUI source-location failure after both measured end signposts; no device marker drops. All measured ops have C++ device timestamps and exported signposts. Numeric windows complete; failed later GUI events excluded.",
+  "evidence": [
+    "profile_linear_b16.log:3987-4005",
+    "tracy/linear_b16/ops.csv",
+    "tracy/linear_b16/.logs/cpp_device_perf_report.csv",
+    "tracy/linear_b16/measured_cpp_device_rows.csv"
+  ],
+  "raw_cpp_sha256": "eea3e0ba337142b14114b87fab2dec887570a14da969d975df145923a6e8d14e"
+}

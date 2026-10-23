@@ -1,0 +1,7 @@
+-- Install configuration: "Release"
+-- Set non-toolchain portion of runtime path of "/workspace/build_Release/lib/libbenchmark_main.so.1.9.1" to ""
+-- Set non-toolchain portion of runtime path of "/workspace/build_Release/bin/generate_rank_bindings" to "$ORIGIN/../lib"
+-- Set non-toolchain portion of runtime path of "/workspace/build_Release/lib/libtt_metal.so" to "/opt/openmpi-v5.0.7-ulfm/lib:$ORIGIN"
+-- Set non-toolchain portion of runtime path of "/workspace/build_Release/lib/_ttnncpp.so" to "$ORIGIN/build/lib:$ORIGIN"
+-- Set non-toolchain portion of runtime path of "/workspace/build_Release/lib/_ttnn.so" to "$ORIGIN/build/lib:$ORIGIN/../../build/lib:$ORIGIN"
+-- Set non-toolchain portion of runtime path of "/workspace/ttnn/ttnn/_ttnn.so" to "$ORIGIN/build/lib:$ORIGIN/../../build/lib:$ORIGIN"

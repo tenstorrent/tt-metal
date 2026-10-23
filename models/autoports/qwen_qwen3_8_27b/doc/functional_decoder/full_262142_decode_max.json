@@ -1,0 +1,15 @@
+{
+  "layer_type": "full_attention",
+  "layer_idx": 3,
+  "batch": 1,
+  "sequence": 262142,
+  "weights": "real",
+  "prefill_pcc": 0.9963822960853577,
+  "decode_pcc": 0.6901835799217224,
+  "changed_input_decode_pcc": 0.6092750430107117,
+  "resume_pcc": null,
+  "deterministic": true,
+  "remap_pcc": null,
+  "remap_cache_pcc": null,
+  "prefill_compared_tokens": 128
+}

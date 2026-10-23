@@ -1,0 +1,9 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_DECODE'.
+Using operations until 'PERF_DECODE_END'.
+Detected data from 1 devices. Merging device data...
+Writing CSV output to models/autoports/qwen_qwen3_8_27b/doc/functional_decoder/tracy/full_b1/decode_perf_report.csv
+Overall DRAM roofline (modeled ops): 61.4% (314 GB/s)

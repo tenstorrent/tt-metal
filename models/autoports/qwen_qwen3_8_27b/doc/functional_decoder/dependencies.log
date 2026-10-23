@@ -1,0 +1,13 @@
+Using Python 3.10.22 environment at: /opt/venv
+Resolved 23 packages in 5.87s
+   Building ttnn @ file:///workspace
+Downloading ml-dtypes (4.8MiB)
+ Downloaded ml-dtypes
+      Built ttnn @ file:///workspace
+Prepared 4 packages in 4.68s
+Uninstalled 1 package in 0.47ms
+Installed 4 packages in 22ms
+ + graphviz==0.21
+ + ml-dtypes==0.5.4
+ + tt-perf-report==1.4.1
+ ~ ttnn==0.81.1.dev4+g0611d6e3938 (from file:///workspace)

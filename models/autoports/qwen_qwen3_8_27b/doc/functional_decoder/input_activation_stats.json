@@ -1,0 +1,9 @@
+{
+  "source": "model.language_model.embed_tokens.weight",
+  "sampling": "Every ~1940th vocabulary row, every 32nd hidden component",
+  "count": 20480,
+  "mean": -7.090716899256222e-05,
+  "std": 0.012562992900548424,
+  "test_input_std": 0.1,
+  "note": "Layer-level tests use normalized random residual activations; compare this sampled embedding scale before accepting input representativeness."
+}

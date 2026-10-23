@@ -1,0 +1,32 @@
+{
+  "hf_model": "Qwen/Qwen3.8-27B",
+  "hf_advertised_context": 262144,
+  "supported_context": 262144,
+  "largest_tested_prefill_context": 262144,
+  "largest_tested_decode_context": 262144,
+  "capability_reduction": null,
+  "status": "validated_no_capability_reduction",
+  "layer_types": [
+    "linear_attention",
+    "full_attention"
+  ],
+  "per_layer": {
+    "linear_attention": {
+      "largest_passed_prefill_context": 262144,
+      "largest_passed_decode_context": 262144,
+      "prefill_evidence": "functional_decoder/linear_262144.json",
+      "decode_evidence": "functional_decoder/linear_262142_decode_max.json",
+      "prefill_compared_tokens": 128,
+      "nonaligned_prefill_context": 262142
+    },
+    "full_attention": {
+      "largest_passed_prefill_context": 262144,
+      "largest_passed_decode_context": 262144,
+      "prefill_evidence": "functional_decoder/full_262144.json",
+      "decode_evidence": "functional_decoder/full_262142_decode_k256.json",
+      "prefill_compared_tokens": 128,
+      "nonaligned_prefill_context": 262142
+    }
+  },
+  "comparison_scope": "All TT outputs computed; long HF reference compares final128 outputs using entire prefix. Decode compares all outputs at positions262142 and262143."
+}

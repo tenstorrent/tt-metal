@@ -1,0 +1,8 @@
+{
+  "layer_type": "full_attention",
+  "batch": 1,
+  "sequence": 262144,
+  "prefill_pcc": 0.9964427947998047,
+  "compared_tokens": 128,
+  "weights": "real"
+}

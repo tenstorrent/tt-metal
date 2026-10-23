@@ -1,0 +1,32 @@
+{
+  "linear_attention": {
+    "cases": 7,
+    "lengths": [
+      1,
+      31,
+      32,
+      33,
+      127,
+      128,
+      129
+    ],
+    "min_prefill_pcc": 0.99983211128175,
+    "min_decode_pcc": 0.999822252989556,
+    "min_changed_decode_pcc": 0.9998589696709818
+  },
+  "full_attention": {
+    "cases": 7,
+    "lengths": [
+      1,
+      31,
+      32,
+      33,
+      127,
+      128,
+      129
+    ],
+    "min_prefill_pcc": 0.9996070998887444,
+    "min_decode_pcc": 0.9997881739268675,
+    "min_changed_decode_pcc": 0.9997881739268675
+  }
+}

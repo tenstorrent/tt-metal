@@ -1,0 +1,19 @@
+{
+  "hf_model": "Qwen/Qwen3.8-27B",
+  "hf_revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "source_checkpoint": "/data/mvasiljev/weights/Qwen3.8-27B",
+  "layer_files": [
+    {
+      "layer_idx": 0,
+      "path": ".cache/qwen38-weights/layer_0.safetensors",
+      "bytes": 766548256,
+      "sha256": "67d6375004d2f937e3116c374ddf99b21ca9a7e312fc33ea10bc484ca6e4dcc1"
+    },
+    {
+      "layer_idx": 3,
+      "path": ".cache/qwen38-weights/layer_3.safetensors",
+      "bytes": 744511960,
+      "sha256": "9fc04cec22d889afaa5bba1460a2a4a62db85a30b48f7af06836504014e6b69f"
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "layer_type": "linear_attention",
+  "layer_idx": 0,
+  "batch": 1,
+  "sequence": 32,
+  "weights": "synthetic",
+  "prefill_pcc": 0.9998761394304715,
+  "decode_pcc": 0.9999000666606905,
+  "changed_input_decode_pcc": 0.9998842803967242,
+  "resume_pcc": null,
+  "deterministic": true,
+  "remap_pcc": null,
+  "remap_cache_pcc": null,
+  "input_std": 0.012563,
+  "request_results": [],
+  "prefill_pcc_fp32": 0.9998748302459717,
+  "prefill_relative_rmse": 0.015747109428048134,
+  "runtime_fallback_audit": true,
+  "provenance": {
+    "tests/run_decoder.py": "1a3af5c30f83433df779363c8b75ba73b0300e1d73eb565e8b070f3c8088e52e",
+    "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77",
+    "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9",
+    "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"
+  },
+  "memory": {
+    "before_weights": {
+      "num_banks": 8,
+      "capacity_bytes": 34178731008,
+      "allocated_bytes": 0,
+      "largest_free_per_bank": 4272341376
+    },
+    "after_weights": {
+      "num_banks": 8,
+      "capacity_bytes": 34178731008,
+      "allocated_bytes": 770129920,
+      "largest_free_per_bank": 4176075136
+    },
+    "request_setup": {
+      "num_banks": 8,
+      "capacity_bytes": 34178731008,
+      "allocated_bytes": 774652928,
+      "largest_free_per_bank": 4175509760
+    }
+  },
+  "prefill_compared_tokens": 32
+}

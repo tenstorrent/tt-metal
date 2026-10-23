@@ -1,0 +1,1197 @@
+[0/2] Re-checking globbed directories...
+[1/1194] Refreshing tt-metal version header
+-- Found Git: /usr/bin/git (found version "2.34.1")
+[2/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/arena.cpp.o
+[3/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/phases.cpp.o
+[4/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/averages.cpp.o
+[5/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/backtrack.cpp.o
+[6/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/backbone.cpp.o
+[7/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/ccadical.cpp.o
+[8/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/assume.cpp.o
+[9/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/analyze.cpp.o
+[10/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/bins.cpp.o
+[11/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/backward.cpp.o
+[12/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/block.cpp.o
+[13/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/clause.cpp.o
+[14/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/checker.cpp.o
+[15/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/collect.cpp.o
+[16/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/config.cpp.o
+[17/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/condition.cpp.o
+[18/1194] Building CXX object CMakeFiles/metal_common_pch.dir/cmake_pch.hxx.pch
+[19/1194] Building CXX object CMakeFiles/metal_common_pch.dir/metal_common_pch.cpp.o
+[20/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/compact.cpp.o
+[21/1194] Linking CXX static library libmetal_common_pch.a
+[22/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/contract.cpp.o
+[23/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/constrain.cpp.o
+[24/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/decide.cpp.o
+[25/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/cover.cpp.o
+[26/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/drattracer.cpp.o
+[27/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/decompose.cpp.o
+[28/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/definition.cpp.o
+[29/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/ema.cpp.o
+[30/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/elim.cpp.o
+[31/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/elimfast.cpp.o
+[32/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/deduplicate.cpp.o
+[33/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/extend.cpp.o
+[34/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/external_propagate.cpp.o
+[35/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/flags.cpp.o
+[36/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/external.cpp.o
+[37/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/file.cpp.o
+[38/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/format.cpp.o
+[39/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/factor.cpp.o
+[40/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/ipasir.cpp.o
+[41/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/flip.cpp.o
+[42/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/frattracer.cpp.o
+[43/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/logging.cpp.o
+[44/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/instantiate.cpp.o
+[45/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/gates.cpp.o
+[46/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/idruptracer.cpp.o
+[47/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/limit.cpp.o
+[48/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/lidruptracer.cpp.o
+[49/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/internal.cpp.o
+[50/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/lookahead.cpp.o
+[51/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/congruence.cpp.o
+[52/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/lrattracer.cpp.o
+[53/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/message.cpp.o
+[54/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/lratchecker.cpp.o
+[55/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/lucky.cpp.o
+[56/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/minimize.cpp.o
+[57/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/parse.cpp.o
+[58/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/profile.cpp.o
+[59/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/occs.cpp.o
+[60/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/propagate.cpp.o
+[61/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/reap.cpp.o
+[62/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/probe.cpp.o
+[63/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/proof.cpp.o
+[64/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/queue.cpp.o
+[65/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/random.cpp.o
+[66/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/rephase.cpp.o
+[67/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/resources.cpp.o
+[68/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/report.cpp.o
+[69/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/reduce.cpp.o
+[70/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/signal.cpp.o
+[71/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/stable.cpp.o
+[72/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/restart.cpp.o
+[73/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/options.cpp.o
+[74/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/restore.cpp.o
+[75/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/score.cpp.o
+[76/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/solution.cpp.o
+[77/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/shrink.cpp.o
+[78/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/terminal.cpp.o
+[79/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/unstable.cpp.o
+[80/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/stats.cpp.o
+[81/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/subsume.cpp.o
+[82/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/ternary.cpp.o
+[83/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/version.cpp.o
+[84/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/solver.cpp.o
+[85/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/transred.cpp.o
+[86/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/tier.cpp.o
+[87/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/var.cpp.o
+[88/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/util.cpp.o
+[89/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/sweep.cpp.o
+[90/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/veripbtracer.cpp.o
+[91/1194] Building C object _deps/blake3-build/CMakeFiles/blake3.dir/blake3.c.o
+[92/1194] Building C object _deps/blake3-build/CMakeFiles/blake3.dir/blake3_portable.c.o
+[93/1194] Building C object _deps/blake3-build/CMakeFiles/blake3.dir/blake3_dispatch.c.o
+[94/1194] Building ASM object _deps/blake3-build/CMakeFiles/blake3.dir/blake3_avx2_x86-64_unix.S.o
+[95/1194] Building ASM object _deps/blake3-build/CMakeFiles/blake3.dir/blake3_avx512_x86-64_unix.S.o
+[96/1194] Building C object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/kitten.c.o
+[97/1194] Building ASM object _deps/blake3-build/CMakeFiles/blake3.dir/blake3_sse2_x86-64_unix.S.o
+[98/1194] Building ASM object _deps/blake3-build/CMakeFiles/blake3.dir/blake3_sse41_x86-64_unix.S.o
+[99/1194] Building CXX object _deps/boost-build/libs/container/CMakeFiles/boost_container.dir/src/dlmalloc.cpp.o
+[100/1194] Linking C static library _deps/blake3-build/libblake3.a
+[101/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/walk.cpp.o
+[102/1194] Building CXX object _deps/boost-build/libs/container/CMakeFiles/boost_container.dir/src/monotonic_buffer_resource.cpp.o
+[103/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/warmup.cpp.o
+[104/1194] Building CXX object _deps/boost-build/libs/container/CMakeFiles/boost_container.dir/src/synchronized_pool_resource.cpp.o
+[105/1194] Building CXX object _deps/boost-build/libs/container/CMakeFiles/boost_container.dir/src/pool_resource.cpp.o
+[106/1194] Building CXX object _deps/boost-build/libs/container/CMakeFiles/boost_container.dir/src/unsynchronized_pool_resource.cpp.o
+[107/1194] Building ASM object _deps/boost-build/libs/context/CMakeFiles/boost_context.dir/src/asm/make_x86_64_sysv_elf_gas.S.o
+[108/1194] Building ASM object _deps/boost-build/libs/context/CMakeFiles/boost_context.dir/src/asm/jump_x86_64_sysv_elf_gas.S.o
+[109/1194] Building ASM object _deps/boost-build/libs/context/CMakeFiles/boost_context.dir/src/asm/ontop_x86_64_sysv_elf_gas.S.o
+[110/1194] Building CXX object _deps/boost-build/libs/container/CMakeFiles/boost_container.dir/src/global_resource.cpp.o
+[111/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/watch.cpp.o
+[112/1194] Building CXX object _deps/boost-build/libs/date_time/CMakeFiles/boost_date_time.dir/src/gregorian/greg_month.cpp.o
+[113/1194] Building CXX object _deps/boost-build/libs/coroutine/CMakeFiles/boost_coroutine.dir/src/detail/coroutine_context.cpp.o
+[114/1194] Linking CXX static library _deps/boost-build/libs/date_time/libboost_date_time.a
+[115/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/walk_full_occs.cpp.o
+[116/1194] Building CXX object _deps/boost-build/libs/context/CMakeFiles/boost_context.dir/src/posix/stack_traits.cpp.o
+[117/1194] Building CXX object _deps/boost-build/libs/coroutine/CMakeFiles/boost_coroutine.dir/src/posix/stack_traits.cpp.o
+[118/1194] Building C object _deps/boost-build/libs/container/CMakeFiles/boost_container.dir/src/alloc_lib.c.o
+[119/1194] Linking CXX static library _deps/boost-build/libs/context/libboost_context.a
+[120/1194] Linking CXX static library _deps/boost-build/libs/container/libboost_container.a
+[121/1194] Building CXX object _deps/boost-build/libs/coroutine/CMakeFiles/boost_coroutine.dir/src/exceptions.cpp.o
+[122/1194] Linking CXX static library _deps/boost-build/libs/coroutine/libboost_coroutine.a
+[123/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/arena.cc.o
+[124/1194] Building CXX object third_party/CMakeFiles/cadical.dir/__/.cpmcache/cadical/aa632c3f0c6f0a938aa99f0ebcdb616105056296/src/vivify.cpp.o
+[125/1194] Linking CXX static library third_party/libcadical.a
+[126/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/arenaz_sampler.cc.o
+[127/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/any_lite.cc.o
+[128/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/arenastring.cc.o
+[129/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/generated_enum_util.cc.o
+[130/1194] Building CXX object _deps/spdlog-build/CMakeFiles/spdlog.dir/src/cfg.cpp.o
+[131/1194] Building CXX object _deps/ttexalens-build/CMakeFiles/ttexalens_elf.dir/elf_file.cpp.o
+[132/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/generated_message_util.cc.o
+[133/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/io/io_win32.cc.o
+[134/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/implicit_weak_message.cc.o
+[135/1194] Building CXX object _deps/ttexalens-build/CMakeFiles/ttexalens_elf.dir/private/dwarf_info_impl.cpp.o
+[136/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/inlined_string_field.cc.o
+[137/1194] Building CXX object _deps/ttexalens-build/CMakeFiles/ttexalens_elf.dir/private/elf_file_impl.cpp.o
+[138/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/io/strtod.cc.o
+[139/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/io/zero_copy_stream.cc.o
+[140/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/io/coded_stream.cc.o
+[141/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/io/zero_copy_stream_impl.cc.o
+[142/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/io/zero_copy_stream_impl_lite.cc.o
+[143/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/generated_message_tctable_lite.cc.o
+[144/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/map.cc.o
+[145/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/extension_set.cc.o
+[146/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/stubs/bytestream.cc.o
+[147/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/repeated_ptr_field.cc.o
+[148/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/message_lite.cc.o
+[149/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/stubs/int128.cc.o
+[150/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/stubs/common.cc.o
+[151/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/stubs/status.cc.o
+[152/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/stubs/statusor.cc.o
+[153/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/parse_context.cc.o
+[154/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/stubs/stringpiece.cc.o
+[155/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/stubs/structurally_valid.cc.o
+[156/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/stubs/stringprintf.cc.o
+[157/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/stubs/time.cc.o
+[158/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/repeated_field.cc.o
+[159/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/wire_format_lite.cc.o
+[160/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/any.cc.o
+[161/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/stubs/strutil.cc.o
+[162/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/any.pb.cc.o
+[163/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/api.pb.cc.o
+[164/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/compiler/importer.cc.o
+[165/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/duration.pb.cc.o
+[166/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/dynamic_message.cc.o
+[167/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/empty.pb.cc.o
+[168/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/extension_set_heavy.cc.o
+[169/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/field_mask.pb.cc.o
+[170/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/generated_message_bases.cc.o
+[171/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/compiler/parser.cc.o
+[172/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/io/gzip_stream.cc.o
+[173/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/generated_message_tctable_full.cc.o
+[174/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/descriptor_database.cc.o
+[175/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/io/tokenizer.cc.o
+[176/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/io/printer.cc.o
+[177/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/service.cc.o
+[178/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/descriptor.pb.cc.o
+[179/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/source_context.pb.cc.o
+[180/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/stubs/substitute.cc.o
+[181/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/reflection_ops.cc.o
+[182/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/map_field.cc.o
+[183/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/generated_message_reflection.cc.o
+[184/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/message.cc.o
+[185/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/util/delimited_message_util.cc.o
+[186/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/timestamp.pb.cc.o
+[187/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/unknown_field_set.cc.o
+[188/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/struct.pb.cc.o
+[189/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/util/field_comparator.cc.o
+[190/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/type.pb.cc.o
+[191/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/util/internal/error_listener.cc.o
+[192/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/util/internal/json_escaping.cc.o
+[193/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/util/field_mask_util.cc.o
+[194/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/util/internal/field_mask_utility.cc.o
+[195/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/util/internal/datapiece.cc.o
+[196/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/util/internal/json_objectwriter.cc.o
+[197/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/util/internal/default_value_objectwriter.cc.o
+[198/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/util/internal/json_stream_parser.cc.o
+[199/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/text_format.cc.o
+[200/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/util/internal/object_writer.cc.o
+[201/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/util/internal/proto_writer.cc.o
+[202/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/util/internal/protostream_objectsource.cc.o
+[203/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/util/json_util.cc.o
+[204/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/util/internal/type_info.cc.o
+[205/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/util/internal/utility.cc.o
+[206/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/util/internal/protostream_objectwriter.cc.o
+[207/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/util/time_util.cc.o
+[208/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/util/type_resolver_util.cc.o
+[209/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/wrappers.pb.cc.o
+[210/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/descriptor.cc.o
+[211/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/cpp/enum.cc.o
+[212/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/code_generator.cc.o
+[213/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/wire_format.cc.o
+[214/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotobuf.dir/src/google/protobuf/util/message_differencer.cc.o
+[215/1194] Linking CXX static library _deps/protobuf-build/libprotobuf.a
+[216/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/cpp/extension.cc.o
+[217/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/cpp/enum_field.cc.o
+[218/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/cpp/field.cc.o
+[219/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/cpp/generator.cc.o
+[220/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/command_line_interface.cc.o
+[221/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/cpp/map_field.cc.o
+[222/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/cpp/padding_optimizer.cc.o
+[223/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/cpp/message_field.cc.o
+[224/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/cpp/helpers.cc.o
+[225/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/cpp/primitive_field.cc.o
+[226/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/csharp/csharp_doc_comment.cc.o
+[227/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/cpp/file.cc.o
+[228/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/cpp/service.cc.o
+[229/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/csharp/csharp_enum_field.cc.o
+[230/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/csharp/csharp_enum.cc.o
+[231/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/cpp/string_field.cc.o
+[232/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/csharp/csharp_generator.cc.o
+[233/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/cpp/parse_function_generator.cc.o
+[234/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/csharp/csharp_field_base.cc.o
+[235/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/csharp/csharp_helpers.cc.o
+[236/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/csharp/csharp_map_field.cc.o
+[237/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/csharp/csharp_message_field.cc.o
+[238/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/csharp/csharp_primitive_field.cc.o
+[239/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/csharp/csharp_repeated_message_field.cc.o
+[240/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/csharp/csharp_reflection_class.cc.o
+[241/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/csharp/csharp_repeated_enum_field.cc.o
+[242/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/csharp/csharp_message.cc.o
+[243/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/cpp/message.cc.o
+[244/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/csharp/csharp_repeated_primitive_field.cc.o
+[245/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/csharp/csharp_source_generator_base.cc.o
+[246/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/csharp/csharp_wrapper_field.cc.o
+[247/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/doc_comment.cc.o
+[248/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/enum.cc.o
+[249/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/enum_field_lite.cc.o
+[250/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/context.cc.o
+[251/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/enum_field.cc.o
+[252/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/enum_lite.cc.o
+[253/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/extension.cc.o
+[254/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/extension_lite.cc.o
+[255/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/generator_factory.cc.o
+[256/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/field.cc.o
+[257/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/generator.cc.o
+[258/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/file.cc.o
+[259/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/helpers.cc.o
+[260/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/kotlin_generator.cc.o
+[261/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/map_field_lite.cc.o
+[262/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/map_field.cc.o
+[263/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/message_builder_lite.cc.o
+[264/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/message.cc.o
+[265/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/message_builder.cc.o
+[266/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/message_field.cc.o
+[267/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/message_field_lite.cc.o
+[268/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/name_resolver.cc.o
+[269/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/primitive_field_lite.cc.o
+[270/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/primitive_field.cc.o
+[271/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/message_lite.cc.o
+[272/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/shared_code_generator.cc.o
+[273/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/service.cc.o
+[274/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/string_field.cc.o
+[275/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/java/string_field_lite.cc.o
+[276/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/objectivec/objectivec_enum.cc.o
+[277/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/objectivec/objectivec_enum_field.cc.o
+[278/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/objectivec/objectivec_generator.cc.o
+[279/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/objectivec/objectivec_map_field.cc.o
+[280/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/objectivec/objectivec_extension.cc.o
+[281/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/objectivec/objectivec_field.cc.o
+[282/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/objectivec/objectivec_file.cc.o
+[283/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/objectivec/objectivec_message_field.cc.o
+[284/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/objectivec/objectivec_oneof.cc.o
+[285/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/objectivec/objectivec_primitive_field.cc.o
+[286/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/plugin.cc.o
+[287/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/objectivec/objectivec_helpers.cc.o
+[288/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/plugin.pb.cc.o
+[289/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/objectivec/objectivec_message.cc.o
+[290/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/subprocess.cc.o
+[291/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/python/helpers.cc.o
+[292/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/zip_writer.cc.o
+[293/1194] Building CXX object _deps/protobuf-build/CMakeFiles/protoc.dir/src/google/protobuf/compiler/main.cc.o
+[294/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/ruby/ruby_generator.cc.o
+[295/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/contrib/graphbuilder.cpp.o
+[296/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/contrib/graphbuilderadapter.cpp.o
+[297/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/binary.cpp.o
+[298/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/directives.cpp.o
+[299/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/depthguard.cpp.o
+[300/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/python/pyi_generator.cc.o
+[301/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/python/generator.cc.o
+[302/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/emit.cpp.o
+[303/1194] Building CXX object _deps/protobuf-build/CMakeFiles/libprotoc.dir/src/google/protobuf/compiler/php/php_generator.cc.o
+[304/1194] Linking CXX static library _deps/protobuf-build/libprotoc.a
+[305/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/convert.cpp.o
+[306/1194] Linking CXX executable _deps/protobuf-build/protoc-3.21.12.0
+[307/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/emitfromevents.cpp.o
+[308/1194] Creating executable symlink _deps/protobuf-build/protoc
+[309/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/exceptions.cpp.o
+[310/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/emitterstate.cpp.o
+[311/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/emitter.cpp.o
+[312/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/exp.cpp.o
+[313/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/null.cpp.o
+[314/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/node.cpp.o
+[315/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/fptostring.cpp.o
+[316/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/emitterutils.cpp.o
+[317/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/memory.cpp.o
+[318/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/ostream_wrapper.cpp.o
+[319/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/nodeevents.cpp.o
+[320/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/nodebuilder.cpp.o
+[321/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/node_data.cpp.o
+[322/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/regex_yaml.cpp.o
+[323/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/parse.cpp.o
+[324/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/parser.cpp.o
+[325/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/scantag.cpp.o
+[326/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/simplekey.cpp.o
+[327/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/scanscalar.cpp.o
+[328/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/scanner.cpp.o
+[329/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/stream.cpp.o
+[330/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/tag.cpp.o
+[331/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/scantoken.cpp.o
+[332/1194] Building CXX object _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/src/singledocparser.cpp.o
+[333/1194] Linking CXX static library _deps/yaml-cpp-build/libyaml-cpp.a
+[334/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatbuffers.dir/src/util.cpp.o
+[335/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/util.cpp.o
+[336/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatbuffers.dir/src/reflection.cpp.o
+[337/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/reflection.cpp.o
+[338/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/idl_gen_binary.cpp.o
+[339/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatbuffers.dir/src/idl_gen_text.cpp.o
+[340/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/idl_gen_text.cpp.o
+[341/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/idl_gen_dart.cpp.o
+[342/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/idl_gen_kotlin.cpp.o
+[343/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/idl_gen_kotlin_kmp.cpp.o
+[344/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/idl_gen_go.cpp.o
+[345/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/idl_gen_cpp.cpp.o
+[346/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/idl_gen_php.cpp.o
+[347/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/idl_gen_csharp.cpp.o
+[348/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatbuffers.dir/src/idl_parser.cpp.o
+[349/1194] Linking CXX static library _deps/flatbuffers-build/libflatbuffers.a
+[350/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/idl_gen_lobster.cpp.o
+[351/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/idl_parser.cpp.o
+[352/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/idl_gen_fbs.cpp.o
+[353/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/idl_gen_grpc.cpp.o
+[354/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/file_name_saving_file_manager.cpp.o
+[355/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/file_binary_writer.cpp.o
+[356/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/idl_gen_python.cpp.o
+[357/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/file_writer.cpp.o
+[358/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/idl_gen_ts.cpp.o
+[359/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/idl_gen_json_schema.cpp.o
+[360/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/idl_gen_java.cpp.o
+[361/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/idl_gen_rust.cpp.o
+[362/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/flatc_main.cpp.o
+[363/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/annotated_binary_text_gen.cpp.o
+[364/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/idl_gen_swift.cpp.o
+[365/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/code_generators.cpp.o
+[366/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/grpc/src/compiler/go_generator.cc.o
+[367/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/grpc/src/compiler/python_generator.cc.o
+[368/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/flatc.cpp.o
+[369/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/bfbs_gen_lua.cpp.o
+[370/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/grpc/src/compiler/cpp_generator.cc.o
+[371/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/binary_annotator.cpp.o
+[372/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/src/bfbs_gen_nim.cpp.o
+[373/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/grpc/src/compiler/java_generator.cc.o
+[374/1194] Building blackhole hw lib tdma_xmov.o
+[375/1194] Building quasar:tt-qsr32 hw lib tt-qsr32-substitutes.o from tt_metal/hw/toolchain/substitutes.cpp
+[376/1194] Building blackhole hw lib tmu-crt0.o
+[377/1194] Building quasar:tt-qsr32 hw lib tt-qsr32-crt0-tls.o from tt_metal/hw/toolchain/crt0-tls.S
+[378/1194] Building quasar:tt-qsr32 hw lib tt-qsr32-crt0.o from tt_metal/hw/toolchain/crt0.S
+[379/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/grpc/src/compiler/swift_generator.cc.o
+[380/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/array.c++.o
+[381/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/list.c++.o
+[382/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/common.c++.o
+[383/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/cidr.c++.o
+[384/1194] Building CXX object _deps/flatbuffers-build/CMakeFiles/flatc.dir/grpc/src/compiler/ts_generator.cc.o
+[385/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/debug.c++.o
+[386/1194] Linking CXX executable _deps/flatbuffers-build/flatc
+[387/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/memory.c++.o
+[388/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/mutex.c++.o
+[389/1194] Building CXX object _deps/spdlog-build/CMakeFiles/spdlog.dir/src/stdout_sinks.cpp.o
+[390/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/source-location.c++.o
+[391/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/exception.c++.o
+[392/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/io.c++.o
+[393/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/hash.c++.o
+[394/1194] Building CXX object _deps/spdlog-build/CMakeFiles/spdlog.dir/src/color_sinks.cpp.o
+[395/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/thread.c++.o
+[396/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/arena.c++.o
+[397/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/units.c++.o
+[398/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/table.c++.o
+[399/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/string.c++.o
+[400/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/test-helpers.c++.o
+[401/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/refcount.c++.o
+[402/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/string-tree.c++.o
+[403/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/time.c++.o
+[404/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/filesystem-disk-win32.c++.o
+[405/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/parse/char.c++.o
+[406/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/encoding.c++.o
+[407/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/main.c++.o
+[408/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj-async.dir/async-win32.c++.o
+[409/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj-async.dir/async-io-win32.c++.o
+[410/1194] Building CXX object _deps/spdlog-build/CMakeFiles/spdlog.dir/src/file_sinks.cpp.o
+[411/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj-async.dir/async-unix.c++.o
+[412/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/filesystem-disk-unix.c++.o
+[413/1194] Building CXX object _deps/spdlog-build/CMakeFiles/spdlog.dir/src/async.cpp.o
+[414/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp.dir/c++.capnp.c++.o
+[415/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp.dir/blob.c++.o
+[416/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj-async.dir/timer.c++.o
+[417/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp.dir/list.c++.o
+[418/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj.dir/filesystem.c++.o
+[419/1194] Linking CXX static library _deps/capnproto-build/c++/src/kj/libkj.a
+[420/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp.dir/any.c++.o
+[421/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp.dir/message.c++.o
+[422/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp.dir/schema.capnp.c++.o
+[423/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp.dir/arena.c++.o
+[424/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp.dir/stream.capnp.c++.o
+[425/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj-async.dir/async.c++.o
+[426/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp.dir/serialize.c++.o
+[427/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp.dir/serialize-packed.c++.o
+[428/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp.dir/schema.c++.o
+[429/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp.dir/stringify.c++.o
+[430/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp.dir/layout.c++.o
+[431/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj-async.dir/async-io-unix.c++.o
+[432/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp-rpc.dir/dynamic-capability.c++.o
+[433/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp.dir/dynamic.c++.o
+[434/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp-rpc.dir/rpc.capnp.c++.o
+[435/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp-rpc.dir/membrane.c++.o
+[436/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp-rpc.dir/serialize-async.c++.o
+[437/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp-rpc.dir/rpc-twoparty.capnp.c++.o
+[438/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp-rpc.dir/persistent.capnp.c++.o
+[439/1194] Building CXX object _deps/spdlog-build/CMakeFiles/spdlog.dir/src/spdlog.cpp.o
+[440/1194] Linking CXX static library _deps/spdlog-build/libspdlog.a
+[441/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp-json.dir/compat/json.capnp.c++.o
+[442/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp.dir/schema-loader.c++.o
+[443/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnpc.dir/compiler/type-id.c++.o
+[444/1194] Linking CXX static library _deps/capnproto-build/c++/src/capnp/libcapnp.a
+[445/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnpc.dir/compiler/error-reporter.c++.o
+[446/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnpc.dir/compiler/lexer.capnp.c++.o
+[447/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp-rpc.dir/rpc-twoparty.c++.o
+[448/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnpc.dir/compiler/grammar.capnp.c++.o
+[449/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp-rpc.dir/capability.c++.o
+[450/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp-rpc.dir/ez-rpc.c++.o
+[451/1194] Building CXX object _deps/capnproto-build/c++/src/kj/CMakeFiles/kj-async.dir/async-io.c++.o
+[452/1194] Linking CXX static library _deps/capnproto-build/c++/src/kj/libkj-async.a
+[453/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnpc.dir/compiler/generics.c++.o
+[454/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnpc.dir/schema-parser.c++.o
+[455/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnpc.dir/compiler/lexer.c++.o
+[456/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp-json.dir/compat/json.c++.o
+[457/1194] Linking CXX static library _deps/capnproto-build/c++/src/capnp/libcapnp-json.a
+[458/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnpc.dir/serialize-text.c++.o
+[459/1194] Generating /workspace/tt_metal/llrt/hal/generated/realtime_profiler_msgs.hpp, /workspace/tt_metal/llrt/hal/generated/realtime_profiler_msgs_impl.hpp
+parsed 3 structs.
+[460/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnpc.dir/compiler/compiler.c++.o
+[461/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnpc.dir/compiler/node-translator.c++.o
+[462/1194] Building CXX object _deps/ttexalens-build/CMakeFiles/ttexalens_elf.dir/dwarf_attribute.cpp.o
+[463/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp_tool.dir/compiler/module-loader.c++.o
+[464/1194] Building CXX object _deps/ttexalens-build/CMakeFiles/ttexalens_elf.dir/dwarf_info.cpp.o
+[465/1194] Building CXX object _deps/ttexalens-build/CMakeFiles/ttexalens_elf.dir/dwarf_cu.cpp.o
+[466/1194] Building CXX object _deps/ttexalens-build/CMakeFiles/ttexalens_elf.dir/dwarf_frame.cpp.o
+[467/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp-rpc.dir/rpc.c++.o
+[468/1194] Building CXX object _deps/ttexalens-build/CMakeFiles/ttexalens_elf.dir/dwarf_location.cpp.o
+[469/1194] Linking CXX static library _deps/capnproto-build/c++/src/capnp/libcapnp-rpc.a
+[470/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_abbrev.c.o
+[471/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_crc.c.o
+[472/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnp_tool.dir/compiler/capnp.c++.o
+[473/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_alloc.c.o
+[474/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_crc32.c.o
+[475/1194] Building CXX object _deps/ttexalens-build/CMakeFiles/ttexalens_elf.dir/dwarf_die.cpp.o
+[476/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_debug_sup.c.o
+[477/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_arange.c.o
+[478/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_debugaddr.c.o
+[479/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_debuglink.c.o
+[480/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_dsc.c.o
+[481/1194] Building CXX object _deps/ttexalens-build/CMakeFiles/ttexalens_elf.dir/variable.cpp.o
+[482/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_elfread.c.o
+[483/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_debugnames.c.o
+[484/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_elf_rel_detector.c.o
+[485/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_error.c.o
+[486/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_fill_in_attr_form.c.o
+[487/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_die_deliv.c.o
+[488/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_find_sigref.c.o
+[489/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_form_class_names.c.o
+[490/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_elf_load_headers.c.o
+[491/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_fission_to_cu.c.o
+[492/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_frame_iter.c.o
+[493/1194] Building CXX object _deps/ttexalens-build/CMakeFiles/ttexalens_elf.dir/callstack.cpp.o
+[494/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_frame.c.o
+[495/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_form.c.o
+[496/1194] Linking CXX static library _deps/ttexalens-build/libttexalens_elf.a
+[497/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_gdbindex.c.o
+[498/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_frame2.c.o
+[499/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_groups.c.o
+[500/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_harmless.c.o
+[501/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_frame_cfa_read.c.o
+[502/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_generic_init.c.o
+[503/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_gnu_index.c.o
+[504/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_global.c.o
+[505/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_leb.c.o
+[506/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_local_malloc.c.o
+[507/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_lname_version.c.o
+[508/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_init_finish.c.o
+[509/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_locationop_read.c.o
+[510/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_loclists.c.o
+[511/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_lvn_name.c.o
+[512/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_loc.c.o
+[513/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_memcpy_swap.c.o
+[514/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_64machoread.c.o
+[515/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_macro.c.o
+[516/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_object_read_common.c.o
+[517/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_machoread.c.o
+[518/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_macro5.c.o
+[519/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnpc.dir/compiler/parser.c++.o
+[520/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_object_detector.c.o
+[521/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_names.c.o
+[522/1194] Linking CXX static library _deps/capnproto-build/c++/src/capnp/libcapnpc.a
+[523/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_peread.c.o
+[524/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_line.c.o
+[525/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_safe_arithmetic.c.o
+[526/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_safe_strcpy.c.o
+[527/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_ranges.c.o
+[528/1194] Linking CXX executable _deps/capnproto-build/c++/src/capnp/capnp
+[529/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_secname_ck.c.o
+[530/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_seekr.c.o
+[531/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_stringsection.c.o
+[532/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_setup_sections.c.o
+[533/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_tied.c.o
+[534/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_query.c.o
+[535/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_rnglists.c.o
+[536/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_str_offsets.c.o
+[537/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_tsearchhash.c.o
+[538/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_string.c.o
+[539/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/nng_legacy.c.o
+[540/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_xu_index.c.o
+[541/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_util.c.o
+[542/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/device.c.o
+[543/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/aio.c.o
+[544/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/dialer.c.o
+[545/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/sockfd.c.o
+[546/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/file.c.o
+[547/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/list.c.o
+[548/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/idhash.c.o
+[549/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/init.c.o
+[550/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/pipe.c.o
+[551/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/listener.c.o
+[552/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/nng.c.o
+[553/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/reap.c.o
+[554/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/lmq.c.o
+[555/1194] Building C object _deps/libdwarf-build/src/lib/libdwarf/CMakeFiles/dwarf.dir/dwarf_print_lines.c.o
+[556/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/log.c.o
+[557/1194] Linking C static library _deps/libdwarf-build/src/lib/libdwarf/libdwarf.a
+[558/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/options.c.o
+[559/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/msgqueue.c.o
+[560/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/pollable.c.o
+[561/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/message.c.o
+[562/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/panic.c.o
+[563/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/sockaddr.c.o
+[564/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/strs.c.o
+[565/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/taskq.c.o
+[566/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/platform/posix/posix_tcpdial.c.o
+[567/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/stream.c.o
+[568/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/stats.c.o
+[569/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/thread.c.o
+[570/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/tcp.c.o
+[571/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/platform/posix/posix_alloc.c.o
+[572/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/platform/posix/posix_atomic.c.o
+[573/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/platform/posix/posix_clock.c.o
+[574/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/socket.c.o
+[575/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/platform/posix/posix_debug.c.o
+[576/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/platform/posix/posix_peerid.c.o
+[577/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/core/url.c.o
+[578/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/platform/posix/posix_ipcdial.c.o
+[579/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/platform/posix/posix_ipcconn.c.o
+[580/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/platform/posix/posix_file.c.o
+[581/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/platform/posix/posix_ipclisten.c.o
+[582/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/platform/posix/posix_socketpair.c.o
+[583/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/platform/posix/posix_pipe.c.o
+[584/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/platform/posix/posix_sockaddr.c.o
+[585/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/platform/posix/posix_sockfd.c.o
+[586/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/platform/posix/posix_resolv_gai.c.o
+[587/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/platform/posix/posix_tcplisten.c.o
+[588/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/platform/posix/posix_tcpconn.c.o
+[589/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/platform/posix/posix_thread.c.o
+[590/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/platform/posix/posix_udp.c.o
+[591/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/platform/posix/posix_rand_getrandom.c.o
+[592/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/platform/posix/posix_pollq_epoll.c.o
+[593/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/protocol/pair0/pair.c.o
+[594/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/protocol/bus0/bus.c.o
+[595/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/protocol/pipeline0/pull.c.o
+[596/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/protocol/pair1/pair.c.o
+[597/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/protocol/pair1/pair1_poly.c.o
+[598/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/protocol/pipeline0/push.c.o
+[599/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/protocol/pubsub0/pub.c.o
+[600/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/protocol/pubsub0/xsub.c.o
+[601/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/protocol/reqrep0/xreq.c.o
+[602/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/protocol/survey0/respond.c.o
+[603/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/protocol/pubsub0/sub.c.o
+[604/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/protocol/reqrep0/rep.c.o
+[605/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/protocol/reqrep0/req.c.o
+[606/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/protocol/reqrep0/xrep.c.o
+[607/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/protocol/survey0/xsurvey.c.o
+[608/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/protocol/survey0/xrespond.c.o
+[609/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/protocol/survey0/survey.c.o
+[610/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/transport/inproc/inproc.c.o
+[611/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/transport/socket/sockfd.c.o
+[612/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/protocol.c.o
+[613/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/transport/ipc/ipc.c.o
+[614/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/transport/ws/websocket.c.o
+[615/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/transport.c.o
+[616/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/supplemental/base64/base64.c.o
+[617/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/transport/tcp/tcp.c.o
+[618/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/supplemental/http/http_public.c.o
+[619/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/sp/transport/tls/tls.c.o
+[620/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/supplemental/http/http_schemes.c.o
+[621/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/supplemental/http/http_chunk.c.o
+[622/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/supplemental/http/http_client.c.o
+[623/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/supplemental/tls/tls_common.c.o
+[624/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/supplemental/util/idhash.c.o
+[625/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/supplemental/sha1/sha1.c.o
+[626/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/supplemental/http/http_conn.c.o
+[627/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/supplemental/util/options.c.o
+[628/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/supplemental/http/http_msg.c.o
+[629/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/supplemental/util/platform.c.o
+[630/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/supplemental/http/http_server.c.o
+[631/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/fs-poll.c.o
+[632/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/random.c.o
+[633/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/strtok.c.o
+[634/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/strscpy.c.o
+[635/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/compat/nanomsg/nn.c.o
+[636/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/idna.c.o
+[637/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/inet.c.o
+[638/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/thread-common.c.o
+[639/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/threadpool.c.o
+[640/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/version.c.o
+[641/1194] Building C object _deps/nanomsg-build/CMakeFiles/nng.dir/src/supplemental/websocket/websocket.c.o
+[642/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/uv-data-getter-setters.c.o
+[643/1194] Linking C static library _deps/nanomsg-build/libnng.a
+[644/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/timer.c.o
+[645/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/async.c.o
+[646/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/dl.c.o
+[647/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/getnameinfo.c.o
+[648/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/uv-common.c.o
+[649/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/getaddrinfo.c.o
+[650/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/loop-watcher.c.o
+[651/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/loop.c.o
+[652/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/random-devurandom.c.o
+[653/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/poll.c.o
+[654/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/pipe.c.o
+[655/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/core.c.o
+[656/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/process.c.o
+[657/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/fs.c.o
+[658/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/tcp.c.o
+[659/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/tty.c.o
+[660/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/thread.c.o
+[661/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/signal.c.o
+[662/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/stream.c.o
+[663/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/proctitle.c.o
+[664/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/procfs-exepath.c.o
+[665/1194] Generating FlatBuffers header /workspace/build_Release/tt_metal/third_party/umd/tt-umd/simulation_device_generated.h
+[666/1194] Generating FlatBuffers header /workspace/build_Release/tt_metal/third_party/umd/tt-umd/simulation_server_protocol_generated.h
+[667/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/random-getrandom.c.o
+[668/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/udp.c.o
+[669/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/random-sysctl-linux.c.o
+[670/1194] Building C object tt_metal/third_party/umd/tt-kmd-lib/CMakeFiles/tt-kmd-lib.dir/src/tt_kmd_lib.c.o
+[671/1194] Linking C static library tt_metal/third_party/umd/tt-kmd-lib/libtt-kmd-lib.a
+[672/1194] Building C object _deps/libuv-build/CMakeFiles/uv_a.dir/src/unix/linux.c.o
+[673/1194] Linking C static library _deps/libuv-build/libuv.a
+[674/1194] Building CXX object _deps/capnproto-build/c++/src/capnp/CMakeFiles/capnpc_cpp.dir/compiler/capnpc-c++.c++.o
+[675/1194] Linking CXX executable _deps/capnproto-build/c++/src/capnp/capnpc-c++
+[676/1194] Building CXX object tt_metal/third_party/umd/tt-umd-utils/CMakeFiles/tt-umd-utils.dir/src/robust_mutex.cpp.o
+[677/1194] Linking CXX static library tt_metal/third_party/umd/tt-umd-utils/libtt-umd-utils.a
+[678/1194] Building CXX object tt_metal/third_party/umd/tt-umd/CMakeFiles/tt-umd.dir/Unity/unity_12_cxx.cxx.o
+[679/1194] Building CXX object tt_metal/third_party/umd/tt-umd/CMakeFiles/tt-umd.dir/Unity/unity_11_cxx.cxx.o
+[680/1194] Building CXX object tt_metal/third_party/umd/tt-umd/CMakeFiles/tt-umd.dir/Unity/unity_10_cxx.cxx.o
+[681/1194] Building CXX object tt_metal/third_party/umd/tt-umd/CMakeFiles/tt-umd.dir/Unity/unity_9_cxx.cxx.o
+[682/1194] Building CXX object tt_metal/third_party/umd/tt-umd/CMakeFiles/tt-umd.dir/Unity/unity_7_cxx.cxx.o
+[683/1194] Building CXX object tt_metal/third_party/umd/tt-umd/CMakeFiles/tt-umd.dir/Unity/unity_8_cxx.cxx.o
+[684/1194] Building CXX object tt_metal/third_party/umd/tt-umd/CMakeFiles/tt-umd.dir/Unity/unity_5_cxx.cxx.o
+[685/1194] Building CXX object tt_stl/CMakeFiles/tt_stl.dir/tt_stl/llvm/llvm_small_vector.cpp.o
+[686/1194] Linking CXX shared library tt_stl/libtt_stl.so
+[687/1194] Generating protobuf/factory_system_descriptor.pb.cc, protobuf/factory_system_descriptor.pb.h
+[688/1194] Generating protobuf/node_config.pb.cc, protobuf/node_config.pb.h
+[689/1194] Generating protobuf/cluster_config.pb.cc, protobuf/cluster_config.pb.h
+[690/1194] Generating protobuf/deployment.pb.cc, protobuf/deployment.pb.h
+[691/1194] Generating protobuf/ethernet_link_metrics.pb.cc, protobuf/ethernet_link_metrics.pb.h
+[692/1194] Building CXX object tt_metal/third_party/umd/tt-umd/CMakeFiles/tt-umd.dir/Unity/unity_4_cxx.cxx.o
+[693/1194] Building CXX object tools/scaleout/CMakeFiles/scaleout_tools.dir/node/node_types.cpp.o
+[694/1194] Building CXX object tt_metal/third_party/umd/tt-umd/CMakeFiles/tt-umd.dir/Unity/unity_6_cxx.cxx.o
+[695/1194] Building CXX object tools/scaleout/CMakeFiles/scaleout_tools.dir/board/board.cpp.o
+[696/1194] Building CXX object tt_metal/third_party/umd/tt-umd/CMakeFiles/tt-umd.dir/Unity/unity_1_cxx.cxx.o
+[697/1194] Building CXX object tt_metal/third_party/umd/tt-umd/CMakeFiles/tt-umd.dir/Unity/unity_0_cxx.cxx.o
+[698/1194] Building CXX object tools/scaleout/CMakeFiles/scaleout_tools.dir/node/node.cpp.o
+[699/1194] Building CXX object tools/scaleout/CMakeFiles/scaleout_tools.dir/cabling_generator/regen_descriptors.cpp.o
+[700/1194] Building CXX object tools/scaleout/CMakeFiles/scaleout_tools.dir/connector/connector.cpp.o
+[701/1194] Building CXX object tools/scaleout/CMakeFiles/scaleout_tools.dir/protobuf/factory_system_descriptor.pb.cc.o
+[702/1194] Building CXX object tt_metal/third_party/tracy/CMakeFiles/TracyClient.dir/public/TracyClient.cpp.o
+[703/1194] Linking CXX shared library lib/libtracy.so.0.14.1
+[704/1194] Creating library symlink lib/libtracy.so
+[705/1194] Building CXX object tools/scaleout/CMakeFiles/scaleout_tools.dir/protobuf/node_config.pb.cc.o
+[706/1194] Building CXX object tools/scaleout/CMakeFiles/scaleout_tools.dir/protobuf/deployment.pb.cc.o
+[707/1194] Building C++ header for api/tt-metalium/serialized_descriptors/mesh_coordinate.fbs
+[708/1194] Building CXX object tools/scaleout/CMakeFiles/scaleout_tools.dir/protobuf/ethernet_link_metrics.pb.cc.o
+[709/1194] Building blackhole hw lib noc.o
+[710/1194] Building CXX object tools/scaleout/CMakeFiles/scaleout_tools.dir/factory_system_descriptor/query.cpp.o
+[711/1194] Building blackhole hw lib substitutes.o
+[712/1194] Building wormhole hw lib substitutes.o
+[713/1194] Building quasar:tt-qsr64 hw lib tt-qsr64-crt0-tls.o from tt_metal/hw/toolchain/crt0-tls.S
+[714/1194] Building quasar:tt-qsr64 hw lib tt-qsr64-crt0.o from tt_metal/hw/toolchain/crt0.S
+[715/1194] Building wormhole hw lib noc.o
+[716/1194] Building quasar:tt-qsr64 hw lib tt-qsr64-substitutes.o from tt_metal/hw/toolchain/substitutes.cpp
+[717/1194] Building quasar:tt-qsr64 hw lib tt-qsr64-noc.o from tt_metal/hw/firmware/src/tt-2xx/quasar/noc.c
+[718/1194] Preprocessing runtime/hw/toolchain/blackhole/firmware_ierisc.ld
+[719/1194] Preprocessing runtime/hw/toolchain/blackhole/firmware_main_aerisc.ld
+[720/1194] Preprocessing runtime/hw/toolchain/blackhole/firmware_ncrisc.ld
+[721/1194] Preprocessing runtime/hw/toolchain/blackhole/firmware_subordinate_aerisc.ld
+[722/1194] Building wormhole hw lib tmu-crt0.o
+[723/1194] Building wormhole hw lib tdma_xmov.o
+[724/1194] Building wormhole hw lib wh-iram-start.o
+[725/1194] Building wormhole hw lib wh-iram-trampoline.o
+[726/1194] Preprocessing runtime/hw/toolchain/blackhole/firmware_drisc.ld
+[727/1194] Preprocessing runtime/hw/toolchain/blackhole/firmware_aerisc.ld
+[728/1194] Preprocessing runtime/hw/toolchain/blackhole/firmware_brisc.ld
+[729/1194] Preprocessing runtime/hw/toolchain/blackhole/firmware_subordinate_ierisc.ld
+[730/1194] Preprocessing runtime/hw/toolchain/blackhole/firmware_trisc0.ld
+[731/1194] Preprocessing runtime/hw/toolchain/blackhole/firmware_trisc1.ld
+[732/1194] Preprocessing runtime/hw/toolchain/blackhole/firmware_trisc2.ld
+[733/1194] Preprocessing runtime/hw/toolchain/blackhole/kernel_aerisc.ld
+[734/1194] Preprocessing runtime/hw/toolchain/blackhole/kernel_brisc.ld
+[735/1194] Preprocessing runtime/hw/toolchain/blackhole/kernel_drisc.ld
+[736/1194] Preprocessing runtime/hw/toolchain/blackhole/kernel_ierisc.ld
+[737/1194] Preprocessing runtime/hw/toolchain/blackhole/kernel_main_aerisc.ld
+[738/1194] Preprocessing runtime/hw/toolchain/blackhole/kernel_subordinate_aerisc.ld
+[739/1194] Preprocessing runtime/hw/toolchain/blackhole/kernel_ncrisc.ld
+[740/1194] Preprocessing runtime/hw/toolchain/blackhole/kernel_trisc0.ld
+[741/1194] Preprocessing runtime/hw/toolchain/blackhole/kernel_subordinate_ierisc.ld
+[742/1194] Preprocessing runtime/hw/toolchain/blackhole/kernel_trisc1.ld
+[743/1194] Preprocessing runtime/hw/toolchain/blackhole/kernel_trisc2.ld
+[744/1194] Preprocessing runtime/hw/toolchain/quasar/firmware_dm.ld
+[745/1194] Preprocessing runtime/hw/toolchain/quasar/firmware_trisc.ld
+[746/1194] Preprocessing runtime/hw/toolchain/quasar/kernel_dm_lgc.ld
+[747/1194] Preprocessing runtime/hw/toolchain/quasar/kernel_dm.ld
+[748/1194] Preprocessing runtime/hw/toolchain/quasar/kernel_trisc.ld
+[749/1194] Preprocessing runtime/hw/toolchain/quasar/kernel_trisc_lgc.ld
+[750/1194] Preprocessing runtime/hw/toolchain/wormhole/erisc-b0-app.ld
+[751/1194] Preprocessing runtime/hw/toolchain/wormhole/erisc-b0-app_iram.ld with IRAM
+[752/1194] Preprocessing runtime/hw/toolchain/wormhole/erisc-b0-kernel_iram.ld with IRAM
+[753/1194] Preprocessing runtime/hw/toolchain/wormhole/erisc-b0-kernel.ld
+[754/1194] Preprocessing runtime/hw/toolchain/wormhole/firmware_brisc.ld
+[755/1194] Preprocessing runtime/hw/toolchain/wormhole/firmware_aerisc.ld
+[756/1194] Preprocessing runtime/hw/toolchain/wormhole/firmware_ierisc.ld
+[757/1194] Preprocessing runtime/hw/toolchain/wormhole/firmware_main_aerisc.ld
+[758/1194] Preprocessing runtime/hw/toolchain/wormhole/firmware_ncrisc.ld
+[759/1194] Preprocessing runtime/hw/toolchain/wormhole/firmware_subordinate_aerisc.ld
+[760/1194] Preprocessing runtime/hw/toolchain/wormhole/firmware_subordinate_ierisc.ld
+[761/1194] Preprocessing runtime/hw/toolchain/wormhole/firmware_trisc0.ld
+[762/1194] Preprocessing runtime/hw/toolchain/wormhole/firmware_trisc2.ld
+[763/1194] Preprocessing runtime/hw/toolchain/wormhole/firmware_trisc1.ld
+[764/1194] Preprocessing runtime/hw/toolchain/wormhole/kernel_brisc.ld
+[765/1194] Preprocessing runtime/hw/toolchain/wormhole/kernel_aerisc.ld
+[766/1194] Preprocessing runtime/hw/toolchain/wormhole/kernel_ierisc.ld
+[767/1194] Preprocessing runtime/hw/toolchain/wormhole/kernel_main_aerisc.ld
+[768/1194] Preprocessing runtime/hw/toolchain/wormhole/kernel_ncrisc.ld
+[769/1194] Preprocessing runtime/hw/toolchain/wormhole/kernel_subordinate_aerisc.ld
+[770/1194] Preprocessing runtime/hw/toolchain/wormhole/kernel_subordinate_ierisc.ld
+[771/1194] Preprocessing runtime/hw/toolchain/wormhole/kernel_trisc0.ld
+[772/1194] Preprocessing runtime/hw/toolchain/wormhole/kernel_trisc1.ld
+[773/1194] Preprocessing runtime/hw/toolchain/wormhole/kernel_trisc2.ld
+[774/1194] Building C++ header for /workspace/tt_metal/impl/flatbuffer/light_metal_binary.fbs
+[775/1194] Building CXX object tt_metal/logging/CMakeFiles/metalium-logging.dir/logging.cpp.o
+[776/1194] Building CXX object tools/scaleout/CMakeFiles/scaleout_tools.dir/protobuf/cluster_config.pb.cc.o
+[777/1194] Building CXX object tt_metal/llrt/hal/tt-1xx/CMakeFiles/wh_hal.dir/wormhole/wh_hal_tensix.cpp.o
+[778/1194] Building CXX object tt_metal/llrt/hal/tt-1xx/CMakeFiles/wh_hal.dir/wormhole/wh_hal_active_eth.cpp.o
+[779/1194] Building CXX object tt_metal/llrt/hal/tt-1xx/CMakeFiles/wh_hal.dir/wormhole/wh_hal_idle_eth.cpp.o
+[780/1194] Building CXX object tt_metal/third_party/umd/tt-umd/CMakeFiles/tt-umd.dir/Unity/unity_2_cxx.cxx.o
+[781/1194] Building CXX object tt_metal/llrt/hal/tt-1xx/CMakeFiles/bh_hal.dir/blackhole/bh_hal_tensix.cpp.o
+[782/1194] Building CXX object tt_metal/third_party/umd/tt-umd/CMakeFiles/tt-umd.dir/Unity/unity_3_cxx.cxx.o
+[783/1194] Linking CXX shared library tt_metal/third_party/umd/lib/libtt-umd.so.0.9.14
+[784/1194] Creating library symlink tt_metal/third_party/umd/lib/libtt-umd.so.0 tt_metal/third_party/umd/lib/libtt-umd.so
+[785/1194] Building CXX object tt_metal/llrt/hal/tt-1xx/CMakeFiles/bh_hal.dir/blackhole/bh_hal_active_eth.cpp.o
+[786/1194] Building CXX object tools/scaleout/CMakeFiles/scaleout_tools.dir/factory_system_descriptor/utils.cpp.o
+[787/1194] Building CXX object tt_metal/llrt/hal/tt-1xx/CMakeFiles/bh_hal.dir/blackhole/bh_hal_idle_eth.cpp.o
+[788/1194] Building CXX object tt_metal/llrt/hal/tt-1xx/CMakeFiles/wh_hal.dir/wormhole/wh_hal.cpp.o
+[789/1194] Building CXX object tools/scaleout/CMakeFiles/scaleout_tools.dir/cabling_generator/cabling_generator.cpp.o
+[790/1194] Building CXX object tt_metal/llrt/hal/tt-1xx/CMakeFiles/bh_hal.dir/blackhole/bh_hal.cpp.o
+[791/1194] Building CXX object tt_metal/common/CMakeFiles/common.dir/Unity/unity_1_cxx.cxx.o
+[792/1194] Building CXX object tt_metal/llrt/hal/tt-1xx/CMakeFiles/bh_hal.dir/blackhole/bh_hal_dram.cpp.o
+[793/1194] Building CXX object tt_metal/llrt/hal/tt-2xx/CMakeFiles/qa_hal.dir/quasar/qa_hal_tensix.cpp.o
+[794/1194] Building CXX object tt_metal/llrt/hal/tt-2xx/CMakeFiles/qa_hal.dir/quasar/qa_hal_active_eth.cpp.o
+[795/1194] Building CXX object tt_metal/llrt/hal/tt-2xx/CMakeFiles/qa_hal.dir/quasar/qa_hal_dispatch.cpp.o
+[796/1194] Building C++ header for /workspace/tt_metal/impl/flatbuffer/command.fbs
+[797/1194] Building C++ header for /workspace/tt_metal/impl/flatbuffer/base_types.fbs
+[798/1194] Building C++ header for /workspace/tt_metal/impl/flatbuffer/buffer_types.fbs
+[799/1194] Building C++ header for /workspace/tt_metal/impl/flatbuffer/program_types.fbs
+[800/1194] Compiling Cap'n Proto schema /workspace/tt_metal/impl/debug/inspector/rpc.capnp
+[801/1194] Generating RPC server implementation for /workspace/tt_metal/impl/debug/inspector/rpc.capnp
+[802/1194] Compiling Cap'n Proto schema /workspace/tt_metal/impl/jit_server/rpc.capnp
+[803/1194] Generating internal/disaggregation/protobuf/kv_chunk_address_table.pb.cc, internal/disaggregation/protobuf/kv_chunk_address_table.pb.h
+[804/1194] Generating RPC stub for /workspace/tt_metal/impl/debug/inspector/rpc.capnp
+[805/1194] Building CXX object tt_metal/llrt/hal/tt-1xx/CMakeFiles/hal_1xx.dir/hal_1xx_common.cpp.o
+[806/1194] Building CXX object tt_metal/llrt/hal/tt-2xx/CMakeFiles/qa_hal.dir/quasar/qa_hal_idle_eth.cpp.o
+[807/1194] Linking CXX static library tt_metal/llrt/hal/tt-1xx/libhal_1xx.a
+[808/1194] Building CXX object tt_metal/llrt/hal/tt-2xx/CMakeFiles/qa_hal.dir/quasar/qa_hal.cpp.o
+[809/1194] Building CXX object tt_metal/llrt/CMakeFiles/llrt.dir/Unity/unity_1_cxx.cxx.o
+[810/1194] Building CXX object tt_metal/common/CMakeFiles/common.dir/Unity/unity_0_cxx.cxx.o
+[811/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_25_cxx.cxx.o
+[812/1194] Building CXX object tt_metal/jit_build/CMakeFiles/jit_build.dir/Unity/unity_1_cxx.cxx.o
+[813/1194] Building CXX object tt_metal/llrt/hal/tt-2xx/CMakeFiles/hal_2xx.dir/hal_2xx_common.cpp.o
+[814/1194] Linking CXX static library tt_metal/llrt/hal/tt-2xx/libhal_2xx.a
+[815/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_24_cxx.cxx.o
+[816/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_23_cxx.cxx.o
+[817/1194] Building CXX object tt_metal/llrt/CMakeFiles/llrt.dir/Unity/unity_0_cxx.cxx.o
+[818/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_22_cxx.cxx.o
+[819/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_21_cxx.cxx.o
+[820/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_20_cxx.cxx.o
+[821/1194] Building CXX object tt_metal/jit_build/CMakeFiles/jit_build.dir/Unity/unity_0_cxx.cxx.o
+[822/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_17_cxx.cxx.o
+[823/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_16_cxx.cxx.o
+[824/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_15_cxx.cxx.o
+[825/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_19_cxx.cxx.o
+[826/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_18_cxx.cxx.o
+[827/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_7_cxx.cxx.o
+[828/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_9_cxx.cxx.o
+[829/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_10_cxx.cxx.o
+[830/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_11_cxx.cxx.o
+[831/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_8_cxx.cxx.o
+[832/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_13_cxx.cxx.o
+[833/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_12_cxx.cxx.o
+[834/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_4_cxx.cxx.o
+[835/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_14_cxx.cxx.o
+[836/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_5_cxx.cxx.o
+[837/1194] Building C++ header for /workspace/tt_metal/distributed/flatbuffer/socket_peer_descriptor.fbs
+[838/1194] Building C++ header for /workspace/tt_metal/distributed/flatbuffer/hd_socket_descriptor.fbs
+[839/1194] Building C++ header for /workspace/tt_metal/distributed/flatbuffer/h2d_stream_service_descriptor.fbs
+[840/1194] Building C++ header for /workspace/tt_metal/distributed/flatbuffer/d2h_stream_service_descriptor.fbs
+[841/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_3_cxx.cxx.o
+[842/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/internal/reload_table.cpp.o
+[843/1194] Building CXX object tt_metal/detail/CMakeFiles/detail.dir/reports/memory_reporter.cpp.o
+[844/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_6_cxx.cxx.o
+[845/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_0_cxx.cxx.o
+[846/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_2_cxx.cxx.o
+[847/1194] Generating protobuf/mesh_graph_descriptor.pb.cc, protobuf/mesh_graph_descriptor.pb.h
+[848/1194] Generating protobuf/physical_system_descriptor.pb.cc, protobuf/physical_system_descriptor.pb.h
+[849/1194] Generating protobuf/router_port_directions.pb.cc, protobuf/router_port_directions.pb.h
+[850/1194] Generating protobuf/port_descriptor_table.pb.cc, protobuf/port_descriptor_table.pb.h
+[851/1194] Generating protobuf/intermesh_connection_table.pb.cc, protobuf/intermesh_connection_table.pb.h
+[852/1194] Generating protobuf/physical_grouping_descriptor.pb.cc, protobuf/physical_grouping_descriptor.pb.h
+[853/1194] Building CXX object tt_metal/distributed/CMakeFiles/distributed.dir/Unity/unity_5_cxx.cxx.o
+[854/1194] Building CXX object tt_metal/distributed/CMakeFiles/distributed.dir/Unity/unity_3_cxx.cxx.o
+[855/1194] Building CXX object tt_metal/impl/CMakeFiles/impl.dir/Unity/unity_1_cxx.cxx.o
+[856/1194] Building CXX object tt_metal/CMakeFiles/tt_metal.dir/impl/streaming_profiler/api.cpp.o
+[857/1194] Building CXX object tt_metal/distributed/CMakeFiles/distributed.dir/Unity/unity_4_cxx.cxx.o
+[858/1194] Building CXX object tt_metal/CMakeFiles/tt_metal.dir/impl/experimental/offline_compile/offline_kernel_compile.cpp.o
+[859/1194] Building CXX object tt_metal/distributed/CMakeFiles/distributed.dir/Unity/unity_2_cxx.cxx.o
+[860/1194] Building CXX object tt_metal/CMakeFiles/tt_metal.dir/impl/graph/graph_tracking.cpp.o
+[861/1194] Building CXX object tt_metal/CMakeFiles/tt_metal.dir/impl/streaming_profiler/ops_csv.cpp.o
+[862/1194] Building CXX object tt_metal/CMakeFiles/tt_metal.dir/impl/host_api/tt_metal.cpp.o
+[863/1194] Building CXX object tt_metal/CMakeFiles/tt_metal.dir/impl/streaming_profiler/zone_csv.cpp.o
+[864/1194] Building CXX object tt_metal/CMakeFiles/tt_metal.dir/hal.cpp.o
+[865/1194] Building CXX object tt_metal/CMakeFiles/tt_metal.dir/impl/streaming_profiler/receiver.cpp.o
+[866/1194] Building CXX object tt_metal/CMakeFiles/tt_metal.dir/impl/streaming_profiler/device_programs.cpp.o
+[867/1194] Building CXX object tt_metal/CMakeFiles/tt_metal.dir/impl/streaming_profiler/tracy_consumer.cpp.o
+[868/1194] Building CXX object tt_metal/CMakeFiles/tt_metal.dir/impl/streaming_profiler/service.cpp.o
+[869/1194] Building CXX object tt_metal/distributed/CMakeFiles/distributed.dir/Unity/unity_1_cxx.cxx.o
+[870/1194] Building CXX object tt_metal/distributed/CMakeFiles/distributed.dir/Unity/unity_0_cxx.cxx.o
+[871/1194] Building CXX object tt_metal/fabric/CMakeFiles/fabric.dir/Unity/unity_2_cxx.cxx.o
+[872/1194] Building CXX object tt_metal/fabric/CMakeFiles/fabric.dir/protobuf/mesh_graph_descriptor.pb.cc.o
+[873/1194] Building CXX object tt_metal/fabric/CMakeFiles/fabric.dir/Unity/unity_5_cxx.cxx.o
+[874/1194] Building CXX object tt_metal/fabric/CMakeFiles/fabric.dir/protobuf/physical_system_descriptor.pb.cc.o
+[875/1194] Building CXX object tt_metal/fabric/CMakeFiles/fabric.dir/Unity/unity_1_cxx.cxx.o
+[876/1194] Building CXX object tt_metal/fabric/CMakeFiles/fabric.dir/protobuf/router_port_directions.pb.cc.o
+[877/1194] Building CXX object tt_metal/fabric/CMakeFiles/fabric.dir/protobuf/intermesh_connection_table.pb.cc.o
+[878/1194] Building CXX object tt_metal/fabric/CMakeFiles/fabric.dir/protobuf/port_descriptor_table.pb.cc.o
+[879/1194] Building CXX object tt_metal/fabric/CMakeFiles/fabric.dir/Unity/unity_3_cxx.cxx.o
+[880/1194] Building CXX object tt_metal/fabric/CMakeFiles/fabric.dir/protobuf/physical_grouping_descriptor.pb.cc.o
+[881/1194] Building CXX object tt_metal/fabric/CMakeFiles/fabric.dir/Unity/unity_4_cxx.cxx.o
+[882/1194] Building CXX object tt_metal/impl/experimental/noc_estimator/CMakeFiles/tt_metal_noc_estimator.dir/noc_estimator.cpp.o
+[883/1194] Building CXX object tt_metal/impl/experimental/noc_estimator/CMakeFiles/tt_metal_noc_estimator.dir/interpolation.cpp.o
+[884/1194] Building CXX object tt_metal/impl/experimental/noc_estimator/CMakeFiles/tt_metal_noc_estimator.dir/yaml_loader.cpp.o
+[885/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_41_cxx.cxx.o
+[886/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_38_cxx.cxx.o
+[887/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_40_cxx.cxx.o
+[888/1194] Building CXX object ttnn/CMakeFiles/ttnn_pch_full.dir/cmake_pch.hxx.pch
+[889/1194] Building CXX object ttnn/CMakeFiles/ttnn_pch_full.dir/ttnn_pch_full.cpp.o
+[890/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_37_cxx.cxx.o
+[891/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_36_cxx.cxx.o
+[892/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_39_cxx.cxx.o
+[893/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_31_cxx.cxx.o
+[894/1194] Building CXX object ttnn/CMakeFiles/ttnncpp.dir/Unity/unity_4_cxx.cxx.o
+[895/1194] Building CXX object ttnn/CMakeFiles/ttnncpp.dir/Unity/unity_3_cxx.cxx.o
+[896/1194] Building CXX object tt_metal/fabric/CMakeFiles/fabric.dir/Unity/unity_6_cxx.cxx.o
+[897/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_35_cxx.cxx.o
+[898/1194] Building CXX object ttnn/CMakeFiles/ttnncpp.dir/Unity/unity_0_cxx.cxx.o
+[899/1194] Building CXX object ttnn/CMakeFiles/ttnncpp.dir/Unity/unity_2_cxx.cxx.o
+[900/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_43_cxx.cxx.o
+[901/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_42_cxx.cxx.o
+[902/1194] Building CXX object ttnn/CMakeFiles/ttnncpp.dir/Unity/unity_1_cxx.cxx.o
+[903/1194] Building CXX object tt_metal/fabric/CMakeFiles/fabric.dir/Unity/unity_0_cxx.cxx.o
+[904/1194] Building CXX object tt_metal/fabric/CMakeFiles/fabric.dir/Unity/unity_7_cxx.cxx.o
+[905/1194] Linking CXX shared library tt_metal/libtt_metal.so
+[906/1194] Linking CXX static library ttnn/libttnn_pch_full.a
+[907/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_34_cxx.cxx.o
+[908/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_44_cxx.cxx.o
+[909/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_27_cxx.cxx.o
+[910/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_30_cxx.cxx.o
+[911/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_29_cxx.cxx.o
+[912/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_33_cxx.cxx.o
+[913/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_32_cxx.cxx.o
+[914/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_45_cxx.cxx.o
+[915/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_28_cxx.cxx.o
+[916/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_22_cxx.cxx.o
+[917/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_21_cxx.cxx.o
+[918/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_23_cxx.cxx.o
+[919/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_25_cxx.cxx.o
+[920/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_16_cxx.cxx.o
+[921/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_24_cxx.cxx.o
+[922/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_9_cxx.cxx.o
+[923/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_20_cxx.cxx.o
+[924/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_12_cxx.cxx.o
+[925/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_19_cxx.cxx.o
+[926/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_8_cxx.cxx.o
+[927/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_26_cxx.cxx.o
+[928/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_11_cxx.cxx.o
+[929/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_10_cxx.cxx.o
+[930/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_15_cxx.cxx.o
+[931/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_14_cxx.cxx.o
+[932/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_17_cxx.cxx.o
+[933/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_7_cxx.cxx.o
+[934/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_2_cxx.cxx.o
+[935/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_6_cxx.cxx.o
+[936/1194] Building CXX object ttnn/CMakeFiles/nanobind-static-abi3.dir/__/.cpmcache/nanobind/7965351fcedc97e6ade403d51a150a266d188dc6/src/nb_internals.cpp.o
+[937/1194] Building CXX object ttnn/CMakeFiles/nanobind-static-abi3.dir/__/.cpmcache/nanobind/7965351fcedc97e6ade403d51a150a266d188dc6/src/nb_func.cpp.o
+[938/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_1_cxx.cxx.o
+[939/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_13_cxx.cxx.o
+[940/1194] Building CXX object ttnn/CMakeFiles/nanobind-static-abi3.dir/__/.cpmcache/nanobind/7965351fcedc97e6ade403d51a150a266d188dc6/src/nb_type.cpp.o
+[941/1194] Building CXX object ttnn/CMakeFiles/nanobind-static-abi3.dir/__/.cpmcache/nanobind/7965351fcedc97e6ade403d51a150a266d188dc6/src/nb_ndarray.cpp.o
+[942/1194] Building CXX object ttnn/CMakeFiles/nanobind-static-abi3.dir/__/.cpmcache/nanobind/7965351fcedc97e6ade403d51a150a266d188dc6/src/nb_enum.cpp.o
+[943/1194] Building CXX object ttnn/CMakeFiles/nanobind-static-abi3.dir/__/.cpmcache/nanobind/7965351fcedc97e6ade403d51a150a266d188dc6/src/nb_static_property.cpp.o
+[944/1194] Building CXX object ttnn/CMakeFiles/nanobind-static-abi3.dir/__/.cpmcache/nanobind/7965351fcedc97e6ade403d51a150a266d188dc6/src/common.cpp.o
+[945/1194] Building CXX object ttnn/CMakeFiles/nanobind-static-abi3.dir/__/.cpmcache/nanobind/7965351fcedc97e6ade403d51a150a266d188dc6/src/error.cpp.o
+[946/1194] Building C++ header for /workspace/ttnn/core/tensor/flatbuffer/tensor.fbs
+[947/1194] Building C++ header for /workspace/ttnn/core/tensor/flatbuffer/overlapped_tensor.fbs
+[948/1194] Building C++ header for /workspace/ttnn/core/tensor/flatbuffer/mesh_shape.fbs
+[949/1194] Building C++ header for /workspace/ttnn/core/tensor/flatbuffer/tensor_spec.fbs
+[950/1194] Building C++ header for /workspace/ttnn/core/tensor/flatbuffer/tensor_topology.fbs
+[951/1194] Building CXX object ttnn/CMakeFiles/nanobind-static-abi3.dir/__/.cpmcache/nanobind/7965351fcedc97e6ade403d51a150a266d188dc6/src/trampoline.cpp.o
+[952/1194] Building CXX object ttnn/CMakeFiles/nanobind-static-abi3.dir/__/.cpmcache/nanobind/7965351fcedc97e6ade403d51a150a266d188dc6/src/implicit.cpp.o
+[953/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_4_cxx.cxx.o
+[954/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_5_cxx.cxx.o
+[955/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_0_cxx.cxx.o
+[956/1194] Building CXX object ttnn/CMakeFiles/ttnn_core.dir/Unity/unity_3_cxx.cxx.o
+[957/1194] Linking CXX static library ttnn/libnanobind-static-abi3.a
+[958/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_18_cxx.cxx.o
+[959/1194] Building CXX object ttnn/CMakeFiles/ttnn.dir/Unity/unity_3_cxx.cxx.o
+[960/1194] Building CXX object ttnn/CMakeFiles/ttnn_core.dir/Unity/unity_0_cxx.cxx.o
+[961/1194] Building CXX object ttnn/CMakeFiles/ttnn_core.dir/Unity/unity_2_cxx.cxx.o
+[962/1194] Building CXX object ttnn/CMakeFiles/ttnn_core.dir/Unity/unity_4_cxx.cxx.o
+[963/1194] Building CXX object ttnn/CMakeFiles/ttnn_core.dir/Unity/unity_1_cxx.cxx.o
+[964/1194] Building CXX object ttnn/cpp/ttnn/operations/conv/CMakeFiles/ttnn_op_conv.dir/Unity/unity_1_cxx.cxx.o
+[965/1194] Building CXX object ttnn/cpp/ttnn/operations/pool/CMakeFiles/ttnn_op_pool.dir/Unity/unity_1_cxx.cxx.o
+[966/1194] Building CXX object ttnn/cpp/ttnn/operations/pool/CMakeFiles/ttnn_op_pool.dir/Unity/unity_2_cxx.cxx.o
+[967/1194] Building CXX object ttnn/cpp/ttnn/operations/conv/CMakeFiles/ttnn_op_conv.dir/Unity/unity_0_cxx.cxx.o
+[968/1194] Building CXX object ttnn/cpp/ttnn/operations/sliding_window/CMakeFiles/ttnn_op_sliding_window.dir/Unity/unity_0_cxx.cxx.o
+[969/1194] Building CXX object ttnn/cpp/ttnn/operations/pool/CMakeFiles/ttnn_op_pool.dir/Unity/unity_0_cxx.cxx.o
+[970/1194] Building CXX object ttnn/cpp/ttnn/operations/ccl/CMakeFiles/ttnn_op_ccl.dir/Unity/unity_4_cxx.cxx.o
+[971/1194] Building CXX object ttnn/cpp/ttnn/operations/point_to_point/CMakeFiles/ttnn_op_point_to_point.dir/device/host/send_program_factory.cpp.o
+[972/1194] Building CXX object ttnn/cpp/ttnn/operations/point_to_point/CMakeFiles/ttnn_op_point_to_point.dir/device/host/receive_program_factory.cpp.o
+[973/1194] Building CXX object ttnn/cpp/ttnn/operations/point_to_point/CMakeFiles/ttnn_op_point_to_point.dir/point_to_point.cpp.o
+[974/1194] Building CXX object ttnn/cpp/ttnn/operations/point_to_point/CMakeFiles/ttnn_op_point_to_point.dir/device/host/local_copy_program_factory.cpp.o
+[975/1194] Building CXX object ttnn/cpp/ttnn/operations/ccl/CMakeFiles/ttnn_op_ccl.dir/Unity/unity_0_cxx.cxx.o
+[976/1194] Building CXX object ttnn/cpp/ttnn/operations/ccl/CMakeFiles/ttnn_op_ccl.dir/Unity/unity_3_cxx.cxx.o
+[977/1194] Building CXX object ttnn/CMakeFiles/ttnn_core.dir/Unity/unity_5_cxx.cxx.o
+[978/1194] Building CXX object ttnn/cpp/ttnn/operations/point_to_point/CMakeFiles/ttnn_op_point_to_point.dir/device/host/point_to_point_device_op.cpp.o
+[979/1194] Building CXX object ttnn/cpp/ttnn/operations/ccl/CMakeFiles/ttnn_op_ccl.dir/Unity/unity_1_cxx.cxx.o
+[980/1194] Building CXX object ttnn/cpp/ttnn/operations/ccl/CMakeFiles/ttnn_op_ccl.dir/Unity/unity_2_cxx.cxx.o
+[981/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_23_cxx.cxx.o
+[982/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_20_cxx.cxx.o
+[983/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_19_cxx.cxx.o
+[984/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_22_cxx.cxx.o
+[985/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_21_cxx.cxx.o
+[986/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_18_cxx.cxx.o
+[987/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_17_cxx.cxx.o
+[988/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_16_cxx.cxx.o
+[989/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_15_cxx.cxx.o
+[990/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_13_cxx.cxx.o
+[991/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_9_cxx.cxx.o
+[992/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_14_cxx.cxx.o
+[993/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_12_cxx.cxx.o
+[994/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_11_cxx.cxx.o
+[995/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_10_cxx.cxx.o
+[996/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_7_cxx.cxx.o
+[997/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_6_cxx.cxx.o
+[998/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_8_cxx.cxx.o
+[999/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_5_cxx.cxx.o
+[1000/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_4_cxx.cxx.o
+[1001/1194] Building CXX object ttnn/cpp/ttnn/operations/embedding_backward/CMakeFiles/ttnn_op_embedding_backward.dir/Unity/unity_0_cxx.cxx.o
+[1002/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_2_cxx.cxx.o
+[1003/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_3_cxx.cxx.o
+[1004/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_0_cxx.cxx.o
+[1005/1194] Building CXX object ttnn/cpp/ttnn/operations/embedding/CMakeFiles/ttnn_op_embedding.dir/Unity/unity_0_cxx.cxx.o
+[1006/1194] Building CXX object ttnn/cpp/ttnn/operations/data_movement/CMakeFiles/ttnn_op_data_movement.dir/Unity/unity_1_cxx.cxx.o
+[1007/1194] Building CXX object ttnn/cpp/ttnn/operations/normalization/CMakeFiles/ttnn_op_normalization.dir/Unity/unity_4_cxx.cxx.o
+[1008/1194] Building CXX object ttnn/cpp/ttnn/operations/reduction/CMakeFiles/ttnn_op_reduction.dir/Unity/unity_6_cxx.cxx.o
+[1009/1194] Building CXX object ttnn/cpp/ttnn/operations/normalization/CMakeFiles/ttnn_op_normalization.dir/Unity/unity_3_cxx.cxx.o
+[1010/1194] Building CXX object ttnn/cpp/ttnn/operations/matmul/CMakeFiles/ttnn_op_matmul.dir/Unity/unity_1_cxx.cxx.o
+[1011/1194] Building CXX object ttnn/cpp/ttnn/operations/reduction/CMakeFiles/ttnn_op_reduction.dir/Unity/unity_5_cxx.cxx.o
+[1012/1194] Building CXX object ttnn/cpp/ttnn/operations/normalization/CMakeFiles/ttnn_op_normalization.dir/Unity/unity_0_cxx.cxx.o
+[1013/1194] Building CXX object ttnn/cpp/ttnn/operations/normalization/CMakeFiles/ttnn_op_normalization.dir/Unity/unity_2_cxx.cxx.o
+[1014/1194] Building CXX object ttnn/cpp/ttnn/operations/normalization/CMakeFiles/ttnn_op_normalization.dir/Unity/unity_1_cxx.cxx.o
+[1015/1194] Building CXX object ttnn/cpp/ttnn/operations/bernoulli/CMakeFiles/ttnn_op_bernoulli.dir/Unity/unity_0_cxx.cxx.o
+[1016/1194] Building CXX object ttnn/cpp/ttnn/operations/reduction/CMakeFiles/ttnn_op_reduction.dir/Unity/unity_4_cxx.cxx.o
+[1017/1194] Building CXX object ttnn/cpp/ttnn/operations/creation/CMakeFiles/ttnn_op_creation.dir/Unity/unity_0_cxx.cxx.o
+[1018/1194] Building CXX object ttnn/cpp/ttnn/operations/reduction/CMakeFiles/ttnn_op_reduction.dir/Unity/unity_2_cxx.cxx.o
+[1019/1194] Building CXX object ttnn/cpp/ttnn/operations/reduction/CMakeFiles/ttnn_op_reduction.dir/Unity/unity_3_cxx.cxx.o
+[1020/1194] Building CXX object ttnn/cpp/ttnn/operations/core/CMakeFiles/ttnn_op_core.dir/Unity/unity_0_cxx.cxx.o
+[1021/1194] Building CXX object ttnn/cpp/ttnn/operations/reduction/CMakeFiles/ttnn_op_reduction.dir/Unity/unity_1_cxx.cxx.o
+[1022/1194] Building CXX object ttnn/cpp/ttnn/operations/full_like/CMakeFiles/ttnn_op_full_like.dir/Unity/unity_0_cxx.cxx.o
+[1023/1194] Building CXX object ttnn/cpp/ttnn/operations/reduction/CMakeFiles/ttnn_op_reduction.dir/Unity/unity_0_cxx.cxx.o
+[1024/1194] Building CXX object ttnn/cpp/ttnn/operations/debug/CMakeFiles/ttnn_op_debug.dir/Unity/unity_0_cxx.cxx.o
+[1025/1194] Building CXX object ttnn/cpp/ttnn/operations/matmul/CMakeFiles/ttnn_op_matmul.dir/Unity/unity_0_cxx.cxx.o
+[1026/1194] Building CXX object ttnn/cpp/ttnn/operations/examples/CMakeFiles/ttnn_op_examples.dir/Unity/unity_0_cxx.cxx.o
+[1027/1194] Building CXX object ttnn/cpp/ttnn/operations/loss/CMakeFiles/ttnn_op_loss.dir/Unity/unity_0_cxx.cxx.o
+[1028/1194] Building CXX object ttnn/cpp/ttnn/operations/index_fill/CMakeFiles/ttnn_op_index_fill.dir/Unity/unity_0_cxx.cxx.o
+[1029/1194] Building CXX object ttnn/cpp/ttnn/operations/index_fill_new/CMakeFiles/ttnn_op_index_fill_new.dir/Unity/unity_0_cxx.cxx.o
+[1030/1194] Building CXX object ttnn/cpp/ttnn/operations/full/CMakeFiles/ttnn_op_full.dir/Unity/unity_0_cxx.cxx.o
+[1031/1194] Building CXX object ttnn/cpp/ttnn/operations/rand/CMakeFiles/ttnn_op_rand.dir/Unity/unity_0_cxx.cxx.o
+[1032/1194] Building CXX object ttnn/cpp/ttnn/operations/eltwise/complex/CMakeFiles/ttnn_op_eltwise_complex.dir/Unity/unity_0_cxx.cxx.o
+[1033/1194] Building CXX object ttnn/cpp/ttnn/operations/uniform/CMakeFiles/ttnn_op_uniform.dir/Unity/unity_0_cxx.cxx.o
+[1034/1194] Building CXX object ttnn/cpp/ttnn/operations/randn/CMakeFiles/ttnn_op_randn.dir/Unity/unity_0_cxx.cxx.o
+[1035/1194] Building CXX object ttnn/cpp/ttnn/operations/kv_cache/CMakeFiles/ttnn_op_kv_cache.dir/Unity/unity_0_cxx.cxx.o
+[1036/1194] Building CXX object ttnn/cpp/ttnn/operations/eltwise/complex_binary/CMakeFiles/ttnn_op_eltwise_complex_binary.dir/Unity/unity_0_cxx.cxx.o
+[1037/1194] Building CXX object ttnn/cpp/ttnn/operations/prefetcher/CMakeFiles/ttnn_op_prefetcher.dir/Unity/unity_0_cxx.cxx.o
+[1038/1194] Building CXX object ttnn/cpp/ttnn/operations/eltwise/complex_unary/CMakeFiles/ttnn_op_eltwise_complex_unary.dir/Unity/unity_0_cxx.cxx.o
+[1039/1194] Building CXX object ttnn/cpp/ttnn/operations/eltwise/binary/CMakeFiles/ttnn_op_eltwise_binary.dir/Unity/unity_0_cxx.cxx.o
+[1040/1194] Building CXX object ttnn/cpp/ttnn/operations/eltwise/complex_unary_backward/CMakeFiles/ttnn_op_eltwise_complex_unary_backward.dir/Unity/unity_0_cxx.cxx.o
+[1041/1194] Building CXX object ttnn/cpp/ttnn/operations/eltwise/ternary_backward/CMakeFiles/ttnn_op_eltwise_ternary_backward.dir/Unity/unity_0_cxx.cxx.o
+[1042/1194] Building CXX object ttnn/cpp/ttnn/operations/eltwise/binary_backward/CMakeFiles/ttnn_op_eltwise_binary_backward.dir/Unity/unity_0_cxx.cxx.o
+[1043/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/adaptive_pool/CMakeFiles/ttnn_op_experimental_adaptive_pool.dir/Unity/unity_0_cxx.cxx.o
+[1044/1194] Building CXX object ttnn/cpp/ttnn/operations/eltwise/quantization/CMakeFiles/ttnn_op_eltwise_quantization.dir/Unity/unity_0_cxx.cxx.o
+[1045/1194] Building CXX object ttnn/cpp/ttnn/operations/eltwise/binary_ng/CMakeFiles/ttnn_op_eltwise_binary_ng.dir/Unity/unity_0_cxx.cxx.o
+[1046/1194] Building CXX object ttnn/cpp/ttnn/operations/eltwise/ternary/CMakeFiles/ttnn_op_eltwise_ternary.dir/Unity/unity_0_cxx.cxx.o
+[1047/1194] Building CXX object ttnn/cpp/ttnn/operations/eltwise/unary_backward/CMakeFiles/ttnn_op_eltwise_unary_backward.dir/Unity/unity_0_cxx.cxx.o
+[1048/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/cnn/CMakeFiles/ttnn_op_experimental_cnn.dir/Unity/unity_0_cxx.cxx.o
+[1049/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/conv3d/CMakeFiles/ttnn_op_experimental_conv3d.dir/Unity/unity_0_cxx.cxx.o
+[1050/1194] Building CXX object ttnn/cpp/ttnn/operations/eltwise/unary/CMakeFiles/ttnn_op_eltwise_unary.dir/Unity/unity_0_cxx.cxx.o
+[1051/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/ccl/CMakeFiles/ttnn_op_experimental_ccl.dir/Unity/unity_13_cxx.cxx.o
+[1052/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/ccl/CMakeFiles/ttnn_op_experimental_ccl.dir/Unity/unity_10_cxx.cxx.o
+[1053/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/ccl/CMakeFiles/ttnn_op_experimental_ccl.dir/Unity/unity_11_cxx.cxx.o
+[1054/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/ccl/CMakeFiles/ttnn_op_experimental_ccl.dir/Unity/unity_8_cxx.cxx.o
+[1055/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/ccl/CMakeFiles/ttnn_op_experimental_ccl.dir/Unity/unity_12_cxx.cxx.o
+[1056/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/ccl/CMakeFiles/ttnn_op_experimental_ccl.dir/Unity/unity_9_cxx.cxx.o
+[1057/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/ccl/CMakeFiles/ttnn_op_experimental_ccl.dir/Unity/unity_7_cxx.cxx.o
+[1058/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/ccl/CMakeFiles/ttnn_op_experimental_ccl.dir/Unity/unity_5_cxx.cxx.o
+[1059/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/ccl/CMakeFiles/ttnn_op_experimental_ccl.dir/Unity/unity_3_cxx.cxx.o
+[1060/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/ccl/CMakeFiles/ttnn_op_experimental_ccl.dir/Unity/unity_2_cxx.cxx.o
+[1061/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/ccl/CMakeFiles/ttnn_op_experimental_ccl.dir/Unity/unity_4_cxx.cxx.o
+[1062/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/ccl/CMakeFiles/ttnn_op_experimental_ccl.dir/Unity/unity_1_cxx.cxx.o
+[1063/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/ccl/CMakeFiles/ttnn_op_experimental_ccl.dir/Unity/unity_0_cxx.cxx.o
+[1064/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/ccl/CMakeFiles/ttnn_op_experimental_ccl.dir/Unity/unity_6_cxx.cxx.o
+[1065/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/CMakeFiles/ttnn_op_experimental_moe_gpt.dir/Unity/unity_0_cxx.cxx.o
+[1066/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/matmul_decode/CMakeFiles/ttnn_op_experimental_matmul_decode.dir/Unity/unity_0_cxx.cxx.o
+[1067/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/matmul/CMakeFiles/ttnn_op_experimental_matmul.dir/Unity/unity_0_cxx.cxx.o
+[1068/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/quasar/CMakeFiles/ttnn_op_experimental_quasar.dir/Unity/unity_15_cxx.cxx.o
+[1069/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/quasar/CMakeFiles/ttnn_op_experimental_quasar.dir/Unity/unity_17_cxx.cxx.o
+[1070/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/quasar/CMakeFiles/ttnn_op_experimental_quasar.dir/Unity/unity_19_cxx.cxx.o
+[1071/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/quasar/CMakeFiles/ttnn_op_experimental_quasar.dir/Unity/unity_16_cxx.cxx.o
+[1072/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/quasar/CMakeFiles/ttnn_op_experimental_quasar.dir/Unity/unity_14_cxx.cxx.o
+[1073/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/quasar/CMakeFiles/ttnn_op_experimental_quasar.dir/Unity/unity_18_cxx.cxx.o
+[1074/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/quasar/CMakeFiles/ttnn_op_experimental_quasar.dir/Unity/unity_13_cxx.cxx.o
+[1075/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/quasar/CMakeFiles/ttnn_op_experimental_quasar.dir/Unity/unity_10_cxx.cxx.o
+[1076/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/quasar/CMakeFiles/ttnn_op_experimental_quasar.dir/Unity/unity_7_cxx.cxx.o
+[1077/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/quasar/CMakeFiles/ttnn_op_experimental_quasar.dir/Unity/unity_6_cxx.cxx.o
+[1078/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/quasar/CMakeFiles/ttnn_op_experimental_quasar.dir/Unity/unity_8_cxx.cxx.o
+[1079/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/quasar/CMakeFiles/ttnn_op_experimental_quasar.dir/Unity/unity_11_cxx.cxx.o
+[1080/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/quasar/CMakeFiles/ttnn_op_experimental_quasar.dir/Unity/unity_5_cxx.cxx.o
+[1081/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/quasar/CMakeFiles/ttnn_op_experimental_quasar.dir/Unity/unity_12_cxx.cxx.o
+[1082/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/quasar/CMakeFiles/ttnn_op_experimental_quasar.dir/Unity/unity_4_cxx.cxx.o
+[1083/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/quasar/CMakeFiles/ttnn_op_experimental_quasar.dir/Unity/unity_9_cxx.cxx.o
+[1084/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/quasar/CMakeFiles/ttnn_op_experimental_quasar.dir/Unity/unity_3_cxx.cxx.o
+[1085/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/quasar/CMakeFiles/ttnn_op_experimental_quasar.dir/Unity/unity_2_cxx.cxx.o
+[1086/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/quasar/CMakeFiles/ttnn_op_experimental_quasar.dir/Unity/unity_1_cxx.cxx.o
+[1087/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/reduction/CMakeFiles/ttnn_op_experimental_reduction.dir/Unity/unity_1_cxx.cxx.o
+[1088/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/kda/CMakeFiles/ttnn_op_experimental_kda_common.dir/Unity/unity_0_cxx.cxx.o
+[1089/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/quasar/CMakeFiles/ttnn_op_experimental_quasar.dir/Unity/unity_0_cxx.cxx.o
+[1090/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/CMakeFiles/ttnn_op_experimental_high_bw_all_gather.dir/Unity/unity_0_cxx.cxx.o
+[1091/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/reduction/CMakeFiles/ttnn_op_experimental_reduction.dir/Unity/unity_0_cxx.cxx.o
+[1092/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/indexer_score/CMakeFiles/ttnn_op_experimental_indexer_score.dir/Unity/unity_0_cxx.cxx.o
+[1093/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/kda/sigmoid_gated_rms_norm/CMakeFiles/ttnn_op_experimental_kda_sigmoid_gated_rms_norm.dir/Unity/unity_0_cxx.cxx.o
+[1094/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/kda/select_final_carry/CMakeFiles/ttnn_op_experimental_kda_select_final_carry.dir/Unity/unity_0_cxx.cxx.o
+[1095/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/kda/chain_affine_transforms/CMakeFiles/ttnn_op_experimental_kda_chain_affine_transforms.dir/Unity/unity_0_cxx.cxx.o
+[1096/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/CMakeFiles/ttnn_op_experimental_kda_qkv_causal_conv1d_silu.dir/Unity/unity_0_cxx.cxx.o
+[1097/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/kda/reduce_affine_transforms/CMakeFiles/ttnn_op_experimental_kda_reduce_affine_transforms.dir/Unity/unity_0_cxx.cxx.o
+[1098/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/kda/affine_exclusive_scan/CMakeFiles/ttnn_op_experimental_kda_affine_exclusive_scan.dir/Unity/unity_0_cxx.cxx.o
+[1099/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/topk_large_indices/CMakeFiles/ttnn_op_experimental_topk_large_indices.dir/Unity/unity_0_cxx.cxx.o
+[1100/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/kda/prepare_chunk_recurrence/CMakeFiles/ttnn_op_experimental_kda_prepare_chunk_recurrence.dir/Unity/unity_0_cxx.cxx.o
+[1101/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/indexed_page_cache/CMakeFiles/ttnn_op_experimental_indexed_page_cache.dir/Unity/unity_0_cxx.cxx.o
+[1102/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/isin/CMakeFiles/ttnn_op_experimental_isin.dir/Unity/unity_0_cxx.cxx.o
+[1103/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/minimal_matmul/CMakeFiles/ttnn_op_experimental_minimal_matmul.dir/device/minimal_matmul_program_factory.cpp.o
+[1104/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/minimal_matmul/CMakeFiles/ttnn_op_experimental_minimal_matmul.dir/device/minimal_matmul_fabric_bound_program_factory.cpp.o
+[1105/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/minimal_matmul/CMakeFiles/ttnn_op_experimental_minimal_matmul.dir/device/minimal_matmul_program_descriptor.cpp.o
+[1106/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/kda/recurrent_chunk_scan/CMakeFiles/ttnn_op_experimental_kda_recurrent_chunk_scan.dir/Unity/unity_0_cxx.cxx.o
+[1107/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/minimal_matmul/CMakeFiles/ttnn_op_experimental_minimal_matmul.dir/Unity/unity_0_cxx.cxx.o
+[1108/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/copy/CMakeFiles/ttnn_op_experimental_copy.dir/Unity/unity_0_cxx.cxx.o
+[1109/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/rgb_to_yuv/CMakeFiles/ttnn_op_experimental_rgb_to_yuv.dir/Unity/unity_0_cxx.cxx.o
+[1110/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/paged_cache/CMakeFiles/ttnn_op_experimental_paged_cache.dir/Unity/unity_0_cxx.cxx.o
+[1111/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/bcast_to/CMakeFiles/ttnn_op_experimental_bcast_to.dir/Unity/unity_0_cxx.cxx.o
+[1112/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/padded_slice/CMakeFiles/ttnn_op_experimental_padded_slice.dir/Unity/unity_0_cxx.cxx.o
+[1113/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/slice_write/CMakeFiles/ttnn_op_experimental_slice_write.dir/Unity/unity_0_cxx.cxx.o
+[1114/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/CMakeFiles/ttnn_op_experimental_deepseek_moe_deepseek_moe_gate.dir/Unity/unity_0_cxx.cxx.o
+[1115/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/CMakeFiles/ttnn_op_experimental_deepseek_mla_matmul_wo.dir/Unity/unity_0_cxx.cxx.o
+[1116/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/CMakeFiles/ttnn_op_experimental_deepseek_moe_generalized_moe_gate.dir/Unity/unity_0_cxx.cxx.o
+[1117/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/CMakeFiles/ttnn_op_experimental_deepseek_moe_moe_gate_mm.dir/Unity/unity_0_cxx.cxx.o
+[1118/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize/CMakeFiles/ttnn_op_experimental_deepseek_moe_post_combine_tilize.dir/Unity/unity_0_cxx.cxx.o
+[1119/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/reshape/CMakeFiles/ttnn_op_experimental_reshape.dir/Unity/unity_0_cxx.cxx.o
+[1120/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/fft/CMakeFiles/ttnn_op_experimental_fft.dir/Unity/unity_2_cxx.cxx.o
+[1121/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/ssm/CMakeFiles/ttnn_op_experimental_ssm.dir/Unity/unity_1_cxx.cxx.o
+[1122/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/dropout/CMakeFiles/ttnn_op_experimental_dropout.dir/Unity/unity_0_cxx.cxx.o
+[1123/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/multi_scale_deformable_attn/CMakeFiles/ttnn_op_experimental_multi_scale_deformable_attn.dir/Unity/unity_0_cxx.cxx.o
+[1124/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/fused_msda/CMakeFiles/ttnn_op_experimental_fused_msda.dir/Unity/unity_0_cxx.cxx.o
+[1125/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/tensor_prefetcher/CMakeFiles/ttnn_op_experimental_tensor_prefetcher.dir/tensor_prefetcher.cpp.o
+[1126/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/fft/CMakeFiles/ttnn_op_experimental_fft.dir/Unity/unity_1_cxx.cxx.o
+[1127/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/test/CMakeFiles/ttnn_op_experimental_test.dir/hang_device/hang_device_operation.cpp.o
+[1128/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/plusone/CMakeFiles/ttnn_op_experimental_plusone.dir/Unity/unity_0_cxx.cxx.o
+[1129/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/fft/CMakeFiles/ttnn_op_experimental_fft.dir/Unity/unity_0_cxx.cxx.o
+[1130/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/test/CMakeFiles/ttnn_op_experimental_test.dir/prefetcher_consumer/dram_prefetcher_consumer.cpp.o
+[1131/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/ssm/CMakeFiles/ttnn_op_experimental_ssm.dir/Unity/unity_0_cxx.cxx.o
+[1132/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/test/CMakeFiles/ttnn_op_experimental_test.dir/prefetcher_consumer/dram_prefetcher_validator.cpp.o
+[1133/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/topk_router_gpt/CMakeFiles/ttnn_op_experimental_topk_router_gpt.dir/Unity/unity_0_cxx.cxx.o
+[1134/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/attn_res_weighted_reduce_nc/CMakeFiles/ttnn_op_experimental_deepseek_prefill_attn_res_weighted_reduce_nc.dir/Unity/unity_0_cxx.cxx.o
+[1135/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/CMakeFiles/ttnn_op_experimental_deepseek_prefill_attn_res_gather_softmax.dir/Unity/unity_0_cxx.cxx.o
+[1136/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/csa_compressor/CMakeFiles/ttnn_op_experimental_deepseek_prefill_csa_compressor.dir/Unity/unity_0_cxx.cxx.o
+[1137/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/compressor_state_exchange/CMakeFiles/ttnn_op_experimental_deepseek_prefill_compressor_state_exchange.dir/Unity/unity_0_cxx.cxx.o
+[1138/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/CMakeFiles/ttnn_op_experimental_deepseek_prefill_combine_fabric2d.dir/Unity/unity_0_cxx.cxx.o
+[1139/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/CMakeFiles/ttnn_op_experimental_deepseek_prefill_combine.dir/Unity/unity_0_cxx.cxx.o
+[1140/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/extract/CMakeFiles/ttnn_op_experimental_deepseek_prefill_extract.dir/Unity/unity_0_cxx.cxx.o
+[1141/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch_fabric2d/CMakeFiles/ttnn_op_experimental_deepseek_prefill_dispatch_fabric2d.dir/Unity/unity_0_cxx.cxx.o
+[1142/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/CMakeFiles/ttnn_op_experimental_deepseek_prefill_dispatch.dir/Unity/unity_0_cxx.cxx.o
+[1143/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount/CMakeFiles/ttnn_op_experimental_deepseek_prefill_masked_bincount.dir/Unity/unity_0_cxx.cxx.o
+[1144/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/inbound_socket_service_sync/CMakeFiles/ttnn_op_experimental_deepseek_prefill_inbound_socket_service_sync.dir/Unity/unity_0_cxx.cxx.o
+[1145/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/insert/CMakeFiles/ttnn_op_experimental_deepseek_prefill_insert.dir/Unity/unity_0_cxx.cxx.o
+[1146/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/mhc_split_sinkhorn/CMakeFiles/ttnn_op_experimental_deepseek_prefill_mhc_split_sinkhorn.dir/Unity/unity_0_cxx.cxx.o
+[1147/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_hash_gate/CMakeFiles/ttnn_op_experimental_deepseek_prefill_moe_hash_gate.dir/Unity/unity_0_cxx.cxx.o
+[1148/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_padding_config/CMakeFiles/ttnn_op_experimental_deepseek_prefill_moe_padding_config.dir/Unity/unity_0_cxx.cxx.o
+[1149/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/CMakeFiles/ttnn_op_experimental_deepseek_prefill_moe_grouped_topk.dir/Unity/unity_0_cxx.cxx.o
+[1150/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/pack_scaled_fp8_kv_cache/CMakeFiles/ttnn_op_experimental_deepseek_prefill_pack_scaled_fp8_kv_cache.dir/Unity/unity_0_cxx.cxx.o
+[1151/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/hybrid_routed_expert_ffn/CMakeFiles/ttnn_op_experimental_deepseek_prefill_hybrid_routed_expert_ffn.dir/Unity/unity_0_cxx.cxx.o
+[1152/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum/CMakeFiles/ttnn_op_experimental_deepseek_prefill_offset_cumsum.dir/Unity/unity_0_cxx.cxx.o
+[1153/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/outbound_socket_service_sync/CMakeFiles/ttnn_op_experimental_deepseek_prefill_outbound_socket_service_sync.dir/Unity/unity_0_cxx.cxx.o
+[1154/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/CMakeFiles/ttnn_op_experimental_deepseek_prefill_moe_fused_swiglu.dir/Unity/unity_0_cxx.cxx.o
+[1155/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/transformer/CMakeFiles/ttnn_op_experimental_transformer.dir/Unity/unity_10_cxx.cxx.o
+[1156/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/CMakeFiles/ttnn_op_experimental_deepseek_prefill_per_token_cast_to_fp8.dir/Unity/unity_0_cxx.cxx.o
+[1157/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_back/CMakeFiles/ttnn_op_experimental_deepseek_prefill_per_token_cast_back.dir/Unity/unity_0_cxx.cxx.o
+[1158/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/CMakeFiles/ttnn_op_experimental_deepseek_prefill_post_combine_reduce.dir/Unity/unity_0_cxx.cxx.o
+[1159/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/zero_padded_kv_cache/CMakeFiles/ttnn_op_experimental_deepseek_prefill_zero_padded_kv_cache.dir/Unity/unity_0_cxx.cxx.o
+[1160/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/CMakeFiles/ttnn_op_experimental_deepseek_prefill_update_padded_kv_cache.dir/Unity/unity_0_cxx.cxx.o
+[1161/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/CMakeFiles/ttnn_op_experimental_deepseek_prefill_unified_routed_expert_ffn.dir/Unity/unity_0_cxx.cxx.o
+[1162/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/CMakeFiles/ttnn_op_experimental_deepseek_prefill_rotary_embedding_indexed.dir/Unity/unity_0_cxx.cxx.o
+[1163/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/transformer/CMakeFiles/ttnn_op_experimental_transformer.dir/Unity/unity_9_cxx.cxx.o
+[1164/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/transformer/CMakeFiles/ttnn_op_experimental_transformer.dir/Unity/unity_8_cxx.cxx.o
+[1165/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/transformer/CMakeFiles/ttnn_op_experimental_transformer.dir/Unity/unity_6_cxx.cxx.o
+[1166/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/transformer/CMakeFiles/ttnn_op_experimental_transformer.dir/Unity/unity_7_cxx.cxx.o
+[1167/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/transformer/CMakeFiles/ttnn_op_experimental_transformer.dir/Unity/unity_5_cxx.cxx.o
+[1168/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/transformer/CMakeFiles/ttnn_op_experimental_transformer.dir/Unity/unity_4_cxx.cxx.o
+[1169/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/transformer/CMakeFiles/ttnn_op_experimental_transformer.dir/Unity/unity_3_cxx.cxx.o
+[1170/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/transformer/CMakeFiles/ttnn_op_experimental_transformer.dir/Unity/unity_2_cxx.cxx.o
+[1171/1194] Building CXX object ttnn/cpp/ttnn/operations/moreh/CMakeFiles/ttnn_op_moreh.dir/Unity/unity_14_cxx.cxx.o
+[1172/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/transformer/CMakeFiles/ttnn_op_experimental_transformer.dir/Unity/unity_1_cxx.cxx.o
+[1173/1194] Building CXX object ttnn/cpp/ttnn/operations/experimental/transformer/CMakeFiles/ttnn_op_experimental_transformer.dir/Unity/unity_0_cxx.cxx.o
+[1174/1194] Building CXX object ttnn/cpp/ttnn/operations/moreh/CMakeFiles/ttnn_op_moreh.dir/Unity/unity_12_cxx.cxx.o
+[1175/1194] Building CXX object ttnn/cpp/ttnn/operations/moreh/CMakeFiles/ttnn_op_moreh.dir/Unity/unity_11_cxx.cxx.o
+[1176/1194] Building CXX object ttnn/cpp/ttnn/operations/moreh/CMakeFiles/ttnn_op_moreh.dir/Unity/unity_13_cxx.cxx.o
+[1177/1194] Building CXX object ttnn/cpp/ttnn/operations/moreh/CMakeFiles/ttnn_op_moreh.dir/Unity/unity_10_cxx.cxx.o
+[1178/1194] Building CXX object ttnn/cpp/ttnn/operations/moreh/CMakeFiles/ttnn_op_moreh.dir/Unity/unity_9_cxx.cxx.o
+[1179/1194] Building CXX object ttnn/cpp/ttnn/operations/moreh/CMakeFiles/ttnn_op_moreh.dir/Unity/unity_8_cxx.cxx.o
+[1180/1194] Building CXX object ttnn/cpp/ttnn/operations/moreh/CMakeFiles/ttnn_op_moreh.dir/Unity/unity_7_cxx.cxx.o
+[1181/1194] Building CXX object ttnn/cpp/ttnn/operations/moreh/CMakeFiles/ttnn_op_moreh.dir/Unity/unity_6_cxx.cxx.o
+[1182/1194] Building CXX object ttnn/cpp/ttnn/operations/moreh/CMakeFiles/ttnn_op_moreh.dir/Unity/unity_5_cxx.cxx.o
+[1183/1194] Building CXX object ttnn/cpp/ttnn/operations/moreh/CMakeFiles/ttnn_op_moreh.dir/Unity/unity_4_cxx.cxx.o
+[1184/1194] Building CXX object ttnn/cpp/ttnn/operations/moreh/CMakeFiles/ttnn_op_moreh.dir/Unity/unity_3_cxx.cxx.o
+[1185/1194] Building CXX object ttnn/cpp/ttnn/operations/moreh/CMakeFiles/ttnn_op_moreh.dir/Unity/unity_1_cxx.cxx.o
+[1186/1194] Building CXX object ttnn/cpp/ttnn/operations/moreh/CMakeFiles/ttnn_op_moreh.dir/Unity/unity_2_cxx.cxx.o
+[1187/1194] Building CXX object ttnn/cpp/ttnn/operations/transformer/CMakeFiles/ttnn_op_transformer.dir/Unity/unity_4_cxx.cxx.o
+[1188/1194] Building CXX object ttnn/cpp/ttnn/operations/moreh/CMakeFiles/ttnn_op_moreh.dir/Unity/unity_0_cxx.cxx.o
+[1189/1194] Building CXX object ttnn/cpp/ttnn/operations/transformer/CMakeFiles/ttnn_op_transformer.dir/Unity/unity_3_cxx.cxx.o
+[1190/1194] Building CXX object ttnn/cpp/ttnn/operations/transformer/CMakeFiles/ttnn_op_transformer.dir/Unity/unity_2_cxx.cxx.o
+[1191/1194] Building CXX object ttnn/cpp/ttnn/operations/transformer/CMakeFiles/ttnn_op_transformer.dir/Unity/unity_0_cxx.cxx.o
+[1192/1194] Building CXX object ttnn/cpp/ttnn/operations/transformer/CMakeFiles/ttnn_op_transformer.dir/Unity/unity_1_cxx.cxx.o
+[1193/1194] Linking CXX shared library ttnn/_ttnncpp.so
+[1194/1194] Linking CXX shared library ttnn/_ttnn.so

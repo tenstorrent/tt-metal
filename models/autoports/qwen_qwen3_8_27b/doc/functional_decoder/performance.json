@@ -1,0 +1,161 @@
+{
+  "linear_attention": {
+    "1": {
+      "prefill_device_us": 284743.5407407407,
+      "decode_device_us": 2660.428148148148,
+      "prefill_useful_flops": 3163039465472,
+      "decode_dram_bytes": 774066176,
+      "peak_flops_per_s": 165888000000000.0,
+      "peak_dram_bytes_per_s": 512000000000.0,
+      "prefill_flops_pct": 6.696313201359952,
+      "decode_dram_pct": 56.827244180691615,
+      "peak_basis": "One Blackhole p300c ASIC:120 physical cores at1.35GHz,4096 FLOP/cycle/core divided by4 for HiFi4;512GB/s DRAM. Runtime compute grid110 cores. No multi-device aggregation.",
+      "traffic_assumptions": "BF16 dense weights once per independent batch plane of the [B,1,H] matmul geometry; FP32 recurrent state and physically padded BF16 convolution state read/write, residual input/output. Excludes intermediate spills, repeated reads within a plane and small norms/gates: estimated lower-bound traffic, not measured bus utilization.",
+      "flops_assumptions": "Dense active work, no MoE/sparsity;2 FLOPs per multiply/add; causal attention pairs or recurrent updates plus approximate scalar norms/gates/activation work. Scalar transcendentals counted as one operation. No padding counted as useful work.",
+      "source": "single-layer Tracy; whole-layer device firmware timestamp envelope including gaps",
+      "evidence": [
+        "tracy/linear_b1_complete/whole_layer_timing.json",
+        "tracy/linear_b1_complete/ops.csv",
+        "profile_linear_b1_complete.json"
+      ]
+    },
+    "8": {
+      "prefill_device_us": 1891512.151111111,
+      "decode_device_us": 18181.605185185184,
+      "prefill_useful_flops": 25304315723776,
+      "decode_dram_bytes": 6192529408,
+      "peak_flops_per_s": 165888000000000.0,
+      "peak_dram_bytes_per_s": 512000000000.0,
+      "prefill_flops_pct": 8.064370846337502,
+      "decode_dram_pct": 66.52209129398061,
+      "peak_basis": "One Blackhole p300c ASIC:120 physical cores at1.35GHz,4096 FLOP/cycle/core divided by4 for HiFi4;512GB/s DRAM. Runtime compute grid110 cores. No multi-device aggregation.",
+      "traffic_assumptions": "BF16 dense weights once per independent batch plane of the [B,1,H] matmul geometry; FP32 recurrent state and physically padded BF16 convolution state read/write, residual input/output. Excludes intermediate spills, repeated reads within a plane and small norms/gates: estimated lower-bound traffic, not measured bus utilization.",
+      "flops_assumptions": "Dense active work, no MoE/sparsity;2 FLOPs per multiply/add; causal attention pairs or recurrent updates plus approximate scalar norms/gates/activation work. Scalar transcendentals counted as one operation. No padding counted as useful work.",
+      "source": "single-layer Tracy; whole-layer device firmware timestamp envelope including gaps",
+      "evidence": [
+        "tracy/linear_b8/whole_layer_timing.json",
+        "tracy/linear_b8/ops.csv",
+        "profile_linear_b8.json"
+      ]
+    },
+    "16": {
+      "prefill_device_us": 3780949.337037037,
+      "decode_device_us": 35725.385925925926,
+      "prefill_useful_flops": 50608631447552,
+      "decode_dram_bytes": 12385058816,
+      "peak_flops_per_s": 165888000000000.0,
+      "peak_dram_bytes_per_s": 512000000000.0,
+      "prefill_flops_pct": 8.068796530803215,
+      "decode_dram_pct": 67.70974580975937,
+      "peak_basis": "One Blackhole p300c ASIC:120 physical cores at1.35GHz,4096 FLOP/cycle/core divided by4 for HiFi4;512GB/s DRAM. Runtime compute grid110 cores. No multi-device aggregation.",
+      "traffic_assumptions": "BF16 dense weights once per independent batch plane of the [B,1,H] matmul geometry; FP32 recurrent state and physically padded BF16 convolution state read/write, residual input/output. Excludes intermediate spills, repeated reads within a plane and small norms/gates: estimated lower-bound traffic, not measured bus utilization.",
+      "flops_assumptions": "Dense active work, no MoE/sparsity;2 FLOPs per multiply/add; causal attention pairs or recurrent updates plus approximate scalar norms/gates/activation work. Scalar transcendentals counted as one operation. No padding counted as useful work.",
+      "source": "single-layer Tracy; whole-layer device firmware timestamp envelope including gaps",
+      "evidence": [
+        "tracy/linear_b16/whole_layer_timing.json",
+        "tracy/linear_b16/ops.csv",
+        "profile_linear_b16.json"
+      ]
+    },
+    "32": {
+      "prefill_device_us": null,
+      "decode_device_us": 70860.33851851852,
+      "prefill_useful_flops": 101217262895104,
+      "decode_dram_bytes": 24770117632,
+      "peak_flops_per_s": 165888000000000.0,
+      "peak_dram_bytes_per_s": 512000000000.0,
+      "prefill_flops_pct": null,
+      "decode_dram_pct": 68.27392729341348,
+      "peak_basis": "One Blackhole p300c ASIC:120 physical cores at1.35GHz,4096 FLOP/cycle/core divided by4 for HiFi4;512GB/s DRAM. Runtime compute grid110 cores. No multi-device aggregation.",
+      "traffic_assumptions": "BF16 dense weights once per independent batch plane of the [B,1,H] matmul geometry; FP32 recurrent state and physically padded BF16 convolution state read/write, residual input/output. Excludes intermediate spills, repeated reads within a plane and small norms/gates: estimated lower-bound traffic, not measured bus utilization.",
+      "flops_assumptions": "Dense active work, no MoE/sparsity;2 FLOPs per multiply/add; causal attention pairs or recurrent updates plus approximate scalar norms/gates/activation work. Scalar transcendentals counted as one operation. No padding counted as useful work.",
+      "source": "single-layer Tracy; whole-layer device firmware timestamp envelope including gaps",
+      "missing_reasons": {
+        "prefill_device_us": "Batch32 supplemental decode profile avoids Tracy32K source-location limit. Batch1 warmed prefill is measured."
+      },
+      "evidence": [
+        "tracy/linear_b32_decode/whole_layer_timing.json",
+        "tracy/linear_b32_decode/ops.csv",
+        "profile_linear_b32_decode.json"
+      ]
+    }
+  },
+  "full_attention": {
+    "1": {
+      "prefill_device_us": 108787.72962962963,
+      "decode_device_us": 2456.268888888889,
+      "prefill_useful_flops": 3257527418880.0,
+      "decode_dram_bytes": 761815040,
+      "peak_flops_per_s": 165888000000000.0,
+      "peak_dram_bytes_per_s": 512000000000.0,
+      "prefill_flops_pct": 18.05066455105044,
+      "decode_dram_pct": 60.57642983350539,
+      "peak_basis": "One Blackhole p300c ASIC:120 physical cores at1.35GHz,4096 FLOP/cycle/core divided by4 for HiFi4;512GB/s DRAM. Runtime compute grid110 cores. No multi-device aggregation.",
+      "traffic_assumptions": "BF16 dense weights once per independent batch plane of the [B,1,H] matmul geometry; prefix KV read once, one KV token write, residual input/output. Excludes intermediate spills, repeated reads within a plane, norms and page metadata: estimated lower-bound traffic, not measured bus utilization.",
+      "flops_assumptions": "Dense active work, no MoE/sparsity;2 FLOPs per multiply/add; causal attention pairs or recurrent updates plus approximate scalar norms/gates/activation work. Scalar transcendentals counted as one operation. No padding counted as useful work.",
+      "source": "single-layer Tracy; whole-layer device firmware timestamp envelope including gaps",
+      "evidence": [
+        "tracy/full_b1/whole_layer_timing.json",
+        "tracy/full_b1/ops.csv",
+        "profile_full_b1.json"
+      ]
+    },
+    "8": {
+      "prefill_device_us": 771712.2770370371,
+      "decode_device_us": 16160.754074074073,
+      "prefill_useful_flops": 26060219351040.0,
+      "decode_dram_bytes": 6094520320,
+      "peak_flops_per_s": 165888000000000.0,
+      "peak_dram_bytes_per_s": 512000000000.0,
+      "prefill_flops_pct": 20.356714524271545,
+      "decode_dram_pct": 73.65596893214278,
+      "peak_basis": "One Blackhole p300c ASIC:120 physical cores at1.35GHz,4096 FLOP/cycle/core divided by4 for HiFi4;512GB/s DRAM. Runtime compute grid110 cores. No multi-device aggregation.",
+      "traffic_assumptions": "BF16 dense weights once per independent batch plane of the [B,1,H] matmul geometry; prefix KV read once, one KV token write, residual input/output. Excludes intermediate spills, repeated reads within a plane, norms and page metadata: estimated lower-bound traffic, not measured bus utilization.",
+      "flops_assumptions": "Dense active work, no MoE/sparsity;2 FLOPs per multiply/add; causal attention pairs or recurrent updates plus approximate scalar norms/gates/activation work. Scalar transcendentals counted as one operation. No padding counted as useful work.",
+      "source": "single-layer Tracy; whole-layer device firmware timestamp envelope including gaps",
+      "evidence": [
+        "tracy/full_b8/whole_layer_timing.json",
+        "tracy/full_b8/ops.csv",
+        "profile_full_b8.json"
+      ]
+    },
+    "16": {
+      "prefill_device_us": 1531264.2992592594,
+      "decode_device_us": 31819.108888888888,
+      "prefill_useful_flops": 52120438702080.0,
+      "decode_dram_bytes": 12189040640,
+      "peak_flops_per_s": 165888000000000.0,
+      "peak_dram_bytes_per_s": 512000000000.0,
+      "prefill_flops_pct": 20.518373642117712,
+      "decode_dram_pct": 74.81894003735981,
+      "peak_basis": "One Blackhole p300c ASIC:120 physical cores at1.35GHz,4096 FLOP/cycle/core divided by4 for HiFi4;512GB/s DRAM. Runtime compute grid110 cores. No multi-device aggregation.",
+      "traffic_assumptions": "BF16 dense weights once per independent batch plane of the [B,1,H] matmul geometry; prefix KV read once, one KV token write, residual input/output. Excludes intermediate spills, repeated reads within a plane, norms and page metadata: estimated lower-bound traffic, not measured bus utilization.",
+      "flops_assumptions": "Dense active work, no MoE/sparsity;2 FLOPs per multiply/add; causal attention pairs or recurrent updates plus approximate scalar norms/gates/activation work. Scalar transcendentals counted as one operation. No padding counted as useful work.",
+      "source": "single-layer Tracy; whole-layer device firmware timestamp envelope including gaps",
+      "evidence": [
+        "tracy/full_b16/whole_layer_timing.json",
+        "tracy/full_b16/ops.csv",
+        "profile_full_b16.json"
+      ]
+    },
+    "32": {
+      "prefill_device_us": 3047594.454814815,
+      "decode_device_us": 63195.40592592592,
+      "prefill_useful_flops": 104240877404160.0,
+      "decode_dram_bytes": 24378081280,
+      "peak_flops_per_s": 165888000000000.0,
+      "peak_dram_bytes_per_s": 512000000000.0,
+      "prefill_flops_pct": 20.618919940216387,
+      "decode_dram_pct": 75.34319829484089,
+      "peak_basis": "One Blackhole p300c ASIC:120 physical cores at1.35GHz,4096 FLOP/cycle/core divided by4 for HiFi4;512GB/s DRAM. Runtime compute grid110 cores. No multi-device aggregation.",
+      "traffic_assumptions": "BF16 dense weights once per independent batch plane of the [B,1,H] matmul geometry; prefix KV read once, one KV token write, residual input/output. Excludes intermediate spills, repeated reads within a plane, norms and page metadata: estimated lower-bound traffic, not measured bus utilization.",
+      "flops_assumptions": "Dense active work, no MoE/sparsity;2 FLOPs per multiply/add; causal attention pairs or recurrent updates plus approximate scalar norms/gates/activation work. Scalar transcendentals counted as one operation. No padding counted as useful work.",
+      "source": "single-layer Tracy; whole-layer device firmware timestamp envelope including gaps",
+      "evidence": [
+        "tracy/full_b32/whole_layer_timing.json",
+        "tracy/full_b32/ops.csv",
+        "profile_full_b32.json"
+      ]
+    }
+  }
+}

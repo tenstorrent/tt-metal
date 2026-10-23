@@ -1,0 +1,90 @@
+{
+  "layer_type": "linear_attention",
+  "layer_idx": 0,
+  "batch": 1,
+  "sequence": 385,
+  "weights": "real",
+  "prefill_pcc": 0.9999480247497559,
+  "decode_pcc": 0.9999708533287048,
+  "changed_input_decode_pcc": 0.9999778866767883,
+  "resume_pcc": 1.0,
+  "deterministic": true,
+  "remap_pcc": null,
+  "remap_cache_pcc": null,
+  "input_std": 0.012563,
+  "request_results": [
+    {
+      "length": 1,
+      "prefill_pcc": 0.999997079372406,
+      "decode_pcc": 0.9999908208847046
+    },
+    {
+      "length": 31,
+      "prefill_pcc": 0.9999148845672607,
+      "decode_pcc": 0.9999783635139465
+    },
+    {
+      "length": 32,
+      "prefill_pcc": 0.999976634979248,
+      "decode_pcc": 0.9999797940254211
+    },
+    {
+      "length": 33,
+      "prefill_pcc": 0.9999179244041443,
+      "decode_pcc": 0.999983549118042
+    },
+    {
+      "length": 127,
+      "prefill_pcc": 0.9999528527259827,
+      "decode_pcc": 0.9999763369560242
+    },
+    {
+      "length": 128,
+      "prefill_pcc": 0.999957799911499,
+      "decode_pcc": 0.9999108910560608
+    },
+    {
+      "length": 129,
+      "prefill_pcc": 0.9999455213546753,
+      "decode_pcc": 0.999994695186615
+    },
+    {
+      "length": 385,
+      "prefill_pcc": 0.9999643564224243,
+      "decode_pcc": 0.9999951720237732
+    },
+    {
+      "length": 31,
+      "prefill_pcc": 0.9999534487724304,
+      "decode_pcc": 0.9999935030937195
+    }
+  ],
+  "runtime_fallback_audit": true,
+  "provenance": {
+    "tests/run_decoder.py": "7da30c7c187fb690bb7c09fb06595ce593dd2f0492e1f1d922018b1058430dd2",
+    "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77",
+    "tt/functional_decoder.py": "e843748bd41908b43565470155d21c784669f28cef42d2976361a4193ee193db",
+    "tt/kernels/fp32_recurrence.cpp": "89df91a22f9cd4d3d7d06eb28009d995f905d9a28105f75faf5bad67b7ee8796"
+  },
+  "memory": {
+    "before_weights": {
+      "num_banks": 8,
+      "capacity_bytes": 34178731008,
+      "allocated_bytes": 0,
+      "largest_free_per_bank": 4272341376
+    },
+    "after_weights": {
+      "num_banks": 8,
+      "capacity_bytes": 34178731008,
+      "allocated_bytes": 770129920,
+      "largest_free_per_bank": 4176075136
+    },
+    "request_setup": {
+      "num_banks": 8,
+      "capacity_bytes": 34178731008,
+      "allocated_bytes": 791447552,
+      "largest_free_per_bank": 4173263104
+    }
+  },
+  "prefill_compared_tokens": 385
+}

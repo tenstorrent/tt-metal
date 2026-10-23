@@ -1,0 +1,7 @@
+Using Python 3.10.22 environment at: /opt/venv
+Resolved 1 package in 5.03s
+   Building ttnn @ file:///workspace
+      Built ttnn @ file:///workspace
+Prepared 1 package in 4.75s
+Installed 1 package in 0.76ms
+ + ttnn==0.81.1.dev4+g0611d6e3938 (from file:///workspace)

@@ -1,0 +1,10 @@
+{
+  "layer_type": "linear_attention",
+  "layer_idx": 0,
+  "batch": 1,
+  "sequence": 32,
+  "weights": "real",
+  "prefill_pcc": 0.9999571442604065,
+  "decode_pcc": 0.9999789595603943,
+  "deterministic": true
+}

@@ -1,0 +1,54 @@
+{
+  "stage": "01-functional-decoder",
+  "workload": {
+    "target_concurrency": 32,
+    "working_set_tokens": 32768,
+    "typical_context_tokens": 4096,
+    "source": "planning estimate; default batch set and agent long-prefix workload, not measured"
+  },
+  "batch_sizes": [
+    1,
+    8,
+    16,
+    32
+  ],
+  "tested_batch_sizes": [
+    1,
+    8,
+    16,
+    32
+  ],
+  "stage_scope": "Single-layer functional decoder, no scheduler or full-model pool. Target workload is a planning estimate.",
+  "batch_evidence": {
+    "1": [
+      "functional_decoder/profile_linear_b1_complete.json",
+      "functional_decoder/profile_full_b1.json"
+    ],
+    "8": [
+      "functional_decoder/profile_linear_b8.json",
+      "functional_decoder/profile_full_b8.json"
+    ],
+    "16": [
+      "functional_decoder/profile_linear_b16.json",
+      "functional_decoder/profile_full_b16.json"
+    ],
+    "32": [
+      "functional_decoder/profile_linear_b32_decode.json",
+      "functional_decoder/profile_full_b32.json"
+    ]
+  },
+  "performance_evidence": "functional_decoder/performance.json",
+  "prefix_contract_evidence": "functional_decoder/README.md#prefix-cache-and-trace-ownership",
+  "memory_evidence": [
+    "functional_decoder/linear_watcher_requests.json:memory",
+    "functional_decoder/full_watcher_requests.json:memory"
+  ],
+  "status": "functional_decoder_validated",
+  "performance_status": "complete",
+  "trace_allocation_evidence": [
+    "functional_decoder/final_validation.log",
+    "functional_decoder/linear_watcher_requests.json",
+    "functional_decoder/full_watcher_requests.json",
+    "functional_decoder/ragged_decode.json"
+  ]
+}

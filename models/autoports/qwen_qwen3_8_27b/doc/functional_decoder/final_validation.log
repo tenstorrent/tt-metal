@@ -1,0 +1,708 @@
+2026-10-23 14:17:34.285 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+[transformers] The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+HF_REFERENCE_READY
+2026-10-23 14:17:40.732 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:17:40.732 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:17:40.732 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:17:40.732 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:17:40.743 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:17:40.743 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:17:40.825 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:17:40.825 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:17:40.825 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:17:40.825 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:17:40.827 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:17:41.032 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:17:41.102 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:17:41.102 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:17:41.102 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:17:41.103 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:17:41.149 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.9999623644618274
+RESUME_PCC 1.0
+EAGER_DECODE_PCC 0.9999659212805988
+{"layer_type": "linear_attention", "layer_idx": 0, "batch": 32, "sequence": 129, "weights": "real", "prefill_pcc": 0.9999623644618274, "decode_pcc": 0.9999659212805988, "changed_input_decode_pcc": 0.9999321724793365, "resume_pcc": 1.0, "deterministic": true, "remap_pcc": null, "remap_cache_pcc": null, "input_std": 0.1, "request_results": [], "prefill_pcc_fp32": 0.9999677538871765, "prefill_relative_rmse": 0.008731838315725327, "runtime_fallback_audit": true, "provenance": {"tests/run_decoder.py": "1a3af5c30f83433df779363c8b75ba73b0300e1d73eb565e8b070f3c8088e52e", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 0, "largest_free_per_bank": 4272341376}, "after_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 770129920, "largest_free_per_bank": 4176075136}, "request_setup": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 956255232, "largest_free_per_bank": 4152809472}}, "prefill_compared_tokens": 128}
+2026-10-23 14:17:46.338 | info     |    BuildKernels | JIT cache stats: 437/440 hits (99.3%) [437 cached, 406 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:17:46.338 | info     |    BuildKernels | JIT telemetry: 37 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:17:46.353 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:17:46.353 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:17:46.634 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:17:46.634 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:17:46.634 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+2026-10-23 14:17:48.077 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+HF_REFERENCE_READY
+2026-10-23 14:17:52.150 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:17:52.150 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:17:52.150 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:17:52.150 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:17:52.161 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:17:52.161 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:17:52.241 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:17:52.241 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:17:52.241 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:17:52.241 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:17:52.242 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:17:52.247 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (blackhole_device_firmware.cpp:251)
+2026-10-23 14:17:52.433 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:17:52.496 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:17:52.496 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:17:52.496 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:17:52.497 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:17:52.537 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.999817065372858
+RESUME_PCC 1.0
+EAGER_DECODE_PCC 0.9999526439166189
+{"layer_type": "full_attention", "layer_idx": 3, "batch": 32, "sequence": 129, "weights": "real", "prefill_pcc": 0.999817065372858, "decode_pcc": 0.9999526439166189, "changed_input_decode_pcc": 0.9999471528701016, "resume_pcc": 1.0, "deterministic": true, "remap_pcc": 0.9999526439166189, "remap_cache_pcc": 0.9999882854177709, "input_std": 0.1, "request_results": [], "prefill_pcc_fp32": 0.9997540712356567, "prefill_relative_rmse": 0.01925584115087986, "runtime_fallback_audit": true, "provenance": {"tests/run_decoder.py": "1a3af5c30f83433df779363c8b75ba73b0300e1d73eb565e8b070f3c8088e52e", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 0, "largest_free_per_bank": 4272341376}, "after_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 746225664, "largest_free_per_bank": 4179063168}, "request_setup": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 877825024, "largest_free_per_bank": 4162613248}}, "prefill_compared_tokens": 128}
+2026-10-23 14:17:58.286 | info     |    BuildKernels | JIT cache stats: 280/285 hits (98.2%) [280 cached, 317 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:17:58.286 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:17:58.301 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:17:58.301 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:17:58.535 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:17:58.536 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:17:58.536 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+2026-10-23 14:17:59.993 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+[transformers] The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+HF_REFERENCE_READY
+2026-10-23 14:18:03.031 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:18:03.031 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:18:03.031 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:18:03.031 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:18:03.042 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:18:03.043 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:18:03.122 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:18:03.122 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:18:03.122 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:18:03.122 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:18:03.123 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:18:03.334 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:18:03.396 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:18:03.397 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:18:03.397 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:18:03.397 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:18:03.437 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.9999690953347471
+RESUME_PCC 1.0
+EAGER_DECODE_PCC 0.9999542388853233
+{"layer_type": "linear_attention", "layer_idx": 0, "batch": 8, "sequence": 129, "weights": "real", "prefill_pcc": 0.9999690953347471, "decode_pcc": 0.9999542388853233, "changed_input_decode_pcc": 0.999988504962357, "resume_pcc": 1.0, "deterministic": true, "remap_pcc": null, "remap_cache_pcc": null, "input_std": 0.1, "request_results": [], "prefill_pcc_fp32": 0.9999756217002869, "prefill_relative_rmse": 0.007924411445856094, "runtime_fallback_audit": true, "provenance": {"tests/run_decoder.py": "1a3af5c30f83433df779363c8b75ba73b0300e1d73eb565e8b070f3c8088e52e", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 0, "largest_free_per_bank": 4272341376}, "after_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 770129920, "largest_free_per_bank": 4176075136}, "request_setup": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 816661504, "largest_free_per_bank": 4170258688}}, "prefill_compared_tokens": 129}
+2026-10-23 14:18:19.243 | info     |    BuildKernels | JIT cache stats: 229/425 hits (53.9%) [229 cached, 235 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:18:19.244 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:18:19.257 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:18:19.257 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:18:19.538 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:18:19.538 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:18:19.538 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+2026-10-23 14:18:21.001 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+[transformers] The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+HF_REFERENCE_READY
+2026-10-23 14:18:24.804 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:18:24.804 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:18:24.804 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:18:24.804 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:18:24.815 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:18:24.815 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:18:24.895 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:18:24.895 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:18:24.895 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:18:24.895 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:18:24.897 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:18:25.137 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:18:25.203 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:18:25.203 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:18:25.203 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:18:25.203 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:18:25.244 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.9999644862244834
+RESUME_PCC 1.0
+EAGER_DECODE_PCC 0.9999355492959149
+{"layer_type": "linear_attention", "layer_idx": 0, "batch": 16, "sequence": 129, "weights": "real", "prefill_pcc": 0.9999644862244834, "decode_pcc": 0.9999355492959149, "changed_input_decode_pcc": 0.9999589182972674, "resume_pcc": 1.0, "deterministic": true, "remap_pcc": null, "remap_cache_pcc": null, "input_std": 0.1, "request_results": [], "prefill_pcc_fp32": 0.9999583959579468, "prefill_relative_rmse": 0.008474196307361126, "runtime_fallback_audit": true, "provenance": {"tests/run_decoder.py": "1a3af5c30f83433df779363c8b75ba73b0300e1d73eb565e8b070f3c8088e52e", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 0, "largest_free_per_bank": 4272341376}, "after_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 770129920, "largest_free_per_bank": 4176075136}, "request_setup": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 863192576, "largest_free_per_bank": 4164442304}}, "prefill_compared_tokens": 129}
+2026-10-23 14:18:39.278 | info     |    BuildKernels | JIT cache stats: 262/431 hits (60.8%) [262 cached, 294 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:18:39.278 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:18:39.293 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:18:39.293 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:18:39.540 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:18:39.540 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:18:39.540 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+2026-10-23 14:18:40.993 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+HF_REFERENCE_READY
+2026-10-23 14:18:44.237 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:18:44.237 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:18:44.237 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:18:44.237 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:18:44.248 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:18:44.248 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:18:44.330 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:18:44.330 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:18:44.330 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:18:44.330 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:18:44.332 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:18:44.539 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:18:44.601 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:18:44.601 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:18:44.601 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:18:44.602 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:18:44.642 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.9998181277212934
+RESUME_PCC 1.0
+EAGER_DECODE_PCC 0.999946030542294
+{"layer_type": "full_attention", "layer_idx": 3, "batch": 16, "sequence": 129, "weights": "real", "prefill_pcc": 0.9998181277212934, "decode_pcc": 0.999946030542294, "changed_input_decode_pcc": 0.9999570493292179, "resume_pcc": 1.0, "deterministic": true, "remap_pcc": 0.999946030542294, "remap_cache_pcc": 0.9999875910740909, "input_std": 0.1, "request_results": [], "prefill_pcc_fp32": 0.9996882081031799, "prefill_relative_rmse": 0.019210752099752426, "runtime_fallback_audit": true, "provenance": {"tests/run_decoder.py": "1a3af5c30f83433df779363c8b75ba73b0300e1d73eb565e8b070f3c8088e52e", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 0, "largest_free_per_bank": 4272341376}, "after_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 746225664, "largest_free_per_bank": 4179063168}, "request_setup": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 812025344, "largest_free_per_bank": 4170838208}}, "prefill_compared_tokens": 129}
+2026-10-23 14:18:52.403 | info     |    BuildKernels | JIT cache stats: 233/275 hits (84.7%) [233 cached, 255 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:18:52.403 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:18:52.417 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:18:52.417 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:18:52.742 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:18:52.742 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:18:52.742 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+2026-10-23 14:18:54.192 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+HF_REFERENCE_READY
+2026-10-23 14:18:59.121 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:18:59.121 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:18:59.121 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:18:59.121 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:18:59.132 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:18:59.133 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:18:59.215 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:18:59.215 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:18:59.215 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:18:59.215 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:18:59.216 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:18:59.441 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:18:59.502 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:18:59.502 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:18:59.502 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:18:59.502 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:18:59.543 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.9999620936474085
+RESUME_PCC 1.0
+EAGER_DECODE_PCC 0.9999833692670952
+{"layer_type": "full_attention", "layer_idx": 3, "batch": 1, "sequence": 4096, "weights": "real", "prefill_pcc": 0.9999620936474085, "decode_pcc": 0.9999833692670952, "changed_input_decode_pcc": 0.9999906608782239, "resume_pcc": 1.0, "deterministic": true, "remap_pcc": 0.9999833692670952, "remap_cache_pcc": 0.9999881394224869, "input_std": 0.1, "request_results": [], "prefill_pcc_fp32": 1.0, "prefill_relative_rmse": 0.008713094517588615, "runtime_fallback_audit": true, "provenance": {"tests/run_decoder.py": "1a3af5c30f83433df779363c8b75ba73b0300e1d73eb565e8b070f3c8088e52e", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 0, "largest_free_per_bank": 4272341376}, "after_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 746225664, "largest_free_per_bank": 4179063168}, "request_setup": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 807408640, "largest_free_per_bank": 4171415296}}, "prefill_compared_tokens": 4096}
+2026-10-23 14:19:06.766 | info     |    BuildKernels | JIT cache stats: 203/217 hits (93.5%) [203 cached, 475 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:19:06.766 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:19:06.781 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:19:06.781 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:19:07.043 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:19:07.043 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:19:07.043 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+2026-10-23 14:19:08.483 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+2026-10-23 14:19:11.696 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:19:11.696 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:19:11.696 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:19:11.696 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:19:11.707 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:19:11.707 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:19:11.786 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:19:11.786 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:19:11.786 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:19:11.786 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:19:11.788 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:19:12.042 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:19:12.108 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:19:12.108 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:19:12.108 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:19:12.108 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:19:12.149 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+{'layer_type': 'full_attention', 'batch': 8, 'positions': [33, 31, 1, 385, 128, 32, 129, 127], 'decode_pcc': 0.9999653010789895, 'changed_position_pcc': 0.9999544883148899, 'deterministic': True, 'runtime_fallback_audit': True}
+2026-10-23 14:19:23.585 | info     |    BuildKernels | JIT cache stats: 295/368 hits (80.2%) [295 cached, 311 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:19:23.585 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:19:23.599 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:19:23.599 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:19:23.845 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:19:23.846 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:19:23.846 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+============================= test session starts ==============================
+platform linux -- Python 3.10.22, pytest-9.0.3, pluggy-1.7.0 -- /opt/venv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /workspace
+configfile: pytest.ini
+plugins: anyio-4.15.1, split-0.11.0, repeat-0.9.4, benchmark-5.2.3, cov-7.0.0, dash-2.15.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 14 items
+
+models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[1-0] 2026-10-23 14:19:26.483 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+[transformers] The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+HF_REFERENCE_READY
+2026-10-23 14:19:30.516 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:19:30.516 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:19:30.516 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:19:30.516 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:19:30.527 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:19:30.527 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:19:30.606 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:19:30.606 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:19:30.606 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:19:30.606 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:19:30.607 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:19:30.844 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:19:30.907 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:19:30.907 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:19:30.907 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:19:30.908 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:19:30.951 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.99983211128175
+EAGER_DECODE_PCC 0.999822252989556
+{"layer_type": "linear_attention", "layer_idx": 0, "batch": 1, "sequence": 1, "weights": "synthetic", "prefill_pcc": 0.99983211128175, "decode_pcc": 0.999822252989556, "changed_input_decode_pcc": 0.9998604222751969, "resume_pcc": null, "deterministic": true, "remap_pcc": null, "remap_cache_pcc": null, "input_std": 0.012563, "request_results": [], "prefill_pcc_fp32": 0.999832272529602, "prefill_relative_rmse": 0.018400315195322037, "runtime_fallback_audit": true, "provenance": {"tests/run_decoder.py": "1a3af5c30f83433df779363c8b75ba73b0300e1d73eb565e8b070f3c8088e52e", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 0, "largest_free_per_bank": 4272341376}, "after_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 770129920, "largest_free_per_bank": 4176075136}, "request_setup": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 774652928, "largest_free_per_bank": 4175509760}}, "prefill_compared_tokens": 1}
+2026-10-23 14:19:34.765 | info     |    BuildKernels | JIT cache stats: 231/231 hits (100.0%) [231 cached, 94 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:19:34.765 | info     |    BuildKernels | JIT telemetry: 31 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:19:34.779 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:19:34.779 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:19:35.047 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:19:35.047 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:19:35.047 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[1-3] 2026-10-23 14:19:36.487 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+HF_REFERENCE_READY
+2026-10-23 14:19:40.436 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:19:40.436 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:19:40.436 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:19:40.436 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:19:40.447 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:19:40.448 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:19:40.528 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:19:40.528 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:19:40.528 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:19:40.528 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:19:40.529 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:19:40.746 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:19:40.807 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:19:40.807 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:19:40.807 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:19:40.807 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:19:40.848 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.9999748166669705
+EAGER_DECODE_PCC 0.9999515977701287
+{"layer_type": "full_attention", "layer_idx": 3, "batch": 1, "sequence": 1, "weights": "synthetic", "prefill_pcc": 0.9999748166669705, "decode_pcc": 0.9999515977701287, "changed_input_decode_pcc": 0.9999358261750521, "resume_pcc": null, "deterministic": true, "remap_pcc": null, "remap_cache_pcc": null, "input_std": 0.012563, "request_results": [], "prefill_pcc_fp32": 0.99997478723526, "prefill_relative_rmse": 0.007099507376551628, "runtime_fallback_audit": true, "provenance": {"tests/run_decoder.py": "1a3af5c30f83433df779363c8b75ba73b0300e1d73eb565e8b070f3c8088e52e", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 0, "largest_free_per_bank": 4272341376}, "after_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 746225664, "largest_free_per_bank": 4179063168}, "request_setup": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 747996160, "largest_free_per_bank": 4178841856}}, "prefill_compared_tokens": 1}
+2026-10-23 14:19:46.257 | info     |    BuildKernels | JIT cache stats: 153/165 hits (92.7%) [153 cached, 126 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:19:46.257 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:19:46.271 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:19:46.271 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:19:46.548 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:19:46.548 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:19:46.548 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[31-0] 2026-10-23 14:19:48.005 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+[transformers] The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+HF_REFERENCE_READY
+2026-10-23 14:19:52.050 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:19:52.050 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:19:52.050 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:19:52.050 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:19:52.061 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:19:52.061 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:19:52.139 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:19:52.139 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:19:52.139 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:19:52.139 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:19:52.141 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:19:52.347 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:19:52.408 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:19:52.408 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:19:52.408 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:19:52.409 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:19:52.449 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.9998762109045511
+EAGER_DECODE_PCC 0.9998653292931985
+{"layer_type": "linear_attention", "layer_idx": 0, "batch": 1, "sequence": 31, "weights": "synthetic", "prefill_pcc": 0.9998762109045511, "decode_pcc": 0.9998653292931985, "changed_input_decode_pcc": 0.9998988996303274, "resume_pcc": null, "deterministic": true, "remap_pcc": null, "remap_cache_pcc": null, "input_std": 0.012563, "request_results": [], "prefill_pcc_fp32": 0.9998777508735657, "prefill_relative_rmse": 0.01574147678911686, "runtime_fallback_audit": true, "provenance": {"tests/run_decoder.py": "1a3af5c30f83433df779363c8b75ba73b0300e1d73eb565e8b070f3c8088e52e", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 0, "largest_free_per_bank": 4272341376}, "after_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 770129920, "largest_free_per_bank": 4176075136}, "request_setup": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 774652928, "largest_free_per_bank": 4175509760}}, "prefill_compared_tokens": 31}
+2026-10-23 14:19:59.345 | info     |    BuildKernels | JIT cache stats: 280/304 hits (92.1%) [280 cached, 221 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:19:59.345 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:19:59.358 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:19:59.358 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:19:59.649 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:19:59.650 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:19:59.650 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[31-3] 2026-10-23 14:20:01.095 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+HF_REFERENCE_READY
+2026-10-23 14:20:05.058 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:20:05.058 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:20:05.059 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:20:05.059 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:20:05.069 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:20:05.070 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:20:05.148 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:20:05.148 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:20:05.148 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:20:05.148 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:20:05.150 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:20:05.348 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:20:05.410 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:20:05.410 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:20:05.410 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:20:05.411 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:20:05.451 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.9997471085661981
+EAGER_DECODE_PCC 0.9998739642900799
+{"layer_type": "full_attention", "layer_idx": 3, "batch": 1, "sequence": 31, "weights": "synthetic", "prefill_pcc": 0.9997471085661981, "decode_pcc": 0.9998739642900799, "changed_input_decode_pcc": 0.9998625175580862, "resume_pcc": null, "deterministic": true, "remap_pcc": null, "remap_cache_pcc": null, "input_std": 0.012563, "request_results": [], "prefill_pcc_fp32": 0.9997495412826538, "prefill_relative_rmse": 0.022944670170545578, "runtime_fallback_audit": true, "provenance": {"tests/run_decoder.py": "1a3af5c30f83433df779363c8b75ba73b0300e1d73eb565e8b070f3c8088e52e", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 0, "largest_free_per_bank": 4272341376}, "after_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 746225664, "largest_free_per_bank": 4179063168}, "request_setup": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 747996160, "largest_free_per_bank": 4178841856}}, "prefill_compared_tokens": 31}
+2026-10-23 14:20:09.051 | info     |    BuildKernels | JIT cache stats: 165/165 hits (100.0%) [165 cached, 137 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:20:09.051 | info     |    BuildKernels | JIT telemetry: 31 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:20:09.064 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:20:09.064 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:20:09.351 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:20:09.351 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:20:09.351 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[32-0] 2026-10-23 14:20:10.819 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+[transformers] The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+HF_REFERENCE_READY
+2026-10-23 14:20:14.866 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:20:14.866 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:20:14.866 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:20:14.866 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:20:14.877 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:20:14.877 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:20:14.956 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:20:14.956 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:20:14.956 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:20:14.956 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:20:14.957 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:20:15.150 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:20:15.214 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:20:15.214 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:20:15.214 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:20:15.214 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:20:15.254 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.9998761394304715
+EAGER_DECODE_PCC 0.9999000666606905
+{"layer_type": "linear_attention", "layer_idx": 0, "batch": 1, "sequence": 32, "weights": "synthetic", "prefill_pcc": 0.9998761394304715, "decode_pcc": 0.9999000666606905, "changed_input_decode_pcc": 0.9998842803967242, "resume_pcc": null, "deterministic": true, "remap_pcc": null, "remap_cache_pcc": null, "input_std": 0.012563, "request_results": [], "prefill_pcc_fp32": 0.9998748302459717, "prefill_relative_rmse": 0.015747109428048134, "runtime_fallback_audit": true, "provenance": {"tests/run_decoder.py": "1a3af5c30f83433df779363c8b75ba73b0300e1d73eb565e8b070f3c8088e52e", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 0, "largest_free_per_bank": 4272341376}, "after_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 770129920, "largest_free_per_bank": 4176075136}, "request_setup": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 774652928, "largest_free_per_bank": 4175509760}}, "prefill_compared_tokens": 32}
+2026-10-23 14:20:19.233 | info     |    BuildKernels | JIT cache stats: 318/318 hits (100.0%) [318 cached, 214 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:20:19.233 | info     |    BuildKernels | JIT telemetry: 31 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:20:19.247 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:20:19.247 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:20:19.552 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:20:19.552 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:20:19.552 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[32-3] 2026-10-23 14:20:20.987 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+HF_REFERENCE_READY
+2026-10-23 14:20:24.942 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:20:24.942 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:20:24.942 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:20:24.942 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:20:24.953 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:20:24.954 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:20:25.033 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:20:25.033 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:20:25.033 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:20:25.033 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:20:25.034 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:20:25.251 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:20:25.313 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:20:25.313 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:20:25.313 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:20:25.314 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:20:25.354 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.999744075462113
+EAGER_DECODE_PCC 0.9998625175580862
+{"layer_type": "full_attention", "layer_idx": 3, "batch": 1, "sequence": 32, "weights": "synthetic", "prefill_pcc": 0.999744075462113, "decode_pcc": 0.9998625175580862, "changed_input_decode_pcc": 0.999888647794517, "resume_pcc": null, "deterministic": true, "remap_pcc": null, "remap_cache_pcc": null, "input_std": 0.012563, "request_results": [], "prefill_pcc_fp32": 0.9997432231903076, "prefill_relative_rmse": 0.023075338453054428, "runtime_fallback_audit": true, "provenance": {"tests/run_decoder.py": "1a3af5c30f83433df779363c8b75ba73b0300e1d73eb565e8b070f3c8088e52e", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 0, "largest_free_per_bank": 4272341376}, "after_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 746225664, "largest_free_per_bank": 4179063168}, "request_setup": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 747996160, "largest_free_per_bank": 4178841856}}, "prefill_compared_tokens": 32}
+2026-10-23 14:20:28.791 | info     |    BuildKernels | JIT cache stats: 154/154 hits (100.0%) [154 cached, 136 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:20:28.791 | info     |    BuildKernels | JIT telemetry: 31 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:20:28.805 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:20:28.805 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:20:29.053 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:20:29.053 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:20:29.053 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[33-0] 2026-10-23 14:20:30.523 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+[transformers] The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+HF_REFERENCE_READY
+2026-10-23 14:20:34.522 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:20:34.522 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:20:34.522 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:20:34.522 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:20:34.533 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:20:34.534 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:20:34.613 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:20:34.613 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:20:34.613 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:20:34.613 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:20:34.615 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:20:34.852 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:20:34.914 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:20:34.914 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:20:34.914 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:20:34.915 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:20:34.955 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.9998773887319305
+EAGER_DECODE_PCC 0.9998874565925111
+{"layer_type": "linear_attention", "layer_idx": 0, "batch": 1, "sequence": 33, "weights": "synthetic", "prefill_pcc": 0.9998773887319305, "decode_pcc": 0.9998874565925111, "changed_input_decode_pcc": 0.9998946005103468, "resume_pcc": null, "deterministic": true, "remap_pcc": null, "remap_cache_pcc": null, "input_std": 0.012563, "request_results": [], "prefill_pcc_fp32": 0.9998763799667358, "prefill_relative_rmse": 0.015669044107198715, "runtime_fallback_audit": true, "provenance": {"tests/run_decoder.py": "1a3af5c30f83433df779363c8b75ba73b0300e1d73eb565e8b070f3c8088e52e", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 0, "largest_free_per_bank": 4272341376}, "after_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 770129920, "largest_free_per_bank": 4176075136}, "request_setup": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 774980608, "largest_free_per_bank": 4175468800}}, "prefill_compared_tokens": 33}
+2026-10-23 14:20:42.411 | info     |    BuildKernels | JIT cache stats: 299/345 hits (86.7%) [299 cached, 195 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:20:42.411 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:20:42.424 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:20:42.424 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:20:42.655 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:20:42.655 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:20:42.655 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[33-3] 2026-10-23 14:20:44.093 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+HF_REFERENCE_READY
+2026-10-23 14:20:48.030 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:20:48.030 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:20:48.030 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:20:48.030 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:20:48.041 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:20:48.041 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:20:48.120 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:20:48.120 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:20:48.120 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:20:48.120 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:20:48.121 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:20:48.354 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:20:48.416 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:20:48.416 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:20:48.416 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:20:48.417 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:20:48.458 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.9997416347672695
+EAGER_DECODE_PCC 0.999888647794517
+{"layer_type": "full_attention", "layer_idx": 3, "batch": 1, "sequence": 33, "weights": "synthetic", "prefill_pcc": 0.9997416347672695, "decode_pcc": 0.999888647794517, "changed_input_decode_pcc": 0.9998901035664358, "resume_pcc": null, "deterministic": true, "remap_pcc": null, "remap_cache_pcc": null, "input_std": 0.012563, "request_results": [], "prefill_pcc_fp32": 0.9997402429580688, "prefill_relative_rmse": 0.023180801421403885, "runtime_fallback_audit": true, "provenance": {"tests/run_decoder.py": "1a3af5c30f83433df779363c8b75ba73b0300e1d73eb565e8b070f3c8088e52e", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 0, "largest_free_per_bank": 4272341376}, "after_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 746225664, "largest_free_per_bank": 4179063168}, "request_setup": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 748323840, "largest_free_per_bank": 4178800896}}, "prefill_compared_tokens": 33}
+2026-10-23 14:20:52.715 | info     |    BuildKernels | JIT cache stats: 192/197 hits (97.5%) [192 cached, 116 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:20:52.715 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:20:52.728 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:20:52.728 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:20:52.956 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:20:52.956 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:20:52.956 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[127-0] 2026-10-23 14:20:54.392 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+[transformers] The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+HF_REFERENCE_READY
+2026-10-23 14:20:58.386 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:20:58.386 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:20:58.387 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:20:58.387 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:20:58.398 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:20:58.398 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:20:58.476 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:20:58.476 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:20:58.476 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:20:58.476 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:20:58.478 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:20:58.755 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:20:58.820 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:20:58.820 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:20:58.820 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:20:58.820 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:20:58.861 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.9998884370927316
+EAGER_DECODE_PCC 0.9998629035399378
+{"layer_type": "linear_attention", "layer_idx": 0, "batch": 1, "sequence": 127, "weights": "synthetic", "prefill_pcc": 0.9998884370927316, "decode_pcc": 0.9998629035399378, "changed_input_decode_pcc": 0.9999198810718227, "resume_pcc": null, "deterministic": true, "remap_pcc": null, "remap_cache_pcc": null, "input_std": 0.012563, "request_results": [], "prefill_pcc_fp32": 0.9998791813850403, "prefill_relative_rmse": 0.014944182708859444, "runtime_fallback_audit": true, "provenance": {"tests/run_decoder.py": "1a3af5c30f83433df779363c8b75ba73b0300e1d73eb565e8b070f3c8088e52e", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 0, "largest_free_per_bank": 4272341376}, "after_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 770129920, "largest_free_per_bank": 4176075136}, "request_setup": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 775635968, "largest_free_per_bank": 4175386880}}, "prefill_compared_tokens": 127}
+2026-10-23 14:21:06.112 | info     |    BuildKernels | JIT cache stats: 350/375 hits (93.3%) [350 cached, 174 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:21:06.112 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:21:06.126 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:21:06.126 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:21:06.357 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:21:06.358 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:21:06.358 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[127-3] 2026-10-23 14:21:07.792 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+HF_REFERENCE_READY
+2026-10-23 14:21:11.860 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:21:11.860 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:21:11.860 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:21:11.860 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:21:11.871 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:21:11.872 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:21:11.951 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:21:11.951 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:21:11.951 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:21:11.951 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:21:11.953 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:21:12.156 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:21:12.219 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:21:12.219 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:21:12.220 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:21:12.220 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:21:12.260 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.9996087677000988
+EAGER_DECODE_PCC 0.9998329284317299
+{"layer_type": "full_attention", "layer_idx": 3, "batch": 1, "sequence": 127, "weights": "synthetic", "prefill_pcc": 0.9996087677000988, "decode_pcc": 0.9998329284317299, "changed_input_decode_pcc": 0.9997881739268675, "resume_pcc": null, "deterministic": true, "remap_pcc": null, "remap_cache_pcc": null, "input_std": 0.012563, "request_results": [], "prefill_pcc_fp32": 0.9996300935745239, "prefill_relative_rmse": 0.028330499306321144, "runtime_fallback_audit": true, "provenance": {"tests/run_decoder.py": "1a3af5c30f83433df779363c8b75ba73b0300e1d73eb565e8b070f3c8088e52e", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 0, "largest_free_per_bank": 4272341376}, "after_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 746225664, "largest_free_per_bank": 4179063168}, "request_setup": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 748979200, "largest_free_per_bank": 4178718976}}, "prefill_compared_tokens": 127}
+2026-10-23 14:21:16.654 | info     |    BuildKernels | JIT cache stats: 202/207 hits (97.6%) [202 cached, 113 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:21:16.654 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:21:16.667 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:21:16.667 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:21:16.959 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:21:16.959 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:21:16.959 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[128-0] 2026-10-23 14:21:18.415 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+[transformers] The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+HF_REFERENCE_READY
+2026-10-23 14:21:22.506 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:21:22.506 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:21:22.506 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:21:22.506 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:21:22.517 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:21:22.517 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:21:22.596 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:21:22.596 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:21:22.596 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:21:22.596 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:21:22.598 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:21:22.858 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:21:22.918 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:21:22.918 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:21:22.918 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:21:22.919 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:21:22.959 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.9998882104950475
+EAGER_DECODE_PCC 0.9999184317959323
+{"layer_type": "linear_attention", "layer_idx": 0, "batch": 1, "sequence": 128, "weights": "synthetic", "prefill_pcc": 0.9998882104950475, "decode_pcc": 0.9999184317959323, "changed_input_decode_pcc": 0.999879123402536, "resume_pcc": null, "deterministic": true, "remap_pcc": null, "remap_cache_pcc": null, "input_std": 0.012563, "request_results": [], "prefill_pcc_fp32": 0.9998799562454224, "prefill_relative_rmse": 0.014959287829697132, "runtime_fallback_audit": true, "provenance": {"tests/run_decoder.py": "1a3af5c30f83433df779363c8b75ba73b0300e1d73eb565e8b070f3c8088e52e", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 0, "largest_free_per_bank": 4272341376}, "after_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 770129920, "largest_free_per_bank": 4176075136}, "request_setup": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 775635968, "largest_free_per_bank": 4175386880}}, "prefill_compared_tokens": 128}
+2026-10-23 14:21:27.111 | info     |    BuildKernels | JIT cache stats: 374/374 hits (100.0%) [374 cached, 172 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:21:27.111 | info     |    BuildKernels | JIT telemetry: 31 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:21:27.124 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:21:27.124 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:21:27.360 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:21:27.360 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:21:27.360 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[128-3] 2026-10-23 14:21:28.802 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+HF_REFERENCE_READY
+2026-10-23 14:21:32.825 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:21:32.825 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:21:32.825 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:21:32.825 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:21:32.836 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:21:32.836 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:21:32.915 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:21:32.915 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:21:32.915 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:21:32.915 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:21:32.916 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:21:33.159 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:21:33.221 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:21:33.221 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:21:33.221 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:21:33.222 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:21:33.263 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.9996082913426383
+EAGER_DECODE_PCC 0.9997881739268675
+{"layer_type": "full_attention", "layer_idx": 3, "batch": 1, "sequence": 128, "weights": "synthetic", "prefill_pcc": 0.9996082913426383, "decode_pcc": 0.9997881739268675, "changed_input_decode_pcc": 0.9998086433218226, "resume_pcc": null, "deterministic": true, "remap_pcc": null, "remap_cache_pcc": null, "input_std": 0.012563, "request_results": [], "prefill_pcc_fp32": 0.9996277689933777, "prefill_relative_rmse": 0.028345363214612007, "runtime_fallback_audit": true, "provenance": {"tests/run_decoder.py": "1a3af5c30f83433df779363c8b75ba73b0300e1d73eb565e8b070f3c8088e52e", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 0, "largest_free_per_bank": 4272341376}, "after_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 746225664, "largest_free_per_bank": 4179063168}, "request_setup": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 748979200, "largest_free_per_bank": 4178718976}}, "prefill_compared_tokens": 128}
+2026-10-23 14:21:36.881 | info     |    BuildKernels | JIT cache stats: 196/196 hits (100.0%) [196 cached, 112 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:21:36.881 | info     |    BuildKernels | JIT telemetry: 31 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:21:36.895 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:21:36.895 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:21:37.161 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:21:37.161 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:21:37.161 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[129-0] 2026-10-23 14:21:38.612 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+[transformers] The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+HF_REFERENCE_READY
+2026-10-23 14:21:42.681 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:21:42.681 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:21:42.681 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:21:42.681 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:21:42.692 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:21:42.692 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:21:42.772 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:21:42.772 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:21:42.772 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:21:42.772 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:21:42.774 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:21:43.060 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:21:43.121 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:21:43.121 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:21:43.121 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:21:43.122 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:21:43.162 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.9998885395409667
+RESUME_PCC 0.9999999999999999
+EAGER_DECODE_PCC 0.9998882932893864
+{"layer_type": "linear_attention", "layer_idx": 0, "batch": 1, "sequence": 129, "weights": "synthetic", "prefill_pcc": 0.9998885395409667, "decode_pcc": 0.9998882932893864, "changed_input_decode_pcc": 0.9998589696709818, "resume_pcc": 0.9999999999999999, "deterministic": true, "remap_pcc": null, "remap_cache_pcc": null, "input_std": 0.012563, "request_results": [], "prefill_pcc_fp32": 0.999883770942688, "prefill_relative_rmse": 0.014937934465706348, "runtime_fallback_audit": true, "provenance": {"tests/run_decoder.py": "1a3af5c30f83433df779363c8b75ba73b0300e1d73eb565e8b070f3c8088e52e", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 0, "largest_free_per_bank": 4272341376}, "after_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 770129920, "largest_free_per_bank": 4176075136}, "request_setup": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 775996416, "largest_free_per_bank": 4175341824}}, "prefill_compared_tokens": 129}
+2026-10-23 14:21:47.476 | info     |    BuildKernels | JIT cache stats: 401/401 hits (100.0%) [401 cached, 182 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:21:47.476 | info     |    BuildKernels | JIT telemetry: 31 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:21:47.492 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:21:47.492 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:21:47.762 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:21:47.762 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:21:47.762 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[129-3] 2026-10-23 14:21:49.202 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+HF_REFERENCE_READY
+2026-10-23 14:21:53.126 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 14:21:53.126 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 14:21:53.126 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 14:21:53.126 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 14:21:53.137 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 14:21:53.137 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 14:21:53.216 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 14:21:53.216 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 14:21:53.216 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 14:21:53.216 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 14:21:53.218 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 14:21:53.461 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 14:21:53.524 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 14:21:53.524 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 14:21:53.524 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 14:21:53.525 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 14:21:53.566 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+PREFILL_PCC 0.9996070998887444
+RESUME_PCC 1.0
+EAGER_DECODE_PCC 0.9998086433218226
+{"layer_type": "full_attention", "layer_idx": 3, "batch": 1, "sequence": 129, "weights": "synthetic", "prefill_pcc": 0.9996070998887444, "decode_pcc": 0.9998086433218226, "changed_input_decode_pcc": 0.9997922319928679, "resume_pcc": 1.0, "deterministic": true, "remap_pcc": null, "remap_cache_pcc": null, "input_std": 0.012563, "request_results": [], "prefill_pcc_fp32": 0.9996210932731628, "prefill_relative_rmse": 0.028387857601046562, "runtime_fallback_audit": true, "provenance": {"tests/run_decoder.py": "1a3af5c30f83433df779363c8b75ba73b0300e1d73eb565e8b070f3c8088e52e", "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77", "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9", "tt/kernels/fp32_recurrence.cpp": "78cf3afd692ed074a047ec402b8e8b49f56183e833d7687f9284ef8af4472c48"}, "memory": {"before_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 0, "largest_free_per_bank": 4272341376}, "after_weights": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 746225664, "largest_free_per_bank": 4179063168}, "request_setup": {"num_banks": 8, "capacity_bytes": 34178731008, "allocated_bytes": 750388224, "largest_free_per_bank": 4178542848}}, "prefill_compared_tokens": 129}
+2026-10-23 14:21:58.161 | info     |    BuildKernels | JIT cache stats: 251/256 hits (98.0%) [251 cached, 193 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 14:21:58.161 | info     |    BuildKernels | JIT telemetry: 41 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 14:21:58.175 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 14:21:58.175 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 14:21:58.364 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 14:21:58.364 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 14:21:58.364 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /workspace/models/autoports/qwen_qwen3_8_27b/doc/functional_decoder/synthetic_pytest.xml -
+============================= slowest 25 durations =============================
+13.58s call     models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[33-0]
+13.39s call     models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[127-0]
+13.09s call     models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[31-0]
+11.51s call     models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[1-3]
+10.62s call     models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[127-3]
+10.61s call     models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[129-3]
+10.59s call     models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[129-0]
+10.40s call     models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[128-0]
+10.30s call     models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[33-3]
+10.18s call     models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[32-0]
+10.00s call     models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[1-0]
+9.80s call     models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[128-3]
+9.71s call     models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[31-3]
+9.53s call     models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[32-3]
+
+(11 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[1-0]
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[1-3]
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[31-0]
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[31-3]
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[32-0]
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[32-3]
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[33-0]
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[33-3]
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[127-0]
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[127-3]
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[128-0]
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[128-3]
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[129-0]
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py::test_synthetic_decoder[129-3]
+======================== 14 passed in 153.34s (0:02:33) ========================

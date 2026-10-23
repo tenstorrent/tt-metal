@@ -1,0 +1,30 @@
+--- tt/functional_decoder.py.before
++++ tt/functional_decoder.py
+@@ -5,7 +5,7 @@
+ Prefill accepts [B,S,5120], decode [B,1,5120]. Full-attention callers supply
+ RoPE cos/sin for the absolute positions and a paged cache; linear attention
+ callers supply convolution and FP32 recurrent state. State is updated in place.
+-This implementation is under validation; see doc/functional_decoder/README.md.
++Validation evidence and limitations are in doc/functional_decoder/README.md.
+ """
+ 
+ from dataclasses import dataclass
+--- tt/kernels/fp32_recurrence.cpp.before
++++ tt/kernels/fp32_recurrence.cpp
+@@ -7,14 +7,14 @@
+ // `naive_recurrent_gated_delta_rule`; the vLLM `fused_sigmoid_gating_delta_rule_update` is this
+ // same recurrence over the K+1 speculative tokens.
+ //
+-// Per token (q pre-scaled + L2-normed, k L2-normed, decay = exp(g_t), all done host-side):
++// Per token (q pre-scaled + L2-normed, k L2-normed, decay = exp(g_t), prepared with TTNN device operations):
+ //   sd     = S * decay            (decay the state BEFORE the read, matches FLA + chunk scan)
+ //   vread  = k . sd               ([1,V])
+ //   u      = beta * (v - vread)   ([1,V])
+ //   S_new  = sd + k^T (x) u       ([K,V] rank-1 update)
+ //   o      = q . S_new            (read from the POST-update state)
+ //
+-// Per-token tiles are [1, D] (token in row 0, rows 1..31 host-zero-padded), so the outer-product
++// Per-token tiles are [1, D] (token in row 0, rows 1..31 zero-padded on device), so the outer-product
+ // update k^T (x) u is a matmul with inner dim 1 whose 31 padding lanes are zero and vanish.
+ 
+ #include <cstdint>
