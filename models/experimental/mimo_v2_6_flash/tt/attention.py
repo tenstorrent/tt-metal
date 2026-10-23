@@ -925,9 +925,14 @@ class TtMiMoAttention:
         """x [1, 1, B, hidden] (B users padded to a tile).
 
         cur_pos: int32 [B] on device (-1 skips a slot), or a dict {"pos", "pos_owned", "owner_mask"} and optionally
-        "pos_update"; global layers with split users read the per-chip owned view (see kv.py).
+        "pos_update" and "serial"; global layers with split users read the per-chip owned view (see kv.py).
+        "serial": per-slot position tensors, each keeping one slot's position, to write K / V slot by slot: the
+        slots of a speculative verify are one request at consecutive positions, whose rows share cache tiles that
+        the per-slot cache writers read, patch and write back concurrently (reference/spec_decode.py).
         ``compact``: users only in rows 0-3; returns the gathered compact rows (see ``_decode_o``)."""
+        serial = None
         if isinstance(cur_pos, dict):
+            serial = cur_pos.get("serial")
             if self.split_users:
                 return self._forward_decode_split(
                     x,
@@ -940,15 +945,19 @@ class TtMiMoAttention:
                     pos_update=cur_pos.get("pos_update"),
                     pos_sdpa=cur_pos.get("pos_sdpa"),
                     page_table_sdpa=cur_pos.get("page_table_sdpa"),
+                    serial=serial,
                 )
             cur_pos = cur_pos["pos"]
         assert not self.split_users, "global layers on TP=8 need the per-chip owned positions"
+        writes = serial or [cur_pos]
         xqkv = self._decode_qkv(x, self.wqkv, self.decode_qkv_program, compact)
         k_cache, v_cache = kv_cache
         fused_qkv = compact and self.swa_qkv is not None and len(rot_mats) >= 4
         if fused_qkv:
-            # Head split, RoPE and both cache updates in one launch (rot_mats[2:4]: the raw cos / sin rows).
-            q_rot = self.swa_qkv(xqkv, rot_mats[2], rot_mats[3], cur_pos, page_table, k_cache, v_cache)
+            # Head split, RoPE and both cache updates in one launch (rot_mats[2:4]: the raw cos / sin rows). Its query
+            # does not depend on the positions, so serial writes repeat it with one slot's position each.
+            for pos in writes:
+                q_rot = self.swa_qkv(xqkv, rot_mats[2], rot_mats[3], pos, page_table, k_cache, v_cache)
             xqkv.deallocate(True)
         else:
             q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
@@ -965,9 +974,10 @@ class TtMiMoAttention:
             k.deallocate(True)
 
             v_cached = self._cache_width_v(v, x.shape[-2], v_cache.shape[-1])
-            update = dict(update_idxs_tensor=cur_pos, page_table=page_table)
-            ttnn.experimental.paged_update_cache(k_cache, k_rot, **update)
-            ttnn.experimental.paged_update_cache(v_cache, v_cached, **update)
+            for pos in writes:
+                update = dict(update_idxs_tensor=pos, page_table=page_table)
+                ttnn.experimental.paged_update_cache(k_cache, k_rot, **update)
+                ttnn.experimental.paged_update_cache(v_cache, v_cached, **update)
             k_rot.deallocate(True)
             v_cached.deallocate(True)
 
@@ -1004,6 +1014,7 @@ class TtMiMoAttention:
         pos_update=None,
         pos_sdpa=None,
         page_table_sdpa=None,
+        serial=None,
     ):
         """Global-layer decode: all 16 Q heads of this chip's KV group, for the slots this chip owns.
 
@@ -1012,7 +1023,9 @@ class TtMiMoAttention:
         ``pos_sdpa`` / ``page_table_sdpa``: ``pos_owned`` and the page table cut to the first n decode slots (n < 32).
         The SDPA takes its batch from the page table's rows and splits its cores evenly over that batch, so with the
         32-row table each user gets 2 of 64 cores (21 ms per layer at 1M context); with n = 2 rows it gets 32 (1.15
-        ms)."""
+        ms). ``serial``: the K / V write positions one slot per tensor, written one after another (forward_decode);
+        vLLM's tables only."""
+        assert serial is None or pos_update is not None, "serial K / V writes need vLLM's tables (pos_update)"
         batch = x.shape[-2]
         xqkv = self._decode_qkv(x, self.wqkv_decode, self.decode_qkv_program)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
@@ -1031,9 +1044,10 @@ class TtMiMoAttention:
         v_shard = self._cache_width_v(v, batch, self.v_head_dim)
 
         k_cache, v_cache = kv_cache
-        update = dict(update_idxs_tensor=pos_owned if pos_update is None else pos_update, page_table=page_table)
-        ttnn.experimental.paged_update_cache(k_cache, k_rot, **update)
-        ttnn.experimental.paged_update_cache(v_cache, v_shard, **update)
+        for pos in serial or [pos_owned if pos_update is None else pos_update]:
+            update = dict(update_idxs_tensor=pos, page_table=page_table)
+            ttnn.experimental.paged_update_cache(k_cache, k_rot, **update)
+            ttnn.experimental.paged_update_cache(v_cache, v_shard, **update)
         k_rot.deallocate(True)
         v_shard.deallocate(True)
 

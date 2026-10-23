@@ -183,10 +183,43 @@ A global layer's prefill chunk after the first (`_prefill_owner_chunk`) zeroes t
 `all_reduce` in the same way, so prompts longer than one chunk likely still prefill slightly differently per parity
 (not measured).
 
+## Speculative decoding (MTP)
+
+Not yet run on hardware. The MTP layer (`model.mtp.layers.0`) drafts 3 tokens through the plugin's model-owned
+drafter contract (`docs/SPEC_DECODE_CONTRACT.md`); lane DP serves it with the plugin branch
+`mimo-v2.6-flash/vllm-plugin-dev-lane-spec-decode`. Launch as above with:
+
+```bash
+export MIMO_SPEC_DECODE=mtp   # MIMO_MTP_LAYER (default 0) picks the MTP layer
+vllm serve ... --no-async-scheduling \
+  --speculative-config '{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter", "num_speculative_tokens": 3}'
+```
+
+- **Who speculates.** A lane drafts after a step that ran one request in it; a lane with several requests declines
+  (`num_valid` 0) and decodes as before. Greedy requests only (the plugin's accept walk compares token ids).
+- **Verify** (`reference/spec_decode.py`, `TtMiMoModel.capture_verify_trace`): the decode step with the request in
+  every decode slot of its replica, column j of the candidate block in slot j at position p + j, each slot with the
+  request's page tables. It stays on the 4-user fast path (streaming MoE, SwaDecodeQkv, GreedyHead). The slots share
+  cache tiles that the per-slot cache writers read, patch and write back concurrently, so the verify step writes K / V
+  one slot at a time (`serial` positions in `TtMiMoAttention.forward_decode`); the query of the fused SWA kernel does
+  not depend on the positions, so it is repeated with one slot's position each. A block that carries drafts beside
+  another request (one joined after the proposal) is packed into passes of 4 slots.
+- **Draft** (`tt/mtp.py`): one traced program per replica. The fill pass runs the MTP layer over the committed tokens,
+  each slot taking the target's final normed hidden there (the persistent buffer of the last layer's fused norm) and
+  the embedding of the committed token; two steps on the last slot feed the layer its own output (vLLM's MTP
+  proposer with one layer). Its KV cache is a ring of 256 positions, addressed at 256 + t % 256 with RoPE at t.
+- **Tests.** `tests/test_spec_decode_host.py` (no device): the planning, the ring addressing, and speculative greedy
+  equal to plain greedy on a small fp32 MiMo with an MTP, an oracle and a partially wrong drafter.
+  `tests/test_spec_decode_tp8_dp4.py` (Galaxy, needs vllm-tt-plugin): the adapter's speculative tokens equal its
+  greedy tokens; logs the mean accepted length and ms per token.
+- **Open.** The MTP ring starts empty for each prompt (its window is not filled from the prompt tail, so the first
+  ~128 decode tokens draft from less context); async scheduling; more than one speculating request per lane (16 / 32
+  verify rows exceed the 4-user kernels); the 3-layer MTP chain; the trace region size with both extra traces.
+
 ## Not done
 
 - Slot parity of chunked prefill (above).
 - Device sampling beyond greedy (top-k / top-p / temperature, penalties, logprobs run on the host, synchronously).
 - A 1M-token prompt, and the 1M server on the c16 branch (decode RoPE tables are off past 128K context).
 - Prefill and decode in the same step for different lanes (the plugin runs a step as all-prefill or all-decode).
-- Speculative decoding (lane DP refuses it); tracing later prefill chunks and chunks longer than 512 tokens.
+- Tracing later prefill chunks and chunks longer than 512 tokens.

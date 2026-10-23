@@ -60,17 +60,28 @@ class MiMoConfig:
         self.add_full_attention_sink_bias = c.get("add_full_attention_sink_bias", False)
         self.max_position_embeddings = c["max_position_embeddings"]
         self.eos_token_id = c.get("eos_token_id")
+        # MTP layers (model.mtp.layers.*): SWA attention with sinks and a dense MLP, addressed by the layer indices
+        # after the decoder's (mtp_layer_index).
+        self.num_nextn_predict_layers = c.get("num_nextn_predict_layers", 0)
 
     @classmethod
     def from_model_path(cls, model_path):
         with open(os.path.join(model_path, "config.json")) as f:
             return cls(json.load(f))
 
+    def mtp_layer_index(self, i):
+        """The layer index of MTP layer ``i``: is_swa, is_moe and attention_dims take it like a decoder layer's."""
+        assert 0 <= i < self.num_nextn_predict_layers, f"MTP layer {i} of {self.num_nextn_predict_layers}"
+        return self.num_hidden_layers + i
+
+    def is_mtp(self, layer_idx):
+        return layer_idx >= self.num_hidden_layers
+
     def is_swa(self, layer_idx):
-        return self.hybrid_layer_pattern[layer_idx] == 1
+        return self.is_mtp(layer_idx) or self.hybrid_layer_pattern[layer_idx] == 1
 
     def is_moe(self, layer_idx):
-        return bool(self.moe_layer_freq[layer_idx])
+        return not self.is_mtp(layer_idx) and bool(self.moe_layer_freq[layer_idx])
 
     def attention_dims(self, layer_idx) -> AttentionDims:
         swa = self.is_swa(layer_idx)
