@@ -125,7 +125,7 @@ def test_qkv_fused_stages(layer_idx, batch, cache_len, mesh_device, reset_seeds,
     # the shards the two paths consumed are dead: free their L1 like the model does (at 32 users on the head_dim-512
     # layers the decode SDPA program's static buffers need the room)
     for t in (q, k, v, q2, k2, v2):
-        if t not in (nq, nk, nv):  # in-place form: the fused outputs are q2 / k2 / v2 themselves
+        if not any(t is o for o in (nq, nk, nv)):  # in-place form: the fused outputs are q2 / k2 / v2 themselves
             t.deallocate(True)
 
     # stage 1: the three head tensors
