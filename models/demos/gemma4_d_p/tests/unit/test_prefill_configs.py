@@ -74,7 +74,20 @@ def test_striped_global_uses_all_tuned_fields(length, monkeypatch):
     monkeypatch.setattr(striped_prefill, "ring_prefill_program_config", lambda *args, **kwargs: (args, kwargs))
     args, kwargs = striped_prefill.striped_prefill_program_config(attention, length, num_heads=8, cache_rows=32768)
     expected = ring_prefill._load_global_ring_sdpa_configs()[length]
-    assert (*args[3:5], kwargs["max_k_splits"], kwargs["segmented_accumulation"]) == expected
+    assert (*args[3:5], kwargs["k_splits"], kwargs["segmented_accumulation"]) == expected
+
+
+@pytest.mark.parametrize("length, cols, rows, expected_splits", [(4096, 12, 10, 3), (4096, 14, 8, 1), (2048, 14, 8, 3)])
+def test_striped_sliding_k_splits_fit_whole_grid_rows(length, cols, rows, expected_splits, monkeypatch):
+    attention = SimpleNamespace(
+        mesh_config=SimpleNamespace(cp_degree=8, device=None),
+        ccl_manager=SimpleNamespace(compute_grid_size=SimpleNamespace(x=cols, y=rows)),
+        config=SimpleNamespace(is_sliding=True, head_dim=256),
+    )
+    monkeypatch.setattr(striped_prefill, "ring_prefill_program_config", lambda *args, **kwargs: (args, kwargs))
+    _, kwargs = striped_prefill.striped_prefill_program_config(attention, length, num_heads=8, cache_rows=32768)
+    assert kwargs["k_splits"] == expected_splits
+    assert not kwargs["segmented_accumulation"]
 
 
 def test_ring_sdpa_table_is_relative_to_module_and_cached(ring_sdpa_table_file, tmp_path, monkeypatch):

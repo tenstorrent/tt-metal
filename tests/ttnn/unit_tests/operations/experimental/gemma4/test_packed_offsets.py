@@ -114,7 +114,7 @@ def test_packed_offsets_trace(runtime, mode, q_chunk, k_chunk, splits):
                     compute_with_storage_grid_size=runtime.sdpa_compute_grid if splits > 1 else ttnn.CoreCoord(2, 2),
                     q_chunk_size=q_chunk,
                     k_chunk_size=k_chunk,
-                    max_k_splits=splits,
+                    k_splits=splits,
                     exp_approx_mode=False,
                 ),
                 compute_kernel_config=runtime.compute_kernel_config,

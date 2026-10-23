@@ -21,9 +21,10 @@ def pytest_runtest_call(item):
                 int(os.getenv("GEMMA4_PERF_CHUNK_SIZE", "8192")) // 8,
                 sliding=False,
                 num_heads=8,
-                num_cores=(ccl.compute_grid_size.x - 1) * ccl.compute_grid_size.y,
+                grid=(ccl.compute_grid_size.x - 1, ccl.compute_grid_size.y),
+                use_tuned_configs=True,
             )
-            kwargs.update(max_k_splits=splits, segmented_accumulation=segmented)
+            kwargs.update(k_splits=splits, segmented_accumulation=segmented)
         if variant == "swa_k128" and head_dim == 256:
             k_chunk = 128
         return original(mesh, ccl, head_dim, q_chunk, k_chunk, **kwargs)

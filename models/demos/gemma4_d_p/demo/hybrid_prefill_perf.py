@@ -158,7 +158,7 @@ def test_prefill_hybrid_comparison(mesh_device, reset_seeds):
                 request_tokens=length,
                 q_chunk_size=config.q_chunk_size,
                 k_chunk_size=config.k_chunk_size,
-                max_k_splits=config.max_k_splits,
+                k_splits=config.k_splits,
                 segmented_accumulation=config.segmented_accumulation,
             )
             for (kind, length), config in hybrid._configs.items()

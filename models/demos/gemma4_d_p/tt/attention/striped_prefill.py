@@ -4,7 +4,11 @@
 """Per-request striped attention inside a shared projection batch."""
 
 import ttnn
-from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_prefill_program_config, ring_sdpa_chunk_sizes
+from models.demos.gemma4_d_p.tt.attention.ring_prefill import (
+    _k_splits,
+    ring_prefill_program_config,
+    ring_sdpa_chunk_sizes,
+)
 
 
 def striped_prefill_program_config(attention, length, num_heads, cache_rows):
@@ -12,15 +16,15 @@ def striped_prefill_program_config(attention, length, num_heads, cache_rows):
     global_attention = not attention.config.is_sliding
     local_length = length // mesh.cp_degree
     grid = ccl.compute_grid_size
-    num_cores = (grid.x - 1) * grid.y
+    sdpa_grid = (grid.x - 1, grid.y)
     if global_attention:
         q_chunk, k_chunk, splits, segmented = ring_sdpa_chunk_sizes(
-            local_length, sliding=False, num_heads=num_heads, num_cores=num_cores, use_tuned_configs=True
+            local_length, sliding=False, num_heads=num_heads, grid=sdpa_grid, use_tuned_configs=True
         )
     else:
         q_chunk = next(size for size in (128, 64, 32) if local_length % size == 0)
         k_chunk = 32
-        splits = 3 if num_heads * (local_length // q_chunk) * 3 <= num_cores else 1
+        splits = _k_splits(num_heads * (local_length // q_chunk), sdpa_grid)
         segmented = False
     return ring_prefill_program_config(
         mesh.device,
@@ -28,7 +32,7 @@ def striped_prefill_program_config(attention, length, num_heads, cache_rows):
         attention.config.head_dim,
         q_chunk,
         k_chunk,
-        max_k_splits=splits,
+        k_splits=splits,
         matmul_math_fidelity=ttnn.MathFidelity.LoFi if global_attention else ttnn.MathFidelity.HiFi2,
         segmented_accumulation=segmented,
     )
