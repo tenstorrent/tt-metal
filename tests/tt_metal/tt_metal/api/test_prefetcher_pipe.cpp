@@ -11,6 +11,7 @@
 // AdvancedProgramRunArgs::prefetcher_pipe_args.
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -39,6 +40,9 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include "impl/allocator/allocator.hpp"
+#include "impl/allocator/persistent_l1_arena.hpp"
+#include "impl/buffers/circular_buffer.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -101,6 +105,10 @@ constexpr const char* relay_receiver_kernel_path =
 constexpr const char* relay_trisc_kernel_path =
     "tests/tt_metal/tt_metal/test_kernels/compute/prefetcher_pipe_relay_trisc.cpp";
 constexpr const char* blank_kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp";
+constexpr const char* cb_fill_kernel_path =
+    "tests/tt_metal/tt_metal/test_kernels/dataflow/cb_fill_report_write_ptr.cpp";
+constexpr const char* scratchpad_kernel_path =
+    "tests/tt_metal/tt_metal/test_kernels/dataflow/scratchpad_write_pattern.cpp";
 
 // The one PrefetcherPipeParameter of a single-pipe Program.
 const m2::PrefetcherPipeParamName pipe_param{"pipe"};
@@ -1085,6 +1093,395 @@ TEST_F(PrefetcherPipeFixture, PersistentArenaSerializesOverlappingSpacesAndReuse
 }
 
 // ============================================================================
+// PersistentL1Arena: relocating Programs placed before a persistent allocation
+// ============================================================================
+
+namespace {
+
+// Stands in for a Program: holds relocatable seals and records each relocation.
+struct CountingRelocatable final : PersistentL1Arena::Relocatable {
+    std::vector<PersistentL1Arena::Seal> seals;
+    uint32_t relocations = 0;
+
+    void seal_each(PersistentL1Arena& arena, const std::vector<CoreCoord>& cores) {
+        const std::weak_ptr<PersistentL1Arena::Relocatable> self = weak_self;
+        for (const CoreCoord& core : cores) {
+            seals.push_back(arena.seal(CoreRangeSet(CoreRange(core)), self));
+        }
+    }
+    void relocate_persistent_l1(PersistentL1Arena& /*arena*/) noexcept override {
+        ++relocations;
+        seals.clear();
+    }
+
+    std::weak_ptr<CountingRelocatable> weak_self;
+};
+
+std::shared_ptr<CountingRelocatable> make_counting_relocatable() {
+    auto holder = std::make_shared<CountingRelocatable>();
+    holder->weak_self = holder;
+    return holder;
+}
+
+// A small standalone arena over a 4x1 worker grid.
+PersistentL1Arena make_test_arena() {
+    constexpr DeviceAddr base = 0x1000;
+    constexpr DeviceAddr limit = 0x10000;
+    return PersistentL1Arena(base, limit, CoreRangeSet(CoreRange({0, 0}, {3, 0})));
+}
+
+}  // namespace
+
+TEST(PersistentL1ArenaTest, CPU_AllocationRelocatesEachSealedHolderOnce) {
+    PersistentL1Arena arena = make_test_arena();
+    const CoreRangeSet allocation_cores(CoreRange({0, 0}, {2, 0}));
+    // `program` is sealed on two of the allocation's cores; `bystander` only on a core outside it.
+    auto program = make_counting_relocatable();
+    program->seal_each(arena, {CoreCoord(0, 0), CoreCoord(1, 0)});
+    auto bystander = make_counting_relocatable();
+    bystander->seal_each(arena, {CoreCoord(3, 0)});
+
+    EXPECT_TRUE(arena.would_relocate(allocation_cores));
+    EXPECT_FALSE(arena.would_relocate(CoreRangeSet(CoreRange({2, 0}))));
+    arena.allocate(allocation_cores, 256, 32);
+    EXPECT_EQ(program->relocations, 1u);
+    EXPECT_TRUE(program->seals.empty());
+    EXPECT_EQ(bystander->relocations, 0u);
+    EXPECT_EQ(bystander->seals.size(), 1u);
+
+    // Relocation released the seals, so the next allocation on those cores moves nothing.
+    EXPECT_FALSE(arena.would_relocate(allocation_cores));
+    arena.allocate(allocation_cores, 256, 32);
+    EXPECT_EQ(program->relocations, 1u);
+
+    // Sealing again after the relocation (the Program's next placement) is relocated again.
+    program->seal_each(arena, {CoreCoord(1, 0)});
+    arena.allocate(CoreRangeSet(CoreRange({1, 0})), 256, 32);
+    EXPECT_EQ(program->relocations, 2u);
+}
+
+TEST(PersistentL1ArenaTest, CPU_FixedSealRejectsAllocationAndRelocatesNothing) {
+    PersistentL1Arena arena = make_test_arena();
+    const CoreRangeSet allocation_cores(CoreRange({0, 0}, {1, 0}));
+    auto program = make_counting_relocatable();
+    program->seal_each(arena, {CoreCoord(0, 0)});
+    // A sub-device local L1 slab seals its cores this way.
+    std::optional<PersistentL1Arena::Seal> slab_seal = arena.seal(CoreRangeSet(CoreRange({1, 0})));
+
+    EXPECT_FALSE(arena.would_relocate(allocation_cores));
+    EXPECT_THAT(
+        [&] { arena.allocate(allocation_cores, 256, 32); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Cannot allocate persistent L1 on core 1-0 after program-local L1 placement")));
+    EXPECT_EQ(program->relocations, 0u);
+    EXPECT_EQ(program->seals.size(), 1u);
+    EXPECT_TRUE(arena.occupied_ranges().empty());
+
+    slab_seal.reset();
+    EXPECT_TRUE(arena.would_relocate(allocation_cores));
+    arena.allocate(allocation_cores, 256, 32);
+    EXPECT_EQ(program->relocations, 1u);
+}
+
+TEST(PersistentL1ArenaTest, CPU_RelocatableSealsOutliveArena) {
+    auto program = make_counting_relocatable();
+    {
+        PersistentL1Arena arena = make_test_arena();
+        program->seal_each(arena, {CoreCoord(0, 0), CoreCoord(1, 0)});
+    }
+    // Cached Programs can outlive the allocator; releasing their seals must be a no-op.
+    EXPECT_NO_THROW(program->seals.clear());
+}
+
+namespace {
+
+// Legacy Program with one locally allocated CB over `cores`, filled by cb_fill_report_write_ptr.cpp.
+struct CbFillProgram {
+    static constexpr uint32_t cb_index = 0;
+    static constexpr uint32_t num_pages = 2;
+    static constexpr uint32_t page_size = 2048;
+    static constexpr uint32_t cb_size = num_pages * page_size;
+
+    Program program;
+    CBHandle cb = 0;
+    KernelHandle kernel = 0;
+};
+
+CbFillProgram make_cb_fill_program(const CoreRangeSet& cores, uint32_t report_addr, uint32_t pattern) {
+    CbFillProgram p{.program = CreateProgram()};
+    const CircularBufferConfig cb_config =
+        CircularBufferConfig(CbFillProgram::cb_size, {{CbFillProgram::cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(CbFillProgram::cb_index, CbFillProgram::page_size);
+    p.cb = CreateCircularBuffer(p.program, cores, cb_config);
+    p.kernel = CreateKernel(
+        p.program,
+        cb_fill_kernel_path,
+        cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {CbFillProgram::cb_index, CbFillProgram::num_pages, CbFillProgram::page_size}});
+    SetRuntimeArgs(p.program, p.kernel, cores, {report_addr, pattern});
+    return p;
+}
+
+// An L1 address above anything these tests place (CBs, scratchpads, a pipe space and its sender
+// staging all sit within a few KiB of the arena base); nothing else allocates L1 here.
+uint32_t relocation_report_address(const distributed::MeshDevice& device) {
+    constexpr uint32_t clearance = 128 * 1024;
+    return static_cast<uint32_t>(device.allocator()->get_base_allocator_addr(HalMemType::L1)) + clearance;
+}
+
+std::vector<uint32_t> counting_words(uint32_t first, uint32_t num_words) {
+    std::vector<uint32_t> words(num_words);
+    for (uint32_t i = 0; i < num_words; i++) {
+        words[i] = first + i;
+    }
+    return words;
+}
+
+uint32_t read_l1_word(distributed::MeshDevice& device, const CoreCoord& core, uint32_t address) {
+    std::vector<uint32_t> word;
+    slow_dispatch::ReadFromL1(device, core, address, sizeof(uint32_t), word);
+    return word.empty() ? 0 : word[0];
+}
+
+std::vector<uint32_t> read_l1_words(
+    distributed::MeshDevice& device, const CoreCoord& core, uint32_t address, uint32_t num_bytes) {
+    std::vector<uint32_t> words;
+    slow_dispatch::ReadFromL1(device, core, address, num_bytes, words);
+    return words;
+}
+
+void write_l1_word(distributed::MeshDevice& device, const CoreCoord& core, uint32_t address, uint32_t value) {
+    std::vector<uint32_t> word{value};
+    slow_dispatch::WriteToL1(device, core, address, word);
+}
+
+uint32_t space_end(const m2::PrefetcherPipeSpace& space) {
+    return std::max(space.buffer_address() + space.ring_size(), space.config_address() + space.config_page_size());
+}
+
+}  // namespace
+
+// A Program placed its CBs at the arena base, so a space created afterwards on those cores lands
+// under them. The space moves the Program instead of failing: its next enqueue puts the CBs above
+// the space, the device sees the new address, and the pipe works over the L1 the CBs used to hold.
+TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_RelocatesCachedProgramCircularBuffers) {
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    if (is_quasar()) {
+        GTEST_SKIP() << "Legacy circular buffers are not used on Quasar";
+    }
+    auto mesh_device = devices_[0];
+    distributed::MeshDevice& device = *mesh_device;
+    const CoreCoord sender(0, 0);
+    const CoreCoord receiver(1, 0);
+    const CoreRangeSet program_cores(CoreRange(sender, receiver));
+    // Larger than the CB region, so the ring covers all of the L1 the CBs start in.
+    constexpr uint32_t ring_size = 4 * CbFillProgram::cb_size;
+    constexpr uint32_t first_pattern = 0x10000000;
+    constexpr uint32_t second_pattern = 0x20000000;
+    const uint32_t report_addr = relocation_report_address(device);
+
+    CbFillProgram cb_fill = make_cb_fill_program(program_cores, report_addr, first_pattern);
+    const auto device_range = persistent_unit_mesh_device_range();
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, std::move(cb_fill.program));
+    Program& placed = workload.get_programs().at(device_range);
+
+    // Runs the cached workload and checks the device used the CB address the host placed and
+    // filled it. Returns that address.
+    const auto run_and_check = [&](uint32_t pattern) {
+        for (const CoreCoord& core : corerange_to_cores(program_cores)) {
+            write_l1_word(device, core, report_addr, 0);
+        }
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue());
+        const uint32_t cb_address = placed.impl().get_circular_buffer(cb_fill.cb)->address();
+        const auto expected = counting_words(pattern, CbFillProgram::cb_size / sizeof(uint32_t));
+        for (const CoreCoord& core : corerange_to_cores(program_cores)) {
+            EXPECT_EQ(read_l1_word(device, core, report_addr), cb_address) << core.str();
+            EXPECT_EQ(read_l1_words(device, core, cb_address, CbFillProgram::cb_size), expected) << core.str();
+        }
+        return cb_address;
+    };
+    const uint32_t first_cb_address = run_and_check(first_pattern);
+
+    auto space =
+        m2::CreatePrefetcherPipeSpace(device, one_pipe_space_config(sender, CoreRangeSet(receiver), ring_size));
+    ASSERT_LT(space.buffer_address(), first_cb_address + CbFillProgram::cb_size);
+    ASSERT_GT(space.buffer_address() + ring_size, first_cb_address);
+    // The Program gave up its seals on these cores; only the space holds them now.
+    EXPECT_FALSE(device.allocator_impl()->persistent_l1().would_relocate(program_cores));
+    auto pipe = space.create_pipe(sender, CoreRangeSet(receiver));
+
+    // Mark the rings: a launch that still wrote through the old CB address would overwrite them.
+    std::vector<uint32_t> ring_marker = counting_words(0xA0000000, ring_size / sizeof(uint32_t));
+    for (const CoreCoord& core : corerange_to_cores(program_cores)) {
+        slow_dispatch::WriteToL1(device, core, space.buffer_address(), ring_marker);
+    }
+
+    SetRuntimeArgs(placed, cb_fill.kernel, program_cores, {report_addr, second_pattern});
+    const uint32_t second_cb_address = run_and_check(second_pattern);
+    EXPECT_GE(second_cb_address, space_end(space));
+    for (const CoreCoord& core : corerange_to_cores(program_cores)) {
+        EXPECT_EQ(read_l1_words(device, core, space.buffer_address(), ring_size), ring_marker) << core.str();
+    }
+
+    EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, pipe, 256, 4, /*write_primitive=*/0), 1u);
+}
+
+// Metal 2.0 scratchpads stack on the same region and reach the kernel as a CRTA, so relocation
+// must re-patch the CRTA the cached dispatch commands carry.
+TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_RelocatesCachedProgramScratchpad) {
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    if (is_quasar()) {
+        GTEST_SKIP() << "scratchpad_write_pattern.cpp reports through a Gen1 L1 write";
+    }
+    auto mesh_device = devices_[0];
+    distributed::MeshDevice& device = *mesh_device;
+    const CoreCoord node(0, 0);
+    const CoreCoord receiver(1, 0);
+    constexpr uint32_t scratchpad_bytes = 64;
+    // scratchpad_write_pattern.cpp writes 0xC0DE0000 + i over the whole scratchpad.
+    constexpr uint32_t scratchpad_pattern = 0xC0DE0000;
+    constexpr uint32_t ring_size = 4096;
+    const uint32_t report_addr = relocation_report_address(device);
+
+    m2::KernelSpec kernel = make_dm_kernel("scratch_kernel", scratchpad_kernel_path);
+    kernel.runtime_arg_schema.runtime_arg_names = {"report_addr"};
+    kernel.scratchpad_bindings.push_back(m2::KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = m2::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    m2::ProgramSpec spec{
+        .name = "relocated_scratchpad",
+        .kernels = {kernel},
+        .scratchpads = {m2::ScratchpadSpec{
+            .unique_id = m2::ScratchpadSpecName{"pad"}, .size_per_node = scratchpad_bytes}},
+        .work_units = {work_unit("scratch_wu", {"scratch_kernel"}, node)},
+    };
+    Program program = m2::MakeProgramFromSpec(device, spec);
+    m2::ProgramRunArgs args;
+    args.kernel_run_args = {m2::ProgramRunArgs::KernelRunArgs{
+        .kernel = m2::KernelSpecName{"scratch_kernel"},
+        .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"report_addr", report_addr}}),
+    }};
+    m2::SetProgramRunArgs(program, args);
+
+    const auto device_range = persistent_unit_mesh_device_range();
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, std::move(program));
+    const auto expected = counting_words(scratchpad_pattern, scratchpad_bytes / sizeof(uint32_t));
+    // Runs the cached workload and returns the scratchpad base the kernel received, after checking
+    // the kernel's writes landed there.
+    const auto run_and_check = [&] {
+        write_l1_word(device, node, report_addr, 0);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue());
+        const uint32_t base = read_l1_word(device, node, report_addr);
+        EXPECT_NE(base, 0u);
+        EXPECT_EQ(read_l1_words(device, node, base, scratchpad_bytes), expected);
+        return base;
+    };
+    const uint32_t first_base = run_and_check();
+
+    auto space = m2::CreatePrefetcherPipeSpace(device, one_pipe_space_config(node, CoreRangeSet(receiver), ring_size));
+    ASSERT_LT(space.buffer_address(), first_base + scratchpad_bytes);
+    ASSERT_GT(space.buffer_address() + ring_size, first_base);
+    std::vector<uint32_t> ring_marker = counting_words(0xA0000000, ring_size / sizeof(uint32_t));
+    slow_dispatch::WriteToL1(device, node, space.buffer_address(), ring_marker);
+
+    EXPECT_GE(run_and_check(), space_end(space));
+    EXPECT_EQ(read_l1_words(device, node, space.buffer_address(), ring_size), ring_marker);
+}
+
+// A trace bakes the Program's CB addresses into its recorded commands, so moving the Program while
+// the trace exists is refused; once the trace is released the space moves it as usual.
+TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_RefusesRelocationWhileTraceExists) {
+    if (!is_fast_dispatch()) {
+        GTEST_SKIP() << "Traces require fast dispatch";
+    }
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    if (is_quasar()) {
+        GTEST_SKIP() << "Legacy circular buffers are not used on Quasar";
+    }
+    auto mesh_device = devices_[0];
+    distributed::MeshDevice& device = *mesh_device;
+    const CoreCoord sender(0, 0);
+    const CoreCoord receiver(1, 0);
+    const CoreRangeSet program_cores(CoreRange(sender, receiver));
+    const auto config = one_pipe_space_config(sender, CoreRangeSet(receiver), 4 * CbFillProgram::cb_size);
+
+    CbFillProgram cb_fill = make_cb_fill_program(program_cores, relocation_report_address(device), 0);
+    const auto device_range = persistent_unit_mesh_device_range();
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, std::move(cb_fill.program));
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    const auto trace_id = device.begin_mesh_trace(cq);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    device.end_mesh_trace(cq, trace_id);
+    distributed::Finish(cq);
+
+    EXPECT_THAT(
+        [&] { m2::CreatePrefetcherPipeSpace(device, config); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Create PrefetcherPipeSpaces before capturing traces")));
+    // Nothing moved: the Program still holds its seals.
+    EXPECT_TRUE(device.allocator_impl()->persistent_l1().would_relocate(program_cores));
+
+    device.release_mesh_trace(trace_id);
+    auto space = m2::CreatePrefetcherPipeSpace(device, config);
+    EXPECT_FALSE(device.allocator_impl()->persistent_l1().would_relocate(program_cores));
+}
+
+// A sub-device manager's local L1 slab is not relocatable: a space over it still fails, and leaves
+// a relocatable Program on the other cores where it was.
+TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_SubDeviceSlabStillRejects) {
+    if (!is_fast_dispatch()) {
+        GTEST_SKIP() << "Sub device managers are unsupported with slow dispatch";
+    }
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    if (is_quasar()) {
+        GTEST_SKIP() << "Legacy circular buffers are not used on Quasar";
+    }
+    auto mesh_device = devices_[0];
+    distributed::MeshDevice& device = *mesh_device;
+    const CoreCoord sender(0, 0);
+    const CoreCoord receiver(1, 0);
+    const CoreRangeSet program_cores{CoreRange(sender)};
+    const auto config = one_pipe_space_config(sender, CoreRangeSet(receiver), 4 * CbFillProgram::cb_size);
+    constexpr DeviceAddr local_l1_size = 3200;
+    auto& arena = device.allocator_impl()->persistent_l1();
+
+    CbFillProgram cb_fill = make_cb_fill_program(program_cores, relocation_report_address(device), 0);
+    const auto device_range = persistent_unit_mesh_device_range();
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, std::move(cb_fill.program));
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue());
+
+    SubDevice sub_device(std::array{CoreRangeSet(CoreRange(receiver))});
+    const auto manager = device.create_sub_device_manager({sub_device}, local_l1_size);
+    EXPECT_THAT(
+        [&] { m2::CreatePrefetcherPipeSpace(device, config); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Cannot allocate persistent L1 on core 1-0 after program-local L1 placement")));
+    EXPECT_TRUE(arena.would_relocate(program_cores));
+
+    device.remove_sub_device_manager(manager);
+    auto space = m2::CreatePrefetcherPipeSpace(device, config);
+    EXPECT_FALSE(arena.would_relocate(program_cores));
+}
+
+// ============================================================================
 // ProgramSpec / ProgramRunArgs: slot reservation and binding
 // ============================================================================
 
@@ -1734,21 +2131,20 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_HostRelationshipValidation
                 /*is_metal2_kernel=*/true,
                 handles);
             bool saw_binding = false;
-            kernel->process_dataflow_buffer_binding_handles(
-                [&](const std::string& name,
-                    uint16_t logical_id,
-                    bool is_relay,
-                    uint8_t prefetcher_pipe_id,
-                    const std::optional<LLKMetadata>& llk_metadata,
-                    uint8_t /*pap*/,
-                    uint8_t /*cap*/) {
-                    EXPECT_EQ(name, "relay_dfb");
-                    EXPECT_EQ(logical_id, expected_slot);
-                    EXPECT_TRUE(is_relay);
-                    EXPECT_EQ(prefetcher_pipe_id, 0u);
-                    EXPECT_FALSE(llk_metadata.has_value());
-                    saw_binding = true;
-                });
+            kernel->process_dataflow_buffer_binding_handles([&](const std::string& name,
+                                                                uint16_t logical_id,
+                                                                bool is_relay,
+                                                                uint8_t prefetcher_pipe_id,
+                                                                const std::optional<LLKMetadata>& llk_metadata,
+                                                                uint8_t /*pap*/,
+                                                                uint8_t /*cap*/) {
+                EXPECT_EQ(name, "relay_dfb");
+                EXPECT_EQ(logical_id, expected_slot);
+                EXPECT_TRUE(is_relay);
+                EXPECT_EQ(prefetcher_pipe_id, 0u);
+                EXPECT_FALSE(llk_metadata.has_value());
+                saw_binding = true;
+            });
             EXPECT_TRUE(saw_binding);
         }
     }

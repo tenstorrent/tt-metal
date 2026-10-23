@@ -1690,8 +1690,8 @@ def test_tensor_prefetcher_mcast_in0_pipes(device, weight_layout, ring_half_bloc
     # receiver count or the two would be indistinguishable in the assertion below.
     assert setup["block_count"] != setup["receiver_count"]
 
-    # Before any matmul runs on the receiver grid: pipe rings come from the persistent L1 arena,
-    # which refuses a core that a live Program (one a program-cache hit keeps alive) has sealed.
+    # Before any matmul runs on the receiver grid, so creating the space never has to move the L1
+    # of a cached matmul Program.
     _space, pipes = _make_tensor_prefetcher_pipes(
         device, setup["bank_to_receivers"], setup["entry_size"] * ring_half_blocks // 2
     )
@@ -1902,8 +1902,8 @@ def test_tensor_prefetcher_gather_in0_pipes(
         # The receivers per bank a GlobalCircularBuffer config carries; pipes ignore it.
         num_global_cb_receivers=recv_per_bank,
     )
-    # Before any matmul runs on the receiver grid: pipe rings come from the persistent L1 arena,
-    # which refuses a core that a live Program (one a program-cache hit keeps alive) has sealed.
+    # Before any matmul runs on the receiver grid, so creating the space never has to move the L1
+    # of a cached matmul Program.
     _space, pipes = _make_tensor_prefetcher_pipes(
         device, setup["bank_to_receivers"], setup["entry_size"] * ring_half_blocks // 2
     )
