@@ -14,13 +14,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
-// Every stage below (conv, silu_backward, accumulate_partial, grad_input_tile) is marked [[gnu::noinline]].
-// Each stage starts with LLK *_init calls that program the math hardware through inline assembly, and some of
-// those instructions take their operand as an immediate: a number baked into the instruction bits, which GCC
-// must know at compile time. If GCC inlines all stages into one function it sees several similar init
-// sequences, merges them into one copy and passes the differing value through a register. That is fine for
-// normal code but not for an immediate, and the build fails with "impossible constraint in 'asm'". Keeping each
-// stage a separate function keeps every init's operand a constant.
 using qkv_conv_bw::tap_count;
 constexpr uint32_t dst_tiles = qkv_conv_bw::dest_tiles;
 static_assert(dst_tiles <= compute_kernel_lib::DEST_AUTO_LIMIT);
@@ -49,7 +42,7 @@ FORCE_INLINE void mul_bcast_rows_accumulate(
 
 // out = sum_tap weights[w] * copy_tap, w = tap (preact) or 3 - tap (grad_input), summed in DST.
 template <uint32_t channel_tiles_per_block>
-[[gnu::noinline]] void conv(uint32_t shifted_cb, bool reversed, DataflowBuffer& out, uint32_t out_cb) {
+void conv(uint32_t shifted_cb, bool reversed, DataflowBuffer& out, uint32_t out_cb) {
     out.reserve_back(channel_tiles_per_block);
     reconfig_data_format(shifted_cb, dfb::weights);
     mul_bcast_rows_init(shifted_cb, dfb::weights);
@@ -80,7 +73,7 @@ template <uint32_t channel_tiles_per_block>
 
 // grad_preact = grad_out * s * (1 + (preact - preact * s)), s = sigmoid(preact). FPU only after the sigmoid.
 template <uint32_t channel_tiles_per_block>
-[[gnu::noinline]] void silu_backward(DataflowBuffer& sigmoid, DataflowBuffer& grad_preact_tile) {
+void silu_backward(DataflowBuffer& sigmoid, DataflowBuffer& grad_preact_tile) {
     grad_preact_tile.reserve_back(channel_tiles_per_block);
     for (uint32_t base = 0; base < channel_tiles_per_block; base += dst_tiles) {
         const uint32_t n = batch_size<channel_tiles_per_block>(base);
@@ -147,7 +140,7 @@ template <uint32_t channel_tiles_per_block>
 // tf32 rounding. The pages are reserved once per item, written out of order by tile index, and pushed to the
 // writer on the last own step.
 template <uint32_t channel_tiles_per_block>
-[[gnu::noinline]] void accumulate_partial(DataflowBuffer& partial, bool first, bool last) {
+void accumulate_partial(DataflowBuffer& partial, bool first, bool last) {
     constexpr uint32_t total = tap_count * channel_tiles_per_block;
     if (first) {
         partial.reserve_back(total);
@@ -176,7 +169,7 @@ template <uint32_t channel_tiles_per_block>
 }
 
 template <uint32_t channel_tiles_per_block>
-[[gnu::noinline]] void grad_input_tile(DataflowBuffer& grad_preact_shifted, DataflowBuffer& output) {
+void grad_input_tile(DataflowBuffer& grad_preact_shifted, DataflowBuffer& output) {
     compute_kernel_lib::tilize<channel_tiles_per_block, dfb::grad_preact_shifted_rm, dfb::grad_preact_shifted_tile>(
         tap_count);
     grad_preact_shifted.wait_front(tap_count * channel_tiles_per_block);

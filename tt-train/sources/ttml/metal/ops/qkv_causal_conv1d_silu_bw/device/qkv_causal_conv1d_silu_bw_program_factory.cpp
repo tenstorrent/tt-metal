@@ -153,6 +153,7 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
         .source = std::string(kernel_dir) + "compute/qkv_causal_conv1d_silu_bw.cpp",
+        .compiler_options = {.opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
         .dfb_bindings =
             {consumer(X_SHIFTED_RM),
              producer(X_SHIFTED_TILE),
