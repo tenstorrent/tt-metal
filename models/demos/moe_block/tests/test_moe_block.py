@@ -23,7 +23,6 @@ from models.demos.moe_block.moe_block import (
     GLM_53_FLASH,
     KIMI_K3,
     MoEBlock,
-    MoEDtypes,
     MoEModel,
     MoEOptions,
     MoEWeights,
@@ -178,11 +177,8 @@ _PARAMS = [
 
 
 @pytest.mark.parametrize("mesh_device, device_params, model, chunk", _PARAMS, indirect=["mesh_device", "device_params"])
-@pytest.mark.parametrize(
-    "tail_fid", ["hifi2"]
-)  # (MoEDtypes.tail_fidelity; "lofi": block PCC within 2e-5, no time gained)
 @pytest.mark.timeout(3600)
-def test_moe_block(mesh_device, device_params, model, chunk, tail_fid):
+def test_moe_block(mesh_device, device_params, model, chunk):
     import os
 
     m = MODELS[model]
@@ -197,8 +193,7 @@ def test_moe_block(mesh_device, device_params, model, chunk, tail_fid):
         tail=os.environ.get("MOE_TAIL", "auto"),
         experts_during_dispatch=bool(int(os.environ.get("MOE_EDD", "0"))),
     )
-    dts = MoEDtypes(tail_fidelity={"hifi2": ttnn.MathFidelity.HiFi2, "lofi": ttnn.MathFidelity.LoFi}[tail_fid])
-    block = MoEBlock(mesh_device, m, chunk, w, WeightCache(path=None, layer=0), dtypes=dts, options=opts)
+    block = MoEBlock(mesh_device, m, chunk, w, WeightCache(path=None, layer=0), options=opts)
     logger.info(f"MoEBlock {model}: built in {time.perf_counter() - t0:.1f} s")
     g = block.geometry
     mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(2, 3))

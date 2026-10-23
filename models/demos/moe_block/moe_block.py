@@ -120,7 +120,7 @@ class MoEDtypes:
         ttnn.MathFidelity.HiFi2
     )  # (HiFi3: rel L2 1.6 -> 1.3% with bf8 weights, +11-25% time)
     projection_weights: ttnn.DataType = ttnn.bfloat8_b  # latent down / up
-    tail_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2  # the fused tail's up projection (rms-normed z @ W')
+    tail_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2  # the fused tail's up projection; never LoFi (user)
     router_weights: ttnn.DataType = ttnn.bfloat16  # top-k selection in fp32
     dispatch_rows: WireFormat = field(default_factory=WireFormat)
     combine_rows: WireFormat = field(default_factory=WireFormat)

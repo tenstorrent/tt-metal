@@ -37,10 +37,9 @@ def _fab(**kw):
     indirect=True,
 )
 @pytest.mark.parametrize("ROWS", [640, 1024])  # (rows a mesh row: chunk 1280 / 2048 on the 2x4)
-@pytest.mark.parametrize("FID", ["hifi2", "lofi"])  # (the up projection's fidelity: MoEDtypes.tail_fidelity)
 @pytest.mark.parametrize("LG", [3], ids=lambda g: f"lg{g}")  # (the gather's landed-share groups: 1 2 3 11 even, traced)
 @pytest.mark.timeout(1800)
-def test_tail_engine(mesh_device, device_params, ROWS, LG, FID):
+def test_tail_engine(mesh_device, device_params, ROWS, LG):
     m = KIMI_K3
     H, Hr, Ho = m.emb_dim, m.latent_dim, m.emb_dim // C
     g_ = torch.Generator().manual_seed(0)
@@ -56,7 +55,6 @@ def test_tail_engine(mesh_device, device_params, ROWS, LG, FID):
         eps=m.norm_eps,
         topology=topo,
         land_group=LG,
-        fidelity={"hifi2": ttnn.MathFidelity.HiFi2, "lofi": ttnn.MathFidelity.LoFi}[FID],
     )
     logger.info(
         f"tail_engine: {ROWS} rows, grid {eng.GX} x {eng.GY} (K halves of {eng.KH} tiles), column widths "
@@ -108,7 +106,7 @@ def test_tail_engine(mesh_device, device_params, ROWS, LG, FID):
         tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         eng.run(yt, w, st, out)
         ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
-        replay_device_times(mesh_device, tid, f"tail {ROWS} lg{LG} {FID}", batches=(20, 20))
+        replay_device_times(mesh_device, tid, f"tail {ROWS} lg{LG}", batches=(20, 20))
         ttnn.release_trace(mesh_device, tid)
         for t in (yt, st, out):
             ttnn.deallocate(t)
