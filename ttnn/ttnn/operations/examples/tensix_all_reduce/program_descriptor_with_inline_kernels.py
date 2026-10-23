@@ -165,7 +165,7 @@ void kernel_main() {
 
     CircularBuffer gather(cb_gather);
     CircularBuffer output(cb_output);
-    binary_op_init_common(cb_gather, cb_gather, cb_output);
+    compute_kernel_hw_startup(cb_gather, cb_gather, cb_output);
 
     for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
         gather.wait_front(num_blocks * num_tiles);
@@ -185,7 +185,7 @@ void kernel_main() {
             }
 
             if (num_blocks > 1) {
-                add_tiles_init(cb_gather, cb_gather, true);
+                add_init(cb_gather, cb_gather, true);
                 for (uint32_t block = first_pair; block < num_blocks; block += 2) {
                     for (uint32_t tile = 0; tile < dst_tiles; ++tile) {
                         const uint32_t lhs = block * num_tiles + tile_base + tile;
@@ -659,7 +659,7 @@ inline void reduce_blocks(uint32_t in_cb, uint32_t out_cb, uint32_t num_blocks, 
         }
 
         if (num_blocks > 1) {
-            add_tiles_init(in_cb, in_cb, true);
+            add_init(in_cb, in_cb, true);
             for (uint32_t block = first_pair; block < num_blocks; block += 2) {
                 for (uint32_t tile = 0; tile < dst_tiles; ++tile) {
                     const uint32_t lhs = block * num_tiles + tile_base + tile;
@@ -693,7 +693,7 @@ void kernel_main() {
     const uint32_t stage2_blocks = get_arg_val<uint32_t>(4);
 
     // All CBs are the same bf16 tile format, so one init covers the packer/unpacker for both stages.
-    binary_op_init_common(cb_gather, cb_gather, cb_partial);
+    compute_kernel_hw_startup(cb_gather, cb_gather, cb_partial);
 
     for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
         // Stage 1: reduce this row's blocks into the row partial.

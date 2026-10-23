@@ -15,8 +15,8 @@ void kernel_main() {
     DataflowBuffer dfb_b(dfb::in_b);
     DataflowBuffer dfb_out(dfb::out);
 
-    binary_op_init_common(dfb::in_a, dfb::in_b, dfb::out);
-    mul_tiles_init(dfb::in_a, dfb::in_b);
+    compute_kernel_hw_startup(dfb::in_a, dfb::in_b, dfb::out);
+    mul_init(dfb::in_a, dfb::in_b);
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
         dfb_a.wait_front(1);

@@ -180,7 +180,7 @@ void kernel_main() {
     constexpr uint32_t full_cnt = has_partial ? (cnt - 1u) : cnt;   // tiles summed via add_tiles
     constexpr BroadcastType MASK_BCAST = (dim == 1) ? BroadcastType::COL : BroadcastType::ROW;
 
-    binary_op_init_common(cb_in, cb_in, cb_out);
+    compute_kernel_hw_startup(cb_in, cb_in, cb_out);
     sfpu_reduce_init<PoolType::SUM, dst_fmt>();  // SFPU reduce macro persists across FPU ops (replay)
     if constexpr (has_partial) {
         cb_wait_front(cb_scaler, 1);             // 0/1 mask tile (row0 for ROW, col0 for COL)
@@ -214,7 +214,7 @@ void kernel_main() {
                 copy_tile(cb_in, start, 0);                  // odd: DEST = cb_in[start]
                 k = 1;
             }
-            add_tiles_init(cb_in, cb_in, true);
+            add_init(cb_in, cb_in, true);
             for (; k < full_cnt; k += 2) {
                 add_tiles(cb_in, cb_in, start + k * stride, start + (k + 1) * stride, 0);
             }
