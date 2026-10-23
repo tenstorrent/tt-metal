@@ -55,17 +55,13 @@ ALWI void process_tile(
         tile_regs_acquire();
 
         // Copy all 3 inputs to destination registers
-        copy_init(predicate_dfb.get_id());
         copy_tile(predicate_dfb.get_id(), 0, 0);  // predicate to reg 0, 3, 6, ...
 
-        copy_init(true_dfb.get_id());
         copy_tile(true_dfb.get_id(), 0, 1);  // true to reg 1, 4, 7, ...
 
-        copy_init(false_dfb.get_id());
         copy_tile(false_dfb.get_id(), 0, 2);  // false to reg 2, 5, 8, ...
 
         // Perform the ternary operation
-        TERNARY_SFPU_OP_INIT();
         TERNARY_SFPU_OP_FUNC(0, 1, 2, 0);
 
         tile_regs_commit();
@@ -118,7 +114,6 @@ void kernel_main() {
     constexpr auto cb_out_id = tt::CBIndex::c_3;
 
     compute_kernel_hw_startup(predicate_cb_id, cb_out_id);
-    copy_init(predicate_cb_id);
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
