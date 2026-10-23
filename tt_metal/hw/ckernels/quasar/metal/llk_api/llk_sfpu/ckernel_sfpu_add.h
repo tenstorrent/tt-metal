@@ -7,12 +7,11 @@
 #include <cstdint>
 #include <type_traits>
 
-#include "ckernel_instr_params.h"
-#include "ckernel_ops.h"
 #include "ckernel_sfpu_srcs.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_operand.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -63,32 +62,15 @@ inline void calculate_add_int(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(FMT == DataFormat::Int32, "Only Int32 currently supported for SFPU integer add on Quasar");
 
-    // Raw TT_ instructions instead of SFPI: SFPI builds each runtime-address SFPLOAD/SFPSTORE word with a
-    // compiler call that GCC will not hoist out of a loop past a runtime branch, so the words get rebuilt
-    // every tile (~10 cycles/tile). Load/store use explicit INT32 because implied formats are broken (TEN-4674).
-    constexpr auto instr_mod = p_sfpu::sfpmem::INT32;
-    constexpr std::uint32_t tile_stride = 1U << trisc::get_dest_tile_size_log2(TILE_SHAPE);
-    const std::uint32_t in0_offset = dst_index_in0 * tile_stride;
-    const std::uint32_t in1_offset = dst_index_in1 * tile_stride;
-    const std::uint32_t out_offset = dst_index_out * tile_stride;
-
-    for (int d = 0; d < ITERATIONS; d++) {
-        TT_SFPLOAD(p_sfpu::LREG0, instr_mod, ADDR_MOD_7, 0, in0_offset + (d << 1));
-        TT_SFPLOAD(p_sfpu::LREG1, instr_mod, ADDR_MOD_7, 0, in1_offset + (d << 1));
-
-        if constexpr (SIGN_MAGNITUDE_FORMAT) {
-            TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC);
-            TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC);
-        }
-
-        TTI_SFPIADD(0x0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::sfp_binary_mod::SFPIADD_DISABLE_CC);
-
-        if constexpr (SIGN_MAGNITUDE_FORMAT) {
-            TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::sfp_sfpcast_mod::TWO_SC_TO_SM);
-        }
-
-        TT_SFPSTORE(p_sfpu::LREG1, instr_mod, ADDR_MOD_7, 0, out_offset + (d << 1));
-    }
+    // SFPI costs ~8-10 cycles/tile over a raw TT_SFPLOAD/TT_SFPSTORE loop (emulator, perf_eltwise_binary_sfpu_quasar
+    // int ADD: L1_TO_L1 97.6 vs 89.8, MATH_ISOLATE 97.0 vs 86.7). SFPI emits 5 RISC instructions per runtime-indexed
+    // Dest access vs 3 hand-written: a per-instruction opcode placeholder GCC cannot CSE, plus a 10-bit address mask.
+    using Operand = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::I32, sfpi::vInt>>;
+    constexpr std::uint32_t dst_tile_size_sfpi = 1U << (trisc::get_dest_tile_size_log2(TILE_SHAPE) - 1);
+    calculate_binary_operands<AddIntMath<SIGN_MAGNITUDE_FORMAT>, ITERATIONS>(
+        Operand{static_cast<int>(dst_index_in0 * dst_tile_size_sfpi)},
+        Operand{static_cast<int>(dst_index_in1 * dst_tile_size_sfpi)},
+        Operand{static_cast<int>(dst_index_out * dst_tile_size_sfpi)});
 }
 
 // ADD math for a SrcS layout: float layouts add floats; I32 adds sign-magnitude Int32, which is how SrcS holds it.
