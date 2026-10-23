@@ -20,6 +20,9 @@ struct MergeSelectKvDeviceOperation {
         uint32_t k = 0;
         // Row of the output that selected row 0 is written to.
         uint32_t output_row_offset = 0;
+        // Candidate source mode when > 0: also merge the parts' candidate blocks.
+        uint32_t candidate_topk_blocks = 0;
+        uint32_t candidate_block_size = 0;
         MemoryConfig output_mem_config;
     };
 
@@ -27,6 +30,8 @@ struct MergeSelectKvDeviceOperation {
         const Tensor& candidates;
         const Tensor& kv_cache;
         std::optional<Tensor> output_tensor;
+        std::optional<Tensor> candidate_blocks_output;
+        std::optional<Tensor> pool_count_output;
     };
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
@@ -57,6 +62,10 @@ ttnn::Tensor merge_select_kv(
     uint32_t k,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::Tensor>& output_tensor = std::nullopt,
-    uint32_t output_row_offset = 0);
+    uint32_t output_row_offset = 0,
+    uint32_t candidate_topk_blocks = 0,
+    uint32_t candidate_block_size = 0,
+    const std::optional<ttnn::Tensor>& candidate_blocks_output = std::nullopt,
+    const std::optional<ttnn::Tensor>& pool_count_output = std::nullopt);
 
 }  // namespace ttnn::prim

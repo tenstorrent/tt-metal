@@ -40,12 +40,15 @@ import collections
 import math
 import queue
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable, Optional, Sequence
 
 import torch
 import ttnn
 from loguru import logger
+from tqdm import tqdm
 
 from models.experimental.deepseek_v41_flash.tt.config import (
     decoder_layer_weights,
@@ -57,6 +60,7 @@ from models.experimental.deepseek_v41_flash.tt.decode.attention import (
     _SELECT_KV_RATE,
     DeepSeekV41LayerCache,
     candidate_buffers,
+    key_split_layers,
     uses_candidate_pool,
 )
 from models.experimental.deepseek_v41_flash.tt.decode.decoder_layer import DeepSeekV41DecoderLayer
@@ -323,28 +327,29 @@ class DeepSeekV41Model(DeepSeekV4Model):
             self.embed_tokens.embedding_weight = extend_embedding(
                 self.embed_tokens.embedding_weight, image_rows, config.vocab_size
             )
-        self.layers: list[DeepSeekV41DecoderLayer] = []
-        self.layer_devices: list[ttnn.MeshDevice] = []
-        for li in range(n):
-            current_device = self.submeshes[self.layer_submesh_ids[li]]
-            logger.info(f"Layer {li} is on device {self.layer_submesh_ids[li]}")
-            self.layer_devices.append(current_device)
-            layer_cache = cache.sub(f"layers.{li}")
-            prefetch_buffers = (
-                self._prefetch_buffers_for(current_device, weight_dtype, num_prefetch_pages)
-                if self.use_prefetcher
-                else None
-            )
-            experts = DeepSeekV41PreloadedExperts(
-                config,
-                expert_provider(loader, li),
-                current_device,
-                dtype=weight_dtype,
-                cache=layer_cache.sub("ffn"),
-                tp_size=tp_size,
-            )
-            self.layers.append(
-                DeepSeekV41DecoderLayer(
+        self.layer_devices: list[ttnn.MeshDevice] = [self.submeshes[s] for s in self.layer_submesh_ids[:n]]
+
+        self.layers: list[DeepSeekV41DecoderLayer] = [None] * n
+
+        def build_stage(layer_ids: list[int]) -> None:
+            for li in layer_ids:
+                current_device = self.layer_devices[li]
+                logger.info(f"Layer {li} is on device {self.layer_submesh_ids[li]}")
+                layer_cache = cache.sub(f"layers.{li}")
+                prefetch_buffers = (
+                    self._prefetch_buffers_for(current_device, weight_dtype, num_prefetch_pages)
+                    if self.use_prefetcher
+                    else None
+                )
+                experts = DeepSeekV41PreloadedExperts(
+                    config,
+                    expert_provider(loader, li),
+                    current_device,
+                    dtype=weight_dtype,
+                    cache=layer_cache.sub("ffn"),
+                    tp_size=tp_size,
+                )
+                self.layers[li] = DeepSeekV41DecoderLayer(
                     config,
                     li,
                     decoder_layer_weights(loader, li, config),
@@ -357,8 +362,16 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     prefetch_buffers=prefetch_buffers,
                     engram_sockets=engram_sockets.get(li),
                 )
-            )
-            _profile(current_device)
+                _profile(current_device)
+
+        # Stages are disjoint submeshes (own allocator and command queues), so each builds on its own thread; a
+        # stage's layers stay in order, keeping every device's allocation order (and addresses) as when serial.
+        stage_layers: dict[int, list[int]] = {}
+        for li in range(n):
+            stage_layers.setdefault(self.layer_submesh_ids[li], []).append(li)
+        with ThreadPoolExecutor(max_workers=max(1, len(stage_layers)), thread_name_prefix="decode-build") as pool:
+            for stage in [pool.submit(build_stage, ids) for ids in stage_layers.values()]:
+                stage.result()
         if self.layer_devices:
             self.last_device = self.layer_devices[-1]
 
@@ -559,6 +572,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 f"two-level select past {cfg.candidate_topk_blocks * cfg.candidate_block_size} entries: "
                 f"source {source}, pool builders {sorted(self._pool_builders)}"
             )
+        split_layers = key_split_layers(cfg, range(self.num_layers), max_seq) if self.tp_size > 1 else set()
+        for layer in self.layers:
+            if layer.self_attn.is_index_source:
+                layer.self_attn.indexer.split_keys = layer.layer_idx in split_layers
+        logger.info(f"key-split selects: layers {sorted(split_layers)}")
         self.submeshes_io = []
         for stage in self.pipeline_submesh_ids:
             device = self.submeshes[stage]
@@ -643,11 +661,32 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 self.system_config.pipeline.d2h_fifo_bytes,
             )
         if self._engram_layers:
-            tables = {layer_idx: load_engram_table(self.loader, layer_idx) for layer_idx, _ in self._engram_layers}
+            ids = [layer_idx for layer_idx, _ in self._engram_layers]
+            total = sum(engram_table_nbytes(self.loader, i) for i in ids)
+            t0 = time.perf_counter()
+            # Drawn on a terminal only (disable=None); a log file gets the summary line below.
+            with tqdm(
+                total=total, unit="B", unit_scale=True, desc=f"Engram tables {ids}", mininterval=0.5, disable=None
+            ) as bar:
+                lock = threading.Lock()
+
+                def advance(n: int) -> None:  # the table readers are 16 threads
+                    with lock:
+                        bar.update(n)
+
+                tables = {}
+                for layer_idx in ids:
+                    bar.set_postfix_str(f"layer {layer_idx}")
+                    tables[layer_idx] = load_engram_table(self.loader, layer_idx, progress=advance)
+            seconds = time.perf_counter() - t0
+            logger.info(
+                f"Engram tables of layers {ids} read: {total / 1e9:.0f} GB in {seconds:.0f}s "
+                f"({total / 1e9 / max(seconds, 1e-9):.1f} GB/s)"
+            )
             self._engram_lookup = EngramHostLookup(
                 cfg, self.loader.snapshot_dir, tables, batch=batch, max_seq=max_seq, sessions=num_sessions
             )
-            logger.info(f"Engram host lookup: layers {[layer_idx for layer_idx, _ in self._engram_layers]}")
+            logger.info(f"Engram host lookup: layers {ids}")
 
     def _allocate_shared_caches(self) -> None:
         """Per-stage KV. A group is aliased inside a stage and handed over across a pipeline edge.

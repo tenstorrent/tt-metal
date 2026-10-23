@@ -83,6 +83,12 @@ DECODE_LAYOUTS = {
 }
 # ``fused_lightning_select_kv`` scores ``(cur_pos + 1) // 4`` keys whatever the ratio.
 _SELECT_KV_RATE = 4
+# A key-split select (``num_parts`` select, ``all_gather``, ``merge_select_kv``) has a fixed cost of
+# its own and loses below ~45k keys (~31k for the candidate source). The split is fixed per layer, so
+# a layer splits only when its maximum key count is past where the split wins averaged over a run
+# from position 0.
+KEY_SPLIT_MIN_KEYS = 80 * 1024
+CANDIDATE_SOURCE_KEY_SPLIT_MIN_KEYS = 48 * 1024
 
 
 class DeepSeekV41Indexer(DeepSeekV4Indexer):
@@ -94,10 +100,33 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
 
     Layer ``layer_idx`` is the candidate source when it is ``candidate_source_layer_id``, and a
     candidate consumer when it comes after it.
+
+    ``tp_size > 1`` (a 1xTP ``device``) splits the select's keys over the ranks: each scores its
+    contiguous share of the key blocks and keeps its own top-k (and, as the candidate source, its
+    best candidate blocks); ``all_gather`` and ``merge_select_kv`` then give every rank the unsplit
+    selection. The projections, caches and the merged rows stay replicated. ``split_keys`` turns the
+    split off (every rank then scores every key); set it before compiling, e.g. from
+    :func:`key_split_layers`.
     """
 
-    def __init__(self, config, layer_idx: int, weights: dict, device, rot, cache, weight_dtype):
+    def __init__(self, config, layer_idx: int, weights: dict, device, rot, cache, weight_dtype, tp_size: int = 1):
         self.device = device
+        self.tp_size = tp_size
+        self.split_keys = tp_size > 1
+        self.cluster_axis = _tp_cluster_axis(device) if tp_size > 1 else None
+        # Rank r scores part r: a trace runs one program on every rank, so the part is read on device.
+        self.part_index = (
+            ttnn.from_torch(
+                torch.arange(tp_size, dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),
+            )
+            if tp_size > 1
+            else None
+        )
         self.rot = rot
         self.rope_dim = config.qk_rope_head_dim
         self.head_dim = config.index_head_dim
@@ -177,13 +206,21 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
         key_cache, page_table = scache.idx_key_cache, scache.idx_page_table
         if page_row is not None:
             extra["page_table_row_tensor"] = page_row
+        split = self.split_keys
+        # Under a split the merge writes the selected rows and the candidate blocks.
+        candidate_outputs = {}
         if candidates and self.is_candidate_source:
-            extra.update(
+            candidate_outputs = dict(
                 candidate_topk_blocks=self.candidate_topk_blocks,
                 candidate_block_size=self.candidate_block_size,
                 candidate_blocks_output=scache.cand_blocks,
                 pool_count_output=scache.pool_count,
             )
+            extra.update(
+                candidate_topk_blocks=self.candidate_topk_blocks, candidate_block_size=self.candidate_block_size
+            )
+            if not split:
+                extra.update(candidate_blocks_output=scache.cand_blocks, pool_count_output=scache.pool_count)
         elif candidates:
             if build_pool:
                 ttnn.experimental.deepseek.build_candidate_pool(
@@ -204,6 +241,10 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
                 extra["kv_page_table"] = scache.idx_page_table
             elif page_row is not None:
                 del extra["page_table_row_tensor"]
+        if split:
+            extra.update(num_parts=self.tp_size, part_index_tensor=self.part_index)
+        else:
+            extra.update(output_tensor=scache.sel_kv, output_row_offset=self.sliding_window)
         sel_kv, scores, *_ = ttnn.experimental.deepseek.fused_lightning_select_kv(
             query,
             key_cache,
@@ -212,13 +253,24 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
             page_table,
             cur_pos,
             self.index_topk,
-            output_tensor=scache.sel_kv,
-            output_row_offset=self.sliding_window,
             **extra,
         )
         ttnn.deallocate(scores)
         ttnn.deallocate(query)
         ttnn.deallocate(weights)
+        if split:
+            local = sel_kv
+            gathered = ttnn.all_gather(local, dim=2, cluster_axis=self.cluster_axis)
+            ttnn.deallocate(local)
+            sel_kv = ttnn.experimental.deepseek.merge_select_kv(
+                gathered,
+                scache.comp_kv,
+                self.index_topk,
+                output_tensor=scache.sel_kv,
+                output_row_offset=self.sliding_window,
+                **candidate_outputs,
+            )
+            ttnn.deallocate(gathered)
         if new_row is not None and extra["new_kv_row"].buffer_address() != new_row.buffer_address():
             ttnn.deallocate(extra["new_kv_row"])
         return sel_kv
@@ -318,8 +370,9 @@ class DeepSeekV41Attention(DeepSeekV4Module):
 
     ``tp_size > 1`` expects a 1xTP ``device``: q_a and kv stay full-width on every rank, q_b
     is head-sharded, o_a runs on each rank's complete output groups and the row-parallel o_b
-    all-reduces its partials. The compressor and indexer are replicated, so every rank writes
-    the same caches and selects the same rows.
+    all-reduces its partials. The compressor and the indexer projections are replicated, so every
+    rank writes the same caches; the select scores a share of the keys on each rank and merges
+    (see :class:`DeepSeekV41Indexer`), so every rank still selects the same rows.
 
     ``use_prefetcher`` streams q_a, q_b, kv, o_a and o_b through the rings of
     :func:`~.decode_prefetch.prefetch_rings`, in ``prefetch_buffers``.
@@ -489,7 +542,9 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 weights["indexer.k_norm.weight"], self.eps, device, cache.file("indexer.k_norm"), sharded=True
             )
         if self.is_index_source:
-            self.indexer = DeepSeekV41Indexer(config, layer_idx, weights, device, self.rot, cache, weight_dtype)
+            self.indexer = DeepSeekV41Indexer(
+                config, layer_idx, weights, device, self.rot, cache, weight_dtype, tp_size=tp_size
+            )
 
     def prefetch_weights(self):
         """Queue the prefetched projections in the order :meth:`decode` pops them."""
@@ -841,6 +896,29 @@ def uses_candidate_pool(config, max_seq: int) -> bool:
         return False
     ratio = config.compress_ratios[source]
     return max_seq // ratio > config.candidate_topk_blocks * config.candidate_block_size
+
+
+def key_split_layers(config, layers, max_seq: int) -> set[int]:
+    """The index sources in ``layers`` that score more than :data:`KEY_SPLIT_MIN_KEYS` keys
+    (:data:`CANDIDATE_SOURCE_KEY_SPLIT_MIN_KEYS` for the candidate source) within ``max_seq`` tokens.
+    A candidate consumer scores at most the candidate pool."""
+    source = config.candidate_source_layer_id
+    pool_size = config.candidate_topk_blocks * config.candidate_block_size
+    split = set()
+    for li in layers:
+        if li not in config.index_source_layer_ids:
+            continue
+        max_keys = max_seq // config.compress_ratios[li]
+        if 0 <= source < li:
+            max_keys = min(max_keys, pool_size)
+        threshold = (
+            CANDIDATE_SOURCE_KEY_SPLIT_MIN_KEYS
+            if li == source and uses_candidate_pool(config, max_seq)
+            else KEY_SPLIT_MIN_KEYS
+        )
+        if max_keys > threshold:
+            split.add(li)
+    return split
 
 
 def build_decode_caches(device, config, layers, max_seq: int) -> dict:

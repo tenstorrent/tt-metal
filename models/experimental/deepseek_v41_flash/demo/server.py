@@ -34,22 +34,24 @@ What V4.1 imposes on the serving side:
 
 * Users. ``--num-users`` sessions (64 by default) stay open at once, each with its own ring and window slot and its
   own rows of the compressed-KV page tables; their compressed KV shares pools sized for ``--total-context`` tokens (default
-  ``num_users * max_context``). At most ``--max-running`` (8, one per stage) generate at once, the rest parked
+  ``num_users * 204800``). At most ``--max-running`` (8, one per stage) generate at once, the rest parked
   or queued; see "Users & KV cache" in the V4 server's docstring. A step decodes one user, and switching users costs no device work: the step's packet
   names the user's slot. The scheduler interleaves the active users' steps through the stages, so up to one
   decoding user per stage (``DEEPSEEK_V4_NUM_STAGES``, default eight) keeps every stage busy; seating and posting,
   trace dispatch, the H2D packet writes and the D2H reads each run on their own thread (see :class:`V41ChatEngine`).
   Speculative decode is single-user.
-* Context. ``--max-context`` is 204800 tokens by default (prompt + reply), which is what lets 64 users' compressed
-  KV fit in device DRAM; the model handles 1048576, for fewer users (``--num-users`` x ``--max-context`` is what
-  the pools hold unless ``--total-context`` says otherwise). Past
+* Context. ``--max-context`` is 1048576 tokens by default (prompt + reply), the model's full context. The pools
+  hold ``--total-context`` tokens, by default 204800 per user (64 x 204800 is what fits in device DRAM), and are
+  paged, so any one user can grow to the full context while the others leave blocks free; a user that needs a
+  block when the pools are full is refused. Past
   ``candidate_topk_blocks * candidate_block_size`` (16384) compressed entries the select is two-level, in the
   traced prefill and in decode, so a prompt prefills up to ``--prefill-max-len`` (by default the whole context, at
   most 131072 tokens, see :class:`_V41Prefiller`) and decode replays the rest.
 * Engram layers 1 and 14 read host n-gram tables (~101 GB each); the model refuses to build without that RAM free.
-* Images (``--vision``, on by default). A user message may carry up to 16 image parts: an uploaded file (a ``file``
-  part with a ``file_id``) or inline base64 (a ``file`` part's ``file_data`` or an ``image_url``, holding a ``data:``
-  URL, or an Anthropic ``image`` with a base64 ``source``); a URL or path is refused.
+* Images (``--vision``, on by default). A request's messages may carry up to 64 distinct images, as long as their rows
+  fit ``--image-rows`` together (up to 1024 an image, fewer for a small one): an uploaded file (a
+  ``file`` part with a ``file_id``) or inline base64 (a ``file`` part's ``file_data`` or an ``image_url``, holding a
+  ``data:`` URL, or an Anthropic ``image`` with a base64 ``source``); a URL or path is refused.
   The vision tower runs on stage ``DEEPSEEK_V41_VISION_STAGE`` (5), with no step in flight, and writes each image's
   rows into ``--image-rows`` rows past the vocabulary of the embedding table, where its span's token ids point (see
   :class:`_ImageBook`); prefill and decode then read them like any token's, and the router picks the image tokens'
@@ -160,9 +162,12 @@ from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
 _NUM_USERS = 64  # default --num-users
-# Default --max-context (prompt + reply). The layer-20 pool costs ~1.25 KiB per token per user on each chip of
-# stages 4-7, so 64 users at 1048576 tokens would not fit; at this context they take ~16 GB of the ~17 GB free.
-_MAX_CONTEXT = 204800
+# Default --max-context (prompt + reply): what one user's page tables address, the model's full context.
+_MAX_CONTEXT = 1048576
+# Default --total-context is --num-users x this. The layer-20 pool costs ~1.25 KiB per token on each chip of
+# stages 4-7, so 64 users x 1048576 tokens would not fit; 64 x 204800 take ~16 GB of the ~17 GB free. The pools
+# are paged, so any one user can still grow to --max-context while the others leave the blocks free.
+_KV_TOKENS_PER_USER = 204800
 
 # The checkpoint's own encoding (``encoding/encoding.py``): V4.1 renamed the DSML tool-call tags and takes no
 # "medium" reasoning effort, which the V4 server accepts and V4 renders as "high".
@@ -187,8 +192,10 @@ V41_CHAT_FORMAT = ChatFormat(
 # compiles one per ViT and aligner bucket on its stage (~1.2 KB), beside decode's and prefill's: 4096 B overflows.
 # Every byte comes out of L1 too, where 16384 leaves the decode fused_experts CBs 3 KB short.
 _VISION_L1_SMALL_SIZE = 8192
-_MAX_IMAGES = 16  # per request
 _PREPARED_IMAGES = 64  # decoded images (their ViT patches, ~11 MB at most each) kept for admission
+# Distinct images per request, across its whole history (a repeated image shares one span). Past the decoded images
+# kept, a request would evict its own before its admission; its rows must also fit --image-rows (ImageBook.rows_of).
+_MAX_IMAGES = _PREPARED_IMAGES
 _IMAGE_PARTS = ("image", "image_url", "file")  # content part types that carry an image
 
 # Files API (https://api-docs.deepseek.com/api/create-file): uploaded images, referenced by a chat ``file`` part's
@@ -506,6 +513,11 @@ class _ImageBook:
         self.entries: OrderedDict[str, _Image] = OrderedDict()  # least recently used first
         self._lock = threading.Lock()
         self.status = _ImageStatus()
+
+    def rows_of(self, keys) -> int:
+        """The image rows images ``keys`` take in the table together (each held, as :meth:`add` left it)."""
+        with self._lock:
+            return sum(int((self.entries[key].types == IMAGE).sum()) for key in keys if key in self.entries)
 
     def stats(self) -> dict:
         """For the live console: the image rows, the images held (and how many have rows), what is in flight."""
@@ -857,8 +869,18 @@ class V41GenerationServer(GenerationServer):
 
     def normalized_messages(self, body: dict) -> list[dict]:
         messages = _normalized_messages(body.get("messages"), body.get("tools"), self.engine.chat_format, self._content)
-        if len(_image_keys(messages)) > _MAX_IMAGES:
-            raise RequestError(400, f"a request may carry at most {_MAX_IMAGES} images")
+        keys = set(_image_keys(messages))
+        if len(keys) > _MAX_IMAGES:
+            raise RequestError(
+                400, f"a request may carry at most {_MAX_IMAGES} distinct images (this conversation has {len(keys)})"
+            )
+        rows = self.engine.images.rows_of(keys) if keys else 0
+        if rows > self.engine.images.total_rows:
+            raise RequestError(
+                400,
+                f"the {len(keys)} images of this conversation take {rows} image rows, more than the "
+                f"{self.engine.images.total_rows} the server has (--image-rows); start a new conversation or drop some images",
+            )
         return messages
 
     def _content(self, role: str, content, index: int) -> dict:
@@ -1201,10 +1223,11 @@ def parse_args(argv: list[str] | None = None):
     p.add_argument(
         "--image-rows",
         type=int,
-        default=16384,
+        default=40960,
         help="rows past the vocabulary in the embedding table for image spans, a multiple of 32 (10 KB each on "
-        "every chip of stage 0); an image of up to 1024 tokens takes as many, and an image keeps them while a "
-        "conversation holds it (default: 16384)",
+        "every chip of stage 0: 400 MiB by default, beside the vocabulary's 1.2 GiB); an image of up to 1024 "
+        "tokens takes as many (~600 for a typical screenshot), and every image of a request, and of any "
+        "conversation held, keeps its rows at once (default: 40960)",
     )
     for action in p._actions:
         if action.dest == "temperature":
@@ -1227,6 +1250,8 @@ def parse_args(argv: list[str] | None = None):
         args.l1_small_size = int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", default))
     if args.max_new_tokens is None:
         args.max_new_tokens = args.max_context
+    if args.total_context is None:
+        args.total_context = max(args.num_users * _KV_TOKENS_PER_USER, args.max_context)
     return check_args(p, args, sys_cfg)
 
 

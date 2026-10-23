@@ -391,7 +391,6 @@ ttnn::Tensor all_reduce_async(
     }
 
     // Reduce scatter + all gather
-    log_info(tt::LogOp, "Using reduce scatter + all gather for all_reduce_async");
     ttnn::Tensor scattered_tensor;
     if (rs_global_semaphores.has_value() && barrier_semaphores.has_value()) {
         scattered_tensor = ttnn::experimental::reduce_scatter_minimal_async(

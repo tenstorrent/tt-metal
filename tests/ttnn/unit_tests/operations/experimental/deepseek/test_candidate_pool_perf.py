@@ -10,8 +10,9 @@
 3. ``build_candidate_pool``,
 4. ``fused_lightning_select_kv`` on the pool, gathering through its row table (layers 24, 28, 32, 36).
 
-``test_key_split_profile`` (a 1x4 submesh of the 8x4 mesh): steps 1 and 4 again, then each of them
-split over the 4 devices (``num_parts=4`` select, ``all_gather``, ``merge_select_kv``).
+``test_key_split_profile`` (a 1x4 submesh of the 8x4 mesh): steps 1 and 2, step 2 split over the 4
+devices (``num_parts=4`` select, ``all_gather``, ``merge_select_kv`` in candidate source mode), step 4,
+then steps 1 and 4 split the same way.
 
 Each length runs twice; the first fills the program cache, so read the second (after the
 ``<length>-warm`` signpost). Run::
@@ -98,7 +99,7 @@ def test_candidate_pool_profile(device, num_keys) -> None:
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [PARENT_MESH], indirect=True, ids=["8x4"])
-@pytest.mark.parametrize("num_keys", [16 * 1024, 128 * 1024], ids=["16k", "128k"])
+@pytest.mark.parametrize("num_keys", [16 * 1024, 32 * 1024, 64 * 1024, 128 * 1024], ids=["16k", "32k", "64k", "128k"])
 def test_key_split_profile(mesh_device, num_keys) -> None:
     submesh = _tp_submesh(mesh_device)
     replicate = ttnn.ReplicateTensorToMesh(submesh)
@@ -131,11 +132,31 @@ def test_key_split_profile(mesh_device, num_keys) -> None:
     pool_keys, pool_rows = ttnn.experimental.deepseek.build_candidate_pool(
         blocks, pool_count, key_tt, page_table_tt, CANDIDATE_BLOCK_SIZE
     )
+    source_mode = dict(candidate_topk_blocks=CANDIDATE_TOPK_BLOCKS, candidate_block_size=CANDIDATE_BLOCK_SIZE)
+    split_blocks = ttnn.clone(blocks)
+    split_pool_count = ttnn.clone(pool_count)
     ttnn.synchronize_device(submesh)
 
     for iteration in ("cold", "warm"):
         signpost(f"split-{num_keys}-{iteration}")
         ttnn.experimental.deepseek.fused_lightning_select_kv(query, key_tt, weights, kv_tt, page_table_tt, cur_pos, k)
+        ttnn.synchronize_device(submesh)
+        ttnn.experimental.deepseek.fused_lightning_select_kv(
+            query, key_tt, weights, kv_tt, page_table_tt, cur_pos, k, **source_mode
+        )
+        ttnn.synchronize_device(submesh)
+        _split_select(
+            submesh,
+            query,
+            key_tt,
+            weights,
+            kv_tt,
+            page_table_tt,
+            cur_pos,
+            k,
+            merge_kwargs=dict(candidate_blocks_output=split_blocks, pool_count_output=split_pool_count, **source_mode),
+            **source_mode,
+        )
         ttnn.synchronize_device(submesh)
         ttnn.experimental.deepseek.fused_lightning_select_kv(
             query, pool_keys, weights, kv_tt, identity, cur_pos, k, num_keys_tensor=pool_count, row_table=pool_rows

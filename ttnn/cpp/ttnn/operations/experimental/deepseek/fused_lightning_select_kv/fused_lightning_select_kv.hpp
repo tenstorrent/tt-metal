@@ -79,7 +79,9 @@ namespace ttnn::experimental::deepseek {
 //                    split into ``num_parts`` contiguous ranges; this device scores range
 //                    ``part_index_tensor[0]`` and returns its local top-k as candidates instead of
 //                    gathering rows. Gathering every device's candidates and passing them to
-//                    ``merge_select_kv`` gives the rows the unsplit op would gather.
+//                    ``merge_select_kv`` gives the rows the unsplit op would gather. In candidate
+//                    source mode the candidates also carry this part's best candidate blocks, and
+//                    ``merge_select_kv`` writes the candidate blocks and pool count instead.
 //   part_index_tensor: ``[1]`` INT32 part this device scores. Given exactly when ``num_parts`` > 1.
 //   row_table:       optional ``[1, max_blocks_per_user * block_size]`` INT32 ``kv_cache`` row of each
 //                    key, replacing the page-table mapping for the gather. A candidate-pool consumer
@@ -94,12 +96,15 @@ namespace ttnn::experimental::deepseek {
 //                    ``row_table`` and ``new_kv_row``, ``new_kv_row_index`` is a logical row mapped
 //                    through its ``page_table_row_tensor`` row instead of a ``kv_cache`` row.
 //
-// Returns: ``[kv_rows, scores]``, plus ``[candidate_blocks, pool_count]`` in candidate source mode.
+// Returns: ``[kv_rows, scores]``, plus ``[candidate_blocks, pool_count]`` in candidate source mode
+// with ``num_parts`` == 1.
 //   kv_rows: selected KV rows, ``[1, Hkv, k, Dh]``, same dtype and layout as ``kv_cache``,
 //            or ``output_tensor`` when given. With ``num_parts`` > 1, the candidates instead:
-//            ``[1, 1, 1, 2k + 16]`` INT32, the selected keys' ``kv_cache`` rows in key order, then
-//            their order keys (fp32 score bits mapped so unsigned order is score order), then the
-//            number selected. Unused entries are zero.
+//            ``[1, 1, 1, 2k + 16 + 2 * candidate_topk_blocks]`` INT32, the selected keys'
+//            ``kv_cache`` rows in key order, then their order keys (fp32 score bits mapped so
+//            unsigned order is score order), then 16 header words {keys selected, blocks selected,
+//            selectable keys, 0...}; in candidate source mode then the selected blocks in ascending
+//            order and their order keys (the newest block's is 0xFFFFFFFF). Unused entries are zero.
 //   scores:  index scores, ``[1, 1, 1, max_blocks_per_user * block_size]`` fp32 ROW_MAJOR. Only the
 //            first ``div_up((cur_pos + 1) / 4, block_size) * block_size`` entries are written.
 //   candidate_blocks: ``[1, candidate_topk_blocks]`` INT32, the kept blocks in ascending order in
