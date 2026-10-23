@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "fresh_cpp/binary_check.h"
+
 // Storm-contract semantic body for the `binarypow-fresh` coverage row (metal
 // ckernel_sfpu_binary_pow.h calculate_sfpu_binary_pow — the header's own
 // kernel entry has zero standalone nodes; the tested SfpuElwpow dispatch goes
@@ -81,7 +83,7 @@ template <DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS>
 inline void call_binary_pow_fresh_cpp(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out, const VectorMode vector_mode)
 {
-    ::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    ::ckernel::campaign_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     LLK_ASSERT(dst_index_in1 == dst_index_in0 + 1, "fresh binary pow expects adjacent inputs");
     LLK_ASSERT(dst_index_out == dst_index_in0, "fresh binary pow expects in-place output");
     LLK_ASSERT(vector_mode == VectorMode::RC, "fresh binary pow expects full-tile vector mode");

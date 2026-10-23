@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "fresh_cpp/binary_check.h"
+
 // div_int32_floor — canonical semantic C++ body (storm contract,
 // fresh_cpp/README.md).  Floor division over the node's positive Int32
 // domain ([1, 8e6] both operands, test_sfpu_binary._INT_BINARY_STIMULI),
@@ -93,7 +95,7 @@ template <DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS>
 inline void call_div_int32_floor_fresh_cpp(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out, const VectorMode vector_mode)
 {
-    ::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    ::ckernel::campaign_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     LLK_ASSERT(dst_index_in1 == dst_index_in0 + 1, "fresh div_int32_floor expects adjacent inputs");
     LLK_ASSERT(dst_index_out == dst_index_in0, "fresh div_int32_floor expects in-place output");
     LLK_ASSERT(vector_mode == VectorMode::RC, "fresh div_int32_floor expects full-tile vector mode");

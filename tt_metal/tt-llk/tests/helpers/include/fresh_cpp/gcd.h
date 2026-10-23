@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "fresh_cpp/binary_check.h"
+
 // gcd — canonical semantic C++ body (storm contract, fresh_cpp/README.md).
 // Binary GCD (Stein's algorithm) stated as UNPREDICATED fixed-point rounds:
 // strip the common power of two and keep a odd, then run a fixed number of
@@ -88,7 +90,7 @@ template <DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS>
 inline void call_gcd_fresh_cpp(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out, const VectorMode vector_mode)
 {
-    ::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    ::ckernel::campaign_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     LLK_ASSERT(dst_index_in1 == dst_index_in0 + 1, "fresh gcd expects adjacent inputs");
     LLK_ASSERT(dst_index_out == dst_index_in0, "fresh gcd expects in-place output");
     LLK_ASSERT(vector_mode == VectorMode::RC, "fresh gcd expects full-tile vector mode");

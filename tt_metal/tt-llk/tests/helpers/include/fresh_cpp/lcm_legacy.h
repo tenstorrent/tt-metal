@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "fresh_cpp/binary_check.h"
+
 // lcm — LEGACY semantic body, preserved verbatim (symbols renamed *_legacy)
 // when lane DI rewrote fresh_cpp/lcm.h (2026-08-20): 15 predicated
 // subtract-shift rounds plus a normalize/rebias Newton reciprocal measured
@@ -135,7 +137,7 @@ template <DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS>
 inline void call_lcm_fresh_cpp_legacy(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out, const VectorMode vector_mode)
 {
-    ::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    ::ckernel::campaign_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     LLK_ASSERT(dst_index_in1 == dst_index_in0 + 1, "fresh lcm expects adjacent inputs");
     LLK_ASSERT(dst_index_out == dst_index_in0, "fresh lcm expects in-place output");
     LLK_ASSERT(vector_mode == VectorMode::RC, "fresh lcm expects full-tile vector mode");

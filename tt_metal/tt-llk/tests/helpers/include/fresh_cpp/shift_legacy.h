@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "fresh_cpp/binary_check.h"
+
 // shift — LEGACY semantic bodies, preserved verbatim (symbols renamed
 // *_legacy) when lane GH rewrote fresh_cpp/shift.h (2026-08-24): the
 // logical-shift + manual sign-fill + compound range-guard composition below
@@ -76,7 +78,7 @@ template <DstSync DST_SYNC, bool DST_ACCUM, bool LOGICAL, int ITERATIONS>
 inline void call_right_shift_fresh_cpp_legacy(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out, const VectorMode vector_mode)
 {
-    ::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    ::ckernel::campaign_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     LLK_ASSERT(dst_index_in1 == dst_index_in0 + 1, "fresh right shift expects adjacent inputs");
     LLK_ASSERT(dst_index_out == dst_index_in0, "fresh right shift expects in-place output");
     LLK_ASSERT(vector_mode == VectorMode::RC, "fresh right shift expects full-tile vector mode");

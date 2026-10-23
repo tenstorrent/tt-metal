@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "fresh_cpp/binary_check.h"
+
 // gcd — LEGACY semantic body, preserved verbatim (symbols renamed *_legacy)
 // when lane CS rewrote fresh_cpp/gcd.h (2026-08-20): 34 predicated rounds at
 // 21 replay slots each measured 2950.0 c/t vs hand 1038.0 (+184.3%,
@@ -85,7 +87,7 @@ template <DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS>
 inline void call_gcd_fresh_cpp_legacy(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out, const VectorMode vector_mode)
 {
-    ::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    ::ckernel::campaign_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     LLK_ASSERT(dst_index_in1 == dst_index_in0 + 1, "fresh gcd expects adjacent inputs");
     LLK_ASSERT(dst_index_out == dst_index_in0, "fresh gcd expects in-place output");
     LLK_ASSERT(vector_mode == VectorMode::RC, "fresh gcd expects full-tile vector mode");

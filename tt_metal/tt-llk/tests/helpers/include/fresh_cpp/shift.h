@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "fresh_cpp/binary_check.h"
+
 // Canonical semantic bodies for the shift op file (storm contract,
 // fresh_cpp/README.md).  Production: metal ckernel_sfpu_shift.h — all three
 // binary Int32 shifts are entirely raw TT_SFPLOAD/TTI_SFP* streams over fixed
@@ -148,7 +150,7 @@ template <DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS>
 inline void call_left_shift_fresh_cpp(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out, const VectorMode vector_mode)
 {
-    ::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    ::ckernel::campaign_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     LLK_ASSERT(dst_index_in1 == dst_index_in0 + 1, "fresh left shift expects adjacent inputs");
     LLK_ASSERT(dst_index_out == dst_index_in0, "fresh left shift expects in-place output");
     LLK_ASSERT(vector_mode == VectorMode::RC, "fresh left shift expects full-tile vector mode");
@@ -165,7 +167,7 @@ template <DstSync DST_SYNC, bool DST_ACCUM, bool LOGICAL, int ITERATIONS>
 inline void call_right_shift_fresh_cpp(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out, const VectorMode vector_mode)
 {
-    ::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    ::ckernel::campaign_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     LLK_ASSERT(dst_index_in1 == dst_index_in0 + 1, "fresh right shift expects adjacent inputs");
     LLK_ASSERT(dst_index_out == dst_index_in0, "fresh right shift expects in-place output");
     LLK_ASSERT(vector_mode == VectorMode::RC, "fresh right shift expects full-tile vector mode");

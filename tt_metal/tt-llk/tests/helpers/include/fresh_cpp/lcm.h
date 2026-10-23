@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "fresh_cpp/binary_check.h"
+
 // lcm — canonical semantic C++ body (storm contract, fresh_cpp/README.md).
 // States the torch.lcm golden contract (golden_generators._lcm, exact Int32)
 // over the row's stimulus domain (test_sfpu_binary._INT_BINARY_STIMULI
@@ -185,7 +187,7 @@ template <DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS>
 inline void call_lcm_fresh_cpp(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out, const VectorMode vector_mode)
 {
-    ::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    ::ckernel::campaign_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     LLK_ASSERT(dst_index_in1 == dst_index_in0 + 1, "fresh lcm expects adjacent inputs");
     LLK_ASSERT(dst_index_out == dst_index_in0, "fresh lcm expects in-place output");
     LLK_ASSERT(vector_mode == VectorMode::RC, "fresh lcm expects full-tile vector mode");

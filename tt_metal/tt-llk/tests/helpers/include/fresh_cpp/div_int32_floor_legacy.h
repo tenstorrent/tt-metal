@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "fresh_cpp/binary_check.h"
+
 // div_int32_floor — LEGACY body, preserved UNWIRED (laneEK 2026-08-21;
 // the castfp32tofp16a_legacy.h / lcm_legacy.h precedent).  Superseded by
 // the fresh_recip_hwseed rewrite in div_int32_floor.h; kept as the
@@ -82,7 +84,7 @@ template <DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS>
 inline void call_div_int32_floor_fresh_cpp_legacy(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out, const VectorMode vector_mode)
 {
-    ::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    ::ckernel::campaign_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     LLK_ASSERT(dst_index_in1 == dst_index_in0 + 1, "fresh div_int32_floor expects adjacent inputs");
     LLK_ASSERT(dst_index_out == dst_index_in0, "fresh div_int32_floor expects in-place output");
     LLK_ASSERT(vector_mode == VectorMode::RC, "fresh div_int32_floor expects full-tile vector mode");

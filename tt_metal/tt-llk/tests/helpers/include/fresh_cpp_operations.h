@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "fresh_cpp/binary_check.h"
+
 // Test-only semantic implementations used by the corpus A/Bs.  These deliberately
 // state the math one row at a time: no fixed LREGs, raw instructions, replay slots,
 // SFPLOADMACRO templates, or hand-interleaved software schedule.
@@ -190,8 +192,7 @@ inline void call_binary_max_min_fresh_cpp(
     const std::uint32_t dst_index_in1,
     const std::uint32_t dst_index_out,
     const VectorMode vector_mode) {
-    ::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(
-        dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    ::ckernel::campaign_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     LLK_ASSERT(dst_index_in1 == dst_index_in0 + 1, "fresh max/min expects adjacent inputs");
     LLK_ASSERT(dst_index_out == dst_index_in0, "fresh max/min expects in-place output");
     LLK_ASSERT(vector_mode == VectorMode::RC, "fresh max/min expects full-tile vector mode");
@@ -301,7 +302,7 @@ template <DstSync DST_SYNC, bool DST_ACCUM, bool IS_ADD, int ITERATIONS>
 inline void call_add_sub_int_fresh_cpp(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out, const VectorMode vector_mode)
 {
-    ::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    ::ckernel::campaign_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     LLK_ASSERT(dst_index_in1 == dst_index_in0 + 1, "fresh add/sub int expects adjacent inputs");
     LLK_ASSERT(dst_index_out == dst_index_in0, "fresh add/sub int expects in-place output");
     LLK_ASSERT(vector_mode == VectorMode::RC, "fresh add/sub int expects full-tile vector mode");
@@ -395,7 +396,7 @@ template <DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS>
 inline void call_mul_int_fresh_cpp(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out, const VectorMode vector_mode)
 {
-    ::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    ::ckernel::campaign_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     LLK_ASSERT(dst_index_in1 == dst_index_in0 + 1, "fresh mul int expects adjacent inputs");
     LLK_ASSERT(dst_index_out == dst_index_in0, "fresh mul int expects in-place output");
     LLK_ASSERT(vector_mode == VectorMode::RC, "fresh mul int expects full-tile vector mode");

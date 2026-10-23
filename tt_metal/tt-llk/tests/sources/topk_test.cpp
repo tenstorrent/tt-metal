@@ -147,15 +147,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const int distance_between_corresponding_tiles      = (1 << current_iteration);
             const int number_of_tile_pairs_in_current_iteration = (NUM_VALUE_TILES_PER_ROW / (distance_between_corresponding_tiles * NUM_TILES_PER_STAGE));
 
-            // Iterations after the first read tiles that the packer wrote back to
-            // buffer_A in the previous iteration. Math/dest handshakes do not order
-            // pack L1 writes before these reads, so wait for the packer's post.
-            if (current_iteration > 0)
-            {
-                t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);
-                t6_semaphore_get<>(semaphore::PACK_DONE);
-            }
-
             for (int current_tile_pair_idx = 0; current_tile_pair_idx < number_of_tile_pairs_in_current_iteration;
                  ++current_tile_pair_idx) // Iterates over tiles in current topk pipeline operation.
             {
@@ -223,6 +214,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                 } // Stage loop.
             } // Pipeline loop.
+            if (current_iteration + 1 < TOPK_NUM_ITERATIONS)
+            {
+                llk_barrier::rendezvous(false);
+            }
         } // iteration loop.
     } // current_tile_row loop
 } // Kernel function.
@@ -518,6 +513,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                 _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             } // Within pipeline loop.
+            if (current_iteration + 1 < TOPK_NUM_ITERATIONS)
+            {
+                llk_barrier::rendezvous(false);
+            }
         } // iteration loop.
     } // current_tile_row loop
 }
@@ -623,11 +622,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
 
-            // Release the unpacker for the next iteration only after every
-            // write-back of this iteration has landed in L1.
+            // The next iteration loops back through buffer_A. Drain pack writes
+            // before releasing both peers through the shared harness barrier;
+            // its reserved arrival semaphore must never carry a driver token.
             if (!last_iteration)
             {
-                t6_semaphore_post<p_stall::PACK>(semaphore::PACK_DONE);
+                TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::PACK);
+                llk_barrier::rendezvous(true);
             }
         } // Iteration loop.
     } // current_tile_row loop

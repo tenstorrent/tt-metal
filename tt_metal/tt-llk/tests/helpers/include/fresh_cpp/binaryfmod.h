@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "fresh_cpp/binary_check.h"
+
 // Storm-contract semantic body for the `binaryfmod` corpus row (metal
 // calculate_sfpu_binary_fmod, float arm).  Mathematical definition
 // (torch.fmod / C fmod): fmod(a, b) = a - trunc(a/b) * b — the residue takes
@@ -63,7 +65,7 @@ template <DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS>
 inline void call_binary_fmod_fresh_cpp(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out, const VectorMode vector_mode)
 {
-    ::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    ::ckernel::campaign_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     LLK_ASSERT(dst_index_in1 == dst_index_in0 + 1, "fresh binary fmod expects adjacent inputs");
     LLK_ASSERT(dst_index_out == dst_index_in0, "fresh binary fmod expects in-place output");
     LLK_ASSERT(vector_mode == VectorMode::RC, "fresh binary fmod expects full-tile vector mode");

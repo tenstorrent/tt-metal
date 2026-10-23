@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "fresh_cpp/binary_check.h"
+
 // Storm-contract semantic body for the `copydest-fresh` coverage row (metal
 // ckernel_sfpu_copy_dest_values.h copy_dest_value, corpus manifest class
 // D-ABSENT — zero dispatch anywhere).  Mathematical definition: identity
@@ -38,7 +40,7 @@ __attribute__((noinline)) void calculate_copy_dest_fresh_cpp()
 template <DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS>
 inline void call_copy_dest_fresh_cpp(const std::uint32_t dst_index_in, const std::uint32_t dst_index_out, const VectorMode vector_mode)
 {
-    ::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in, dst_index_out, dst_index_out, vector_mode);
+    ::ckernel::campaign_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in, dst_index_out, dst_index_out, vector_mode);
     LLK_ASSERT(dst_index_out == dst_index_in + 1, "fresh copy-dest expects the adjacent output tile");
     LLK_ASSERT(vector_mode == VectorMode::RC, "fresh copy-dest expects full-tile vector mode");
 

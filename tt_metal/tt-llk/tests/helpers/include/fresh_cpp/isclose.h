@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "fresh_cpp/binary_check.h"
+
 // Canonical semantic body for the isclose corpus row (storm contract — see
 // README.md in this directory).  Include from an LLK_TRISC_MATH kernel after
 // sfpu_operations.h; plain typed C++ only.
@@ -100,7 +102,7 @@ inline void call_isclose_fresh_cpp(
     const std::uint32_t rtol_bits,
     const std::uint32_t atol_bits)
 {
-    ::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    ::ckernel::campaign_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     LLK_ASSERT(dst_index_in1 == dst_index_in0 + 1, "fresh isclose expects adjacent inputs");
     LLK_ASSERT(dst_index_out == dst_index_in0, "fresh isclose expects in-place output");
     LLK_ASSERT(vector_mode == VectorMode::RC, "fresh isclose expects full-tile vector mode");

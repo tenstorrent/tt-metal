@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "fresh_cpp/binary_check.h"
+
 // PROVENANCE — LICENSED REFIT (lane GT 2026-08-25), superseding the lane DH
 // PLACEHOLDER (frontier unary atan winner P8/s1 TAKEN at 0.499 ulp + exact
 // Blinn reciprocal — measured +109.14% vs hand: the accuracy CONTRACT, not
@@ -116,7 +118,7 @@ template <DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS>
 inline void call_atan2_fitted_cpp(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out, const VectorMode vector_mode)
 {
-    ::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    ::ckernel::campaign_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     LLK_ASSERT(dst_index_in1 == dst_index_in0 + 1, "fitted atan2 expects adjacent inputs");
     LLK_ASSERT(dst_index_out == dst_index_in0, "fitted atan2 expects in-place output");
     LLK_ASSERT(vector_mode == VectorMode::RC, "fitted atan2 expects full-tile vector mode");

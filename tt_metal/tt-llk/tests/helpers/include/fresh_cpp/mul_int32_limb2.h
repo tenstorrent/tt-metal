@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "fresh_cpp/binary_check.h"
+
 // mul_int32 (limb-2) — canonical semantic C++ body (storm contract,
 // fresh_cpp/README.md).  Included by fresh_cpp_operations.h AFTER the
 // impl-1 body (calculate_mul_int_fresh_cpp) it delegates to on WH.
@@ -88,7 +90,7 @@ template <DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS>
 inline void call_mul_int_limb2_fresh_cpp(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out, const VectorMode vector_mode)
 {
-    ::ckernel::_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
+    ::ckernel::campaign_sfpu_binary_check_<DST_SYNC, DST_ACCUM>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     LLK_ASSERT(dst_index_in1 == dst_index_in0 + 1, "fresh mul int limb2 expects adjacent inputs");
     LLK_ASSERT(dst_index_out == dst_index_in0, "fresh mul int limb2 expects in-place output");
     LLK_ASSERT(vector_mode == VectorMode::RC, "fresh mul int limb2 expects full-tile vector mode");
