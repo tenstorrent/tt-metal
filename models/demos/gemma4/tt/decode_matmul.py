@@ -75,11 +75,14 @@ def decode_1d_progcfg(mesh_device, k: int, n: int, max_block_w=None):
 
 def decode_compute_kernel_config(mesh_device):
     """HiFi2 (the auto path's fidelity) with fp32 Dest accumulation across the K blocks (default); the
-    auto path's packer-L1 accumulation on ``GEMMA4_DECODE_MM_FP32_ACC=0``."""
+    auto path's packer-L1 accumulation on ``GEMMA4_DECODE_MM_FP32_ACC=0``. ``GEMMA4_DECODE_MM_FIDELITY=lofi``
+    selects LoFi, the fidelity every matmul with an explicit program config and no compute config runs at
+    (``create_matmul_attributes``: the DRAM-sharded decode matmuls and the lm_head of the dense variants)."""
     fp32_acc = os.environ.get("GEMMA4_DECODE_MM_FP32_ACC", "1") == "1"
+    fidelity = os.environ.get("GEMMA4_DECODE_MM_FIDELITY", "hifi2").lower()
     return ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=ttnn.MathFidelity.LoFi if fidelity == "lofi" else ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
         fp32_dest_acc_en=fp32_acc,
         packer_l1_acc=not fp32_acc,
