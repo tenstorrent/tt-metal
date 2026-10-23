@@ -474,12 +474,14 @@ ttsl::hash::hash_t DitFusedDistributedRmsnormDeviceOperation::compute_program_ha
     const auto& weight = tensor_args.weight;
     const auto& bias = tensor_args.bias;
     const auto& map = tensor_args.affine_tile_row_map;
-    const uint32_t num_tile_rows = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT;
-    const uint32_t capacity_tile_rows = args.row_capacity.has_value() ? *args.row_capacity / TILE_HEIGHT : num_tile_rows;
+    // Key the compiled geometry itself: a pinned capacity and a bare row count of the same size take
+    // different worker knees, so capacity_tile_rows alone does not fix the worker split.
+    const auto sizing = compute_sizing(args, input);
     const uint32_t batch = input.logical_shape()[1];
     const bool per_token_weight = weight.has_value() && weight->logical_shape()[-2] > 1;
     const bool per_token_bias = bias.has_value() && bias->logical_shape()[-2] > 1;
-    const bool per_batch_weight = weight.has_value() && !per_token_weight && batch > 1 && affine_tile_rows(*weight) == batch;
+    const bool per_batch_weight =
+        weight.has_value() && !per_token_weight && batch > 1 && affine_tile_rows(*weight) == batch;
     const bool per_batch_bias = bias.has_value() && !per_token_bias && batch > 1 && affine_tile_rows(*bias) == batch;
     const auto map_hash = map.has_value() ? ttsl::hash::hash_objects_with_default_seed(
                                                 kSalt + 8, map->dtype(), map->layout(), map->memory_config())
@@ -497,7 +499,12 @@ ttsl::hash::hash_t DitFusedDistributedRmsnormDeviceOperation::compute_program_ha
         args.compute_kernel_config,
         static_cast<uint8_t>(args.norm_type),
         args.sub_device_id,
-        capacity_tile_rows,
+        args.row_capacity,
+        sizing.capacity_tile_rows,
+        sizing.num_workers,
+        sizing.num_forwarders,
+        sizing.max_rounds,
+        sizing.window_size,
         per_token_weight,
         per_token_bias,
         per_batch_weight,
