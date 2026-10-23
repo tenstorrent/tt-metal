@@ -137,6 +137,7 @@ enum class UnaryOpType {
     DIGAMMA,
     POLYGAMMA,
     SOFTCAP,
+    MULTIGAMMALN,
 };
 
 enum class VecMode {
