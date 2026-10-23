@@ -276,14 +276,15 @@ tt::tt_metal::Program build_program(
     // Scores stay FP32: a bf16 round trip would quantize the very comparisons the argmax makes.
     create_circular_buffer(
         program, layout.all_cores, kScoresCbIndex, tt::DataFormat::Float32, score_tile_bytes, streamed_tiles);
-    // The writer's output ring: 32 token ids, each in its own NOC-aligned slot.
-    constexpr uint32_t kOutputSlotBytes = 32U;
+    // The writer's output ring: 32 token ids, each in its own slot of at least 32 B and at least one aligned output
+    // page, since the writer sends whole aligned pages (64 B in Blackhole DRAM). The writer derives the same size.
+    const uint32_t output_slot_bytes = std::max(32U, static_cast<uint32_t>(output.buffer()->aligned_page_size()));
     create_circular_buffer_bytes(
         program,
         layout.all_cores,
         kOutputStagingCbIndex,
         tt::DataFormat::UInt32,
-        tt::constants::TILE_HEIGHT * kOutputSlotBytes);
+        tt::constants::TILE_HEIGHT * output_slot_bytes);
 
     // Boundary-row partials: receive slots plus one staging slot for the outgoing record.
     create_circular_buffer_bytes(
