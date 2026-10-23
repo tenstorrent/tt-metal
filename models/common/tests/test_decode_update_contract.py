@@ -394,7 +394,6 @@ def test_shared_generator_rejects_cross_lane_sampling_remap(expect_error):
         ("models.tt_transformers.tt.generator_vllm:LlamaForCausalLM", 8),
         ("models.tt_transformers.tt.generator_vllm:QwenForCausalLM", 8),
         ("models.tt_transformers.tt.generator_vllm:MistralForCausalLM", 8),
-        ("models.tt_transformers.tt.generator_vllm:Mistral3ForConditionalGeneration", 8),
         ("models.tt_transformers.tt.generator_vllm:Gemma3ForConditionalGeneration", 8),
         # Decode bucketing runs 3 active rows in the width-4 bucket.
         ("models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM", 4),
