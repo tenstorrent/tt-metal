@@ -43,7 +43,9 @@ void read_block_from_dram(
     noc.async_read_barrier();
 }
 
-static void do_signaling(const Noc& noc, uint32_t& rt_args_idx) {
+namespace {
+
+void do_signaling(const Noc& noc, uint32_t& rt_args_idx) {
     const uint32_t pv_core_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     const uint32_t pv_core_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     const uint32_t pv_semaphore_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
@@ -53,7 +55,7 @@ static void do_signaling(const Noc& noc, uint32_t& rt_args_idx) {
         const uint32_t target_sem_value = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
         const uint32_t signalling_semaphore_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
         const uint32_t num_signal_ranges = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-        Semaphore<> sig_sem(signalling_semaphore_id);
+        const Semaphore<> sig_sem(signalling_semaphore_id);
         pv_sem.wait(target_sem_value);
         pv_sem.set(1);
         // Only the RS cores own sig_sem, so write it per RS rectangle and never on the rectangles'
@@ -76,6 +78,8 @@ static void do_signaling(const Noc& noc, uint32_t& rt_args_idx) {
         noc.async_atomic_barrier();
     }
 }
+
+}  // namespace
 
 void kernel_main() {
     // Compile time args

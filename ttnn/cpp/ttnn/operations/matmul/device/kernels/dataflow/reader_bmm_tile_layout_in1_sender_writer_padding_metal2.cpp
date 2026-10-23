@@ -143,7 +143,7 @@ void kernel_main() {
     // batch args
     constexpr auto MtNt = get_arg(args::MtNt);  // if 0
     // Don't need batch; same as batch from READER args
-    constexpr bool compact_output = get_arg(args::compact_output);
+    constexpr bool compact_output = get_arg(args::compact_output) != 0;
 
     // When sparsity is disabled, we just loop once
     constexpr uint32_t batchB_lim = batchB == 0 ? 1u : batchB;
@@ -165,8 +165,8 @@ void kernel_main() {
     const Noc noc;
     DataflowBuffer dfb_in1(dfb::in1);
     DataflowBuffer dfb_out(dfb::out);
-    Semaphore sender_sem(sem::in1_mcast_sender);
-    Semaphore receiver_sem(sem::in1_mcast_receiver);
+    Semaphore<> sender_sem(sem::in1_mcast_sender);
+    Semaphore<> receiver_sem(sem::in1_mcast_receiver);
 
 #ifdef FUSE_BIAS
     // in3 mcast args

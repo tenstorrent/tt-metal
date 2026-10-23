@@ -46,8 +46,8 @@ void kernel_main() {
     const Noc noc;
     // in0 is filled here from the multicast and drained by the compute kernel.
     DataflowBuffer dfb_in0(dfb::in0);
-    Semaphore sender_sem(sem::in0_mcast_sender);
-    Semaphore receiver_sem(sem::in0_mcast_receiver);
+    Semaphore<> sender_sem(sem::in0_mcast_sender);
+    Semaphore<> receiver_sem(sem::in0_mcast_receiver);
 
     for (uint32_t b = 0; b < batch; ++b) {
         if constexpr (get_batch_from_reader) {

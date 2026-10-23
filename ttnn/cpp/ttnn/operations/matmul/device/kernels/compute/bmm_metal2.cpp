@@ -23,10 +23,10 @@ void kernel_main() {
 
     constexpr int onetile = 1;
 
-    uint32_t batch = get_arg(args::batch);
-    uint32_t Mt = get_arg(args::Mt);
-    uint32_t Kt = get_arg(args::Kt);
-    uint32_t Nt = get_arg(args::Nt);
+    const uint32_t batch = get_arg(args::batch);
+    const uint32_t Mt = get_arg(args::Mt);
+    const uint32_t Kt = get_arg(args::Kt);
+    const uint32_t Nt = get_arg(args::Nt);
 
     DataflowBuffer in0_dfb(dfb::in0);
     DataflowBuffer in1_dfb(dfb::in1);
