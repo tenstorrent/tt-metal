@@ -93,6 +93,7 @@ struct OpConfig {
         NE,
         ISCLOSE,
         SITU_GLU,
+        GEGLU_TANH,
     };
 
     template <class EnumT>
