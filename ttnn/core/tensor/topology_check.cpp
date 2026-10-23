@@ -246,11 +246,10 @@ void verify_shards_match_topology(const Tensor& tensor, bool compare_replica_con
             TT_FATAL(
                 !distributed_buffer.is_local(coord),
                 "Tensor topology lists mesh coordinate {} but the host storage has no shard there ({}; host storage "
-                "shape {} with {} populated shard(s)). The topology label describes data that does not exist, "
-                "typically because the tensor is a single shard taken out of a distributed tensor "
-                "(get_device_tensors(...)[i].cpu()), or this is a LOCAL-mode partial file re-dumped on a single host "
-                "(re-dump from the multi-host job instead). Relabel the tensor with update_tensor_topology() so the "
-                "label matches how the shards were produced.",
+                "shape {} with {} populated shard(s)). The topology label describes data that does not exist, for "
+                "example a LOCAL-mode partial file re-dumped on a single host (re-dump from the multi-host job "
+                "instead). Relabel the tensor with update_tensor_topology() so the label matches how the shards were "
+                "produced.",
                 coord,
                 describe(topology),
                 distributed_buffer.shape(),
