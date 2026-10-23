@@ -5,6 +5,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_log_bf16_replay_window.h"
 #include "sfpu/ckernel_sfpu_log_bf16_log_fused.h"
 
 namespace ckernel::sfpu::bf16::log {
