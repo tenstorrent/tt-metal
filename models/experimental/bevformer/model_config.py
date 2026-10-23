@@ -299,11 +299,14 @@ DRAM_CONV_SLICES = 8
 # halo and write-back ops.
 CONV2_DRAM_CONV_SLICES = {0: 2, 1: 1}
 
-# Layers whose downsample and non-DCN conv2s are block sharded (layer3, layer4) and FPN levels
-# whose output conv is (C3, C4). Height sharded, each core of tiny's layer4 conv2 would hold its
-# whole 512-channel 3x3 weight, more than L1.
+# Layers whose downsample and non-DCN conv2s are block sharded (layer3, layer4). Height sharded,
+# each core of tiny's layer4 conv2 would hold its whole 512-channel 3x3 weight, more than L1.
 BLOCK_SHARDED_STAGES = (2, 3)
-BLOCK_SHARDED_LEVELS = _C3_C4_LEVELS
+
+# Width slices for the DRAM levels' 3x3 output convs, by level (0 is C3), over DRAM_CONV_SLICES:
+# height sharded, C4 fits L1 whole and C3 in 4 slices. Block sharding splits the 256 channels
+# into one-tile-wide blocks and runs several times slower.
+FPN_OUTPUT_CONV_DRAM_CONV_SLICES = {0: 4, 1: 1}
 
 # Layers whose DCNs take their input height-sharded rather than interleaved in L1: most bilinear
 # corners then lie in the core's own shard or a neighbour's. Sharding pays where each core owns many
@@ -312,10 +315,10 @@ BLOCK_SHARDED_LEVELS = _C3_C4_LEVELS
 DCN_SHARDED_INPUT_STAGES = (2,)
 
 # conv2d's act_block_h overrides: the stem conv's, the non-DCN 3x3 conv2's of the bottlenecks and
-# the block-sharded FPN output convs'. None of these, nor the sharding above, is tuned for 928x1600.
+# the DRAM levels' FPN output convs'. The FPN's larger blocks overflow L1 at these slice counts.
 STEM_ACT_BLOCK_H = 64
 CONV2_ACT_BLOCK_H = 32
-FPN_BLOCK_SHARDED_ACT_BLOCK_H = 128
+FPN_OUTPUT_CONV_ACT_BLOCK_H = 32
 
 
 def tt_resnet_kwargs():
@@ -341,8 +344,8 @@ def tt_fpn_kwargs():
     return dict(
         dram_activation_levels=DRAM_ACTIVATION_LEVELS,
         dram_conv_slices=DRAM_CONV_SLICES,
-        block_sharded_levels=BLOCK_SHARDED_LEVELS,
-        block_sharded_act_block_h=FPN_BLOCK_SHARDED_ACT_BLOCK_H,
+        output_conv_dram_conv_slices=FPN_OUTPUT_CONV_DRAM_CONV_SLICES,
+        output_conv_act_block_h=FPN_OUTPUT_CONV_ACT_BLOCK_H,
         weights_dtype=_ttnn_dtype("CONV_WEIGHT_DTYPE"),
     )
 
