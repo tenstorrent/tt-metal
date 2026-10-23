@@ -113,6 +113,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--weights-distilled", type=Path, default=None, help="distilled checkpoint dir")
     parser.add_argument("--eager", action="store_true", help="run the denoise and decode without tracing")
+    parser.add_argument("--cache", default=None, help="DBCache (cache-dit) spec for the DiT, e.g. F8B0:0.08:w8; implies --eager")
     parser.add_argument(
         "--layout",
         choices=("sp4tp8", "sp8tp4", "dual"),
@@ -217,6 +218,7 @@ def main(argv: list[str] | None = None) -> int:
         prompt_upsampling=False,
         boxes=None if caption is not None else (tuple(boxes) if boxes else None),
         return_final_tokens=False,  # a serving-style request: the latent read is not part of the image time
+        cache=args.cache,
     )
     print(
         f"model {model} seed {request.seed if request.seed is not None else 'sha256(caption)'} "
@@ -240,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"pipeline resident ({model}) in {time.time() - t0:.1f}s")
         for i in range(args.repeat):
             try:
-                result = pipeline.generate(request, traced=not args.eager)
+                result = pipeline.generate(request, traced=not (args.eager or args.cache))
             except Flux3KleinAdmissionError as err:
                 adm = err.admission
                 print(f"REFUSED: {adm.reason} (budget {adm.budget}, measured {adm.measured})", file=sys.stderr)
