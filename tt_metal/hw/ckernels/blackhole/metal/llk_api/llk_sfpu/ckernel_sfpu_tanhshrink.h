@@ -12,6 +12,12 @@
 
 namespace ckernel::sfpu {
 
+bool bf16_dest_tanhshrink();
+template <int ITERATIONS>
+void calculate_tanhshrink_bf16();
+// Whether BF16 DEST runs the generated tanhshrink kernel as one call over the whole tile.
+inline constexpr bool tanhshrink_bf16_whole_tile = true;
+
 // tanhshrink(x) = x - tanh(x).
 // For small |x|, tanh(x) ~= x, so the subtractive form x - tanh(x) suffers catastrophic
 // cancellation in bf16 (both operands round to the same value -> result 0). Instead, for
@@ -23,6 +29,12 @@ namespace ckernel::sfpu {
 // sigmoid-based accurate tanh (deg-3 would be ~1700 fp32 ULP).
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanhshrink() {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_tanhshrink()) {
+            calculate_tanhshrink_bf16<ITERATIONS>();
+            return;
+        }
+    }
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
@@ -84,6 +96,8 @@ inline void calculate_tanhshrink() {
     }
 }
 
+void init_tanhshrink_bf16();
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanhshrink_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -93,6 +107,11 @@ inline void tanhshrink_init() {
         // exp it uses is pure arithmetic (no LUT / programmable constants).
         sfpu_reciprocal_init<false>();
     }
+    if constexpr (!is_fp32_dest_acc_en) {
+        init_tanhshrink_bf16();
+    }
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_tanhshrink_bf16.h"
