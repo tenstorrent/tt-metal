@@ -5,27 +5,27 @@
 #pragma once
 
 #include <stdint.h>
+#include "dev_mem_map.h"
+#include "hostdev/cce_spa_routes.h"
 #include "internal/risc_attribs.h"
 
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DRISC)
 
 namespace experimental {
 
-// Package GDDR is one 8 GiB block per Mimir on the D2D0 route. The CCE remapper
-// claims only this die's block, so a local index hits the remapper.
-inline constexpr uint64_t CCE_GDDR_SPA_BASE = 0x1000000000000ULL;
-inline constexpr uint64_t CCE_GDDR_MIMIR_STRIDE = 0x200000000ULL;
-// Same cells on the D2D1 route: 16 instance strides above the D2D0 base.
-// On MMK the Mimir-to-Mimir wire is M0 D2D1 <-> M1 D2D0. A sender on Mimir 0
-// reaches another die through this window. A sender on Mimir 1 uses the D2D0
-// window. M0 D2D0 is not connected to Mimir 1.
-inline constexpr uint64_t CCE_GDDR_D2D1_SPA_BASE = 0x1002000000000ULL;
+inline __attribute__((always_inline)) volatile tt_l1_ptr CceSpaRoutes* cce_spa_routes() {
+    return reinterpret_cast<volatile tt_l1_ptr CceSpaRoutes*>(MEM_CCE_SPA_ROUTES_BASE);
+}
 
+// local_mimir stays in the signature so existing kernels compile. The host wrote this core's
+// route table, so the destination instance selects the port.
 inline __attribute__((always_inline)) uint64_t
 cce_gddr_address(uint32_t local_mimir, uint32_t mimir_index, uint64_t offset) {
-    const uint64_t route_base =
-        (local_mimir == 0 && mimir_index != local_mimir) ? CCE_GDDR_D2D1_SPA_BASE : CCE_GDDR_SPA_BASE;
-    return route_base + static_cast<uint64_t>(mimir_index) * CCE_GDDR_MIMIR_STRIDE + offset;
+    (void)local_mimir;
+    volatile tt_l1_ptr CceSpaRoutes* routes = cce_spa_routes();
+    const uint32_t index = mimir_index < CCE_SPA_ROUTES_MAX_INSTANCES ? mimir_index : 0;
+    const uint32_t port = routes->gddr_d2d[index];
+    return routes->gddr_d2d_base[port] + static_cast<uint64_t>(index) * routes->gddr_instance_stride + offset;
 }
 
 inline __attribute__((always_inline)) void cce_gddr_read(
@@ -47,12 +47,9 @@ inline __attribute__((always_inline)) void cce_gddr_write(
     }
 }
 
-// Package CCE SRAM is 4 MiB per CCE, grouped as 8 MiB per Mimir.
-inline constexpr uint64_t CCE_SRAM_SPA_BASE = 0x1280000000ULL;
-inline constexpr uint64_t CCE_SRAM_TILE_STRIDE = 0x400000ULL;
-
 inline __attribute__((always_inline)) uint64_t cce_sram_address(uint32_t cce_index, uint64_t offset) {
-    return CCE_SRAM_SPA_BASE + static_cast<uint64_t>(cce_index) * CCE_SRAM_TILE_STRIDE + offset;
+    volatile tt_l1_ptr CceSpaRoutes* routes = cce_spa_routes();
+    return routes->sram_spa_base + static_cast<uint64_t>(cce_index) * routes->sram_tile_stride + offset;
 }
 
 inline __attribute__((always_inline)) void cce_sram_write_uint32(uint32_t cce_index, uint64_t offset, uint32_t value) {
