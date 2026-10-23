@@ -28,12 +28,13 @@ from ....models.vae.vae_wan2_1 import (
 from ....parallel.config import ParallelFactor, VaeHWParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
+from ....utils.checkpoint import local_revision, resolve_checkpoint
 from ....utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_pad_width, conv_unpad_height, count_convs
 from ....utils.golden import load_golden, save_golden
 from ....utils.tensor import typed_tensor_2dshard
 from ....utils.test import skip_if_unsupported_num_links
 
-VAE_MODEL_NAME = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+VAE_MODEL_NAME = resolve_checkpoint("Wan-AI/Wan2.2-T2V-A14B-Diffusers")
 VAE_COMMIT_HASH_PLACEHOLDER = "local"
 
 # Canonical mesh configurations shared across component-level VAE tests.
@@ -314,7 +315,7 @@ def test_autoencoder_kl_wan():
     logger.info("Loading AutoencoderKLWan model for Wan2.2 14B T2V...")
 
     # Load the pretrained AutoencoderKLWan model for Wan2.2 14B T2V
-    model_id = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+    model_id = VAE_MODEL_NAME
     torch_dtype = torch.float32
 
     # Load VAE component from the Wan2.2 model
@@ -1660,6 +1661,7 @@ def test_wan_decoder(
     tt_input_dtype = ttnn.bfloat16 if dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
 
     _, commit_hash = TorchAutoencoderKLWan.load_config(VAE_MODEL_NAME, subfolder="vae", return_commit_hash=True)
+    commit_hash = commit_hash or local_revision(VAE_MODEL_NAME)
     logger.info(f"Loaded {VAE_MODEL_NAME} (subfolder=vae) at commit: {commit_hash}")
     param_id = request.node.name
     golden = load_golden(commit_hash, "wan_decoder", param_id)
@@ -2406,6 +2408,7 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
 
     torch.manual_seed(0)
     _, commit_hash = TorchAutoencoderKLWan.load_config(VAE_MODEL_NAME, subfolder="vae", return_commit_hash=True)
+    commit_hash = commit_hash or local_revision(VAE_MODEL_NAME)
     logger.info(f"Loaded {VAE_MODEL_NAME} (subfolder=vae) at commit: {commit_hash}")
     param_id = request.node.name
     golden = load_golden(commit_hash, "wan_encoder", param_id)

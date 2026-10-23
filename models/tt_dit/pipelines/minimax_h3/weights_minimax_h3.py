@@ -5,7 +5,7 @@
 """Resolve the MiniMax-H3 diffusers snapshot, optionally fetching it from HuggingFace.
 
 Resolution order matches the lightx2v loader (`experimental/utils/lightx2v_loader.py`): an explicit
-path first, then the HuggingFace cache, then a download -- and the download only happens when it has
+path first, then the shared local mirror (`utils/checkpoint.py`), then the HuggingFace cache, then a download -- and the download only happens when it has
 been opted into with `TT_DIT_ALLOW_HF_DOWNLOAD=1`, so no test run pulls 144 GB by surprise.
 
 Only the diffusers partitions the caller asks for are fetched. The repo's top-level `FL2VA/` and
@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
+
+from ...utils.checkpoint import local_checkpoint_dir
 
 MINIMAX_H3_REPO_ID = "MiniMaxAI/MiniMax-H3"
 
@@ -108,8 +110,8 @@ def resolve_weights_dir(
 ) -> Path:
     """The snapshot directory holding every partition in `required_subdirs`.
 
-    `weights_dir` (or `$MINIMAX_H3_MODEL_PATH`) wins when it is set; otherwise the HuggingFace cache
-    is searched and then, with `$TT_DIT_ALLOW_HF_DOWNLOAD=1`, fetched. Raises `WeightsNotFoundError`
+    `weights_dir` (or `$MINIMAX_H3_MODEL_PATH`) wins when it is set; otherwise the local mirror and
+    then the HuggingFace cache are searched and then, with `$TT_DIT_ALLOW_HF_DOWNLOAD=1`, fetched. Raises `WeightsNotFoundError`
     when nothing resolves and downloads are off.
 
     An explicit directory is checked for the required partitions only: it is the caller's own layout,
@@ -131,6 +133,11 @@ def resolve_weights_dir(
         if missing:
             raise WeightsNotFoundError(f"MiniMax-H3 snapshot at {directory} is missing {missing}")
         return directory
+
+    mirrored = local_checkpoint_dir(MINIMAX_H3_REPO_ID)
+    if mirrored is not None and _is_complete(mirrored, required):
+        logger.info(f"Resolving {MINIMAX_H3_REPO_ID} from local mirror {mirrored}")
+        return mirrored
 
     cached = _cached_snapshot(required)
     if cached is not None:

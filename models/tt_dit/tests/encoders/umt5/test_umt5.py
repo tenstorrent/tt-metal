@@ -23,6 +23,7 @@ from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import cache
 from ....utils.check import assert_quality
+from ....utils.checkpoint import resolve_checkpoint
 
 # Shared device configuration for UMT5 tests to reduce code duplication and ensure we are using consistent device configurations.
 
@@ -97,7 +98,7 @@ def test_umt5_embeddings(
     else:
         model_name_checkpoint = f"Wan-AI/Wan2.2-T2V-A14B-Diffusers"
         hf_model = UMT5EncoderModel.from_pretrained(
-            model_name_checkpoint, subfolder="text_encoder", local_files_only=False
+            resolve_checkpoint(model_name_checkpoint), subfolder="text_encoder", local_files_only=False
         )
 
     hf_model.eval()
@@ -206,7 +207,7 @@ def test_umt5_encoder(
         hf_model = get_random_weights_model()
     else:
         hf_model = UMT5EncoderModel.from_pretrained(
-            model_name_checkpoint, subfolder="text_encoder", local_files_only=False
+            resolve_checkpoint(model_name_checkpoint), subfolder="text_encoder", local_files_only=False
         )
     hf_model.eval()
 
@@ -219,7 +220,9 @@ def test_umt5_encoder(
     total_prompts = len(prompt)
     num_devices = mesh_device.shape[1 - parallel_config.tensor_parallel.mesh_axis]
     prompt += [" "] * ((num_devices - (total_prompts % num_devices)) % num_devices)
-    tokenizer = AutoTokenizer.from_pretrained(model_name_checkpoint, subfolder="tokenizer", trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        resolve_checkpoint(model_name_checkpoint), subfolder="tokenizer", trust_remote_code=True
+    )
     text_inputs = tokenizer(
         prompt,
         padding="max_length",
