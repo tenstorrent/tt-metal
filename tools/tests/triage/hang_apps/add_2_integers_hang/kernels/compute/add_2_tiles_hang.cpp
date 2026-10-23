@@ -38,13 +38,11 @@ void kernel_main() {
     // signal the packer
     tile_regs_commit();  // Math
 #if LIGHTWEIGHT_ASSERT_ENABLED
-    // With lightweight asserts on, hang on an ASSERT instead: the core halts inside lightweight_assert_trap(), a
-    // frame above this ASSERT (tt-exalens#1164). volatile keeps the compiler from deciding the ASSERT up front. The
-    // name n is a letter of "[info]", to test triage's Rich markup. test_triage.py expects this ASSERT on line 45.
+    // Intentional hang on a lightweight ASSERT (tt-exalens#1164); test_triage.py asserts it is on line 43.
     volatile uint32_t magic = 0, n = 0xDEADBEEF;
     ASSERT(magic == n);
 #else
-    // Intentional hang for triage testing; test_triage.py asserts this `ebreak` is on line 48.
+    // Intentional hang for triage testing; test_triage.py asserts this `ebreak` is on line 46.
     asm volatile("ebreak");
 #endif
 
