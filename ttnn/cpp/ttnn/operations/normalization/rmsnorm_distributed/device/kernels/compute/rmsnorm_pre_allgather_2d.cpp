@@ -15,7 +15,6 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 #include "api/compute/layernorm.h"
 #include "api/debug/dprint.h"
 #include "api/dataflow/circular_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 ALWI void ACQ() {
     tile_regs_acquire();
@@ -40,7 +39,7 @@ void kernel_main() {
     constexpr uint32_t cb_inp_idx = tt::CBIndex::c_0;
     constexpr uint32_t cb_reduce_idx = tt::CBIndex::c_1;
 
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
+    constexpr uint32_t cb_out_idx = tt::CBIndex::c_16;
 
     constexpr uint32_t cb_x2_idx = tt::CBIndex::c_6;  // x**2
     constexpr uint32_t cb_zero_idx = tt::CBIndex::c_13;
@@ -50,15 +49,12 @@ void kernel_main() {
     CircularBuffer cb_inp(cb_inp_idx);
     CircularBuffer cb_reduce(cb_reduce_idx);
     CircularBuffer cb_x2(cb_x2_idx);
+    CircularBuffer cb_out(cb_out_idx);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         /*
          * x**2
          */
-        reconfig_data_format(cb_inp_idx, cb_inp_idx);
-        pack_reconfig_data_format(cb_x2_idx);
-        mul_init(cb_inp_idx, cb_inp_idx);
-
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_inp.wait_front(wt + blk);  // cumulative wait
 
@@ -77,14 +73,19 @@ void kernel_main() {
         /*
          * sum(x**2)
          */
-        // BulkWaitBulkPop: All Wt tiles already in CB (see cumulative wait above)
-        compute_kernel_lib::reduce<
-            PoolType::AVG,
-            ReduceDim::REDUCE_ROW,
-            cb_x2_idx,
-            cb_reduce_idx,
-            cb_out,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+        cb_reduce.wait_front(1);
+        cb_x2.wait_front(Wt);
+        cb_out.reserve_back(1);
+        tile_regs_acquire();
+        for (uint32_t wt = 0; wt < Wt; wt++) {
+            reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW>(cb_x2_idx, cb_reduce_idx, wt, 0, 0, cb_out_idx);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_out_idx);
+        tile_regs_release();
+        cb_out.push_back(1);
+        cb_x2.pop_front(Wt);
         cb_inp.pop_front(Wt);
         cb_reduce.pop_front(1);
     }
@@ -109,8 +110,6 @@ void kernel_main() {
         // Initialize accumulation
         // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
         compute_kernel_hw_startup(cb_x2_merge_idx, cb_zero_idx, cb_out_final_idx);
-        reconfig_data_format(cb_x2_merge_idx, cb_zero_idx);
-        pack_reconfig_data_format(cb_out_final_idx);
 
         // Acquire registers
         ACQ();
