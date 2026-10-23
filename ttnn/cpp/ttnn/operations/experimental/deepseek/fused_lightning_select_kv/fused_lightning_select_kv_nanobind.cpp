@@ -86,7 +86,9 @@ void bind_fused_lightning_select_kv(nb::module_& mod) {
                 selectable keys split into ``num_parts`` contiguous ranges; this device scores range
                 ``part_index_tensor[0]`` and returns its local top-k candidates instead of gathering
                 rows. ``ttnn.all_gather`` of the candidates followed by ``merge_select_kv`` gives the
-                rows the unsplit op would gather.
+                rows the unsplit op would gather. In candidate source mode the candidates also carry
+                this part's best blocks, and ``merge_select_kv`` writes the candidate blocks and pool
+                count (so ``candidate_blocks_output`` / ``pool_count_output`` are not given here).
             part_index_tensor (Optional[ttnn.Tensor]): ``[1]`` INT32 part this device scores, e.g.
                 a ``[num_parts]`` tensor sharded over the mesh. Given exactly when ``num_parts`` > 1.
             row_table (Optional[ttnn.Tensor]): ``[1, max_blocks_per_user * block_size]`` INT32
@@ -104,9 +106,12 @@ void bind_fused_lightning_select_kv(nb::module_& mod) {
 
         Returns:
             List[ttnn.Tensor]: ``[kv_rows, scores]``, plus ``[candidate_blocks, pool_count]`` in
-            candidate source mode. With ``num_parts`` > 1, ``kv_rows`` is instead the candidates
-            ``[1, 1, 1, 2k + 16]`` INT32: the selected keys' ``kv_cache`` rows in key order, their
-            order keys, then the number selected. Otherwise ``kv_rows`` is ``[1, Hkv, k, Dh]`` (or
+            candidate source mode with ``num_parts`` == 1. With ``num_parts`` > 1, ``kv_rows`` is
+            instead the candidates ``[1, 1, 1, 2k + 16 + 2 * candidate_topk_blocks]`` INT32: the
+            selected keys' ``kv_cache`` rows in key order, their order keys, 16 header words
+            {keys selected, blocks selected, selectable keys, 0...}, then in candidate source mode
+            the selected blocks in ascending order and their order keys. Otherwise ``kv_rows`` is
+            ``[1, Hkv, k, Dh]`` (or
             ``output_tensor`` when given);
             ``scores`` is the fp32 ROW_MAJOR index score ``[1, 1, 1, max_blocks_per_user * block_size]``,
             valid for the first ``(cur_pos + 1) // 4`` keys. ``candidate_blocks`` holds the kept blocks

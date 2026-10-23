@@ -26,10 +26,11 @@ void bind_merge_select_kv(::nanobind::module_& mod) {
         writes the rows in ascending key order like the unsplit op.
 
         Args:
-            candidates (ttnn.Tensor): ``[1, 1, num_parts, 2k + 16]`` INT32 row-major interleaved.
+            candidates (ttnn.Tensor): ``[1, 1, num_parts, 2k + 16 + 2 * candidate_topk_blocks]``
+                INT32 row-major interleaved.
             kv_cache (ttnn.Tensor): row-major interleaved ``[num_blocks, 1, block_size, Dh]``; the
                 candidates' rows index it.
-            k (int): number of selected rows.
+            k (int): number of selected rows, a multiple of 16.
 
         Keyword Args:
             memory_config (Optional[ttnn.MemoryConfig]): output memory config, interleaved.
@@ -38,6 +39,17 @@ void bind_merge_select_kv(::nanobind::module_& mod) {
                 interleaved output with ``kv_cache``'s dtype. Only rows
                 ``[output_row_offset, output_row_offset + k)`` are written.
             output_row_offset (int): output row of selected row 0. Requires ``output_tensor``.
+            candidate_topk_blocks (int): candidate source mode when > 0 (with
+                ``candidate_block_size``), for the candidates of a candidate source split: the
+                ``candidate_topk_blocks`` best blocks over every part, ties to the lower block, go to
+                ``candidate_blocks_output`` in ascending order (zero past the last) and the keys they
+                hold to ``pool_count_output``, as the unsplit op writes them. A multiple of 16.
+            candidate_block_size (int): keys per candidate block.
+            candidate_blocks_output (Optional[ttnn.Tensor]): preallocated
+                ``[1, candidate_topk_blocks]`` INT32 row-major interleaved. Given exactly in
+                candidate source mode.
+            pool_count_output (Optional[ttnn.Tensor]): preallocated ``[1]`` INT32 row-major
+                interleaved. Given exactly in candidate source mode.
 
         Returns:
             ttnn.Tensor: the selected rows ``[1, 1, k, Dh]``, or ``output_tensor``. With fewer than
@@ -50,7 +62,11 @@ void bind_merge_select_kv(::nanobind::module_& mod) {
         nb::kw_only(),
         nb::arg("memory_config") = std::nullopt,
         nb::arg("output_tensor") = std::nullopt,
-        nb::arg("output_row_offset") = 0);
+        nb::arg("output_row_offset") = 0,
+        nb::arg("candidate_topk_blocks") = 0,
+        nb::arg("candidate_block_size") = 0,
+        nb::arg("candidate_blocks_output") = std::nullopt,
+        nb::arg("pool_count_output") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::detail
