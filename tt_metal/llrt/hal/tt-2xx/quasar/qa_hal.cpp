@@ -427,11 +427,7 @@ public:
     }
 
     std::string rvv_compile_flags(const Params& params) const override {
-        // Only TRISC0 of each Neo has the vector unit on Quasar. This is the single source of truth:
-        // a kernel only opts in, and the build applies these flags wherever they are non-empty.
-        if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
-              params.processor_class == HalProcessorClassType::COMPUTE &&
-              params.processor_id % NUM_TRISC_CORES == 0)) {
+        if (!hal_.get_supports_rvv(params.core_type, params.processor_class, params.processor_id)) {
             return {};
         }
         // -march: the tt-qsr32-tensix base ISA plus zve32f and zvl128b (VLEN >= 128).

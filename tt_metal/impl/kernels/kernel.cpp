@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
+#include <ranges>
 #include <set>
 #include <string_view>
 #include <type_traits>
@@ -114,11 +115,11 @@ fs::path resolve_compiler_include_dir(const fs::path& given) {
     return resolved;
 }
 
-// The HAL decides which compute processors get RVV flags (JitBuildState::supports_rvv). A kernel
-// that opts in where none do (e.g. Wormhole) would otherwise silently build scalar code.
-void validate_rvv_opt_in(const JitBuildSettings& kernel, bool any_build_supports_rvv) {
+// The HAL decides which compute processors get RVV flags (Hal::get_supports_rvv). A kernel that opts
+// in where none do (e.g. Wormhole) would otherwise silently build scalar code.
+void validate_rvv_opt_in(const JitBuildSettings& kernel, bool any_processor_supports_rvv) {
     TT_FATAL(
-        !kernel.get_rvv_enabled() || any_build_supports_rvv,
+        !kernel.get_rvv_enabled() || any_processor_supports_rvv,
         "Kernel {} enables RVV code generation, but no compute processor on this architecture supports it",
         kernel.get_full_kernel_name());
 }
@@ -1137,13 +1138,16 @@ void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_
         BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_env,
         *this,
         this->kernel_src_);
-    uint32_t tensix_core_type = MetalContext::instance(this->get_context_id())
-                                    .hal()
-                                    .get_programmable_core_type_index(this->get_kernel_programmable_core_type());
+    const auto& hal = MetalContext::instance(this->get_context_id()).hal();
+    const auto core_type = this->get_kernel_programmable_core_type();
+    uint32_t tensix_core_type = hal.get_programmable_core_type_index(core_type);
     uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
     auto build_states = BuildEnvManager::get_instance(extract_context_id(device))
                             .get_kernel_build_states(device->build_id(), tensix_core_type, compute_class_idx);
-    validate_rvv_opt_in(*this, std::ranges::any_of(build_states, &JitBuildState::supports_rvv));
+    validate_rvv_opt_in(
+        *this, std::ranges::any_of(std::views::iota(0u, static_cast<uint32_t>(build_states.size())), [&](uint32_t id) {
+            return hal.get_supports_rvv(core_type, HalProcessorClassType::COMPUTE, id);
+        }));
     jit_build_subset(build_states, this);
 }
 
@@ -1655,9 +1659,9 @@ void QuasarComputeKernel::generate_binaries(IDevice* device, JitBuildOptions&) c
         BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_env,
         *this,
         this->kernel_src_);
-    const uint32_t tensix_core_type = MetalContext::instance(this->get_context_id())
-                                          .hal()
-                                          .get_programmable_core_type_index(this->get_kernel_programmable_core_type());
+    const auto& hal = MetalContext::instance(this->get_context_id()).hal();
+    const auto core_type = this->get_kernel_programmable_core_type();
+    const uint32_t tensix_core_type = hal.get_programmable_core_type_index(core_type);
     const uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
 
     // One compile/link per TRISC slot (UNPACK/MATH/PACK/ISOLATE_SFPU), shared across all NEOs using that slot.
@@ -1668,8 +1672,9 @@ void QuasarComputeKernel::generate_binaries(IDevice* device, JitBuildOptions&) c
         build_states.push_back(&BuildEnvManager::get_instance(extract_context_id(device))
                                     .get_kernel_build_state(device->build_id(), tensix_core_type, compute_class_idx, processor_id));
     }
-    validate_rvv_opt_in(
-        *this, std::ranges::any_of(build_states, [](const JitBuildState* state) { return state->supports_rvv(); }));
+    validate_rvv_opt_in(*this, std::ranges::any_of(this->trisc_binary_groups_, [&](const auto& group) {
+        return hal.get_supports_rvv(core_type, HalProcessorClassType::COMPUTE, enchantum::to_underlying(group[0]));
+    }));
     for (const JitBuildState* build_state : build_states) {
         jit_build(*build_state, this);
     }

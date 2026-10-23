@@ -127,12 +127,13 @@ HalCoreInfoType create_tensix_mem_map() {
              .fw_launch_addr = RISCV_DEBUG_REG_TRISC1_RESET_PC,
              .fw_launch_addr_value = MEM_TRISC1_FIRMWARE_BASE,
              .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
-            // TRISC2
+            // TRISC2 (fronts the Tensix vector unit)
             {.fw_base_addr = MEM_TRISC2_FIRMWARE_BASE,
              .local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH,
              .fw_launch_addr = RISCV_DEBUG_REG_TRISC2_RESET_PC,
              .fw_launch_addr_value = MEM_TRISC2_FIRMWARE_BASE,
-             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP,
+             .supports_rvv = true},
         },
     };
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names = {

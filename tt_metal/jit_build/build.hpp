@@ -180,8 +180,6 @@ public:
     std::string get_target_out_path(const std::string& kernel_name) const {
         return this->out_path_ + kernel_name + target_full_path_;
     }
-    // True when the HAL can generate RISC-V Vector code for this processor.
-    bool supports_rvv() const { return !this->rvv_cflags_.empty(); }
 
     // Build a transport-ready target recipe from this build state and
     // kernel-specific settings.  Replaces the PoC pattern of exposing
