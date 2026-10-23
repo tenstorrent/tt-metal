@@ -72,7 +72,18 @@
 #define HYB_NS hyb_unified
 #define HYB_CT_BASE HYB_UNIFIED_CT_BASE
 #define HYB_RT_BASE HYB_UNIFIED_RT_BASE
+// The unified half's unpack and math at O2, not the binary's O3, to give the kernel-config ring the
+// ~2.9 KB the union program needs: this half's matmuls run on large M, where O2 measured within
+// noise, while the fused half is compute-bound from 64 tokens and loses up to 1.9x at O2. The pack
+// thread keeps the file-wide Os above.
+#if !defined(TRISC_PACK)
+#pragma GCC push_options
+#pragma GCC optimize("O2")
+#endif
 #include "compute/fused_swiglu.cpp"
+#if !defined(TRISC_PACK)
+#pragma GCC pop_options
+#endif
 #undef HYB_NS
 #undef HYB_CT_BASE
 #undef HYB_RT_BASE
