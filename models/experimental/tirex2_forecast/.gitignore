@@ -3,3 +3,5 @@ doc/optimize/**/tracy/
 doc/optimize/**/ops_perf_results.csv
 doc/optimize/**/*.log
 doc/optimize/scratch/
+# tt-perf-report's text table exceeds the 500 KB hook for long op-level loops: it is committed gzipped
+doc/optimize/**/perf_report.txt
