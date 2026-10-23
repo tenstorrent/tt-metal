@@ -504,9 +504,8 @@ def _logsigmoid_stimuli_spec():
 def _override_src_A(src_A, src_A_override, *, repeat):
     """Replace the generated operand buffer with an explicit one, cast to its dtype.
 
-    With ``repeat`` the override is tiled across the buffer, so its length must evenly
-    divide the buffer length -- which admits a single element and rejects, say, three
-    tile pairs on an eight-pair buffer; without it the override must be the whole buffer.
+    With ``repeat`` the override is tiled across the buffer (its length must evenly divide
+    the buffer length); without it the override must be the whole buffer.
     """
     override = src_A_override.to(src_A.dtype).flatten()
     if repeat:
@@ -2134,9 +2133,8 @@ def _run_sfpu_add_top_row(
         input_dimensions_B=input_dimensions,
     )
 
-    # The kernel only consumes buffer_A (tile 0 = operand 0, tile 1 = operand 1), so an
-    # explicit src_A fully controls the inputs; src_B stays random but unused. One tile
-    # pair, exactly: the driver runs a single [64, 32] pair.
+    # The kernel only consumes buffer_A (tile 0 = operand 0, tile 1 = operand 1); the
+    # override must be exactly the one [64, 32] tile pair the driver runs.
     if src_A_override is not None:
         src_A = _override_src_A(src_A, src_A_override, repeat=False)
 
@@ -2246,17 +2244,10 @@ _ACROSS_ZERO_STRIDE = 4
 
 
 def _build_add_top_row_int32_across_zero_src():
-    """One Int32 tile pair whose every lane takes either sign.
-
-    Tile 0 cycles -8..7 lane by lane; tile 1 cycles the same range one step per four
-    lanes, so the pattern repeats every 64 lanes and one period of pairs, cycled over the
-    tile, is the whole stimulus. Over the 128 lanes the kernel writes (rows 0-3 of faces
-    0 and 1) that gives 64 distinct (a, b) pairs and 31 distinct sums spanning [-16, 14]:
-    16 pairs are both negative, 26 are of opposite sign (3 of them summing to zero), 6
-    pair a zero with a negative and 16 are both non-negative. Magnitudes stay small so
-    nothing overflows: the sign is the point. The default sweep draws Int32 from
-    [0, 2**30), where sign-magnitude and two's complement are the same bits, so it cannot
-    tell which one the kernel assumes.
+    """One Int32 tile pair of small values of either sign: tile 0 cycles -8..7 per lane,
+    tile 1 cycles the same range once per four lanes, so each face's 64 written lanes hold
+    distinct (a, b) pairs. The default sweep draws Int32 from [0, 2**30), where
+    sign-magnitude and two's complement are the same bits.
     """
     period = _ACROSS_ZERO_SPAN * _ACROSS_ZERO_STRIDE
     pairs = [
@@ -2269,10 +2260,8 @@ def _build_add_top_row_int32_across_zero_src():
     return _build_paired_tile_override(pairs, torch.int32)
 
 
-# mathop stays a parametrize axis although it has one value: --op selection reads the
-# MathOperation from the variant's parameters and would otherwise not find this test.
-# dest_acc stays for the same reason the other across-zero Int32 tests keep it: the
-# variant id and the failure report name the Dest width that ran.
+# mathop and dest_acc stay parametrize axes with one value each: --op selection reads the
+# MathOperation from the variant's parameters, and the variant id names the Dest width.
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
     mathop=[MathOperation.SfpuAddTopRow],
@@ -2281,13 +2270,8 @@ def _build_add_top_row_int32_across_zero_src():
 def test_eltwise_binary_sfpu_add_top_row_int32_across_zero(formats, dest_acc, mathop):
     """Negative and mixed-sign Int32 operands, which the positive-only sweep never reaches.
 
-    A native Int32 tile is two's complement in L1, and unpack-to-dest moves its bits to
-    Dst unchanged, so the kernel must load and store the raw word. A kernel that applied
-    the sign-magnitude conversion on the way in and out would pass the sweep and fail
-    here on every lane where an operand is negative and neither is zero (84 of the 128
-    written lanes; the conversion leaves zero unchanged, so a zero-with-negative pair
-    round-trips). twos_complement=True is required for the same reason as in
-    test_eltwise_binary_sfpu_int_extremes.
+    A native Int32 tile reaches Dst as raw two's complement, so a kernel that applied the
+    sign-magnitude conversion on load/store fails here on 84 of the 128 written lanes.
     """
     _run_sfpu_add_top_row(
         formats,
