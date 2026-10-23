@@ -78,22 +78,22 @@ every 10 s while it runs, and the bad pairs of any failing step (capped by `TT_N
 ```
 [dev 0] sweep 'tensix row-major push': 8 active x 8 passive lines, 112 steps, grid 8x8, harvesting mask 0x204
 [dev 0] sweep 'tensix row-major push': step 57/112 (row4 -> row0 noc1), 0 bad so far, 10.0 s elapsed
-[dev 0] sweep 'tensix row-major push': 112 steps, 7168 pairs, 0 bad, 1.0 s (9.3 ms/step)
+[dev 0] sweep 'tensix row-major push': 112 steps, 7168 pairs, 0 bad, 0.4 s (3.5 ms/step: host-write 0.2, build+run 0.9, readback+check 2.4)
 ```
 
-The progress line only appears for sweeps that run longer than 10 s. A progress line that stops advancing means
+The summary splits the per-step time into host L1 writes (payload and poison), program build + launch + wait for completion, and L1 readback + compare, which shows directly which part is slow on a given platform. The progress line only appears for sweeps that run longer than 10 s. A progress line that stops advancing means
 a kernel on the active line never finished; the step named in the last progress line brackets where to look.
 `TT_NOC_SWEEP_VERBOSE=1` logs every step and the cores of every line.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `TT_NOC_SWEEP_TRANSFER_BYTES` | 4096 | bytes per (source, destination) pair, multiple of 64 |
+| `TT_NOC_SWEEP_TRANSFER_BYTES` | 1024 | bytes per (source, destination) pair, multiple of 64 |
 | `TT_NOC_SWEEP_CHUNK_BYTES` | 0 | bytes per NOC transaction; 0 = whole transfer per call |
 | `TT_NOC_SWEEP_ITERS` | 1 | re-send the same data this many times per step |
 | `TT_NOC_SWEEP_SEED` | 0xC0FFEE | payload RNG seed |
 | `TT_NOC_SWEEP_NOCS` | `0,1` | which NOCs to test |
 | `TT_NOC_SWEEP_DEVICES` | all | comma list of chip ids |
-| `TT_NOC_SWEEP_MAX_REPORT` | 64 | bad pairs logged per step and in the final summary |
+| `TT_NOC_SWEEP_MAX_REPORT` | 16 | bad pairs logged per step and in the final summary |
 | `TT_NOC_SWEEP_VERBOSE` | 0 | 1 = log every step and the cores of every line |
 | `TT_NOC_SWEEP_INJECT_XOR` | 0 | checker self-test, see below |
 | `TT_NOC_SWEEP_INJECT_FLIT_WORD` | 15 | checker self-test, see below |
@@ -101,8 +101,9 @@ a kernel on the active line never finished; the step named in the last progress 
 The transfer size is capped automatically when a sink line cannot hold one slot per source core (small Ethernet L1
 on some architectures); a warning says so.
 
-Cost: measured on Wormhole N300 at about 3.5 s per chip for the whole suite. A Blackhole chip has 14x10 tensix
-cores, so the column-major sweeps have about three times as many steps; estimate roughly 10 s per chip.
+Cost: measured on Wormhole N300 at about 2 s per chip for the whole suite (about 4 ms per step, most of it in
+the per-core host L1 reads, whose cost is per call rather than per byte). A Blackhole chip has 14x10 tensix cores,
+so it has about 2.5x the steps and more cores per step; read the actual per-phase cost off the summary line.
 
 ## Reading a failure
 
@@ -111,7 +112,7 @@ fixture prints a summary at the end:
 
 ```
 [dev 0] active-eth log(0,2) virt(...) phys(2,1) -> row0 log(3,0) virt(...) phys(4,2) over noc1 (PUSH/write, erisc kernel):
-    31/1024 bad words, xor_or=0x00000800, 0->1 only, flit-word{idx:count}={15:31}, first bad @+0x3c exp=... got=...
+    7/256 bad words, xor_or=0x00000800, 0->1 only, flit-word{idx:count}={15:7}, first bad @+0x3c exp=... got=...
 ```
 
 * `log` / `virt` / `phys` are the logical, virtual (what the kernel addresses) and physical NOC0 coordinates of the
@@ -136,11 +137,11 @@ still expecting the pristine one. Every pair must then be reported with exactly 
 ```bash
 TT_METAL_SLOW_DISPATCH_MODE=1 TT_NOC_SWEEP_INJECT_XOR=0x800 TT_NOC_SWEEP_INJECT_FLIT_WORD=15 \
   ./build/test/tt_metal/unit_tests_noc --gtest_filter='NocLineSweepFixture.TensixRowMajorPush'
-# ... 32/1024 bad words, xor_or=0x00000800, 0->1 only, flit-word{idx:count}={15:32} ...
+# ... 8/256 bad words, xor_or=0x00000800, 0->1 only, flit-word{idx:count}={15:8} ...
 ```
 
-The injection only sets bits, so only words whose target bit was 0 become bad. With a 4 KB random payload about
-half of the 64 words at the chosen flit position are affected, which is why the count is around 32 rather than 64.
+The injection only sets bits, so only words whose target bit was 0 become bad. With a 1 KB random payload about
+half of the 16 words at the chosen flit position are affected, which is why the count is around 8 rather than 16.
 
 ## Limitations
 

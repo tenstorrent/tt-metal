@@ -29,13 +29,13 @@
 //     device ever waits for data from another core, so corruption cannot turn into a hang.
 //
 // Environment knobs (all optional):
-//   TT_NOC_SWEEP_TRANSFER_BYTES  bytes per (source, destination) pair, multiple of 64     (default 4096)
+//   TT_NOC_SWEEP_TRANSFER_BYTES  bytes per (source, destination) pair, multiple of 64     (default 1024)
 //   TT_NOC_SWEEP_CHUNK_BYTES     bytes per NOC transaction, 0 = whole transfer per call   (default 0)
 //   TT_NOC_SWEEP_ITERS           how many times each step re-sends the same data         (default 1)
 //   TT_NOC_SWEEP_SEED            payload RNG seed                                        (default 0xC0FFEE)
 //   TT_NOC_SWEEP_NOCS            comma list of NOCs to test, e.g. "1" or "0,1"            (default "0,1")
 //   TT_NOC_SWEEP_DEVICES         comma list of chip ids to test, empty = all              (default all)
-//   TT_NOC_SWEEP_MAX_REPORT      max bad pairs logged per step                            (default 64)
+//   TT_NOC_SWEEP_MAX_REPORT      max bad pairs logged per step                            (default 16)
 //   TT_NOC_SWEEP_VERBOSE         1 = log every step and the cores of every line; 0 = one summary line per
 //                                sweep per chip plus a progress line every few seconds   (default 0)
 //   TT_NOC_SWEEP_INJECT_XOR      checker self-test: OR this mask into the payload the host writes to every
@@ -111,13 +111,13 @@ struct RiscNoc {
 constexpr auto kProgressInterval = std::chrono::seconds(10);
 
 struct SweepConfig {
-    uint32_t transfer_bytes = 4096;
+    uint32_t transfer_bytes = 1024;
     uint32_t chunk_bytes = 0;
     uint32_t num_iters = 1;
     uint32_t seed = 0xC0FFEE;
     std::vector<NOC> nocs = {NOC::NOC_0, NOC::NOC_1};
     std::vector<ChipId> devices;  // empty = all
-    uint32_t max_report = 64;
+    uint32_t max_report = 16;
     bool verbose = false;
     uint32_t inject_xor = 0;  // checker self-test, see header
     uint32_t inject_flit_word = 15;
@@ -360,6 +360,9 @@ protected:
     std::unordered_set<std::string> warned_caps_;  // (source line -> sink line) pairs already warned about
     uint32_t steps_run_ = 0;
     uint32_t pairs_checked_ = 0;
+    // Time spent in each phase of run_step since the last reset, so a slow platform can be diagnosed from the
+    // sweep summary line alone: host writes (payload + poison), program build + launch + wait, readback + compare.
+    double t_write_ = 0, t_run_ = 0, t_read_ = 0;
 
     void SetUp() override {
         MeshDispatchFixture::SetUp();
@@ -463,6 +466,14 @@ protected:
         const uint32_t src_payload = payload_addr(sources.prog_type);
         const uint32_t sink_slots = slot_addr(sinks.prog_type, transfer);
 
+        auto phase_t = std::chrono::steady_clock::now();
+        auto lap = [&phase_t]() {
+            const auto now = std::chrono::steady_clock::now();
+            const double d = std::chrono::duration<double>(now - phase_t).count();
+            phase_t = now;
+            return d;
+        };
+
         // 1. Host-generated payload per source core, written into that core's L1.
         const uint32_t step_seed =
             cfg_.seed ^ (static_cast<uint32_t>(dev_id) * 0x9E3779B9u) ^ (step_index * 0x85EBCA6Bu);
@@ -490,6 +501,8 @@ protected:
         for (const auto& c : sinks.cores) {
             detail::WriteToDeviceL1(device, c, sink_slots, poison, sinks.host_type);
         }
+
+        t_write_ += lap();
 
         // 3. One kernel on every active core.
         Program program = CreateProgram();
@@ -547,6 +560,7 @@ protected:
         distributed::MeshWorkload workload;
         workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
         RunProgram(mesh_device, workload);
+        t_run_ += lap();
 
         // 4. Read every slot back and compare.
         uint32_t bad_pairs = 0;
@@ -578,6 +592,7 @@ protected:
                 }
             }
         }
+        t_read_ += lap();
         steps_run_++;
         if (cfg_.verbose || bad_pairs != 0) {
             log_info(
@@ -675,6 +690,7 @@ protected:
 
             const auto t0 = std::chrono::steady_clock::now();
             auto last_report = t0;
+            t_write_ = t_run_ = t_read_ = 0;
             uint32_t dev_bad = 0;
             const uint32_t pairs_before = pairs_checked_;
             for (uint32_t i = 0; i < plan.size(); i++) {
@@ -701,14 +717,18 @@ protected:
             const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
             log_info(
                 tt::LogTest,
-                "[dev {}] sweep '{}': {} steps, {} pairs, {} bad, {:.1f} s ({:.1f} ms/step)",
+                "[dev {}] sweep '{}': {} steps, {} pairs, {} bad, {:.1f} s ({:.1f} ms/step: host-write {:.1f}, "
+                "build+run {:.1f}, readback+check {:.1f})",
                 device->id(),
                 sweep_name,
                 plan.size(),
                 pairs_checked_ - pairs_before,
                 dev_bad,
                 secs,
-                plan.empty() ? 0.0 : 1e3 * secs / plan.size());
+                plan.empty() ? 0.0 : 1e3 * secs / plan.size(),
+                plan.empty() ? 0.0 : 1e3 * t_write_ / plan.size(),
+                plan.empty() ? 0.0 : 1e3 * t_run_ / plan.size(),
+                plan.empty() ? 0.0 : 1e3 * t_read_ / plan.size());
             total_bad += dev_bad;
             steps += plan.size();
         }
