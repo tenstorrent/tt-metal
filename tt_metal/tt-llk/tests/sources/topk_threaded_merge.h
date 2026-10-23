@@ -50,10 +50,15 @@ __attribute__((always_inline)) inline void merge8(std::uint32_t offset, std::uin
     sfpi::l_reg[sfpi::LRegs::LReg1] = value1;
     sfpi::l_reg[sfpi::LRegs::LReg4] = index0;
     sfpi::l_reg[sfpi::LRegs::LReg5] = index1;
-    INSTRUCTION_WORD(TT_OP_SFPSWAP(0, top_min ? p_sfpu::LREG1 : p_sfpu::LREG0, top_min ? p_sfpu::LREG0 : p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX));
     if constexpr (STABLE_SORT)
     {
-        // Same second swap/stall as production. No C++ operation intervenes.
+        if constexpr (top_min)
+            topk_cmp_swap_stable_min_to_vd<p_sfpu::LREG1, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX, TopkTieOrder::Ascending>();
+        else
+            topk_cmp_swap_stable_min_to_vd<p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX, TopkTieOrder::Descending>();
+    }
+    else
+    {
         INSTRUCTION_WORD(TT_OP_SFPSWAP(0, top_min ? p_sfpu::LREG1 : p_sfpu::LREG0, top_min ? p_sfpu::LREG0 : p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX));
     }
 
