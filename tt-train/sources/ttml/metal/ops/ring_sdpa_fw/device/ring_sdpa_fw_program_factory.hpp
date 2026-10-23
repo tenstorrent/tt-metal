@@ -15,10 +15,7 @@ struct RingSDPAFwSharedVariables {
     // SDPA kernel handles for runtime argument updates
     tt::tt_metal::KernelHandle sdpa_fw_reader_kernel{};
     tt::tt_metal::KernelHandle sdpa_fw_writer_kernel{};
-    tt::tt_metal::KernelHandle sdpa_fw_kernel_group_1{};
-    tt::tt_metal::KernelHandle sdpa_fw_kernel_group_2{};
-    tt::tt_metal::CoreRangeSet core_group_1{};
-    tt::tt_metal::CoreRangeSet core_group_2{};
+    tt::tt_metal::KernelHandle sdpa_fw_compute_kernel{};
     uint32_t num_cores{};
     uint32_t num_cores_y{};
 };
