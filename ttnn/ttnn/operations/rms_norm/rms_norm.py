@@ -96,8 +96,19 @@ SUPPORTED = {
     "gamma_mode": ["gamma", "no_gamma"],
     "gamma_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, "none"],
     "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
-    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
+    "memory_layout": [
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
 }
+
+_SHARDED_LAYOUTS = (
+    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +123,13 @@ EXCLUSIONS = [
     # that bypasses the harness's INVALID skip (e.g. test_translated.py) is refused natively, not run untested.
     {"dtype": ttnn.bfloat8_b, "alignment": "w_non_aligned"},
     {"dtype": ttnn.bfloat8_b, "alignment": "h_non_aligned"},
+    # ROW_MAJOR input + sharded placement + TILE gamma: mirrors the author-scoped INVALID entries. A sharded RM
+    # W slice is element-granular (the shard width need not be a multiple of 32), and the TILE-gamma load is
+    # tile-granular, so the combination is refused natively rather than run untested.
+    *[
+        {"layout": ttnn.ROW_MAJOR_LAYOUT, "memory_layout": ml, "gamma_layout": ttnn.TILE_LAYOUT}
+        for ml in _SHARDED_LAYOUTS
+    ],
 ]
 
 
@@ -142,16 +160,40 @@ def _axes_for(input_tensor, gamma, compute_kernel_config):
     return axes
 
 
+def _validate_placement(input_tensor, gamma, memory_config):
+    """Placement contract: a sharded input is consumed in place and produces an output with the SAME shard spec
+    (zero-copy into the output shard); an interleaved input produces an interleaved output. Mismatches are refused,
+    never silently re-read."""
+    in_mc = input_tensor.memory_config()
+    out_mc = memory_config if memory_config is not None else _default_output_memory_config(input_tensor)
+    if out_mc.memory_layout not in SUPPORTED["memory_layout"]:
+        raise UnsupportedAxisValue(
+            f"rms_norm: output memory_layout={out_mc.memory_layout!r} not in SUPPORTED {SUPPORTED['memory_layout']}"
+        )
+    if gamma is not None and gamma.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        raise UnsupportedAxisValue("rms_norm: gamma must be interleaved")
+    if in_mc.is_sharded() != out_mc.is_sharded():
+        raise UnsupportedAxisValue(
+            f"rms_norm: input placement {in_mc.memory_layout!r} and output placement {out_mc.memory_layout!r} differ "
+            "(sharded in -> sharded out with the same shard spec; interleaved in -> interleaved out)"
+        )
+    if in_mc.is_sharded():
+        if in_mc.buffer_type != ttnn.BufferType.L1 or out_mc.buffer_type != ttnn.BufferType.L1:
+            raise UnsupportedAxisValue("rms_norm: sharded input / output must be L1-resident")
+        a, b = in_mc.shard_spec, out_mc.shard_spec
+        if (
+            out_mc.memory_layout != in_mc.memory_layout
+            or b is None
+            or list(a.shape) != list(b.shape)
+            or a.grid != b.grid
+            or a.orientation != b.orientation
+        ):
+            raise UnsupportedAxisValue("rms_norm: a sharded output must carry the input's shard spec")
+
+
 def validate(input_tensor, *, gamma=None, compute_kernel_config=None, memory_config=None):
     axes = _axes_for(input_tensor, gamma, compute_kernel_config)
-    if memory_config is not None:
-        axes_out = memory_config.memory_layout
-        if axes_out not in SUPPORTED["memory_layout"]:
-            raise UnsupportedAxisValue(
-                f"rms_norm: output memory_layout={axes_out!r} not in SUPPORTED {SUPPORTED['memory_layout']}"
-            )
-    if gamma is not None and gamma.memory_config().memory_layout not in SUPPORTED["memory_layout"]:
-        raise UnsupportedAxisValue("rms_norm: gamma must be interleaved")
+    _validate_placement(input_tensor, gamma, memory_config)
 
     for axis, allowed in SUPPORTED.items():
         if axes[axis] not in allowed:
@@ -160,6 +202,13 @@ def validate(input_tensor, *, gamma=None, compute_kernel_config=None, memory_con
     for exc in EXCLUSIONS:
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"rms_norm: unsupported combination (refinement candidate): {exc}")
+
+
+def _default_output_memory_config(input_tensor):
+    """`memory_config=None`: a sharded input keeps its shard spec (written in place, zero-copy); an interleaved
+    input defaults to DRAM interleaved."""
+    in_mc = input_tensor.memory_config()
+    return in_mc if in_mc.is_sharded() else ttnn.DRAM_MEMORY_CONFIG
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +248,7 @@ def rms_norm(
     validate(input_tensor, gamma=gamma, compute_kernel_config=compute_kernel_config, memory_config=memory_config)
 
     device = input_tensor.device()
-    output_memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+    output_memory_config = memory_config if memory_config is not None else _default_output_memory_config(input_tensor)
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape(list(input_tensor.shape)),
         input_tensor.dtype,

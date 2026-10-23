@@ -13,6 +13,13 @@
 // Nominal quanta everywhere (mechanism caps M1/M6): every push is the nominal page count even when the
 // last block has fewer valid rows or the chunk fewer valid tiles; only the NoC transfers are narrowed.
 //
+// Sharded placements (Refinement 2):
+//   TILE: cb_x_tiles IS the resident input shard (zero-copy, ttnn.cb_descriptor_from_sharded_tensor); the
+//         reader issues no NoC read at all — it publishes the whole shard with one reserve/push.
+//   RM:   the shard's sticks are local L1; load_block restrides them (local NoC copies, shard stick stride ->
+//         chunk_w_tiles*32-element tilize stride, plus the M9 tail zero-fill) into cb_x_rm_sticks. Only the
+//         source address changes vs. interleaved: no TensorAccessor read of the shard.
+//
 // Helper deviation (design rejection R-a): the RM stick read is a raw loop, not
 // dataflow_kernel_lib::read_sticks_for_tilize, because the ragged last chunk / last W slice must keep the
 // nominal L1 stick stride (chunk_w_tiles*32 elements) and the nominal push of chunk_w_tiles pages while
@@ -35,8 +42,8 @@ void kernel_main() {
     constexpr uint32_t chunks_per_row = get_compile_time_arg_val(6);
     constexpr uint32_t elem_bytes = get_compile_time_arg_val(7);
     constexpr uint32_t tensor_w_tiles = get_compile_time_arg_val(8);
-    constexpr uint32_t tensor_w_elems = get_compile_time_arg_val(9);
-    constexpr uint32_t tensor_rows_sticks = get_compile_time_arg_val(10);
+    constexpr bool x_sharded = get_compile_time_arg_val(9) != 0;
+    constexpr uint32_t shard_stick_bytes = get_compile_time_arg_val(10);  // RM shard: local stick stride
     constexpr auto x_args = TensorAccessorArgs<11>();
 
     constexpr uint32_t TILE_W = 32;
@@ -51,6 +58,9 @@ void kernel_main() {
     const uint32_t slice_start_tile = get_arg_val<uint32_t>(3);
     const uint32_t slice_w_tiles = get_arg_val<uint32_t>(4);
     const uint32_t last_tile_valid_cols = get_arg_val<uint32_t>(5);
+    const uint32_t row_sticks_end = get_arg_val<uint32_t>(6);     // RM: sticks of the row space below this are valid
+    const uint32_t slice_valid_elems = get_arg_val<uint32_t>(7);  // valid elements of this core's W slice
+    const uint32_t x_col0_bytes = get_arg_val<uint32_t>(8);       // RM: slice start within a source stick
 
     // prepare_scalers: [full, partial] pair consumed by ReducePartialScaler::with_partial().
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
@@ -64,6 +74,14 @@ void kernel_main() {
 
     const auto x_accessor = TensorAccessor(x_args, x_addr);
     const uint32_t num_blocks = (core_rows_tiles + block_rows - 1) / block_rows;
+
+    if constexpr (x_sharded && !is_rm) {
+        // load_block (TILE shard): the shard is already resident in cb_x_tiles; publish all of it at once.
+        const uint32_t shard_tiles = num_blocks * block_rows * chunks_per_row * chunk_w_tiles;
+        cb_reserve_back(cb_x_tiles, shard_tiles);
+        cb_push_back(cb_x_tiles, shard_tiles);
+        return;
+    }
 
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         const uint32_t block_row0 = block_idx * block_rows;
@@ -99,18 +117,15 @@ void kernel_main() {
                 const uint32_t tile_row = tile_row_start + block_row0 + r;
                 const uint32_t stick0 = tile_row * TILE_H;
                 uint32_t sticks_valid = 0;
-                if (r < valid_rows && stick0 < tensor_rows_sticks) {
-                    sticks_valid = tensor_rows_sticks - stick0 < TILE_H ? tensor_rows_sticks - stick0 : TILE_H;
+                if (r < valid_rows && stick0 < row_sticks_end) {
+                    sticks_valid = row_sticks_end - stick0 < TILE_H ? row_sticks_end - stick0 : TILE_H;
                 }
                 for (uint32_t ci = 0; ci < chunks_per_row; ++ci) {
-                    const uint32_t chunk_col0 = ci * chunk_w_tiles;
-                    const uint32_t chunk_tile0 = slice_start_tile + chunk_col0;  // global tile-column
+                    const uint32_t chunk_elem0 = ci * chunk_w_tiles * TILE_W;  // within the slice
                     uint32_t valid_elems = 0;
-                    if (chunk_col0 < slice_w_tiles) {
-                        const uint32_t chunk_valid_tiles =
-                            slice_w_tiles - chunk_col0 < chunk_w_tiles ? slice_w_tiles - chunk_col0 : chunk_w_tiles;
-                        const uint32_t elems_left = tensor_w_elems - chunk_tile0 * TILE_W;
-                        valid_elems = chunk_valid_tiles * TILE_W < elems_left ? chunk_valid_tiles * TILE_W : elems_left;
+                    if (chunk_elem0 < slice_valid_elems) {
+                        const uint32_t elems_left = slice_valid_elems - chunk_elem0;
+                        valid_elems = chunk_w_tiles * TILE_W < elems_left ? chunk_w_tiles * TILE_W : elems_left;
                     }
                     const uint32_t valid_bytes = valid_elems * elem_bytes;
                     const uint32_t tail_bytes =
@@ -119,9 +134,14 @@ void kernel_main() {
                     cb_reserve_back(cb_x_rm_sticks, chunk_w_tiles);
                     uint32_t l1_addr = get_write_ptr(cb_x_rm_sticks);
                     if (valid_bytes > 0) {
-                        const uint32_t byte_offset = chunk_tile0 * tile_col_bytes;
+                        const uint32_t byte_offset = x_col0_bytes + chunk_elem0 * elem_bytes;
                         for (uint32_t i = 0; i < sticks_valid; ++i) {
-                            const uint64_t src = x_accessor.get_noc_addr(stick0 + i, byte_offset);
+                            uint64_t src;
+                            if constexpr (x_sharded) {
+                                src = get_noc_addr(x_addr + (stick0 + i) * shard_stick_bytes + byte_offset);
+                            } else {
+                                src = x_accessor.get_noc_addr(stick0 + i, byte_offset);
+                            }
                             noc_async_read(src, l1_addr + i * stick_stride_bytes, valid_bytes);
                         }
                         if (tail_bytes > 0) {

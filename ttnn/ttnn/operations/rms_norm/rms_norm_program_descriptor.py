@@ -82,6 +82,11 @@ class Geometry:
     # under fp32_dest_acc_en=True, Float16_b pages under False (a 16-bit DEST value has no extra bits to keep).
     interm_dtype: object
     interm_tile_bytes: int
+    # Sharded placement (Refinement 2). `sharded`: x / out live in L1 shards (same shard spec). TILE shards are
+    # consumed zero-copy: cb_x_tiles / cb_out_tiles are backed on the input / output shard (`zero_copy_tiles`).
+    # RM shards are restrided by local L1 copies into the tilize / untilize staging CBs.
+    sharded: bool = False
+    zero_copy_tiles: bool = False
 
 
 @dataclass(frozen=True)
@@ -115,10 +120,13 @@ def _round_up(v, m):
 
 # CB page-format roles, resolved to a concrete dtype in _build_cbs.
 _FMT_IN, _FMT_OUT, _FMT_GAMMA, _FMT_SCALER, _FMT_INTERM = "in", "out", "gamma", "scaler", "interm"
+# CB backing: None = allocated in the CB region (counted by the L1 solve); _BACK_IN / _BACK_OUT = zero-copy on the
+# input / output shard (ttnn.cb_descriptor_from_sharded_tensor) — already resident, so not counted.
+_BACK_IN, _BACK_OUT = "input_shard", "output_shard"
 
 
 def _cb_specs(geo: Geometry, b, n, c, k, L, gw, x_depth):
-    """THE single definition of every CB: [(index, num_pages, page_bytes, format_role)].
+    """THE single definition of every CB: [(index, num_pages, page_bytes, format_role, backing)].
 
     Both the L1 solve (_footprint) and the allocation (_build_cbs) read this list, so a block / chunk / depth knob
     changes the budget and the real CB sizes in exactly one place (l1_ledger.md §Ledger mirrors it).
@@ -126,36 +134,83 @@ def _cb_specs(geo: Geometry, b, n, c, k, L, gw, x_depth):
     s = k * c
     out_depth = 1 if geo.is_rm else 2  # RM: normalize -> untilize are sequential on compute (no overlap to buy)
     stream_depth = 2  # reader / writer run one chunk ahead of compute
+    x_backing = _BACK_IN if geo.zero_copy_tiles else None
+    out_backing = _BACK_OUT if geo.zero_copy_tiles else None
     specs = []
     if geo.is_rm:
-        specs.append((CB_X_RM_STICKS, stream_depth * c, geo.in_tile_bytes, _FMT_IN))
-    specs.append((CB_X_TILES, x_depth * b * s, geo.in_tile_bytes, _FMT_IN))
+        specs.append((CB_X_RM_STICKS, stream_depth * c, geo.in_tile_bytes, _FMT_IN, None))
+    specs.append((CB_X_TILES, x_depth * b * s, geo.in_tile_bytes, _FMT_IN, x_backing))
     if geo.has_gamma and geo.gamma_is_rm:
-        stick_bytes = _round_up(n * TILE * geo.gamma_elem_bytes, ttnn.get_dram_alignment())
-        specs.append((CB_GAMMA_RM_STICK, 1, stick_bytes, _FMT_GAMMA))
+        # + one alignment unit: a sharded RM slice may start mid-alignment-unit of the gamma stick (read aligned down)
+        align = ttnn.get_dram_alignment()
+        stick_bytes = _round_up(n * TILE * geo.gamma_elem_bytes, align) + align
+        specs.append((CB_GAMMA_RM_STICK, 1, stick_bytes, _FMT_GAMMA, None))
     if geo.has_gamma:
-        specs.append((CB_GAMMA_TILES, s, geo.gamma_tile_bytes, _FMT_GAMMA))
-    specs.append((CB_REDUCE_SCALER, 2, SCALER_TILE_BYTES, _FMT_SCALER))
-    specs.append((CB_SUMSQ, 2 * b, geo.interm_tile_bytes, _FMT_INTERM))
+        specs.append((CB_GAMMA_TILES, s, geo.gamma_tile_bytes, _FMT_GAMMA, None))
+    specs.append((CB_REDUCE_SCALER, 2, SCALER_TILE_BYTES, _FMT_SCALER, None))
+    specs.append((CB_SUMSQ, 2 * b, geo.interm_tile_bytes, _FMT_INTERM, None))
     if gw >= 2:
-        specs.append((CB_ROWSUM_PARTIAL, b, geo.interm_tile_bytes, _FMT_INTERM))
-        specs.append((CB_ROWSUM_GATHER, gw * b, geo.interm_tile_bytes, _FMT_INTERM))
-        specs.append((CB_INV_RMS_ROOT, b, geo.interm_tile_bytes, _FMT_INTERM))
-    specs.append((CB_INV_RMS, b, geo.interm_tile_bytes, _FMT_INTERM))
+        specs.append((CB_ROWSUM_PARTIAL, b, geo.interm_tile_bytes, _FMT_INTERM, None))
+        specs.append((CB_ROWSUM_GATHER, gw * b, geo.interm_tile_bytes, _FMT_INTERM, None))
+        specs.append((CB_INV_RMS_ROOT, b, geo.interm_tile_bytes, _FMT_INTERM, None))
+    specs.append((CB_INV_RMS, b, geo.interm_tile_bytes, _FMT_INTERM, None))
     if geo.has_gamma:
-        specs.append((CB_X_GAMMA, L * b * c, geo.interm_tile_bytes, _FMT_INTERM))
-    specs.append((CB_OUT_TILES, out_depth * b * c, geo.out_tile_bytes, _FMT_OUT))
+        specs.append((CB_X_GAMMA, L * b * c, geo.interm_tile_bytes, _FMT_INTERM, None))
+    specs.append((CB_OUT_TILES, out_depth * b * c, geo.out_tile_bytes, _FMT_OUT, out_backing))
     if geo.is_rm:
-        specs.append((CB_OUT_RM_STICKS, stream_depth * b * c, geo.out_tile_bytes, _FMT_OUT))
+        specs.append((CB_OUT_RM_STICKS, stream_depth * b * c, geo.out_tile_bytes, _FMT_OUT, None))
     return specs
 
 
 def _footprint(geo: Geometry, b, n, c, k, L, gw, x_depth=X_DEPTH_BLOCKS):
     """Per-core CB bytes — the closed form of l1_ledger.md §Footprint, summed from _cb_specs."""
-    return sum(pages * page_bytes for _, pages, page_bytes, _ in _cb_specs(geo, b, n, c, k, L, gw, x_depth))
+    return sum(
+        pages * page_bytes
+        for _, pages, page_bytes, _, backing in _cb_specs(geo, b, n, c, k, L, gw, x_depth)
+        if backing is None
+    )
+
+
+def _fit_block(geo: Geometry, gw, n, gr, rows_hi, l1_budget_bytes):
+    """Coarsest (chunk, lookahead, block_rows) for a fixed W-group / W slice — the one fit both selectors share.
+
+    Zero-copy TILE shards (geo.zero_copy_tiles) add two wrap-safety constraints: x / out are read and written in
+    place in the resident shard, whose row stride is exactly `n` tiles and whose height is `rows_hi` tile-rows, so
+    the chunk must divide `n` (k·c == n) and the block must divide `rows_hi` (no nominal tail past the shard).
+    Returns None if even the finest chunk does not fit.
+    """
+    if geo.zero_copy_tiles:
+        chunk_candidates = [(n // k, k) for k in range(1, n + 1) if n % k == 0]  # every divisor, largest first
+    else:
+        # largest balanced chunk first, down to the chunk floor (k <= n: beyond it the chunk stops shrinking)
+        chunk_candidates = [(-(-n // k), k) for k in range(1, n + 1) if -(-n // k) >= min(n, CHUNK_FLOOR_TILES)]
+    for chunk, k in chunk_candidates:
+        for L in [k, 1] if gw >= 2 else [1]:  # R2: whole-block x*gamma lookahead first (stall fill S1)
+            if _footprint(geo, 1, n, chunk, k, L, gw) > l1_budget_bytes:
+                continue
+            block_rows = 1  # k > 1 => 1 (M5: a chunk of a multi-row block is not FIFO-contiguous)
+            if k == 1:
+                for b in range(rows_hi, 0, -1):
+                    if geo.zero_copy_tiles and rows_hi % b != 0:
+                        continue
+                    if _footprint(geo, b, n, chunk, k, L, gw) <= l1_budget_bytes:
+                        block_rows = b
+                        break
+            return BlockingPlan(
+                w_group_size=gw,
+                core_w_tiles=n,
+                num_row_groups=gr,
+                rows_hi=rows_hi,
+                block_rows=block_rows,
+                chunk_w_tiles=chunk,
+                chunks_per_row=k,
+                xg_lookahead_chunks=L,
+            )
+    return None
 
 
 def _select_blocking(geo: Geometry, num_cores_available: int, l1_budget_bytes: int) -> BlockingPlan:
+    """Interleaved placement: the op chooses the W-group (R1 / R2) and the row split."""
     C, R, Wt = num_cores_available, geo.tensor_rows_tiles, geo.tensor_w_tiles
     if R < C and C // R >= 2 and Wt >= 2 * MIN_W_TILES_PER_CORE:
         gw_fill = min(C // R, Wt // MIN_W_TILES_PER_CORE)
@@ -169,34 +224,103 @@ def _select_blocking(geo: Geometry, num_cores_available: int, l1_budget_bytes: i
             continue
         seen.add(gw)
         gr = min(R, C // gw)
-        rows_hi = -(-R // gr)
-        k = 1
-        while True:  # largest balanced chunk first
-            chunk = -(-n // k)
-            if chunk < min(n, CHUNK_FLOOR_TILES):
-                break
-            for L in [k, 1] if gw >= 2 else [1]:  # R2: whole-block x*gamma lookahead first (stall fill S1)
-                if _footprint(geo, 1, n, chunk, k, L, gw) <= l1_budget_bytes:
-                    if k > 1:
-                        block_rows = 1  # M5: a chunk of a multi-row block is not FIFO-contiguous
-                    else:
-                        block_rows = 1
-                        for b in range(rows_hi, 0, -1):
-                            if _footprint(geo, b, n, chunk, k, L, gw) <= l1_budget_bytes:
-                                block_rows = b
-                                break
-                    return BlockingPlan(
-                        w_group_size=gw,
-                        core_w_tiles=n,
-                        num_row_groups=gr,
-                        rows_hi=rows_hi,
-                        block_rows=block_rows,
-                        chunk_w_tiles=chunk,
-                        chunks_per_row=k,
-                        xg_lookahead_chunks=L,
-                    )
-            k += 1
+        plan = _fit_block(geo, gw, n, gr, -(-R // gr), l1_budget_bytes)
+        if plan is not None:
+            return plan
     raise RuntimeError("rms_norm: W too wide for the grid")  # M3
+
+
+def _select_sharded_blocking(geo: Geometry, sp: "ShardPlacement", l1_budget_bytes: int) -> BlockingPlan:
+    """Sharded placement: the shard spec pins the W-group, the row groups and the W slice (op_design.md
+    §Placement axis) — HEIGHT -> R1 (gw = 1), WIDTH / BLOCK -> R2 (gw = shard columns). The shard is the block:
+    `_fit_block` picks the coarsest block that fits, down from the whole resident shard."""
+    plan = _fit_block(geo, sp.num_shard_cols, sp.core_w_tiles, sp.num_shard_rows, sp.rows_hi, l1_budget_bytes)
+    if plan is None:
+        raise RuntimeError(
+            f"rms_norm: sharded geometry (shard {sp.shard_shape}, {sp.num_shard_rows}x{sp.num_shard_cols} shards) "
+            f"leaves {l1_budget_bytes} B of L1 for circular buffers, too little for one {sp.core_w_tiles}-tile slice"
+        )
+    return plan
+
+
+@dataclass(frozen=True)
+class ShardPlacement:
+    """The shard spec of a sharded input, resolved into the regime geometry (op_design.md §Placement axis).
+
+    Shard (sr, sc) — shard-row sr (row group), shard-column sc (W-group member) — lives on cores[sr * cols + sc].
+    `core_order` is the order in which every W-group is a consecutive run of `cores` (the Mcast grouping order).
+    """
+
+    memory_layout: object
+    shard_shape: tuple  # (height, width) in elements (sticks x elements for RM)
+    num_shard_rows: int
+    num_shard_cols: int
+    cores: tuple
+    core_order: object
+    core_w_tiles: int  # n: nominal W slice per core (tiles)
+    rows_hi: int  # nominal tile-rows per core (TILE: the shard height; RM: ceil(sticks / 32))
+
+
+def _shard_placement(input_tensor, geo: Geometry) -> ShardPlacement:
+    mc = input_tensor.memory_config()
+    ss = mc.shard_spec
+    shard_h, shard_w = int(ss.shape[0]), int(ss.shape[1])
+    row_major = ss.orientation == ttnn.ShardOrientation.ROW_MAJOR
+    phys_h = geo.tensor_rows_sticks if geo.is_rm else geo.tensor_rows_tiles * TILE
+    phys_w = int(input_tensor.padded_shape[-1])  # TILE: Wt*32; RM: the shard-padded stick width
+    nsr, nsc = -(-phys_h // shard_h), -(-phys_w // shard_w)
+    ml = mc.memory_layout
+    if ml == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        start = ss.grid.bounding_box().start
+        cores = [
+            ttnn.CoreCoord(start.x + sc, start.y + sr) if row_major else ttnn.CoreCoord(start.x + sr, start.y + sc)
+            for sr in range(nsr)
+            for sc in range(nsc)
+        ]
+    else:
+        cores = list(ttnn.corerange_to_cores(ss.grid, row_wise=row_major))[: nsr * nsc]
+    if len(cores) != nsr * nsc or not all(ss.grid.contains(c) for c in cores):
+        raise ValueError(f"rms_norm: shard grid {ss.grid} cannot hold {nsr}x{nsc} shards of {ss.shape}")
+    order_key = (lambda c: (c.y, c.x)) if row_major else (lambda c: (c.x, c.y))
+    if [order_key(c) for c in cores] != sorted(order_key(c) for c in cores):
+        raise ValueError(f"rms_norm: shard grid {ss.grid} does not map shards to cores in {ss.orientation} order")
+    if (nsc - 1) * shard_w >= geo.tensor_w_elems:
+        raise ValueError(f"rms_norm: shard width {shard_w} leaves the last shard column without valid elements")
+    if geo.is_rm:
+        n = -(-shard_w // TILE)
+        rows_hi = -(-min(shard_h, phys_h) // TILE)
+    else:
+        n = shard_w // TILE
+        rows_hi = shard_h // TILE
+    return ShardPlacement(
+        memory_layout=ml,
+        shard_shape=(shard_h, shard_w),
+        num_shard_rows=nsr,
+        num_shard_cols=nsc,
+        cores=tuple(cores),
+        core_order=ttnn.McastCoreOrder.RowMajor if row_major else ttnn.McastCoreOrder.ColumnMajor,
+        core_w_tiles=n,
+        rows_hi=rows_hi,
+    )
+
+
+def _cores_to_corerangeset(cores):
+    """CoreRangeSet over `cores`, one range per run of x-consecutive cores in a row."""
+    by_row = {}
+    for c in cores:
+        by_row.setdefault(c.y, []).append(c.x)
+    ranges = set()
+    for y, xs in by_row.items():
+        xs = sorted(xs)
+        run_start = prev = xs[0]
+        for x in xs[1:] + [None]:
+            if x is not None and x == prev + 1:
+                prev = x
+                continue
+            ranges.add(ttnn.CoreRange(ttnn.CoreCoord(run_start, y), ttnn.CoreCoord(prev, y)))
+            if x is not None:
+                run_start = prev = x
+    return ttnn.CoreRangeSet(ranges)
 
 
 _BLOCK_FLOAT_DTYPES = (ttnn.bfloat8_b, ttnn.bfloat4_b)
@@ -227,6 +351,7 @@ def _geometry(input_tensor, output_tensor, gamma, fp32_dest_acc_en) -> Geometry:
         rows_tiles = lead * (-(-H // TILE))
     has_gamma = gamma is not None
     interm_dtype = ttnn.float32 if fp32_dest_acc_en else ttnn.bfloat16
+    sharded = input_tensor.memory_config().is_sharded()
     return Geometry(
         tensor_w_elems=W,
         tensor_w_tiles=w_tiles,
@@ -245,6 +370,8 @@ def _geometry(input_tensor, output_tensor, gamma, fp32_dest_acc_en) -> Geometry:
         gamma_is_block_float=has_gamma and gamma.dtype in _BLOCK_FLOAT_DTYPES,
         interm_dtype=interm_dtype,
         interm_tile_bytes=ttnn.tile_size(interm_dtype),
+        sharded=sharded,
+        zero_copy_tiles=sharded and not is_rm,
     )
 
 
@@ -276,15 +403,20 @@ def _cb(index, core_ranges, num_pages, page_bytes, dtype):
     )
 
 
-def _build_cbs(geo: Geometry, plan: BlockingPlan, cores, in_dtype, out_dtype, gamma_dtype):
-    """Every CB declared once over all used cores at one nominal size (M1), from the same _cb_specs as the solve."""
+def _build_cbs(geo: Geometry, plan: BlockingPlan, cores, input_tensor, output_tensor, gamma_dtype):
+    """Every CB declared once over all used cores at one nominal size (M1), from the same _cb_specs as the solve.
+
+    Shard-backed CBs are globally allocated on the shard (zero-copy), so they take no CB-region L1 and do not move
+    the CB-region addresses of the remote-written cb_rowsum_gather / cb_inv_rms (identical on every core, M1).
+    """
     fmt = {
-        _FMT_IN: in_dtype,
-        _FMT_OUT: out_dtype,
+        _FMT_IN: input_tensor.dtype,
+        _FMT_OUT: output_tensor.dtype,
         _FMT_GAMMA: gamma_dtype,
         _FMT_SCALER: ttnn.bfloat16,
         _FMT_INTERM: geo.interm_dtype,
     }
+    backing_tensor = {_BACK_IN: input_tensor, _BACK_OUT: output_tensor}
     specs = _cb_specs(
         geo,
         plan.block_rows,
@@ -295,41 +427,147 @@ def _build_cbs(geo: Geometry, plan: BlockingPlan, cores, in_dtype, out_dtype, ga
         plan.w_group_size,
         plan.x_depth_blocks,
     )
-    return [_cb(index, cores, pages, page_bytes, fmt[role]) for index, pages, page_bytes, role in specs]
+    cbs = []
+    for index, pages, page_bytes, role, backing in specs:
+        if backing is None:
+            cbs.append(_cb(index, cores, pages, page_bytes, fmt[role]))
+        else:
+            cbs.append(ttnn.cb_descriptor_from_sharded_tensor(index, backing_tensor[backing], core_ranges=cores))
+    return cbs
 
 
 def _f32_bits(x):
     return struct.unpack("<I", struct.pack("<f", float(x)))[0]
 
 
+@dataclass(frozen=True)
+class CoreWork:
+    """One core's share of the plan — every per-core runtime argument is derived from these fields.
+
+    Rows are tile-rows of the core's row space (TILE interleaved / RM: global tile-row index from `tile_row_start`;
+    TILE shard: the shard's own rows). RM sticks of that space are valid below `row_sticks_end`. The W slice is
+    `slice_valid_elems` valid elements starting at `x_col0_bytes` / `out_col0_bytes` of each source / destination
+    stick (RM), at global tile-column `slice_start_tile` (TILE) and global element `gamma_col0_elem` (gamma).
+    """
+
+    core: object
+    member_idx: int
+    root: object
+    tile_row_start: int
+    rows_tiles: int
+    row_sticks_end: int
+    slice_start_tile: int
+    slice_w_tiles: int
+    slice_valid_elems: int
+    x_col0_bytes: int
+    out_col0_bytes: int
+    gamma_col0_elem: int
+
+    @property
+    def last_tile_valid_cols(self):
+        return self.slice_valid_elems - TILE * (self.slice_w_tiles - 1)
+
+
+def _interleaved_work(geo: Geometry, plan: BlockingPlan, grid):
+    """Interleaved: consecutive row-major runs of the grid form the W-groups; rows split two-class over groups."""
+    gw, gr = plan.w_group_size, plan.num_row_groups
+    core_list = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(plan.used_cores)]
+    q, rem = divmod(geo.tensor_rows_tiles, gr)  # split_work_to_cores semantics (two classes)
+    work = []
+    for i, core in enumerate(core_list):
+        gi, g = divmod(i, gw)
+        rows = q + 1 if gi < rem else q
+        slice_start = g * plan.core_w_tiles
+        slice_w = min(plan.core_w_tiles, geo.tensor_w_tiles - slice_start)
+        valid_elems = min(slice_w * TILE, geo.tensor_w_elems - slice_start * TILE)
+        work.append(
+            CoreWork(
+                core=core,
+                member_idx=g,
+                root=core_list[gi * gw],
+                tile_row_start=gi * q + min(gi, rem),
+                rows_tiles=rows,
+                row_sticks_end=geo.tensor_rows_sticks,
+                slice_start_tile=slice_start,
+                slice_w_tiles=slice_w,
+                slice_valid_elems=valid_elems,
+                x_col0_bytes=slice_start * TILE * geo.in_elem_bytes,
+                out_col0_bytes=slice_start * TILE * geo.out_elem_bytes,
+                gamma_col0_elem=slice_start * TILE,
+            )
+        )
+    return ttnn.num_cores_to_corerangeset(plan.used_cores, grid, True), work
+
+
+def _sharded_work(geo: Geometry, plan: BlockingPlan, sp: ShardPlacement):
+    """Sharded: shard (sr, sc) is row group sr, W-group member sc; the core's rows / slice are its shard's."""
+    shard_h, shard_w = sp.shard_shape
+    work = []
+    for i, core in enumerate(sp.cores):
+        sr, sc = divmod(i, sp.num_shard_cols)
+        if geo.is_rm:
+            valid_sticks = min(shard_h, geo.tensor_rows_sticks - sr * shard_h)
+            valid_elems = min(shard_w, geo.tensor_w_elems - sc * shard_w)
+            rows = -(-valid_sticks // TILE)
+            slice_w = -(-valid_elems // TILE)
+            gamma_col0 = sc * shard_w
+        else:
+            # Zero-copy: every core walks its whole nominal shard (padding rows are row-local, never written back
+            # as valid data), so all members of a W-group run the same number of blocks.
+            valid_sticks = 0
+            rows = sp.rows_hi
+            slice_w = min(sp.core_w_tiles, geo.tensor_w_tiles - sc * sp.core_w_tiles)
+            valid_elems = min(slice_w * TILE, geo.tensor_w_elems - sc * sp.core_w_tiles * TILE)
+            gamma_col0 = sc * sp.core_w_tiles * TILE
+        work.append(
+            CoreWork(
+                core=core,
+                member_idx=sc,
+                root=sp.cores[sr * sp.num_shard_cols],
+                tile_row_start=0,
+                rows_tiles=rows,
+                row_sticks_end=valid_sticks,
+                slice_start_tile=gamma_col0 // TILE,
+                slice_w_tiles=slice_w,
+                slice_valid_elems=valid_elems,
+                x_col0_bytes=0,
+                out_col0_bytes=0,
+                gamma_col0_elem=gamma_col0,
+            )
+        )
+    return _cores_to_corerangeset(sp.cores), work
+
+
 def create_program_descriptor(input_tensor, output_tensor, *, gamma, epsilon, compute_kernel_config):
     device = input_tensor.device()
     geo = _geometry(input_tensor, output_tensor, gamma, bool(compute_kernel_config.fp32_dest_acc_en))
     grid = device.compute_with_storage_grid_size()
-    num_cores_available = grid.x * grid.y
-    plan = _select_blocking(geo, num_cores_available, _l1_budget_bytes(device))
-
-    gw, gr = plan.w_group_size, plan.num_row_groups
-    used = plan.used_cores
-    cores = ttnn.num_cores_to_corerangeset(used, grid, True)
-    core_list = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(used)]
-
-    # Row split over row groups: split_work_to_cores semantics (two classes).
-    q, rem = divmod(geo.tensor_rows_tiles, gr)
-
-    def group_rows(gi):
-        rows = q + 1 if gi < rem else q
-        start = gi * q + min(gi, rem)
-        return start, rows
+    l1_budget = _l1_budget_bytes(device)
+    if geo.sharded:
+        sp = _shard_placement(input_tensor, geo)
+        plan = _select_sharded_blocking(geo, sp, l1_budget)
+        cores, work = _sharded_work(geo, plan, sp)
+        core_order = sp.core_order
+    else:
+        plan = _select_blocking(geo, grid.x * grid.y, l1_budget)
+        cores, work = _interleaved_work(geo, plan, grid)
+        core_order = ttnn.McastCoreOrder.RowMajor
+    gw = plan.w_group_size
 
     cbs = _build_cbs(
         geo,
         plan,
         cores,
-        input_tensor.dtype,
-        output_tensor.dtype,
+        input_tensor,
+        output_tensor,
         gamma.dtype if gamma is not None else ttnn.bfloat16,
     )
+
+    # RM shards: local stick stride of the input / output shard = the buffer's aligned page (one padded stick).
+    shard_stick_bytes_in = shard_stick_bytes_out = 0
+    if geo.sharded and geo.is_rm:
+        shard_stick_bytes_in = ttnn.cb_descriptor_from_sharded_tensor(0, input_tensor).format_descriptors[0].page_size
+        shard_stick_bytes_out = ttnn.cb_descriptor_from_sharded_tensor(0, output_tensor).format_descriptors[0].page_size
 
     # ---------------- reader ----------------
     reader_ct = [
@@ -342,8 +580,8 @@ def create_program_descriptor(input_tensor, output_tensor, *, gamma, epsilon, co
         plan.chunks_per_row,
         geo.in_elem_bytes,
         geo.tensor_w_tiles,
-        geo.tensor_w_elems,
-        geo.tensor_rows_sticks,
+        int(geo.sharded),
+        shard_stick_bytes_in,
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -373,10 +611,12 @@ def create_program_descriptor(input_tensor, output_tensor, *, gamma, epsilon, co
         geo.gamma_elem_bytes,
         geo.tensor_w_tiles,
         geo.tensor_w_elems,
-        geo.tensor_rows_sticks,
+        int(geo.sharded),
         SEM_GATHER_ARRIVALS,
         gamma_face_row_read_bytes,
         int(geo.gamma_is_block_float),
+        shard_stick_bytes_out,
+        ttnn.get_dram_alignment(),
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct.extend(
@@ -415,30 +655,37 @@ def create_program_descriptor(input_tensor, output_tensor, *, gamma, epsilon, co
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
     compute_rt = ttnn.RuntimeArgs()
-    for i, core in enumerate(core_list):
-        gi, g = divmod(i, gw)
-        row_start, rows = group_rows(gi)
-        slice_start = g * plan.core_w_tiles
-        slice_w = min(plan.core_w_tiles, geo.tensor_w_tiles - slice_start)
-        owns_last_col = slice_start + slice_w == geo.tensor_w_tiles
-        last_valid = geo.last_tile_valid_cols if owns_last_col else TILE
-        num_blocks = -(-rows // plan.block_rows)
-        root = core_list[gi * gw]
-        root_virtual = device.worker_core_from_logical_core(root)
-
-        reader_rt[core.x][core.y] = [input_tensor.buffer_address(), row_start, rows, slice_start, slice_w, last_valid]
-        writer_rt[core.x][core.y] = [
+    for w in work:
+        x, y = w.core.x, w.core.y
+        num_blocks = -(-w.rows_tiles // plan.block_rows)
+        root_virtual = device.worker_core_from_logical_core(w.root)
+        reader_rt[x][y] = [
+            input_tensor.buffer_address(),
+            w.tile_row_start,
+            w.rows_tiles,
+            w.slice_start_tile,
+            w.slice_w_tiles,
+            w.last_tile_valid_cols,
+            w.row_sticks_end,
+            w.slice_valid_elems,
+            w.x_col0_bytes,
+        ]
+        writer_rt[x][y] = [
             output_tensor.buffer_address(),
             gamma.buffer_address() if gamma is not None else 0,
-            row_start,
-            rows,
-            slice_start,
-            slice_w,
-            g,
+            w.tile_row_start,
+            w.rows_tiles,
+            w.slice_start_tile,
+            w.slice_w_tiles,
+            w.member_idx,
             root_virtual.x,
             root_virtual.y,
+            w.row_sticks_end,
+            w.slice_valid_elems,
+            w.out_col0_bytes,
+            w.gamma_col0_elem,
         ]
-        compute_rt[core.x][core.y] = [num_blocks, slice_w, int(g == 0), inv_w_bits, eps_bits]
+        compute_rt[x][y] = [num_blocks, w.slice_w_tiles, int(w.member_idx == 0), inv_w_bits, eps_bits]
 
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
@@ -471,7 +718,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, gamma, epsilon, co
             cores,
             gw,
             ttnn.McastFixedSenderConfig(sender_index=0),
-            ttnn.McastCoreOrder.RowMajor,
+            core_order,
         )
         mcast.attach(descriptor, "inv_mcast", [writer], SEM_INV_MCAST_FIRST)
     else:

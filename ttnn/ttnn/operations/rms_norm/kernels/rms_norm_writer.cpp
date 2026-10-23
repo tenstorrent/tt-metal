@@ -16,6 +16,13 @@
 //                    inverse-RMS (cb_inv_rms_root) into every member's cb_inv_rms (loopback includes the root).
 //   store_block    — per chunk: valid tiles (TILE) / valid stick bytes (RM) to DRAM, one flush per chunk.
 //
+// Sharded placements (Refinement 2): the output shard is written zero-copy — TILE: cb_out_tiles IS the output
+// shard, so store_block only retires the chunk (wait / pop, no NoC); RM: the untilized sticks are copied into the
+// local output shard (local NoC writes at the shard stick stride). The combine is unchanged: its W-groups are the
+// shard grid's rows of cores (host-side Mcast grouping). A sharded RM slice may start mid-tile: the RM gamma slice
+// is read from the DRAM-alignment unit below its first element, and face rows the NoC cannot copy (not 16 B
+// aligned) are copied by the RISC (2 x 16 elements per tile).
+//
 // Helper deviations (design rejections R-b, R-c, R-d): the RM stick store is a raw loop rather than
 // write_sticks_after_untilize (nominal stride/pop on the ragged chunk); the gamma face-row scatter uses plain
 // self-aimed noc_async_read (the source address changes on every copy, so the stateful set_read_state /
@@ -47,12 +54,14 @@ void kernel_main() {
     constexpr uint32_t out_elem_bytes = get_compile_time_arg_val(16);
     constexpr uint32_t gamma_elem_bytes = get_compile_time_arg_val(17);
     constexpr uint32_t tensor_w_tiles = get_compile_time_arg_val(18);
-    constexpr uint32_t tensor_w_elems = get_compile_time_arg_val(19);
-    constexpr uint32_t tensor_rows_sticks = get_compile_time_arg_val(20);
+    [[maybe_unused]] constexpr uint32_t tensor_w_elems = get_compile_time_arg_val(19);
+    constexpr bool out_sharded = get_compile_time_arg_val(20) != 0;
     constexpr uint32_t sem_gather_id = get_compile_time_arg_val(21);
     constexpr uint32_t gamma_face_row_read_bytes = get_compile_time_arg_val(22);
     constexpr bool gamma_is_block_float = get_compile_time_arg_val(23) != 0;
-    constexpr auto out_args = TensorAccessorArgs<24>();
+    constexpr uint32_t shard_stick_bytes = get_compile_time_arg_val(24);  // RM output shard: local stick stride
+    constexpr uint32_t gamma_read_align = get_compile_time_arg_val(25);   // DRAM alignment (bytes)
+    constexpr auto out_args = TensorAccessorArgs<26>();
     constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto inv_mcast = dataflow_kernel_lib::McastArgs<
         get_named_compile_time_arg_val("inv_mcast_ct_offset"),
@@ -75,6 +84,10 @@ void kernel_main() {
     const uint32_t member_idx = get_arg_val<uint32_t>(6);
     const uint32_t root_x = get_arg_val<uint32_t>(7);
     const uint32_t root_y = get_arg_val<uint32_t>(8);
+    const uint32_t row_sticks_end = get_arg_val<uint32_t>(9);      // RM: sticks of the row space below this are valid
+    const uint32_t slice_valid_elems = get_arg_val<uint32_t>(10);  // valid elements of this core's W slice
+    const uint32_t out_col0_bytes = get_arg_val<uint32_t>(11);     // RM: slice start within a destination stick
+    const uint32_t gamma_col0_elem = get_arg_val<uint32_t>(12);    // global element index of the slice start
 
     const auto out_accessor = TensorAccessor(out_args, out_addr);
 
@@ -88,18 +101,27 @@ void kernel_main() {
         const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_tiles);
         if constexpr (gamma_is_rm) {
             const uint32_t stage = get_write_ptr(cb_gamma_rm_stick);
-            const uint32_t elems_left = tensor_w_elems - slice_start_tile * TILE_W;
-            const uint32_t valid_elems = slice_w_tiles * TILE_W < elems_left ? slice_w_tiles * TILE_W : elems_left;
+            const uint32_t src_offset = gamma_col0_elem * gamma_elem_bytes;
+            const uint32_t lead = src_offset & (gamma_read_align - 1);  // 0 unless a sharded RM slice starts mid-unit
             noc_async_read(
-                gamma_accessor.get_noc_addr(0, slice_start_tile * TILE_W * gamma_elem_bytes),
-                stage,
-                valid_elems * gamma_elem_bytes);
+                gamma_accessor.get_noc_addr(0, src_offset - lead), stage, lead + slice_valid_elems * gamma_elem_bytes);
             noc_async_read_barrier();
             for (uint32_t j = 0; j < slice_w_tiles; ++j) {
-                const uint32_t src = stage + j * TILE_W * gamma_elem_bytes;
+                const uint32_t src = stage + lead + j * TILE_W * gamma_elem_bytes;
                 const uint32_t dst = gamma_base + j * gamma_tile_bytes;
-                noc_async_read(get_noc_addr(src), dst, face_row_bytes);
-                noc_async_read(get_noc_addr(src + face_row_bytes), dst + face1_offset, face_row_bytes);
+                if ((src & 15) == 0) {
+                    noc_async_read(get_noc_addr(src), dst, face_row_bytes);
+                    noc_async_read(get_noc_addr(src + face_row_bytes), dst + face1_offset, face_row_bytes);
+                } else {
+                    // 2-byte granular source (fp32 RM shard of a bf16 gamma): 2 x 16 elements, RISC copy.
+                    auto* s16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src);
+                    auto* d0 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst);
+                    auto* d1 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst + face1_offset);
+                    for (uint32_t h = 0; h < face_row_bytes / 2; ++h) {
+                        d0[h] = s16[h];
+                        d1[h] = s16[face_row_bytes / 2 + h];
+                    }
+                }
             }
         } else if constexpr (gamma_is_block_float) {
             for (uint32_t j = 0; j < slice_w_tiles; ++j) {
@@ -124,14 +146,12 @@ void kernel_main() {
 
     // RM per-chunk valid element count of this core's slice (same as the reader's).
     auto chunk_valid_elems = [&](uint32_t ci) -> uint32_t {
-        const uint32_t chunk_col0 = ci * chunk_w_tiles;
-        if (chunk_col0 >= slice_w_tiles) {
+        const uint32_t chunk_elem0 = ci * chunk_w_tiles * TILE_W;
+        if (chunk_elem0 >= slice_valid_elems) {
             return 0;
         }
-        const uint32_t chunk_valid_tiles =
-            slice_w_tiles - chunk_col0 < chunk_w_tiles ? slice_w_tiles - chunk_col0 : chunk_w_tiles;
-        const uint32_t elems_left = tensor_w_elems - (slice_start_tile + chunk_col0) * TILE_W;
-        return chunk_valid_tiles * TILE_W < elems_left ? chunk_valid_tiles * TILE_W : elems_left;
+        const uint32_t elems_left = slice_valid_elems - chunk_elem0;
+        return chunk_w_tiles * TILE_W < elems_left ? chunk_w_tiles * TILE_W : elems_left;
     };
 
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
@@ -186,6 +206,10 @@ void kernel_main() {
                         ? 0
                         : (slice_w_tiles - chunk_col0 < chunk_w_tiles ? slice_w_tiles - chunk_col0 : chunk_w_tiles);
                 cb_wait_front(cb_out_tiles, chunk_tiles);
+                if constexpr (out_sharded) {  // compute packed straight into the output shard
+                    cb_pop_front(cb_out_tiles, chunk_tiles);
+                    continue;
+                }
                 const uint32_t l1_base = get_read_ptr(cb_out_tiles);
                 const uint32_t tile_bytes = get_tile_size(cb_out_tiles);
                 for (uint32_t r = 0; r < valid_rows; ++r) {
@@ -200,24 +224,27 @@ void kernel_main() {
                 cb_pop_front(cb_out_tiles, chunk_tiles);
             } else {
                 const uint32_t valid_bytes = chunk_valid_elems(ci) * out_elem_bytes;
-                const uint32_t byte_offset = (slice_start_tile + ci * chunk_w_tiles) * out_tile_col_bytes;
+                const uint32_t byte_offset = out_col0_bytes + ci * chunk_w_tiles * out_tile_col_bytes;
                 cb_wait_front(cb_out_rm_sticks, chunk_tiles);
                 const uint32_t l1_base = get_read_ptr(cb_out_rm_sticks);
                 const uint32_t slab_bytes = chunk_w_tiles * get_tile_size(cb_out_rm_sticks);
                 if (valid_bytes > 0) {
                     for (uint32_t r = 0; r < valid_rows; ++r) {
                         const uint32_t stick0 = (tile_row_start + block_row0 + r) * TILE_H;
-                        if (stick0 >= tensor_rows_sticks) {
+                        if (stick0 >= row_sticks_end) {
                             break;
                         }
                         const uint32_t sticks_valid =
-                            tensor_rows_sticks - stick0 < TILE_H ? tensor_rows_sticks - stick0 : TILE_H;
+                            row_sticks_end - stick0 < TILE_H ? row_sticks_end - stick0 : TILE_H;
                         const uint32_t slab = l1_base + r * slab_bytes;
                         for (uint32_t i = 0; i < sticks_valid; ++i) {
-                            noc_async_write(
-                                slab + i * out_stick_stride_bytes,
-                                out_accessor.get_noc_addr(stick0 + i, byte_offset),
-                                valid_bytes);
+                            uint64_t dst;
+                            if constexpr (out_sharded) {
+                                dst = get_noc_addr(out_addr + (stick0 + i) * shard_stick_bytes + byte_offset);
+                            } else {
+                                dst = out_accessor.get_noc_addr(stick0 + i, byte_offset);
+                            }
+                            noc_async_write(slab + i * out_stick_stride_bytes, dst, valid_bytes);
                         }
                     }
                 }
