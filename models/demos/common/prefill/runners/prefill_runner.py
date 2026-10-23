@@ -643,17 +643,17 @@ def _compute_and_send(
     mtp_kwargs = {"mtp_tokens": mtp_tokens, "provided_levels": meta["provided_levels"]} if MTP_LEVELS else {}
     with _with_hang_timeout():
         out = runtime.prefill_chunk(
-          inp,
-          kv_caches,
-          slot_id=meta["slot_id"],
-          actual_start=meta["actual_start"],
-          actual_end=meta["actual_end"],
-          request_id=c,
-          d2h_service=d2h_service,
-          metadata_msg=sockets.metadata,
-          **mtp_kwargs,
-          **({"indexer_indices": indices} if indices is not None else {}),
-      )
+            inp,
+            kv_caches,
+            slot_id=meta["slot_id"],
+            actual_start=meta["actual_start"],
+            actual_end=meta["actual_end"],
+            request_id=c,
+            d2h_service=d2h_service,
+            metadata_msg=sockets.metadata,
+            **mtp_kwargs,
+            **({"indexer_indices": indices} if indices is not None else {}),
+        )
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
         compute_ms = (time.perf_counter() - t_perf) * 1000.0
