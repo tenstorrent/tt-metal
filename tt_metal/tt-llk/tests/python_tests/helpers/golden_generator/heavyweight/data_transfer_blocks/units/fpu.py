@@ -8,10 +8,6 @@ does arithmetic -- so it owns the arithmetic. Everything about *how* a multiply
 behaves on this device lives here or in :mod:`.fidelity`: the multiplier's
 width, the phase decomposition, the pre-carry denormal flush, the rounding that
 happens on every Dest write, and what the Dest-to-src trip costs.
-
-What stays with the operation is *which* instruction runs and in what order --
-an Elwadd rather than an Elwmul, how many tiles fold into one Dest, which
-operand rides which register. The operation sequences; the FPU performs.
 """
 
 from typing import Optional, Tuple
