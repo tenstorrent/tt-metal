@@ -99,7 +99,7 @@ inline void _softmax_k_()
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
     TTI_SFPLOADI(p_sfpu::LREG4, 0, 0);
     TTI_SFPNOP;
-    sfpu::horizontal_reduce<false>();
+    sfpu::horizontal_reduce();
 
     // Broadcast the column-0 sum across all eight SFPU columns.
     TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG7, 0);

@@ -243,6 +243,11 @@ each core's runtime-arg vector has that fixed length.
 longest vector in its kernel group; it does not write those slots. A shorter
 vector on a cache hit would not match that count.
 
+Each core takes a contiguous run of the tile list. The list is ordered `b`, then
+query block, then head, so a core's consecutive tiles mostly share one query
+block: `reference_points` is head-invariant, and the V2 reader stages it once
+per query block rather than once per tile.
+
 All runtime args, buffer addresses included, are plain values that
 `ProgramFactory::override_runtime_arguments` rebuilds on every cache hit. That
 is what lets `num_valid_queries` stay out of the program hash.
@@ -274,6 +279,11 @@ reader  -> compute   4 x input_tiles            the gathered bilinear corners
 compute -> compute   4 x scalar_tile            attn * corner coefficient
 ```
 
+With the split gather (§8) a fourth, reader <-> writer, runs beside them:
+`gather_mailbox` plus the `ready` / `done` semaphores, one point at a time. The
+writer then also decodes `x0` / `y0` at the reader's CB front, so the reader
+pops them only after `done`.
+
 | CB | Role | Pages | Page size |
 | --- | --- | --- | --- |
 | `c_0` `value_scratch` | reader-only L1 arena, one staged `D`-stick per row | 32 | `align(D*2)` |
@@ -290,6 +300,7 @@ compute -> compute   4 x scalar_tile            attn * corner coefficient
 | `c_14` `frac_x`, `c_15` `frac_y` | compute → compute, `px - floor(px)` | 2 | 2048 |
 | `c_16` `output_tile` | compute → writer, the accumulator | `2 * n_d_tiles` | 2048 |
 | `c_17` `tiled_input` | compute → compute, the tilized corners (only when `D % 32 == 0`) | `8 * n_d_tiles` | 2048 |
+| `c_18` `gather_mailbox` | reader → writer, one point's split-gather arguments (split gather only: `D % 32 == 0` on Blackhole) | 1 | 64 |
 
 `n_d_tiles = ceil(D / 32)`. CB pressure for the BEVFormer shape
 (`D=32, L=4, P=4, R=4`, packed) is ~126 KB, ~142 KB with float32 reference
@@ -315,18 +326,23 @@ Deriving `px`, `x0`, `dx` and the four corner weights is per-point float work
 over 32 query rows, and the dataflow RISC has no FPU — every float operation
 there costs ~140 cycles of soft-float emulation. The SFPU does it instead: the
 reader ships the operands as column-0 tiles and gets `floor(px)` back, and
-the only arithmetic left in the reader is the integer decode, the bounds test
-and the page index. Those tiles are bf16, except `geom_x` / `geom_y` when
+the only arithmetic left on the data-movement RISCs is the integer decode, the
+bounds test and the page index. Those tiles are bf16, except `geom_x` / `geom_y` when
 `reference_points` are float32. The SFPU multiplies that point, and a bf16 tile
 would already have moved it in steps of up to 2^-8. Those two CBs are also
 unpacked straight into the 32-bit destination (`UnpackToDestFp32`):
 `copy_tile` through SrcA would keep only 10 mantissa bits.
 
 Both sides run **one sampling point ahead** of the work they feed — the reader
-pushes point `j+1`'s operand tiles before waiting for point `j`'s corners, and
-the compute kernel solves point `j+1` before reducing point `j`. Without that
-lookahead the two ping-pong, each idle through the other's turn. The CB depths
-above are what make it legal: `scalar_tile` and `input_tile` hold two points'
+pushes point `j+1`'s operand tiles before it gathers point `j`, and the compute
+kernel solves point `j+1` before reducing point `j`. Without that lookahead the
+two ping-pong, each idle through the other's turn. Where the push sits depends
+on the gather: with the reader-only gather it goes out before the reader waits
+for point `j`'s `x0` / `y0`; with the split gather (§8) it goes out after point
+`j` is posted to the writer, so the writer gathers while the reader builds the
+tiles. That order cannot deadlock, because compute produces point `j`'s `x0` /
+`y0` while solving `j`, before it waits for `j+1`'s tiles. The CB depths above are
+what make the lookahead legal: `scalar_tile` and `input_tile` hold two points'
 worth, the reader ↔ compute geometry pipes three to four, `frac` two.
 
 The floored corner crosses as **bf16**, which is exact for every integer up to
@@ -351,7 +367,8 @@ a meaningful column 0 — so a query occupies one lane of a 32x32 tile throughou
   every emission; rows `>= v_rows` get `0` in that tile's format. A zero attn lane is what makes
   a tail row's scalar zero. Columns 1..31 are zeroed once per CB slot at reader
   startup, so an uninitialised L1 bit pattern never reaches the SFPU as a NaN.
-* **input tile** (reader → compute): rows that are in range **and** in bounds
+* **input tile** (reader → compute; reader + writer with the split gather, each
+  for its own rows): rows that are in range **and** in bounds
   hold the gathered value stick; every other row is explicitly zeroed. In the
   row-major block the same holds per corner slot: an in-range, in-bounds slot
   holds its stick, every other slot and every row `>= v_rows` is zeroed.
@@ -403,12 +420,16 @@ is a different formula, not a different layout.
 reader_msda_v1.cpp ─┐                                      compute_msda.cpp
                     ├─> fused_msda_reader_common.hpp <──>  + msda_geometry.hpp  ─> writer_msda.cpp
 reader_msda_v2.cpp ─┘   (staging, gather, tile scatter)     (SFPU geometry, reduction)
+                                 │                                                    │
+                                 └──── msda_gather_rows.hpp (row-major gather) ───────┘
+                                       rows [0, SPLIT_ROW) on the reader, the rest on the writer
 ```
 
 **Reader** (both variants). Per output tile `(b, h, q_start, v_rows)`:
 
-1. stage attention weights and locations/offsets (+ reference points for V2)
-   for all `v_rows` rows into L1 arenas — one `noc.async_read` per page;
+1. stage attention weights and locations/offsets (+ reference points for V2,
+   unless the previous tile staged the same query block) for all `v_rows` rows
+   into L1 arenas — one `noc.async_read` per page;
 2. for each `(l, p)`: write the bf16 operands into column 0 of the geometry
    tiles and push them. No arithmetic — the reader moves bit patterns;
 3. take `x0`, `y0` back from the SFPU, decode them with integer shifts, and
@@ -416,7 +437,9 @@ reader_msda_v2.cpp ─┘   (staging, gather, tile scatter)     (SFPU geometry, 
 4. when `D % 32 == 0`: reserve one block for all four corners and land each
    corner's `D`-wide stick straight in its slot of row `r`
    (`r * 4*D*2 + c * D*2`), zero the skipped slots while the reads are in
-   flight, barrier, and push once. The reader copies no value data. Other `D`:
+   flight, barrier, and push once. The reader copies no value data; with the
+   split gather it does this for rows `[0, SPLIT_ROW)` only and waits for the writer's
+   rows before the push. Other `D`:
    for each corner, read the sticks into `value_scratch`, scatter them into
    `n_d_tiles` tile rows, zero the rows it skipped, and push. The stick is at
    page `(b*S + level_start[l] + cy*W_l + cx) * H + h` (canonical) or
@@ -433,7 +456,7 @@ V2. The primary pair is float32 when `reference_points` are float32.
   fractions stay. Four `corner_weight` windows then form
   `attn * corner_coeff` — the scalar tile the reduction consumes. Out-of-bounds
   corners are *not* masked here: this kernel has no bounds information, which
-  is why the reader zeroes the input rows it skipped (§6).
+  is why the gathering RISCs zero the input rows they skipped (§6).
 * for `D % 32 == 0`, one `tilize_block` per point turns the reader's row-major
   block into `4 * n_d_tiles` tiles in `tiled_input` on the unpacker, with L1
   accumulate off;
@@ -445,6 +468,34 @@ V2. The primary pair is float32 when `reference_points` are float32.
 **Writer** (shared). Waits on `n_d_tiles` accumulated tiles, gathers each query
 row's `D` values across them into a stick, and writes it at
 `page_id = b*Q + q`, `offset_bytes = h*D*2`. No SCA/BEV scatter logic, ever.
+With the split gather it first gathers rows `[SPLIT_ROW, 32)` of every point of
+the block. It always receives the `value` accessor and address, and reads them
+only then.
+
+**Split gather** (`D % 32 == 0`, Blackhole). The reader's gather is bound by how
+fast one RISC can decode corners and issue `D*2`-byte reads, and the writer RISC
+has spare issue capacity and its own NoC. So both take part of every row-major
+block: the reader rows `[0, SPLIT_ROW)`, the writer rows `[SPLIT_ROW, 32)`,
+through `fused_msda_gather::gather_rows` (`msda_gather_rows.hpp`, which also
+documents the handshake and how `SPLIT_ROW` was chosen).
+Per point the reader posts the point's arguments to `gather_mailbox` and bumps
+the `ready` semaphore, then pushes the next point's geometry tiles while the
+writer gathers; the writer gathers its rows, barriers and bumps `done`; the
+reader gathers its own rows and waits for `done` before it pops `x0` / `y0` and
+pushes the block. Because the reader also builds the geometry tiles, it takes
+fewer rows than the writer. Both counters only grow, and launch restarts them
+from their initial value.
+
+Sharing one CB block between the reader and the writer follows conv2d's
+`split_reader_cb_shared` mode, where the reader reserves the block, the writer
+fills part of it and two semaphores hand it back. Here the hand-off is per
+point rather than per block, because the writer needs each point's `x0` / `y0`
+and level geometry: the reader posts them to a one-page mailbox and the
+semaphores count points instead of flagging valid / invalid. Splitting by point
+instead, with each RISC its own CBs as `grid_sample`'s split reader does, would
+duplicate the input, `x0` / `y0` and geometry pipes and make compute alternate
+between them; the row split leaves compute unchanged and adds one 64 B CB.
+Wormhole keeps the reader-only gather; the split has not been measured there.
 
 ---
 
@@ -499,6 +550,7 @@ ttnn/cpp/ttnn/operations/experimental/fused_msda/
         ├── dataflow/reader_msda_v1.cpp
         ├── dataflow/reader_msda_v2.cpp
         ├── dataflow/writer_msda.cpp
+        ├── dataflow/msda_gather_rows.hpp       row-range corner gather, shared by reader and writer
         ├── compute/msda_geometry.hpp           sampling geometry on the SFPU
         └── compute/compute_msda.cpp
 
