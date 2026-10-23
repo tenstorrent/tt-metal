@@ -15,7 +15,6 @@
 #include <cstdint>
 #include "internal/risc_attribs.h"
 #include "noc_parameters.h"
-#include "tensix_neo_reg.h"
 #include "hostdev/dev_msgs.h"
 #include "noc_overlay_parameters.h"
 #include "api/debug/assert.h"
@@ -237,31 +236,6 @@ inline __attribute__((always_inline)) uint32_t NOC_CFG_READ_REG(uint32_t noc, ui
     uintptr_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_CFG(reg_id);
     volatile uint32_t* ptr = (volatile uint32_t*)offset;
     return *ptr;
-}
-
-// Quasar-only: the per-VC initiator throttler (NOC_CFG 0x2C..0x30) desynchronises the router state machine for that
-// VC, so it stays at reset (0).
-constexpr uint32_t NOC_THROTTLER_RESET_VALUE = 0;
-static_assert(
-    VC_THROTTLER_CYCLES_PER_WINDOW - VC_THROTTLER_HANDSHAKES_PER_WINDOW_0 == 4,
-    "per-VC throttler NOC_CFG ids must be contiguous");
-
-// True when the per-VC initiator throttler of every NOC on this tile reads 0. Reads NIU MMIO: DM0 calls it at boot.
-inline bool noc_throttler_at_reset() {
-    for (uint32_t noc = 0; noc < NUM_NOCS; ++noc) {
-        // The HANDSHAKES registers use all 32 bits.
-        for (uint32_t reg_id = VC_THROTTLER_HANDSHAKES_PER_WINDOW_0; reg_id < VC_THROTTLER_CYCLES_PER_WINDOW;
-             ++reg_id) {
-            if (NOC_CFG_READ_REG(noc, reg_id) != NOC_THROTTLER_RESET_VALUE) {
-                return false;
-            }
-        }
-        if ((NOC_CFG_READ_REG(noc, VC_THROTTLER_CYCLES_PER_WINDOW) &
-             NOC_CONFIG_VC_THROTTLER_CYCLES_PER_WINDOW_DATA_MASK) != NOC_THROTTLER_RESET_VALUE) {
-            return false;
-        }
-    }
-    return true;
 }
 
 inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint32_t cmd_buf) {
