@@ -33,7 +33,8 @@ the dtype, the layers it exists on and what it is.
 | `generate_golden_nemotron_3_ultra.py` | nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16 | transformers `nemotron_h` (Mamba-2 + latent MoE + NoPE GQA), needs `--with kernels==0.12.3` |
 | `generate_golden_llama_3_1_8b_instruct.py` | meta-llama/Llama-3.1-8B-Instruct | transformers `llama` |
 | `generate_golden_qwen3_8_27b.py` | Qwen/Qwen3.8-27B | transformers `qwen3_5` (Gated DeltaNet + gated GQA), torch GDN reference |
-| `generate_golden_whole_model.py` | Qwen/Qwen3.8-27B, Mistral-Medium-3.5 | whole model, one forward (see below) |
+| `generate_golden_mistral_medium_3_5.py` | mistralai/Mistral-Medium-3.5-128B | transformers `mistral3` (`ministral3` text model), FP8 weights dequantized |
+| `generate_golden_whole_model.py` | Qwen/Qwen3.8-27B, Mistral-Medium-3.5 (`isl10240`, older layout) | whole model, one forward (see below) |
 
 Not covered yet:
 - **DeepSeek-V4.1-Flash**: transformers has no implementation and the repo ships no modeling code.
@@ -152,9 +153,16 @@ causal_conv1d installed: the torch GDN reference only. isl 56320 on CPU with `--
 29.5 min, 5.3 GB host peak, 40 GB on disk; its first 10240 rows equal the isl 10240 run bit for bit (195/195
 tensors), ppl 6.400 over all 56264 tokens.
 
+**Mistral-Medium-3.5-128B:** `<s>` prefix, BOS (wikitext ppl at isl 10240 over the same 9600 tokens: 6.271 BOS, 6.408
+raw, 6.445 chat with its default Le Chat system prompt). The FP8 e4m3 linears are dequantized by transformers'
+`Fp8Dequantize` (per-tensor `weight_scale_inv`), as `from_pretrained` does without an FP8 GPU; activations stay bf16
+and the static activation scales go to `metadata.json` unapplied. isl 56320 on CPU with `--prefill-chunk 5120
+--attn-chunk 4096`: 143 min (~98 s / layer), 14 GB host peak, 136 GB on disk; its first 10240 rows equal the isl 10240
+run bit for bit (267/267 tensors), ppl 4.033 over all 56318 tokens.
+
 **`--device cuda` under torch 2.11:** `torch.cuda.set_device` rejects a device without an index; pass `cuda:0`.
 
-`generate_golden_whole_model.py` is the original script behind the Qwen3.8-27B and Mistral traces. It loads the whole
+`generate_golden_whole_model.py` is the original script behind the older Qwen3.8-27B and Mistral `isl10240` traces. It loads the whole
 model, runs one forward, and writes the older format the device-side grader (`galaxy_prefill_kv_pcc.py`) reads:
 `kv_cache/layer_<i>.safetensors` (`key_cache_layer_<i>`, `value_cache_layer_<i>`, or GDN conv/recurrent state) and
 `final_hidden.safetensors`. It computes in fp32 and writes to `/mnt/models/agentic-prefill-goldens` by default. Every
