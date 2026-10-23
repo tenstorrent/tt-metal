@@ -143,7 +143,6 @@ ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::CoreGrid> core_grid) {
     using OperationType = ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation;
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
 
     /* Matmul setup */
     bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.logical_shape());
@@ -180,7 +179,7 @@ ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return
     ttnn::experimental::prim::ReduceScatterMinimalAsyncParams reduce_scatter_params{
         .dim = dim,
         .num_links = num_links,
-        .ring_size = static_cast<uint32_t>(devices.size()),
+        .ring_size = static_cast<uint32_t>(input_tensor.device_storage().get_coords().size()),
         .output_mem_config = memory_config_rs.value_or(input_tensor.memory_config()),
         .optional_intermediate_mem_config = intermediate_memory_config_rs.value_or(input_tensor.memory_config()),
         .topology = topology,
@@ -194,8 +193,8 @@ ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return
         .num_buffers_per_channel = std::nullopt,
     };
 
-    auto operation_attributes = OperationType::operation_attributes_t(
-        reduce_scatter_params, matmul_struct, reduce_scatter_core_grid_offset, devices);
+    auto operation_attributes =
+        OperationType::operation_attributes_t(reduce_scatter_params, matmul_struct, reduce_scatter_core_grid_offset);
     auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor,
         .weight = weight_tensor,

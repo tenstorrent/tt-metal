@@ -283,7 +283,7 @@ constexpr uint32_t RM_ROW_WORDS = 4 * CORNER_SLOT_WORDS;
 static_assert(!RM_STAGING || D % 32 == 0, "row-major staging needs D to be a multiple of the tile width");
 
 inline void zero_words(uint32_t l1_addr, uint32_t words) {
-    uint32_t* p = CoreLocalMem<uint32_t>(l1_addr).get_unsafe_ptr();
+    uint32_t* p = &CoreLocalMem<uint32_t>(l1_addr)[0];
 #pragma GCC unroll 8
     for (uint32_t i = 0; i < words; ++i) {
         p[i] = 0;
@@ -301,8 +301,8 @@ inline void zero_input_row(uint32_t tile_l1, uint32_t r) {
 #pragma GCC unroll 4
     for (uint32_t k = 0; k < N_D_TILES; ++k) {
         const uint32_t ktile_l1 = tile_l1 + k * TILE_NBYTES;
-        uint32_t* lo = CoreLocalMem<uint32_t>(ktile_l1 + off.lo).get_unsafe_ptr();
-        uint32_t* hi = CoreLocalMem<uint32_t>(ktile_l1 + off.hi).get_unsafe_ptr();
+        uint32_t* lo = &CoreLocalMem<uint32_t>(ktile_l1 + off.lo)[0];
+        uint32_t* hi = &CoreLocalMem<uint32_t>(ktile_l1 + off.hi)[0];
 #pragma GCC unroll 8
         for (uint32_t i = 0; i < HALF_WORDS; ++i) {
             lo[i] = 0;
@@ -314,7 +314,7 @@ inline void zero_input_row(uint32_t tile_l1, uint32_t r) {
 // Copies one staged D-wide stick into row r of an input tile group.
 inline void scatter_stick(uint32_t tile_l1, uint32_t r, uint32_t src_l1) {
     const auto off = fused_msda_tile_layout::tile_row_offsets(r);
-    const uint32_t* src = CoreLocalMem<uint32_t>(src_l1).get_unsafe_ptr();
+    const uint32_t* src = &CoreLocalMem<uint32_t>(src_l1)[0];
 #pragma GCC unroll 4
     for (uint32_t k = 0; k < N_D_TILES; ++k) {
         const uint32_t base = k * WORDS_PER_TILE_ROW;
@@ -322,8 +322,8 @@ inline void scatter_stick(uint32_t tile_l1, uint32_t r, uint32_t src_l1) {
         const uint32_t lo_words = words_k < HALF_WORDS ? words_k : HALF_WORDS;
         const uint32_t hi_words = words_k - lo_words;
         const uint32_t ktile_l1 = tile_l1 + k * TILE_NBYTES;
-        uint32_t* dl = CoreLocalMem<uint32_t>(ktile_l1 + off.lo).get_unsafe_ptr();
-        uint32_t* dh = CoreLocalMem<uint32_t>(ktile_l1 + off.hi).get_unsafe_ptr();
+        uint32_t* dl = &CoreLocalMem<uint32_t>(ktile_l1 + off.lo)[0];
+        uint32_t* dh = &CoreLocalMem<uint32_t>(ktile_l1 + off.hi)[0];
 #pragma GCC unroll 8
         for (uint32_t i = 0; i < lo_words; ++i) {
             dl[i] = src[base + i];

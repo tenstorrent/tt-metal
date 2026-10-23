@@ -24,17 +24,17 @@
 #include <unordered_set>
 #include <vector>
 
-#include <umd/device/cluster.hpp>
-#include <umd/device/driver_atomics.hpp>
-#include <umd/device/cluster_descriptor.hpp>
-#include <umd/device/chip_helpers/sysmem_buffer.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/io_window_config.hpp>
-#include <umd/device/soc_descriptor.hpp>
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/cluster_types.hpp>
-#include <umd/device/types/host_memory.hpp>
+#include <tt-umd/cluster.hpp>
+#include <tt-umd/driver_atomics.hpp>
+#include <tt-umd/cluster_descriptor.hpp>
+#include <tt-umd/chip_helpers/sysmem_buffer.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/io_window_config.hpp>
+#include <tt-umd/soc_descriptor.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_types.hpp>
+#include <tt-umd/types/host_memory.hpp>
 
 namespace tt {
 namespace llrt {
@@ -160,7 +160,8 @@ public:
         uint64_t addr,
         std::optional<tt::umd::IoOrdering> ordering = std::nullopt) const;
 
-    // Access physical noc coordinates. Does write without effects of write combining
+    // Access physical noc coordinates. Does write without effects of write combining. On a remote chip a payload
+    // that lies in L1 or a DRAM bank goes out as a block; anything else keeps register-width writes.
     void write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
 
     // Write to core without effects of write combining
