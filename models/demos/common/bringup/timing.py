@@ -220,9 +220,9 @@ def main(argv=None) -> int:
     ap.add_argument("--top", type=int, default=15)
     a = ap.parse_args(argv)
     spec = Spec.load(a.spec)
-    run_dir = spec.run_dir(a.run or run_name(Ledger(spec.bringup_dir)))
-    tasks = {t["id"]: t for t in (yaml.safe_load((spec.bringup_dir / "tasks.yaml").read_text()) or {}).get("tasks", [])}
-    res = breakdown(spec.bringup_dir, run_dir, tasks)
+    run_dir = spec.run_dir(a.run or run_name(Ledger(spec.ledger_dir)))
+    tasks = {t["id"]: t for t in (yaml.safe_load((spec.ledger_dir / "tasks.yaml").read_text()) or {}).get("tasks", [])}
+    res = breakdown(spec.ledger_dir, run_dir, tasks)
     out = run_dir / "timing.json"
     out.write_text(json.dumps({k: v for k, v in res.items() if k != "agents"}, indent=1) + "\n")
     print(table(res, a.top))

@@ -16,6 +16,7 @@ agents:
     test: {attempts: 3, escalate: stop}
     perf: {attempts: 3, escalate: debugger, debugger_attempts: 3}
     assemble: {attempts: 3, escalate: debugger, debugger_attempts: 3}
+    port: {attempts: 3, escalate: debugger, debugger_attempts: 3}  # F185: a seeded run's W.1 / M.1
     optests: {attempts: 3, escalate: stop}
     serving: {attempts: 2, escalate: stop}
     settings: {attempts: 2, escalate: stop}

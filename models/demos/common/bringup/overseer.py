@@ -5,7 +5,7 @@
 
 The overseer does not edit the model's code, knowledge files or run state. It writes notes; the agents act on them.
 
-    <bringup_dir>/overseer.yaml (the overseer's; the agent path check ignores it)
+    <ledger_dir>/overseer.yaml (the overseer's; the agent path check ignores it)
     notes:
       - {id: OV-1, tasks: ["C.*"], roles: [implement], status: open, t: ..., text: "what is wrong, what to do"}
 
@@ -59,39 +59,39 @@ def now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
 
-def path(bringup_dir: Path) -> Path:
-    return Path(bringup_dir) / FILE
+def path(ledger_dir: Path) -> Path:
+    return Path(ledger_dir) / FILE
 
 
-def _read(bringup_dir: Path) -> dict:
-    p = path(bringup_dir)
+def _read(ledger_dir: Path) -> dict:
+    p = path(ledger_dir)
     return (yaml.safe_load(p.read_text()) if p.exists() else None) or {}
 
 
-def _write(bringup_dir: Path, data: dict) -> None:
+def _write(ledger_dir: Path, data: dict) -> None:
     head = "# Overseer notes (models/demos/common/bringup/overseer.py): written by the overseer, read by every agent.\n"
     keep = {k: v for k, v in data.items() if v}
-    path(bringup_dir).write_text(head + yaml.safe_dump({"notes": [], **keep}, sort_keys=False, width=118))
+    path(ledger_dir).write_text(head + yaml.safe_dump({"notes": [], **keep}, sort_keys=False, width=118))
 
 
-def load(bringup_dir: Path) -> list[dict]:
-    return list(_read(bringup_dir).get("notes") or [])
+def load(ledger_dir: Path) -> list[dict]:
+    return list(_read(ledger_dir).get("notes") or [])
 
 
-def save(bringup_dir: Path, notes: list[dict]) -> None:
-    _write(bringup_dir, {**_read(bringup_dir), "notes": notes})
+def save(ledger_dir: Path, notes: list[dict]) -> None:
+    _write(ledger_dir, {**_read(ledger_dir), "notes": notes})
 
 
 # ---- fix jobs (F77): a change an agent makes now, gated by the passed steps it touches
 FIX_STEP, FIX_ROLE = "overseer_fix", "overseer"
 
 
-def fixes(bringup_dir: Path) -> list[dict]:
-    return list(_read(bringup_dir).get("fixes") or [])
+def fixes(ledger_dir: Path) -> list[dict]:
+    return list(_read(ledger_dir).get("fixes") or [])
 
 
 def queue_fix(
-    bringup_dir: Path,
+    ledger_dir: Path,
     text: str,
     gate_tasks: list[str],
     title: str = "",
@@ -105,7 +105,7 @@ def queue_fix(
     missing = [t for t in gate_tasks if tasks is not None and t not in tasks]
     if missing:
         raise SystemExit(f"no such tasks: {missing}")
-    data = _read(bringup_dir)
+    data = _read(ledger_dir)
     have = [int(str(x["id"]).split(".")[-1]) for x in data.get("fixes") or []]
     have += [int(t.split(".")[-1]) for t in (tasks or {}) if t.startswith("FIX.") and t.split(".")[-1].isdigit()]
     job = {
@@ -119,20 +119,20 @@ def queue_fix(
         **({"paths": list(paths)} if paths else {}),  # F127: where the fix may write, beyond its gate tasks' paths
     }
     data["fixes"] = list(data.get("fixes") or []) + [job]
-    _write(bringup_dir, data)
+    _write(ledger_dir, data)
     return job
 
 
-def release(bringup_dir: Path, fix_id: str) -> dict:
-    data = _read(bringup_dir)
+def release(ledger_dir: Path, fix_id: str) -> dict:
+    data = _read(ledger_dir)
     for x in data.get("fixes") or []:
         if x["id"] == fix_id:
             if x.get("status") != "held":
                 raise SystemExit(f"{fix_id} is {x.get('status')}, not held")
             x.update(status="queued", released=now())
-            _write(bringup_dir, data)
+            _write(ledger_dir, data)
             return x
-    raise SystemExit(f"no fix {fix_id} in {path(bringup_dir)}")
+    raise SystemExit(f"no fix {fix_id} in {path(ledger_dir)}")
 
 
 def fix_task(job: dict, tasks: dict) -> dict:
@@ -164,14 +164,14 @@ def _as_task(task: dict) -> str:
     return " && ".join(f"BRINGUP_TASK={task['id']} {x}" for x in segs)
 
 
-def take_fixes(bringup_dir: Path) -> list[dict]:
+def take_fixes(ledger_dir: Path) -> list[dict]:
     """The queued fixes, marked as placed (the orchestrator puts them in the ledger)."""
-    data = _read(bringup_dir)
+    data = _read(ledger_dir)
     out = [x for x in data.get("fixes") or [] if x.get("status") == "queued"]
     for x in out:
         x.update(status="placed", placed=now())
     if out:
-        _write(bringup_dir, data)
+        _write(ledger_dir, data)
     return out
 
 
@@ -179,31 +179,31 @@ def _globs(v) -> list[str]:
     return [v] if isinstance(v, str) else list(v or ["*"])
 
 
-def add(bringup_dir: Path, text: str, tasks=None, roles=None) -> dict:
-    notes = load(bringup_dir)
+def add(ledger_dir: Path, text: str, tasks=None, roles=None) -> dict:
+    notes = load(ledger_dir)
     n = max([int(str(x.get("id", "OV-0")).split("-")[-1]) for x in notes] + [0]) + 1
     note = {"id": f"OV-{n}", "tasks": _globs(tasks), "status": "open", "t": now(), "text": text.strip()}
     if roles:
         note["roles"] = list(roles)
-    save(bringup_dir, notes + [note])
+    save(ledger_dir, notes + [note])
     return note
 
 
-def close(bringup_dir: Path, note_id: str, why: str = "") -> dict:
-    notes = load(bringup_dir)
+def close(ledger_dir: Path, note_id: str, why: str = "") -> dict:
+    notes = load(ledger_dir)
     for x in notes:
         if x.get("id") == note_id:
             x.update(status="closed", closed=now(), **({"why_closed": why} if why else {}))
-            save(bringup_dir, notes)
+            save(ledger_dir, notes)
             return x
-    raise SystemExit(f"no note {note_id} in {path(bringup_dir)}")
+    raise SystemExit(f"no note {note_id} in {path(ledger_dir)}")
 
 
-def for_task(bringup_dir: Path, tid: str, role: str) -> list[dict]:
+def for_task(ledger_dir: Path, tid: str, role: str) -> list[dict]:
     """The open notes a step of task `tid` in role `role` must answer."""
     return [
         x
-        for x in load(bringup_dir)
+        for x in load(ledger_dir)
         if x.get("status", "open") == "open"
         and any(fnmatch.fnmatchcase(tid, g) for g in _globs(x.get("tasks")))
         and (not x.get("roles") or role in x["roles"])
@@ -260,14 +260,14 @@ def take_abort(run_dir: Path) -> dict | None:
     return rec
 
 
-def abort(bringup_dir: Path, run_dir: Path, reason: str, tasks=None, kill=os.killpg) -> dict:
+def abort(ledger_dir: Path, run_dir: Path, reason: str, tasks=None, kill=os.killpg) -> dict:
     """Stop the agent at work: record the reason, add it as a note for its task, end its process group."""
     p = Path(run_dir) / AGENT_FILE
     if not p.exists():
         raise SystemExit("no agent is at work (no AGENT.json in the run dir); write a note instead")
     agent = json.loads(p.read_text())
     note = add(
-        bringup_dir,
+        ledger_dir,
         f"The overseer stopped attempt {agent['attempt']} ({agent['role']}): {reason}",
         tasks or [agent["task"]],
     )
@@ -283,26 +283,26 @@ def abort(bringup_dir: Path, run_dir: Path, reason: str, tasks=None, kill=os.kil
 KINDS = ("framework", "waiver", "infra", "model")
 
 
-def classify(bringup_dir: Path, tid: str, kind: str, why: str = "") -> dict:
+def classify(ledger_dir: Path, tid: str, kind: str, why: str = "") -> dict:
     if kind not in KINDS:
         raise ValueError(f"kind {kind!r}: one of {', '.join(KINDS)}")
-    data = _read(bringup_dir)
+    data = _read(ledger_dir)
     rec = {"kind": kind, "why": why, "t": now()}
     data["classified"] = {**(data.get("classified") or {}), tid: rec}
-    _write(bringup_dir, data)
+    _write(ledger_dir, data)
     return rec
 
 
-def classification(bringup_dir: Path, tid: str) -> dict | None:
-    return (_read(bringup_dir).get("classified") or {}).get(tid)
+def classification(ledger_dir: Path, tid: str) -> dict | None:
+    return (_read(ledger_dir).get("classified") or {}).get(tid)
 
 
-def clear_classification(bringup_dir: Path, tid: str) -> None:
-    data = _read(bringup_dir)
+def clear_classification(ledger_dir: Path, tid: str) -> None:
+    data = _read(ledger_dir)
     c = dict(data.get("classified") or {})
     if c.pop(tid, None) is not None:
         data["classified"] = c
-        _write(bringup_dir, data)
+        _write(ledger_dir, data)
 
 
 STATUS_FILE = "OVERSEER_STATUS.json"  # in the run dir: why the overseer has the run stopped (the dashboard shows it)
@@ -329,7 +329,7 @@ def _dirs(spec_path: str):
     from models.demos.common.bringup.core.spec import Spec
 
     spec = Spec.load(spec_path)
-    return spec.bringup_dir, spec.run_dir(run_name(Ledger(spec.bringup_dir)))
+    return spec.ledger_dir, spec.run_dir(run_name(Ledger(spec.ledger_dir)))
 
 
 def main(argv=None) -> int:

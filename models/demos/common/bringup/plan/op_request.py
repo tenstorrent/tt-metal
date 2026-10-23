@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Op requests (F46): a component step TTNN has no proper op for, deferred to the op code generator (op-gen,
 tt_metal/third_party/tt_ops_code_gen). The step stays on the CPU reference through testing/cpu_bridge.py, the rest of
-the bring-up continues, and the owner decides whether to launch op-gen. ``<bringup_dir>/op_requests/<op>/``:
+the bring-up continues, and the owner decides whether to launch op-gen. ``<ledger_dir>/op_requests/<op>/``:
 
     request.yaml     op, model, tasks, component, layers, status (draft | approved | exported | delivered), evidence
                      (searched, tried, why_not_fork), interface (per-device inputs / output, chunks, params),
@@ -51,7 +51,7 @@ MIN_OUTCOME = 20
 
 # ---------------------------------------------------------------- where and what
 def root(spec) -> Path:
-    return spec.bringup_dir / REQUESTS
+    return spec.ledger_dir / REQUESTS
 
 
 def request_dir(spec, op: str) -> Path:
@@ -84,7 +84,7 @@ def deferred_steps(spec) -> set[tuple[str, str]]:
     """(block type, step) of every DEFERRED task: the harness runs these on the CPU reference."""
     from models.demos.common.bringup.core.ledger import Ledger
 
-    led = Ledger(spec.bringup_dir)
+    led = Ledger(spec.ledger_dir)
     if not led.tasks_path.exists():
         return set()
     tasks = led.tasks()
@@ -265,7 +265,7 @@ def _tolerance(task: dict, spec=None) -> dict:
 
     from models.demos.common.bringup.core import metrics
 
-    got = metrics.load(task["id"], spec.bringup_dir / "results") if spec is not None else {}
+    got = metrics.load(task["id"], spec.ledger_dir / "results") if spec is not None else {}
     for name, c in (task["gate"].get("metrics") or {}).items():
         if not (name.startswith("err_") and str(c).split()[-1] == "limit"):
             continue
@@ -287,7 +287,7 @@ def _source_of(fn) -> tuple[str, str]:
 
 
 def generate(spec, tid: str, op: str, force: bool = False) -> Path:
-    """Write <bringup_dir>/op_requests/<op>/ for task tid: everything mechanical filled, the rest marked <<AGENT."""
+    """Write <ledger_dir>/op_requests/<op>/ for task tid: everything mechanical filled, the rest marked <<AGENT."""
 
     from models.demos.common.bringup.core.ledger import Ledger
     from models.demos.common.bringup.core.spec import parse_layers
@@ -295,7 +295,7 @@ def generate(spec, tid: str, op: str, force: bool = False) -> Path:
 
     if not OP_NAME.match(op):
         raise ValueError(f"op name {op!r}: one snake_case token")
-    led = Ledger(spec.bringup_dir)
+    led = Ledger(spec.ledger_dir)
     task = led.task(tid)
     if not deferrable(task):
         raise ValueError(f"{tid} is not a component task of the implement step; only those may be deferred")
@@ -594,7 +594,7 @@ def check(spec, d: Path) -> list[str]:
         for p in (f"ttnn/ttnn/operations/{op}", f"ttnn/ttnn/bringup/{op}"):
             if (spec.repo / p).exists():
                 errs.append(f"{p} exists: an op of this name is already in TTNN; use it or pick another name")
-    tasks = Ledger(spec.bringup_dir).tasks()
+    tasks = Ledger(spec.ledger_dir).tasks()
     for tid in req["tasks"] or ["(none)"]:
         t = tasks.get(tid)
         if t is None or not deferrable(t):
