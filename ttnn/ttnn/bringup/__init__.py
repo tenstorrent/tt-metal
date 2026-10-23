@@ -32,6 +32,14 @@ def _stable_arg_reprs():
     sem = getattr(getattr(core, "global_semaphore", None), "global_semaphore", None)
     if sem is not None and sem.__repr__ is object.__repr__:
         sem.__repr__ = lambda self: "global_semaphore"
+    # deepseek_v41_flash_d_p O.1: flat_routed_expert_with_program(extra=<the fused combine program>) gave a new
+    # signature per call and per run (one per layer, keyed on the object's address). The value: how many programs
+    # and the kernel count of each (the same for every layer's combine; an empty descriptor on a cache hit).
+    mpd = getattr(getattr(core, "program_descriptor", None), "MeshProgramDescriptor", None)
+    if mpd is not None and mpd.__repr__ is object.__repr__:
+        mpd.__repr__ = lambda self: (
+            "MeshProgramDescriptor(kernels=" + str([len(pd.kernels) for _, pd in iter(self)]) + ")"
+        )
 
 
 _stable_arg_reprs()

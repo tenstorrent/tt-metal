@@ -153,3 +153,21 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Files: device/indexer_score_device_operation_types.hpp, device/indexer_score_device_operation.hpp,
   device/indexer_score_device_operation.cpp (launch validation, hash), device/ring_indexer_score_dsa_program_factory.cpp,
   device/kernels/writer_indexer_score.cpp, indexer_score_nanobind.cpp, tests/unit/test_block_epilogue.py
+
+### Tests: deepseek_v41_flash_d_p ring cases (O.1, 2026-10-23)
+- What: 3 random-input cases for the ring_indexer_score_dsa calls deepseek_v41_flash_d_p makes (2x2, natural query
+  blocks, last chunk of 55296 tokens, HiFi2 + fp32 DEST: ratio 2; ratio 1 with block_bias; ratio 1 with block_max_out
+  + pin), run by test_ring_indexer_score_dsa_ds41 (excluded from the key-stride test): -inf / finite exact, visible
+  scores within noise_limit with the FPU's operand bits at HiFi2 (reference.dsa_score_at(fidelity=): measured 7.7e-3,
+  the model's own 7.7e-3, limit 1.55e-2), block max bit-exact vs the op's own scores, determinism with fresh k / max
+  buffers. No op change.
+- Why: task O.1, every call a model makes to a fork gets a case.
+- Needed by: deepseek_v41_flash_d_p O.1
+- Files: tests/cases.py, tests/reference.py, tests/test_indexer_score.py
+- Follow-up (O.1 attempt 4): test_ring_indexer_score_dsa_ds41 writes every call's fresh k buffer (garbage) before the
+  first call is enqueued. Writing it from the host per call raced: a peer that finished call N starts N+1 and writes
+  its shard into this chip's new buffer while this chip still runs N; the host write queued after N then overwrites
+  it. Probe (ratio 2 case, 2 cycled semaphore sets): 4 of 299 calls on chip 3 (the most causal work) wrong on all
+  13824 remote-shard columns (or a few tiles); pre-written buffers 0 of 299 and 0 of 599. The model's buffer is
+  written once at load (tt/indexer.py _kbuf). No op change. The hy4 / glm53 ring tests (_call, _call_key_stride)
+  still write per call (latent; they passed). DS41-111.

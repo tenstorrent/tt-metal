@@ -3,7 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """ttnn.bringup.mhc_post against its torch semantics (reference.py), one random-input case per captured model call
 (cases.py). Math: PCC plus a max relative error (rel L2) per output, per device. The inputs differ per device (sharded
-over the mesh on dim 0), so each chip's output is checked on its own data; the weights are replicated."""
+over the mesh on dim 0), so each chip's output is checked on its own data; the weights are replicated.
+
+Cases with `noise` (deepseek_v41_flash_d_p O.1: bf16 streams, packed mixes, stats_weight) run in test_mhc_post_ds41,
+each output within fork_cases.noise_limit at its declared formats (F139)."""
 
 import importlib.util
 from pathlib import Path
@@ -13,6 +16,7 @@ import torch
 
 import ttnn
 from models.demos.common.bringup.testing import determinism
+from models.demos.common.bringup.testing.fork_cases import noise_limit
 
 _HERE = Path(__file__).resolve().parent
 
@@ -93,7 +97,10 @@ def _inputs(case, seed, mesh):
     return (f, x, post, comb), dev
 
 
-@pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
+_LEGACY = [c for c in CASES if "noise" not in c]
+
+
+@pytest.mark.parametrize("case", _LEGACY, ids=[c["id"] for c in _LEGACY])
 def test_mhc_post(mesh, case):
     (f, x, post, comb), dev = _inputs(case, case["seed"], mesh)
     kw = {"comb_transposed": case["comb_transposed"]} if "comb_transposed" in case else {}
@@ -109,6 +116,114 @@ def test_mhc_post(mesh, case):
     determinism.assert_deterministic(
         lambda: ttnn.bringup.mhc_post(*dev, **kw),
         lambda: ttnn.bringup.mhc_post(*dev_b, **kw),
+        first=out,
+        label=case["id"],
+    )
+
+
+# ---------------------------------------------------------------------------------------------------------------- DS41
+_NOISE = [c for c in CASES if "noise" in c]
+
+
+def _r9(w):
+    """fp32 -> 9 explicit mantissa bits, nearest-even (what the FPU's srcA multiplies; the model's fpu_weight)."""
+    i = w.float().contiguous().view(torch.int32)
+    sh = 14
+    lsb = (i >> sh) & 1
+    return (((i + ((1 << (sh - 1)) - 1) + lsb) >> sh) << sh).view(torch.float32)
+
+
+def _ds41_inputs(case, seed, mesh):
+    """Host (f, x, post, comb, w) for `seed` (post / comb sliced out of the packed mixes when the case packs them) and
+    the device call's (args, kwargs)."""
+    g = torch.Generator().manual_seed(seed)
+    n_dev = _devices(mesh)
+    f = _host(case["input"], g, True, n_dev)
+    x = (_host(case["residual"], g, True, n_dev).float() * 3).to(torch.bfloat16)
+    n = 4
+    if "mixes" in case:
+        mixes = torch.rand([n_dev] + case["mixes"]["shape"][1:], generator=g)
+        mixes[..., n : 2 * n] *= 2
+        post, comb = mixes[..., case["post_col"] : case["post_col"] + n], mixes[..., case["comb_col"] :]
+        md = _to_device(mixes, case["mixes"], mesh, True)
+        args = [_to_device(f, case["input"], mesh, True), _to_device(x, case["residual"], mesh, True), md, md]
+        kw = {"post_col": case["post_col"], "comb_col": case["comb_col"]}
+    else:
+        post = torch.rand([n_dev] + case["post"]["shape"][1:], generator=g) * 2
+        comb = torch.rand([n_dev] + case["comb"]["shape"][1:], generator=g)
+        args = [
+            _to_device(t, case[k], mesh, True)
+            for t, k in ((f, "input"), (x, "residual"), (post, "post"), (comb, "comb"))
+        ]
+        kw = {}
+    w = None
+    if "stats_weight" in case:
+        w = torch.randn(case["stats_weight"]["shape"], generator=g) * case["stats_weight"]["shape"][-2] ** -0.5
+        w[..., 6 * n :] = 0
+        w = _r9(w)
+        kw["stats_weight"] = _to_device(w, case["stats_weight"], mesh, False)
+        ck = case["compute_kernel_config"]
+        kw["compute_kernel_config"] = ttnn.ComputeConfigDescriptor(
+            math_fidelity=getattr(ttnn.MathFidelity, ck["math_fidelity"]),
+            math_approx_mode=ck["math_approx_mode"],
+            fp32_dest_acc_en=ck["fp32_dest_acc_en"],
+        )
+    return (f, x, post.contiguous(), comb.contiguous(), w), args, kw
+
+
+def _ds41_check(name, got, want, lim):
+    got, want = got.double().reshape(want.shape), want.double()
+    a, b = (got - got.mean()).flatten(), (want - want.mean()).flatten()
+    p = float(a @ b / (a.norm() * b.norm()))
+    rel = float((got - want).norm() / want.norm())
+    print(
+        f"{name}: rel {rel:.3e} (limit {lim['rel']:.3e}, noise {lim['noise_rel']:.3e}) pcc {p:.8f} (min {lim['pcc']:.8f})"
+    )
+    assert rel <= lim["rel"], f"{name}: rel L2 {rel:.3e} > limit {lim['rel']:.3e} (pcc {p:.8f}, a diagnostic)"
+
+
+@pytest.mark.parametrize("case", _NOISE, ids=[c["id"] for c in _NOISE])
+def test_mhc_post_ds41(mesh, case):
+    (f, x, post, comb, w), args, kw = _ds41_inputs(case, case["seed"], mesh)
+    out = ttnn.bringup.mhc_post(*args, **kw)
+    xo, st = out if "stats_weight" in kw else (out, None)
+    assert xo.dtype == ttnn.bfloat16, xo.dtype
+    got_x = _from_device(xo, mesh)
+    nz = case["noise"]
+    # (the reference per chip: the noise floor's rel is per-tensor, as the check's)
+    for d in range(_devices(mesh)):
+        ins = [f[d : d + 1], x[d : d + 1], post[d : d + 1], comb[d : d + 1]]
+        fn = lambda ff, xx, pp, cc: ref.mhc_post(ff, xx, pp, cc).to(ff.dtype)  # noqa: E731
+        want = ref.mhc_post(*ins)
+        _ds41_check(
+            f"{case['id']} dev {d} y", got_x[d : d + 1], want, noise_limit(fn, ins, nz["y"]["inputs"], nz["y"]["out"])
+        )
+        if st is None:
+            continue
+        s = ttnn.to_torch(ttnn.get_device_tensors(st)[d]).double().reshape(*want.shape[:-1], 32)
+        k = 24  # n (n + 2) projection columns, then sum X'^2, then zeros
+        # the projection of the device's own bf16 X' (K-40), at the call's fidelity (reference.fpu_operands)
+        xp = got_x[d : d + 1].reshape(-1, want.shape[-1]).float()
+        wk = w.reshape(-1, 32)[:, :k]
+        fid = case["compute_kernel_config"]["math_fidelity"]
+
+        def proj(a, b):
+            if a.dtype == torch.float64:
+                return a @ b
+            a, b = ref.fpu_operands(a, b, fid)
+            return a @ b
+
+        want_p = xp.double() @ wk.double()
+        lim_p = noise_limit(proj, [xp, wk], nz["proj"]["inputs"], nz["proj"]["out"])
+        _ds41_check(f"{case['id']} dev {d} proj ({fid})", s.reshape(-1, 32)[:, :k], want_p, lim_p)
+        want_ss = ref.mhc_post_sumsq(*[t.double() for t in ins])
+        lim_ss = noise_limit(ref.mhc_post_sumsq, ins, nz["ss"]["inputs"], nz["ss"]["out"])
+        _ds41_check(f"{case['id']} dev {d} ss", s[..., k], want_ss, lim_ss)
+        assert bool((s[..., k + 1 :] == 0).all()), "stats columns past n (n + 2) must be zero"
+    args_b, kw_b = _ds41_inputs(case, case["seed"] + 1, mesh)[1:]
+    determinism.assert_deterministic(
+        lambda: ttnn.bringup.mhc_post(*args, **kw),
+        lambda: ttnn.bringup.mhc_post(*args_b, **kw_b),
         first=out,
         label=case["id"],
     )

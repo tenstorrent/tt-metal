@@ -347,3 +347,114 @@ CASES = [
         "rtol": 0.006,
     },
 ]
+
+
+# deepseek_v41_flash_d_p O.1 (scaled 2x2 run, ladder rung last: 1024 rows a chip; tt/norm.py, NORM_IMPL on): every
+# norm through the fork, HiFi4 + fp32 DEST, fp32 TILE weights (bf16-valued, as the checkpoint's), epsilon 1e-20 (the
+# GPU code's), DRAM interleaved. Run by test_rms_norm_ttnn_ds41 (the split program's options: stats_out, partial_stats /
+# stats_width, input_window, dtype). Limits: noise_limit (F139) of the float64 reference at the declared formats
+# (inputs, out), never a measured number; stats_out: the row sums of the partials vs float64 sum x^2.
+_DS41 = {
+    "model": "deepseek_v41_flash_d_p",
+    "task": "O.1",
+    "mesh": [2, 2],
+    "device_params": {"fabric_config": "FABRIC_2D", "l1_small_size": 24576},
+    "compute_kernel_config": {
+        "math_fidelity": "HiFi4",
+        "math_approx_mode": False,
+        "fp32_dest_acc_en": True,
+        "packer_l1_acc": False,
+        "dst_full_sync_en": False,
+    },
+    "seed": 0,
+}
+
+CASES += [
+    {
+        # compressor norm (tt/compressor.py), fp32 rows -> bf16 (dtype=), the default program's statistic over the full 512 width
+        **_DS41,
+        "id": "deepseek_v41_flash_d_p-2x2-s1024-h512-fp32-to-bf16",
+        "sig": "516a31a79d",
+        "input": {"shape": [1, 1, 1024, 512], "dtype": "FLOAT32", "layout": "TILE"},
+        "weight": {"shape": [1, 1, 1, 512], "dtype": "FLOAT32", "layout": "TILE"},
+        "epsilon": 1e-20,
+        "dtype": "BFLOAT16",
+        "noise": {"inputs": ["fp32", "fp32"], "out": "bf16"},
+    },
+    {
+        # compressor norm on the 512 rows of the ratio-4 path, fp32 rows -> bf16 (dtype=)
+        **_DS41,
+        "id": "deepseek_v41_flash_d_p-2x2-s512-h512-fp32-to-bf16",
+        "sig": "5f7e0b4ad1",
+        "input": {"shape": [1, 1, 512, 512], "dtype": "FLOAT32", "layout": "TILE"},
+        "weight": {"shape": [1, 1, 1, 512], "dtype": "FLOAT32", "layout": "TILE"},
+        "epsilon": 1e-20,
+        "dtype": "BFLOAT16",
+        "noise": {"inputs": ["fp32", "fp32"], "out": "bf16"},
+    },
+    {
+        # k_norm on the indexer keys, bf16 in / out
+        **_DS41,
+        "id": "deepseek_v41_flash_d_p-2x2-s1024-h128-bf16",
+        "sig": "68a871de3d",
+        "input": {"shape": [1, 1, 1024, 128], "dtype": "BFLOAT16", "layout": "TILE"},
+        "weight": {"shape": [1, 1, 1, 128], "dtype": "FLOAT32", "layout": "TILE"},
+        "epsilon": 1e-20,
+        "noise": {"inputs": ["bf16", "fp32"], "out": "bf16"},
+    },
+    {
+        # attn_norm / ffn_norm apply step: this chip's 2560 of 5120 hidden columns, normalized by the whole row's statistic (partial_stats = the all-gathered stats_out partials of both TP chips, stats_width 5120), bf16 out
+        **_DS41,
+        "id": "deepseek_v41_flash_d_p-2x2-s1024-h2560-bf16-partial-stats5120",
+        "sig": "73aa2d360c",
+        "input": {"shape": [1, 1, 1024, 2560], "dtype": "BFLOAT16", "layout": "TILE"},
+        "weight": {"shape": [1, 1, 1, 2560], "dtype": "FLOAT32", "layout": "TILE"},
+        "epsilon": 1e-20,
+        "partial_stats": {"shape": [1, 1, 1024, 128], "dtype": "FLOAT32", "layout": "TILE"},
+        "stats_width": 5120,
+        "noise": {"inputs": ["bf16", "fp32", "fp32"], "out": "bf16"},
+    },
+    {
+        # attn_norm / ffn_norm statistic step: the partial sums of squares of this chip's 2560 hidden columns (stats_out, fp32 [.., 32 B])
+        **_DS41,
+        "id": "deepseek_v41_flash_d_p-2x2-s1024-h2560-bf16-stats-out",
+        "sig": "826864a291",
+        "input": {"shape": [1, 1, 1024, 2560], "dtype": "BFLOAT16", "layout": "TILE"},
+        "weight": None,
+        "epsilon": None,
+        "stats_out": True,
+        "noise": {"inputs": ["bf16"], "out": "fp32"},
+    },
+    {
+        # kv_norm on the fused [wq_a | wkv] output: columns [1280, 1792) read in place (input_window), bf16 out
+        **_DS41,
+        "id": "deepseek_v41_flash_d_p-2x2-s1024-h1792-bf16-window1280-1792",
+        "sig": "9166a4be85",
+        "input": {"shape": [1, 1, 1024, 1792], "dtype": "BFLOAT16", "layout": "TILE"},
+        "weight": {"shape": [1, 1, 1, 512], "dtype": "FLOAT32", "layout": "TILE"},
+        "epsilon": 1e-20,
+        "input_window": [1280, 1792],
+        "noise": {"inputs": ["bf16", "fp32"], "out": "bf16"},
+    },
+    {
+        # k_norm on the 512-row indexer path, bf16 in / out
+        **_DS41,
+        "id": "deepseek_v41_flash_d_p-2x2-s512-h128-bf16",
+        "sig": "a4b71ffddb",
+        "input": {"shape": [1, 1, 512, 128], "dtype": "BFLOAT16", "layout": "TILE"},
+        "weight": {"shape": [1, 1, 1, 128], "dtype": "FLOAT32", "layout": "TILE"},
+        "epsilon": 1e-20,
+        "noise": {"inputs": ["bf16", "fp32"], "out": "bf16"},
+    },
+    {
+        # q_norm on the fused [wq_a | wkv] output: columns [0, 1280) read in place (input_window), bf16 out
+        **_DS41,
+        "id": "deepseek_v41_flash_d_p-2x2-s1024-h1792-bf16-window0-1280",
+        "sig": "f3058f954f",
+        "input": {"shape": [1, 1, 1024, 1792], "dtype": "BFLOAT16", "layout": "TILE"},
+        "weight": {"shape": [1, 1, 1, 1280], "dtype": "FLOAT32", "layout": "TILE"},
+        "epsilon": 1e-20,
+        "input_window": [0, 1280],
+        "noise": {"inputs": ["bf16", "fp32"], "out": "bf16"},
+    },
+]

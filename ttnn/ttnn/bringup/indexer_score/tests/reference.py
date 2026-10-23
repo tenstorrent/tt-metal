@@ -72,3 +72,36 @@ def full_mesh_key_local_positions(t: int, n_dev: int, key_stripe: int) -> torch.
     out = torch.stack([c * chunk + d * key_stripe + w for d in range(n_dev)])
     assert torch.equal(out.flatten().sort().values, torch.arange(t))
     return out
+
+
+# FPU operand mantissa bits (in0 = srcB, in1 = srcA) per fidelity on Blackhole, truncated (deepseek_v41_flash_d_p O.1,
+# probe mhc_post_ds41 / DS41-108; the in1 bits are DS41-42's): the formats the scorer's two FPU steps multiply in.
+FPU_BITS = {"LoFi": (6, 4), "HiFi2": (6, 9), "HiFi3": (10, 9), "HiFi4": (10, 9)}
+
+
+def _truncate(t, bits):
+    i = t.float().contiguous().view(torch.int32)
+    sh = 23 - bits
+    return ((i >> sh) << sh).view(torch.float32)
+
+
+def dsa_score_at(q, k, w, q_start, key_stride=1, fidelity=None):
+    """dsa_score in q's dtype (float64: the reference; float32: noise_limit's formats run) -> the visible scores
+    [S, T] with the future columns -inf. ``fidelity`` (float32 only): the FPU's operands as the scorer multiplies them,
+    q.k^T (q in0, k in1) then relu(qk) x w (qk in1 = srcA, the gate w in0 = srcB, broadcast over the columns), every
+    product and sum in fp32 (compute_indexer_score.cpp: matmul_block, then mul_tiles_bcast_cols MAC'd in DEST)."""
+    dt = q.dtype
+    fpu = fidelity is not None and dt == torch.float32
+    b0, b1 = FPU_BITS[fidelity] if fpu else (None, None)
+    kt = (_truncate(k, b1) if fpu else k.to(dt)).t().contiguous()
+    w = _truncate(w, b0) if fpu else w.to(dt)
+    score = torch.zeros(q.shape[1], k.shape[0], dtype=dt)
+    for h in range(q.shape[0]):
+        qh = _truncate(q[h], b0) if fpu else q[h].to(dt)
+        qk = torch.relu(qh @ kt)
+        if fpu:
+            qk = _truncate(qk, b1)
+        score.add_(qk.mul_(w[:, h : h + 1]))
+    r = key_stride
+    future = (r * torch.arange(k.shape[0])[None, :] + r - 1) > (q_start + torch.arange(q.shape[1]))[:, None]
+    return score.masked_fill_(future, float("-inf"))
