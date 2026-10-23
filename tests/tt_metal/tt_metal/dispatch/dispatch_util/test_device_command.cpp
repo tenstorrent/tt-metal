@@ -30,7 +30,7 @@ TEST_F(DeviceCommandTest, CPU_AddDispatchWait) {
     calculator.add_dispatch_wait();
 
     HostMemDeviceCommand command(ctx_, calculator.write_offset_bytes());
-    command.add_dispatch_wait(0, 0, 0, 0, 0);
+    command.add_dispatch_wait(0, 0, 0, 0);
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
@@ -39,7 +39,7 @@ TEST_F(DeviceCommandTest, CPU_AddDispatchWaitWithPrefetchStall) {
     calculator.add_dispatch_wait_with_prefetch_stall();
 
     HostMemDeviceCommand command(ctx_, calculator.write_offset_bytes());
-    command.add_dispatch_wait_with_prefetch_stall(0, 0, 0, 0, 0);
+    command.add_dispatch_wait_with_prefetch_stall(0, 0, 0, 0);
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
@@ -104,7 +104,7 @@ TEST_F(DeviceCommandTest, CPU_AddDispatchGoSignalMcast) {
     calculator.add_dispatch_go_signal_mcast();
 
     HostMemDeviceCommand command(ctx_, calculator.write_offset_bytes());
-    command.add_dispatch_go_signal_mcast(0, 0, 0, 0, 0, 0, DispatcherSelect::DISPATCH_MASTER);
+    command.add_dispatch_go_signal_mcast(0, 0, 0, 0, 0, DispatcherSelect::DISPATCH_MASTER);
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
@@ -137,16 +137,6 @@ TEST_F(DeviceCommandTest, CPU_AddDispatchSetSubDeviceWorkerCounts) {
     command.add_dispatch_set_sub_device_worker_counts(
         ttsl::Span<const uint32_t>(workers_per_sub_device.data(), workers_per_sub_device.size()),
         DispatcherSelect::DISPATCH_MASTER);
-    EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
-}
-
-TEST_F(DeviceCommandTest, CPU_AddDispatchSetGoSignalNocData) {
-    DeviceCommandCalculator calculator(ctx_);
-    calculator.add_dispatch_set_go_signal_noc_data(5);
-
-    HostMemDeviceCommand command(ctx_, calculator.write_offset_bytes());
-    vector_aligned<uint32_t> data(5);
-    command.add_dispatch_set_go_signal_noc_data(data, DispatcherSelect::DISPATCH_MASTER);
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 

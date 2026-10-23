@@ -157,6 +157,55 @@ def assert_quality(
             ),
             ttnn.TILE_LAYOUT,
         ),
+        # Regression for #58523: block-sharded COL_MAJOR produced a non-rectangular output grid
+        (
+            (1, 1, 128, 256),
+            3,
+            64,
+            64,
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))}),
+                    (32, 64),
+                    ttnn.ShardOrientation.COL_MAJOR,
+                ),
+            ),
+            ttnn.TILE_LAYOUT,
+        ),
+        (
+            (1, 1, 128, 256),
+            2,
+            32,
+            32,
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))}),
+                    (32, 64),
+                    ttnn.ShardOrientation.COL_MAJOR,
+                ),
+            ),
+            ttnn.TILE_LAYOUT,
+        ),
+        (
+            (1, 1, 128, 256),
+            3,
+            128,
+            128,
+            ttnn.MemoryConfig(
+                buffer_type=ttnn.BufferType.L1,
+                memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 3))}),
+                    (64, 64),
+                    ttnn.ShardOrientation.COL_MAJOR,
+                ),
+            ),
+            ttnn.TILE_LAYOUT,
+        ),
     ],
     ids=[
         "dram_dim0_tile",
@@ -167,6 +216,9 @@ def assert_quality(
         "l1_width_sharded_dim3_tile",
         "l1_width_sharded_dim3_rm",
         "l1_block_sharded_dim3_tile",
+        "l1_block_sharded_col_major_dim3_tile",
+        "l1_block_sharded_col_major_dim2_tile",
+        "l1_block_sharded_col_major_non_square_grid_dim3_tile",
     ],
 )
 def test_narrow(input_shape, dim, start, length, memory_config, layout, dtype, device):
@@ -187,6 +239,11 @@ def test_narrow(input_shape, dim, start, length, memory_config, layout, dtype, d
     assert layout == ttnn_output.layout
     assert memory_config.buffer_type == ttnn_output.memory_config().buffer_type
     assert memory_config.memory_layout == ttnn_output.memory_config().memory_layout
+    if memory_config.shard_spec is not None:
+        assert memory_config.shard_spec.orientation == ttnn_output.memory_config().shard_spec.orientation
+    if memory_config.shard_spec is not None:
+        # Consume the narrowed tensor through its shard spec, so a grid/orientation mismatch is caught
+        ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG)
     output = ttnn.to_torch(ttnn_output)
     # bf8_atol=0.05: unseeded randn input; worst observed bf8 delta across runs is ~0.047
     assert_quality(torch_result, output, dtype, bf8_atol=0.05)

@@ -94,12 +94,16 @@ struct KernelGroup {
     std::vector<uint32_t> kernel_text_offsets;
     dev_msgs::launch_msg_t launch_msg;
     dev_msgs::go_msg_t go_msg;
+    // DFBs on the group's cores. Until the program's offsets are finalized, the launch message's local_cb_mask holds
+    // only the group's CB mask, which sizes the CB config region; finalize_dfb_masks then writes the DFBs there.
+    uint32_t num_local_dfbs{};
 
     KernelGroup(
         const detail::ProgramImpl& program,
         uint32_t programmable_core_type_index,
         std::vector<KernelHandle> kernel_ids,
         uint64_t local_cb_mask,
+        uint32_t num_local_dfbs,
         uint32_t min_remote_cb_start_index,
         const CoreRangeSet& new_ranges,
         const dev_msgs::Factory& dev_msgs_factory);
@@ -248,6 +252,17 @@ public:
     void init_semaphores(
         const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const;
     std::vector<std::vector<CoreCoord>> logical_cores() const;
+    /// Compiles all kernels in the program for `device`. Binaries are written to
+    /// `<cache root>/<build key>/kernels/<kernel name>/<kernel hash>/`, where the cache root is TT_METAL_CACHE
+    /// (default ~/.cache/tt-metal-cache/).
+    ///  - The build key hashes the device build configuration: architecture, compiler flags and version, dispatch
+    ///    core config, number of HW CQs, harvesting (without coordinate virtualization) and compile-affecting
+    ///    rtoptions (watcher, sanitizer, DPRINT and other debug features).
+    ///  - The kernel hash combines the build key with the kernel's compile-time args, defines, CB/DFB formats and
+    ///    other kernel-type attributes (e.g. NOC, math fidelity).
+    /// Each kernel hash is built at most once per process (see experimental::ClearKernelCache). Across processes,
+    /// objects on disk are reused unless the content hash of a source or header dependency changed (or
+    /// TT_METAL_FORCE_JIT_COMPILE is set). A program is compiled once per build key; later calls return early.
     void compile(IDevice* device, bool force_slow_dispatch = false);
     void compile_and_allocate(IDevice* device, bool force_slow_dispatch);
     void invalidate_circular_buffer_allocation();
@@ -565,7 +580,6 @@ public:
     // Validates that a semaphore ID is within bounds and not already in use on overlapping cores
     void validate_semaphore_id(const CoreRangeSet& crs, uint32_t semaphore_id, CoreType core_type) const;
 
-    bool runs_on_noc_unicast_only_cores();
     bool runs_on_noc_multicast_only_cores();
 
     std::unordered_map<uint64_t, ProgramCommandSequence>& get_cached_program_command_sequences() noexcept;

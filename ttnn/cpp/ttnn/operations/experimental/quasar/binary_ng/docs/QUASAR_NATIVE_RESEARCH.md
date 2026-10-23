@@ -406,7 +406,7 @@ often cited is the C=4 *target*, not phase 1.
 | **Canonical multi-thread STRIDED producer loop** (copy this, incl. `break` guard + `finish()`) | `tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp:27-32,47` |
 | **Device-side cycle bracketing prior art** (`TT_METAL_MEASURE_DFB_INIT_TIME=1`) | `tests/tt_metal/tt_metal/api/dataflow_buffer/dfb_init_timing_bench.cpp` |
 | **Bound-kernel-identity readout** (routing proof, no env var, written every run) | `generated/inspector/kernels.yaml` |
-| Profiler's device-side wall-clock read (works on DM cores) | `tt_metal/tools/profiler/kernel_profiler.hpp:218-225` |
+| Profiler's device-side wall-clock read (works on DM cores) | `tt_metal/hw/inc/api/debug/kernel_profiler.hpp:218-225` |
 
 Confluence: NEO HLS `TA/84508873`; Errata `TA/1802436609`; Overlay Tile Counter Interrupt Protocol
 `TA/408289306`; Tile Counter Remapping Block `TA/1401028761`; Quasar Programming Quirks `LLK/2316533761`;
@@ -990,7 +990,7 @@ harness becomes the regression gate for phase-2 broadcast work.
 - **Primary metric: simulated cycles on craq-sim.** craq-sim applies every store synchronously and has
   produced *bit-identical simulated clocks across 13 repeat runs*, so cycle deltas are deterministic and
   comparable A/B. Quasar is pre-silicon; there are no real-HW numbers.
-- **Secondary: the device profiler**, which has Quasar support (`tt_metal/tools/profiler/kernel_profiler.hpp`
+- **Secondary: the device profiler**, which has Quasar support (`tt_metal/hw/inc/api/debug/kernel_profiler.hpp`
   has `ARCH_QUASAR` paths at `:22,48,114,212,234,717,881`), for per-engine timestamps; and the per-role
   cycle harness pattern in `dfb_init_timing_bench.cpp` if finer instrumentation is needed.
 - **A/B protocol**: identical shapes/dtypes/memory configs, `ProgramFactoryMetalV2` (baseline) vs the new
@@ -2014,6 +2014,48 @@ holds that.
 
 ---
 
+### 5.0.15 F16: borrowed L1-interleaved slices
+
+**What a slice is.** An interleaved buffer puts page `i` in bank `i mod N`, at
+`address + (i / N) * aligned_page_size` (`Buffer::page_address`), and the L1 allocator gives each worker
+core exactly one bank, at offset 0. So bank k holds pages k, k+N, k+2N, ... back to back from
+`buffer->address()`, the address that `AttachBorrowedDFBBuffers` hands every borrowed DFB. The spec-time
+check sizes a borrowed DFB against the per-bank slice and leaves the layout to the caller, so the host
+API admits an interleaved L1 tensor as a borrow source as it is.
+
+**Why the bank order does not matter.** The allocator shuffles bank ids over the cores (seed 0, unless
+`l1_bank_remap` is set). A borrowed DFB always computes on its own core's memory, and a, b and c put page
+`i` in the same bank, so one core's three slices hold the same page indices, whatever its bank id. The
+placement must cover every core that holds a bank, and the gate checks that the worker grid is exactly
+that set. A sub-device grid fails the check and keeps the NoC path.
+
+**Pad slots.** Every bank reserves `ceil(P/N)` pages, so every core computes `S = ceil(P/N)` slots. On
+a bank with one real page fewer, the last slot is padding inside its own allocation, which no page
+reads. Only slot `S - 1` can be padding. This is F3's rule for uneven shards, where every core computes
+its full shard.
+
+**No tail rings, by decision.** A borrowed ring must divide by the compute count, and `S` follows from
+the tensor size: at `C = 4` only one page count in four divides (`P` in `[128m - 31, 128m]`), and
+`P <= 96` leaves `S <= 3`. The F3 tail rings would carry the rest, but here they compete with the NoC
+path at the tuned `4,4,2`, which has the same slope. Against the recorded craq-sim fits a tail adds about
+800 cycles of latency and no throughput (about 600 for a slice of 1-3 tiles); in F3 the same rings
+replaced fewer Neos and won 4x or 2x. So a slice that `C` does not divide keeps the NoC path (dchen: the
+tail rings are temporary until the DFB gives each tile counter its own capacity, tt-metal#57623). The
+tails would pay back in a batched or transport-bound regime. Derived from the fits on one basis, with the
+tail's N=1 cost of about 1070 cycles assumed at N=8 too, and both paths' fixed costs counted: on craq-sim
+after #56194 (borrowed `1,4,1` at N=8, `1114 + 11.69*T`, against the NoC path's `1817 + 26.44*T`), above
+about 25 tiles per cluster; on silicon, where the NoC path meets the cut at 48.0 (status, week of 09-29,
+slide 4), above about 530 tiles per cluster at N=1 and about 10 at N=8.
+
+**Measured** (status, week of 09-29): the borrowed slices fit `754 + 186.00*T` at `1,1,1` N=1,
+`847 + 46.50*T` at `1,4,1` and `4,4,2`, and `1021 + 46.75*T` at the default `1,1,1`, against F3's
+shards at `757`, `851` and `1016` with the same slopes. On craq-sim the placement does not enter; what
+the borrow changes is the thread budget and the batch. At the default tuning an L1-interleaved add goes
+from `773 + 185.00*T` to `1021 + 46.75*T`, 3.96x on throughput, because the NoC path does not batch by
+default and a borrowed ring at stride 1 does.
+
+---
+
 ### 5.0.7 Next action and open questions
 
 > **SCOPE OF EVERY MEASUREMENT IN §5.0.1-§5.0.6: `num_tiles_per_cycle = 1`.** The roofline constants,
@@ -2379,7 +2421,7 @@ inside that model's calibrated envelope. Coverage and model quality are **uneval
 | **Global cycle count** | free, printed at exit | `[<cycles>] <wall>s (<rate>)` from `g_clock` (`src/sim.cpp:502-513`) |
 | **Device profiler** | `TT_METAL_DEVICE_PROFILER=1` (no rebuild — profiler is on by default) | per-RISC kernel spans in `generated/profiler/.logs/profile_log_device.csv`; RiscTypes `QUASAR_DM0-7`, `QUASAR_NEO0-3_TRISC0-3`; cycles-since-reset stamps. **The only cycle source, and the only per-core one** — §5.0.2 has the measured role map (readers/writers/pipes by RISC name) and the occupancy method |
 | **craq-sim perf trace** | `TTSIM_PERF_TRACE=1 TTSIM_PERF_TRACE_PER_DISPATCH=1 TTSIM_PERF_TRACE_OUT=<dir>` | `ttsim_perf_trace.tsv`: per-engine instruction counts, DFB op counts (`cb_waits/reserves/pushes/pops`), `kernel_launches`, per-pipe **stall** cycles (`src/sim.cpp:143-150`) |
-| **Profiler zones inside a kernel** (DM cores included) | wrap a region in a device-profiler zone | exact cycles for a **sub-kernel region on any core**. The profiler's device-side stamp is a direct read of `NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0` (`tt_metal/tools/profiler/kernel_profiler.hpp:218-225`), which craq-sim answers with `g_clock` verbatim (`src/tile.cpp:1768`) and — unlike Gen1 — with **no read delay** (`src/riscv_impl.h:612` gates it on `TT_VERSION <= 1`). In-tree prior art: `tests/tt_metal/tt_metal/api/dataflow_buffer/dfb_init_timing_bench.cpp` (`TT_METAL_MEASURE_DFB_INIT_TIME=1`). |
+| **Profiler zones inside a kernel** (DM cores included) | wrap a region in a device-profiler zone | exact cycles for a **sub-kernel region on any core**. The profiler's device-side stamp is a direct read of `NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0` (`tt_metal/hw/inc/api/debug/kernel_profiler.hpp:218-225`), which craq-sim answers with `g_clock` verbatim (`src/tile.cpp:1768`) and — unlike Gen1 — with **no read delay** (`src/riscv_impl.h:612` gates it on `TT_VERSION <= 1`). In-tree prior art: `tests/tt_metal/tt_metal/api/dataflow_buffer/dfb_init_timing_bench.cpp` (`TT_METAL_MEASURE_DFB_INIT_TIME=1`). |
 | **DFB credit event log** | `TTSIM_QSR_DFB_TRACE=1`, `TTSIM_QSR_DFB_COUNTER_TRACE=1` | every credit post/ack with `posted→M acked=K` per `(tensix, counter)`, plus a distinct *blocked* event carrying capacity (`src/riscv_impl.h:1941-1948`, `:2235-2252`, `:2521-2530`). Post-process for the **ring-occupancy trajectory** — max occupancy, whether the ring ever fills, at what depth. Event-ordered, not clock-stamped; pair with a profiler zone for time. |
 
 Both profiler and perf trace can run in the **same** process — do that, so numbers never get mixed across

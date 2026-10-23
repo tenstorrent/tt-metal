@@ -7,6 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace ttnn::prim {

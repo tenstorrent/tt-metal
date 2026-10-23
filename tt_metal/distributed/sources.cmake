@@ -25,16 +25,20 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/h2d_socket.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/d2h_socket.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/inter_process_counter_channel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/named_shm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/shm_resource_tracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/hd_socket_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/h2d_stream_service_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/d2h_stream_service_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pcie_core_writer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/host_region.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/host_ring_alias.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/host_l1_map.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/host_d2h_leg.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/host_h2d_leg.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/blitz_decode_pipeline.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/experimental/command_list.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/internal_cluster.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion/layer_completion_queue.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion/layer_completion_reorder_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion/layer_completion_router.cpp
 )

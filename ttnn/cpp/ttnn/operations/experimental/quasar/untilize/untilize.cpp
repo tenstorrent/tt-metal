@@ -66,14 +66,33 @@ ttnn::Tensor untilize(
     bool fp32_dest_acc_en = input_tensor.dtype() == DataType::INT32 || input_tensor.dtype() == DataType::UINT32 ||
                             input_tensor.dtype() == DataType::FLOAT32;
 
+    // The prim emits BFLOAT16 for a BFLOAT8_B input, so size the output CB estimate and the pending
+    // output buffer by the output dtype rather than the input's tile size.
+    const DataType output_dtype = operations::data_movement::untilize_output_dtype(input_tensor.dtype());
     auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_dtype);
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    uint32_t output_single_tile_size = input_single_tile_size;
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
 
+    // The interleaved L1 output is allocated after this check but before the CBs are placed; reserve its
+    // per-core footprint so the routing doesn't pick a factory whose static CBs clash with it.
+    const uint32_t pending_l1_output_bytes = operations::data_movement::get_pending_l1_output_reservation(
+        input_tensor,
+        input_tensor.padded_shape(),
+        memory_config.value_or(input_tensor.memory_config()),
+        output_dtype,
+        Layout::ROW_MAJOR);
+
     bool enough_space_height = operations::data_movement::is_enough_space(
-        input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+        input_tensor,
+        input_single_tile_size,
+        output_single_tile_size,
+        num_tiles_per_row,
+        /*staging_bytes_per_tile=*/0,
+        /*fixed_staging_bytes=*/0,
+        pending_l1_output_bytes);
 
     auto base_untilize = [=](const ttnn::Tensor& input_tensor) {
         auto pf_type = ttnn::operations::experimental::quasar::get_pf_type(

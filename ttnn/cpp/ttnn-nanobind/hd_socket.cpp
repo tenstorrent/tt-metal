@@ -258,6 +258,10 @@ void py_module_types(nb::module_& mod) {
 
     nb::class_<tt::tt_metal::distributed::D2HSocket>(mod, "D2HSocket")
         .def(
+            "has_data",
+            [](tt::tt_metal::distributed::D2HSocket& self) { return self.has_data(); },
+            "Whether the host-side FIFO holds at least one unread page.")
+        .def(
             nb::init<
                 const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>&,
                 const tt::tt_metal::distributed::MeshCoreCoord&,

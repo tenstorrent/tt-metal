@@ -144,7 +144,7 @@ namespace experimental {
 //    wait_front(n);
 //    auto lock = scoped_read_lock(n);
 //    auto rd = lock.get_ptr();  // CoreLocalMem at fifo front
-//    // process data at rd.get_address() / rd.get_unsafe_ptr() ...
+//    // process data at rd[i] / *rd, or pass rd to Noc as an endpoint ...
 //    pop_front(n);
 //
 //  Mid-flight resize (receiver):
@@ -454,7 +454,7 @@ public:
         const uint32_t bytes_per_recv = num_rows * row_bytes_per_recv;
         const uint32_t row_stride_in_stage = row_bytes_per_recv * num_recv;
 
-        tt_buf_rw::note_if_bound<tt_buf_rw::READ, Src>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
+        tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
         uint32_t src_addr = noc_traits_t<Src>::template src_addr<Noc::AddressType::LOCAL_L1>(src, noc, src_args);
         uint32_t recv_src_offset = 0;
         for (uint32_t i = 0; i < num_recv; ++i) {
@@ -743,8 +743,8 @@ public:
 
     private:
         friend class PrefetcherPipe;
-        FORCE_INLINE explicit RelayView(DataflowBuffer& dfb) : dfb_(dfb) {}
-        DataflowBuffer& dfb_;
+        FORCE_INLINE explicit RelayView(DataflowBufferAnyPattern& dfb) : dfb_(dfb) {}
+        DataflowBufferAnyPattern& dfb_;
     };
 
     // Open the relay DFB the host registered for this slot (DataflowBufferSpec::
@@ -824,12 +824,13 @@ private:
         // it does not drain payload already in flight at the peer's old entry size.
         // Multi-DM: only tid 0 mutates shared config; others re-setup after the barrier.
         // Drop any cached copy of this core's credit words before anyone touches them, so a
-        // host reset / the previous program's flushed values in TL1 are what every hart sees.
+        // host reset / the previous program's flushed values in TL1 are what every hart sees
+        // (as long as the lines are clean, as the previous pipe's dtor flush leaves them).
         // Not multi-DM specific: it is the Quasar cost of reading credit words through the
         // cache at all (P == 1 included). Compiles out on WH/BH, and sync_threads() returns
         // immediately when the kernel has one thread, so the single-thread path only pays
         // the one-time invalidate here and the flush in the dtor.
-        invalidate_local_credit_lines(/*lane_offset_bytes=*/0);
+        writeback_invalidate_local_credit_lines(/*lane_offset_bytes=*/0);
         sync_threads();
         if (dense_entry_size != applied_entry_size) {
             if (get_my_thread_id() == 0) {
@@ -863,7 +864,7 @@ private:
     uint32_t destination_offset_bytes_ = 0;
 
 #if !defined(COMPILE_FOR_TRISC)
-    std::optional<DataflowBuffer> relay_dfb_;
+    std::optional<DataflowBufferAnyPattern> relay_dfb_;
     // Relay pages per pipe entry, fixed at bind_relay() (see prefetcher_pipe_relay_pages_per_entry).
     uint16_t relay_pages_per_entry_ = 1;
 #ifndef ARCH_QUASAR
@@ -908,18 +909,18 @@ private:
         return get_my_thread_id() * L1_ALIGNMENT;
     }
 
-    // Quasar: discard cached copies (L1 D$ of this hart + shared L2) of the local credit
-    // lines. Only safe when nothing is dirty, i.e. after the previous pipe's dtor flushed.
-    FORCE_INLINE void invalidate_local_credit_lines(uint32_t lane_offset_bytes) const {
+    // Quasar: write back and invalidate the cached copies (L1 D$ of this hart + shared L2) of the local credit lines,
+    // so the next reads come from TL1. Not a discard, which would lose a dirty line's credit writes or neighbours.
+    FORCE_INLINE void writeback_invalidate_local_credit_lines(uint32_t lane_offset_bytes) const {
 #ifdef ARCH_QUASAR
         uint32_t base = 0;
         uint32_t size = 0;
         local_credit_range(lane_offset_bytes, base, size);
         constexpr uint32_t line = 64;
         for (uint32_t addr = base & ~(line - 1); addr < base + size; addr += line) {
-            invalidate_l1_dcache(addr);
+            flush_l1_dcache(addr);
         }
-        invalidate_l2_cache_range(base, size);
+        flush_l2_cache_range(base, size);
 #else
         (void)lane_offset_bytes;
 #endif
@@ -1021,8 +1022,9 @@ private:
     // remote_dfb_config_layout.h): Quasar's DM L2 writes back whole 64B lines, so a dirty line
     // may only ever contain words this core wrote. Peer-written words are always read through
     // load_remote_l1_credit. Cached copies are dropped at construction
-    // (invalidate_local_credit_lines) so a host reset in TL1 is observed, and written back at
-    // destruction (flush_local_credit_lines) so the values persist into the next program.
+    // (writeback_invalidate_local_credit_lines) so a host reset in TL1 is observed while the lines are clean,
+    // and written back at destruction (flush_local_credit_lines) so the values persist into the next
+    // program.
 
     // Byte offset of (receiver_idx, lane)'s slot within either credit block. Layout stride is
     // credit_lane_capacity() (allocated slots); active P only selects which are used.
@@ -1284,8 +1286,18 @@ private:
             return;
         }
         ASSERT(num_credit_lanes() == 1);
-        note_credit_atomic_noc(noc);
         volatile tt_l1_ptr uint32_t* sent_ptr = local_sent_ptr(iface, receiver_idx, 0);
+        // The pad holds its bytes of the ring until the receiver steps over them, so it waits for room
+        // as reserve_back does. Published into a full ring it would push the outstanding count past the
+        // ring, and reserve_back's free-space check would then let the next entry overwrite ones the
+        // receiver still holds.
+        const uint32_t num_units = fifo_size() / L1_ALIGNMENT;
+        volatile tt_l1_ptr uint32_t* acked_ptr = local_acked_ptr(iface, receiver_idx, 0);
+        WAYPOINT("GSPW");
+        while ((num_units - (*sent_ptr - load_remote_l1_credit(acked_ptr))) < adjustment) {
+        }
+        WAYPOINT("GSPD");
+        note_credit_atomic_noc(noc);
         volatile tt_l1_ptr uint32_t* xy =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) + 2 * receiver_idx;
         const uint64_t remote_sent_noc_addr =

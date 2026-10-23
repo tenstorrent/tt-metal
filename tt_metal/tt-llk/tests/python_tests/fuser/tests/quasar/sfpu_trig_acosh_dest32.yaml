@@ -1,0 +1,34 @@
+# acosh on its domain x >= 1: [1.01, 10] plus the endpoint 1, 2, 10 and 100.
+#
+# Trigonometry SFPU kernels on Quasar, using only existing fuser features: dest_acc is fixed per file
+# (hence the _dest16 / _dest32 pairs), every float input goes through the FPU datacopy path, and
+# stimuli are finite intervals and points. Special points sit outside the random ranges.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 32]
+    format: [Float16_b, Float16, Float32]
+    stimuli:
+      include:
+        - [1.01, 1.99]
+        - [2.01, 10.0]
+        - 1.0
+        - 2.0
+        - 10.0
+        - 100.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float32
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32]}
+      - type: "UnarySfpu"
+        operation: [Acosh]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32]}

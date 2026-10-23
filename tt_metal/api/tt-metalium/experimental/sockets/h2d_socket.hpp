@@ -4,12 +4,17 @@
 
 #pragma once
 
+#include <cstdint>
+#include <functional>
+#include <string>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <memory>
 #include <optional>
-#include <utility>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <vector>
 
 namespace tt::umd {
 class IoWindow;
@@ -323,6 +328,8 @@ private:
     std::unique_ptr<NamedShm> shm_;
     std::unique_ptr<PCIeCoreWriter> pcie_writer_instance_;
     MeshDevice* mesh_device_ = nullptr;
+    // Resolved once at construction so I/O never reads the mesh view; see validate_host_socket_access.
+    bool rank_owns_endpoint_ = true;
     bool is_owner_ = true;
     std::string descriptor_path_;
     HDSocketConnectorState* connector_state_ = nullptr;

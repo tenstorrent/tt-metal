@@ -47,14 +47,15 @@ uint64_t make_channel_key(const FabricNodeId& node_id, uint8_t channel_id) {
            static_cast<uint64_t>(channel_id);
 }
 
-TelemetryMap capture_telemetry(MeshId mesh_id, size_t num_devices) {
+TelemetryMap capture_telemetry(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, MeshId mesh_id, size_t num_devices) {
     TelemetryMap snapshot;
 
     for (size_t device_idx = 0; device_idx < num_devices; ++device_idx) {
         FabricNodeId node_id(mesh_id, static_cast<uint32_t>(device_idx));
 
         // Call the fabric telemetry reader API directly
-        auto samples = tt::tt_fabric::read_fabric_telemetry(node_id);
+        auto samples = tt::tt_fabric::read_fabric_telemetry(mesh_device, node_id);
 
         for (const auto& sample : samples) {
             if (sample.snapshot.dynamic_info.has_value()) {
@@ -78,10 +79,14 @@ bool telemetry_increased(const TelemetryMap& before, const TelemetryMap& after) 
     return false;
 }
 
-bool check_traffic_flowing(MeshId mesh_id, size_t num_devices, std::chrono::milliseconds interval) {
-    auto baseline = capture_telemetry(mesh_id, num_devices);
+bool check_traffic_flowing(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    MeshId mesh_id,
+    size_t num_devices,
+    std::chrono::milliseconds interval) {
+    auto baseline = capture_telemetry(mesh_device, mesh_id, num_devices);
     std::this_thread::sleep_for(interval);
-    auto after = capture_telemetry(mesh_id, num_devices);
+    auto after = capture_telemetry(mesh_device, mesh_id, num_devices);
     return telemetry_increased(baseline, after);
 }
 
@@ -166,7 +171,7 @@ TEST_F(FabricTrafficGeneratorKernelIntegrationTest, KernelGeneratesTraffic) {
     ASSERT_TRUE(cmd_interface.wait_for_state(RouterState::RUNNING, std::chrono::milliseconds(5000)))
         << "Routers did start in running state";
     // Validate traffic is flowing
-    ASSERT_TRUE(check_traffic_flowing(mesh_id, get_devices().size(), std::chrono::milliseconds(500)));
+    ASSERT_TRUE(check_traffic_flowing(*mesh_device_, mesh_id, get_devices().size(), std::chrono::milliseconds(500)));
 
     // Signal pause via control plane
     cmd_interface.pause_routers();
@@ -174,7 +179,7 @@ TEST_F(FabricTrafficGeneratorKernelIntegrationTest, KernelGeneratesTraffic) {
         << "Routers did not pause within timeout";
 
     // Validate there is no traffic flowing after pause
-    ASSERT_TRUE(!check_traffic_flowing(mesh_id, get_devices().size(), std::chrono::milliseconds(500)));
+    ASSERT_TRUE(!check_traffic_flowing(*mesh_device_, mesh_id, get_devices().size(), std::chrono::milliseconds(500)));
 
     // Signal resume via control plane
     cmd_interface.resume_routers();
@@ -182,7 +187,7 @@ TEST_F(FabricTrafficGeneratorKernelIntegrationTest, KernelGeneratesTraffic) {
         << "Routers did not resume within timeout";
 
     // Validate traffic is flowing again
-    ASSERT_TRUE(check_traffic_flowing(mesh_id, get_devices().size(), std::chrono::milliseconds(500)));
+    ASSERT_TRUE(check_traffic_flowing(*mesh_device_, mesh_id, get_devices().size(), std::chrono::milliseconds(500)));
 
     // Signal teardown and wait for completion
     signal_worker_teardown(mesh_device_, worker_core,

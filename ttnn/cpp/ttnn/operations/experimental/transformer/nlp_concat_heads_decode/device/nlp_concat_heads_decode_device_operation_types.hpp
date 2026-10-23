@@ -11,7 +11,7 @@ namespace ttnn::experimental::prim {
 struct NlpConcatHeadsDecodeParams {
     uint32_t num_heads{};
     bool on_subcoregrids{};
-    std::optional<CoreRangeSet> sub_core_grids;
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
 };
 
 struct NlpConcatHeadsDecodeInputs {

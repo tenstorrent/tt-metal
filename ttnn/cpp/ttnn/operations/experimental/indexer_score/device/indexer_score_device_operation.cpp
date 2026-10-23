@@ -12,7 +12,6 @@
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_device.hpp>  // q.device()->get_view().shape() for block-cyclic sp derivation
 
 #include "kernels/indexer_score_work_split.hpp"  // banded grid mapping (banded_core_count)
@@ -488,7 +487,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
 
     // Blackhole-only: the compute kernel relies on BH fast-untilize + custom BH LLK paths. Enforce in C++
     // so a Wormhole caller fails cleanly instead of hanging at launch.
-    const tt::ARCH arch = tt::tt_metal::hal::get_arch();
+    const tt::ARCH arch = q.device()->arch();
     TT_FATAL(arch == tt::ARCH::BLACKHOLE, "indexer_score is only supported on Blackhole, got {}", arch);
 
     // The custom blocked bcast-col LLK + half-sync 8-head subblock are validated only for bf16 DEST in
@@ -912,7 +911,7 @@ ttnn::Tensor launch_indexer_score(
     bool allow_subshard,
     std::optional<uint32_t> block_cyclic_sp_axis,
     std::optional<uint32_t> block_cyclic_chunk_local,
-    bool block_cyclic_cache_tp_sharded = false,  // MSA frontend never TP-shards; DSA passes it through
+    bool block_cyclic_cache_tp_sharded = false,  // KV dedup key remap; both DSA and MSA frontends pass it through
     // Fused ring (all-gather subsumed): k is the gathered [B,1,T,D] persistent output buffer, k_local is this
     // chip's SP shard = the all-gather INPUT, fused_ring carries the AG config. Both nullopt = the classic path.
     std::optional<ttnn::Tensor> k_local = std::nullopt,
@@ -1213,7 +1212,8 @@ ttnn::Tensor indexer_score_msa(
     std::optional<uint32_t> kv_len,
     const std::optional<std::vector<uint32_t>>& seq_shard_axes,
     std::optional<uint32_t> block_cyclic_sp_axis,
-    std::optional<uint32_t> block_cyclic_chunk_local) {
+    std::optional<uint32_t> block_cyclic_chunk_local,
+    bool block_cyclic_cache_tp_sharded) {
     // M3 has no learned gates, only a 1/sqrt(d) scale. Rather than materialize a constant [B,Hi,Sq,1] gate
     // tensor (an extra fill op dispatched every call), the reader fills cb_w with `scale` in L1 in-kernel
     // (synthesize_gate); q is passed as the unused weights placeholder so the op infra still has a valid
@@ -1237,9 +1237,10 @@ ttnn::Tensor indexer_score_msa(
         cache_batch_idx,
         kv_len,
         seq_shard_axes.value_or(std::vector<uint32_t>{}),
-        /*allow_subshard=*/false,  // MSA has no TP sub-shard
+        /*allow_subshard=*/false,  // MSA has no TP sub-shard (queries); the KEY cache may still be TP-deduped
         block_cyclic_sp_axis,
-        block_cyclic_chunk_local);
+        block_cyclic_chunk_local,
+        block_cyclic_cache_tp_sharded);
 }
 
 ttnn::Tensor ring_indexer_score_dsa(
