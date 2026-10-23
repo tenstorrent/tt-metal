@@ -917,3 +917,18 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   before the zeroing, 6 after); the unzeroed word was the one hazard found (MATH could start on a stale 1).
 - The fin's sigmoid (11.3 of 16 us): approximate (fast_and_approx) breaks picks (59%); exp_21f + 2 Newton steps keeps
   picks (99.14-99.53% a call) for 16.0 -> 13.2 us - not taken (precision for ~3 us).
+
+### Soak (HSE3_SOAK=N: N more calls over a pool of 8 inputs, every 500th checked) - an open K3 hang
+- GLM defaults: 3000 calls, no hang, checks pass.
+- K3 defaults: hangs within 150-750 calls (5 repros; router on the engine too). Triage (bh-lb-09, twice): row 0
+  (devs 4-7) in the SE reduce-scatter - engines in the down loop waiting arrival thresholds / W rounds, ports' readers
+  waiting engine hand-offs, some senders in noc_async_writes_flushed; row 1 done but its router cores in ra::plan
+  waiting packets; ETH (fabric router) cores report mismatched NoC counters. Twice the latent rows on row 0 chips
+  came out at PCC 0.9986-0.9988 (a correctness failure, call 0 / 1).
+- Fixed on the way (cross-call hazards, kept): (1) the latent all-to-all had only the first hop fenced - a source
+  could write its next call's latent into a destination still reading this call's (the source port now waits for every
+  destination chip's "started" - one header-only increment per destination a call, subtract re-armed); (2) RAFwd
+  re-armed its landed count with "= 0": another row a call ahead could land a next-call packet's count before that,
+  the next call's poll then never scans the flag (forward lost) - now subtracted.
+- A/B (3000-call budgets): without the latent: 2000 clean; without the router: 1 hang at 850 then 3000 clean (and one
+  latent PCC failure); without the routing exchange: hang at ~400. The hang needs the latent; not yet explained.

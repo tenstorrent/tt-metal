@@ -430,7 +430,10 @@ class HeadSE3:
                     rsx["coord"] = coord
                     la = None
                     if self.latent:
-                        la = dict(word=mbox + 16 * e.GX * e.GY + 128, ctr=arr[2], out=self.lout)
+                        # (fence: the latent's end-to-end "started" word - the old router words' slot, zeroed, free)
+                        la = dict(
+                            word=mbox + 16 * e.GX * e.GY + 128, ctr=arr[2], out=self.lout, fence=mbox + 16 * e.GX * e.GY
+                        )
                     rse = dict(
                         rs_pos=p,
                         rs_port=lambda d, l, pc=pc: (pc[(d, l)].x, pc[(d, l)].y),

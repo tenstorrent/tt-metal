@@ -202,6 +202,14 @@ FORCE_INLINE void la_send(uint32_t a0, C& conn, H* hdrs, L&& lpoll, uint32_t& rp
     if (nu == 0) return;
     const uint32_t c0 = u0 + 2 * nu + 1, t0a = c0 + 2 * nc;
     const uint32_t latz = get_arg_val<uint32_t>(t0a + 2), lctr = get_arg_val<uint32_t>(t0a + 3), LW = get_arg_val<uint32_t>(t0a + 4);
+    {  // (end-to-end fence: every destination chip started this call - its LATZ is free; my neighbour's ready only
+       // fences the first hop)
+        const uint32_t fence = get_arg_val<uint32_t>(t0a + 5), need = get_arg_val<uint32_t>(t0a + 6);
+        while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fence) < need) {
+            invalidate_l1_cache();
+            lpoll();
+        }
+    }
     uint32_t u = 0, lim = GROUP - rpos % GROUP;
     auto pop_batch = [&]() {
         noc_async_writes_flushed();
@@ -421,14 +429,18 @@ void kernel_main() {
     LStream ls;
     ls.init(ls0);
     const uint32_t la0 = ls0 + LStream::len(ls0), lnu = get_arg_val<uint32_t>(la0);
-    const uint32_t ra0 = la0 + 2 + 2 * lnu + 2 * get_arg_val<uint32_t>(la0 + 1 + 2 * lnu) + 5;
+    // (the latent's end-to-end fence: my fence word, the "started" count my sends need (one a destination chip), then
+    // the chips I tell "started" - their latent ports toward me: (chip | mesh << 16, x | y << 8))
+    const uint32_t lf0 = la0 + 2 + 2 * lnu + 2 * get_arg_val<uint32_t>(la0 + 1 + 2 * lnu) + 5;
+    const uint32_t lfence = get_arg_val<uint32_t>(lf0), lneed = get_arg_val<uint32_t>(lf0 + 1), lns = get_arg_val<uint32_t>(lf0 + 2);
+    const uint32_t ra0 = lf0 + 3 + 2 * lns;
     RASend ra;
     ra.init(ra0);
     const uint32_t rf0 = ra0 + RASend::len(ra0);
     RAFwd rf;
     rf.init(rf0);
     a = rf0 + RAFwd::len(rf0);
-    if (n > 0 || send_ready || rnu > 0 || ls.nu > 0 || lnu > 0 || !ra.done || rf.left) {
+    if (n > 0 || send_ready || rnu > 0 || ls.nu > 0 || lnu > 0 || lns > 0 || !ra.done || rf.left) {
         auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
         volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[GROUP + 1 + 3];
         for (uint32_t h = 0; h <= GROUP; ++h) {
@@ -448,6 +460,16 @@ void kernel_main() {
             hdrs[GROUP]->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{get_noc_addr(rx, ry, ready), 1, true});
             conn.wait_for_empty_write_slot();
             conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdrs[GROUP]), sizeof(PACKET_HEADER_TYPE));
+        }
+        if (lns > 0) {  // (I started this call: every chip sending me latent may - its latent port's fence word)
+            volatile tt_l1_ptr PACKET_HEADER_TYPE* fh = PacketHeaderPool::allocate_header();
+            for (uint32_t i = 0; i < lns; ++i) {
+                const uint32_t w = get_arg_val<uint32_t>(lf0 + 3 + 2 * i), xy = get_arg_val<uint32_t>(lf0 + 4 + 2 * i);
+                (void)fabric_set_unicast_route(fh, static_cast<uint16_t>(w & 0xFFFF), static_cast<uint16_t>(w >> 16));
+                fh->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{get_noc_addr(xy & 0xFF, (xy >> 8) & 0xFF, lfence), 1, true});
+                conn.wait_for_empty_write_slot();
+                conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(fh), sizeof(PACKET_HEADER_TYPE));
+            }
         }
         if (wait_ready) {
             DeviceZoneScopedN("SE-RDYWAIT");  // (its end: the neighbour's port started - launch skew + a hop)
@@ -516,6 +538,7 @@ void kernel_main() {
         rf.poll(conn, rahdr, true, RA_N_, RA_M_, RA_HBP_, RA_MAXP_);  // (and what passes through)
         noc_async_writes_flushed();
         ls.rearm();
+        if (lneed) noc_semaphore_inc(get_noc_addr(lfence), 0u - lneed);  // (re-arm: a next call's early "started" stays)
         conn.close();
     }
     if (expect_in > 0) {  // everything from upstream landed; re-arm for the next call
@@ -754,7 +777,7 @@ class XGather3:
         import os
 
         if not la or not getattr(e, "LT", None) or "NOA2A" in os.environ.get("SE_PROBE", ""):
-            return [0, 0] + [0] * 5
+            return [0, 0] + [0] * 5 + [0, 0, 0]
         plan, p = rs["plan"], rs["p"]
         node = lambda pos: self._node_of_pos(rs["coord"], pos)  # noqa: E731
         dst = [b for b in range(self.G) if b != p and e.la_dir(p, b) == d]
@@ -773,12 +796,25 @@ class XGather3:
                 r0, nr = e.la_rows(cy, b)
                 rows |= (r0 | nr << 2) << (4 * b)
             cw += [c.x | c.y << 8 | (cy * e.GX + cx) << 16, rows]
+        # (the end-to-end fence: my sends wait one "started" a destination chip; I tell every chip whose latent comes
+        # to me through this direction's link v - its port (its direction to me, v))
+        sends = []
+        for q in range(self.G):
+            if q == p or e.la_dir(p, q) != d:
+                continue
+            qc = next(c for c, ch in self.chips.items() if c[0] == rs["coord"][0] and ch["rings"][0]["p"] == q)
+            pc = {(dd, l): c for (_, dd, l), c in self.chips[qc]["ports"].items()}[(e.la_dir(q, p), v)]
+            pv = self.mesh.worker_core_from_logical_core(pc)
+            nq = node(q)
+            sends += [int(nq.chip_id) | int(nq.mesh_id) << 16, pv.x | pv.y << 8]
         return (
             [len(dst)]
             + units
             + [len(cores)]
             + cw
             + [e.base + e.off["lat"], la["word"], e.base + e.off["latz"], la["ctr"], e.LWMAX]
+            + [la["fence"], len(dst), len(sends) // 2]
+            + sends
         )
 
     def _node_of_pos(self, coord, pos):

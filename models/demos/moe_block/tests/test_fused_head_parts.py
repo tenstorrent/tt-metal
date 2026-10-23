@@ -193,6 +193,22 @@ def _check_latent(head, xs, w_l, rows, name):
         xf = torch.cat([xs[r * C + cc] for cc in range(C)], dim=1)
         ref = xf[p * rows // G : (p + 1) * rows // G] @ w_l.T
         ps.append(pcc(outs[d], ref))
+        if ps[-1] < 0.9995:  # (where: per source chip's column slice x row tile, the bad ones)
+            LTc = ref.shape[1] // G
+            bad = []
+            for q in range(G):
+                for rt in range(ref.shape[0] // 32):
+                    o_, r_ = (
+                        outs[d][rt * 32 : (rt + 1) * 32, q * LTc : (q + 1) * LTc],
+                        ref[rt * 32 : (rt + 1) * 32, q * LTc : (q + 1) * LTc],
+                    )
+                    e = (o_ - r_).abs().max().item() / max(r_.abs().max().item(), 1e-6)
+                    if e > 0.05:
+                        cols = ((o_ - r_).abs() > 0.05 * r_.abs().max()).any(0).nonzero().flatten()
+                        bad.append(
+                            f"src{q}(pos) rt{rt} rel {e:.2f} cols {cols.min().item()}..{cols.max().item()} ({cols.numel()})"
+                        )
+            logger.info(f"HSE3 {name} latent chip {d} (p {p}): PCC {ps[-1]:.5f} bad {bad[:12]}")
     logger.info(f"HSE3 {name} latent: PCC min {min(ps):.5f}")
     assert min(ps) > 0.999, ps
 
@@ -360,7 +376,11 @@ def test_head_se3(mesh_device, device_params):
             w_r, b_r = torch.randn(spec.E, H, generator=g) * 0.02, torch.randn(spec.E, generator=g) * 0.01
             head.upload_router(w_r, b_r)
         # (every call its own x - and so its own routing: each call checked against its own reference)
-        xss = [[torch.randn(rows, H // C, generator=gen(7, k)) for _ in range(R * C)] for k in range(ncalls())]
+        soak = int(os.environ.get("HSE3_SOAK", "0"))  # (a soak: that many more calls over a pool of 8 inputs)
+        xss = [
+            [torch.randn(rows, H // C, generator=gen(7, k)) for _ in range(R * C)]
+            for k in range(max(ncalls(), 8 if soak else 0))
+        ]
         xts = [
             ttnn.from_torch(
                 torch.stack(xs).view(R, C, rows, H // C),
@@ -407,6 +427,18 @@ def test_head_se3(mesh_device, device_params):
             return min(ps)
 
         us, pss = _calls(mesh_device, lambda k: head.run(xts[k], w), check)
+        if soak:  # (each call its pool input; every 500th and the last checked against its own reference)
+            for i in range(soak):
+                y = head.run(xts[i % len(xts)], w)
+                if i % 50 == 49:  # (progress: where a hang lands)
+                    ttnn.synchronize_device(mesh_device)
+                    logger.info(f"HSE3 {name} soak progress: {i + 1}")
+                if i % 500 == 499 or i == soak - 1:
+                    ttnn.synchronize_device(mesh_device)
+                    check(i % len(xts), y)
+                    logger.info(f"HSE3 {name} soak: {i + 1} calls")
+                ttnn.deallocate(y)
+            ttnn.synchronize_device(mesh_device)
         if os.environ.get("SE_RTR_GATE_DBG"):  # PROBE: the engine cores' gate masks (word 60: 0x100 | arrived)
             for d, t in enumerate(ttnn.get_device_tensors(head.eng.ewords)):
                 m = ttnn.to_torch(t).reshape(-1, 64)[:, 60].tolist()

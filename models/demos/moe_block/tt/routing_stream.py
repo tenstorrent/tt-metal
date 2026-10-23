@@ -291,9 +291,12 @@ struct RAFwd {
             }
             if (!blocking && !any) return;
         }
-        if (blocking && n) {  // (re-arm once every packet's count has landed)
+        if (blocking && n) {  // (re-arm once every packet's count has landed: by subtracting - a next call's packets may
+                              // already land here (another row a call ahead: its count must survive, or the next call's
+                              // poll never scans its flag - the forward lost, the destination's planner waiting forever)
             while (*ctr < n) invalidate_l1_cache();
-            *ctr = 0;
+            noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(ctr)), 0u - n);
+            noc_async_atomic_barrier();
             lastc = 0;
         }
         noc_async_writes_flushed();
