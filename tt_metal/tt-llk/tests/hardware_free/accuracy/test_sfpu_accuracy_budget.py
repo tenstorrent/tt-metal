@@ -837,16 +837,18 @@ def test_a_tolerance_reading_ranks_fp16_subnormals_flushed(tmp_path, monkeypatch
     assert row.worst == 0, row
 
 
-def test_an_unpreparable_measure_path_warns_and_records_nothing(tmp_path, monkeypatch):
-    """The session-start truncation is under the same rule as every write: a path that
-    is a directory warns and switches the recorder off rather than aborting pytest
-    before anything is compared."""
+def test_an_unpreparable_measure_path_is_refused_before_anything_runs(
+    tmp_path, monkeypatch
+):
+    """A path that is a directory raises, and the plugin makes that a usage error: the
+    sweep's records are required, and under `-n` the workers set the path themselves,
+    so a controller that only switched itself off left every worker failing every
+    sweep cell while a serial run passed and recorded nothing."""
     import helpers.utils as utils
 
     monkeypatch.setattr(utils, "_ULP_MEASURE_PATH", str(tmp_path))  # a directory
-    monkeypatch.setattr(utils, "_ULP_MEASURE_WARNED", False)
-    utils.prepare_ulp_measure_file()
-    assert utils._ULP_MEASURE_PATH is None and utils._ULP_MEASURE_WARNED
+    with pytest.raises(OSError):  # allow-pytest.raises: host-only test
+        utils.prepare_ulp_measure_file()
 
     target = tmp_path / "nested" / "measure.jsonl"
     monkeypatch.setattr(utils, "_ULP_MEASURE_PATH", str(target))

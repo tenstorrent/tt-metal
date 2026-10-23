@@ -40,6 +40,7 @@ from .ulp_table import (
     BudgetKey,
     Metric,
     _winner,
+    contracts_of,
     load_table,
     resolve_variant,
     steps_bind,
@@ -82,9 +83,7 @@ def _current_test() -> str:
 #: One op's keyed budgets.
 _Contracts = Dict[BudgetKey, AccuracyContract]
 
-_SFPU_ACCURACY_BUDGET: Dict[MathOperation, _Contracts] = {
-    op: {row.key: row.contract for row in rows} for op, rows in load_table().items()
-}
+_SFPU_ACCURACY_BUDGET: Dict[MathOperation, _Contracts] = contracts_of(load_table())
 
 
 def resolve_contract(table: _Contracts, query: BudgetKey) -> AccuracyContract:

@@ -388,11 +388,12 @@ def _segment_changes(
 ) -> List[Tuple[Kind, Tuple[float, float], str, str]]:
     """``(kind, segment, held_before, held_after)`` for each run of the input over which
     the two rows' gates differ, over the union of both lists' edges, then the cell-wide
-    rise in excused non-finite lanes, if any (``segment`` ``None``). On a segment held
-    to a figure on both sides -- gated or past the ceiling, either way round -- a
-    widened floor ranks after a raise or a lost gate and before a tightening or a new
-    gate, as in :func:`_classify`: both figures are measured outside the floor, so a
-    wider one forgives lanes the old figure held, whatever the figures did."""
+    changes (``segment`` ``None``): a declared ``atol``/``rtol`` that may loosen where
+    neither side is a whole-cell gate, and a rise in excused non-finite lanes. On a
+    segment held to a figure on both sides -- gated or past the ceiling, either way
+    round -- a widened floor ranks after a raise or a lost gate and before a tightening
+    or a new gate, as in :func:`_classify`: both figures are measured outside the floor,
+    so a wider one forgives lanes the old figure held, whatever the figures did."""
     before, after = _spans(was, query), _spans(now, query)
     edges = sorted(
         {e for spans in (before, after) for s in spans for e in (s.low, s.high)}
@@ -421,6 +422,9 @@ def _segment_changes(
         else:
             found.append([held, low, high])
     changes = [(kind, (low, high), t0, t1) for (kind, t0, t1), low, high in found]
+    if not was.gated and not now.gated and _widened(was.declared, now.declared):
+        # Off a whole-cell gate the functional drivers compare on the declared bounds.
+        changes.append((Kind.TOLERANCE_WIDENED, None, was.describe(), now.describe()))
     if now.nonfinite > was.nonfinite:
         # Lanes the headroom report excuses are a cell-wide figure, not a segment's.
         changes.append((Kind.BASELINE_RAISED, None, was.describe(), now.describe()))

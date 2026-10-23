@@ -247,8 +247,9 @@ def pytest_addoption(parser):
         "lookup in the same test, on a variant that ran with the dest_acc it names. "
         "The exhaustive sweep records every cell it measures, gated or not and under "
         "--ulp-emit too, plus a non-finite lane count for a tolerance cell it cannot "
-        "measure. PATH is created and truncated at session start. Reporting only: it "
-        "cannot change a verdict.",
+        "measure. PATH is created and truncated at session start; one that cannot be "
+        "is a usage error. Reporting only, except that the sweep's records are "
+        "required: a sweep cell whose record is not written fails.",
     )
     parser.addoption(
         "--ulp-emit",
@@ -551,7 +552,12 @@ def pytest_configure(config):
                 "through a UMD simulation server, which needs no port. Drop it from "
                 "your command line; it will be removed."
             )
-        utils_module.prepare_ulp_measure_file()
+        try:
+            utils_module.prepare_ulp_measure_file()
+        except OSError as exc:
+            raise pytest.UsageError(
+                f"--ulp-measure: cannot prepare {config.getoption('--ulp-measure')}: {exc}"
+            ) from exc
         # Refresh order folder with setup_files function
         order_processing.setup_files(TestConfig.ARTEFACTS_DIR / "order_records", True)
         if os.path.exists(log_file):

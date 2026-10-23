@@ -93,10 +93,12 @@ def usable_budget_ceiling(output_format: DataFormat) -> float:
 #: How finely the gateable range is split. ``None`` is the binary rule: a binade is
 #: either within the ceiling or past it, and adjacent binades on the same side merge.
 #: An integer *n* would split the gateable range into step classes a factor of ``2**n``
-#: apart as well (0 and 1 merged). Measured on a full sweep, factor-2 classes gave
-#: 27,741 extra entries, almost all of them the worst lane flickering between 0 and 1
-#: step from one binade to the next where the pack path rounds; the binary rule gave
-#: 3,472, and is the question asked: where is the op safe.
+#: apart as well (0 and 1 merged). Drawn from one Wormhole sweep's recorded profiles,
+#: per cell and before the emitter's collapse (the 3,041 cells with a profile),
+#: factor-2 classes gave 8,452 entries and the binary rule 5,677; the extra ones mostly
+#: part a 0-1-step binade from a 2-7-step neighbour or, on a Float32 output, an exact
+#: binade from one at 2**13-2**17 steps. The binary rule is the question asked: where
+#: is the op safe.
 DOMAIN_CLASS_BITS: Optional[int] = None
 
 #: A binade with fewer lanes *present* than this (the single zero lane; a format's last

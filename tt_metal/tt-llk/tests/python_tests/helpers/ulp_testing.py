@@ -6,6 +6,7 @@ parametrized case by it, and one well-formed ``domains`` list."""
 
 import math
 from contextlib import contextmanager
+from typing import Optional
 
 import pytest
 
@@ -28,7 +29,7 @@ def refused(problem: Problem):
     assert caught.value.problem is problem, caught.value
 
 
-def problem_id(value) -> str:
+def problem_id(value) -> Optional[str]:
     """A pytest ``ids=`` callable: a :class:`Problem` is named by its member, any other
-    parameter is left to pytest's own numbering."""
-    return value.name if isinstance(value, Problem) else ""
+    parameter is left to pytest's own numbering (which it applies only to ``None``)."""
+    return value.name if isinstance(value, Problem) else None

@@ -553,7 +553,9 @@ _ULP_REPORT: bool = False
 #: every cell it measures, gated or not -- it records a tolerance cell, and every cell
 #: under ``--ulp-emit``, itself rather than through ``passed_test`` -- and a non-finite
 #: lane count for a tolerance cell it cannot measure. Like ``_ULP_REPORT`` it is written
-#: after the verdict and never read back into one, so it cannot change a result.
+#: after the verdict and never read back into one, with one exception: the sweep's
+#: records are *required* (the headroom report judges only the cells it reads), so a
+#: sweep record that is not written fails its cell (:class:`RecordDropped`).
 _ULP_MEASURE_PATH: Optional[str] = None
 
 #: Set once a recorder write has failed, so the warning is printed once per process.
@@ -578,27 +580,17 @@ def prepare_ulp_measure_file() -> None:
     """Create ``--ulp-measure``'s file empty, once per session, on the controller.
 
     The parent is created so a later write cannot raise ``FileNotFoundError``, and the
-    file truncated so a second run does not fold its rows in with the first's. Like
-    every recorder write, a failure here -- an unwritable directory, a path that is a
-    directory, a full disk -- warns and turns the recorder off rather than aborting the
-    session: the flag is reporting only and must not fail a run before it compares
-    anything.
+    file truncated so a second run does not fold its rows in with the first's. A path
+    that cannot be prepared -- an unwritable directory, a path that is a directory --
+    raises ``OSError``, which the plugin turns into a usage error before anything runs:
+    the sweep's records are required, and the workers, which set the path themselves,
+    would otherwise each fail every sweep cell on a path the controller gave up on.
     """
-    global _ULP_MEASURE_PATH, _ULP_MEASURE_WARNED
     if not _ULP_MEASURE_PATH:
         return
     path = Path(_ULP_MEASURE_PATH)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("", encoding="utf-8")
-    except OSError as exc:
-        logger.warning(
-            "--ulp-measure: cannot prepare {}: {}; recording nothing this session",
-            path,
-            exc,
-        )
-        _ULP_MEASURE_WARNED = True
-        _ULP_MEASURE_PATH = None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("", encoding="utf-8")
 
 
 def _consume_ulp_query() -> None:

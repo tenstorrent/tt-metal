@@ -436,6 +436,35 @@ def test_a_list_re_emitted_as_an_unmeasurable_row_raises_the_baseline():
     assert compare(plain, plain) == []
 
 
+@pytest.mark.parametrize(
+    "base_extra, head_row",
+    [
+        (
+            (),
+            Row(input=F16B, output=F16B, dest=D_NO, metric=TOL, measured=10, atol=1.0),
+        ),
+        (
+            (Row(metric=TOL, atol=0.05),),
+            Row(input=F16B, output=F16B, dest=D_NO, domains=(Domain(-INF, INF, 10),)),
+        ),
+    ],
+    ids=["list-to-plain", "broader-bound-widened"],
+)
+def test_a_declared_tolerance_that_may_loosen_beside_a_list_is_a_regression(
+    base_extra, head_row
+):
+    """Past bf16's ceiling the list is no whole-cell gate, so the functional drivers
+    compare on the op's declared bounds; segment by segment nothing changed."""
+    past = Row(input=F16B, output=F16B, dest=D_NO, domains=(Domain(-INF, INF, 10),))
+    head_extra = tuple(Row(metric=TOL, atol=1.0) for _ in base_extra)
+    changes = compare(
+        _table(past, *base_extra, op=TANH), _table(head_row, *head_extra, op=TANH)
+    )
+    assert (Kind.TOLERANCE_WIDENED, None) in [(c.kind, c.segment) for c in changes]
+    assert all(c.is_regression for c in changes)
+    assert compare(_table(past, op=TANH), _table(past, op=TANH)) == []
+
+
 def test_a_re_emit_that_splits_a_list_row_drops_no_baseline():
     past = (Domain(-INF, -1, 9), Domain(-1, 1, 10), Domain(1, INF, 9))
     one = _table(Row(input=F16B, output=F16B, domains=past), op=TANH)

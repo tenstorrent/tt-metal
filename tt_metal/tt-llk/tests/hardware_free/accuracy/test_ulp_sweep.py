@@ -1129,6 +1129,10 @@ _FLOAT32_WALK_SAMPLES = 65024
 #: patterns and one zero (+0.0 and -0.0 are one value); no subnormal.
 _BFLOAT16_SWEPT_VALUES = 65025
 
+#: The Float16 sweep's value count, likewise: 2 signs x 30 normal binades x 1,024
+#: mantissas, and one zero; no subnormal.
+_FLOAT16_SWEPT_VALUES = 61441
+
 
 def test_the_float32_walk_is_pinned_end_to_end():
     """`swept_value_count` enumerates at most `_SWEEP_TENSOR` lanes, so the check above
@@ -1178,7 +1182,11 @@ def test_the_float32_walk_is_pinned_end_to_end():
 
 @pytest.mark.parametrize(
     "fmt, count",
-    [(F16B, _BFLOAT16_SWEPT_VALUES), (F16, 61441), (F32, _FLOAT32_WALK_SAMPLES)],
+    [
+        (F16B, _BFLOAT16_SWEPT_VALUES),
+        (F16, _FLOAT16_SWEPT_VALUES),
+        (F32, _FLOAT32_WALK_SAMPLES),
+    ],
     ids=lambda v: v.name if isinstance(v, DataFormat) else str(v),
 )
 def test_the_sweep_feeds_every_normal_value_and_zero_and_nothing_else(fmt, count):

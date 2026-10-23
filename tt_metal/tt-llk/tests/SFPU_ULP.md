@@ -43,8 +43,7 @@ anything compiles. The producer half only compiles, and `--collect-only` runs no
 so both write nothing and say so. Of a measured op it replaces every row of each
 measured `(input, output)` pair, and keeps the rows no measurement re-derives: one that
 names an `arch`, declares `atol`/`rtol`, or names a pair this run did not measure. Each
-refusal is its own exception type (`WrongArch`, `SessionNotClean`, `IncompleteGrid`,
-`AmbiguousCollapse`); a rewrite the loader would refuse, or that would resolve ambiguously for some
+refusal is its own `EmitRefused` subclass, carrying the facts as attributes; a rewrite the loader would refuse, or that would resolve ambiguously for some
 variant, is a `TableError` raised before anything is written, since `write_table_file`
 reads its dump back and resolves it first. A successful
 emit returns a `WriteReport` that the one-line summary is rendered from.
@@ -322,8 +321,10 @@ the measurement will be dominated by the band and the cell will demote to tolera
 `near_zero_atol` is the floor under the budget for exactly that: the lanes where the
 reference crosses zero, judged on absolute error instead of steps. The emitter derives
 it from the measurement (`ulp_sweep.near_zero_floor`) and writes it on the row, so a
-re-emit regenerates a floor row like any other; the only rows it keeps as written are
-the op-wide `atol`/`rtol` anchors of `GeluAppx` and `SigmoidAppx`. A floor past `EMIT_MAX_NEAR_ZERO_ATOL` is a kernel's cut-off rather than its
+re-emit regenerates a floor row like any other. The rows it keeps as written are the
+ones no measurement re-derives (`ulp_sweep._kept`): a row naming an `arch`, a row
+declaring `atol`/`rtol` (the op-wide anchors of `GeluAppx` and `SigmoidAppx`), and every
+row for a pair the run did not measure, such as the `Abs` and `Identity` wildcard rows. A floor past `EMIT_MAX_NEAR_ZERO_ATOL` is a kernel's cut-off rather than its
 rounding -- `Softplus` answers 0 below x = -5 where the answer is up to 0.0065, the
 approximate `Gelu` is 0.024 off -- and stays a hand decision: the demoted row records
 the floor it would have needed.
@@ -431,6 +432,10 @@ anchor's `atol`/`rtol`.
 
   Each line of `ulp.jsonl` is one `ulp_table.Measurement`, read back by
   `read_measurements`; `judge` returns the typed findings the report is rendered from.
+- **`--ulp-measure` can fail the sweep.** Elsewhere it only reports, but the sweep's
+  records are required: the headroom report judges only the cells it reads, so a sweep
+  cell whose record is not written fails (`RecordDropped`), and a path that cannot be
+  prepared at session start is a usage error before anything runs.
 - **`CHIP_ARCH` must be set**, and `--ulp-emit` refuses to run on anything but
   Wormhole, because the emitter writes no `arch` and the rows would be badged wrongly.
 
