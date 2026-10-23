@@ -425,11 +425,6 @@ class RunTimeOptions {
     // NOC API version for Quasar
     uint32_t quasar_noc_api_version = 2;
 
-    // Quasar IP variant from TT_METAL_QUASAR_VARIANT (horizon, trinity, saturn, ...). Selects the variant's
-    // register headers and, when tt_metal/tt-llk/tt_llk_quasar/arch/<variant> exists, the LLK headers that
-    // shadow the base Quasar ones. Empty means the base Quasar part.
-    std::string quasar_variant;
-
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
 
@@ -691,7 +686,7 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}_{}_{}_{}",
             get_watcher_hash(),
             get_sanitizer_hash(),
             get_kernels_early_return(),
@@ -699,8 +694,7 @@ public:
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
             get_disable_fabric_2_erisc_mode(),
-            get_eth_ptp_trace(),
-            get_quasar_variant());
+            get_eth_ptp_trace());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -1038,7 +1032,6 @@ public:
     void set_simulator_serve_over_sockets(bool enable) { simulator_serve_over_sockets = enable; }
 
     uint32_t get_quasar_noc_api_version() const { return quasar_noc_api_version; }
-    const std::string& get_quasar_variant() const { return quasar_variant; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 

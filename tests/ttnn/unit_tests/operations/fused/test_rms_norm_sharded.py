@@ -373,12 +373,12 @@ def test_rms_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w,
     ids=["row_major", "col_major"],
 )
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
+@pytest.mark.parametrize("h", [32, 64, 96])
 def test_rms_norm_sharded_width_non_rectangular_grid(
-    device, full_lines, cores_in_last_line, origin, line_length, orientation, dtype
+    device, full_lines, cores_in_last_line, origin, line_length, orientation, dtype, h
 ):
     torch.manual_seed(0)
 
-    h = 32
     shard_width = 32
     _, sharded_mem_config, w = non_rectangular_width_shard_config(
         device,
