@@ -201,6 +201,9 @@ class Flux3KleinRequest:
     prompt_upsampling: bool = True
     boxes: tuple | None = None
     return_final_tokens: bool = True
+    cache: object = None
+    """DBCache (cache-dit) for the DiT single stage, eager only: ``None`` (off), a ``Flux3KleinCacheConfig``, a dict
+    of its fields, or a spec string such as ``"F8B0:0.08:w8"`` (``cache_flux3_klein.Flux3KleinCacheConfig.from_spec``)."""
     """Read the final latent state back to the host (``Flux3KleinResult.final_tokens``; the tests and the sweep's
     replay check need it). A serving request does not: at 4096x4096 that read is ~1.5 s of the ``to_host`` stage
     (sweep 2026-10-21: to_host 1.94 s, of which the uint8 image is ~0.3 s). ``False`` leaves ``final_tokens`` None."""
@@ -907,9 +910,25 @@ class Flux3KleinPipeline:
             self._warm_vae(resolved.height, resolved.width, traced=True, layout=layout)
         vae_capture_s = time.time() - t0
         captured_before = prepared.key in denoiser.captured_keys
+        from .cache_flux3_klein import Flux3KleinCache, Flux3KleinCacheConfig
+
+        cache_config = Flux3KleinCacheConfig.from_spec(request.cache)
+        cache_stats = None
+        denoiser._transformer.cache = Flux3KleinCache(cache_config, self._device) if cache_config is not None else None
         t0 = time.time()
-        state = denoiser.denoise_on_device(prepared, traced=traced)
+        try:
+            state = denoiser.denoise_on_device(prepared, traced=traced)
+        finally:
+            if denoiser._transformer.cache is not None:
+                cache_stats = denoiser._transformer.cache.stats
+                denoiser._transformer.cache.close()
+                denoiser._transformer.cache = None
         denoise_s = time.time() - t0
+        if cache_stats is not None:
+            logger.info(
+                f"RECORD dbcache {cache_config.tag()}: cached {len(cache_stats.cached_steps)}/{cache_stats.steps} steps "
+                f"{cache_stats.cached_steps}; diffs {[(i, round(d, 4)) for i, d in cache_stats.diffs]}"
+            )
 
         # 6. decode (a replay when traced: the trace was captured above, before the DiT trace)
         t0 = time.time()
@@ -948,6 +967,7 @@ class Flux3KleinPipeline:
             "prepare_s": prepare_s,
             "vae_capture_s": vae_capture_s,
             "denoise_s": denoise_s,
+            "cached_steps": float(len(cache_stats.cached_steps)) if cache_stats is not None else 0.0,
             "decode_s": decode_s,
             "to_host_s": to_host_s,
             "total_s": time.time() - t_total,

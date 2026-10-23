@@ -563,9 +563,16 @@ class Flux3KleinDenoiser:
         alignment rows zero) after ``ttnn.synchronize_device``, without a host read: the M7 pipeline hands it to the
         device VAE. The slot belongs to the denoiser (never deallocate it; the next ``prepare`` of the key refreshes
         it). ``on_step`` as in :meth:`denoise`."""
+        cache = getattr(self._transformer, "cache", None)
+        if cache is not None:
+            if traced:
+                raise ValueError("DBCache is eager-only: a cached step is a different program sequence; run with traced=False")
+            cache.begin_request()
         if on_step is not None:
             on_step(0, self.read_state(prepared))
         for index in range(prepared.num_steps):
+            if cache is not None:
+                cache.begin_step(index)
             velocity = self.step(prepared, index, traced=traced)
             if not traced:
                 ttnn.deallocate(velocity)

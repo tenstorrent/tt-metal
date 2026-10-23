@@ -328,10 +328,23 @@ class Flux3KleinTransformer(Module):
         if trace is not None:
             trace("assembled", h)
         mod = tuple(gather_modulation(table, idx) for idx in plan.single_mod_indices)
-        for i, block in enumerate(self.single_blocks):
-            h = block(h, rope=plan.single_rope, mod=mod, logical_length=layout.total)
-            if trace is not None:
-                trace(f"single.{i}", h)
+        cache = getattr(self, "cache", None)
+        if cache is not None and trace is None:
+            # DBCache (pipelines/flux3_klein/cache_flux3_klein.py): the stack with the middle blocks skipped on a
+            # cached step; ``h`` (the assembled sequence) is consumed by the stack as in the plain loop.
+            h = cache.run(
+                self.single_blocks,
+                h,
+                lambda block, x: block(x, rope=plan.single_rope, mod=mod, logical_length=layout.total),
+                content_rows=layout.lengths["image"] + layout.lengths["image_cond"],
+                total_padded=layout.total_padded,
+                sp_axis=self._sp_axis,
+            )
+        else:
+            for i, block in enumerate(self.single_blocks):
+                h = block(h, rope=plan.single_rope, mod=mod, logical_length=layout.total)
+                if trace is not None:
+                    trace(f"single.{i}", h)
 
         # Final layer on every row of the shard (row-local), then the image rows back in the image layout.
         y = ttnn.squeeze(
