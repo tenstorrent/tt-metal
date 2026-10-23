@@ -26,7 +26,17 @@ import torch
 
 import ttnn
 
-from .sol_prepass import LOG2E, NEG, TILE, VAR_EPS, SolGeometry, _pad32, build_constants
+from .sol_prepass import (
+    LOG2E,
+    NEG,
+    TILE,
+    VAR_EPS,
+    SolGeometry,
+    _pad32,
+    build_constants,
+    compute_row_max,
+    row_max_constants,
+)
 
 KERNEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sol_kernels")
 TILE_BYTES = 2048
@@ -152,12 +162,14 @@ class SolPrepassFused:
         math_fidelity=None,
         emit_chunk_union: bool = False,
         debug_moments: bool = False,
+        row_max: bool = False,
         units_per_shard: bool | None = None,
         mask_reuse: int = 1,
     ):
         # "compact" (tier 3, DESIGN_BLOCK_COMPACT.md) consumes the gather-form block mask: same outputs as "gather".
         # emit_chunk_union=True additionally writes the (Q chunk x K chunk) union row as "chunk_union" (dormant option).
-        assert mode in ("gather", "chunk", "compact"), mode
+        # "pack" is compact plus the ring op's Q2 cross-chunk packing; the pre-pass output is identical to compact.
+        assert mode in ("gather", "chunk", "compact", "pack"), mode
         assert thresh_type == "diag", "fused pre-pass implements the diag threshold (H3 policy)"
         self.mode = mode
         self.mesh_device = mesh_device
@@ -184,6 +196,17 @@ class SolPrepassFused:
         )
         self.route_units: tuple[int, int] | None = None  # (unit count, units_per_shard) of the last built route program
         self.math_fidelity = math_fidelity if math_fidelity is not None else ttnn.MathFidelity.HiFi4
+        # row_max=True (resident mode, M4): also return "row_max" from sol_prepass.compute_row_max, the same ttnn-op
+        # chain SolPrepass uses (not fused; it is a handful of small ops on top of one tile-sized all-gather).
+        self.row_max = bool(row_max)
+        self._row_max_consts: dict | None = None
+        self._row_max_ckc = (
+            ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+            )
+            if self.row_max
+            else None
+        )
         # E10 mask reuse: N > 1 keeps the route outputs (block mask, bias, union) of a call and reuses them for the next
         # N-1 calls, skipping the route program; the pool program and the two gathers still run every call because the
         # ring op's correction term needs the current block means. 1 (default) = route every call (committed behaviour).
@@ -194,6 +217,9 @@ class SolPrepassFused:
         self._state: dict | None = None
         self._key = None
         self.last_density: float | None = None
+        # The fused route program writes the chunk-form mask directly in chunk mode, so the block-level density is
+        # only known in the block-form modes (where it equals last_density).
+        self.last_block_density: float | None = None
         self.host_times: dict = {}  # last call's host-side timing of allocation vs launch, per program (seconds)
 
     # ------------------------------------------------------------------ constants / descriptors
@@ -564,6 +590,20 @@ class SolPrepassFused:
     ) -> dict:
         assert abs(scale - self._state["scale"]) < 1e-12, "scale is baked into the prepared constants"
         geo = self.geo
+        row_max = None
+        if self.row_max:
+            if self._row_max_consts is None:
+                self._row_max_consts = {
+                    name: self._upload(t, shard=False) for name, t in row_max_constants(int(q.shape[3]), scale).items()
+                }
+            row_max = compute_row_max(
+                q,
+                k,
+                consts=self._row_max_consts,
+                ccl_manager=self.ccl_manager,
+                sp_axis=self.sp_axis,
+                compute_kernel_config=self._row_max_ckc,
+            )
         q_bar, kc_local, vc_local = self._run_pool(q, k, v)
         kc = self.ccl_manager.all_gather(kc_local, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
         vc = self.ccl_manager.all_gather(vc_local, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
@@ -595,8 +635,9 @@ class SolPrepassFused:
             else:
                 cols = torch.cat([torch.arange(s * geo.nb_pad, s * geo.nb_pad + geo.nb) for s in range(geo.shards)])
             self.last_density = float(sub[..., cols].mean())
+            self.last_block_density = None if self.mode == "chunk" else self.last_density
         ttnn.deallocate(q_bar)
-        out = {"block_mask": mask, "pooled_k": kc, "pooled_v": vc, "bias": bias}
+        out = {"block_mask": mask, "pooled_k": kc, "pooled_v": vc, "bias": bias, "row_max": row_max}
         if union is not None:
             out["chunk_union"] = union
         return out

@@ -246,6 +246,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& sol_pooled_k,
     const std::optional<ttnn::Tensor>& sol_pooled_v,
     const std::optional<ttnn::Tensor>& sol_bias,
+    const std::optional<ttnn::Tensor>& sol_row_max,
     const std::string& sol_mode) {
     // Normalize empty joints to nullopt (see drop_if_empty).
     const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
@@ -318,6 +319,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         sol_pooled_k,
         sol_pooled_v,
         sol_bias,
+        sol_row_max,
         sol_mode);
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],

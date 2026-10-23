@@ -206,13 +206,21 @@ struct RingJointSDPAInputs {
     //                   negative for exact and padding blocks). When absent the reader generates the same
     //                   tile rows on device from the mask row and the block geometry (sol_bias_gen.hpp), which
     //                   is the production path; the tensor form stays for A/B validation of the generator.
+    //   sol_row_max     DEPRECATED, ignored. Optional bf16 tile [1, NH, q_rows_pad, 32] (q_rows_pad = the local Q
+    //                   shard's padded row count); accepted by sol_mode="resident" only and shape-validated, but
+    //                   resident compute no longer reads it: it always runs a (lazy) running row max. Its a-priori
+    //                   bound was too loose for bf16 intermediates. Kept so existing callers keep working; omit it.
     std::optional<Tensor> sol_block_mask;
     std::optional<Tensor> sol_pooled_k;
     std::optional<Tensor> sol_pooled_v;
     std::optional<Tensor> sol_bias;
+    std::optional<Tensor> sol_row_max;
 
     bool sol_enabled() const { return sol_block_mask.has_value(); }
     bool sol_bias_generated() const { return sol_enabled() && !sol_bias.has_value(); }
+    // Deprecated sol_row_max supplied (resident only). Only selects the reader's runtime-arg layout; compute ignores
+    // it.
+    bool sol_static_max() const { return sol_enabled() && sol_row_max.has_value(); }
     // Exact-set granularity. "chunk": the mask is [1, NH, nqc_pad, nkc_pad] over K CHUNKS; the reader streams every
     // chunk through the chained path (minus chain-wide skips) and compute drains the chunks the mask drops.
     // "gather": block mask [1, NH, nqc_pad, n_blocks_pad]; the reader gathers kept blocks from DRAM (chains off).
@@ -222,10 +230,23 @@ struct RingJointSDPAInputs {
     bool sol_mask_is_chunk_width() const {
         return sol_enabled() && sol_block_mask->logical_shape()[3] != sol_pooled_k->logical_shape()[2];
     }
+    // "resident": the K/V-once loop order: every K/V piece is streamed through a core once per ring iteration
+    // (chains on, as chunk mode) and applied to each of the core's resident Q chunks, whose accumulators stay in
+    // L1 for the whole op (sol_attn_status_2026-10-21.md §4a, milestone M1). Since M2 its exact set is per
+    // 64-token BLOCK: the mask is the block-form one (W = n_blocks_pad, as compact), a piece is streamed when any
+    // chunk of the chain keeps a block of it, and each chunk's step multiplies only its kept blocks in place.
+    // Requires the generated bias.
+    bool sol_resident_mode(const std::string& mode) const { return sol_enabled() && mode == "resident"; }
     bool sol_chunk_mode(const std::string& mode) const {
-        return sol_enabled() && (mode == "chunk" || (mode == "auto" && sol_mask_is_chunk_width()));
+        return sol_enabled() &&
+               (mode == "chunk" || sol_resident_mode(mode) || (mode == "auto" && sol_mask_is_chunk_width()));
     }
-    bool sol_compact_mode(const std::string& mode) const { return sol_enabled() && mode == "compact"; }
+    // "pack": compact plus Q2 cross-chunk packing (kept blocks appended into full pages). A mode rather than an
+    // env var so it participates in the program hash and the kernels' named compile-time args.
+    bool sol_pack_mode(const std::string& mode) const { return sol_enabled() && mode == "pack"; }
+    bool sol_compact_mode(const std::string& mode) const {
+        return sol_enabled() && (mode == "compact" || sol_pack_mode(mode));
+    }
     bool sol_gather_mode(const std::string& mode) const {
         return sol_enabled() && !sol_chunk_mode(mode) && !sol_compact_mode(mode);
     }

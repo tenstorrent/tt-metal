@@ -47,6 +47,7 @@ Geometry (`sol_prepass.SolGeometry`): `S` = SP shards (ring size), `rows` = padd
 | `sol_pooled_k` | `[1, H, n_blocks_pad, D]` | `bf16`, TILE | row `s*nb_pad + b` = **mean** over the valid tokens of block `b` of shard `s` (the ragged tail block divides by its true length). Padding rows (`b >= nb`, or blocks with no valid token) are zero. |
 | `sol_pooled_v` | `[1, H, n_blocks_pad, D]` | `bf16`, TILE | same blocking, **mean** V (not the paper's sum: the kernel multiplies by the token count through the bias, see section 3). |
 | `sol_bias` (optional, legacy) | `[1, H, nqc_pad*32, n_blocks_pad]` | `bf16`, TILE | tile row `qc` (rows `32*qc .. 32*qc+31`, all identical) = column bias per padded block, section 3. Omit it: the kernel generates it. Kept only so the generator can be A/B-validated against it. |
+| `sol_row_max` (deprecated, ignored) | `[1, H, q_rows_pad, 32]` | `bf16`, TILE | Optional, accepted by `sol_mode="resident"` only and shape-validated, but no longer read: resident compute runs its own (lazy) running row max. Omit it (`sol_prepass.compute_row_max` is not needed). |
 
 Rules the kernel relies on:
 

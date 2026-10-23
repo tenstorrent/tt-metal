@@ -236,6 +236,23 @@ void kernel_main() {
     constexpr uint32_t sol_pooled_last_tiles = get_named_compile_time_arg_val("sol_pooled_last_tiles");
     constexpr bool sol_drain_all = get_named_compile_time_arg_val("sol_drain_all") == 1;
     constexpr bool sol_compact = get_named_compile_time_arg_val("sol_compact") == 1;
+    // Q2: kept blocks arrive packed across K-chunk boundaries on the ordinary K/V CBs, so compute pays one visit
+    // per full page instead of one per kept chunk. Raw chunks are staged privately by the reader and never
+    // reach compute, so there is nothing here to drain and no extra CB to name.
+    constexpr bool sol_pack = get_named_compile_time_arg_val("sol_pack") == 1;
+    constexpr uint32_t sol_blocks_per_page = get_named_compile_time_arg_val("sol_blocks_per_page");
+    // K/V CB depth in chunks (factory kv_cb_pages, default 2): the end-of-iteration phase alignment pads to it.
+    constexpr uint32_t kv_cb_pages = get_named_compile_time_arg_val("kv_cb_pages");
+    // Resident mode: piece-outer loop over the core's resident Q chunks (sdpa_ring_resident).
+    constexpr bool sol_resident = get_named_compile_time_arg_val("sol_resident") == 1;
+    constexpr uint32_t sol_resident_slots = get_named_compile_time_arg_val("sol_resident_slots");
+    constexpr uint32_t sol_res_block_words = get_named_compile_time_arg_val("sol_res_block_words");
+    static_assert(!sol_resident || (sol_chunk_mode && !sol_compact && !sol_pack), "resident mode is a chunk mode");
+    static_assert(
+        !sol_resident || (use_streaming_compute && !v_shares_k_buffer && !kt_inplace_v && !has_joint_k &&
+                          !rotated_q_split_enabled && !ksplit_enabled && !seg_accum_enabled),
+        "resident mode: streaming compute, separate V entries, no joint K, no Q rotation or K split");
+    static_assert(!sol_pack || sol_compact, "Q2 packing builds on compact-mode block selection");
     static_assert(!sol_enabled || (!ksplit_enabled && !seg_accum_enabled), "Sol-Attn excludes the K split");
     static_assert(!(ksplit_enabled && seg_accum_enabled));
     static_assert(
@@ -590,7 +607,67 @@ void kernel_main() {
         }
         const bool skip_first_half_q = !has_sliding_window && (ring_index >= ring_id ? false : is_balanced);
 
-        if constexpr (use_streaming_compute) {
+        if constexpr (sol_resident) {
+            sdpa_ring_resident<
+                Sq_chunk_t,
+                Sk_chunk_t,
+                DHt,
+                vDHt,
+                NH,
+                scale_fp32,
+                qk_subblock_h,
+                qk_subblock_w,
+                out_subblock_h,
+                out_subblock_w,
+                cb_q_in,
+                cb_k_in,
+                cb_v_in,
+                cb_qk_im,
+                cb_identity_scale_in,
+                cb_exp_max_diff,
+                cb_max_A,  // new-max scratch of the in-place slot step (one tile row per resident chunk)
+                cb_col_identity,
+                cb_recip_scratch,
+                cb_mask_in,
+                cb_max_in,
+                cb_prev_out,
+                cb_out,
+                cb_sum_in,
+                kv_local_padded_Nt,
+                kv_region_Nt,
+                chunk_size_t,
+                v_cb_physical_width_t,
+                global_n_has_padding,
+                local_n_has_padding,
+                cb_sol_plan,
+                cb_sol_bias,
+                sol_pooled_chunks,
+                sol_pooled_last_tiles,
+                sol_resident_slots,
+                sol_res_block_words,
+                kv_cb_pages,
+                RingStreamingMaskCtx<
+                    neginf_tile_idx,
+                    causal_diag_tile_idx,
+                    local_n_padded_tiles,
+                    global_n_partial_tile_idx,
+                    joint_l_partial_tile_idx,
+                    straddle_chunk_id>>(
+                global_q_start,
+                global_q_end,
+                num_q_chunks,
+                ring_id,
+                num_local_k_chunks,
+                logical_nt,
+                ring_iter_needs_global_n_mask,
+                local_n_needs_masking,
+                global_n_mask_chunk_id,
+                local_n_mask_chunk_id,
+                acc_state,
+                is_last_ring_iter,
+                is_first_active_iter,
+                lw_mask);
+        } else if constexpr (use_streaming_compute) {
             sdpa_ring_v2<
                 Sq_chunk_t,
                 Sk_chunk_t,
@@ -661,7 +738,10 @@ void kernel_main() {
                 sol_pooled_last_tiles,
                 sol_chunk_mode,
                 sol_drain_all,
-                sol_compact>(
+                sol_compact,
+                sol_pack,
+                sol_blocks_per_page,
+                kv_cb_pages>(
                 // Rotated: iterate [0, my_count) as POSITIONS, each mapped to its flat chunk id via
                 // the fixed base range or moving remainder ID. Static: [start, end) is already flat.
                 rotated_q_split_enabled ? 0u : global_q_start,
