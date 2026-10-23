@@ -1021,3 +1021,16 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   K3 fused: head 532.5 | arena_zero 5.1 | dispatch 133.7 | experts_combine 2300.3 | tilize 7.8 | tail_ag 82.6 |
   latent_up 162.6 | add 17.3 = 3242 us, 10 programs (ops head: 11 stages 1130 us, 3848 total).
   Head Galaxy-projected (tests/galaxy_projection.py on the head's own profile): GLM 161-164, K3 384-388.
+
+### The fused router's picks: the fin in fp32
+- The block test's routing agreement with the host: fused 98.2-98.6% (GLM) / 97.1-97.6 (K3) vs the ops head's 99.0-99.6 /
+  98.4-98.8. HiFi4 for the router matmul (engine and router cores): no change. test_router_vs_ops (GLM: both routers on
+  the same x / W_r / bias vs the host on bf16 W_r, per chip; for the tokens off, the host's gap between the K-th and
+  (K + 1)-th biased scores): fused 99.61% with misses at gaps up to 8.4e-4, ops 99.88% with misses at gaps <= 1.5e-4 -
+  the fused scores ~4x noisier.
+- Cause: the fin summed the fp32 partials (add_tiles, add_reuse_dest) and added the bias (add_reuse_dest) through the
+  FPU, whose srcA / srcB hold TF32 (10-bit mantissa): logits ~ +-5 rounded by ~4e-3, scores moved ~1e-3. Now all in
+  DEST at fp32: HOLD / ARRF / BIAS unpacked straight to DEST, the adds on the SFPU (add_binary_tile).
+- After: GLM fused 99.92% vs ops 99.88% (test_router_vs_ops); block test GLM 98.95-99.46% (ops 98.97-99.56), K3
+  98.48-98.73 (ops 98.44-98.79); the head test's picks GLM 99.45%, K3 99.73% (worst chip). Cost: the fin + top-K
+  ~+8 us - GLM's chain 160-161 -> 172 (binds; SE 158), K3 378 (SE 392 binds).

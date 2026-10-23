@@ -165,6 +165,7 @@ _COMPUTE = r"""
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/topk.h"
 #include "api/compute/copy_dest_values.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "tools/profiler/kernel_profiler.hpp"
 constexpr uint32_t KT = get_compile_time_arg_val(0), ET = get_compile_time_arg_val(1), G = get_compile_time_arg_val(2);
 constexpr uint32_t KBR = get_compile_time_arg_val(3), K = get_compile_time_arg_val(4);
@@ -250,25 +251,30 @@ void kernel_main() {
         cb_reserve_back(SC, ET);
         cb_wait_front(IDX, ET);
         pack_reconfig_data_format(HOLD);
+        // (all in DEST at fp32: the partials, the bias unpacked straight to DEST, the adds on the SFPU - the FPU's
+        // srcA / srcB hold TF32, a 10-bit mantissa: the sums and the bias add through them moved scores by up to ~1e-3
+        // and the picks of close experts with them)
         for (uint32_t i0 = 0; i0 < ET; i0 += 2) {  // (2 score tiles a pass: their id tiles in DEST 2 .. 3)
             const uint32_t n = ET - i0 < 2 ? ET - i0 : 2;
             tile_regs_acquire();
-            reconfig_data_format(HOLD, ARRF);
-            add_init(HOLD, ARRF);
-            for (uint32_t j = 0; j < n; ++j) add_tiles(HOLD, ARRF, e * ET + i0 + j, i0 + j, j);
-            if (na > 1) {  // (the other sources: DEST -> srcA at fp32 width, + their tiles)
-                reconfig_data_format(HOLD, ARRF);
-                add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(ARRF);
-                for (uint32_t sl = 1; sl < na; ++sl)
-                    for (uint32_t j = 0; j < n; ++j)
-                        add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(ARRF, sl * ET + i0 + j, j);
+            reconfig_data_format_srca(HOLD);
+            copy_init(HOLD);
+            for (uint32_t j = 0; j < n; ++j) copy_tile(HOLD, e * ET + i0 + j, j);
+            for (uint32_t sl = 0; sl < na; ++sl) {  // (+ every source's partial)
+                reconfig_data_format_srca(HOLD, ARRF);
+                copy_init(ARRF);
+                for (uint32_t j = 0; j < n; ++j) copy_tile(ARRF, sl * ET + i0 + j, 2 + j);
+                add_binary_tile_init();
+                for (uint32_t j = 0; j < n; ++j) add_binary_tile(j, 2 + j, j);
             }
             {  // the owner: scores = sigmoid(logits), biased = scores + bias (bias^T: per row)
                 sigmoid_tile_init();
                 for (uint32_t j = 0; j < n; ++j) sigmoid_tile(j);
-                reconfig_data_format(HOLD, BIAS);
-                add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(BIAS);
-                for (uint32_t j = 0; j < n; ++j) add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(BIAS, i0 + j, j);
+                reconfig_data_format_srca(ARRF, BIAS);
+                copy_init(BIAS);
+                for (uint32_t j = 0; j < n; ++j) copy_tile(BIAS, i0 + j, 2 + j);
+                add_binary_tile_init();
+                for (uint32_t j = 0; j < n; ++j) add_binary_tile(j, 2 + j, j);
                 // -> the top-K's keys: the expert ids into the low mantissa bits (rt_key)
                 reconfig_data_format_srca(BIAS, IDX);
                 copy_init(IDX);
@@ -928,6 +934,7 @@ class RouterStream:
         comp.math_approx_mode = False
         modes = [ttnn.UnpackToDestMode.Default] * 64
         modes[SC] = modes[BEST] = ttnn.UnpackToDestMode.UnpackToDestFp32  # (the scores: fp32 into DEST, unrounded)
+        modes[HOLD] = modes[ARRF] = modes[BIAS] = ttnn.UnpackToDestMode.UnpackToDestFp32  # (the fin's partials, bias)
         comp.unpack_to_dest_mode = modes
         dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(  # noqa: E731
             processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc

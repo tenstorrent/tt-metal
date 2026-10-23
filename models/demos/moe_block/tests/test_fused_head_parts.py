@@ -519,3 +519,100 @@ def test_head_se3(mesh_device, device_params):
 
         mrs._MESH_CACHE.clear()  # (its staging / mailbox L1 tensors: the next arena wants the L1 unfragmented)
         gc.collect()
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [((R, C), fabric2d_device_params(fabric_payload_size=fabric_payload(7168), l1_small_size=0))],
+    indirect=True,
+)
+def test_router_vs_ops(mesh_device, device_params):
+    """Diagnostic: the fused head's router picks and the ops head's router's (moe_block.Router: the same x, W_r, bias)
+    vs the host's on bf16 W_r (what both devices hold): per chip the share of picks among the host's, and for the tokens
+    either gets wrong the host's gap between its K-th and (K + 1)-th biased scores."""
+    import dataclasses
+    import gc
+
+    from ttnn.bringup.combine_rf.lin2d import glu_weight
+
+    from models.demos.moe_block.moe_block import GLM_53_FLASH, KIMI_K3, Geometry, MoEDtypes, Router
+    from models.demos.moe_block.tt.fused_head import HeadSE3
+
+    rows = 640
+    # (GLM: K3's head leaves L1 the ops router's CBs then clash with - the block test compares K3's picks)
+    for name in os.environ.get("L2C_CHAIN", "glm").split(","):
+        H, N, glu, _, _ = CHAIN[name]
+        I, spec = N // 2, ROUTER[name]
+        K, G = spec.K, C
+        g = torch.Generator().manual_seed(7)
+        w_r, b_r = torch.randn(spec.E, H, generator=g) * 0.02, torch.randn(spec.E, generator=g) * 0.01
+        xs = [torch.randn(rows, H // C, generator=gen(7, 0)) for _ in range(R * C)]
+        xt = ttnn.from_torch(
+            torch.stack(xs).view(R, C, rows, H // C),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(R, C)),
+        )
+        head = HeadSE3(
+            mesh_device,
+            rows=rows,
+            H=H,
+            I=I,
+            glu=glu,
+            rs_dim=RS_DIM[name],
+            router=spec,
+            latent=LATENT.get(name),
+            routing=ROUTING[name],
+        )
+        wg = [torch.randn(H, N, generator=g) * 0.02 for _ in range(R * C)]
+        wd = [torch.randn(I, H, generator=g) * 0.03 for _ in range(R * C)]
+        w_l = [torch.randn(head.latent, H, generator=g) * 0.02] * (R * C) if head.latent else None
+        w = head.upload([glu_weight(t[:, :I], t[:, I:]) for t in wg], wd, w_latent=w_l)
+        head.upload_router(w_r, b_r)
+        y = head.run(xt, w)
+        ttnn.synchronize_device(mesh_device)
+        fus = [ttnn.to_torch(t).reshape(-1) for t in ttnn.get_device_tensors(head.outputs["rows"])]
+        pos = {d: head.xg.chips[divmod(d, C)]["rings"][0]["p"] for d in range(R * C)}
+        for t in [y, w] + list(head.outputs.values()):
+            ttnn.deallocate(t)
+        head.free_arena()
+        del head
+        gc.collect()
+        m = dataclasses.replace(GLM_53_FLASH if name == "glm" else KIMI_K3, num_experts=spec.E, top_k=K)
+        gm = Geometry.of(mesh_device, m, rows * R, 2, zigzag=False)
+        rt = Router(mesh_device, gm, m, {"weight": w_r, "bias": b_r}, MoEDtypes())
+        lg = rt.logits(xt)
+        own = ttnn.reduce_scatter(lg, dim=2, cluster_axis=1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        orow = rt.top_k(own)
+        ttnn.synchronize_device(mesh_device)
+        ops = [ttnn.to_torch(t).reshape(-1) for t in ttnn.get_device_tensors(orow)]
+        wq = w_r.to(torch.bfloat16).double()
+        n = rows // G
+        tot = {"fused": [], "ops": []}
+        for d in range(R * C):
+            r, c = divmod(d, C)
+            xf = torch.cat([xs[r * C + cc].to(torch.bfloat16).double() for cc in range(C)], dim=1)
+            bs = torch.sigmoid(xf @ wq.T) + b_r.double()
+            out = []
+            for tag, rows_, blk in (("fused", fus[d], pos[d]), ("ops", ops[d], c)):
+                hb = bs[blk * n : (blk + 1) * n]
+                srt, ids = torch.sort(hb, dim=-1, descending=True)
+                gap = srt[:, K - 1] - srt[:, K]
+                u = rows_.to(torch.int64).reshape(n, 2 * K) & 0xFFFF
+                hit = torch.stack([torch.isin(u[t, :K], ids[t, :K]) for t in range(n)])
+                bad = ~hit.all(1)
+                gb = gap[bad]
+                tot[tag].append(hit.float().mean().item())
+                out.append(
+                    f"{tag} {100 * hit.float().mean():.2f}% ({int(bad.sum())} tokens off, their host gap median "
+                    f"{gb.median().item() if gb.numel() else 0:.1e} max {gb.max().item() if gb.numel() else 0:.1e}; "
+                    f"all tokens' median {gap.median().item():.1e})"
+                )
+            logger.info(f"RTRVS {name} chip {d}: " + " | ".join(out))
+        logger.info(
+            f"RTRVS {name}: fused {100 * sum(tot['fused']) / len(tot['fused']):.2f}%, ops {100 * sum(tot['ops']) / len(tot['ops']):.2f}%"
+        )
+        for t in (lg, own, orow, xt):
+            ttnn.deallocate(t)
