@@ -972,7 +972,13 @@ test runs first in the `m2` step.
 the M9 state (the `TT_SOL_ABLATE` knobs, the `TT_SOL_RES_CHUNK_MAJOR` bisection switch, the superseded per-piece
 step) and documents `sol_row_max` as deprecated (accepted by resident mode, shape-validated, ignored by compute).
 No functional change is intended; `./run_sol_validation.sh prod` (correctness set, 5 s parity, traced dense /
-gather / tau 1-3) is its acceptance run and has not been run yet. `sosborne/sol-attn-perf` is the optimization
+gather / tau 1-3) is its acceptance run. **Passed (2026-10-23, 00:43-01:07):** 11/11 (22 Wormhole-only skips),
+resident vs compact 0.9999 on every geometry, resident vs dense 0.9996-0.9999 at 512 and 1024 rows (the 1184-row
+geometries sit at 0.88 vs dense for compact and resident alike, keep-all included: the known partial-tail
+ramp-data artifact of that test shape, and the same values line for line as the M9 log, not the kernel); 5 s parity
+0.9996 / 0.9999 / 1.0 / 1.0, resident 10.9 ms vs compact 19.4 at 47 % density; traced dense 7.22-7.44, gather 3.06,
+resident tau 1/2/3 = 4.97 / 4.00 / 3.39 ms: identical to the pre-cleanup numbers (section 16). No warnings beyond
+the fabric routing-plane and pre-pass matmul-blocking notices every run prints. `sosborne/sol-attn-perf` is the optimization
 branch: the production head plus one commit marked DEV ONLY that re-adds the ablation and bisection knobs and
 tracks `run_sol_validation.sh`; every optimization goes on top of it, and the DEV ONLY commit is dropped
 (revert, or `rebase --onto`) when a result is promoted to production, so the diff to production stays clean.
