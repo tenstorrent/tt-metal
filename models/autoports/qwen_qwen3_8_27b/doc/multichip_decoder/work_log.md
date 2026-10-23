@@ -63,3 +63,7 @@ Final device profiles: `final_profile_l0.log`, `final_profile_l3.log`, `tracy/fi
 ### Independent acceptance
 
 Fresh xhigh reviewer `/root/stage_review` returned **clean-pass**, no required work; full report `stage_review.md`. It independently verified all43 final-source cases, finite output/state PCC, complete watcher scans, both per-device timing envelopes, runtime BFP4/LoFi/packed projection rows, speedups/efficiency/rooflines and memory arithmetic. Minimum output PCC0.9999053588, statePCC0.9998227069. Final source SHA2564b8b89ab05452f6c9194049ed6baa155265a3d1d1288d7043f8fe25c731eca90. Host syntax checks and staged source/Markdown whitespace checks pass. Generated CSV/log/text evidence retains verbatim line endings/table padding via stage-local attributes. Only decoder/tests/docs in this autoport are staged; no raw profiler captures or unrelated files.
+
+### Local checkpoint
+
+Repository `/home/mvasiljev/tt-metal`, branch `exp26-qwen38-bringup`: implementation/evidence checkpoint `81697dba9b6a141b0d5df41416e2b78d81dda506`. Committed after independent clean-pass; never pushed. Git had no configured identity, so the command used the existing pipeline identity `Codex <codex@localhost>` via command-local settings, without changing global configuration. A following documentation-only commit records this SHA; its own final SHA is recorded in the external telemetry packet.
