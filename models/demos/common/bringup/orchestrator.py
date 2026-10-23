@@ -503,7 +503,7 @@ class Orchestrator:
         timeout_s: int | None = None,
         echo=print,
     ):
-        self.spec, self.led = spec, Ledger(spec.bringup_dir)
+        self.spec, self.led = spec, Ledger(spec.ledger_dir)
         self.model = model or spec.get("agents.model")
         self.max_attempts, self.debugger_attempts = max_attempts, debugger_attempts
         self.attempts_override = None
@@ -531,7 +531,7 @@ class Orchestrator:
             f"{b}/repo_map.md",
             f"{b}/BREADCRUMBS.md",
             f"{b}/findings.yaml",
-            f"{b}/{kusage.REPORT_DIR}",  # the step's knowledge-use report (the brief names it)
+            f"{rel(self.spec, self.spec.ledger_dir)}/{kusage.REPORT_DIR}",  # the step's knowledge-use report (the brief names it)
         ]
 
     def place_fixes(self) -> bool:
@@ -593,6 +593,7 @@ class Orchestrator:
             "title": task["title"],
             "model_dir": rel(s, s.model_dir),
             "bringup_dir": rel(s, b),
+            "ledger_dir": rel(s, s.ledger_dir),
             "hf_dir": str(s.hf_dir),
             "mesh": "x".join(map(str, s.mesh)),
             "chips": s.mesh[0] * s.mesh[1],
@@ -635,6 +636,16 @@ class Orchestrator:
                 f"## Prior bring-up\nThis checkpoint was brought up before as `{pdir}` (mesh "
                 f"{'x'.join(map(str, ps.mesh))}). Its goldens and CPU reference are shared with this one. {text}\n"
             )
+        if s.seed:  # F184: a run grown from a seed (same model dir, same tt/)
+            ss = s.seed_spec()
+            vals |= {"seed_spec": rel(s, ss.path), "seed_mesh": "x".join(map(str, ss.mesh))}
+            vals["prior"] += (
+                f"## Seed\nThis run grows the bring-up `{rel(s, ss.path)}` (mesh {vals['seed_mesh']}, layers "
+                f"{ss.layers()}) to {vals['mesh']}: the same `{vals['model_dir']}/tt`, hooks, CPU reference, plan, serving "
+                "contract and forks. Its reference, contract and plan tasks passed there and are not re-run. Change the "
+                "seed's code in place for both boxes; never copy it.\n"
+            )
+            vals["role_text"] = Template(self.roles[role]).safe_substitute(vals)
         vals["read_list"] = "\n".join(f"- `{r}`" for r in reads)
         rules = s.get("agents.rules") or []
         vals["rules"] = (
@@ -645,7 +656,7 @@ class Orchestrator:
             "\n".join(f"- `{k}` {v}" for k, v in (task["gate"].get("metrics") or {}).items()) or "- (exit code only)"
         )
         vals["previous"] = f"## Previous attempt failed\n```\n{previous[-6000:]}\n```\n" if previous else ""
-        notes = OV.for_task(s.bringup_dir, task["id"], role)
+        notes = OV.for_task(s.ledger_dir, task["id"], role)
         vals["overseer"] = OV.brief_text(notes)
 
         text = Template((HERE / "briefs" / "brief.md").read_text()).safe_substitute(vals)
@@ -668,7 +679,7 @@ class Orchestrator:
         return (
             f"## Deferring this step to op-gen\n{head}\n\n"
             f"1. `{cmd} new <op> --task {task['id']} --spec {vals['spec_path']}` writes "
-            f"`{vals['bringup_dir']}/{OR.REQUESTS}/<op>/` (one snake_case op name): request.yaml, op_prompt.txt, "
+            f"`{vals['ledger_dir']}/{OR.REQUESTS}/<op>/` (one snake_case op name): request.yaml, op_prompt.txt, "
             "feature_spec.py, reference.py, bind.py, with the shapes, tolerance and acceptance test filled in.\n"
             f"2. Replace every `{OR.MARK}` marker. request.yaml `evidence`: `searched` (the repo map rows and greps you "
             "checked), `tried` (each op, composition or fork you tried, with the gate or test outcome quoted), "
@@ -907,7 +918,7 @@ class Orchestrator:
         problems += [e for e in self.knowledge_errors() if e not in knowledge_before]
         # The knowledge-use report: validated and cross-checked against what the step touched; a missing or malformed
         # one is recorded (the dashboard shows it), not a failed attempt.
-        report = kusage.report_path(self.spec.bringup_dir, tid, *(report or (role, attempt)))
+        report = kusage.report_path(self.spec.ledger_dir, tid, *(report or (role, attempt)))
         touched, _, visible = kusage.transcript_touches(log, self.spec.repo)
         knowledge_report = kusage.finalize(
             report,
@@ -996,7 +1007,7 @@ class Orchestrator:
             if ln.startswith(("  units passed:", "  units remaining:")):
                 self.echo(f"  [{tid}]{ln[1:]}")
         if res.verdict == "PASS":
-            OV.clear_classification(self.spec.bringup_dir, tid)
+            OV.clear_classification(self.spec.ledger_dir, tid)
         if res.verdict == "COMMIT_PENDING":
             raise CommitPending(tid, res.summary())
         if res.verdict in ("FAIL", "HANG"):
@@ -1354,7 +1365,7 @@ class Orchestrator:
     def overseer_owned(self, tid: str) -> str | None:
         """F169: the overseer's classification of this task's last gate failure, when it is not the model's code
         (framework, waiver, infra): the orchestrator runs only the gate's remaining units and starts no agent."""
-        c = OV.classification(self.spec.bringup_dir, tid)
+        c = OV.classification(self.spec.ledger_dir, tid)
         return c["kind"] if c and c.get("kind") != "model" else None
 
     def stop_for_overseer(self, tid: str) -> int:
@@ -1956,7 +1967,7 @@ class Orchestrator:
         if (task["id"] == "X.2" and not picked) or task.get("stop_after"):
             return self._human(
                 task,
-                f"pick opportunities in {rel(self.spec, self.spec.bringup_dir)}/opportunities.md; "
+                f"pick opportunities in {rel(self.spec, self.spec.ledger_dir)}/opportunities.md; "
                 "each pick becomes a perf task in tasks.yaml",
             )
         return DONE
@@ -2068,7 +2079,7 @@ def _live_orchestrator(pid_file: Path) -> int | None:
 
 def _place_fixes(orch: Orchestrator) -> bool:
     """F77: every queued overseer fix becomes a ledger task placed just before the first unpassed task."""
-    jobs = OV.take_fixes(orch.spec.bringup_dir)
+    jobs = OV.take_fixes(orch.spec.ledger_dir)
     if not jobs:
         return False
     spec = yaml.safe_load(orch.led.tasks_path.read_text())

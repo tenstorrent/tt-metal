@@ -149,10 +149,10 @@ def main(argv=None) -> int:
         from models.demos.common.bringup.core.spec import Spec
 
         spec = Spec.load(a.spec)
-        run_dir = spec.run_dir(run_name(Ledger(spec.bringup_dir)))
+        run_dir = spec.run_dir(run_name(Ledger(spec.ledger_dir)))
         from models.demos.common.bringup.dashboard import links as LK
 
-        stale = lambda: LK.stale(spec.bringup_dir, run_dir=run_dir)  # noqa: E731
+        stale = lambda: LK.stale(spec.ledger_dir, run_dir=run_dir)  # noqa: E731
     rc = watch(run_dir, a.timeout, a.poll, a.quiet_gates, quiet_passes=a.quiet_passes, stale=stale)
     if rc == TIMEOUT:
         log = (

@@ -6,7 +6,7 @@ the task ledger is valid, and a person approved exactly these plan files.
 
     python -m models.demos.common.bringup.plan.check_plan --spec S
 
-Writes <bringup_dir>/results/plan_memory.json (the dashboard's sharding section reads it) and records
+Writes <ledger_dir>/results/plan_memory.json (the dashboard's sharding section reads it) and records
 plan_fits, per_chip_total_gb, per_chip_budget_gb, unplaced_tensors, plan_errors, component_errors, ledger_errors,
 plan_approved. With a deployment target in the spec (F64) it also writes results/plan_boxes.json (plan/boxes.py) and
 records deploy_fits and box_path_differences.
@@ -44,7 +44,7 @@ def main(argv=None):
     plan, tensors, cfg = load_plan(spec), checkpoint_tensors(hf), text_config(hf)
     # F64: a deployment plan places every layer; the run's own check keeps the run's layers
     res = check_plan(spec, plan, tensors, cfg, layers=spec.layers() if spec.has_deploy else None)
-    out = spec.bringup_dir / "results" / "plan_memory.json"
+    out = spec.ledger_dir / "results" / "plan_memory.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({k: v for k, v in res.items() if k != "unplaced"}, indent=1) + "\n")
     for r in res.get("rows", []):
@@ -89,7 +89,7 @@ def main(argv=None):
     comp_errs = components.validate(spec, ref)
     for e in comp_errs:
         print(f"COMPONENT ERROR {e}")
-    led_errs = Ledger(spec.bringup_dir).validate()
+    led_errs = Ledger(spec.ledger_dir).validate()
     for e in led_errs:
         print(f"LEDGER ERROR {e}")
     approved = approvals.is_approved(spec, "plan")

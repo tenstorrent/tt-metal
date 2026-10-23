@@ -918,8 +918,7 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   the end-to-end gates (final hidden, top-k, the device smoke) come from the existing rules. Ladder and profile
   record `scaled_run`. Dashboard: deployment and mode in the header, a Boxes section (per-box table, per-chip paths,
   differing ones marked), teletext page 111. The intake asks for the deployment box, the boxes and the mode.
-- Not done: results per box. One ledger per model, so running the same model on a second box re-runs its tasks in
-  the same results folder; separating them means a ledger per box, worth doing when a model first moves boxes.
+- Not done here: results per box. Done in F183 (a seeded run's own ledger).
   Perf picks (P tasks) still A/B on the real-size profile; only the opportunity list uses the scaled one.
 
 ## F65 (2026-10-14): layers that read other layers' state
@@ -1951,3 +1950,46 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - core/ledger.py: SIDE_KEYS (agent_runs, ab) are saved to bringup/history_state.json (kept out of git through the
   clone's info/exclude; ignored by the agent path check); state() merges them back, so every reader is unchanged.
   Selftest test_attempt_and_ab_histories_live_beside_state_json.
+
+## F183: a run's ledger apart from the model's shared files (2026-10-23)
+- Growing DeepSeek-V4.1 from its 2x2 partial run to the whole model on galaxy_8x4 (reports/full_from_seed_design.md,
+  F-S1): one ledger per model meant the second run would overwrite the first's tasks, results and approvals.
+- core/spec.py: `ledger_dir` (tasks.yaml, state.json, results/, approvals.yaml, overseer.yaml, supervision.md,
+  dashboard/, op_requests/) is `bringup_dir` except for a seeded run: `bringup_dir/ledgers/<run box>-<mode>/`, where
+  its spec.yaml lives too; `run_dir` is `runs/<box>-<mode>/<run>`. The model's shared files (hooks.py, plan,
+  components, serving contract, official taps, known issues, repo map, BREADCRUMBS, dashboard.yaml) stay in
+  `bringup_dir`. Every ledger reader moved to `ledger_dir`; approvals: intake = the run's spec, perf = its
+  opportunities.md, plan = the model's plan; gate.stage_paths stages each from its own dir. A spec without
+  `run.seed` resolves exactly as before. Selftest test_a_seeded_run_has_its_own_ledger_and_run_dirs,
+  test_approvals_are_the_runs_except_the_plan.
+
+## F184: run.seed: a finished run of the same model this run grows from (2026-10-23)
+- F-S2. `run: {box, mode, seed: <the seed's spec path>}`: the same model dir, tt/, hooks, CPU reference, plan, forks
+  (unlike `prior`, which copies the model to another dir). The spec check refuses a seed of another model, `prior`
+  with a seed, a seeded spec outside its ledger, and a seeded spec without ladder rung `seed` over the seed's layers.
+- Briefs get a `## Seed` section (extend the seed's code in place, both boxes keep working); role `port`
+  (briefs/roles.yaml, defaults agents.policy.port) for W.1 and M.1. The dashboard reads plan_boxes / plan_memory /
+  block_graphs from the seed's results (its PL and R tasks are carried). Selftests
+  test_a_seed_is_the_same_model_and_its_layers_are_the_port_rung, test_the_port_brief_names_the_seed.
+
+## F185: the seeded task graph (2026-10-23)
+- F-S3. plan/ledger_gen.py generate_seeded: CK.1 (the checkpoint on this host, intake approval, prompt; no HF sanity,
+  the seed passed it), G.<rung> imported (F186), B.1, W.1 (the seed's layers at this run's size, each contiguous run
+  from its golden input: every block type in its new mesh at once), M.1 (every layer, E2E_LAST), then the standard
+  ladder, smoke, K.1, X.*, O.1, Z.1 (`integrate`, shared with the standard graph). No R/SC/PL/C/S/SG tasks: tasks.yaml
+  `seed:` records the seed's spec, the commit of its last gate and the carried tasks (R.1-3, R.5, SC.1, PL.0-1) it
+  passed. The seed's component and swap tests stay the diagnosis of a failing layer (they read the spec and its
+  goldens), not gates. Selftest test_the_seeded_graph_carries_the_seed_and_ports_its_layers.
+- Not done: F-S4 (the orchestrator runs a failing layer's block chain by itself), F-S6 (golden budget at intake),
+  F-S8 (a tt/ commit of the seeded run flags the seed's L tasks for re-verification); the port agent is told to keep
+  the seed box working, nothing checks it yet.
+
+## F186: goldens made on another host, imported (2026-10-23)
+- F-S7. Real-size goldens take CPU hours and the whole checkpoint in RAM (DS41 8x4: s10240 ~50 min, s56320 13.5 h), so
+  they are made once on a big host and copied, often in part (only what the run's tests read).
+- reference/golden.py: files.json (every file's sha256; derived, not in content_hash) and verify_copy (the index gives
+  the manifest's content_hash, every copied file its line, the missing files listed). reference/golden_import.py: the
+  seeded G task's gate (manifest is this rung's, verify_copy, the drift file of every rung reading the golden present,
+  records golden_hash_ok / golden_files_missing / drift_metrics / the margin); `--index` writes files.json where the
+  golden is complete. Spec `paths.*` relative paths resolve under the artifact root (one spec on several hosts).
+  Selftests test_an_imported_golden_verifies_as_a_partial_copy, test_relative_artifact_paths_are_under_the_artifact_root.

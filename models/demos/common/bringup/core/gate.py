@@ -382,25 +382,28 @@ def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
     rel = lambda p: str(Path(p).resolve().relative_to(repo)) if Path(p).is_absolute() else p  # noqa: E731
     paths = [rel(ledger.state_path), rel(ledger.results_dir / f"{task['id']}.json"), rel(ledger.tasks_path)]
     paths.append(rel(ledger.dir / ".gitignore"))
-    for extra in (
-        "approvals.yaml",
-        "findings.yaml",
-        "known_issues.md",  # the model's own lessons and repo pointers (agents write these, not the shared files)
-        "known_issues_detail.md",
-        "repo_map.md",
-        "__init__.py",
-        "results/block_graphs.json",
-        "spec.yaml",
-        "supervision.md",
-        "serving_contract.md",  # F58: the serving contract (SC.1) and its test list
-        "contract_tests.yaml",
-        "official_taps.yaml",  # F80: the official code mapped onto the steps (testing/noise_floor.py)
-        "results/knowledge_use",  # the agents' knowledge-use reports (knowledge/usage.py)
+    # F183: the run's own files are in its ledger; the model's shared files in bringup_dir (the same dir unless seeded)
+    for d, extras in (
+        (ledger.dir, ("approvals.yaml", "results/block_graphs.json", "spec.yaml", "supervision.md")),
+        (ledger.dir, ("results/knowledge_use",)),  # the agents' knowledge-use reports (knowledge/usage.py)
+        (
+            spec.bringup_dir,
+            (
+                "findings.yaml",
+                "known_issues.md",  # the model's own lessons and repo pointers (agents write these, not the shared files)
+                "known_issues_detail.md",
+                "repo_map.md",
+                "__init__.py",
+                "BREADCRUMBS.md",
+                "serving_contract.md",  # F58: the serving contract (SC.1) and its test list
+                "contract_tests.yaml",
+                "official_taps.yaml",  # F80: the official code mapped onto the steps (testing/noise_floor.py)
+            ),
+        ),
     ):
-        if (ledger.dir / extra).exists():
-            paths.append(rel(ledger.dir / extra))
-    if ledger.breadcrumbs.exists():
-        paths.append(rel(ledger.breadcrumbs))
+        for extra in extras:
+            if (d / extra).exists() and rel(d / extra) not in paths:
+                paths.append(rel(d / extra))
     # The files the task's own gate writes (gate_outputs): <task>_profile.json, <task>_ops_profile.json, ... and the
     # record of the model's ttnn.bringup calls the derived-op test task writes.
     paths += [rel(p) for p in gate_outputs(ledger, task) if p.exists() and p.name != f"{task['id']}.json"]
@@ -417,7 +420,7 @@ def stage_paths(spec: Spec, ledger: Ledger, task: dict) -> list[str]:
             paths.append(rel(tests))
     if task.get("step") == "contract":
         paths.append("models/demos/common/prefill")  # orchestrator.CONTRACT_SHARED: the contract agent may change it
-        paths.append(rel(ledger.dir / "hooks.py"))  # and the model's hooks (contract_state_pcc)
+        paths.append(rel(spec.bringup_dir / "hooks.py"))  # and the model's hooks (contract_state_pcc)
     # F48: every agent may write ttnn/ttnn/bringup (a fork, or a change to one behind an option); one agent runs at a
     # time, so what changed there is this task's. Only changed files, so the gate's formatting pass does not touch the
     # other forks. The shared knowledge files are no longer agent-writable (the overseer curates them at run end).

@@ -7,7 +7,7 @@ knowledge says about each. Applies nothing; a person picks entries, and each pic
 
     python -m models.demos.common.bringup.plan.opportunities --profile X.1 [--top 12]
 
-Writes <bringup_dir>/opportunities.md; records opportunities_listed.
+Writes <ledger_dir>/opportunities.md; records opportunities_listed.
 """
 
 from __future__ import annotations
@@ -100,9 +100,9 @@ def main(argv=None):
     ap.add_argument("--top", type=int, default=12)
     a = ap.parse_args(argv)
     spec = load_spec(a.spec)
-    profile = json.loads((spec.bringup_dir / "results" / f"{a.profile}_profile.json").read_text())
+    profile = json.loads((spec.ledger_dir / "results" / f"{a.profile}_profile.json").read_text())
     text, n = build(profile, a.top)
-    out = spec.bringup_dir / "opportunities.md"
+    out = spec.ledger_dir / "opportunities.md"
     if out.exists() and "[x]" in out.read_text():
         out = Path(str(out).replace(".md", ".new.md"))  # never overwrite a list a person already picked from
     out.write_text(text)

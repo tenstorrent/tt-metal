@@ -177,7 +177,7 @@ def fork(spec: Spec, ledger: Ledger, tid: str, name: str) -> Spec:
     fspec_path = spec.run_dir(name) / "spec.yaml"
     fspec_path.write_text(yaml.safe_dump(data, sort_keys=False))
     fspec = Spec.load(fspec_path)
-    fled = Ledger(fspec.bringup_dir)
+    fled = Ledger(fspec.ledger_dir)
     downstream = [t for t in fled.downstream(tid) if t != tid]
     fled.reset(downstream)
     init_run(fspec, fled, name, forked_from={"run": parent, "task": tid, "commit": sha})

@@ -4,7 +4,7 @@
 """Render a model's bring-up dashboard (the ERNIE dashboard's look and sections, from any model's records).
 
     python -m models.demos.common.bringup.dashboard.export --spec S [--style standard|teletext|both] [--out PATH]
-    -> <bringup_dir>/dashboard/index.html (standard) and/or teletext.html (a 90s teletext service on a CRT),
+    -> <ledger_dir>/dashboard/index.html (standard) and/or teletext.html (a 90s teletext service on a CRT),
        self-contained, data inlined. The spec's ``dashboard.styles`` picks the default; the /bringup skill asks.
 
 Reads: tasks.yaml, state.json, results/*.json (metrics, plan_memory.json, block_graphs.json, <task>_profile.json),
@@ -53,6 +53,15 @@ def bound_of(section: str) -> str:
 
 def git(repo: Path, *args) -> str:
     return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True).stdout.strip()
+
+
+def plan_result(spec, res: Path, name: str) -> Path:
+    """F184: the plan's and the reference's records (plan_boxes / plan_memory / block_graphs.json) of a seeded run are
+    the seed's: its PL and R tasks are carried, not re-run."""
+    p = res / name
+    if p.exists() or not spec.seed:
+        return p
+    return spec.seed_spec().ledger_dir / "results" / name
 
 
 def load_yaml(p: Path) -> dict:
@@ -228,12 +237,12 @@ def runtime_summary(spec) -> dict | None:
         from models.demos.common.bringup import timing as TL
         from models.demos.common.bringup.core.gate import run_name
 
-        led = Ledger(spec.bringup_dir)
+        led = Ledger(spec.ledger_dir)
         run_dir = spec.run_dir(run_name(led))
         if not (run_dir / "agents").exists():
             return None
         tasks = led.tasks()
-        res = TL.breakdown(spec.bringup_dir, run_dir, tasks)
+        res = TL.breakdown(spec.ledger_dir, run_dir, tasks)
     except Exception as e:  # never let the time section break the dashboard
         return {"error": str(e)}
     work = lambda v: sum(x for k, x in v.items() if k != "agent runs")  # noqa: E731
@@ -254,7 +263,7 @@ def boxes_summary(spec, res: Path) -> dict | None:
     from models.demos.common.bringup.plan.boxes import scaling_applies
 
     mesh = lambda b: list(spec.boxes[b]["mesh"])  # noqa: E731
-    pb = res / "plan_boxes.json"
+    pb = plan_result(spec, res, "plan_boxes.json")
     return {
         "deploy": {
             "box": spec.deploy_box,
@@ -343,7 +352,7 @@ def _overseer_status(spec, led) -> str | None:
 
 
 def build(spec) -> dict:
-    led = Ledger(spec.bringup_dir)
+    led = Ledger(spec.ledger_dir)
     tasks_spec, state = led.tasks(), led.state()
     res = led.results_dir
     comp_doc = load_yaml(spec.bringup_dir / "components.yaml")
@@ -405,7 +414,7 @@ def build(spec) -> dict:
 
     block_types = list(spec.data.get("block_types", {}))
     layer_types = [spec.block_type_of(i) for i in range(spec.num_layers)]
-    graphs_path = res / "block_graphs.json"
+    graphs_path = plan_result(spec, res, "block_graphs.json")
     graphs = json.loads(graphs_path.read_text()) if graphs_path.exists() else {}
     for bt, steps in graphs.items():
         for st in steps:
@@ -465,7 +474,7 @@ def build(spec) -> dict:
                 model += f" + {m['deferred_cpu_steps']['value']} CPU steps (deferred to op-gen)"
             positions = {"task": t["id"], "chunk": m.get("pos_chunk", {}).get("value"), "points": pos, "model": model}
 
-    plan_mem = res / "plan_memory.json"
+    plan_mem = plan_result(spec, res, "plan_memory.json")
     return {
         "generated": time.strftime("%Y-%m-%d %H:%M"),
         "overseer_status": _overseer_status(spec, led),
@@ -504,7 +513,7 @@ def build(spec) -> dict:
         "knowledge": knowledge_summary(spec),
         "boxes": boxes_summary(spec, res),
         "runtime": runtime_summary(spec),
-        "source": str(spec.bringup_dir.relative_to(spec.repo)),
+        "source": str(spec.ledger_dir.relative_to(spec.repo)),
     }
 
 
@@ -851,7 +860,7 @@ def _delta(a, b):
 
 def _side(spec) -> dict:
     """What the vs-prior view needs from one bring-up: per-task result metrics, the current profile, the latest TTFT."""
-    led = Ledger(spec.bringup_dir)
+    led = Ledger(spec.ledger_dir)
     res = led.results_dir
     tids = led.topo_order()
     metrics = {tid: {k: v["value"] for k, v in M.load(tid, res).items()} for tid in tids}
@@ -1043,7 +1052,7 @@ def main(argv=None):
     red = red_passed(data["tasks"])
     for line in red:
         print(f"DASHBOARD CHECK: a passed task shows red (an export bug): {line}")
-    check = spec.bringup_dir / "dashboard" / CHECK_FILE  # the supervisor's watch reports it (links.stale)
+    check = spec.ledger_dir / "dashboard" / CHECK_FILE  # the supervisor's watch reports it (links.stale)
     check.parent.mkdir(parents=True, exist_ok=True)
     if red:
         check.write_text("".join(f"{x}\n" for x in red))
@@ -1056,7 +1065,7 @@ def main(argv=None):
         if a.out and len(styles) == 1 and a.out.endswith(".html"):
             out = Path(a.out)
         else:
-            out = (Path(a.out) if a.out else spec.bringup_dir / "dashboard") / STYLES[style][1]
+            out = (Path(a.out) if a.out else spec.ledger_dir / "dashboard") / STYLES[style][1]
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(html)
         print(f"wrote {out} ({len(html) // 1024} KB, {style})")

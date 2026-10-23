@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Human approvals, recorded with the hash of exactly what was approved.
 
-``<bringup_dir>/approvals.yaml``: {point: {by, at, files: {path: sha256}, ledger, note}}. Approval points: intake
+``<ledger_dir>/approvals.yaml``: {point: {by, at, files: {path: sha256}, ledger, note}}. Approval points: intake
 (spec.yaml), plan (plan.yaml, plan.md, components.yaml, and the ledger's structure), perf (opportunities.md with the
 picked items). Any edit to an approved file after approval makes ``is_approved`` false again, so the gate that needs
 the approval fails. The ledger is approved by structure (ids, titles, deps, gate commands and thresholds), because
@@ -32,21 +32,26 @@ POINTS = {
     "plan": ["plan.yaml", "plan.md", "components.yaml"],
     "perf": ["opportunities.md"],
 }
+SHARED = ("plan",)  # F183: the plan is the model's (bringup_dir); the spec and the picks are the run's (ledger_dir)
 
 
 def _path(spec):
-    return spec.bringup_dir / "approvals.yaml"
+    return spec.ledger_dir / "approvals.yaml"
+
+
+def _dir(spec, point: str):
+    return spec.bringup_dir if point in SHARED else spec.ledger_dir
 
 
 def _files(spec, point: str) -> list[str]:
-    rel = spec.bringup_dir.relative_to(spec.repo)
-    return [str(rel / f) for f in POINTS[point] if (spec.bringup_dir / f).exists()]
+    d = _dir(spec, point)
+    return [str((d / f).relative_to(spec.repo)) for f in POINTS[point] if (d / f).exists()]
 
 
 def ledger_signature(spec) -> str:
     # Picked performance items (step: perf) are approved at the perf point, and the overseer's fixes (F77) are
     # reviewed like any gate commit, so adding either keeps the plan approval.
-    tasks = [t for t in Ledger(spec.bringup_dir).tasks().values() if t.get("step") not in ("perf", "overseer_fix")]
+    tasks = [t for t in Ledger(spec.ledger_dir).tasks().values() if t.get("step") not in ("perf", "overseer_fix")]
     keep = [{k: t.get(k) for k in ("id", "title", "deps", "gate", "paths", "tests", "device")} for t in tasks]
     return hashlib.sha256(json.dumps(keep, sort_keys=True).encode()).hexdigest()
 
@@ -59,7 +64,7 @@ def load(spec) -> dict:
 def approve(spec, point: str, note: str = "", by: str | None = None) -> dict:
     files = _files(spec, point)
     if not files:
-        raise FileNotFoundError(f"nothing to approve for {point}: none of {POINTS[point]} in {spec.bringup_dir}")
+        raise FileNotFoundError(f"nothing to approve for {point}: none of {POINTS[point]} in {_dir(spec, point)}")
     format_paths(spec.repo, files)  # the commit hooks must not change an approved file afterwards
     data = load(spec)
     data[point] = {

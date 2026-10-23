@@ -472,7 +472,33 @@ Unprompted: when a task becomes DEFERRED, review it (above), then tell the owner
 In every status report and at the end of the run, list the pending requests with their status (draft, approved,
 exported, delivered), so the owner never has to remember them. Log each approval, export and delivery in supervision.md.
 
-## 6. Resume, rerun, fork
+## 6. Full bring-up from a seed (F183-F186)
+
+**Experimental (owner, 2026-10-23).** Seeded runs are new and verified only by selftests; the first real one (DeepSeek-V4.1
+on galaxy_8x4) is also their test. When `/bringup` is invoked for a seeded run (a spec with `run.seed`, or the owner
+asks to grow a finished bring-up), first outline to the owner in a few lines: the seed and what it carries (code, CPU
+reference, plan, serving contract; its passed R/SC/PL tasks are not re-run), the new run's own ledger
+(`bringup/ledgers/<box>-<mode>/`), the goldens imported from another host, W.1 (the seed's layers at real size on the
+new mesh) then M.1 (every layer), and that this mode is experimental. Then supervise with special care:
+- read every W.1 / M.1 / fix gate commit's diff, not only the verdict: changes to `tt/` must keep the seed box working
+  (sizes, link counts, topology and payload constants derived from the mesh, never this box's literals); nothing
+  checks the seed box automatically yet (F185 "Not done"), so list such changes for a re-verification on the seed box;
+- check the first imported golden's gate by hand (files missing, hash, drift files) and the first W.1 limits against
+  the seed rung's drift;
+- treat anything the seeded graph or ledger split gets wrong as a framework bug (section 4): stop, fix in a dev tree
+  with a selftest, resume; report it to the owner in one line.
+
+When a partial bring-up of the model is finished and the owner wants the whole model on a box where it fits, never
+start over and never copy the model: write the seeded spec (README "Full bring-up from a seed"; DeepSeek-V4.1:
+`models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml`). Ask for: the box, the chunk, the
+context of the accuracy check (the goldens' longest rung) and of deployment (memory only), where goldens are made
+(the CPU cost: real size takes hours per rung) and where they are copied. Index each golden where it is made
+(`reference.golden_import --rung <r> --index`) before copying, and make the `seed` rung's drift there too
+(`reference.drift --rung seed`). Supervise as section 4; W.1 and M.1 are agent tasks (role `port`): a failing layer is
+located with the seed's component and swap tests at that layer and the CPU at the device's formats, then fixed in
+place so the seed box keeps working.
+
+## 7. Resume, rerun, fork
 
 - `python -m models.demos.common.bringup.orchestrator resume --spec <spec>` (after a stop, a pause, or a fix).
 - `$B approve plan|perf --spec <spec>`; `$B status --spec <spec>` (DEFERRED tasks are listed with their op requests).
