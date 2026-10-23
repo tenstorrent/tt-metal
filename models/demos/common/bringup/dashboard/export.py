@@ -664,7 +664,9 @@ def load_profile(spec, res: Path, plan_doc: dict) -> dict | None:
     prof = json.loads(prof_p.read_text())
     base_p = res / "X.1_profile.json"
     base = json.loads(base_p.read_text()) if base_p.exists() and base_p != prof_p else None
-    meta = plan_doc.get("profile_sections") or {}
+    meta = dict(plan_doc.get("profile_sections") or {})  # F181: plus the model's bringup/dashboard.yaml (no plan edit)
+    for k, v in (load_yaml(spec.bringup_dir / "dashboard.yaml").get("profile_sections") or {}).items():
+        meta[k] = dict(meta.get(k) or {}, **v)
     nch = spec.mesh[0] * spec.mesh[1]
     ops = prof.get("ops") or {}
     if not ops and prof.get("ops_file") and (res / prof["ops_file"]).exists():  # F148: gzipped beside the profile
