@@ -831,3 +831,17 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   program build at these shapes).
 - Green: test_fused_head_parts (se_engine3, head_se3 with RS / router / routing / latent), test_tp_collectives,
   test_agmm_bar, test_mrs_bar, test_moe_block (4 cases, 3 checked calls each), protocol models 47, mock Galaxy 2.
+
+### The ports' routing sends (SE-RASEND): the header totals from the planners
+- SE-RASEND ~25 us a chip (GLM): zones inside (SE-RATOT / SE-RAPKT, probes) - the per-expert totals of a packet's
+  header (M slices' prefixes summed on the port RISC) 2.2 us a destination, the packet itself 0.6; the Y sender
+  serves 5 destinations in a row. Packed 16-bit lanes: 1.7-2.2 us (the port RISC's ~10 cycles an element; its data
+  cache: 2.2 -> 1.7).
+- Now (routing_a2a's planner): in the exchange each instance also sends its per-expert counts of destination d to the
+  owner instance d % M (behind the same write barrier / exchange count: no new semaphore); the owner sums the M
+  slices' (packed lanes, the planner's data cache) and writes the header's totals into the sender's packet buffer
+  with its slice. The senders (the head's RASend, routing_a2a's own) only sum the slice counts for the bytes and send.
+  The planner's debug page sized to the 128 B it writes.
+- SE-RASEND 25 -> 3-4 us a chip. GLM Galaxy-projected 193 -> 182 (packed totals) -> 178 us from the mesh's last
+  launch (1.95x of 91; chain binds, SE 160). K3 chain 294 -> 271 (SE path binds: 373). Plans / route words bit-exact
+  every call; mock Galaxy builds.

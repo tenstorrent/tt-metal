@@ -70,14 +70,17 @@ def _plan_fn(subs):
             "get_noc_addr(px[0], py[0], bb[0] + O_PLAN + (16 + aa) * 4)",
         ),
         ("get_noc_addr(px[0], py[0], B + O_PIN + q * 64)", "get_noc_addr(px[0], py[0], bb[0] + O_PIN + q * 64)"),
+        (
+            "get_noc_addr(px[r], py[r], B + O_PSUM + ((d / M) * M + q) * BB)",
+            "get_noc_addr(px[r], py[r], bb[r] + O_PSUM + ((d / M) * M + q) * BB)",
+        ),
     ):
         assert body.count(a_) == 1, a_
         body = body.replace(a_, b_)
     # (the port buffers: absolute addresses, not offsets from the planner's base)
-    body = body.replace(
-        "const uint32_t pb = B + get_arg_val<uint32_t>(dst_arg + 3 * d + 2);",
-        "const uint32_t pb = get_arg_val<uint32_t>(dst_arg + 3 * d + 2);",
-    )
+    a_ = "const uint32_t pb = B + get_arg_val<uint32_t>(dst_arg + 3 * d + 2);"
+    assert body.count(a_) == 1, a_
+    body = body.replace(a_, "const uint32_t pb = get_arg_val<uint32_t>(dst_arg + 3 * d + 2);")
     # (global semaphores: exact waits, then re-armed for the next call - every increment of this call has landed)
     body = body.replace(
         "noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ex_sem), M - 1);",
@@ -226,12 +229,7 @@ struct RASend {
         for (uint32_t j = 0; j < nd; ++j) {
             const uint32_t pb = B + j * PCAP;
             const uint32_t* nq = reinterpret_cast<const uint32_t*>(pb);
-            uint16_t* tot = reinterpret_cast<uint16_t*>(pb + 64);
-            for (uint32_t e = 0; e < RA_EPC; ++e) tot[e] = 0;
-            for (uint32_t q = 0; q < RA_M; ++q) {
-                const uint16_t* pre = reinterpret_cast<const uint16_t*>(pb + 64 + RA_BB + q * RA_BBP);
-                for (uint32_t e = 0; e < RA_EPC; ++e) tot[e] += pre[e + 1] - pre[e];
-            }
+            // (the per-expert totals: the planners' - the destination's owner instance wrote them into the header)
             reinterpret_cast<uint32_t*>(pb)[14] = par;  // (for the forwarders: the call's parity, the source)
             reinterpret_cast<uint32_t*>(pb)[15] = RA_ME;
             (void)nq;

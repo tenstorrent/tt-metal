@@ -135,17 +135,12 @@ void kernel_main() {
     invalidate_l1_cache();
     ts[1] = get_timestamp_32b();
     uint32_t bytes[ND];
-    for (uint32_t j = 0; j < ND; ++j) {  // (header: the total, the per-expert totals from the slices' prefixes)
+    for (uint32_t j = 0; j < ND; ++j) {  // (the packet's bytes: its slices' entries; the per-expert totals are the
+                                         // planners' - the owner instance of the destination wrote them)
         const uint32_t pb = B + j * PCAP;
         const uint32_t* nq = reinterpret_cast<const uint32_t*>(pb);
         uint32_t n = 0;
         for (uint32_t q = 0; q < M; ++q) n += nq[q];
-        uint16_t* tot = reinterpret_cast<uint16_t*>(pb + 64);
-        for (uint32_t e = 0; e < EPC; ++e) tot[e] = 0;
-        for (uint32_t q = 0; q < M; ++q) {
-            const uint16_t* pre = reinterpret_cast<const uint16_t*>(pb + 64 + BB + q * BBP);
-            for (uint32_t e = 0; e < EPC; ++e) tot[e] += pre[e + 1] - pre[e];
-        }
         bytes[j] = (HBP + 4 * n + 63) / 64 * 64;
     }
     ts[2] = get_timestamp_32b();
@@ -214,7 +209,9 @@ constexpr uint32_t O_TIDX = O_ET + al64(2 * EPC * S), O_TAB = O_TIDX + al64(4 * 
 constexpr uint32_t O_WANT = O_TAB + al64(8 * ROWS_CAP), O_PIN = O_WANT + al64(128 * NOWN);
 constexpr uint32_t O_PLAN = O_PIN + M * 64, O_CNT = O_PLAN + 128, O_RGN = O_CNT + al64(4 * (EPC + 32));
 constexpr uint32_t O_ROWS = O_RGN + al64(4 * (EPC + 32));
-constexpr uint32_t O_DBG = O_ROWS + 64;
+constexpr uint32_t NOWND = (N + M - 1) / M;  // (destinations an instance owns the header totals of: d % M == q)
+constexpr uint32_t O_CX = O_ROWS + 64, O_PSUM = O_CX + N * BB, O_TOT = O_PSUM + NOWND * M * BB;
+constexpr uint32_t O_DBG = O_TOT + al64(NOWND * BB);
 constexpr uint32_t LMW = 1024;  // local-memory counters: per global expert, later per (my expert, token) if they fit
 static_assert(NG <= LMW, "local counters: NG up to 1024");
 static_assert(S <= 2048 && EPC <= 64, "an entry: token (11 bits) | expert (6 bits) | weight (15 bits)");
@@ -288,6 +285,14 @@ void kernel_main() {
         nq[d] = s;
     }
     for (uint32_t r = 0; r < M; ++r) noc_async_write(B + O_NQ, get_noc_addr(px[r], py[r], B + O_EX + q * N * 4), N * 4);
+    {  // my per-expert counts of destination d to its owner instance d % M (slot q): the owner sums the M slices'
+       // into the packet header's totals - the sender then only sends
+        uint16_t* cx = reinterpret_cast<uint16_t*>(B + O_CX);
+        for (uint32_t d = 0; d < N; ++d)
+            for (uint32_t e = 0; e < BB / 2; ++e) cx[d * (BB / 2) + e] = e < EPC ? lm[d * EPC + e] : 0;
+        for (uint32_t d = 0, r = 0; d < N; ++d, r = r + 1 == M ? 0 : r + 1)
+            noc_async_write(B + O_CX + d * BB, get_noc_addr(px[r], py[r], B + O_PSUM + ((d / M) * M + q) * BB), BB);
+    }
     noc_async_write_barrier();
     for (uint32_t r = 0; r < M; ++r) {
         if (r != q) noc_semaphore_inc(get_noc_addr(px[r], py[r], ex_sem), 1);
@@ -330,12 +335,23 @@ void kernel_main() {
                 }
             }
         }
+        for (uint32_t d = q; d < N; d += M) {  // (my destinations' header totals: the M slices' counts, two 16-bit
+                                                // lanes a word - a lane's sum <= the destination's entries <= S K)
+            const uint32_t* cs = reinterpret_cast<const uint32_t*>(B + O_PSUM + (d / M) * M * BB);
+            uint32_t* tw = reinterpret_cast<uint32_t*>(B + O_TOT + (d / M) * BB);
+            for (uint32_t i = 0; i < BB / 4; ++i) {
+                uint32_t acc = 0;
+                for (uint32_t r = 0; r < M; ++r) acc += cs[r * (BB / 4) + i];
+                tw[i] = acc;
+            }
+        }
         for (uint32_t d = 0; d < N; ++d) {
             const uint32_t x = get_arg_val<uint32_t>(dst_arg + 3 * d), y = get_arg_val<uint32_t>(dst_arg + 3 * d + 1);
             const uint32_t pb = B + get_arg_val<uint32_t>(dst_arg + 3 * d + 2);  // (the port's CB 0: the same base)
             if (nq[d]) noc_async_write(stg[d], get_noc_addr(x, y, pb + doff[d]), 4 * nq[d]);
             noc_async_write(B + O_PRE + d * BBP, get_noc_addr(x, y, pb + 64 + BB + q * BBP), BBP);
             noc_inline_dw_write(get_noc_addr(x, y, pb + 4 * q), nq[d]);
+            if (d % M == q) noc_async_write(B + O_TOT + (d / M) * BB, get_noc_addr(x, y, pb + 64), BB);
         }
         noc_async_write_barrier();
         for (uint32_t i = 0; i < NPORT; ++i) {
@@ -635,7 +651,10 @@ def routing_a2a_sizes(*, N, S, K, EPC, A, rows_cap, M=None, TPP=32, port_dests=N
         + 128
         + 2 * _al64(4 * (EPC + 32))
         + 64
-        + 64
+        + N * _al16(2 * EPC)
+        + ((N + M - 1) // M) * M * _al16(2 * EPC)
+        + _al64(((N + M - 1) // M) * _al16(2 * EPC))
+        + 128
     )
     port_l1 = (port_dests or N) * PCAP + 64
     why = []
