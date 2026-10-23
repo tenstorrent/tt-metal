@@ -1,0 +1,187 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-License-Identifier: Apache-2.0
+
+"""TTNN pre-norm attention sublayers of t0: time (causal, RoPE + xPos) and group (across a series' rows).
+
+reference : t0/torch/model/layers/time_attention.py, group_attention.py, rope.py
+    xn = RMSNorm(x) * norm
+    time:   q, k, v = heads(xn @ Wqkv + b)                  # rows (three, heads, head_dim)
+            q, k = RMSNorm_hd(q) * q_norm, RMSNorm_hd(k) * k_norm     # QK-norm BEFORE RoPE
+            q = q * cos_q + rot(q) * sin_q; k likewise       # interleaved pairs, xPos folded into the tables
+            ctx = SDPA(q, k, v), causal (or the uploaded mask), scale 1 / sqrt(head_dim)
+    group:  one row per series: ctx = xn @ Wv + bv         # softmax over one key is 1
+            else SDPA over the G rows of a series at every patch, (S_pad * B, H, G, hd)
+    return x + ctx @ Wo + bo
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+
+from models.experimental.t0_forecast.tt.common import (
+    TtT0Precision,
+    add,
+    linear,
+    rms_norm,
+    upload,
+    upload_bias,
+    upload_linear,
+    upload_norm,
+)
+from models.experimental.t0_forecast.tt.host import pair_rotation
+from models.experimental.t0_forecast.tt.weights import TIME, AttentionWeights
+
+_MAX_SDPA_CHUNK = 256
+
+
+@dataclass(frozen=True)
+class TtAttentionInputs:
+    """Device tensors shared by every attention sublayer of one forward."""
+
+    rows: int  # R
+    padded_seq: int  # S_pad, the patches of a row padded to a whole tile
+    group_size: int  # G
+    rope: tuple  # (cos_q, sin_q, cos_k, sin_k), each (1, 1, S_pad, hd); pad positions rotate by identity
+    time_mask: object | None  # (R, 1, S_pad, S_pad) additive; None = causal
+    group_mask: object | None  # (S_pad * R / G, 1, G, G) additive; None = every row of a series visible
+
+
+def sdpa_chunk(padded_len: int) -> int:
+    """Largest tile multiple up to 256 dividing the padded length."""
+    return max(c for c in range(32, min(padded_len, _MAX_SDPA_CHUNK) + 1, 32) if padded_len % c == 0)
+
+
+class TtAttention:
+    def __init__(self, device, weights: AttentionWeights, precision: TtT0Precision):
+        self.device = device
+        self.precision = precision
+        self.kind = weights.kind
+        self.num_heads = weights.num_heads
+        self.head_dim = weights.head_dim
+        self.d = weights.num_heads * weights.head_dim
+        self.eps = 1e-8
+        dtype = precision.weight_dtype()
+        self._norm = upload_norm(device, weights.norm)
+        self._wqkv = upload_linear(device, weights.wqkv, dtype)
+        self._bqkv = upload_bias(device, weights.bqkv)
+        wv, bv = weights.part(2)
+        self._wv = upload_linear(device, wv, dtype)
+        self._bv = upload_bias(device, bv)
+        self._q_norm = upload_norm(device, weights.q_norm)
+        self._k_norm = upload_norm(device, weights.k_norm)
+        self._wo = upload_linear(device, weights.wo, dtype)
+        self._bo = upload_bias(device, weights.bo)
+        if weights.kind == TIME:
+            self._trans = upload(device, pair_rotation(32).reshape(1, 1, 32, 32))
+
+    def __call__(self, x, inputs: TtAttentionInputs):
+        """Flat ``(1, 1, R * S_pad, d)`` -> ``x + attention``, same shape; ``x`` is borrowed."""
+        import ttnn
+
+        xn = rms_norm(x, self._norm, self.eps, self.precision)
+        if self.kind == TIME:
+            ctx = self._time(xn, inputs)
+        elif inputs.group_size == 1:
+            ctx = linear(xn, self._wv, self.precision, role="wv", bias=self._bv)
+        else:
+            ctx = self._group(xn, inputs)
+        ttnn.deallocate(xn)
+        out = linear(ctx, self._wo, self.precision, role="wo", bias=self._bo)
+        ttnn.deallocate(ctx)
+        y = add(x, out)
+        ttnn.deallocate(out)
+        return y
+
+    def _heads(self, qkv):
+        """``(batch, 1, seq, 3d)`` (tile-aligned seq) or ``(batch, seq, 3d)`` -> q, k, v ``(batch, H, seq, hd)``
+        with q and k RMS-normed per head."""
+        import ttnn
+
+        if len(qkv.shape) == 4:
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                qkv, num_heads=self.num_heads, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+        else:
+            q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
+                qkv, num_heads=self.num_heads, transpose_key=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+        ttnn.deallocate(qkv)
+        qn = rms_norm(q, self._q_norm, self.eps, self.precision)
+        kn = rms_norm(k, self._k_norm, self.eps, self.precision)
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        return qn, kn, v
+
+    def _rope(self, t, cos, sin):
+        import ttnn
+
+        out = ttnn.experimental.rotary_embedding_llama(
+            t,
+            cos,
+            sin,
+            self._trans,
+            is_decode_mode=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.precision.exact_kernel_config(),
+        )
+        ttnn.deallocate(t)
+        return out
+
+    def _sdpa(self, q, k, v, *, mask, is_causal: bool, concat_heads: bool = False):
+        import ttnn
+
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
+            q_chunk_size=sdpa_chunk(q.padded_shape[-2]),
+            k_chunk_size=sdpa_chunk(k.padded_shape[-2]),
+            exp_approx_mode=False,
+        )
+        ctx = ttnn.transformer.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            attn_mask=mask,
+            is_causal=is_causal,
+            scale=1.0 / math.sqrt(self.head_dim),
+            program_config=program_config,
+            compute_kernel_config=self.precision.compute_kernel_config(fp32_acc=True),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_concat_heads=concat_heads,
+        )
+        for t in (q, k, v):
+            ttnn.deallocate(t)
+        return ctx
+
+    def _time(self, xn, inputs: TtAttentionInputs):
+        import ttnn
+
+        r, s = inputs.rows, inputs.padded_seq
+        qkv = linear(xn, self._wqkv, self.precision, role="qkv", bias=self._bqkv)
+        q, k, v = self._heads(ttnn.reshape(qkv, (r, 1, s, 3 * self.d)))
+        cos_q, sin_q, cos_k, sin_k = inputs.rope
+        q, k = self._rope(q, cos_q, sin_q), self._rope(k, cos_k, sin_k)
+        ctx = self._sdpa(q, k, v, mask=inputs.time_mask, is_causal=inputs.time_mask is None)
+        merged = ttnn.experimental.nlp_concat_heads(ctx, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(ctx)
+        return ttnn.reshape(merged, (1, 1, r * s, self.d))
+
+    def _group(self, xn, inputs: TtAttentionInputs):
+        """Attention across the G rows of each series at every patch slot: ``(S_pad * B, H, G, hd)``."""
+        import ttnn
+
+        r, s, g, d = inputs.rows, inputs.padded_seq, inputs.group_size, self.d
+        qkv = ttnn.reshape(linear(xn, self._wqkv, self.precision, role="qkv", bias=self._bqkv), (r, s, 3 * d))
+        slot_major = ttnn.permute(qkv, (1, 0, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(qkv)
+        blocks = ttnn.reshape(slot_major, (s * r // g, g, 3 * d))
+        if g % 32:
+            # The reshape leaves stale rows in the tile padding; zero them so no key reads garbage.
+            blocks = ttnn.fill_implicit_tile_padding(blocks, 0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        q, k, v = self._heads(blocks)
+        merged = ttnn.reshape(
+            self._sdpa(q, k, v, mask=inputs.group_mask, is_causal=False, concat_heads=True), (s, r, d)
+        )
+        row_major = ttnn.permute(merged, (1, 0, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(merged)
+        return ttnn.reshape(row_major, (1, 1, r * s, d))
