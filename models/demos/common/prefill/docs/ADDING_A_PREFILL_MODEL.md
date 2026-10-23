@@ -217,9 +217,9 @@ the runtime then gets `prefill_forward` instead of `prefill_chunk`:
 ```
 
 Metadata (`forward_entries`), little-endian uint32: at F = 1 today's 12 B `(slot, start, end)` record; at
-F > 1 tt-d-gen's 200 B `PrefillBatchMetadata`, `{num_chunks, 0}` then 16 `(slot, start, end)` records, those
-past `num_chunks` set to `(0xFFFFFFFF, 0, 0)`. F is at most 16. `num_chunks` (1..F) is the forward's non-empty
-entry count; the runtime gets F entries, the ones past `num_chunks` empty. The H2D producer must use the same F
+F > 1 tt-d-gen's `PrefillBatchMetadata`, 8 + 12 * F B: `{num_chunks, 0}` then F `(slot, start, end)` records,
+those past `num_chunks` set to `(0xFFFFFFFF, 0, 0)`. `num_chunks` (1..F) is the forward's non-empty entry
+count; the runtime gets F entries, the ones past `num_chunks` empty. The H2D producer must use the same F
 (tt-d-gen's `max_chunks_per_batch`); `prefill_producer.py` pushes one chunk per forward.
 `[start, end)` keeps its single-chunk meaning; `start == end` is an empty entry (no attention, no KV
 write, slot ignored). The SHUTDOWN / WARMUP sentinels fill every word with -1 / -2. Order contract,

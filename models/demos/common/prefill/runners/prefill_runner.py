@@ -96,8 +96,6 @@ LAYER_ACK_RECORD_BYTES = 64
 
 H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()])
 
-D2D_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_PP_D2D_FIFO_BYTES", 256))
-
 ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
 MODEL_CFG = ADAPTER.model_config
 
@@ -138,6 +136,8 @@ _MTP_PAD_AS_INT32 = MTP_PAD_TOKEN_ID - (1 << 32)
 CHUNK_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS)
 
 D2D_METADATA_SIZE_BYTES = CHUNK_METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
+# The D2D FIFO must hold the L1-aligned metadata: 256 B, grown in 256 B steps for a wide packed forward.
+D2D_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_PP_D2D_FIFO_BYTES", -(-D2D_METADATA_SIZE_BYTES // 256) * 256))
 TP_SHARD_KV = os.environ.get("PREFILL_TP_SHARD_KV", str(int(ADAPTER.tp_shard_kv_default))) == "1"
 assert (
     not TP_SHARD_KV or ADAPTER.supports_tp_shard_kv
@@ -416,7 +416,7 @@ def _d2d_recv(inbound, sockets) -> tuple:
 
 
 def _metadata_record_words(meta: dict) -> torch.Tensor:
-    words = forward_metadata_words(meta["entries"])
+    words = forward_metadata_words(meta["entries"], FORWARD_CHUNKS)
     if MTP_LEVELS:
         words.append(int(meta["provided_levels"]))
     return torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1)
@@ -511,6 +511,7 @@ def _forward_shutdown(
 
 def _forward_send_warmup(runtime, d2d_out, rank: int, idx_out=None) -> None:
     """Compile the traced send before this rank's capture; the next rank drops the record."""
+    assert FORWARD_CHUNKS == 1, "the send warm-up record and activation are sized for one chunk per forward"
     get_inputs = getattr(runtime, "send_warmup_inputs", None)
     words = tuple(sentinel_words(WARMUP_METADATA_WORD, FORWARD_CHUNKS)) + ((0,) if MTP_LEVELS else ())
     inputs = get_inputs(words) if get_inputs is not None else None
@@ -758,14 +759,40 @@ def run_request_loop(
     t0 = time.perf_counter()
     c = 0  # chunks
     first = None
+
+    def forward_shutdown():
+        if d2d_out is not None:
+            _forward_shutdown(
+                d2d_out,
+                rank,
+                d2d_rows,
+                d2d_width,
+                outbound_planes,
+                idx_out,
+                runtime.indexer_indices_shape() if idx_out is not None else None,
+            )
+
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out, idx_in, idx_out)
-        if cfg.is_first_rank:
-            inp, mtp_tokens, meta = _socket_next(h2d_service, sockets, NUM_MTP_TOKENS)
-            meta["provided_levels"] = 0 if _is_shutdown_sentinel(meta) else mtp_provided_levels(mtp_tokens, meta)
-        else:
-            inp, meta = _d2d_recv(d2d_in, sockets)
-            mtp_tokens = None
+        try:
+            if cfg.is_first_rank:
+                inp, mtp_tokens, meta = _socket_next(h2d_service, sockets, NUM_MTP_TOKENS)
+                meta["provided_levels"] = 0 if _is_shutdown_sentinel(meta) else mtp_provided_levels(mtp_tokens, meta)
+                if FORWARD_CHUNKS > 1 and not meta["entries"][0].is_sentinel:
+                    validate_forward_entries(
+                        meta["entries"],
+                        chunk_size=CHUNK_SIZE,
+                        forward_chunks=FORWARD_CHUNKS,
+                        num_users=NUM_USERS,
+                        max_seq_len=MAX_SEQ_LEN,
+                    )
+            else:
+                inp, meta = _d2d_recv(d2d_in, sockets)
+                mtp_tokens = None
+        except ValueError:
+            # A refused forward: release the downstream ranks before failing.
+            forward_shutdown()
+            raise
         indices = _d2d_recv_indices(d2d_in, idx_in) if idx_in is not None else None
         if _is_shutdown_sentinel(meta):
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
@@ -778,16 +805,7 @@ def run_request_loop(
                 ttnn.deallocate(mtp_tokens)
             if indices is not None:
                 ttnn.deallocate(indices)
-            if d2d_out is not None:
-                _forward_shutdown(
-                    d2d_out,
-                    rank,
-                    d2d_rows,
-                    d2d_width,
-                    outbound_planes,
-                    idx_out,
-                    runtime.indexer_indices_shape() if idx_out is not None else None,
-                )
+            forward_shutdown()
             break
         warmup = _is_warmup_sentinel(meta)
         if warmup:
@@ -802,14 +820,6 @@ def run_request_loop(
             before_first_chunk = None
         if warmup:
             continue
-        if cfg.is_first_rank and FORWARD_CHUNKS > 1:
-            validate_forward_entries(
-                meta["entries"],
-                chunk_size=CHUNK_SIZE,
-                forward_chunks=FORWARD_CHUNKS,
-                num_users=NUM_USERS,
-                max_seq_len=MAX_SEQ_LEN,
-            )
         t = _compute_and_send(
             runtime,
             kv_caches,

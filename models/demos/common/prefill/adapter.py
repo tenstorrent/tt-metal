@@ -95,10 +95,6 @@ class PrefillRunParams:
     forward_chunks: int = 1
 
     @property
-    def forward_tokens(self) -> int:
-        return self.forward_chunks * self.chunk_size
-
-    @property
     def sp_factor(self) -> int:
         return self.mesh_shape[self.sp_axis]
 

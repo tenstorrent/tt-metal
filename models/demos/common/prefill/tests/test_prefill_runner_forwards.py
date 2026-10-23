@@ -47,17 +47,27 @@ def _configure(monkeypatch, *, supports_packed_forward):
 
 @pytest.fixture
 def loop(monkeypatch):
-    def run(runtime, forwards, *, supports_packed_forward):
+    def run(runtime, forwards, *, supports_packed_forward, num_ranks=1, d2d_out=None):
         _configure(monkeypatch, supports_packed_forward=supports_packed_forward)
-        words = [forward_metadata_words(pad_entries(f, F)) for f in forwards]
+        words = [forward_metadata_words(pad_entries(f, F), F) for f in forwards]
         words.append(sentinel_words(SHUTDOWN_WORD, F))
         it = iter(words)
 
-        def socket_next(service, n_mtp=0):
-            return _Tensor(), None, runner._meta_from_words(next(it)), _Tensor()
+        def socket_next(service, sockets, n_mtp=0):
+            return _Tensor(), None, runner._meta_from_words(next(it))
 
         monkeypatch.setattr(runner, "_socket_next", socket_next)
-        runner.run_request_loop(runtime, None, 0, 1, d2d_rows=0, d2d_width=0, h2d_service=object())
+        runner.run_request_loop(
+            runtime,
+            None,
+            0,
+            num_ranks,
+            d2d_rows=0,
+            d2d_width=0,
+            h2d_service=object(),
+            d2d_out=d2d_out,
+            sockets=runner.SocketBuffers(metadata=None),
+        )
 
     return run
 
@@ -85,6 +95,20 @@ def test_first_rank_refuses_a_bad_forward(loop, expect_error):
         loop(_PackedRuntime(), [split], supports_packed_forward=True)
 
 
+def test_a_refused_forward_shuts_down_the_next_rank(loop, monkeypatch, expect_error):
+    shutdowns = []
+    monkeypatch.setattr(runner, "_lease_reclaim", lambda *a: None)
+    monkeypatch.setattr(runner, "_forward_shutdown", lambda d2d_out, *a: shutdowns.append(d2d_out))
+    runtime = _PackedRuntime()
+    runtime.config.is_last_rank = False
+    d2d_out = object()
+    split = [PrefillEntry(0, 0, C), PrefillEntry(1, 0, C), PrefillEntry(0, C, 2 * C)]
+    with expect_error(ValueError, "two separate runs"):
+        loop(runtime, [split], supports_packed_forward=True, num_ranks=2, d2d_out=d2d_out)
+    assert shutdowns == [d2d_out]
+    assert runtime.calls == []
+
+
 def test_index_endpoints_use_the_chunk_metadata(monkeypatch):
     made = []
     services = SimpleNamespace(
@@ -94,5 +118,6 @@ def test_index_endpoints_use_the_chunk_metadata(monkeypatch):
     monkeypatch.setattr(runner.ttnn, "D2DStreamService", services)
     monkeypatch.setattr(runner.ttnn, "create_mesh_mapper", lambda *a: None)
     monkeypatch.setattr(runner, "indexer_indices_global_spec", lambda *a: None)
+    monkeypatch.setattr(runner, "D2D_METADATA_SIZE_BYTES", 16)
     runner.build_d2d_index_endpoints(None, 1, (1, 1, 32, 8), inbound=True, outbound=True)
-    assert made == [runner.CHUNK_METADATA_SIZE_BYTES] * 2
+    assert made == [12, 12]
