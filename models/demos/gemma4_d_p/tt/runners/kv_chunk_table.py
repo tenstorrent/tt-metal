@@ -199,15 +199,16 @@ def build_kv_chunk_address_table(*, mesh_device, kv_caches: Gemma4KvCaches, chun
     # per-block arithmetic inlined keep this loop near the binding's per-call floor.
     table_set = table.set
     for stream in _cache_streams(kv_caches):
+        cache_geometry = kv_caches if stream.config_id < len(CONFIG_NAMES) else kv_caches.dflash
         base_addr = int(stream.tensor.buffer_address())
         chunk_bytes = stream.chunk_bytes
         location = ttnn.experimental.disaggregation.KvCacheLocation()
         location.size_bytes = chunk_bytes
         for cp_row, slot, position, first_shard, count in _cache_chunk_runs(
-            seq_len=kv_caches.max_seq_len,
+            seq_len=cache_geometry.max_seq_len,
             chunk_size=chunk_size,
             cp=cp,
-            num_users=kv_caches.num_users,
+            num_users=cache_geometry.num_users,
             heads_per_device=stream.heads_per_device,
             local_head=stream.local_head,
             num_layers=stream.cache_num_layers,

@@ -196,14 +196,19 @@ def test_service_capabilities_and_ack_counts():
     assert runtime.layer_ack_layers(60, 60) == (60, 60)
 
 
-def test_draft_migration_rows_addresses_and_stages(monkeypatch):
+@pytest.mark.parametrize(
+    "draft_capacity,blocks_per_head,last_address",
+    [(1024, 4, 0x700409900), (2048, 8, 0x700414300)],
+    ids=["matching-capacity", "larger-draft-cache"],
+)
+def test_draft_migration_rows_addresses_and_stages(monkeypatch, draft_capacity, blocks_per_head, last_address):
     from models.demos.common.prefill.runners import migration_driver, prefill_producer
     from models.demos.gemma4_d_p.tt.attention.ring_prefill import GlobalRingKVCache, SlidingRingKVCache
 
     def tensor(address):
         return SimpleNamespace(dtype=ttnn.bfloat8_b, buffer_address=lambda: address)
 
-    draft = DFlashKVCache(tensor(0x300000), tensor(0x400000), config(), 2, 1024)
+    draft = DFlashKVCache(tensor(0x300000), tensor(0x400000), config(), 2, draft_capacity)
     caches = Gemma4KvCaches(
         layers=[
             (
@@ -228,19 +233,27 @@ def test_draft_migration_rows_addresses_and_stages(monkeypatch):
     table = build_kv_chunk_address_table(mesh_device=mesh_device, kv_caches=caches, chunk_size=256)
     assert table.num_configs() == 52
     assert table.config_name(35) == "35_sliding_v_h15"
+    assert table.config(0).max_sequence_length == 1024
     for kind, base in [("k", 0x300000), ("v", 0x400000)]:
         for layer in range(5):
             for head in range(8):
                 cfg_id = table.config_id_of(f"dflash_{kind}_h{head:02d}")
                 assert table.config(cfg_id).num_layers == 65
+                assert table.config(cfg_id).max_sequence_length == draft_capacity
                 for slot in range(2):
                     # Third chunk, CP rank 3; each rank holds one 32-token row per chunk.
                     entry = table.lookup(60 + layer, 2 * 256 + 3 * 32, slot, cfg_id)
-                    shard = ((slot * 5 + layer) * 2 + head % 2) * 4 + 2
+                    shard = ((slot * 5 + layer) * 2 + head % 2) * blocks_per_head + 2
                     assert entry.noc_addr == ((shard % 8) << 32 | base + (shard // 8) * 4352)
                     assert entry.size_bytes == 4352
                     nodes = table.get_device_group(entry.device_group_index).fabric_node_ids
                     assert int(nodes[0].chip_id) == 3 * 4 + head // 2
+
+    # The final advertised block must be mapped, including capacity beyond the target cache.
+    last = table.lookup(64, draft_capacity - 32, 1, "dflash_v_h07")
+    assert last.noc_addr == last_address
+    assert last.size_bytes == 4352
+    assert int(table.get_device_group(last.device_group_index).fabric_node_ids[0].chip_id) == 31
 
     monkeypatch.setattr(gemma4, "load_dflash_config", lambda path: config())
     monkeypatch.setattr(prefill_producer, "ADAPTER", gemma4.Gemma4PrefillAdapter())
