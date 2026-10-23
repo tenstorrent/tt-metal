@@ -53,9 +53,10 @@ def to_tt(device, t, dtype=ttnn.bfloat16):
     return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
 
-def matmul_config(device, M, K, N, heuristic):
-    core_grid = device.compute_with_storage_grid_size()
-    return get_matmul_config(M, K, N, core_grid, use_heuristic=heuristic)
+def matmul_config(device, M, K, N):
+    # The model's heuristic blocking (16 M tiles) overflows the 1.5 MB L1 with the fp32 intermediate at these M,
+    # so the generic 8x8x8 / 2x2 fallback of get_matmul_config is used.
+    return get_matmul_config(M, K, N, device.compute_with_storage_grid_size())
 
 
 def torch_inputs(M, K, N, bias=True):
@@ -87,10 +88,10 @@ def report(tag, ns):
     print(f"MMAB-MEDIAN {tag} duration_ns={statistics.median(ns):.0f}")
 
 
-def linear_case(device, M, K, N, heuristic, approx, activation=None, check=True):
+def linear_case(device, M, K, N, approx, activation=None, check=True):
     x, w, b = torch_inputs(M, K, N)
     tt_x, tt_w, tt_b = to_tt(device, x), to_tt(device, w), to_tt(device, b)
-    cfg = matmul_config(device, M, K, N, heuristic)
+    cfg = matmul_config(device, M, K, N)
     ckc = compute_config(device, approx)
 
     def call():
@@ -121,20 +122,20 @@ def check_quality(golden, out, pcc_min=PCC_MIN, rmse_max=RMSE_MAX):
 
 
 LINEAR_CASES = {
-    # id: (K, N, heuristic blocking, math approx, gelu_tanh)
-    "cross_q_out": (DIM, OUT_N, True, True, False),
-    "ff1_gelu_tanh": (DIM, FF1_N, False, False, True),
-    "ff2": (FF2_K, DIM, False, False, False),
+    # id: (K, N, math approx, gelu_tanh)
+    "cross_q_out": (DIM, OUT_N, True, False),
+    "ff1_gelu_tanh": (DIM, FF1_N, False, True),
+    "ff2": (FF2_K, DIM, False, False),
 }
 
 
 @pytest.mark.parametrize("preset", PRESETS)
 @pytest.mark.parametrize("case", list(LINEAR_CASES))
 def test_wan_linear(device, preset, case):
-    K, N, heuristic, approx, gelu = LINEAR_CASES[case]
+    K, N, approx, gelu = LINEAR_CASES[case]
     M = PRESET_M[preset]
     activation = ttnn.UnaryOpType.GELU_TANH if gelu else None
-    call, (x, w, b) = linear_case(device, M, K, N, heuristic, approx, activation)
+    call, (x, w, b) = linear_case(device, M, K, N, approx, activation)
     out = ttnn.to_torch(call())
     check_quality(torch_linear(x, w, b, gelu), out)
 
@@ -152,7 +153,7 @@ def test_wan_qkv_split(device, preset):
         dim=-1,
         bias_tensor=tt_b,
         compute_kernel_config=compute_config(device, True),
-        config=matmul_config(device, M, K, N, True),
+        config=matmul_config(device, M, K, N),
     )
     golden = torch.chunk(torch_linear(x, w, b), chunks, dim=-1)
     assert len(outs) == chunks
@@ -171,7 +172,7 @@ def test_wan_cross_kv_split(device):
         dim=-1,
         bias_tensor=tt_b,
         compute_kernel_config=compute_config(device, True),
-        config=matmul_config(device, M, K, N, True),
+        config=matmul_config(device, M, K, N),
     )
     golden = torch.chunk(torch_linear(x, w, b), chunks, dim=-1)
     assert len(outs) == chunks
@@ -184,7 +185,7 @@ def addcmul_case(device, M, K, N, full_gate=False):
     a = torch.randn((M, N), dtype=torch.float32)
     g = torch.randn((M, N) if full_gate else (1, N), dtype=torch.float32)
     tt = dict(x=to_tt(device, x), w=to_tt(device, w), b=to_tt(device, b), a=to_tt(device, a), g=to_tt(device, g))
-    cfg = matmul_config(device, M, K, N, True)
+    cfg = matmul_config(device, M, K, N)
     ckc = compute_config(device, True)
 
     def call():
@@ -216,10 +217,10 @@ def perf_n():
 @pytest.mark.parametrize("preset", PRESETS)
 @pytest.mark.parametrize("case", list(LINEAR_CASES))
 def test_wan_linear_perf(device, preset, case):
-    K, N, heuristic, approx, gelu = LINEAR_CASES[case]
+    K, N, approx, gelu = LINEAR_CASES[case]
     M = PRESET_M[preset]
     activation = ttnn.UnaryOpType.GELU_TANH if gelu else None
-    call, _ = linear_case(device, M, K, N, heuristic, approx, activation)
+    call, _ = linear_case(device, M, K, N, approx, activation)
     report(f"{case}-{preset}", profile_ns(device, call, perf_n()))
 
 
@@ -230,7 +231,7 @@ def test_wan_qkv_split_perf(device, preset):
     K, N = DIM, QKV_N
     x, w, b = torch_inputs(M, K, N)
     tt_x, tt_w, tt_b = to_tt(device, x), to_tt(device, w), to_tt(device, b)
-    cfg = matmul_config(device, M, K, N, True)
+    cfg = matmul_config(device, M, K, N)
     ckc = compute_config(device, True)
 
     def call():
@@ -246,7 +247,7 @@ def test_wan_cross_kv_split_perf(device):
     M, K, N = CROSS_KV_M, DIM, CROSS_KV_N
     x, w, b = torch_inputs(M, K, N)
     tt_x, tt_w, tt_b = to_tt(device, x), to_tt(device, w), to_tt(device, b)
-    cfg = matmul_config(device, M, K, N, True)
+    cfg = matmul_config(device, M, K, N)
     ckc = compute_config(device, True)
 
     def call():
