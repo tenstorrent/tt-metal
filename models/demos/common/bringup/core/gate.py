@@ -790,8 +790,13 @@ def run_gate(
         changed = _dirty_under(spec.repo, list(task.get("paths") or [])) if task.get("paths") else []
         if changed:
             format_paths(spec.repo, changed)
-    M.reset(tid, ledger.results_dir)
-    for out in gate_outputs(ledger, task):  # F55: only what this gate writes now counts
+    # F172: a validation run (freeze's reference / stub / mutation checks: record=False, not --check) writes its metrics
+    # to a scratch dir: the zero stub's rel 1.0 overwrote the task's real results (DeepSeek-V4.1 C.swa.shared_expert)
+    results_dir = ledger.results_dir if (record or check) else spec.run_dir(run_name(ledger)) / "validation" / tid
+    M.reset(tid, results_dir)
+    for out in (
+        gate_outputs(ledger, task) if results_dir == ledger.results_dir else ()
+    ):  # F55: only what this gate writes now counts
         if out.name != f"{tid}.json":
             out.unlink(missing_ok=True)
     if record:
@@ -799,12 +804,13 @@ def run_gate(
     log = log_dir(spec, ledger) / (f"{tid}.log" if record else f"{tid}.check.log")
     env = gate_env(spec, ledger, tid)
     env.update(extra_env or {})
+    env[M.RESULTS_ENV] = str(results_dir)  # F172
     cmd = gate_command(task, tasks)
     t0 = time.time()
     reused, sids = [], {}
     if reuse is not None:
         stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
-        out = M._path(tid, ledger.results_dir)
+        out = M._path(tid, results_dir)
         out.parent.mkdir(parents=True, exist_ok=True)
         data = {"task": tid, "metrics": {k: {"value": v, "t": stamp} for k, v in (reuse.get("metrics") or {}).items()}}
         out.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n")
@@ -815,11 +821,11 @@ def run_gate(
         fresh = fresh or any(not (spec.repo / a).exists() for a in task.get("artifacts", []))  # made only by a run
         delta = stamps.Delta(spec.run_dir(run_name(ledger)), tid) if record or check else None
         rc, reused, sids = run_units(
-            spec, task, env, log, ledger.results_dir, store, fresh, tasks, delta, None, frozenset(rerun or ()), on_unit
+            spec, task, env, log, results_dir, store, fresh, tasks, delta, None, frozenset(rerun or ()), on_unit
         )
     dur = time.time() - t0
 
-    got = M.load(tid, ledger.results_dir)
+    got = M.load(tid, results_dir)
     thresholds = task["gate"].get("metrics", {})
     if reuse is not None and reuse.get("partial"):  # F122: a quick A/B; the full gate runs before the final task
         thresholds = measured_only(thresholds, got)

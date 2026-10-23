@@ -178,6 +178,46 @@ UNDER_TEST_ROOTS = ("ttnn/", "tt_metal/")
 _NOT_CODE = re.compile(r".*(__pycache__/|\.md$)")
 
 
+def semantic_py_hash(text: str) -> str:
+    """F173: a Python file's hash without what cannot change behaviour: comments, formatting, docstrings, and a
+    model Setting's explanation (`why`, the 3rd argument; core/model_settings.Setting). A file that does not parse is
+    hashed as text (never a false reuse)."""
+    import ast
+
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return "text:" + sha16(text)
+
+    class _Strip(ast.NodeTransformer):
+        def _body(self, node):
+            self.generic_visit(node)
+            b = getattr(node, "body", None)
+            if (
+                b
+                and isinstance(b[0], ast.Expr)
+                and isinstance(getattr(b[0], "value", None), ast.Constant)
+                and isinstance(b[0].value.value, str)
+            ):
+                node.body = b[1:] or [ast.Pass()]
+            return node
+
+        visit_Module = visit_FunctionDef = visit_AsyncFunctionDef = visit_ClassDef = _body
+
+        def visit_Call(self, node):
+            self.generic_visit(node)
+            f = node.func
+            if (isinstance(f, ast.Name) and f.id == "Setting") or (
+                isinstance(f, ast.Attribute) and f.attr == "Setting"
+            ):
+                if len(node.args) >= 3:
+                    node.args[2] = ast.Constant("")
+                node.keywords = [k for k in node.keywords if k.arg != "why"]
+            return node
+
+    return "ast:" + sha16(ast.dump(_Strip().visit(tree), annotate_fields=False, include_attributes=False))
+
+
 def under_test_key(repo: Path, spec, paths=()) -> str:
     """F169: the content of the model's own code and tests (models/demos/<model>/ without its bring-up records: of
     bringup/ only the Python, e.g. hooks.py), the forks and ttnn / tt_metal (ttnn/, tt_metal/), the paths the task
@@ -198,6 +238,13 @@ def under_test_key(repo: Path, spec, paths=()) -> str:
         return p.startswith(own) or any(p == r or p.startswith(r if r.endswith("/") else r + "/") for r in roots)
 
     files = _file_map(repo, keep)
+    for (
+        p
+    ) in (
+        files
+    ):  # F173: the model's own Python by behaviour, not bytes (a docstring / Setting-text edit re-ran 18 units)
+        if p.endswith(".py") and p.startswith(own) and (Path(repo) / p).is_file():
+            files[p] = semantic_py_hash((Path(repo) / p).read_text(errors="replace"))
     return sha16("\n".join(f"{p}\0{h}" for p, h in sorted(files.items())) + "\n" + goldens_key(spec))
 
 
