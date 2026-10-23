@@ -642,7 +642,7 @@ def _compute_and_send(
 
     mtp_kwargs = {"mtp_tokens": mtp_tokens, "provided_levels": meta["provided_levels"]} if MTP_LEVELS else {}
     with _with_hang_timeout():
-      out = runtime.prefill_chunk(
+        out = runtime.prefill_chunk(
           inp,
           kv_caches,
           slot_id=meta["slot_id"],
