@@ -1759,24 +1759,15 @@ def _acknowledges(key, cell) -> bool:
 #: resolves to the global default, and nothing holds it. A cell listed here is a
 #: decision, with its reason, not a gap.
 _UNRESOLVED_SWEPT_CELLS: dict = {
-    # #54080: Logsigmoid was enrolled on the ttsim Wormhole model, which cannot unpack a
-    # Float32 input; its Float32-in rows are ttsim Blackhole measurements, and Blackhole
-    # does not support a Float16 output at dest_acc=No. Nothing reachable measures the
-    # cell, so it resolves to tolerance until a Wormhole board sweeps the op.
-    (
-        MathOperation.Logsigmoid,
-        DataFormat.Float32,
-        DataFormat.Float16,
-        ApproximationMode.Yes,
-        DestAccumulation.No,
-    ): "Float32 input unreachable on the ttsim Wormhole model; cell unsupported on Blackhole",
-    (
-        MathOperation.Logsigmoid,
-        DataFormat.Float32,
-        DataFormat.Float16,
-        ApproximationMode.No,
-        DestAccumulation.No,
-    ): "Float32 input unreachable on the ttsim Wormhole model; cell unsupported on Blackhole",
+    # #54080: Logsigmoid was swept on the ttsim Wormhole model, which cannot unpack a
+    # Float32 input, and budgets do not transfer from Blackhole. These cells resolve to
+    # tolerance until a Wormhole board sweeps them.
+    (MathOperation.Logsigmoid, DataFormat.Float32, out, approx, dest): (
+        "Float32 input unreachable on the ttsim Wormhole model"
+    )
+    for out in (DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32)
+    for approx in (ApproximationMode.Yes, ApproximationMode.No)
+    for dest in (DestAccumulation.Yes, DestAccumulation.No)
 }
 
 

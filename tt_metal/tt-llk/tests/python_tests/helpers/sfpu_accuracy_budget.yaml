@@ -1078,11 +1078,6 @@ Logsigmoid:
 - {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
 - {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 2}]}
-- {input: Float32, output: Float16, dest: 'Yes', measured: 1, note: 'ttsim blackhole: the ttsim Wormhole model cannot unpack a Float32 input'}
-- {input: Float32, output: Float16_b, dest: 'No', measured: 1, note: 'ttsim blackhole: the ttsim Wormhole model cannot unpack a Float32 input'}
-- {input: Float32, output: Float16_b, dest: 'Yes', measured: 0, note: 'ttsim blackhole: the ttsim Wormhole model cannot unpack a Float32 input'}
-- {input: Float32, output: Float32, dest: 'No', measured: 65536, note: 'ttsim blackhole: the ttsim Wormhole model cannot unpack a Float32 input'}
-- {input: Float32, output: Float32, dest: 'Yes', measured: 2, note: 'ttsim blackhole: the ttsim Wormhole model cannot unpack a Float32 input'}
 Lrelu:
 - {input: Float16, output: Float16, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
