@@ -131,9 +131,7 @@ jobs:
           fi
 
       - name: Install clang-tidy ${{ inputs.clang-tidy-version }}
-        # The CI image bakes in clang-tidy-20 only. Other versions are installed
-        # here from apt.llvm.org so this stays a reusable-workflow-level switch
-        # rather than a second CI image to build and maintain.
+        # CI image only bakes in clang-tidy-20; others come from apt.llvm.org.
         if: ${{ inputs.clang-tidy-version != '20' }}
         env:
           LLVM_VERSION: ${{ inputs.clang-tidy-version }}
@@ -293,11 +291,8 @@ jobs:
         run: mkdir -p .build/clang-tidy/fixes
 
       - name: Merge v23 skip-list into .clang-tidy
-        # Makes a non-20 run a plain version bump: same effective check set as
-        # today's .clang-tidy, just on a newer binary, so its timing and
-        # violation count are directly comparable to the real (v20) scan with
-        # no new-check noise. Only ever touches the ephemeral checkout for
-        # this job; the committed .clang-tidy is never modified.
+        # Makes a non-20 run a plain version bump. Only touches this job's
+        # ephemeral checkout, never the committed .clang-tidy.
         if: ${{ inputs.clang-tidy-version != '20' }}
         run: |
           uv pip install --quiet PyYAML
