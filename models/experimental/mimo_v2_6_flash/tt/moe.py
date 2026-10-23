@@ -33,8 +33,10 @@ from .common import (
 )
 from .moe_stream import (
     DownStream,
+    FabricRowGather,
     GateUpStream,
     PendingCompact,
+    PendingConsumer,
     ReduceExpand,
     fabric_row_gather,
     fabric_transport_noc,
@@ -304,7 +306,7 @@ class TtMiMoMoE:
             except AssertionError:
                 self.router_scores = None
 
-    def reduce_residual(self, gathered, residual=None, norm=None, compact=None):
+    def reduce_residual(self, gathered, residual=None, norm=None, compact=None, consumer=None):
         """Row all-gather of the chips' compact [1, 1, 32, H / 8] rows -> a new [1, 1, 32, H]: their chip-ordered sum
         in rows 0-3 and zeros elsewhere, or with ``residual`` the residual plus that (bf16-rounded) sum.
         ``norm`` = (compact gamma, persistent output, eps): returns (sum, RMSNorm(sum) * gamma in that output).
@@ -322,14 +324,14 @@ class TtMiMoMoE:
             res = ttnn.to_memory_config(residual, ttnn.DRAM_MEMORY_CONFIG)
         if compact is not None:
             fabric = fabric_row_gather(self.plan, self.reduce_expand)
-            normed = self.reduce_expand.call_fabric(compact, full, res, norm, fabric)
+            normed = self.reduce_expand.call_fabric(compact, full, res, norm, fabric, consumer=consumer)
         else:
             normed = self.reduce_expand(gathered, full, residual=res, norm=norm)
         if res is not residual:
             res.deallocate(True)
         return normed if norm is not None else full
 
-    def _forward_decode_stream(self, x, token_mask, residual=None, norm=None):
+    def _forward_decode_stream(self, x, token_mask, residual=None, norm=None, next_qkv=None):
         """BFP4 decode: fp32 router logits, sigmoid and +bias, then one streaming program that selects every user's
         fp32 top-k, normalizes and masks the weights and computes gate|up + SwiGLU + routing weight; then the
         streaming down program (down and the sum over each user's pairs) on the expert ids that program wrote."""
@@ -359,7 +361,18 @@ class TtMiMoMoE:
 
         plan = self.plan
         if norm is not None and self.fabric_gather:
-            # Down runs in the same launch as the all-gather and the reduce (it signals the transport cores).
+            # Down runs in the same launch as the all-gather and the reduce (it signals the transport cores). With
+            # ``next_qkv`` the next layer's qkv projection runs there too: its cores stream their weights into L1
+            # while the reduce waits on the fabric (once the fabric senders have read their rows, so the stream does
+            # not queue ahead of those reads), then read the norm.
+            consumer = None
+            if next_qkv is not None:
+                stream, w = next_qkv
+                qkv_section, qkv_out = stream.section(
+                    norm[1], w, start_count=FabricRowGather.SENDERS, x_ready_count=len(self.reduce_expand.cores)
+                )
+                start = (stream.SEM_START, stream.stream_cores())
+                consumer = PendingConsumer(qkv_section, qkv_out, stream.SEM_X_READY, stream.loaders(), start=start)
             section = self.down_stream(
                 act,
                 self.ids_buf,
@@ -369,7 +382,8 @@ class TtMiMoMoE:
                 launch=False,
             )
             pending = PendingCompact(section, self.out_buf, len(self.down_stream.cores))
-            return self.reduce_residual(None, residual, norm=norm, compact=pending)
+            result = self.reduce_residual(None, residual, norm=norm, compact=pending, consumer=consumer)
+            return (*result, consumer.out) if consumer is not None else result
         out = self.down_stream(act, self.ids_buf, self.w_down, self.out_buf)  # compact [1, 1, 32, H / 8], persistent
         # The row all-reduce as one fabric phase: gather every chip's compact output (chip order along the row, the
         # same on every chip), then ReduceExpand sums the copies in that order. The persistent compact output is
@@ -380,7 +394,7 @@ class TtMiMoMoE:
             gathered.deallocate(True)
         return full
 
-    def forward_decode(self, x, token_mask, residual=None, norm=None):
+    def forward_decode(self, x, token_mask, residual=None, norm=None, next_qkv=None):
         """Decode: x [1, 1, 32, hidden], users in rows [0, decode_users). Computes only the selected experts.
         ``residual``: returns residual + the MoE output (fused into the streaming path's reduction); ``norm`` (streaming
         path with ``residual``): returns (that, its RMSNorm), see ``reduce_residual``.
@@ -389,7 +403,7 @@ class TtMiMoMoE:
         pair's expert on all 32 rows, the routing weight applied to the pair's own row (the other rows are
         zeroed), down for the same expert, then a sum over pairs. Nothing is materialized per expert."""
         if self.gate_up_stream is not None:
-            return self._forward_decode_stream(x, token_mask, residual, norm)
+            return self._forward_decode_stream(x, token_mask, residual, norm, next_qkv=next_qkv)
         assert norm is None
         U, k = self.decode_users, self.cfg.num_experts_per_tok
         pairs = U * k

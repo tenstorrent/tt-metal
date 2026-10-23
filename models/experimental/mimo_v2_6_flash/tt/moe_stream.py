@@ -62,12 +62,17 @@ def fp32_bits(value):
     return int(torch.tensor([float(value)], dtype=torch.float32).view(torch.int32).item()) & 0xFFFFFFFF
 
 
-def semaphore_descriptor(ranges):
-    """Semaphore 0 (initial value 0) of a program on ``ranges``, or None if the bindings take other arguments."""
-    attempts = [dict(id=0, core_ranges=ranges, initial_value=0), dict(core_ranges=ranges, initial_value=0)]
+def semaphore_descriptor(ranges, sem_id=0):
+    """Semaphore ``sem_id`` (initial value 0) of a program on ``ranges``, or None if the bindings take other
+    arguments (semaphore 0 only, without an id argument)."""
+    attempts = [dict(id=sem_id, core_ranges=ranges, initial_value=0)]
+    if sem_id == 0:
+        attempts.append(dict(core_ranges=ranges, initial_value=0))
     core_type = getattr(getattr(ttnn, "CoreType", None), "Worker", None)
     if core_type is not None:
-        attempts.append(dict(core_type=core_type, core_ranges=ranges, initial_value=0))
+        attempts.append(dict(id=sem_id, core_type=core_type, core_ranges=ranges, initial_value=0))
+        if sem_id == 0:
+            attempts.append(dict(core_type=core_type, core_ranges=ranges, initial_value=0))
     for kwargs in attempts:
         try:
             return ttnn.SemaphoreDescriptor(**kwargs)
@@ -682,37 +687,42 @@ class ReduceExpand:
         ttnn.generic_op(io, program)
         return out
 
-    def call_fabric(self, compact, out, residual, norm, fabric):
+    def call_fabric(self, compact, out, residual, norm, fabric, consumer=None):
         if isinstance(compact, PendingCompact):  # the producer runs in the same launch
-            return self._call_fabric(compact.rows, out, residual, norm, fabric, producer=compact)
-        return self._call_fabric(compact, out, residual, norm, fabric)
+            return self._call_fabric(compact.rows, out, residual, norm, fabric, producer=compact, consumer=consumer)
+        return self._call_fabric(compact, out, residual, norm, fabric, consumer=consumer)
 
-    def _call_fabric(self, compact, out, residual, norm, fabric, producer=None):
+    def _call_fabric(self, compact, out, residual, norm, fabric, producer=None, consumer=None):
         """The row all-gather and the fused reduce + residual + RMSNorm in one launch per chip: ``compact`` is this
         chip's [1, 1, 32, hidden / 8] compact rows (DRAM tiles), sent over the fabric to every chip of the row
         (``fabric``: the row's FabricRowGather); returns (out, norm_out) as ``__call__`` with ``norm``. ``producer``
-        (a PendingCompact): the launch that writes ``compact`` runs in this one, on other cores."""
+        (a PendingCompact): the launch that writes ``compact`` runs in this one, on other cores. ``consumer`` (a
+        PendingConsumer): a launch that reads norm_out runs in this one, on other cores; every reduce core raises its
+        semaphore once its share of norm_out is written."""
         gamma, norm_out, eps = norm
         for t in (compact, out, residual, gamma, norm_out):
             assert t.layout == ttnn.TILE_LAYOUT and t.dtype == ttnn.bfloat16 and is_dram_interleaved(t)
         assert compact.shape[-1] == self.compact_width
         phase = fabric.next_phase()
+        ready = (consumer.sem, consumer.targets) if consumer is not None else None
         kernels, cbs, semaphores = self._norm_kernels(
-            out, residual, gamma, norm_out, eps, gather_sem=fabric.sem_addr(phase)
+            out, residual, gamma, norm_out, eps, gather_sem=fabric.sem_addr(phase), ready=ready
         )
         # cb_in is the gather buffer of this phase (every chip's copies of this core's tiles land there)
         cbs[self.cb_in] = ttnn.cb_descriptor_from_sharded_tensor(
             self.cb_in, fabric.gather, address_offset=phase * fabric.phase_bytes, total_size=fabric.phase_bytes
         )
         extra_tensors = []
-        if producer is not None:
-            kernels = kernels + producer.section["kernels"]
-            cbs = cbs + producer.section["cbs"]
-            semaphores = semaphores + producer.section["semaphores"]
-            extra_tensors = producer.section["tensors"]
+        for section in [p.section for p in (producer, consumer) if p is not None]:
+            kernels = kernels + section["kernels"]
+            cbs = cbs + section["cbs"]
+            semaphores = semaphores + section["semaphores"]
+            extra_tensors = extra_tensors + section["tensors"]
         waits = producer.signals if producer is not None else 0
-        mesh_program = fabric.programs(kernels, cbs, semaphores, compact, phase, wait_count=waits)
-        io = [compact, residual, gamma, self.norm_consts, fabric.gather] + list(extra_tensors) + [out, norm_out]
+        read_done = consumer.start if consumer is not None else None
+        mesh_program = fabric.programs(kernels, cbs, semaphores, compact, phase, wait_count=waits, read_done=read_done)
+        outputs = [out, norm_out] + ([consumer.out] if consumer is not None else [])
+        io = [compact, residual, gamma, self.norm_consts, fabric.gather] + list(extra_tensors) + outputs
         ttnn.generic_op(io, mesh_program)
         fabric.advance()
         return out, norm_out
@@ -727,9 +737,11 @@ class ReduceExpand:
         ttnn.generic_op([gathered, residual, gamma, self.norm_consts, out, norm_out], program)
         return out, norm_out
 
-    def _norm_kernels(self, out, residual, gamma, norm_out, eps, gathered=None, gather_sem=None):
+    def _norm_kernels(self, out, residual, gamma, norm_out, eps, gathered=None, gather_sem=None, ready=None):
         """Kernels, CBs and semaphores of the fused reduce + residual + RMSNorm on the bank cores. The chips' copies
-        come from ``gathered`` (a row all-gather in DRAM) or, with ``gather_sem``, from the fabric gather buffer."""
+        come from ``gathered`` (a row all-gather in DRAM) or, with ``gather_sem``, from the fabric gather buffer.
+        ``ready`` = (semaphore id, NoC coordinates): each core raises that semaphore of those cores by one once its
+        share of norm_out is written."""
         assert out.shape[-1] == self.hidden and residual.shape[-1] == self.hidden and norm_out.shape[-1] == self.hidden
         assert gamma.shape[-1] == self.compact_width
         cores = len(self.cores)
@@ -748,13 +760,10 @@ class ReduceExpand:
                 gamma.buffer_address(),
                 self.norm_consts.buffer_address(),
             ]
-            writer_rt[core.x][core.y] = [
-                out.buffer_address(),
-                first,
-                residual.buffer_address(),
-                norm_out.buffer_address(),
-                i,
-            ] + noc
+            args = [out.buffer_address(), first, residual.buffer_address(), norm_out.buffer_address(), i] + noc
+            if ready is not None:
+                args += [len(ready[1])] + [v for c in ready[1] for v in (c.x, c.y)]
+            writer_rt[core.x][core.y] = args
             compute_rt[core.x][core.y] = []
         sem_id = 0
         reader_ct = [
@@ -781,6 +790,8 @@ class ReduceExpand:
             self.cb_h,
             cores,
             sem_id,
+            1 if ready is not None else 0,
+            ready[0] if ready is not None else 0,
         ]
         compute_ct = [
             self.cb_in,
@@ -892,9 +903,13 @@ class FabricRowGather:
     def sem_addr(self, phase):
         return ttnn.get_global_semaphore_address(self.sems[phase])
 
-    def programs(self, kernels, cbs, semaphores, compact, phase, wait_count=0):
+    SENDERS = 2 * len(TRANSPORT_CORES)  # a forward and a backward sender per transport core
+
+    def programs(self, kernels, cbs, semaphores, compact, phase, wait_count=0, read_done=None):
         """MeshProgramDescriptor: per chip, ``kernels`` / ``cbs`` / ``semaphores`` (the reduce, the same on every
-        chip) plus, per fabric link, a transport core whose two senders multicast its share of ``compact``."""
+        chip) plus, per fabric link, a transport core whose two senders multicast its share of ``compact``.
+        ``read_done`` = (semaphore id, NoC coordinates): each of the SENDERS raises that semaphore of those cores by
+        one once it has read its share of ``compact`` (a consumer in the same launch may then load DRAM)."""
         transport = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in self.transports])
         per_link = len(self.cores) // len(self.transports)
         page = ttnn.Tile([TILE, TILE]).get_tile_size(ttnn.bfloat16)
@@ -926,13 +941,27 @@ class FabricRowGather:
                     noc = []
                     for c in self.noc_cores[first : first + per_link]:
                         noc += [c.x, c.y]
+                    if read_done is not None:
+                        noc += [len(read_done[1])] + [v for c in read_done[1] for v in (c.x, c.y)]
                     rt[t.x][t.y] = [compact.buffer_address(), gather_addr, self.sem_addr(phase), chip, first] + noc
                 senders.append(
                     ttnn.KernelDescriptor(
                         kernel_source=f"{KERNEL_DIR}/fabric_gather_send.cpp",
                         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                         core_ranges=transport,
-                        compile_time_args=[cb, rng, per_link, self.tiles_per_core, self.chips, local, 1, 0, wait_count],
+                        compile_time_args=[
+                            cb,
+                            rng,
+                            per_link,
+                            self.tiles_per_core,
+                            self.chips,
+                            local,
+                            1,
+                            0,
+                            wait_count,
+                            1 if read_done is not None else 0,
+                            read_done[0] if read_done is not None else 0,
+                        ],
                         runtime_args=rt,
                         config=config,
                     )
@@ -958,9 +987,26 @@ class FabricRowGather:
         return mesh_program
 
 
+def reduce_launch_cores(device):
+    """Logical (x, y) of the cores a fabric reduce launch (ReduceExpand.call_fabric) takes besides its producer's:
+    the reduce row and the transport cores. A consumer section in that launch must avoid them."""
+    reduce = [(x, ReduceExpand.CORE_ROW) for x in range(device.dram_grid_size().x)]
+    return reduce + [tuple(c) for c in FabricRowGather.TRANSPORT_CORES]
+
+
 def fabric_transport_noc(device):
     """NoC coordinates of FabricRowGather's transport cores (what a producer signals)."""
     return [device.worker_core_from_logical_core(ttnn.CoreCoord(*c)) for c in FabricRowGather.TRANSPORT_CORES]
+
+
+class PendingConsumer:
+    """A launch that reads a reduce's norm_out and has not launched yet: ``section`` (kernels, cbs, semaphores,
+    tensors) runs in the reduce launch on other cores and writes ``out``; the reduce cores raise semaphore ``sem`` of
+    each of ``targets`` once their share of norm_out is written. ``start`` = (semaphore id, NoC coordinates): the
+    fabric senders raise that semaphore of those cores once they no longer read DRAM (``FabricRowGather.programs``)."""
+
+    def __init__(self, section, out, sem, targets, start=None):
+        self.section, self.out, self.sem, self.targets, self.start = section, out, sem, targets, start
 
 
 class PendingCompact:

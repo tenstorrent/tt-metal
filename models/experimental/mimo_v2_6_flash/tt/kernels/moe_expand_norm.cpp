@@ -20,6 +20,10 @@ void kernel_main() {
     constexpr uint32_t cb_h = get_compile_time_arg_val(7);
     constexpr uint32_t cores = get_compile_time_arg_val(8);
     constexpr uint32_t sem_id = get_compile_time_arg_val(9);
+    // > 0: after the cores list, runtime args [count, x0, y0, ...]: once norm_out is written, raise semaphore
+    // ready_sem of each of those cores by one (a consumer in the same launch reads norm_out).
+    constexpr uint32_t ready_signal = get_compile_time_arg_val(10);
+    constexpr uint32_t ready_sem = get_compile_time_arg_val(11);
     constexpr uint32_t tile_bytes = 2048;
     constexpr uint32_t fp32_tile_bytes = 4096;
     constexpr uint32_t face_bytes = mimo_moe::kBf16FaceBytes;
@@ -100,6 +104,15 @@ void kernel_main() {
         }
     }
     noc_async_write_barrier();
+    if constexpr (ready_signal > 0) {
+        constexpr uint32_t at = 5 + 2 * cores;
+        const uint32_t n = get_arg_val<uint32_t>(at);
+        const uint32_t sem = get_semaphore(ready_sem);
+        for (uint32_t c = 0; c < n; c++) {
+            noc_semaphore_inc(
+                get_noc_addr(get_arg_val<uint32_t>(at + 1 + 2 * c), get_arg_val<uint32_t>(at + 2 + 2 * c), sem), 1);
+        }
+    }
     cb_pop_front(cb_h, tiles);
     cb_pop_front(cb_sum, tiles);
     noc_async_atomic_barrier();

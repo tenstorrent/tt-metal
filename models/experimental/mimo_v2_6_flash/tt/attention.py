@@ -48,7 +48,7 @@ import ttnn
 from .proj_stream import BankStreamMatmul
 from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config, decode_linear_config, pad_to
 from .kv import BatchFillTables, kv_replication, per_chip, slot_owner_masks
-from .moe_stream import KERNEL_DIR, zero_output
+from .moe_stream import KERNEL_DIR, reduce_launch_cores, zero_output
 from .rope import permute_heads_for_rope
 
 # chunked_flash_mla_prefill reads its start position from a device tensor (chunk_start_idx_tensor); builds without
@@ -458,7 +458,7 @@ class TtMiMoAttention:
                 decode_sinks = torch.nn.functional.pad(s.reshape(dims.num_heads, 1), (0, TILE - 1))
 
         hidden = cfg.hidden_size
-        self.qkv_stream = self.o_stream = None
+        self.qkv_stream = self.o_stream = self.qkv_prefetch_stream = None
         self.swa_qkv = None  # set by the model: the shared SwaDecodeQkv of the SWA layers' compact decode
         self.fabric_gather = False  # set by the model: forward_decode(compact=True) returns the un-gathered rows
         self.mm_config = compute_config(ttnn.MathFidelity.HiFi2)
@@ -521,6 +521,13 @@ class TtMiMoAttention:
             self.qkv_stream = self._bank_stream(hidden, self.qkv_width, skip_bank_core=True)
             if self.qkv_stream is not None:
                 self.wqkv_stream = self.qkv_stream.prepare(self.wqkv)
+                # The same projection as a section of the previous layer's reduce launch (prefetch_qkv); it reads the
+                # same padded weight.
+                self.qkv_prefetch_stream = BankStreamMatmul.prefetching(
+                    plan, hidden, self.qkv_width, self.mm_config, avoid=reduce_launch_cores(plan.mesh_device)
+                )
+                if self.qkv_prefetch_stream is not None:
+                    assert self.qkv_prefetch_stream.n_pad == self.qkv_stream.n_pad
         self.sinks = self.decode_sinks = None
         if dims.has_sink:
             self.sinks = as_weight(sinks, plan, plan.shard(1), ttnn.bfloat16, cache_name(cache_dir, prefix, "sinks"))
@@ -637,10 +644,10 @@ class TtMiMoAttention:
             compute_kernel_config=self.mm_config,
         )
 
-    def _bank_stream(self, k, n, skip_bank_core=False):
+    def _bank_stream(self, k, n, **kwargs):
         """A BankStreamMatmul for a [k, n] decode projection, or None when its layout constraints do not hold."""
         try:
-            return BankStreamMatmul(self.plan, k, n, self.mm_config, skip_bank_core=skip_bank_core)
+            return BankStreamMatmul(self.plan, k, n, self.mm_config, **kwargs)
         except AssertionError:
             return None
 
@@ -659,6 +666,13 @@ class TtMiMoAttention:
         op = SwaDecodeQkv(self.plan, self.nh_local, self.head_dim, users, block_size, trans[0], sample)
         sample.deallocate(True)
         return op
+
+    def prefetch_qkv(self):
+        """(stream, weight) of this layer's compact decode qkv projection, which the previous layer's reduce launch can
+        run (BankStreamMatmul.section), or None: SWA layers with the bank-local qkv stream only."""
+        if self.split_users or self.qkv_prefetch_stream is None:
+            return None
+        return self.qkv_prefetch_stream, self.wqkv_stream
 
     def _decode_qkv(self, x, weight, program_config, compact=False):
         # Keep the fused qkv row in L1: the decode head split reads it with many small per-user row reads. The bank
@@ -944,7 +958,7 @@ class TtMiMoAttention:
         attn_cat.deallocate(True)
         return self.plan.all_reduce(out)
 
-    def forward_decode(self, x, rot_mats, cur_pos, page_table, kv_cache, compact=False):
+    def forward_decode(self, x, rot_mats, cur_pos, page_table, kv_cache, compact=False, xqkv=None):
         """x [1, 1, B, hidden] (B users padded to a tile).
 
         cur_pos: int32 [B] on device (-1 skips a slot), or a dict {"pos", "pos_owned", "owner_mask"} and optionally
@@ -952,7 +966,8 @@ class TtMiMoAttention:
         "serial": per-slot position tensors, each keeping one slot's position, to write K / V slot by slot: the
         slots of a speculative verify are one request at consecutive positions, whose rows share cache tiles that
         the per-slot cache writers read, patch and write back concurrently (reference/spec_decode.py).
-        ``compact``: users only in rows 0-3; returns the gathered compact rows (see ``_decode_o``)."""
+        ``compact``: users only in rows 0-3; returns the gathered compact rows (see ``_decode_o``). ``xqkv``: the
+        fused qkv row of x, already computed (``prefetch_qkv``: in the previous layer's reduce launch)."""
         serial = None
         if isinstance(cur_pos, dict):
             serial = cur_pos.get("serial")
@@ -973,7 +988,8 @@ class TtMiMoAttention:
             cur_pos = cur_pos["pos"]
         assert not self.split_users, "global layers on TP=8 need the per-chip owned positions"
         writes = serial or [cur_pos]
-        xqkv = self._decode_qkv(x, self.wqkv, self.decode_qkv_program, compact)
+        if xqkv is None:
+            xqkv = self._decode_qkv(x, self.wqkv, self.decode_qkv_program, compact)
         k_cache, v_cache = kv_cache
         fused_qkv = compact and self.swa_qkv is not None and len(rot_mats) >= 4
         if fused_qkv:

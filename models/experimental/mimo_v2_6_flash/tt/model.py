@@ -42,6 +42,10 @@ from .rope import MiMoRotarySetup, partial_rope_table
 from .spec_inputs import SpecInputs
 from .verify_sampler import VerifySampler
 
+# MIMO_QKV_PREFETCH=0: every SWA layer launches its own qkv projection instead of running it in the previous layer's
+# MoE reduce launch (decode_forward_device).
+QKV_PREFETCH = os.environ.get("MIMO_QKV_PREFETCH", "1") == "1"
+
 # Rows of the decode RoPE tables past max_seq_len - 1: a position derived on device before the host checks it (a
 # verify or draft chained on device, a few positions ahead) still reads a row of the table, not another buffer.
 ROPE_TABLE_MARGIN = 32  # one tile
@@ -1018,7 +1022,7 @@ class TtMiMoModel:
         sdpa_tables = {}
         if compact_sdpa:
             positions["pos_sdpa"] = ttnn.slice(pos_owned_tt, (0,), (self.decode_users,))
-        h = None
+        h = xqkv = None
         for i, layer in enumerate(self.layers):
             layer_positions = positions
             if compact_sdpa and not layer.is_swa:
@@ -1027,7 +1031,11 @@ class TtMiMoModel:
                     table = self.page_table_tt[key]
                     sdpa_tables[key] = ttnn.slice(table, (0, 0), (self.decode_users, table.shape[-1]))
                 layer_positions = dict(positions, page_table_sdpa=sdpa_tables[key])
-            y, h = layer.forward_decode(
+            # The next layer's qkv projection runs in this layer's reduce launch, its weights streaming while the reduce
+            # waits on the fabric (MoE.forward_decode); MIMO_QKV_PREFETCH=0 runs it in its own launch.
+            nxt = self.layers[i + 1] if i + 1 < len(self.layers) and QKV_PREFETCH else None
+            next_qkv = nxt.attn.prefetch_qkv() if nxt is not None else None
+            out = layer.forward_decode(
                 x,
                 rot_mats,
                 layer_positions,
@@ -1036,7 +1044,10 @@ class TtMiMoModel:
                 mask_tt,
                 h=h,
                 return_norm=True,
+                xqkv=xqkv,
+                next_qkv=next_qkv,
             )
+            y, h, xqkv = out if next_qkv is not None else (*out, None)
             x.deallocate(True)
             x = y
         logits = self._logits(x, h)

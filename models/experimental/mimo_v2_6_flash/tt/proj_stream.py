@@ -50,8 +50,8 @@ def _ranges(cores):
     )
 
 
-def _cb(index, dtype, pages, ranges):
-    tile = ttnn.Tile([TILE, TILE])
+def _cb(index, dtype, pages, ranges, rows=TILE):
+    tile = ttnn.Tile([rows, TILE])
     page = tile.get_tile_size(dtype)
     fmt = ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page, tile=ttnn.TileDescriptor(tile))
     return ttnn.CBDescriptor(total_size=pages * page, core_ranges=ranges, format_descriptors=[fmt])
@@ -94,28 +94,39 @@ class BankStreamMatmul:
     CB_X, CB_W, CB_OUT, CB_ZERO = 0, 1, 2, 3
     SEM_X = 0  # tiles of x the bank's loader has landed
 
-    def __init__(self, plan, k, n, compute_kernel_config, skip_bank_core=False):
-        """``skip_bank_core``: use the GROUP cores after each bank core in its row instead of starting at it."""
+    def __init__(self, plan, k, n, compute_kernel_config, skip_bank_core=False, group=None, avoid=(), x_rows=TILE):
+        """``skip_bank_core``: use the ``group`` (default GROUP) cores after each bank core in its row instead of
+        starting at it. A group larger than GROUP takes GROUP cores per row, the bank core's row first and then the
+        nearest rows (the same columns, close to the bank); ``avoid``: logical (x, y) cores to leave free (another
+        section of the same launch). ``x_rows``: the height of the x and output tiles in L1 (8, 16 or 32): the users
+        sit in rows 0-3, and a shorter x tile cuts the matmul per K tile (4 of a full tile's 16 MVMULs at 8 rows)."""
+        assert x_rows in (8, 16, TILE), x_rows
+        self.x_rows = x_rows
         device = plan.mesh_device
         self.plan, self.k, self.n = plan, k, n
+        self.group = group or self.GROUP
         self.banks = device.dram_grid_size().x
         self.kt = k // TILE
         self.cpb = math.ceil(n / (TILE * self.banks))
         self.n_pad = self.cpb * TILE * self.banks
-        assert k % TILE == 0 and n % TILE == 0 and self.cpb % self.GROUP == 0, (k, n)
-        self.cpc = self.cpb // self.GROUP
+        assert k % TILE == 0 and n % TILE == 0 and self.cpb % self.group == 0, (k, n)
+        self.cpc = self.cpb // self.group
         assert self.cpc <= self.MAX_DEST, self.cpc
         grid = device.compute_with_storage_grid_size()
         bank_cores = list(dram_bank_cores(device))
-        taken, self.cores, self.slots = set(), [], []
+        taken, self.cores, self.slots = set(avoid), [], []
         if skip_bank_core:
-            taken = {(c.x, c.y) for c in bank_cores}
+            taken |= {(c.x, c.y) for c in bank_cores}
         for b, c in enumerate(bank_cores):
-            row = [(x, c.y) for x in list(range(c.x, grid.x)) + list(range(c.x - 1, -1, -1))]
-            xs = [p for p in row if p not in taken]
-            assert len(xs) >= self.GROUP, (b, c)
-            for q, (x, y) in enumerate(xs[: self.GROUP]):
-                taken.add((x, y))
+            picked = []
+            for y in sorted(range(grid.y), key=lambda y: (abs(y - c.y), y)):
+                row = [(x, y) for x in list(range(c.x, grid.x)) + list(range(c.x - 1, -1, -1))]
+                picked += [p for p in row if p not in taken][: min(self.GROUP, self.group - len(picked))]
+                taken.update(picked)
+                if len(picked) == self.group:
+                    break
+            assert len(picked) == self.group, (b, c)
+            for q, (x, y) in enumerate(picked):
                 self.cores.append(ttnn.CoreCoord(x, y))
                 self.slots.append((b, q))
         self.vcs = bank_vcs(self.cores)
@@ -176,30 +187,85 @@ class BankStreamMatmul:
         ttnn.generic_op([w, out], program)
         return out
 
+    # Prefetch (``section``): semaphores of the consumer cores, raised by producers in the same launch.
+    SEM_START = 1  # the producers are done with DRAM
+    SEM_X_READY = 2  # x is written
+    PREFETCH_IN_FLIGHT = 6
+    PREFETCH_GROUP = 4
+
+    @classmethod
+    def prefetching(cls, plan, k, n, compute_kernel_config, avoid=()):
+        """The matmul ``section`` runs as the next layer's qkv inside the previous layer's reduce launch (``avoid``:
+        that launch's other cores), or None when its layout constraints do not hold."""
+        try:
+            return cls(
+                plan,
+                k,
+                n,
+                compute_kernel_config,
+                skip_bank_core=True,
+                group=cls.PREFETCH_GROUP,
+                avoid=avoid,
+                x_rows=8,
+            )
+        except AssertionError:
+            return None
+
     def __call__(self, x, w, compact_out=None):
         """``compact_out``: write rows 0-3 straight into this compact rows tensor ([1, 1, 32, n / 8] bf16 DRAM tiles:
         rows 4c..4c+3 of compact tile t % (n / 256) hold rows 0-3 of tile column t, c = t / (n / 256)) and return it."""
+        out = compact_out if compact_out is not None else self.output()
+        kernels, cbs, semaphores = self._parts(x, w, out, compact=compact_out is not None)
+        program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=semaphores, cbs=cbs)
+        ttnn.generic_op([x, w, out], program)
+        return out
+
+    def output(self):
+        return ttnn.empty(
+            [1, 1, TILE, self.n],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.plan.mesh_device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+    def section(self, x, w, start_count, x_ready_count):
+        """This matmul as a section of another launch (its cores must be clear of that launch's): every core
+        (``stream_cores``) streams its whole weight slice into L1 once semaphore SEM_START reaches ``start_count``
+        (the producers no longer read DRAM), and each bank's x loader (``loaders``) reads x once semaphore
+        SEM_X_READY reaches ``x_ready_count`` (the producers write x, then raise it). Returns (section dict, the
+        [1, 1, 32, n] L1 output). x must be in DRAM (the loaders share it with their groups)."""
+        assert x.memory_config().buffer_type == ttnn.BufferType.DRAM and self.x_loaders(x) is not None
+        out = self.output()
+        prefetch = (self.SEM_START, start_count, self.SEM_X_READY, x_ready_count)
+        kernels, cbs, semaphores = self._parts(x, w, out, prefetch=prefetch)
+        return dict(kernels=kernels, cbs=cbs, semaphores=semaphores, tensors=[w]), out
+
+    def stream_cores(self):
+        """NoC coordinates of every core."""
+        return list(self.noc_cores)
+
+    def loaders(self):
+        """Per bank, the NoC coordinate of the core that reads x from DRAM for its group."""
+        return [noc for (b, q), noc in zip(self.slots, self.noc_cores) if q == 0]
+
+    def _parts(self, x, w, out, compact=False, prefetch=None):
+        """Kernels, CBs and semaphores. ``prefetch`` = (start sem, start count, x sem, x count): stream the whole
+        weight slice into L1 once the start semaphore is raised, read x once the x semaphore is (see ``section``)."""
         assert x.dtype == ttnn.bfloat16 and x.layout == ttnn.TILE_LAYOUT
         assert _is_interleaved(x)
         compact_tiles = 0
-        if compact_out is not None:
+        if compact:
             compact_tiles = self.n // TILE // (TILE // 4)
-            assert (
-                compact_out.shape[-1] == compact_tiles * TILE
-                and compact_out.memory_config().buffer_type == ttnn.BufferType.DRAM
-            )
-            out = compact_out
-        else:
-            out = ttnn.empty(
-                [1, 1, TILE, self.n],
-                dtype=x.dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.plan.mesh_device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
+            assert out.shape[-1] == compact_tiles * TILE and out.memory_config().buffer_type == ttnn.BufferType.DRAM
         w_tile, row_bytes, block_rows = self._sizes(w.dtype)
         num_blocks = self.kt // block_rows
         block_tiles = block_rows * self.cpc
+        num_buffers, in_flight = self.NUM_BUFFERS, self.IN_FLIGHT
+        start_sem = start_count = x_sem = x_count = 0
+        if prefetch is not None:
+            start_sem, start_count, x_sem, x_count = prefetch
+            num_buffers, in_flight = num_blocks, min(self.PREFETCH_IN_FLIGHT, num_blocks - 1)
         x_dram = 1 if x.memory_config().buffer_type == ttnn.BufferType.DRAM else 0
         w_addr, x_addr, out_addr = w.buffer_address(), x.buffer_address(), out.buffer_address()
         nt = self.n // TILE
@@ -234,16 +300,18 @@ class BankStreamMatmul:
                 block_tiles,
                 row_bytes,
                 self.cpb * w_tile,
-                self.NUM_BUFFERS,
-                self.IN_FLIGHT,
+                num_buffers,
+                in_flight,
+                start_sem,
+                start_count,
             ],
             reader_rt,
             ttnn.ReaderConfigDescriptor(),
         )
         cbs = [
-            _cb(self.CB_X, x.dtype, self.kt, ranges),
-            _cb(self.CB_W, w.dtype, self.NUM_BUFFERS * block_tiles, ranges),
-            _cb(self.CB_OUT, x.dtype, self.cpc, ranges),
+            _cb(self.CB_X, x.dtype, self.kt, ranges, rows=self.x_rows),
+            _cb(self.CB_W, w.dtype, num_buffers * block_tiles, ranges),
+            _cb(self.CB_OUT, x.dtype, self.cpc, ranges, rows=self.x_rows),
             _cb(self.CB_ZERO, x.dtype, 1, ranges),
         ]
         writer = _kernel(
@@ -260,6 +328,9 @@ class BankStreamMatmul:
                 self.banks,
                 self.SEM_X,
                 compact_tiles,
+                x_sem,
+                x_count,
+                self.x_rows,
             ],
             writer_rt,
             ttnn.WriterConfigDescriptor(),
@@ -272,9 +343,9 @@ class BankStreamMatmul:
             self.compute_config,
         )
         semaphores = [_semaphore(ranges)] if loaders is not None else []
-        program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=semaphores, cbs=cbs)
-        ttnn.generic_op([x, w, out], program)
-        return out
+        if prefetch is not None:
+            semaphores += [_semaphore(ranges, start_sem), _semaphore(ranges, x_sem)]
+        return [reader, writer, compute], cbs, semaphores
 
 
 class RouterScoreStream:
@@ -374,7 +445,7 @@ class RouterScoreStream:
         reader = _kernel(
             "proj_reader.cpp",
             self.cores,
-            [self.CB_W, num_blocks, 1, self.BLOCK_TILES, packet, packet, num_blocks + 1, num_blocks],
+            [self.CB_W, num_blocks, 1, self.BLOCK_TILES, packet, packet, num_blocks + 1, num_blocks, 0, 0],
             [[b, vc, w_addr, q * self.kq * w_tile] for (b, q), vc in zip(self.slots, self.vcs)],
             ttnn.ReaderConfigDescriptor(),
         )

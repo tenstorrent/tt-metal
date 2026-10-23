@@ -291,13 +291,30 @@ class TtMiMoDecoderLayer:
         """The MoE streaming decode serves users in rows 0-3 only: both block reductions then move only those rows."""
         return self.is_moe and self.mlp.gate_up_stream is not None
 
-    def forward_decode(self, x, rot_mats, cur_pos, page_table, kv_cache, token_mask=None, h=None, return_norm=False):
+    def forward_decode(
+        self,
+        x,
+        rot_mats,
+        cur_pos,
+        page_table,
+        kv_cache,
+        token_mask=None,
+        h=None,
+        return_norm=False,
+        xqkv=None,
+        next_qkv=None,
+    ):
         """``h``: input_norm(x) when the previous layer's reduction already computed it (see set_fused_norms).
-        ``return_norm``: return (y, the next norm of y or None)."""
+        ``return_norm``: return (y, the next norm of y or None). ``xqkv``: this layer's qkv row of h, already computed
+        (by the previous layer, ``next_qkv``). ``next_qkv`` (with ``return_norm``): the next layer's
+        ``prefetch_qkv()``; returns (y, h_next, its qkv row of h_next or None when this layer cannot run it)."""
         if not self._compact_decode():
+            assert xqkv is None
             x2 = self.attention_decode(x, rot_mats, cur_pos, page_table, kv_cache)
             y = self._ffn(x2, token_mask, decode=True)
             x2.deallocate(True)
+            if next_qkv is not None:
+                return y, None, None
             return (y, None) if return_norm else y
         # Each block's row all-reduce is a compact all-gather; ReduceExpand sums the chips and adds the residual
         # (with fused norms, it also computes the following RMSNorm).
@@ -306,7 +323,7 @@ class TtMiMoDecoderLayer:
         if own_h:
             h = self.input_norm(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         gathered = self.attn.forward_decode(
-            h, rot_mats[self.is_swa], cur_pos, self._page_table(page_table), kv_cache, compact=True
+            h, rot_mats[self.is_swa], cur_pos, self._page_table(page_table), kv_cache, compact=True, xqkv=xqkv
         )
         if own_h:
             h.deallocate(True)
@@ -321,9 +338,16 @@ class TtMiMoDecoderLayer:
         if fused is None:
             h2 = self.post_norm(x2)
         nxt = fused["next"] if fused is not None and return_norm else None
-        out = self.mlp.forward_decode(h2, token_mask, residual=x2, norm=nxt)
+        merge_qkv = next_qkv if nxt is not None and self.mlp.fabric_gather else None
+        out = self.mlp.forward_decode(h2, token_mask, residual=x2, norm=nxt, next_qkv=merge_qkv)
         if fused is None:
             h2.deallocate(True)
         x2.deallocate(True)
-        y, h_next = out if nxt is not None else (out, None)
+        xqkv_next = None
+        if merge_qkv is not None:
+            y, h_next, xqkv_next = out
+        else:
+            y, h_next = out if nxt is not None else (out, None)
+        if next_qkv is not None:
+            return y, h_next, xqkv_next
         return (y, h_next) if return_norm else y

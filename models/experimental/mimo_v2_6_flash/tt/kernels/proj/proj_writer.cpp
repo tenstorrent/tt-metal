@@ -7,7 +7,10 @@
 // x arrives one of three ways (runtime arg role): 0 reads every tile from the x tensor; 1 (the loader of a bank group)
 // does the same and, after each block, raises the x semaphore of each of its peers by block_rows; 2 (a peer) waits
 // until its loader's count covers the block and copies it from the loader's cb_x, which sits at the same L1 address.
-// One 640 B read per tile covers rows 0-3 of faces 0 and 1 (and face 0's rows 4-15 between them).
+// One 640 B read per tile covers rows 0-3 of faces 0 and 1 (and face 0's rows 4-15 between them). cb_x and cb_out
+// hold x_rows x 32 tiles (faces of min(x_rows, 16) rows), so with x_rows < 16 rows 0-3 of each face are read on
+// their own. With x_wait_count > 0 a core that reads x from the tensor (roles 0 and 1) first waits until semaphore
+// x_wait_sem reaches x_wait_count: a producer in the same launch writes x and then raises it.
 //
 // Only rows 0-3 of x carry users and an output row depends only on the same x row, so the unread rows of cb_x
 // reach only output rows that are written as zeros.
@@ -33,10 +36,16 @@ void kernel_main() {
     // > 0: write rows 0-3 of output tile column n into the compact rows layout instead (DRAM tiles: rows 4c..4c+3
     // of compact tile n % compact_tiles, c = n / compact_tiles), the layout the row reduction moves.
     constexpr uint32_t compact_tiles = get_compile_time_arg_val(9);
-    constexpr uint32_t tile_bytes = 2048;  // bf16 32x32
+    constexpr uint32_t x_wait_sem = get_compile_time_arg_val(10);
+    constexpr uint32_t x_wait_count = get_compile_time_arg_val(11);
+    constexpr uint32_t x_rows = get_compile_time_arg_val(12);
+    constexpr uint32_t tile_bytes = 2048;  // bf16 32x32 (x and the output in their tensors)
     constexpr uint32_t face_bytes = 512;   // bf16 16x16
     constexpr uint32_t user_bytes = 128;   // rows 0-3 of a face
-    constexpr uint32_t x_read_bytes = face_bytes + user_bytes;
+    // cb_x / cb_out tiles: x_rows x 32, face 1 at l1_face_bytes
+    constexpr uint32_t l1_tile_bytes = x_rows * 64;
+    constexpr uint32_t l1_face_bytes = (x_rows < 16 ? x_rows : 16) * 32;
+    constexpr uint32_t x_read_bytes = l1_face_bytes + user_bytes;  // a peer's copy: rows 0-3 of faces 0 and 1
 
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
     const uint32_t out_addr = get_arg_val<uint32_t>(1);
@@ -50,6 +59,12 @@ void kernel_main() {
     const uint32_t sem_addr = get_semaphore(sem_id);
     volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
 
+    if constexpr (x_wait_count > 0) {
+        if (role != 2) {
+            noc_semaphore_wait_min(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(x_wait_sem)), x_wait_count);
+        }
+    }
     cb_reserve_back(cb_x, num_blocks * block_rows);
     uint32_t x_l1 = get_write_ptr(cb_x);
     uint32_t k = 0;
@@ -58,12 +73,18 @@ void kernel_main() {
             noc_semaphore_wait_min(sem, k + block_rows);
             for (uint32_t r = 0; r < block_rows; r++, k++) {
                 noc_async_read(get_noc_addr(src_x, src_y, x_l1), x_l1, x_read_bytes);
-                x_l1 += tile_bytes;
+                x_l1 += l1_tile_bytes;
             }
         } else {
             for (uint32_t r = 0; r < block_rows; r++, k++) {
-                noc_async_read(page_noc_addr<x_dram>(x_addr, k, tile_bytes), x_l1, x_read_bytes);
-                x_l1 += tile_bytes;
+                const uint64_t src = page_noc_addr<x_dram>(x_addr, k, tile_bytes);
+                if constexpr (l1_face_bytes == face_bytes) {
+                    noc_async_read(src, x_l1, face_bytes + user_bytes);
+                } else {
+                    noc_async_read(src, x_l1, user_bytes);
+                    noc_async_read(src + face_bytes, x_l1 + l1_face_bytes, user_bytes);
+                }
+                x_l1 += l1_tile_bytes;
             }
         }
         noc_async_read_barrier();
@@ -92,8 +113,8 @@ void kernel_main() {
             const uint64_t dst = page_noc_addr<true>(out_addr, n % compact_tiles, tile_bytes) +
                                  (c / 4) * 2 * face_bytes + (c % 4) * user_bytes;
             noc_async_write(src, dst, user_bytes);
-            noc_async_write(src + face_bytes, dst + face_bytes, user_bytes);
-            src += tile_bytes;
+            noc_async_write(src + l1_face_bytes, dst + face_bytes, user_bytes);
+            src += l1_tile_bytes;
         }
         noc_async_write_barrier();
         cb_pop_front(cb_out, cols);
@@ -106,9 +127,9 @@ void kernel_main() {
         const uint64_t dst = page_noc_addr<false>(out_addr, first_col + j * col_stride, tile_bytes);
         noc_async_write(src, dst, user_bytes);
         noc_async_write(zero_l1, dst + user_bytes, face_bytes - user_bytes);
-        noc_async_write(src + face_bytes, dst + face_bytes, user_bytes);
+        noc_async_write(src + l1_face_bytes, dst + face_bytes, user_bytes);
         noc_async_write(zero_l1, dst + face_bytes + user_bytes, tile_bytes - face_bytes - user_bytes);
-        src += tile_bytes;
+        src += l1_tile_bytes;
     }
     noc_async_write_barrier();
     cb_pop_front(cb_out, cols);

@@ -29,6 +29,10 @@ void kernel_main() {
     // A producer in the same launch: wait until semaphore wait_sem counts wait_count (its cores' "written").
     constexpr uint32_t wait_sem = get_compile_time_arg_val(7);
     constexpr uint32_t wait_count = get_compile_time_arg_val(8);
+    // A consumer in the same launch: once this sender has read its tiles, raise semaphore done_sem of each core in
+    // the runtime args after the reduce cores ([count, x0, y0, ...]); the consumer streams DRAM after that.
+    constexpr bool read_done = get_compile_time_arg_val(9) == 1;
+    constexpr uint32_t done_sem = get_compile_time_arg_val(10);
     constexpr uint32_t tile_bytes = 2048;
     constexpr uint32_t core_bytes = tiles_per_core * tile_bytes;
     static_assert(tiles_per_core == 2, "one scatter packet carries a core's two tiles");
@@ -43,6 +47,10 @@ void kernel_main() {
     for (uint32_t i = 0; i < cores; i++) {
         core_x[i] = get_arg_val<uint32_t>(arg++);
         core_y[i] = get_arg_val<uint32_t>(arg++);
+    }
+    const uint32_t done_at = arg;
+    if constexpr (read_done) {
+        arg += 1 + 2 * get_arg_val<uint32_t>(done_at);
     }
 
     auto connection = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg);
@@ -69,6 +77,16 @@ void kernel_main() {
     connection.open_finish();
     noc_async_read_barrier();
     DeviceTimestampedData("FGS", 2);
+    if constexpr (read_done) {
+        const uint32_t n = get_arg_val<uint32_t>(done_at);
+        const uint32_t sem = get_semaphore(done_sem);
+        for (uint32_t c = 0; c < n; c++) {
+            noc_semaphore_inc(
+                get_noc_addr(
+                    get_arg_val<uint32_t>(done_at + 1 + 2 * c), get_arg_val<uint32_t>(done_at + 2 + 2 * c), sem),
+                1);
+        }
+    }
 
     // Slot (tile j, chip c) of a core's gather buffer: gather_addr + (j * chips + c) * tile_bytes.
     for (uint32_t i = 0; i < cores; i++) {
