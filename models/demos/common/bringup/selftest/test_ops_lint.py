@@ -74,6 +74,26 @@ def test_stock_call_needs_a_breadcrumbs_reason(tmp_path):
     assert L.stock_problems(tmp_path, "models/demos/m", files, crumbs, base=None) == []
 
 
+def test_a_stock_op_named_in_a_string_is_not_a_call(tmp_path):
+    """F174: DeepSeek-V4.1 P.22: a Setting's help text naming the stock op ("ONE stock ttnn.all_gather(...)") failed the
+    attempt as a call. The lint reads the parsed code: strings and comments are not calls; a real call still is."""
+    from models.demos.common.bringup.testing import ops_lint as L
+
+    _ops_root(tmp_path, {})
+    tt = tmp_path / "models" / "demos" / "m" / "tt"
+    tt.mkdir(parents=True)
+    (tt / "settings.py").write_text('H = "fused = ONE stock ttnn.all_gather(x, dim=3) in one program"\n')
+    (tt / "ccl.py").write_text(
+        '"""uses ttnn.all_gather(x) in the docstring"""\ny = (1,\n     ttnn.all_gather(x, dim=3))\n'
+    )
+    crumbs = tmp_path / "models" / "demos" / "m" / "bringup" / "BREADCRUMBS.md"
+    crumbs.parent.mkdir(parents=True)
+    bad = L.stock_problems(
+        tmp_path, "models/demos/m", ["models/demos/m/tt/settings.py", "models/demos/m/tt/ccl.py"], crumbs, base=None
+    )
+    assert len(bad) == 1 and "ccl.py:3: calls ttnn.all_gather" in bad[0], bad
+
+
 def test_fork_op_writes_every_readme_section():
     src = (Path(L.__file__).resolve().parents[5] / L.FORKS / "fork_op.py").read_text()
     assert all(s in src for s in L.SECTIONS) and "Consider instead of:" in src

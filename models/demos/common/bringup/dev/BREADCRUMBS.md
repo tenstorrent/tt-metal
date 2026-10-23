@@ -1892,3 +1892,26 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   ~GBs per model; swap tests' floors depend on device outputs; measure the CPU share first.
 - Items 13 (stamps per model, not per run) and 18 (resume an agent's session) not in this round.
 - Selftests: test_waste_fixes.py group B; test_verify's batched test checks the batch's runs are kept.
+
+## F172: freeze's validation runs write to a scratch dir, not the task's results (2026-10-22)
+- DeepSeek-V4.1 C.swa.shared_expert / C.swa_engram.shared_expert: the re-freeze's reference and zero-stub runs
+  (record=False) wrote their metrics into results/<task>.json, so the task's record showed rel 1.0 on every check
+  (read as "the shared expert returns zeros") while the committed device result was rel 0.002.
+- core/gate.py run_gate: a validation run (record=False, not --check) sets BRINGUP_RESULTS to
+  runs/<run>/validation/<task>, resets and reads metrics there, and deletes no gate outputs. Selftest
+  test_freeze_validation_runs_leave_the_task_results_alone (fails without the fix).
+
+## F173: the code under test is hashed by behaviour for the model's Python (2026-10-22)
+- DeepSeek-V4.1 P.22 attempt 2 re-ran 18 accuracy units (~40 min) because it edited a Setting's explanation text in
+  tt/settings.py: F169's under-test key hashed the model's files byte for byte.
+- core/stamps.py under_test_key: the model's own .py files count by semantic_py_hash (the AST without comments,
+  formatting, docstrings and a Setting's `why` text); unparsable files hash as text. Code, defaults and choices still
+  change the key. Selftest test_a_docstring_or_setting_text_edit_keeps_the_code_under_test.
+
+## F174: the bring-up-ops lint reads real calls, not names in strings (2026-10-22)
+- DeepSeek-V4.1 P.22: attempt 1 was failed because a Setting's help text in tt/settings.py named the stock
+  `ttnn.experimental.deepseek_prefill.moe_grouped_topk(...)`; the code already called the fork. Attempt 2 (~1 h) only
+  reworded the text.
+- testing/ops_lint.py stock_problems: calls come from the parsed AST (dotted name of each Call); strings, docstrings
+  and comments never count; an unparsable file falls back to the line pattern. Selftest
+  test_a_stock_op_named_in_a_string_is_not_a_call.
