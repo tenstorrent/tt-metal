@@ -4,13 +4,14 @@
 #pragma once
 
 #include "argmax_common.hpp"
-#include "tt-metalium/constants.hpp"
+#include "api/tile_constants.h"
 #include "api/debug/assert.h"
 #include "api/debug/waypoint.h"
 #include "api/dataflow/noc.h"
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/local_mem/address_access.h"
 #include "internal/scoped_lock_cache_ops.h"
 
 constexpr uint32_t face_width = tt::constants::FACE_WIDTH;
@@ -88,18 +89,18 @@ struct OutputContext {
     uint32_t* const stack_ptr;
     const uint32_t stack_buffer_size;
 
-    const uint32_t output_addr;
+    const CoreLocalMem<uint32_t> output_mem;
     const uint32_t write_out_count;
 
     OutputContext() = delete;
     OutputContext(const OutputContext&) = delete;
 
-    OutputContext(uint32_t* ptr, uint32_t size, uint32_t dst_addr, uint32_t out_count) :
+    OutputContext(uint32_t* ptr, uint32_t size, CoreLocalMem<uint32_t> dst_mem, uint32_t out_count) :
         collected_count(0),
         output_page_id(0),
         stack_ptr(ptr),
         stack_buffer_size(size),
-        output_addr(dst_addr),
+        output_mem(dst_mem),
         write_out_count(out_count) {}
 };
 
@@ -301,7 +302,7 @@ void collect_row_major_output(const uint32_t new_values[], uint32_t count, Outpu
     }
 
     auto* stack_ptr = ctx.stack_ptr;
-    auto* out_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctx.output_addr);
+    volatile tt_l1_ptr uint32_t* out_ptr = &ctx.output_mem[0];
 
     for (uint32_t idx = 0; idx < count; idx++) {
         const uint32_t write_index = curr_collected + idx;
@@ -332,8 +333,7 @@ void write_to_output(const Noc& noc, AccessorType& output_accessor, OutputContex
     uint32_t collected_count = output_ctx.collected_count;
     uint32_t output_page_id = output_ctx.output_page_id;
 
-    auto dst_addr = output_ctx.output_addr;
-    const CoreLocalMem<uint32_t> dst_mem(dst_addr);
+    const CoreLocalMem<uint32_t> dst_mem = output_ctx.output_mem;
 
     uint32_t sent_count = 0;
     while (collected_count > 0) {
@@ -341,7 +341,7 @@ void write_to_output(const Noc& noc, AccessorType& output_accessor, OutputContex
         // Otherwise, argmax values are accumulated directly in the output scratchpad.
         if constexpr (keepdim) {
             auto* stack_ptr = output_ctx.stack_ptr;
-            auto* dst_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_addr);
+            volatile tt_l1_ptr uint32_t* dst_ptr = &dst_mem[0];
             // Copy one page of output data into the output scratchpad.
             for (uint32_t idx = 0; idx < output_page_elements; idx++) {
                 dst_ptr[idx] = stack_ptr[sent_count + idx];
@@ -351,7 +351,7 @@ void write_to_output(const Noc& noc, AccessorType& output_accessor, OutputContex
         const uint32_t write_size = output_page_elements * sizeof(uint32_t);
         // Quasar DM cores stage output through the cached view, so flush it to SRAM before this NoC
         // read. No-op on WH/BH, where CPU stores are already coherent with the NoC.
-        scoped_lock_release_cache_ops(static_cast<uintptr_t>(dst_addr), write_size);
+        scoped_lock_release_cache_ops(local_mem::detail::AddressAccess::address(dst_mem), write_size);
         noc.async_write(dst_mem, output_accessor, write_size, {.offset_bytes = 0}, {.page_id = output_page_id});
 
         sent_count += output_page_elements;
