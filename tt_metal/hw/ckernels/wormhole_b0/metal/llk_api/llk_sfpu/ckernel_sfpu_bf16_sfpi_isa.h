@@ -332,8 +332,28 @@ template <class R>
 
 template <class R>
 [[gnu::always_inline]] inline void sfp_stoch_rnd(
-    std::uint32_t rnd, std::uint32_t imm8, std::uint32_t, std::uint32_t c, std::uint32_t d, std::uint32_t m, R& f) {
-    f.wr(d, __builtin_rvtt_sfpstochrnd_i(f.rd(c), imm8, m, rnd));
+    std::uint32_t rnd, std::uint32_t imm8, std::uint32_t a2, std::uint32_t c, std::uint32_t d, std::uint32_t m, R& f) {
+#if __has_builtin(__builtin_rvtt_sfpstochrnd_descale_v)
+    // Current SFPI separates floating conversion from integer descaling.
+    // Only integer modes read the immediate/vector descale operand.
+    const auto mode = m & 7u;
+    if (mode == 4 || mode == 5) {
+        if (m & 8u) {
+            f.wr(d, __builtin_rvtt_sfpstochrnd_descale_i(f.rd(c), imm8, mode, rnd));
+        } else {
+            f.wr(d, __builtin_rvtt_sfpstochrnd_descale_v(f.rd(c), f.rd(a2), mode, rnd));
+        }
+    } else {
+        f.wr(d, __builtin_rvtt_sfpstochrnd(f.rd(c), mode, rnd));
+    }
+#else
+    // Released compilers retain the original combined conversion interface.
+    if (((m & 7u) == 4 || (m & 7u) == 5) && !(m & 8u)) {
+        f.wr(d, __builtin_rvtt_sfpstochrnd_v(f.rd(c), f.rd(a2), m & 7u, rnd));
+    } else {
+        f.wr(d, __builtin_rvtt_sfpstochrnd_i(f.rd(c), imm8, m & 7u, rnd));
+    }
+#endif
 }
 [[gnu::always_inline]] inline void sfp_stoch_rnd(
     std::uint32_t rnd, std::uint32_t imm8, std::uint32_t a2, std::uint32_t c, std::uint32_t d, std::uint32_t m) {
