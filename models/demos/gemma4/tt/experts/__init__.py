@@ -91,7 +91,12 @@ class Gemma4Experts:
                 else Gemma4DispatchExperts.hf_expert_list(state_dict["gate_up_proj"], state_dict["down_proj"])
             )
             self.dispatch_experts = Gemma4DispatchExperts(
-                mesh_device, config, hf_list, tensor_cache_path=tensor_cache_path, weights_dtype=weight_dtype
+                mesh_device,
+                config,
+                hf_list,
+                tensor_cache_path=tensor_cache_path,
+                weights_dtype=weight_dtype,
+                ccl_manager=self.ccl_manager,
             )
         # Optional local token-sorted routed prefill (GEMMA4_MOE_LOCAL_ROUTED_PREFILL=1, experts/local_routed_prefill.py):
         # on the whole-expert tp-only shapes every chip holds every token, so the routed (token, expert) pairs are

@@ -32,7 +32,9 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombine2dModule, Tt
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import MoERoutingOutputs, TtMoERoutingSetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+from models.demos.gemma4.custom_ops.expert_gather_small import ExpertGatherSmall
 from models.demos.gemma4.custom_ops.geglu_routed_expert import GegluRoutedExpert
+from models.demos.gemma4.tt.ccl import sync_all_reduce
 from models.demos.minimax_m3.tt.moe.tt_reduce import TtMiniMaxReduce
 
 # tokens per dispatch chunk across the whole mesh (rows * seq_len_per_chip); every chip holds the chunk
@@ -193,6 +195,22 @@ class _DispatchChunkPlan:
             owner.global_idx,
             max_tokens=self.max_tok,
         )
+        # GEMMA4_SMALL_ROW_EXPERTS=1 on a chunk of <= 256 tokens: the gemma4 small-row path (no fabric dispatch;
+        # custom_ops/expert_gather_small + the GeGLU op on a persistent zero-initialized output + W @ expert_out +
+        # one all-reduce). Built here, outside any trace capture, with the drop-free buffer contract asserted.
+        self.gather = None
+        if ExpertGatherSmall.enabled() and self.chunk_tokens <= ExpertGatherSmall.MAX_TOKENS and not owner.ring:
+            self.gather = ExpertGatherSmall(
+                self.chunk_tokens, owner.num_experts, experts_per_chip, owner.top_k, owner.hidden
+            )
+            assert self.gather.M == self.max_buf, (self.gather.M, self.max_buf)
+            self.small_out = ttnn.zeros(
+                ttnn.Shape([self.max_buf, owner.hidden]),
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=owner.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
 
 class Gemma4DispatchExperts:
@@ -207,8 +225,10 @@ class Gemma4DispatchExperts:
         layer_idx=0,
         weights_dtype=ttnn.bfloat8_b,
         num_links=1,
+        ccl_manager=None,
     ):
         self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager  # the small-row path's all-reduce runs on its semaphores when given
         rows, cols = mesh_device.shape
         self.rows, self.cols = rows, cols
         self.num_experts = config.num_experts
@@ -381,12 +401,40 @@ class Gemma4DispatchExperts:
             ttnn.deallocate(t)
         return out
 
+    def _chunk_small(self, hidden, routing, plan):
+        """The small-row path of one chunk (GEMMA4_SMALL_ROW_EXPERTS=1, <= 256 tokens, dense routing): every chip
+        gathers the rows routed to its own experts from the replicated chunk (custom_ops/expert_gather_small), runs
+        the GeGLU op on them into the plan's zero-initialized persistent output, forms its partial sum as the
+        matmul W @ expert_out ([T, M] x [M, H], the routing weights at the gathered rows) and the chips all-reduce
+        the partials over the dispatch axis. Returns [1,1,T,H] replicated, like _chunk."""
+        T = plan.chunk_tokens
+        h_rm = ttnn.to_layout(hidden, ttnn.ROW_MAJOR_LAYOUT)
+        buffer, counts, offsets, w = plan.gather.op(h_rm, routing, self.global_idx)
+        ttnn.deallocate(h_rm)
+        expert_out = plan.geglu_op(buffer, counts, offsets, output=plan.small_out)
+        ttnn.deallocate(buffer)
+        ttnn.deallocate(counts)
+        ttnn.deallocate(offsets)
+        partial = ttnn.matmul(
+            w,
+            ttnn.reshape(expert_out, (1, 1, plan.max_buf, self.hidden)),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+        )  # [1,1,T,H]
+        ttnn.deallocate(w)
+        out = sync_all_reduce(partial, self.dispatch_axis, ttnn.DRAM_MEMORY_CONFIG, self.ccl_manager)
+        ttnn.deallocate(partial)
+        assert [int(v) for v in out.shape] == [1, 1, T, self.hidden], out.shape
+        return out
+
     def _chunk(self, hidden, routing, n_tokens, plan=None):
         """One dispatch chunk. hidden [1,1,T,H] replicated on every chip, T = ``plan.chunk_tokens`` (rows beyond
         n_tokens are zero padding); routing is the dense [1,1,T,E] matrix or the router's sparse
         ``(values [1,1,T,K] bf16, indices [1,1,T,K] uint16)`` pair (both TILE). Returns [1,1,T,H] replicated
         (full top-k sum)."""
         plan = self._plans[CHUNK_TOKENS] if plan is None else plan
+        if plan.gather is not None and not isinstance(routing, tuple):
+            return self._chunk_small(hidden, routing, plan)
         S = plan.seq_per_chip
         # each chip of the dispatch group takes its slice of the chunk (tokens [r*S, (r+1)*S)); the other axis
         # keeps the same slice
