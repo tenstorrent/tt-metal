@@ -178,6 +178,12 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
 }
 
 std::optional<DeviceAddr> FreeListOpt::allocate_at_address(DeviceAddr absolute_start_address, DeviceAddr size_bytes) {
+    // Blocks start and end on alignment_ boundaries; a misaligned start would split one off the grid.
+    TT_FATAL(
+        absolute_start_address % alignment_ == 0,
+        "Requested buffer address {} is not aligned to {} B",
+        absolute_start_address,
+        alignment_);
     // Nothing we can do but scan the free list
     size_t alloc_size = align(std::max(size_bytes, min_allocation_size_));
     std::optional<size_t> target_block_index;
