@@ -2,16 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The MTP draft chained behind a verify, and the next verify chained onto it (reference/spec_chain.py, the integer
-mirror of kernels/spec_chain.cpp); no device. The chain step must write exactly the upload the host built after reading the verify (pack_mtp(plan_mtp(...))
-from the plugin's committed tokens and positions), for every accepted count, around the MTP ring's wrap and at the end
-of the context, and decline where propose_draft_tokens declines; the drafts step must pick the anchor's tokens; the
-result page must round-trip, and a ChainedDraft must match exactly the commit it was drafted from. End to end with the
-accept kernel's mirror (reference/sample_verify.py) on greedy requests: the committed tokens are the plugin's greedy
-walk over the argmax ids. The relay step must write exactly the verify upload and control page the host would have
-built after reading the page (the last committed token at the bonus and the drafts), for every count of the step it
-chains onto and every number of drafts verified, around the ring's wrap and at the context limit, from a provisional
-layout above the real position, leaving every other slot alone, and idle the pass when the page drafted nothing.
-test_spec_inputs_tp8.py runs the kernel against the same mirror on a Galaxy row."""
+mirror of kernels/spec_chain.cpp); no device. The chain step must write exactly the upload the host built after
+reading the verify (pack_mtp(plan_mtp(...)) from the plugin's committed tokens and positions), for every accepted
+count, around the MTP ring's wrap and at the end of the context, and decline where propose_draft_tokens declines; the
+drafts step must pick the anchor's tokens; the result page must round-trip, and a ChainedDraft must match exactly the
+commit it was drafted from. End to end with the accept kernel's mirror (reference/sample_verify.py) on greedy
+requests: the committed tokens are the plugin's greedy walk over the argmax ids. The relay step must write exactly the
+verify upload and control page the host would have built after reading the page (the last committed token at the
+bonus and the drafts), for every count of the step it chains onto and every number of drafts verified, around the
+ring's wrap and at the context limit, from a provisional layout above the real position, leaving every other slot
+alone, and idle the pass when the page drafted nothing; with either drafter (one MTP layer, or every layer: the
+description, the plan step on the stash, the anchor in the last slot). test_spec_inputs_tp8.py runs the kernel
+against the same mirror on a Galaxy row."""
 
 import random
 from types import SimpleNamespace

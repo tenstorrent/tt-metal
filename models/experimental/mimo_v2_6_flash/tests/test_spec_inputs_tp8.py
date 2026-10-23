@@ -22,9 +22,10 @@ every accepted count, around the ring's wrap and at the context limit, an idle c
 
 test_spec_relay_tp8: the relay step (a chained verify's tokens and positions into ``verify_packed`` and its drafts into
 the accept step's control page, from the lane's last result page) against its mirror (reference.spec_chain.relay_step)
-bit for bit, eager and traced: every count of the step chained onto and every number of drafts relayed, around the
-ring's wrap and at the context limit, a page that drafted nothing, host content beside the relayed slots, and an
-upload without the relay word (untouched).
+bit for bit, eager and traced: every count of the step chained onto (its page written by the one-layer or the
+every-layer chain and drafts steps) and every number of drafts relayed, around the ring's wrap and at the context
+limit, a page that drafted nothing, host content beside the relayed slots, and an upload without the relay word
+(untouched).
 
 test_spec_chain_layers_tp8: the same with every MTP layer (MIMO_MTP_LAYERS=3): the chain step's description and the
 drafts step, then the plan step (plan_mtp_layers on the device stash: every commit count, a plain step's slot, stash
@@ -36,6 +37,7 @@ reference/mtp_backfill.py bit for bit: a decode step's, a verify pass's and a pr
 rows), and the backfill's plan (rows, RoPE indices, tokens, the fill table, the stash page and hidden rows), eager and
 traced."""
 
+import itertools
 from types import SimpleNamespace
 
 import random
@@ -660,22 +662,23 @@ def test_spec_relay_tp8(mesh_device):
         row = torch.tensor(chain_row(B, draft_source([vp]), limit, relay=relay), dtype=torch.int32)
         return (tok, pos, row), control_words(pass_inputs(vp, None)[1])
 
-    def page_of(p, m, page_limit=limit):
+    def page_of(p, m, page_limit=limit, layers=1):
         """The result page of a pass at p with MAX_DRAFTS drafts that committed m tokens (the chain and drafts steps'
-        mirrors)."""
+        mirrors; with every MTP layer the drafts are slot 3's)."""
         (tok, pos, row), _ = one_pass([rng.randrange(152576) for _ in range(1 + MAX_DRAFTS)], p, MAX_DRAFTS)
         row[2] = page_limit
         committed = [rng.randrange(152576) for _ in range(m)]
         ids = [rng.randrange(152576) for _ in range(B)]
-        mtp, header = chain_step(pack_verify(tok, pos, row).tolist(), accept_page(m, committed), ids)
-        return header + drafts_step(mtp, [[rng.randrange(152576) for _ in range(B)] for _ in range(MAX_DRAFTS)])
+        mtp, header = chain_step(pack_verify(tok, pos, row).tolist(), accept_page(m, committed), ids, layers)
+        heads = [[rng.randrange(152576) for _ in range(B)] for _ in range(MAX_DRAFTS)]
+        return header + drafts_step(mtp, heads, layers)
 
     cases = []  # (verify upload tensors, page words, control words)
-    for bonus in (1, 255, 256, 257, 4000, MAX_SEQ_LEN - 1 - MAX_DRAFTS):
-        for m in range(1, MAX_DRAFTS + 2):
-            if bonus - m < 0:
-                continue
-            page = page_of(bonus - m, m)
+    for bonus, m, layers in itertools.product(
+        (1, 255, 256, 257, 4000, MAX_SEQ_LEN - 1 - MAX_DRAFTS), range(1, MAX_DRAFTS + 2), (1, MAX_DRAFTS)
+    ):
+        if bonus - m >= 0:
+            page = page_of(bonus - m, m, layers=layers)
             for n in range(1, MAX_DRAFTS + 1):
                 upload, ctrl_words = one_pass([0] * (n + 1), bonus + 2 * MAX_DRAFTS, n, relay=True)
                 cases.append((upload, page, ctrl_words))
