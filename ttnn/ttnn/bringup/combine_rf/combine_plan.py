@@ -420,6 +420,7 @@ constexpr uint32_t P = get_compile_time_arg_val(9), ROWS_CAP = get_compile_time_
 constexpr uint32_t M = get_compile_time_arg_val(11), CH = get_compile_time_arg_val(12), HS = get_compile_time_arg_val(13);
 constexpr uint32_t N = R * C, T = N * S * K, SK = S * K;
 constexpr uint32_t al64(uint32_t v) { return (v + 63) / 64 * 64; }
+constexpr uint32_t gcd_(uint32_t a, uint32_t b) { return b ? gcd_(b, a % b) : a; }
 constexpr uint32_t CNT = al64(2 * EPC * 4);  // a chunk's counts per expert, then its bucket prefix per expert
 // token-major rows (TM): core p plans tokens [p TPC, (p + 1) TPC) of every home (its ids / weights one run per home,
 // 64 B of slack for a run's unaligned start), so an expert's rows come out in (token, home, k) order
@@ -491,10 +492,12 @@ void kernel_main() {
     // (JW) one page per token of its K ids then its K weights ([N S, 2 K] uint16, RP = 4 K bytes; wts = ids)
     constexpr uint32_t RP = __RPAGE__, JW = __RJOINT__, RB = 2 * K;  // (RB: one row's ids, or weights, in bytes)
     constexpr uint32_t PT = __RPT__;  // tokens per page (joint rows: PT rows of RP bytes a page; 1: a page a row)
-    static_assert(PT == 1 || (JW && 64 % RP == 0), "multi-token pages: joint rows only (64 / RP rows a 64 B)");
     // (staging stride: 64 B a row with one row a page; RP with multi-token pages - a run is one read that keeps its
-    // source's 64 B alignment, so it starts SH rows into the staging when its first row is not 64 B aligned)
-    constexpr uint32_t SR = PT == 1 ? 64 : (RP ? RP : 64), RA = 64 / SR;
+    // source's 64 B alignment, so it starts SH rows into the staging when its first row is not 64 B aligned: rows come
+    // back to a 64 B boundary every RA = lcm(64, RP) / RP rows - 2 at K 8, 8 at K 6 (DeepSeek V4's 24 B rows))
+    constexpr uint32_t SR = PT == 1 ? 64 : (RP ? RP : 64);
+    constexpr uint32_t RA = 64 / gcd_(64, SR);
+    static_assert(PT == 1 || (JW && PT % RA == 0), "multi-token pages: joint rows only, whole 64 B runs a page");
     const InterleavedAddrGen<true> ids_g = {.bank_base_address = ids_addr, .page_size = RP ? RP * PT : T * 2};
     const InterleavedAddrGen<true> w_g = {.bank_base_address = w_addr, .page_size = RP ? RP * PT : T * 2};
     // (row pages land 64 bytes apart in local scratch, free until the sort: a DRAM read keeps its source's 64-byte
@@ -544,11 +547,23 @@ void kernel_main() {
     if constexpr (RP != 0) {
         // (RP == 0 ||: a static_assert in a discarded if-constexpr branch of a non-template is still checked)
         static_assert(RP == 0 || (RP <= 64 && RB % 4 == 0 && RP == (JW ? 2 : 1) * RB), "row pages");
-        // (unpacked by local NoC copies, one per row and array: scalar L1 copies cost ~50 cycles a word here)
+        // (unpacked by local NoC copies, one per row and array: scalar L1 copies cost ~50 cycles a word here; a row
+        // under 16 B - K < 8, MiniMax M3's top-4 - by words: a NoC copy needs source and destination equally 16 B
+        // aligned, and the packed destination rows alternate)
         for (uint32_t q = 0; q < npk; ++q) {
             for (uint32_t r = 0; r < pk_rows[q]; ++r) {
-                noc_async_read(get_noc_addr(pk_src[q] + r * SR), pk_dst[q] + r * RB, RB);
-                if (pk_dw[q]) noc_async_read(get_noc_addr(pk_src[q] + r * SR + RB), pk_dw[q] + r * RB, RB);
+                if constexpr (RB % 16 == 0) {
+                    noc_async_read(get_noc_addr(pk_src[q] + r * SR), pk_dst[q] + r * RB, RB);
+                    if (pk_dw[q]) noc_async_read(get_noc_addr(pk_src[q] + r * SR + RB), pk_dw[q] + r * RB, RB);
+                } else {
+                    const uint32_t* sw = reinterpret_cast<const uint32_t*>(pk_src[q] + r * SR);
+                    uint32_t* di = reinterpret_cast<uint32_t*>(pk_dst[q] + r * RB);
+                    for (uint32_t i = 0; i < RB / 4; ++i) di[i] = sw[i];
+                    if (pk_dw[q]) {
+                        uint32_t* dw = reinterpret_cast<uint32_t*>(pk_dw[q] + r * RB);
+                        for (uint32_t i = 0; i < RB / 4; ++i) dw[i] = sw[RB / 4 + i];
+                    }
+                }
             }
         }
         noc_async_read_barrier();

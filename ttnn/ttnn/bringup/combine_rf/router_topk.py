@@ -95,9 +95,10 @@ void kernel_main() {
         }
         float w[K], sum = 0.0f;
         if constexpr (__PROBE__ == 1) {  // (probe: no weight math)
-            volatile tt_l1_ptr uint16_t* o = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(o_l1 + i * 64);
+            const uint32_t ol = o_l1 + i * 128 + ((r * 4 * K) & 63);
+            volatile tt_l1_ptr uint16_t* o = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(ol);
             for (uint32_t j = 0; j < K; ++j) o[j] = static_cast<uint16_t>(ti[j]), o[K + j] = 0;
-            noc_async_write(o_l1 + i * 64, og.get_noc_addr(tr) + r * 4 * K, 4 * K);
+            noc_async_write(ol, og.get_noc_addr(tr) + r * 4 * K, 4 * K);
             continue;
         }
         for (uint32_t j = 0; j < K; ++j) {
@@ -112,12 +113,15 @@ void kernel_main() {
             sum += w[j];
         }
         const float inv = scale / (sum + 1e-20f);
-        volatile tt_l1_ptr uint16_t* o = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(o_l1 + i * 64);
+        // (the row's slot keeps its destination's offset in 64 B: a token's 4 K bytes land at r x 4 K in the page - not
+        // 16 B aligned at K 6, and a NoC write needs source and destination equally aligned)
+        const uint32_t ol = o_l1 + i * 128 + ((r * 4 * K) & 63);
+        volatile tt_l1_ptr uint16_t* o = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(ol);
         for (uint32_t j = 0; j < K; ++j) {
             o[j] = static_cast<uint16_t>(ti[j] / __FOLD__);  // (a fold: candidate c is expert c / fold)
             o[K + j] = static_cast<uint16_t>(bf16_rne(w[j] * inv));
         }
-        noc_async_write(o_l1 + i * 64, og.get_noc_addr(tr) + r * 4 * K, 4 * K);
+        noc_async_write(ol, og.get_noc_addr(tr) + r * 4 * K, 4 * K);
     }
     noc_async_write_barrier();
 }
@@ -143,7 +147,7 @@ def router_topk_prepare(mesh_device, *, S, E, K, route_scale=1.0, split=None, bi
     cores = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(nt * split)]
     crs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
     assert spt <= 16 and spt % 2 == 0
-    per_risc = (spt // 2) * (2 * ET * 128 + 64)  # (each RISC: its tokens' row pieces and output rows)
+    per_risc = (spt // 2) * (2 * ET * 128 + 128)  # (each RISC: its tokens' row pieces and output rows)
     l1 = 2 * per_risc + 128
     scale_bits = struct.unpack("<I", struct.pack("<f", route_scale))[0]
     st = ttnn.KernelDescriptor.SourceType.SOURCE_CODE

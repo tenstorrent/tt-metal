@@ -102,7 +102,8 @@ def reference(x, w: MoEWeights, m: MoEModel, ids=None, wts=None):
     """Host model of the block in fp32: y [T, H], ids [T, K], weights [T, K]."""
     x = x.float()
     rt = m.router
-    s = torch.sigmoid(x @ w.router["weight"].float().T)
+    lg = x @ w.router["weight"].float().T
+    s = torch.sqrt(torch.nn.functional.softplus(lg)) if rt.score_func == "sqrtsoftplus" else torch.sigmoid(lg)
     if ids is None:
         _, ids = torch.topk(s + w.router["bias"].float(), m.top_k, dim=-1)
         wts = s.gather(1, ids)

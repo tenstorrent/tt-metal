@@ -679,7 +679,13 @@ class MoEBlock(LightweightModule):
         return self._x_in
 
     def close(self):
-        pass
+        """Free the block's device memory (weights, arenas, persistent words): another block - another chunk or model -
+        can then be built on this mesh. The block is unusable after."""
+        ttnn.synchronize_device(self.mesh_device)
+        _free_device_tensors([self], ("models.demos", "ttnn.bringup"), l1_only=False)
+        import gc
+
+        gc.collect()  # (the global semaphores go with their last reference)
 
 
 def _act_dev(kind: ExpertActivation, g, u):
@@ -751,7 +757,13 @@ def _free_partial_l1(roots, tb):
     while tb is not None:
         roots.append(tb.tb_frame.f_locals.get("self"))
         tb = tb.tb_next
+    _free_device_tensors(roots, ("models.demos.moe_block.tt",), l1_only=True)
+
+
+def _free_device_tensors(roots, modules, l1_only):
+    """Force-free the device tensors reachable from roots through objects (and closures) of the given modules."""
     seen, stack = set(), [r for r in roots if r is not None]
+    ours = lambda o: (getattr(o, "__module__", None) or "").startswith(modules)  # noqa: E731
     while stack:
         o = stack.pop()
         if id(o) in seen:
@@ -759,13 +771,20 @@ def _free_partial_l1(roots, tb):
         seen.add(id(o))
         if isinstance(o, ttnn.Tensor):
             dev = o.storage_type() == ttnn.StorageType.DEVICE and o.is_allocated()
-            if dev and o.memory_config().buffer_type == ttnn.BufferType.L1:
+            if dev and (not l1_only or o.memory_config().buffer_type == ttnn.BufferType.L1):
                 ttnn.deallocate(o, force=True)
-        elif isinstance(o, (list, tuple)):
+        elif isinstance(o, (list, tuple, set)):
             stack.extend(o)
         elif isinstance(o, dict):
             stack.extend(o.values())
-        elif type(o).__module__.startswith("models.demos.moe_block.tt"):
+        elif callable(o) and hasattr(o, "__code__") and ours(o):  # (a closure: its cells, its attributes)
+            for c in o.__closure__ or ():
+                try:
+                    stack.append(c.cell_contents)
+                except ValueError:  # (an empty cell)
+                    pass
+            stack.extend(vars(o).values())
+        elif ours(type(o)) and hasattr(o, "__dict__"):
             stack.extend(vars(o).values())
 
 
@@ -968,8 +987,11 @@ class Router:
         from ttnn.bringup.combine_rf.router_topk import router_topk_prepare
 
         r = model.router
-        if not (r.score_func == "sigmoid" and r.normalize_topk and r.expert_groups == 1):
-            raise NotImplementedError(f"MoEBlock router: sigmoid + bias, normalized, one group (got {r})")
+        if not (r.score_func in ("sigmoid", "sqrtsoftplus") and r.normalize_topk and r.expert_groups == 1):
+            raise NotImplementedError(
+                f"MoEBlock router: sigmoid / sqrtsoftplus + bias, normalized, one group (got {r})"
+            )
+        self.score_func = r.score_func
         E = model.num_experts * r.fold  # (the candidates: a fold picks over E x fold, candidate c is expert c // fold)
         self.w = _weight(mesh, w["weight"].T, dtypes.router_weights, (None, 0))  # [H, E], H over the columns
         self.cfg = _cfg(ttnn.MathFidelity.HiFi4)
@@ -994,12 +1016,22 @@ class Router:
         """the owners' complete logits [1, 1, S/N, E] -> joint routing rows [S/N / 32, 32 x 2K] uint16."""
         lg = ttnn.reshape(logits, [self.S, int(logits.shape[-1])])
         # (the biased scores in L1: the top-k's 64 B reads at L1 latency; freed before the exchange's arena)
-        b = ttnn.add(
-            lg,
-            self.bias32,
-            input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        if self.score_func == "sqrtsoftplus":  # (DeepSeek V4: sqrt(softplus(logits)), fp32)
+            sp = ttnn.softplus(lg, memory_config=ttnn.L1_MEMORY_CONFIG)
+            b = ttnn.add(
+                sp,
+                self.bias32,
+                input_tensor_a_activations=[ttnn.UnaryOpType.SQRT],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(sp)
+        else:
+            b = ttnn.add(
+                lg,
+                self.bias32,
+                input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
         rows = self.rtopk(self.bias_row, b)
         ttnn.deallocate(b)
         return rows

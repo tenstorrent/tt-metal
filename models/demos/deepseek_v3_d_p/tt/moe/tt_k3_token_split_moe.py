@@ -577,7 +577,12 @@ class TtK3TokenSplitMoE:
                 man_b = (int(ms[0][-1]) * 4 + 63) // 64 * 64
                 stat = static_cb_bytes(self.N, S, d.latent, group=grp)
                 reserve = fused_arena_reserve(max(flat_cbs, stat), l1=True) + man_b + 1024
-            a_rows = max(a_rows, (int(mv.largest_contiguous_bytes_free_per_bank) - reserve) // 64 // 32 * 32)
+            left = (int(mv.largest_contiguous_bytes_free_per_bank) - reserve) // 64 // 32 * 32
+            assert a_rows <= left, (
+                f"the flat op's arena {a_rows * 64 >> 10} KB > the L1 left {left * 64 >> 10} KB (less the dispatch's / "
+                f"the flat op's static CBs, {reserve >> 10} KB): their circular buffers would clash with it"
+            )
+            a_rows = left
         all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         self._arena_spec = (
             ttnn.Shape([grid.x * grid.y * a_rows, 16]),

@@ -40,7 +40,9 @@ void kernel_main() {
     const uint32_t scratch = get_write_ptr(0);
     const auto ids = TensorAccessor(ids_args, ids_addr, ROW * PT);
     const auto route = TensorAccessor(route_args, route_addr, S * 4 * RW);
-    constexpr uint32_t RS = (ROW + 63) / 64 * 64;  // (64-byte landing: a DRAM read keeps its source alignment)
+    // (64-byte landing: a DRAM read keeps its source alignment - a row at offset so(t) in its slot; rows not dividing
+    // 64 B - K 6's 24 B - may start late in theirs: one more 64 B so the row never runs into the next slot)
+    constexpr uint32_t RS = (ROW + (64 % ROW ? 63 : 0) + 63) / 64 * 64;
     const uint32_t rows_l1 = (scratch + 63) & ~63u, words_l1 = rows_l1 + (t1 - t0) * RS;
     auto put = [&](uint32_t t, uint32_t m, uint32_t flags) {  // (flags: order | link << 1)
         volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words_l1);
@@ -166,6 +168,7 @@ def dispatch_prep_prepare(
     assert N <= 32
     chips_of = ", ".join(str(e // EPC) for e in range(E))
     grid = mesh_device.compute_with_storage_grid_size()
+    n_copy = min(n_copy, 2 * grid.x - n_route)  # (an 11-column board: 14 copy cores)
     assert n_route <= grid.x and n_copy <= 2 * grid.x and max(rows) < grid.y and n_route + n_copy <= 2 * grid.x
     rcs = [ttnn.CoreCoord(i, rows[0]) for i in range(n_route)]
     cps = [
@@ -181,7 +184,7 @@ def dispatch_prep_prepare(
         W = int(xbuf.shape[-1])
         progs = {}
         row = W * 2
-        route_l1 = rper * (((4 * K) + 63) // 64 * 64) + rper * 4 * RW + 128
+        route_l1 = rper * ((4 * K + (63 if 64 % (4 * K) else 0) + 63) // 64 * 64) + rper * 4 * RW + 128
         mesh_desc = ttnn.MeshProgramDescriptor()
         jr_ct = list(ttnn.TensorAccessorArgs(jr).get_compile_time_args())
         rt_ct = list(ttnn.TensorAccessorArgs(route).get_compile_time_args())

@@ -122,6 +122,68 @@ def _cases():
 CASES = _cases()
 
 
+def run_checked(mesh_device, block, m, w, tag, *, eager, replays, nx=16):
+    """eager calls, then (replays > 0) a trace replayed on fresh inputs; every checked call against the host model on
+    the device's own routing (PCC > 0.98) -> dict(pcc=[...], agree=[...]) (the routing agreement with the host's)."""
+    g = block.geometry
+    T, H = g.chunk_tokens, m.emb_dim
+    shape = tuple(mesh_device.shape)
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=shape, dims=(2, 3))
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=shape, dims=(2, 3))
+    NX = nx
+    xs = [torch.randn(T, H, generator=torch.Generator().manual_seed(3000 + k)).to(torch.bfloat16) for k in range(NX)]
+    hx = [
+        ttnn.from_torch(x_.view(1, 1, T, H), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper)
+        for x_ in xs
+    ]
+    x_in = block.input_buffer()
+    refs, stats = {}, dict(pcc=[], agree=[])
+
+    def check(out, k):
+        y = ttnn.to_torch(out, mesh_composer=composer).reshape(T, H).float()
+        rows = block.taps()["rows"]
+        if k not in refs or not all(torch.equal(a, b) for a, b in zip(rows, refs[k][0])):
+            ids_d, wts_d = device_routing(rows, g.tokens_per_chip, m.top_k)
+            y_ref = reference(xs[k], w, m, ids=ids_d, wts=wts_d)[0]
+            _, ids_r, _ = reference(xs[k], w, m)
+            agree = (torch.sort(ids_d, 1)[0] == torch.sort(ids_r, 1)[0]).float().mean().item()
+            refs[k] = (rows, y_ref, agree)
+        p = pcc(y, refs[k][1])
+        stats["pcc"].append(p)
+        stats["agree"].append(refs[k][2])
+        assert p > 0.98, f"{tag} (x {k}): block output off (PCC {p:.5f})"
+
+    block.keep_taps = "device"
+    for k in range(eager):  # (eager)
+        ttnn.copy_host_to_device_tensor(hx[k], x_in)
+        out = block(x_in)
+        ttnn.synchronize_device(mesh_device)
+        check(out, k)
+        ttnn.deallocate(out)
+    if not replays:
+        return stats
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    out = block(x_in)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    every = 1 if replays <= 64 else 25  # (soak: every replay on a fresh input, every 25th checked)
+    for i in range(replays):
+        k = (3 * i + 2) % NX
+        ttnn.copy_host_to_device_tensor(hx[k], x_in)
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        if i % every == every - 1 or i == replays - 1:
+            ttnn.synchronize_device(mesh_device)
+            check(out, k)
+        if i % 1000 == 999:
+            logger.info(f"MATRIX {tag}: {i + 1} replays, PCC min {min(stats['pcc']):.5f}")
+    ttnn.synchronize_device(mesh_device)
+    if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
+        replay_device_times(mesh_device, tid, f"matrix {tag}", batches=(10, 40))
+    ttnn.release_trace(mesh_device, tid)
+    ttnn.deallocate(out)
+    return stats
+
+
 @pytest.mark.parametrize(
     "mesh_device, device_params, case",
     [
@@ -143,74 +205,101 @@ CASES = _cases()
 def test_moe_block_matrix(mesh_device, device_params, case: Case):
     chips = R * C
     m = mesh_model(case.model, chips)
-    T, H = case.rows * R, m.emb_dim
     w = scenario_weights(m, case.routing, chips)
     try:
-        block = MoEBlock(mesh_device, m, T, w, WeightCache(path=None, layer=0))
+        block = MoEBlock(mesh_device, m, case.rows * R, w, WeightCache(path=None, layer=0))
     except (AssertionError, ValueError, NotImplementedError, RuntimeError) as e:
         msg = " | ".join(l.strip() for l in str(e).splitlines() if l.strip() and "---" not in l)[:600]
         logger.error(f"MATRIX {case.id}: does not build: {type(e).__name__}: {msg}")
         pytest.xfail(f"does not build: {type(e).__name__}: {msg[:300]}")
-    g = block.geometry
     logger.info(f"MATRIX {case.id}: {m.num_experts} experts (fold {m.router.fold}), {block.summary}")
     if case.routing in PACKED and block.head_mode == "fused":
         pytest.skip(
             "packed routing: the fused head's planner rows_cap (2 x the average a chip) overflows - a hang; the "
             "token-dropping policy is pending"
         )
-    shape = tuple(mesh_device.shape)
-    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=shape, dims=(2, 3))
-    composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=shape, dims=(2, 3))
-    NX = 16
-    xs = [torch.randn(T, H, generator=torch.Generator().manual_seed(3000 + k)).to(torch.bfloat16) for k in range(NX)]
-    hx = [
-        ttnn.from_torch(x_.view(1, 1, T, H), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper)
-        for x_ in xs
-    ]
-    x_in = block.input_buffer()
-    refs, stats = {}, dict(pcc=[], agree=[])
-
-    def check(out, k):
-        y = ttnn.to_torch(out, mesh_composer=composer).reshape(T, H).float()
-        rows = block.taps()["rows"]
-        if k not in refs or not all(torch.equal(a, b) for a, b in zip(rows, refs[k][0])):
-            ids_d, wts_d = device_routing(rows, g.tokens_per_chip, m.top_k)
-            y_ref = reference(xs[k], w, m, ids=ids_d, wts=wts_d)[0]
-            _, ids_r, _ = reference(xs[k], w, m)
-            agree = (torch.sort(ids_d, 1)[0] == torch.sort(ids_r, 1)[0]).float().mean().item()
-            refs[k] = (rows, y_ref, agree)
-        p = pcc(y, refs[k][1])
-        stats["pcc"].append(p)
-        stats["agree"].append(refs[k][2])
-        assert p > 0.98, f"{case.id} (x {k}): block output off (PCC {p:.5f})"
-
-    block.keep_taps = "device"
-    for k in range(2):  # (eager)
-        ttnn.copy_host_to_device_tensor(hx[k], x_in)
-        out = block(x_in)
-        ttnn.synchronize_device(mesh_device)
-        check(out, k)
-        ttnn.deallocate(out)
-    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    out = block(x_in)
-    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
-    ttnn.synchronize_device(mesh_device)
-    every = 1 if case.replays <= 64 else 25  # (soak: every replay on a fresh input, every 25th checked)
-    for i in range(case.replays):
-        k = (3 * i + 2) % NX
-        ttnn.copy_host_to_device_tensor(hx[k], x_in)
-        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
-        if i % every == every - 1 or i == case.replays - 1:
-            ttnn.synchronize_device(mesh_device)
-            check(out, k)
-        if i % 1000 == 999:
-            logger.info(f"MATRIX {case.id}: {i + 1} replays, PCC min {min(stats['pcc']):.5f}")
-    ttnn.synchronize_device(mesh_device)
-    if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
-        replay_device_times(mesh_device, tid, f"matrix {case.id}", batches=(10, 40))
-    ttnn.release_trace(mesh_device, tid)
-    ttnn.deallocate(out)
+    stats = run_checked(mesh_device, block, m, w, case.id, eager=2, replays=case.replays)
     logger.info(
         f"MATRIX_RESULT {case.id}: PCC min {min(stats['pcc']):.5f} median {statistics.median(stats['pcc']):.5f}; "
         f"routing agreement min {min(stats['agree']):.4f}; {len(stats['pcc'])} checks; {block.summary}"
     )
+
+
+# switching in one process: chunks, eager <-> traced, each block closed before the next is built
+SWITCH = (
+    ("k3", 640, 4),
+    ("k3", 1024, 0),
+    ("k3", 128, 4),
+    ("k3", 2048, 0),
+    ("k3", 640, 0),
+    ("k3", 256, 4),
+    ("k3", 640, 4),
+)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (R, C),
+            _fab(
+                fabric_payload_size=fabric_payload(KIMI_K3.routed_width),
+                l1_small_size=0,
+                trace_region_size=TRACE_REGION,
+            ),
+            id="switch-k3",
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.timeout(7200)
+def test_moe_block_switch(mesh_device, device_params):
+    """Blocks of other chunks built one after another on one mesh (each closed first), eager and traced: every one
+    checked - nothing a closed block left behind (L1, program cache, semaphores) breaks the next."""
+    import gc
+
+    chips = R * C
+    for i, (mn, rows, replays) in enumerate(SWITCH):
+        m = mesh_model(mn, chips)
+        w = scenario_weights(m, "uniform", chips, seed=i)
+        block = MoEBlock(mesh_device, m, rows * R, w, WeightCache(path=None, layer=0))
+        tag = f"switch {i} {mn} r{rows} x{replays}"
+        stats = run_checked(mesh_device, block, m, w, tag, eager=2, replays=replays, nx=4)
+        logger.info(f"MATRIX_RESULT {tag}: PCC min {min(stats['pcc']):.5f}; {block.summary}")
+        block.close()
+        del block
+        gc.collect()
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (R, C),
+            _fab(
+                fabric_payload_size=fabric_payload(KIMI_K3.routed_width),
+                l1_small_size=0,
+                trace_region_size=TRACE_REGION,
+            ),
+            id="first-call-k3",
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("builds", [24])
+@pytest.mark.timeout(7200)
+def test_moe_block_first_call(mesh_device, device_params, builds):
+    """The block built again and again in one process (closed in between), each build's warm-ups and first call checked:
+    the fused tail once hung in its first call ever (MOE_BLOCK_WORKLOG.md, the SP 1 hang entry)."""
+    import gc
+
+    chips = R * C
+    m = mesh_model("k3", chips)
+    for i in range(builds):
+        w = scenario_weights(m, "uniform", chips, seed=i)
+        block = MoEBlock(mesh_device, m, 640 * R, w, WeightCache(path=None, layer=0))
+        stats = run_checked(mesh_device, block, m, w, f"first call {i}", eager=1, replays=0, nx=1)
+        logger.info(f"MATRIX_RESULT first call {i}: PCC {stats['pcc'][0]:.5f}")
+        block.close()
+        del block
+        gc.collect()
