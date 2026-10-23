@@ -171,6 +171,7 @@ class TtV4Block(LightweightModule):
             weight_cache_path=weight_cache_path,
             layer_idx=layer_idx,
             dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
+            combine_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
             is_balanced=is_balanced,
             overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,

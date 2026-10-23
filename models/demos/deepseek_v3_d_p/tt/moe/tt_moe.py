@@ -236,6 +236,7 @@ class TtMoe(LightweightModule):
         rms_norm_eps: float = 1e-5,
         max_gate_seq_len_per_chip: Optional[int] = None,
         overlap_routed_expert_with_combine: Optional[bool] = False,
+        combine_memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     ):
         """
         Initialize TtMoe module.
@@ -319,6 +320,9 @@ class TtMoe(LightweightModule):
                 both routed-expert ops read a per-core weight slice as one NoC transaction per
                 K-row; interleaved elsewhere. Passed straight through; the cache is placement-
                 agnostic, so this never invalidates one.
+            combine_memory_config: Interleaved output placement for the separate combine operation.
+                Defaults to DRAM; L1 can reduce combine-to-reduction traffic when the output fits.
+                Does not control the overlapped combine_fabric2d path.
             overlap_routed_expert_with_combine: run the routed expert and combine_fabric2d as ONE program
                 (hybrid_routed_expert_moe in overlap mode), combine taking each expert as soon as it is
                 written. Blackhole only. Off by default (False): only models that opt in with
@@ -516,6 +520,7 @@ class TtMoe(LightweightModule):
             cluster_axis=0,
             num_links=self.row_num_links,
             topology=self.row_topology,
+            memory_config=combine_memory_config,
             init_zeros=False,
         )
 

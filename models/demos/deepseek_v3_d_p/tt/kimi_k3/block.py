@@ -136,6 +136,7 @@ class TtKimiK3Block(LightweightModule):
                 shared_expert_activations_dtype=shared_expert_activations_dtype,
                 shared_expert_weights_dtype=shared_expert_weights_dtype,
                 dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
+                combine_memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 weight_cache_path=weight_cache_path,
                 layer_idx=layer_idx,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,

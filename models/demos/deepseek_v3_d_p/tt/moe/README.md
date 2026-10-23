@@ -17,6 +17,21 @@ The MoE dispatch/combine operations implement expert-parallel token routing acro
 - **Load balancing**: Capacity factor (CF) handles imbalanced routing by allocating CF × expected_load per expert
 - **Full metadata tracking**: Round-trip verification from dispatch → experts → combine
 
+### Combine output placement
+
+`TtMoe`, `TtPrefillBlock`, and `TtPrefillTransformer` accept
+`combine_memory_config=ttnn.L1_MEMORY_CONFIG` to keep the separate combine
+operation's output in interleaved L1 before the post-combine reduction. The default
+is `ttnn.DRAM_MEMORY_CONFIG`. Select L1 only after checking capacity and measuring
+latency for the intended sequence length, routing shape, and execution mode.
+
+This option applies to the separate combine operation, including eager execution.
+It does not change the overlapped routed-expert/`combine_fabric2d` path used during
+tracing when overlap is enabled. To evaluate the separate path under tracing, pass
+`overlap_routed_expert_with_combine=False` to `TtMoe`, or use a model configuration
+with `ROUTED_EXPERT_COMBINE_OVERLAP=False` for a block or transformer. Keep that
+choice identical in the DRAM and L1 measurements.
+
 ## 2. Key Terminology
 
 | Term | Definition |

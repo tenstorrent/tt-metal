@@ -199,6 +199,7 @@ class TtPrefillTransformer(LightweightModule):
         lm_head_is_column_parallel: bool = True,
         mtp_predictor=None,
         use_fused_rmsnorm: Optional[bool] = None,
+        combine_memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -303,6 +304,7 @@ class TtPrefillTransformer(LightweightModule):
                 first_layer_idx=first_layer_idx,
                 llama4_scale_cache=self._llama4_scale_cache,
                 use_fused_rmsnorm=use_fused_rmsnorm,
+                combine_memory_config=combine_memory_config,
             )
             self.layers.append(layer)
 

@@ -282,6 +282,7 @@ class TtPrefillBlock(LightweightModule):
         first_layer_idx: Optional[int] = None,
         llama4_scale_cache: Optional[dict] = None,
         use_fused_rmsnorm: Optional[bool] = None,
+        combine_memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -423,6 +424,7 @@ class TtPrefillBlock(LightweightModule):
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
                 is_balanced=is_balanced,
                 overlap_shared_expert_with_dispatch=self.overlap_shared_expert_with_dispatch,
+                combine_memory_config=combine_memory_config,
             )
         else:
             # emb_dim/hidden_dim default to DSv3/Kimi's 7168/18432 in TtFfn; pass the variant's real dims
@@ -466,6 +468,7 @@ class TtPrefillBlock(LightweightModule):
         shared_expert_activations_dtype,
         shared_expert_weights_dtype,
         dispatch_buffer_capacity_factor,
+        combine_memory_config,
         weight_cache_path=None,
         layer_idx=0,
         routing_use_l1_small_for_semaphores=False,
@@ -516,6 +519,7 @@ class TtPrefillBlock(LightweightModule):
             max_gate_seq_len_per_chip=getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", None),
             # Only configs that opt in (Kimi K2.7, GLM 5.3) overlap the routed expert with combine_fabric2d.
             overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(model_cfg),
+            combine_memory_config=combine_memory_config,
             num_links=num_links,
             topology=topology,
             routed_expert_weights=state_dict.get("routed_expert_weights"),  # None if cache exists
