@@ -31,8 +31,8 @@ void kernel_main() {
     // When set, stats CBs hold fp32; the Welford combine reads/writes them as float not bf16.
     constexpr bool stats_is_fp32 = get_compile_time_arg_val(11) != 0;
 
-    const std::uint32_t mcast_sender_noc_x = get_arg_val<std::uint32_t>(0);
-    const std::uint32_t mcast_sender_noc_y = get_arg_val<std::uint32_t>(1);
+    const auto mcast_sender_noc_x = get_arg_val<std::uint32_t>(0);
+    const auto mcast_sender_noc_y = get_arg_val<std::uint32_t>(1);
 
     constexpr std::uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr std::uint32_t dfb_ex_global_id = tt::CBIndex::c_15;

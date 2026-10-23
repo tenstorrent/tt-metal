@@ -84,15 +84,15 @@ inline void accumulate_compute_loop(
             const auto num_previous_tiles = pop_input ? 0 : block.start();
             const auto curr_block_size = sync_full_block ? block.full_block_size() : block.size();
             const uint32_t num_tiles_to_wait = num_previous_tiles + curr_block_size;
-            dfb.wait_front(num_tiles_to_wait);
+            dfb.wait_front(static_cast<uint16_t>(num_tiles_to_wait));
             for (auto j : block.local()) {
                 // If it's the last tile and it's partial, use the second tile in dfb_scalar
-                const auto scaler_tile_idx = block.to_global(j) == num_tiles - 1 && last_tile_partial ? 1 : 0;
+                const uint32_t scaler_tile_idx = block.to_global(j) == num_tiles - 1 && last_tile_partial ? 1 : 0;
                 reduce_tile<reduce_type, reduce_dim>(
                     dfb.get_id(), dfb_scalar.get_id(), num_previous_tiles + j, scaler_tile_idx, detail::dst0);
             }
             if constexpr (pop_input) {
-                dfb.pop_front(curr_block_size);
+                dfb.pop_front(static_cast<uint16_t>(curr_block_size));
             }
         }
     };
@@ -171,7 +171,7 @@ inline void row_wise_accumulate_with_epilogue(
     // One for the full tiles, and one for the partial tile
     const auto last_tile_partial = N % tile_width > 0;
     const uint32_t num_scaler_tiles_needed = last_tile_partial ? 2 : 1;
-    dfb_scalar.wait_front(num_scaler_tiles_needed);
+    dfb_scalar.wait_front(static_cast<uint16_t>(num_scaler_tiles_needed));
     reconfig_data_format(dfb_in.get_id(), dfb_scalar.get_id());
     tile_regs_acquire();
 
@@ -235,7 +235,7 @@ inline void row_wise_mean(
     uint32_t tile_width = 32) {
     row_wise_accumulate_with_epilogue<reduce_type, reduce_dim, FLOAT32_REDUCTION, input_policy, wait_at_end_policy>(
         dfb_in, dfb_scalar, dfb_out, num_tiles, block_size, N, tile_width, [N]() {
-            detail::scale_dest(detail::dst0, generic::bit_cast<uint32_t>(1.0f / N));
+            detail::scale_dest(detail::dst0, generic::bit_cast<uint32_t>(1.0f / static_cast<float>(N)));
         });
 }
 
@@ -286,7 +286,7 @@ inline void row_wise_mean_with_pre_add(
         block_size,
         N,
         tile_width,
-        [N]() { detail::scale_dest(detail::dst0, generic::bit_cast<uint32_t>(1.0f / N)); },
+        [N]() { detail::scale_dest(detail::dst0, generic::bit_cast<uint32_t>(1.0f / static_cast<float>(N))); },
         dfb_in1);
 }
 }  // namespace norm::kernel_util::compute::numeric
