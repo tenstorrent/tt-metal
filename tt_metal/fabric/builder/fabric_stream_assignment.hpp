@@ -40,17 +40,17 @@ enum class L1CreditCounterReason : uint8_t {
 class CreditTransportPlan {
 public:
     // Each accessor fatals on a VC outside the fabric's VCs.
-    const std::vector<L1CreditCounterReason>& reasons(uint32_t vc) const;
+    const std::vector<L1CreditCounterReason>& get_l1_counters_reasons(uint32_t vc) const;
     void add_counter_reason(uint32_t vc, L1CreditCounterReason reason);
 
-    bool vc_uses_counters(uint32_t vc) const { return !reasons(vc).empty(); }
+    bool vc_uses_counters(uint32_t vc) const { return !get_l1_counters_reasons(vc).empty(); }
     bool any_vc_uses_counters() const {
-        return std::ranges::any_of(reasons_, [](const auto& reasons) { return !reasons.empty(); });
+        return std::ranges::any_of(per_vc_l1_counters_reasons_, [](const auto& reasons) { return !reasons.empty(); });
     }
 
 private:
     // Why each VC is on L1 counters. A VC with no reasons stays on stream registers.
-    std::array<std::vector<L1CreditCounterReason>, builder_config::MAX_NUM_VCS> reasons_{};
+    std::array<std::vector<L1CreditCounterReason>, builder_config::MAX_NUM_VCS> per_vc_l1_counters_reasons_{};
 };
 
 struct StreamRegAssignments {
