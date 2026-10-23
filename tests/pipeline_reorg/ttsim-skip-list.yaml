@@ -9,11 +9,7 @@
 #
 # run_ttsim_regression.sh reads this file too. It keeps entries under
 # tt_metal/tt-llk/tests/python_tests/ and drops that prefix, because the LLK
-# suite collects pytest with python_tests/ as rootdir. The ttnn sim_quasar legs
-# apply the whole quasar section the same way the sim_wh/sim_bh legs apply
-# theirs, so its non-LLK entries are for them. The weekly workflow passes
-# --no-ignore; the LLK entries are for callers that must stay green, such as
-# the quasar ttsim PR gate.
+# suite collects pytest with python_tests/ as rootdir.
 
 wormhole_b0:
   # Job-level timeouts -- can be cut down still
@@ -65,7 +61,6 @@ quasar:
   - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_rand_dest32__op1_math2_Rand__op1_math3_Neg__op1_math4_Add1__op1_math5_Add1__op1_math6_Abs__op1_math7_Neg__op1_math8_Add1__op1_math9_GreaterThanEqualZero__operand1_format_Float32]
   # ttsim: tensix_cfg_wr32 reg=82 (PRNG_SEED_OVERRIDE_CTRL, dropout's seeding) is unimplemented.
   - tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_sfpu_quasar.py::test_dropout_reseed_quasar
-  # Quoted: a plain scalar ending in ':' is a yaml mapping key, not this prefix.
   - "tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_sfpu_quasar.py::test_eltwise_unary_sfpu_quasar[mathop_formats_dest_acc_sync_input_dims:(<MathOperation.Dropout:"
   - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_dropout_
   # ttsim: check_unpack_formats, Int4/UInt4 → Int8/UInt8 widening is unimplemented.
