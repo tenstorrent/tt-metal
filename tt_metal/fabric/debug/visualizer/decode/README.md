@@ -258,3 +258,15 @@ Filling only each ring's first slot keeps the file small: with every slot random
 ```bash
 python3 -m tt_metal.fabric.debug.visualizer.decode.tests.check_decode generated/fabric
 ```
+
+### Future work
+
+#### End-to-end tests
+
+Today's testing is unit tests, plus the checks above on mock manifests with a fake device. They show that decode reads
+what the manifest describes and applies its rules. They don't show that it reads a real fabric right: nothing committed
+runs traffic on hardware, captures it and checks the decoded file against what was sent.
+
+End-to-end tests should fill that gap. Ideally, we would simulate / create a fabric hang in some reproducible way, use capture to get information from the hardware, run decode on the captured snapshot and manifest, and then validate that the decoded information matches what we expected from our reproducible hang.
+
+Doing this on different fabric configs (1d, 2d, torus, etc) and architectures (wormhole, blackhole) would be good as well.
