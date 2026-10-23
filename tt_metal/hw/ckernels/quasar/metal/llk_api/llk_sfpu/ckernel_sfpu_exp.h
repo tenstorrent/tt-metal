@@ -17,7 +17,7 @@
 #include "llk_assert.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_operand.h"
+#include "ckernel_sfpu_operand.h"
 // After sfpi.h: the Blackhole 21f helpers below use PolynomialEvaluator.
 #include "ckernel_sfpu_polyval.h"
 
