@@ -30,7 +30,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from agentx_sim import load_sessions, pct, run  # noqa: E402
+from agentx_sim import load_sessions, pct, resume_step, run  # noqa: E402
 from cost_model import DEFAULT_DATA, Model  # noqa: E402
 
 CHUNK = 2048
@@ -83,11 +83,17 @@ def padded(n_in):
     return -(-n_in // CHUNK) * CHUNK
 
 
-def start_of(r, width):
-    return (min(r["cached"], r["in"] - 1) // width) * width
+# Extra step time of a lane that starts on a slab boundary inside a chunk, measured on silicon (4096 not measured:
+# as 2048).
+MID_COST = {2048: 0.015, 4096: 0.015, 8192: 0.02}
 
 
-def predict(model, reqs, mode):
+def start_of(r, width, align="chunk"):
+    step = resume_step(width, align)
+    return (min(r["cached"], r["in"] - 1) // step) * step
+
+
+def predict(model, reqs, mode, align="chunk"):
     """Per-request (arrival, start of service, finish) in seconds, plus busy time and step count."""
     width, budget = MODES[mode]
     batched = mode == "batched"
@@ -101,7 +107,7 @@ def predict(model, reqs, mode):
         while pending and reqs[pending[0]]["t"] <= t and len(active) < limit:
             i = pending.popleft()
             r = reqs[i]
-            active.append([i, start_of(r, width), padded(r["in"])])
+            active.append([i, start_of(r, width, align), padded(r["in"])])
             started[i] = t
         if not active:
             t = reqs[pending[0]]["t"]
@@ -119,6 +125,7 @@ def predict(model, reqs, mode):
             plan = [[active[0], 1]]
         lanes = [(width, e[1] + j * width) for e, n in plan for j in range(n)]
         dt, gap = model.step_s(lanes, width, budget)
+        dt *= 1 + MID_COST[width] * sum(d % width != 0 for _, d in lanes) / len(lanes)
         t += dt
         busy += dt
         steps += 1
@@ -159,6 +166,7 @@ def main():
     ap.add_argument("--max-think-s", type=float, default=60.0)
     ap.add_argument("--decode-tps", type=float, default=100.0)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--align", default="chunk", help="chunk, resume or chunk,resume: how the demo rounds a resume")
     a = ap.parse_args()
     if a.cmd == "build":
         return build(a)
@@ -171,18 +179,19 @@ def main():
             meas = json.load(f)["modes"]
     print(f"{len(reqs)} requests; batched slots {MODES['batched'][1] // CHUNK}")
     print(
-        f"{'mode':>10} | {'pred p50':>8} {'p90':>6} {'p99':>6} {'small50':>7} {'makespan':>8} {'busy':>6} {'steps':>5}"
+        f"{'mode':>19} | {'pred p50':>8} {'p90':>6} {'p99':>6} {'small50':>7} {'makespan':>8} {'busy':>6} {'steps':>5}"
         + (
             f" | {'meas p50':>8} {'p90':>6} {'p99':>6} {'small50':>7} {'makespan':>8} {'busy':>6} {'steps':>5} {'step err':>8}"
             if meas
             else ""
         )
     )
-    for mode in MODES:
-        st, fi, busy, steps = predict(model, reqs, mode)
+    for align, mode in [(al, m) for al in a.align.split(",") for m in MODES]:
+        st, fi, busy, steps = predict(model, reqs, mode, align)
+        mode = mode if align == "chunk" else f"{mode} (resume)"
         p = summary(reqs, st, fi)
         line = (
-            f"{mode:>10} | {p['p50']:8.3f} {p['p90']:6.2f} {p['p99']:6.2f} {p['small_p50']:7.3f} {p['makespan']:8.2f} "
+            f"{mode:>19} | {p['p50']:8.3f} {p['p90']:6.2f} {p['p99']:6.2f} {p['small_p50']:7.3f} {p['makespan']:8.2f} "
             f"{busy:6.2f} {steps:5d}"
         )
         if mode in meas:
