@@ -15,7 +15,7 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
 from helpers.ulp_domains import Domain, Problem
 from helpers.ulp_table import (
-    TABLE_PATH,
+    TABLE_PATHS,
     AccuracyContract,
     BudgetKey,
     Measurement,
@@ -216,9 +216,10 @@ def test_an_empty_document_is_an_empty_table(text):
     assert read_table(text) == {}
 
 
-def test_the_table_on_disk_is_exactly_what_the_serializer_writes():
-    """No hand formatting survives a re-emit, so none may be in the file."""
-    assert dump_table(load_table()) == TABLE_PATH.read_text(encoding="utf-8")
+@pytest.mark.parametrize("path", TABLE_PATHS.values(), ids=lambda p: p.stem[-2:])
+def test_the_table_on_disk_is_exactly_what_the_serializer_writes(path):
+    """No hand formatting survives a re-emit, so none may be in either file."""
+    assert dump_table(load_table(path)) == path.read_text(encoding="utf-8")
 
 
 def test_a_measurement_round_trips_through_its_json_line():

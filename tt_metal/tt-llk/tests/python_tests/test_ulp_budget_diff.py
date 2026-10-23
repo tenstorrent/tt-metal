@@ -202,13 +202,11 @@ def test_a_declared_tolerance_that_may_loosen_is_a_regression(base_row, head_row
 def test_an_unkeyed_budget_binds_only_on_the_measured_arch():
     """Elsewhere the registry hands the cell its tolerance, so a raise there loosens
     nothing; a row naming the arch binds there."""
-    assert MEASURED_ARCH is not ChipArchitecture.BLACKHOLE
+    other = next(a for a in ChipArchitecture if a is not MEASURED_ARCH)
     unkeyed = Row(input=F16B, output=F16B, measured=3)
-    bh = Row(input=F16B, output=F16B, arch=ChipArchitecture.BLACKHOLE, measured=5)
-    changes = compare(_table(unkeyed), _table(unkeyed, bh))
-    assert [(c.kind, c.cell[1].arch) for c in changes] == [
-        (Kind.GATED, ChipArchitecture.BLACKHOLE)
-    ]
+    keyed = Row(input=F16B, output=F16B, arch=other, measured=5)
+    changes = compare(_table(unkeyed), _table(unkeyed, keyed))
+    assert [(c.kind, c.cell[1].arch) for c in changes] == [(Kind.GATED, other)]
 
 
 @pytest.mark.parametrize(

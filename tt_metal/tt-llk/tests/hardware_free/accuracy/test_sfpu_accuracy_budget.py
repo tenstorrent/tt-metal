@@ -172,13 +172,13 @@ _TRANSLATIONS = [
 
 @pytest.mark.parametrize(
     "arch, gated",
-    [(ChipArchitecture.WORMHOLE, True), (ChipArchitecture.BLACKHOLE, False)],
+    [(MEASURED_ARCH, True), (UNSWEPT_ARCHS[0], False)],
     ids=lambda v: getattr(v, "name", str(v)),
 )
 def test_the_binary_gate_enforces_the_whole_contract(arch, gated, monkeypatch):
     """`assert_against_contract` is the binary and ternary drivers' gate, and they run
     only on hardware, so this is the one host check that it takes the step budget: a
-    one-step drift on SfpuElwEq, exact on Wormhole, fails there and passes the tolerance
+    one-step drift on SfpuElwEq, exact on the measured arch, fails there and passes the tolerance
     it falls back to elsewhere. It also ranks subnormal outputs flushed: an
     fp16-subnormal golden the pack writes as 0 is no step of SfpuElwsub's error."""
     monkeypatch.setattr(chip, "get_chip_architecture", lambda: arch)
@@ -345,7 +345,8 @@ def test_an_enrolled_op_keeps_todays_gate_when_the_input_is_not_a_compute_format
 
 
 def test_a_step_budget_does_not_bind_on_an_unswept_architecture():
-    """Unkeyed rows are Wormhole measurements with no headroom for another kernel."""
+    """Unkeyed rows are measurements on the table's own architecture, with no headroom
+    for another kernel."""
     query = dict(output_format=DataFormat.Float32)
     on_wh = accuracy_contract(MathOperation.Abs, arch=MEASURED_ARCH, **query)
     assert on_wh.metric is Metric.ULP and on_wh.max_ulp == 0
@@ -361,7 +362,7 @@ def test_a_declared_tolerance_survives_an_unswept_architecture():
         output_format=DataFormat.Float16_b,
         approx_mode=ApproximationMode.Yes,
         dest_acc=DestAccumulation.No,
-        arch=ChipArchitecture.BLACKHOLE,
+        arch=UNSWEPT_ARCHS[0],
     )
     assert contract.metric is Metric.TOLERANCE
     assert contract.atol == 0.13 and contract.rtol == 0.05
@@ -371,7 +372,7 @@ def test_a_declared_tolerance_survives_an_unswept_architecture():
     "arch, output_format",
     [
         (MEASURED_ARCH, DataFormat.Bfp4_b),
-        (ChipArchitecture.BLACKHOLE, DataFormat.Float16_b),
+        (UNSWEPT_ARCHS[0], DataFormat.Float16_b),
     ],
     ids=["block-float", "unswept-arch"],
 )
@@ -448,7 +449,7 @@ def test_a_bare_tolerance_row_opts_out_of_ulp_without_retracting_a_declared_atol
 
 def test_a_ulp_row_that_names_its_arch_binds_there(monkeypatch):
     """A row keyed on an arch was measured there, so the arch downgrade exempts it."""
-    arch = ChipArchitecture.BLACKHOLE
+    arch = UNSWEPT_ARCHS[0]
     monkeypatch.setitem(
         _SFPU_ACCURACY_BUDGET,
         MathOperation.Abs,

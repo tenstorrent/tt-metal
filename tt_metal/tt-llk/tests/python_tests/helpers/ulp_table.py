@@ -3,8 +3,9 @@
 
 """The SFPU accuracy table as typed rows, and the ``--ulp-measure`` records.
 
-``sfpu_accuracy_budget.yaml`` is data: each op maps to a list of :class:`Row`, written
-by :func:`dump_table` as one flow mapping per row with enum members by name.
+The table is data, one file per architecture it was measured on
+(:data:`TABLE_PATHS`): each op maps to a list of :class:`Row`, written by
+:func:`dump_table` as one flow mapping per row with enum members by name.
 :func:`from_plain` reads any dataclass here from that plain form and refuses anything
 else with a typed :class:`TableError`.
 """
@@ -20,7 +21,7 @@ from typing import Any, TypeVar, Union, get_args, get_origin, get_type_hints
 
 import yaml
 
-from .chip_architecture import ChipArchitecture
+from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .format_config import DataFormat
 from .llk_params import ApproximationMode, DestAccumulation, MathOperation
 from .ulp import ULP_FORMATS
@@ -33,10 +34,26 @@ from .ulp_domains import (
     usable_budget_ceiling,
 )
 
-TABLE_PATH = Path(__file__).with_name("sfpu_accuracy_budget.yaml")
+# One table per architecture the sweep has measured on. Every unkeyed row of a file is a
+# measurement on that file's architecture, and a session reads the file of the chip it
+# targets; Quasar, with no table of its own, reads Wormhole's, whose step budgets bind
+# nowhere else (:func:`steps_bind`).
+TABLE_PATHS = {
+    ChipArchitecture.WORMHOLE: Path(__file__).with_name("sfpu_accuracy_budget_wh.yaml"),
+    ChipArchitecture.BLACKHOLE: Path(__file__).with_name(
+        "sfpu_accuracy_budget_bh.yaml"
+    ),
+}
 
-# The architecture every unkeyed row was measured on.
-MEASURED_ARCH = ChipArchitecture.WORMHOLE
+
+def table_arch(arch: ChipArchitecture) -> ChipArchitecture:
+    """The architecture whose table a session on *arch* reads."""
+    return arch if arch in TABLE_PATHS else ChipArchitecture.WORMHOLE
+
+
+# The architecture every unkeyed row of this session's table was measured on.
+MEASURED_ARCH = table_arch(get_chip_architecture())
+TABLE_PATH = TABLE_PATHS[MEASURED_ARCH]
 
 
 class Metric(Enum):

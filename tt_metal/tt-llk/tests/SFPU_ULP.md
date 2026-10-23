@@ -1,7 +1,9 @@
 # SFPU accuracy: the ULP sweep, and how to enrol an op in it
 
 Every SFPU op declares how closely its output must match its golden, in
-`python_tests/helpers/sfpu_accuracy_budget.yaml`. For most ops that is a tolerance; for
+`python_tests/helpers/sfpu_accuracy_budget_wh.yaml` (Wormhole) and `_bh.yaml`
+(Blackhole), one table per architecture it was measured on, each read by a session on
+that chip (`ulp_table.TABLE_PATHS`). For most ops that is a tolerance; for
 the ops enrolled here it is a **step budget**, "every element is within N representable
 values of the reference", the same strictness at every magnitude where `atol=0.05` is 6
 bfloat16 steps at 1.0 and 0.01 at 512. Most unary budgets come from the exhaustive
@@ -20,16 +22,21 @@ CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py --op MyOp --ulp-emit --compile-
 CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py --op MyOp --ulp-emit --compile-consumer
 
 # Read the diff, then gate on it.
-git diff helpers/sfpu_accuracy_budget.yaml
+git diff helpers/sfpu_accuracy_budget_wh.yaml
 CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py --op MyOp --compile-consumer
 ```
+
+The same three commands with `CHIP_ARCH=blackhole` measure and gate the op on a
+Blackhole card and write `sfpu_accuracy_budget_bh.yaml`; each table is its own
+measurement, and an op enrolled in one is enrolled in the other by its own rows.
 
 `--op` matches the op name exactly; `-k Exp` would also run and rewrite `Exp2`,
 `ExpWithBase`, `Expm1` and `Expm1Cw`.
 
-`--ulp-emit` **writes the checked-in table**, once, at the end of the session, merging
-every xdist worker's measurements first. It raises `ulp_sweep.EmitRefused` and writes
-nothing unless the session ran on Wormhole, ran to the end with no failure, and measured
+`--ulp-emit` **writes the checked-in table** of the session's architecture, once, at the
+end of the session, merging every xdist worker's measurements first. It raises
+`ulp_sweep.EmitRefused` and writes nothing unless the session ran on an architecture
+with a table of its own, ran to the end with no failure, and measured
 every cell of each `(input, output)` grid it touched (the producer half and
 `--collect-only` measure nothing and say so). Of a measured op it replaces every row of
 each measured pair and keeps the rows no measurement re-derives: one naming an `arch`,
@@ -156,8 +163,10 @@ fp16 subnormals the pack does not reproduce.
 - **The list is the statement.** A `domains` row carries no `measured` or `metric` and
   pins the `input` and `output` it was measured on. An entry never widens or narrows
   what the op claims; it reports where the claim holds, and at what figure.
-- **Budgets do not transfer between architectures.** Every unkeyed number is a Wormhole
-  measurement; elsewhere an op falls back to tolerance unless a row names that `arch`.
+- **Budgets do not transfer between architectures.** Every unkeyed number is a
+  measurement on its table's architecture (`ulp_table.MEASURED_ARCH`, the chip the
+  session targets); on a chip with no table of its own (Quasar reads Wormhole's) an op
+  falls back to tolerance unless a row names that `arch`.
 - **An exact op may not carry a wide budget.** Sign-bit ops, copies, integer results,
   predicates and constant fills are the canaries:
   `test_an_exact_op_never_carries_a_wide_budget` holds their budgets to the pack path's
@@ -214,15 +223,15 @@ two others are gated at 3. `log` answers nothing below 0 and is 1 step from 0 up
 
   ```bash
   CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py -n auto --ulp-measure=ulp.jsonl
-  python -m helpers.ulp_budget_diff headroom --table helpers/sfpu_accuracy_budget.yaml --measured ulp.jsonl
+  python -m helpers.ulp_budget_diff headroom --table helpers/sfpu_accuracy_budget_wh.yaml --measured ulp.jsonl
   ```
 
   Each line of `ulp.jsonl` is one `ulp_table.Measurement`.
 - **`--ulp-measure` can fail the sweep**: the sweep's records are required, since the
   headroom report judges only the cells it reads, so a sweep cell whose record is not
   written fails (`RecordDropped`), and a path that cannot be prepared is a usage error.
-- **`CHIP_ARCH` must be set**, and `--ulp-emit` refuses to run off Wormhole, because the
-  emitter writes no `arch`.
+- **`CHIP_ARCH` must be set**, and `--ulp-emit` refuses to run on a chip with no table
+  of its own, because the emitter writes no `arch`: a row's architecture is its file's.
 
 ## Where things live
 
@@ -231,7 +240,7 @@ two others are gated at 3. `log` answers nothing below 0 and is 1 step from 0 up
 | `python_tests/test_unary_sfpu_ulp.py` | the harness: one device run per variant |
 | `python_tests/helpers/ulp.py` | the metric: `ulp_distance`, the elementwise verdict, the near-zero floor |
 | `python_tests/helpers/ulp_sweep.py` | what the sweep feeds, what it masks, and the emitter |
-| `python_tests/helpers/sfpu_accuracy_budget.yaml` | the table |
+| `python_tests/helpers/sfpu_accuracy_budget_wh.yaml`, `_bh.yaml` | the table, per architecture |
 | `python_tests/helpers/ulp_table.py` | the table as typed rows, its reader and writer, and the `--ulp-measure` records |
 | `python_tests/helpers/sfpu_accuracy_budget.py` | how a row is resolved |
 | `python_tests/helpers/ulp_domains.py` | the `domains` list and the rule that draws it; `Problem` and `TableError` |

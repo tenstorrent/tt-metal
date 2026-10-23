@@ -75,6 +75,7 @@ from helpers.ulp_sweep import (
     write_table,
 )
 from helpers.ulp_table import (
+    MEASURED_ARCH,
     BudgetKey,
     Measurement,
     Metric,
@@ -88,6 +89,8 @@ F16, F16B, F32 = DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32
 NO, YES = ApproximationMode.No, ApproximationMode.Yes
 D_NO, D_YES = DestAccumulation.No, DestAccumulation.Yes
 GELU = MathOperation.Gelu
+# An architecture whose table this session does not read: an emit there is refused.
+OTHER_ARCH = next(a for a in ChipArchitecture if a is not MEASURED_ARCH)
 # An op defined everywhere, so the non-finite tests turn on the exclusion they mean.
 _OP = MathOperation.Abs
 # The key of a cell whose coordinates a test is not about.
@@ -101,11 +104,11 @@ _TWO = (Domain(-_INF, 0, 5), Domain(0, _INF, 2))
 
 @pytest.fixture(autouse=True)
 def _host_only_arch(monkeypatch):
-    """`sweep_cells` asks the chip which cells promote; judge the Wormhole table
-    whatever CHIP_ARCH the host sets."""
+    """`sweep_cells` asks the chip which cells promote; judge the session's table
+    (the one `MEASURED_ARCH` named at import) whatever CHIP_ARCH the host sets."""
     import helpers.chip_architecture as chip
 
-    monkeypatch.setenv("CHIP_ARCH", "wormhole")
+    monkeypatch.setenv("CHIP_ARCH", MEASURED_ARCH.value)
     monkeypatch.setattr(chip, "_cached_chip_architecture", None)
 
 
@@ -356,7 +359,7 @@ def test_three_readings_of_one_cell_merge_alike_in_any_order():
 
 @pytest.mark.parametrize(
     "arch, clean",
-    [(ChipArchitecture.BLACKHOLE, True), (ChipArchitecture.WORMHOLE, False)],
+    [(OTHER_ARCH, True), (MEASURED_ARCH, False)],
     ids=["other-arch", "unclean-session"],
 )
 def test_emit_refuses_what_the_session_cannot_vouch_for(table, arch, clean):
@@ -373,7 +376,7 @@ def test_emit_refuses_a_partly_measured_grid(table):
     record(GELU, _CELL, 5)
     before = table.read_text()
     with pytest.raises(EmitRefused):  # allow-pytest.raises: host-only test
-        finish_emit(ChipArchitecture.WORMHOLE, True, table)
+        finish_emit(MEASURED_ARCH, True, table)
     assert table.read_text() == before
 
 
@@ -386,9 +389,9 @@ def test_a_whole_table_emit_over_the_real_table_loads(tmp_path):
     write_table_file(load_table(), path)
     ops = sweep._sweep_ops()
     for op in ops:
-        for cell in sweep_cells(ChipArchitecture.WORMHOLE):
+        for cell in sweep_cells(MEASURED_ARCH):
             record(op, cell_key(*cell), 1)
-    written = finish_emit(ChipArchitecture.WORMHOLE, True, path)
+    written = finish_emit(MEASURED_ARCH, True, path)
     assert set(written) == set(ops)
     load_table(path)
 
@@ -399,7 +402,7 @@ def test_the_plugin_prints_the_emit_summary_on_a_clean_session(
     monkeypatch.setattr(ulp_sweep, "EMIT", True)
     monkeypatch.setattr("helpers.ulp_table.TABLE_PATH", table)
     monkeypatch.setattr(
-        llk_pytest_plugin, "get_chip_architecture", lambda: ChipArchitecture.WORMHOLE
+        llk_pytest_plugin, "get_chip_architecture", lambda: MEASURED_ARCH
     )
     _record_grid(GELU, F16, F16, 5)
     session = _session(pytest.ExitCode.OK)
@@ -917,7 +920,6 @@ def test_no_step_budget_names_an_arch_sweep_cells_does_not_filter_for():
     """`sweep_cells` applies only the Dest promotion off Wormhole, not another arch's
     format support; a ULP row naming one would send unsupported cells to the device."""
     from helpers.sfpu_accuracy_budget import _SFPU_ACCURACY_BUDGET
-    from helpers.ulp_table import MEASURED_ARCH
 
     elsewhere = [
         (op.name, key)
