@@ -6,7 +6,11 @@
 #pragma once
 
 #include <cstdint>
+#ifdef KERNEL_BUILD
+#include "api/tile_constants.h"
+#else
 #include <tt-metalium/constants.hpp>
+#endif
 
 namespace qkv_conv_bw {
 
