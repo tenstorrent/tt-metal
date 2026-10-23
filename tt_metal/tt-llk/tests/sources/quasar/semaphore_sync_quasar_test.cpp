@@ -102,15 +102,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if constexpr (unpack_to_dest)
     {
-        // Middleman only, no FPU work. Seed MATH_PACK (the semaphore this thread posts), then spin until the unpacker's
-        // first UNPACK_MATH post, so the first wait below is armed only after its seed. Per section: wait for the
-        // unpacker's data, hand the section to pack (MATH_PACK post and, in SyncHalf, the math-side bank flip), then
-        // release the unpacker's data-ready credit.
+        // Middleman only, no FPU work. Seed MATH_PACK (the semaphore this thread posts). Per section: wait for the
+        // unpacker's data (first section: spin until its first UNPACK_MATH post, so the wait is armed only after its
+        // seed), hand the section to pack (MATH_PACK post and, in SyncHalf, the math-side bank flip), then release the
+        // unpacker's data-ready credit.
         _llk_math_pack_sync_init_<dest_sync>();
-        _llk_sync_spin_until_posted_(semaphore::UNPACK_MATH);
         for (std::uint32_t i = 0; i < TILE_CNT; ++i)
         {
             _llk_math_wait_for_dest_available_();
+            if (i == 0)
+            {
+                _llk_sync_spin_until_posted_(semaphore::UNPACK_MATH);
+            }
             _llk_sync_wait_<p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(semaphore::UNPACK_MATH);
             _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             _llk_sync_get_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::UNPACK_MATH);
