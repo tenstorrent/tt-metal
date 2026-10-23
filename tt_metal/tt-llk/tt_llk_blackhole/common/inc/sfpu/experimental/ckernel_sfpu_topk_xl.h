@@ -2580,22 +2580,17 @@ inline void _topk_xl_rebuild_(const std::uint32_t dst_index, const bool ascendin
         load_replay_buf<Exec>(0, 8, [] { load8_rows_x2_unfused<indices_offset, 8>(); });
         bitonic_sort_len_16_alt<fused>(dir);
         load_replay_buf<Exec>(8, 8, [] { store8_rows_x2_unfused<indices_offset, 8, 16>(); });
-        for (int i = 1; i < 8; i++)
+        for (int pass = 0; pass < 2; pass++)
         {
-            lltt::replay(0, 8);
-            bitonic_sort_len_16_alt<fused>(dir);
-            lltt::replay(8, 8);
+            for (int i = 1 - pass; i < 8; i++)
+            {
+                lltt::replay(0, 8);
+                bitonic_sort_len_16_alt<fused>(dir);
+                lltt::replay(8, 8);
+            }
+            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+            set_dst_write_addr_offset(tile_offset + (pass ? 0 : 2));
         }
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-        set_dst_write_addr_offset(tile_offset + 2);
-        for (int i = 0; i < 8; i++)
-        {
-            lltt::replay(0, 8);
-            bitonic_sort_len_16_alt<fused>(dir);
-            lltt::replay(8, 8);
-        }
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-        set_dst_write_addr_offset(tile_offset + 0);
         transpose_8_faces<fused, indices_offset, /*manage_outer_cfg=*/false>();
         leave_transpose_cfg_block();
 
