@@ -31,11 +31,11 @@ constexpr uint32_t kStopPollMask = 255u;
 // refclk, so every reading lands on the same cycle relative to the refclk edge and their errors stop averaging out.
 constexpr uint32_t kCheckPadRange = 64;
 
-// Reads the refclk and the wall clock in blocks of four reads, up to 22 blocks, until the refclk steps, and returns
-// whether it did. On a step, walls and refclks get the reads around it. Calibration and sampling call the same
-// 64-byte-aligned copy of the pass, so calibration measures exactly the reads that sample, regardless of the code
-// around them.
-__attribute__((noinline, aligned(64))) bool pass(uint32_t (&walls)[3], uint32_t (&refclks)[4]) {
+// Runs nops from `pad`, then reads the refclk and the wall clock in blocks of four reads, up to 22 blocks, until the
+// refclk steps, and returns whether it did. On a step, walls and refclks get the reads around it. Calibration and
+// sampling call the same 64-byte-aligned copy of the pass, so calibration measures exactly the reads that sample,
+// regardless of the code around them.
+__attribute__((noinline, aligned(64))) bool pass(uint32_t pad, uint32_t (&walls)[3], uint32_t (&refclks)[4]) {
     eth_clock::Block blocks[3];
     const auto read = [](eth_clock::Block& block) __attribute__((always_inline)) {
         block.first_refclk = eth_ptp::kRefclkLo.read();
@@ -44,6 +44,7 @@ __attribute__((noinline, aligned(64))) bool pass(uint32_t (&walls)[3], uint32_t 
         block.last_refclk = eth_ptp::kRefclkLo.read();
     };
     bool stepped = false;
+    eth_clock::nops<kCheckPadRange - 1>(pad);
     eth_clock::disable_branch_predictor();
     read(blocks[2]);
     read(blocks[0]);
@@ -77,8 +78,9 @@ constexpr int32_t kDropGap = -128;
 FORCE_INLINE uint32_t
 run(uint32_t period, eth_clock::GapPositions gap_positions, volatile tt_l1_ptr uint32_t* slot, uint32_t& random_state) {
     uint32_t walls[3], refclks[4];
-    eth_clock::nops<kCheckPadRange>(4 * eth_clock::draw(random_state, kCheckPadRange));
-    if (!pass(walls, refclks)) {
+    const uint32_t pad =
+        reinterpret_cast<uint32_t>(eth_clock::eth_clock_nops_end) - 4u * eth_clock::draw(random_state, kCheckPadRange);
+    if (!pass(pad, walls, refclks)) {
         return 0;
     }
     if (period == 0) {

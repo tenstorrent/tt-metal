@@ -28,21 +28,24 @@ FORCE_INLINE uint32_t draw(uint32_t& random_state, uint32_t range) {
 // so that a branch taken on the previous pass can't mispredict and change this pass's timing.
 FORCE_INLINE void disable_branch_predictor() { asm volatile("csrrsi zero, 0x7c0, 2" ::: "memory"); }
 FORCE_INLINE void enable_branch_predictor() { asm volatile("csrrci zero, 0x7c0, 2" ::: "memory"); }
-// Runs `bytes` / 4 one-cycle nops by jumping into a run of Length of them. `bytes` must be a multiple of 4 and at most
-// 4 * Length. A C loop's cost per iteration varies with its branch, so only jumping into a run of nops makes each nop
-// exactly one cycle.
+// The end of the run of nops in nops().
+extern "C" char eth_clock_nops_end[];
+// Runs the nops from `target` to eth_clock_nops_end, one cycle each, by jumping into a run of Length of them. `target`
+// is eth_clock_nops_end minus 4 times the number to run, at most Length. A C loop's cost per iteration varies with its
+// branch, so only jumping into a run of nops makes each nop exactly one cycle. The caller computes `target` up front,
+// so the jump is the only instruction. A kernel calls nops() from one place, because the asm defines the label.
 template <uint32_t Length>
-FORCE_INLINE void nops(uint32_t bytes) {
+FORCE_INLINE void nops(uint32_t target) {
     asm volatile(
         ".option push\n\t.option norvc\n\t"
-        "auipc t0, 0\n\t"
-        "sub t0, t0, %[bytes]\n\t"
-        "jr 12 + %[n] * 4(t0)\n\t"
+        "jr %[target]\n\t"
         ".rept %[n]\n\tnop\n\t.endr\n\t"
+        ".globl eth_clock_nops_end\n"
+        "eth_clock_nops_end:\n\t"
         ".option pop"
         :
-        : [bytes] "r"(bytes), [n] "i"(Length)
-        : "t0", "memory");
+        : [target] "r"(target), [n] "i"(Length)
+        : "memory");
 }
 // The four reads of one block of a pass, in the order the pass makes them.
 struct Block {
