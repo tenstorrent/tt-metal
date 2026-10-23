@@ -288,6 +288,8 @@ def test_se_engine3(mesh_device, device_params):
         xts = [_repl(mesh_device, x.view(1, 1, rows, H)) for x in xsk]
 
         def check(k, y):
+            if os.environ.get("SE_PROBE"):  # (a timing probe: no checks)
+                return 1.0
             ys = [ttnn.to_torch(t).float().reshape(rows, -1) for t in ttnn.get_device_tensors(y)]
             ps = [pcc(ys[d], _se_ref(xsk[k], wg[d], wd[d], I, glu)) for d in range(R * C)]
             assert min(ps) > 0.999, (k, ps)

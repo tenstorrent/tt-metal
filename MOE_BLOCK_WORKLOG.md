@@ -866,3 +866,6 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - Next in the chain (GLM, from the mesh's last launch): logits in at ~45 (dev 7) / 60-71 (the others: dev 7's
   partials at its ports ~25, ~35-45 us on the line under the x gather); then on every router core ~14 us from the last
   arrival to the top-K start (the fin), top-K ~12, rows ~12.
+- The router cores' fin (last arrival -> top-K start), GLM: 16 us, of it the full-precision fp32 sigmoid 11.3 (probe:
+  4.7 without it); top-K 10.4; rows (after the top-K) 12. For later: a cheaper sigmoid (or the arrivals' sums and
+  sigmoid as each source lands), the top-K and rows over more RISCs.
