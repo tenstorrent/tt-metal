@@ -85,7 +85,6 @@ from pathlib import Path
 from loguru import logger
 
 import ttnn
-from models.demos.common.prefill.runners.layer_completion_ring_writer import LayerCompletionSink
 from models.demos.common.prefill.runners.runner_utils import raise_nproc_limit
 from models.demos.gpt_oss_d_p.tests.galaxy_prefill_kv_pcc import COLS, ROWS, chunk_alignment
 
@@ -197,14 +196,21 @@ def cache_traffic_note(hf_config, num_layers, cache, chunk, kv_bytes_per_elem):
     )
 
 
-class DrainSink(LayerCompletionSink):
+class DrainSink:
     """Layer-completion sink that drains the device profiler every `read_every` layers and stays silent
-    inside the profiled chunk unless `read_in_chunk` (the drain policy is explained in main())."""
+    inside the profiled chunk unless `read_in_chunk` (the drain policy is explained in main()).
+
+    The runtime reports a finished layer either as sink(global_layer_idx, request_id) or as
+    sink.layers_completed(layer_start, layer_end, slot_id, pos_start, pos_end), depending on the
+    layer-completion protocol on main, so both calls are accepted."""
 
     def __init__(self, drain, state, read_every, read_in_chunk):
         self.drain, self.state, self.read_every, self.read_in_chunk = drain, state, read_every, read_in_chunk
 
-    def layers_completed(self, layer_start, layer_end, slot_id, pos_start, pos_end) -> None:
+    def __call__(self, global_layer_idx, request_id=None) -> None:
+        self.layers_completed(layer_start=global_layer_idx, layer_end=global_layer_idx + 1)
+
+    def layers_completed(self, layer_start, layer_end, slot_id=None, pos_start=None, pos_end=None) -> None:
         if self.state["in_chunk"] and not self.read_in_chunk:
             return
         if self.read_every > 0 and layer_end % self.read_every == 0:

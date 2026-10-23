@@ -18,7 +18,6 @@ from pathlib import Path
 import pytest
 
 from models.demos.common.prefill.profiling import parse_zone_perf as P
-from models.demos.common.prefill.runners.layer_completion_ring_writer import LayerCompletionSink
 from models.demos.gpt_oss_d_p.utils.profiler_utils import SPEC
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "run_prefill_profile.sh"
@@ -102,18 +101,28 @@ class TestHarness:
     def test_zero_cache_is_one_shot(self):
         assert self._harness().plan(8192, 0) == (1, 0, 8192)
 
-    def test_drain_sink_follows_the_runtime_protocol(self):
-        # The runtime calls sink.layers_completed(start, end, slot, pos_start, pos_end) once per layer,
-        # so a plain-function sink fails on the first layer.
+    @pytest.mark.parametrize(
+        "report",
+        [
+            lambda sink, layer: sink(layer, 0),
+            lambda sink, layer: sink.layers_completed(layer, layer + 1, 0, 0, 1024),
+            lambda sink, layer: sink.layers_completed(
+                layer_start=layer, layer_end=layer + 1, slot_id=0, pos_start=0, pos_end=1024
+            ),
+        ],
+        ids=["callable", "layers_completed", "layers_completed_keywords"],
+    )
+    def test_drain_sink_accepts_every_runtime_protocol(self, report):
+        # The runtime reports each finished layer through one of these calls, depending on the
+        # layer-completion protocol on main; all of them must drain at the same cadence.
         reads, state = [], {"in_chunk": False}
         sink = self._harness().DrainSink(lambda: reads.append(1), state, read_every=2, read_in_chunk=False)
-        assert isinstance(sink, LayerCompletionSink)
         for layer in range(4):
-            sink.layers_completed(layer, layer + 1, 0, 0, 1024)
+            report(sink, layer)
         assert len(reads) == 2
         state["in_chunk"] = True
-        sink.layers_completed(4, 5, 0, 0, 1024)
-        sink.layers_completed(5, 6, 0, 0, 1024)
+        report(sink, 4)
+        report(sink, 5)
         assert len(reads) == 2
 
     def test_misaligned_chunk_is_rejected(self, expect_error):
