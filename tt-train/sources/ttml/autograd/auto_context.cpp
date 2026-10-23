@@ -81,6 +81,7 @@ void AutoContext::close_device() {
     // The CCL semaphores are L1 buffers of the mesh being closed; the next mesh allocates its own, and a set kept
     // from this one would point at addresses the next mesh hands out to other buffers.
     m_ccl_resources.reset();
+    m_device_constants.clear();
     m_device = nullptr;
     // Drop the process-global fabric config that open_device_mesh may have
     // installed via enable_fabric(). Without this, fabric stays armed for
@@ -143,6 +144,15 @@ core::TTProfiler& AutoContext::get_profiler() {
         m_ccl_resources = std::make_unique<core::distributed::CCLResources>();
     }
     return *m_ccl_resources;
+}
+
+[[nodiscard]] const ttnn::Tensor& AutoContext::get_device_constant(
+    const std::string& key, const std::function<ttnn::Tensor()>& make) {
+    auto it = m_device_constants.find(key);
+    if (it == m_device_constants.end()) {
+        it = m_device_constants.emplace(key, make()).first;
+    }
+    return it->second;
 }
 
 void AutoContext::initialize_socket_manager(ttnn::distributed::SocketType socket_type) {

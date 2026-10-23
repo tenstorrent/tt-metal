@@ -6,7 +6,6 @@
 
 #include <ttnn/operations/core/to_layout/to_layout_op.hpp>
 #include <ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/qkv_causal_conv1d_silu.hpp>
-#include <unordered_map>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
@@ -16,22 +15,6 @@
 namespace ttml::ops {
 
 namespace {
-
-// The forward's actual_start is a constant zero; one upload per device, so forwards stay free of host writes
-// (which trace capture rejects).
-ttnn::Tensor zero_actual_start(ttnn::distributed::MeshDevice* device) {
-    static std::unordered_map<ttnn::distributed::MeshDevice*, ttnn::Tensor> cache;
-    auto it = cache.find(device);
-    if (it == cache.end() || !it->second.is_allocated() || it->second.device() != device) {
-        it = cache
-                 .insert_or_assign(
-                     device,
-                     core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-                         std::vector<uint32_t>{0}, ttnn::Shape({1}), device, ttnn::Layout::ROW_MAJOR))
-                 .first;
-    }
-    return it->second;
-}
 
 // ttml activations are [B,1,T,.]; the kernels take [1,T,.]. For TILE tensors these are views.
 ttnn::Tensor rank3(const ttnn::Tensor& t) {
@@ -89,7 +72,11 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> qkv_ca
                                 : metal::qkv_causal_conv1d_silu_chunk_size(q_width + k_width + v_width, *device);
     const ttnn::experimental::kda::QkvCausalConv1dSiluProgramConfig program_config{forward_chunk_size};
     auto history_rm = ttnn::to_layout(rank3(history), ttnn::Layout::ROW_MAJOR);
-    auto actual_start = zero_actual_start(device);
+    // The forward's actual_start is a constant zero, uploaded once per device so forwards do no host writes.
+    const auto& actual_start = autograd::ctx().get_device_constant("qkv_causal_conv1d_silu/actual_start", [&] {
+        return core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+            std::vector<uint32_t>{0}, ttnn::Shape({1}), device, ttnn::Layout::ROW_MAJOR);
+    });
 
     auto [q, k, v] = ttnn::experimental::kda::qkv_causal_conv1d_silu(
         x,
