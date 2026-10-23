@@ -206,26 +206,6 @@ def run_summary(
     return summaries
 
 
-def split_summaries(
-    summaries: ttnn.Tensor, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
-) -> list[ttnn.Tensor]:
-    """Transitional (tt_metal_tracker-57p1): per-slot [A, B] device tensors until the prefix ops read summaries."""
-    slots, group_heads, key_dim, row_width = tuple(summaries.shape)
-    parts = []
-    for slot in range(slots):
-        for begin, end in ((0, key_dim), (key_dim, row_width)):
-            sliced = ttnn.slice(
-                summaries,
-                (slot, 0, 0, begin),
-                (slot + 1, group_heads, key_dim, end),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            parts.append(
-                ttnn.to_memory_config(ttnn.reshape(sliced, (group_heads, key_dim, end - begin)), memory_config)
-            )
-    return parts
-
-
 def assert_runtime_contract(
     device: ttnn.Device,
     inputs: Sequence[ttnn.Tensor],

@@ -24,8 +24,10 @@ def test_padding_prefix_empty_and_partial_groups(mesh_device, width):
     def upload(tensor, dtype):
         return ttnn.from_torch(tensor, device=mesh_device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
 
-    a_tt, b_tt, initial_tt = upload(a, ttnn.bfloat16), upload(b, ttnn.bfloat16), upload(initial, ttnn.float32)
-    summaries_tt = upload(torch.cat([a, b], dim=-1).unsqueeze(0), ttnn.bfloat16)
+    # Two SP ranks need a tail slot; an unsplit start never reads it, so it is NaN.
+    head = torch.cat([a, b], dim=-1)
+    summaries_tt = upload(torch.stack([head, torch.full_like(head, float("nan"))]), ttnn.bfloat16)
+    initial_tt = upload(initial, ttnn.float32)
     start = make_actual_start(mesh_device, 0)
     end = make_actual_start(mesh_device, 512)
 
@@ -34,16 +36,13 @@ def test_padding_prefix_empty_and_partial_groups(mesh_device, width):
             summaries_tt, 4, actual_start=start, actual_end=end, local_rows=256, sequence_parallel_axis=0
         )
         entries = ttnn.experimental.kda.affine_exclusive_scan(
-            a_tt,
-            b_tt,
+            summaries_tt,
             initial_tt,
             4,
             actual_start=start,
             actual_end=end,
             local_rows=256,
             sequence_parallel_axis=0,
-            tail_a=a_tt,
-            tail_b=b_tt,
             tail_entry_states=initial_tt,
         )
         return (*reduced, entries)
@@ -74,5 +73,5 @@ def test_padding_prefix_empty_and_partial_groups(mesh_device, width):
                         torch.testing.assert_close(shards[2][device_index][head * 4 + group], expected, rtol=0, atol=0)
     finally:
         ttnn.release_trace(mesh_device, trace)
-        for tensor in (*outputs, summaries_tt, a_tt, b_tt, initial_tt, start, end):
+        for tensor in (*outputs, summaries_tt, initial_tt, start, end):
             ttnn.deallocate(tensor)
