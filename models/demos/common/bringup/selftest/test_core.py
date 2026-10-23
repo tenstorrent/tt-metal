@@ -416,3 +416,16 @@ def test_cpu_threads_env_override(monkeypatch):
     assert cpu_threads() == 8
     monkeypatch.delenv("BRINGUP_CPU_THREADS")
     assert cpu_threads() >= 1
+
+
+def test_attempt_and_ab_histories_live_beside_state_json(sandbox):
+    """F180: DeepSeek-V4.1 Z.1's commit was refused: state.json reached 504 KB (agent_runs 137 KB, ab 85 KB). Those
+    histories now live in history_state.json (uncommitted); state() merges them back for every reader."""
+    led = sandbox.tasks(task("A.1", "true"))
+    led.update("A.1", agent_runs=[{"attempt": 1, "role": "fix"}], ab={"decision": "accept"}, status="PASS")
+    raw = json.loads(led.state_path.read_text())["A.1"]
+    assert "agent_runs" not in raw and "ab" not in raw and raw["status"] == "PASS"
+    st = led.state()["A.1"]
+    assert st["agent_runs"] == [{"attempt": 1, "role": "fix"}] and st["ab"] == {"decision": "accept"}
+    led.update("A.1", agent_runs=st["agent_runs"] + [{"attempt": 2, "role": "fix"}])
+    assert len(led.state()["A.1"]["agent_runs"]) == 2

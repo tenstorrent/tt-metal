@@ -139,6 +139,7 @@ ROLE_OF_STEP = {
 IGNORED = (
     r"/dashboard/[^/]+\.(html|yaml)$",  # the dashboards and their links (F71)
     r"(^|/)bringup/(overseer\.yaml|supervision\.md)$",  # the overseer's own files (F69), never an agent's
+    r"(^|/)bringup/history_state\.json$",  # F180: the attempt / A/B histories beside state.json (uncommitted)
     r"(^|/)__pycache__/",
     r"\.pyc$",
     r"^generated/",
