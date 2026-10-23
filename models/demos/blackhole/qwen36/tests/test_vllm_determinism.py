@@ -1,4 +1,5 @@
-"""Debug reproduction for BUG 2 / BUG 3 (untracked scratch test)."""
+"""vLLM-path determinism on device: the same prompt run alone repeatedly must produce identical greedy tokens.
+Also prints (without asserting) each user of a batched run that drops users mid-decode vs the same prompt alone."""
 import os
 
 import pytest
@@ -84,6 +85,8 @@ def test_dbg(mesh_device, reset_seeds, ensure_gc):
     for k in range(1, 4):
         print(f"R1 run{k} vs run0: first_div={first_div(runs[0], runs[k])}/{STEPS1} identical={runs[0]==runs[k]}")
     print("R1 text:", repr(tok.decode(runs[0], skip_special_tokens=True))[:200])
+    for k in range(1, 4):
+        assert runs[k] == runs[0], f"R1 run{k} diverged at token {first_div(runs[0], runs[k])}"
     # R2 batch
     lg, bl = d.prefill(reqs, list(range(8)))
     rows = mk_rows(reqs, lg, bl)
@@ -111,6 +114,9 @@ def test_dbg(mesh_device, reset_seeds, ensure_gc):
         print(
             f"R2 alone repeat user{i}: identical_to_first_alone={refs2[i]==refs[i]} first_div={first_div(refs2[i], refs[i])}"
         )
+    # Batched-vs-alone stays print-only: batch composition may legitimately change rounding.
+    for i in (0, 4):
+        assert refs2[i] == refs[i], f"R2 user{i} repeat diverged at token {first_div(refs2[i], refs[i])}"
 
 
 def _blocks(d, L):

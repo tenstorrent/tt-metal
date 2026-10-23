@@ -158,7 +158,7 @@ COUNTS = {}
 DEV = [None]
 
 
-def _wrap(obj, name, key):
+def _wrap(obj, name, key, monkeypatch):
     orig = getattr(obj, name)
 
     def w(*a, **k):
@@ -170,24 +170,24 @@ def _wrap(obj, name, key):
         ACC[key + "#"] = ACC.get(key + "#", 0) + 1
         return r
 
-    setattr(obj, name, w)
+    monkeypatch.setattr(obj, name, w)
 
 
-def _count(mod, name):
+def _count(mod, name, monkeypatch):
     orig = getattr(mod, name)
 
     def w(*a, **k):
         COUNTS[name] = COUNTS.get(name, 0) + 1
         return orig(*a, **k)
 
-    setattr(mod, name, w)
+    monkeypatch.setattr(mod, name, w)
 
 
 @run_for_blackhole()
 @pytest.mark.timeout(3500)
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_prefill_overhead(mesh_device, reset_seeds, ensure_gc):
+def test_prefill_overhead(mesh_device, reset_seeds, ensure_gc, monkeypatch):
     from transformers import AutoConfig, AutoTokenizer
 
     DEV[0] = mesh_device
@@ -214,18 +214,18 @@ def test_prefill_overhead(mesh_device, reset_seeds, ensure_gc):
     rng = random.Random(1234)
 
     if BREAKDOWN:
-        _wrap(model, "prefill_paged_slots", "prefill_paged_slots")
-        _wrap(model, "_prefill_with_prefix_cache", "_prefill_with_prefix_cache")
-        _wrap(model, "prefill_traced_chunked", "legacy_prefill_traced_chunked")
-        _wrap(model, "_prepare_short_trace_gdn_init", "_prepare_short_trace_gdn_init")
-        _wrap(model, "_write_gdn_slot_from_scratch", "_write_gdn_slot_from_scratch")
-        _wrap(model, "_prefill_range", "_prefill_range")
-        _wrap(model, "prepare_gdn_decode_width", "prepare_gdn_decode_width")
+        _wrap(model, "prefill_paged_slots", "prefill_paged_slots", monkeypatch)
+        _wrap(model, "_prefill_with_prefix_cache", "_prefill_with_prefix_cache", monkeypatch)
+        _wrap(model, "prefill_traced_chunked", "legacy_prefill_traced_chunked", monkeypatch)
+        _wrap(model, "_prepare_short_trace_gdn_init", "_prepare_short_trace_gdn_init", monkeypatch)
+        _wrap(model, "_write_gdn_slot_from_scratch", "_write_gdn_slot_from_scratch", monkeypatch)
+        _wrap(model, "_prefill_range", "_prefill_range", monkeypatch)
+        _wrap(model, "prepare_gdn_decode_width", "prepare_gdn_decode_width", monkeypatch)
         if cache is not None:
-            _wrap(cache, "save", "cache.save")
-            _wrap(cache, "restore", "cache.restore")
+            _wrap(cache, "save", "cache.save", monkeypatch)
+            _wrap(cache, "restore", "cache.restore", monkeypatch)
     for n in ("copy", "embedding", "to_torch", "from_torch", "execute_trace"):
-        _count(ttnn, n)
+        _count(ttnn, n, monkeypatch)
 
     sp = SamplingParams(temperature=[0.0] * WIDTH, top_k=[1] * WIDTH, top_p=[1.0] * WIDTH, seed=[None] * WIDTH)
 

@@ -33,6 +33,9 @@ def serve_device_decode_env_enabled():
     return os.environ.get("QWEN36_SERVE_DEVICE_DECODE", "1") == "1"
 
 
+_BATCHED_PREFILL_BG_WARNED = set()  # QWEN36_BATCHED_PREFILL_BG values already warned about
+
+
 class _ShortPrefillTrace:
     """Persistent device buffers + outputs of ONE captured bucket short-prompt prefill trace (any length <= bucket).
 
@@ -3226,8 +3229,16 @@ class Qwen36Model:
 
     @staticmethod
     def batched_prefill_bgs():
+        """QWEN36_BATCHED_PREFILL_BG group sizes (default "4,8"). Sizes below 2 are dropped: a lone prompt already takes
+        the per-user path, and the grouped body does not support a group of one."""
         raw = os.environ.get("QWEN36_BATCHED_PREFILL_BG", "4,8")
-        return tuple(sorted({int(x) for x in raw.split(",") if x.strip()}))
+        bgs = {int(x) for x in raw.split(",") if x.strip()}
+        if any(b < 2 for b in bgs) and raw not in _BATCHED_PREFILL_BG_WARNED:
+            _BATCHED_PREFILL_BG_WARNED.add(raw)
+            logger.warning(
+                f"QWEN36_BATCHED_PREFILL_BG={raw}: group sizes below 2 ignored (a lone prompt runs per-user)"
+            )
+        return tuple(sorted(b for b in bgs if b >= 2))
 
     def _any_trace_captured(self):
         return bool(
