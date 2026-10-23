@@ -8,6 +8,7 @@
 #include <array>
 #include <bit>
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <memory_resource>
@@ -21,11 +22,13 @@
 
 #include <tt_stl/assert.hpp>
 
+#include "context/metal_context.hpp"
 #include "hostdev/profiler_zone_id.h"
 #include "hostdev/record_site.h"
 #include "impl/streaming_profiler/decode.hpp"
 #include "impl/streaming_profiler/service.hpp"
 #include "impl/streaming_profiler/sync/clock_map.hpp"
+#include "impl/streaming_profiler/external_receiver.hpp"
 #include "llrt/call_sites.hpp"
 
 namespace api = tt::tt_metal::experimental::streaming_profiler;
@@ -330,10 +333,10 @@ const DirectForms* RecordRoutes::direct_forms(const tt::llrt::CallSite& site, st
     for (const tt::llrt::CallSite::Form& form : site.forms) {
         forms[uint32_t(form.time_form)] = direct_form(site, form.data_bits, field_offsets);
     }
-    // The payload is already the records' data when the site has one form and each field sits in it as in a record,
-    // past its head.
+    // The payload is already the records' data when the site has one form, a medium one as spsc_record() reads it, and
+    // each field sits in it as in a record, past its head.
     const bool as_is =
-        site.forms.size() == 1 &&
+        site.forms.size() == 1 && site.forms[0].time_form == api::detail::TimeForm::Medium &&
         std::ranges::all_of(forms[uint32_t(site.forms[0].time_form)].fields, [](const DirectForm::Field& field) {
             return field.op == DirectForm::Op::Copy && field.bit % 8 == 0 &&
                    field.width == 8 * code_bytes(field.code) && field.to == profiler::kSpscHeadBytes + field.bit / 8;
@@ -385,6 +388,15 @@ Callback detail::register_callback(
     static std::atomic<uint32_t> anonymous{0};
     if (name.empty()) {
         name = "callback-" + std::to_string(++anonymous);
+    }
+    // A process with callbacks and no MetalContext may be the external process, so it listens for profiled processes
+    // until it creates a MetalContext of its own.
+    bool metal = false;
+    for (int context = 0; context < static_cast<int>(MAX_CONTEXT_COUNT); context++) {
+        metal |= MetalContext::instance_exists(ContextId{context});
+    }
+    if (!metal) {
+        internal::serve_profiled_processes();
     }
     for (const Kind& kind : kinds) {
         tt::llrt::add_host_type(kind.data_type, kind.data_codes);

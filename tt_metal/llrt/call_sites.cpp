@@ -13,6 +13,8 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -104,11 +106,25 @@ struct Registry {
     std::deque<CallSite> sites;  // a record may hold its site's address for the life of the process
     std::array<std::atomic<const CallSite*>, TT_ZONE_ID_COUNT> by_id{};
     TypeLayouts types;
+    std::set<std::string, std::less<>> names;  // the names of sites another process described, which no image holds
 };
 
 Registry& call_site_registry() {
     static ttsl::Indestructible<Registry> instance;
     return instance.get();
+}
+
+// Checks the site's types against every other showing of their names, and makes it the site with id `id`. The caller
+// holds the registry's mutex.
+void add_site(Registry& registry, uint32_t id, CallSite site) {
+    registry.types.add_device_type(site.metadata_type, site.metadata_codes, site.metadata_bits);
+    for (const CallSite::Value& value : site.values) {
+        if (!value.type.empty()) {
+            registry.types.add_device_type(
+                value.type, std::span(site.data_codes).subspan(value.first_field, value.field_bits.size()), value.field_bits);
+        }
+    }
+    registry.by_id[id].store(&registry.sites.emplace_back(std::move(site)), std::memory_order_release);
 }
 
 struct Section {
@@ -367,18 +383,28 @@ void load_call_sites(const std::string& elf_path, ll_api::ElfFile& elf) {
     std::vector<std::pair<uint32_t, CallSite>> sites = read_call_sites(elf_path, elf);
     const std::lock_guard lock(registry.mutex);
     for (auto& [id, site] : sites) {
-        registry.types.add_device_type(site.metadata_type, site.metadata_codes, site.metadata_bits);
-        for (const CallSite::Value& value : site.values) {
-            if (!value.type.empty()) {
-                registry.types.add_device_type(
-                    value.type,
-                    std::span(site.data_codes).subspan(value.first_field, value.field_bits.size()),
-                    value.field_bits);
-            }
-        }
-        registry.by_id[id].store(&registry.sites.emplace_back(std::move(site)), std::memory_order_release);
+        add_site(registry, id, std::move(site));
     }
     log_debug(tt::LogLLRuntime, "streaming profiler: '{}' -> call site ids [{}, {})", elf_path, base, base + count);
+}
+
+uint32_t add_call_site(CallSite site) {
+    Registry& registry = call_site_registry();
+    const std::lock_guard lock(registry.mutex);
+    TT_FATAL(
+        registry.next_id < TT_ZONE_STALL_ID,
+        "streaming profiler: all {} of the process's call-site ids are taken",
+        TT_ZONE_STALL_ID);
+    const auto keep = [&](std::string_view& name) { name = *registry.names.emplace(name).first; };
+    keep(site.location.file);
+    keep(site.location.function);
+    keep(site.metadata_type);
+    for (CallSite::Value& value : site.values) {
+        keep(value.type);
+    }
+    const uint32_t id = registry.next_id++;
+    add_site(registry, id, std::move(site));
+    return id;
 }
 
 const CallSite* find_call_site(uint32_t id) { return call_site_registry().by_id[id].load(std::memory_order_acquire); }

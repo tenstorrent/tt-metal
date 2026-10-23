@@ -62,6 +62,9 @@ struct CaptureContext {
         std::vector<int64_t> clock_offsets;
         CoreTable core_of_xy;  // a tile's xy to its core index
         uint32_t chip_id = 0;
+        // The chip's wall clock high word when the capture started, which the decoder widens a lane's 16-bit timer slot
+        // from on its first frame.
+        uint32_t start_timer_hi = 0;
         // The wall-clock core's wall clock minus the check core's, or 0 when the sync check is off.
         int64_t check_offset = 0;
         // The Tensix core whose wall clock the host reads on a chip with no Ethernet cores (p100a), or nullopt on any

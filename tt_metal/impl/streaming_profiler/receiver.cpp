@@ -134,7 +134,7 @@ RefclkBurst RootRefclkWindow::read_burst() {
     return reads;
 }
 
-Receiver::Receiver(tt::Cluster& cluster, std::unique_ptr<DevicePrograms> programs) :
+DeviceReceiver::DeviceReceiver(tt::Cluster& cluster, std::unique_ptr<DevicePrograms> programs) :
     programs_(std::move(programs)),
     root_refclk_(cluster, programs_->capture_context().devices[CaptureContext::kRootDevice].chip_id),
     clock_solver_(programs_->capture_context(), root_refclk_.bases()) {
@@ -184,25 +184,42 @@ std::unique_ptr<Receiver> Receiver::create(const std::shared_ptr<distributed::Me
     // The first call sleeps while it measures the rate, so it is made here rather than on the sync thread.
     static_cast<void>(ns_per_tsc_tick());
     service().register_builtin_consumers(mc.rtoptions());
-    std::unique_ptr<Receiver> receiver(new Receiver(mc.get_cluster(), std::move(programs)));
+    std::unique_ptr<DeviceReceiver> receiver(new DeviceReceiver(mc.get_cluster(), std::move(programs)));
+    if (const auto& relays = receiver->programs_->external_relays(); !relays.empty()) {
+        DevicePrograms& programs_ref = *receiver->programs_;
+        receiver->external_ = std::make_unique<external::ProfiledEnd>(
+            external::Hello{
+                .relays = relays,
+                .devices = receiver->capture_context().devices,
+                .bases = receiver->root_refclk_.bases()},
+            [&programs_ref](const external::RelayBuffer& buffer) {
+                return programs_ref.attach_external(buffer.relay, buffer.noc_addr, buffer.bytes);
+            },
+            [&programs_ref](uint32_t relay) { programs_ref.detach_external(relay); });
+        receiver->clock_solver_.mirror_map(
+            [link = receiver->external_.get()](const ClockUpdate& update) { link->send(update); });
+    }
     service().attach_receiver(*receiver);
     for (uint32_t d = 0; d < receiver->capture_context().devices.size(); d++) {
-        std::vector<Stream*> owned;
+        std::vector<DeviceReceiver::Stream*> owned;
         for (auto& s : receiver->streams_) {
             if (s->captured.device_index == d) {
                 owned.push_back(s.get());
             }
         }
         if (!owned.empty()) {
-            receiver->ingest_threads_.emplace_back(&Receiver::ingest_thread, receiver.get(), std::move(owned));
+            receiver->ingest_threads_.emplace_back(&DeviceReceiver::ingest_thread, receiver.get(), std::move(owned));
         }
     }
     receiver->sync_thread_ = std::jthread([r = receiver.get()](const std::stop_token& stop) { r->sync_thread(stop); });
     receiver->programs_->start();
+    if (receiver->external_) {
+        receiver->external_->start();
+    }
     return receiver;
 }
 
-Receiver::~Receiver() {
+DeviceReceiver::~DeviceReceiver() {
     programs_->quiesce([this](uint32_t device_index, uint32_t socket_index, RelayState state) {
         stream(device_index, socket_index).relay.store(state, std::memory_order_release);
     });
@@ -212,6 +229,8 @@ Receiver::~Receiver() {
     sync_thread_.request_stop();
     wake_sync_thread();
     sync_thread_.join();
+    // The sync thread has finished the clock map, and the link sends the external process its last changes.
+    external_.reset();
     service().detach_receiver(*this);
     for (uint32_t d = 0; d < capture_context().devices.size(); d++) {
         programs_->verify_completeness(d);
@@ -219,7 +238,7 @@ Receiver::~Receiver() {
     log_report();
 }
 
-bool Receiver::poll(Stream& s) {
+bool DeviceReceiver::poll(Stream& s) {
     // pages_available counts from the last ack, so it includes the pages already seen
     const uint64_t arrived = s.acked + s.captured.socket->pages_available();
     if (arrived == s.arrived) {
@@ -238,7 +257,7 @@ bool Receiver::poll(Stream& s) {
 // frame's header is a dependent DRAM miss, and walked back to back they would serialize at that latency. Every
 // landed page below `arrived` is a frame header or inside the frame before it: the relay notifies only bytes the
 // PCIe tile has acknowledged.
-bool Receiver::walk_frame(Stream& s) {
+bool DeviceReceiver::walk_frame(Stream& s) {
     namespace kp = kernel_profiler;
     if (s.consumed >= s.arrived) {
         return false;
@@ -290,7 +309,7 @@ bool Receiver::walk_frame(Stream& s) {
 
 // Credits only ever follow the walk, and a drained relay reports done only when every byte it sent is credited, so
 // done means the walk has consumed every landed page.
-bool Receiver::settle(Stream& s) {
+bool DeviceReceiver::settle(Stream& s) {
     if (const uint64_t walked = s.consumed * kPageBytes; walked != s.walked_bytes.load(std::memory_order_relaxed)) {
         s.walked_bytes.store(walked, std::memory_order_release);
     }
@@ -305,12 +324,12 @@ bool Receiver::settle(Stream& s) {
     return relay == RelayState::Done;
 }
 
-uint64_t Receiver::live_head(uint32_t stream) const {
+uint64_t DeviceReceiver::live_head(uint32_t stream) const {
     const Stream& s = *streams_[stream];
     return widen_head(s.arrived_bytes.load(std::memory_order_acquire), s.captured.socket->bytes_sent());
 }
 
-void Receiver::ingest_thread(std::vector<Stream*> streams) {
+void DeviceReceiver::ingest_thread(std::vector<Stream*> streams) {
     std::string name = "sp-ingest:";
     for (Stream* s : streams) {
         name += std::to_string(s->captured.device_index) + "." + std::to_string(s->captured.socket_index) + ",";
@@ -361,12 +380,12 @@ void Receiver::ingest_thread(std::vector<Stream*> streams) {
     }
 }
 
-void Receiver::wake_sync_thread() {
+void DeviceReceiver::wake_sync_thread() {
     sync_wake_.fetch_add(1, std::memory_order_release);
     sync_wake_.notify_one();
 }
 
-void Receiver::sync_thread(const std::stop_token& stop) {
+void DeviceReceiver::sync_thread(const std::stop_token& stop) {
     set_thread_name("sp-sync");
     // Refclk reads from the other CPU socket take about 90 ns longer in one direction, which would shift a burst's
     // midpoint by tens of ns.
@@ -483,7 +502,7 @@ void Receiver::sync_thread(const std::stop_token& stop) {
     }
 }
 
-Receiver::Stream& Receiver::stream(uint32_t device_index, uint32_t socket_index) {
+DeviceReceiver::Stream& DeviceReceiver::stream(uint32_t device_index, uint32_t socket_index) {
     for (auto& s : streams_) {
         if (s->captured.device_index == device_index && s->captured.socket_index == socket_index) {
             return *s;
@@ -492,7 +511,7 @@ Receiver::Stream& Receiver::stream(uint32_t device_index, uint32_t socket_index)
     TT_THROW("streaming profiler: no stream for device {} socket {}", device_index, socket_index);
 }
 
-void Receiver::log_report() const {
+void DeviceReceiver::log_report() const {
     uint64_t pages = 0, frames = 0;
     std::string fill;
     for (const auto& s : streams_) {

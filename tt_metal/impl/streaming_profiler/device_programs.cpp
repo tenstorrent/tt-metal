@@ -47,6 +47,10 @@
 #include "llrt/tt_cluster.hpp"
 #include "hostdev/streaming_profiler_common.h"
 #include "impl/streaming_profiler/sync/link_sync.hpp"
+#include "impl/streaming_profiler/external_link.hpp"
+#include "distributed/mesh_socket_utils.hpp"
+#include "hostdev/socket.h"
+#include <tt-umd/pcie/pci_device.hpp>
 #include "impl/streaming_profiler/sync/tile_sync.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
@@ -198,11 +202,20 @@ void DevicePrograms::carve_l1() {
         "socket config",
         region,
         kStageSlots);
+    if (!mc_->rtoptions().get_streaming_profiler_external_process_disabled()) {
+        drisc_l1_.external_cfg = drisc_l1_.cfg - cfg_bytes;
+        TT_FATAL(
+            drisc_l1_.ctrl + kCtrlBytes <= drisc_l1_.external_cfg,
+            "streaming profiler: DRISC L1 ({} B unreserved) cannot hold a relay's external socket config",
+            region);
+    }
 
     const uint32_t eth_base = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
     const uint32_t eth_size = hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
-    eth_l1_.frames_cfg = eth_base + eth_size - 2 * cfg_bytes;
+    const bool external = !mc_->rtoptions().get_streaming_profiler_external_process_disabled();
+    eth_l1_.frames_cfg = eth_base + eth_size - (external ? 3 : 2) * cfg_bytes;
     eth_l1_.sync_cfg = eth_l1_.frames_cfg + cfg_bytes;
+    eth_l1_.external_cfg = external ? eth_l1_.sync_cfg + cfg_bytes : 0;
     eth_l1_.ctrl = eth_l1_.frames_cfg - kCtrlBytes;
     // spsc_span_pack_pad() assumes the staged frame starts on a page boundary.
     eth_l1_.stage = (eth_l1_.ctrl - slot_bytes) & ~(kPageBytes - 1u);
@@ -276,6 +289,13 @@ bool DevicePrograms::boot(const std::shared_ptr<distributed::MeshDevice>& mesh_d
         if (ctx.check) {
             capture.check_offset = wall_clock_offset - offset_of(CoreType::ETH, ctx.check->core.logical);
         }
+        // A Tensix core's RISC debug registers hold its wall clock; reading the low word latches the high word.
+        constexpr uint64_t kWallClockLo = 0xFFB121F0, kWallClockHi = 0xFFB121F8;
+        const tt_cxy_pair worker(ctx.chip_id, ctx.producers.front().virt);
+        uint32_t wall_clock_word = 0;
+        cluster.read_reg(&wall_clock_word, worker, kWallClockLo);
+        cluster.read_reg(&wall_clock_word, worker, kWallClockHi);
+        capture.start_timer_hi = wall_clock_word;
     }
     if (devices_.empty()) {
         log_warning(tt::LogMetal, "[streaming profiler] not capturing: no device of this mesh is local to this host");
@@ -318,6 +338,17 @@ bool DevicePrograms::boot(const std::shared_ptr<distributed::MeshDevice>& mesh_d
     for (DeviceCtx& ctx : devices_) {
         std::ranges::move(ctx.captured, std::back_inserter(sockets_));
         ctx.captured.clear();
+        if (drisc_l1_.external_cfg == 0) {
+            continue;
+        }
+        // The external process opens the chip by its PCIe device number, which every process on the host shares.
+        const auto pcie_device = tt::umd::PCIDevice::get_pci_device_id(static_cast<int>(ctx.chip_id));
+        TT_FATAL(pcie_device.has_value(), "streaming profiler: device {} has no PCIe device number", ctx.chip_id);
+        // The DRISC relays, then the eth relay.
+        external_relays_.insert(
+            external_relays_.end(),
+            ctx.relays.size() + 1,
+            {.pcie_device = static_cast<uint32_t>(*pcie_device), .dev = ctx.index});
     }
     plan_links();
     log_info(
@@ -341,15 +372,16 @@ void DevicePrograms::start_resident(
     resident.socket_index = static_cast<uint32_t>(ctx.sockets.size());
     resident.socket_count = static_cast<uint32_t>(specs.size());
     for (const SocketSpec& spec : specs) {
-        const auto& socket = ctx.sockets.emplace_back(std::make_unique<distributed::D2HSocket>(
+        auto socket = std::make_unique<distributed::D2HSocket>(
             ctx.mesh->shared_from_this(),
             distributed::MeshCoreCoord{ctx.coord, resident.core.phys},
             spec.fifo_bytes,
             distributed::D2HSocket::ExternalConfigBuffer{.address = spec.cfg, .sender_core_type = core_type},
-            distributed::D2HSocket::ProcessScope::InProcess));
+            distributed::D2HSocket::ProcessScope::InProcess);
         socket->set_page_size(kPageBytes);
+        ctx.sockets.push_back(std::move(socket));
         ctx.captured.push_back(CapturedSocket{
-            .socket = socket.get(),
+            .socket = ctx.sockets.back().get(),
             .device_index = ctx.index,
             .socket_index = static_cast<uint32_t>(ctx.sockets.size() - 1),
             .numa_node = ctx.numa_node,
@@ -545,7 +577,8 @@ std::unique_ptr<Program> DevicePrograms::relay_program(const DeviceCtx& ctx, uin
                 // Bit 1 of the relay index splits the relays' pushes between two of the four unicast request VCs.
                 {"write_vc", (relay_index & 2u) ? 0u : 1u},
                 {"spool_base", drisc_l1_.spool_addr},
-                {"spool_bytes", drisc_l1_.spool_bytes}}});
+                {"spool_bytes", drisc_l1_.spool_bytes},
+                {"external_socket_config_addr", drisc_l1_.external_cfg}}});
     std::vector<uint32_t> runtime_args = {my_cores, static_cast<uint32_t>(control_vector_l1_)};
     // Reversed so the last-launched cores get the first-serviced slots.
     std::ranges::copy(
@@ -676,7 +709,8 @@ std::unique_ptr<Program> DevicePrograms::eth_relay_program(const DeviceCtx& ctx)
          {"sync_ring", eth_l1_.sync_ring},
          {"link_ring", eth_l1_.link_ring},
          {"sync_check", ctx.check ? 1u : 0u},
-         {"check_xy", ctx.check ? packed_xy(ctx.check->core.virt) : 0u}});
+         {"check_xy", ctx.check ? packed_xy(ctx.check->core.virt) : 0u},
+         {"external_socket_config_addr", eth_l1_.external_cfg}});
     const auto drained = ctx.drained_by_eth_relay();
     const auto drained_count = static_cast<uint32_t>(drained.size());
     TT_FATAL(
@@ -923,6 +957,14 @@ void DevicePrograms::await_stop(const DeviceCtx& ctx, const ResidentCore& reside
             ctrl.sync.dropped,
             ctrl.sync.tail + ctrl.sync.dropped);
     }
+    if (ctrl.external.copied != 0) {
+        log_info(
+            tt::LogMetal,
+            "[streaming profiler] device {} {} copied the routed lanes of {} frames to the external process",
+            ctx.chip_id,
+            resident.name,
+            ctrl.external.copied);
+    }
 }
 
 void DevicePrograms::quiesce(const RelayStateFn& on_state) {
@@ -964,9 +1006,86 @@ void DevicePrograms::quiesce(const RelayStateFn& on_state) {
             await_stop(*ctx, *resident, on_state);
         }
     }
+    relays_stopped_ = true;
     for (const DeviceCtx& ctx : devices_) {
         write_producers_armed(ctx, 0);
     }
+}
+
+std::pair<const DevicePrograms::DeviceCtx*, const DevicePrograms::ResidentCore*> DevicePrograms::external_relay(
+    uint32_t relay) const {
+    for (const DeviceCtx& ctx : devices_) {
+        if (relay < ctx.relays.size()) {
+            return {&ctx, &ctx.relays[relay]};
+        }
+        if (relay == ctx.relays.size()) {
+            return {&ctx, &ctx.eth_relay};
+        }
+        relay -= static_cast<uint32_t>(ctx.relays.size()) + 1;
+    }
+    return {nullptr, nullptr};
+}
+
+bool DevicePrograms::attach_external(uint32_t relay, uint64_t noc_addr, uint32_t bytes) {
+    const auto [ctx, resident] = external_relay(relay);
+    if (ctx == nullptr || bytes % kPageBytes != 0) {
+        return false;
+    }
+    auto& cluster = mc_->get_cluster();
+    const Hal& hal = mc_->hal();
+    // A D2H socket's sender config (distributed/d2h_socket.cpp), aimed at the buffer, with the relay's bytes_sent in
+    // the word after it.
+    const distributed::SocketSenderSize size(hal.get_alignment(HalMemType::L1));
+    std::vector<uint32_t> config(
+        (size.md_size_bytes + size.ack_size_bytes + size.enc_size_bytes) / sizeof(uint32_t), 0);
+    const uint64_t bytes_sent_addr = noc_addr + bytes;
+    const auto pcie = cluster.get_soc_desc(ctx->chip_id).get_cores(CoreType::PCIE, CoordSystem::TRANSLATED).front();
+    config[offsetof(sender_socket_md, num_downstreams) / sizeof(uint32_t)] = 1;
+    config[offsetof(sender_socket_md, downstream_bytes_sent_addr) / sizeof(uint32_t)] = uint32_t(bytes_sent_addr);
+    config[offsetof(sender_socket_md, downstream_fifo_addr) / sizeof(uint32_t)] = uint32_t(noc_addr);
+    config[offsetof(sender_socket_md, downstream_fifo_total_size) / sizeof(uint32_t)] = bytes;
+    config[offsetof(sender_socket_md, is_d2h) / sizeof(uint32_t)] = 1;
+    uint32_t* encoding = config.data() + (size.md_size_bytes + size.ack_size_bytes) / sizeof(uint32_t);
+    encoding[0] = uint32_t(bytes_sent_addr >> 32);
+    encoding[1] = uint32_t(noc_addr >> 32);
+    encoding[2] = hal.noc_xy_pcie64_encoding(pcie.x, pcie.y);
+    const tt_cxy_pair core(ctx->chip_id, resident->core.virt);
+    const uint32_t config_addr = resident == &ctx->eth_relay ? eth_l1_.external_cfg : drisc_l1_.external_cfg;
+    cluster.write_core(config.data(), config.size() * sizeof(uint32_t), core, config_addr);
+    const uint32_t generation = ++external_generation_;
+    write_u32(
+        cluster,
+        ctx->chip_id,
+        resident->core.virt,
+        resident->ctrl + offsetof(kernel_profiler::ResidentCtrl, external.attach),
+        generation);
+    return poll_word(
+        cluster,
+        core,
+        resident->ctrl + offsetof(kernel_profiler::ResidentCtrl, external.attached),
+        std::chrono::seconds(1),
+        [&](uint32_t word) { return word == generation; });
+}
+
+void DevicePrograms::detach_external(uint32_t relay) {
+    const auto [ctx, resident] = external_relay(relay);
+    if (ctx == nullptr || relays_stopped_) {
+        return;
+    }
+    auto& cluster = mc_->get_cluster();
+    write_u32(
+        cluster,
+        ctx->chip_id,
+        resident->core.virt,
+        resident->ctrl + offsetof(kernel_profiler::ResidentCtrl, external.attach),
+        0);
+    // A relay that stops during the wait copies nothing more, and doesn't echo.
+    [[maybe_unused]] const bool followed = poll_word(
+        cluster,
+        tt_cxy_pair(ctx->chip_id, resident->core.virt),
+        resident->ctrl + offsetof(kernel_profiler::ResidentCtrl, external.attached),
+        std::chrono::seconds(1),
+        [](uint32_t word) { return word == 0; });
 }
 
 // Reads each producer core's control vector once over MMIO, and reports its stall counts and any lane whose tail is

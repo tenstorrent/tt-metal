@@ -23,6 +23,10 @@ namespace tt::tt_metal::experimental::streaming_profiler {
 /** @brief The DevicePublish option that makes a record visible to the host as soon as it is written. */
 inline constexpr struct PublishImmediately {
 } kPublishImmediately{};
+/** @brief The DevicePublish option that also sends the record to the external process, a process on this host that
+ * registered callbacks without opening devices of its own. The Metal process gets it too. */
+inline constexpr struct SendToExternalProcess {
+} kSendToExternalProcess{};
 }  // namespace tt::tt_metal::experimental::streaming_profiler
 
 namespace kernel_profiler {
@@ -34,8 +38,12 @@ namespace kernel_profiler::records {
 
 template <typename... Options>
 constexpr bool check_options() {
-    constexpr bool known = (std::is_same_v<std::remove_cv_t<Options>, sp::PublishImmediately> && ...);
-    static_assert(known, "unknown DevicePublish option; the only one is kPublishImmediately");
+    constexpr bool known =
+        ((std::is_same_v<std::remove_cv_t<Options>, sp::PublishImmediately> ||
+          std::is_same_v<std::remove_cv_t<Options>, sp::SendToExternalProcess>) &&
+         ...);
+    static_assert(
+        known, "unknown DevicePublish option; the options are kPublishImmediately and kSendToExternalProcess");
     return known;
 }
 
@@ -707,23 +715,28 @@ constexpr spd::RecordForm call_site_form() {
         .copies = section_form_copies<Data, F>.data(),
         .copy_count = uint32_t(section_form_copies<Data, F>.size())};
 }
-// The forms a call site keeps, shortest first.
-template <typename Data>
+// The forms a call site keeps, shortest first. A call site whose records go to the external process keeps only the
+// full form, whose time and Timestamps need nothing from the lane's earlier records, since that process sees only some
+// of the lane's frames.
+template <typename Data, bool kWholeTime>
 constexpr auto form_list() {
-    constexpr bool kShort = kHasShort<Data>, kFull = kSendsDistances<Data>;
-    std::array<spd::RecordForm, 1 + kShort + kFull> list{};
+    constexpr bool kShort = !kWholeTime && kHasShort<Data>, kMedium = !kWholeTime;
+    constexpr bool kFull = kWholeTime || kSendsDistances<Data>;
+    std::array<spd::RecordForm, kShort + kMedium + kFull> list{};
     size_t n = 0;
     if constexpr (kShort) {
         list[n++] = call_site_form<Data, spd::TimeForm::Short>();
     }
-    list[n++] = call_site_form<Data, spd::TimeForm::Medium>();
+    if constexpr (kMedium) {
+        list[n++] = call_site_form<Data, spd::TimeForm::Medium>();
+    }
     if constexpr (kFull) {
         list[n] = call_site_form<Data, spd::TimeForm::Full>();
     }
     return list;
 }
-template <typename Data>
-static const auto section_forms __attribute__((section(".tt_record_data"), unused)) = form_list<Data>();
+template <typename Data, bool kWholeTime>
+static const auto section_forms __attribute__((section(".tt_record_data"), unused)) = form_list<Data, kWholeTime>();
 
 // The data type a call site describes its records as, and which of its fields is their publish time and isn't sent.
 template <typename Data>
@@ -742,7 +755,7 @@ struct Described<ZoneStart> {
 template <auto kLocation, auto kMetadata, typename Data>
 static char call_site_handle __attribute__((section(".tt_record_ids"), unused)) = 0;
 
-template <auto kLocation, auto kMetadata, typename Data>
+template <auto kLocation, auto kMetadata, typename Data, bool kWholeTime>
 static const spd::RecordSiteEntry call_site_entry __attribute__((section(".tt_record_meta"), unused)) = {
     .id = &call_site_handle<kLocation, kMetadata, Data>,
     .metadata_type = section_type_name<decltype(kMetadata)>.data(),
@@ -758,8 +771,8 @@ static const spd::RecordSiteEntry call_site_entry __attribute__((section(".tt_re
     .data_field_count = uint32_t(section_codes<typename Described<Data>::type>.size()),
     .data_values = section_values<typename Described<Data>::type>.data(),
     .data_value_count = uint32_t(section_values<typename Described<Data>::type>.size()),
-    .data_forms = section_forms<Data>.data(),
-    .data_form_count = uint32_t(section_forms<Data>.size()),
+    .data_forms = section_forms<Data, kWholeTime>.data(),
+    .data_form_count = uint32_t(section_forms<Data, kWholeTime>.size()),
     .data_published_field = Described<Data>::kPublishedField,
     .padding_canary = &section_padding_canary<>,
 };
@@ -877,13 +890,13 @@ struct WordStore {
 // The writer of every record: a DevicePublish call's, or a zone's, whose data is its ZoneStart. Source is where it
 // reads the record's values, as record_source gives them or as RegisterWords. Data with Timestamps writes the shortest
 // form they fit; other data is always medium.
-template <typename Data, typename Source>
+template <typename Data, typename Source, bool kWholeTime = false>
 struct RecordWriter {
     using Form = spd::TimeForm;
 
     // The longest packet: a full one, or a medium one with the timer's high word ahead of it.
     static constexpr uint32_t kMaxWords = [] {
-        if constexpr (kSendsDistances<Data>) {
+        if constexpr (kWholeTime || kSendsDistances<Data>) {
             return 1 + kForm<Data, Form::Full>.body_words;
         } else {
             return 2 + kForm<Data, Form::Medium>.body_words;
@@ -921,7 +934,9 @@ private:
     static FORCE_INLINE void write_record(
         uint32_t header, uint32_t time_hi, uint32_t time_lo, const Source& source, std::index_sequence<K...>) {
         const OutgoingRecord record{source, time_hi, time_lo, {timestamp_bits<K>(source)...}};
-        if constexpr (kSendsDistances<Data>) {
+        if constexpr (kWholeTime) {
+            write_form<Form::Full>(header, record);
+        } else if constexpr (kSendsDistances<Data>) {
             write_shortest_form(header, record, kPieceIndices);
         } else {
             write_form<Form::Medium>(header, record);
@@ -1020,14 +1035,14 @@ private:
     }
 
     // A record stores as one block when it fits before the ring's end and is long enough for the check to pay for
-    // itself: a medium record with payload, or one with a run. A short record is otherwise a word or two, cheaper word
-    // by word.
+    // itself: a medium or full record with payload, or one with a run. A short record is otherwise a word or two,
+    // cheaper word by word. Only a call site whose records all take the full form writes it here.
     template <Form F, typename Record>
     static FORCE_INLINE void write_form(uint32_t header, const Record& record) {
         constexpr auto& payload = kPayloadLayout<Data, F, kCopyRuns>;
-        constexpr uint32_t kHeadWords = F == Form::Short ? 1 : 2;
+        constexpr uint32_t kHeadWords = F == Form::Short ? 1 : (F == Form::Medium ? 2 : 3);
         constexpr uint32_t kWords = kHeadWords + kPayloadWords<Data, F>;
-        constexpr bool kBlock = kWords > 2 && (F == Form::Medium || payload.has_run);
+        constexpr bool kBlock = kWords > 2 && (F != Form::Short || payload.has_run);
         constexpr auto parts = std::make_index_sequence<payload.count>{};
         // The short form keeps the time's distance from the cursor in the top half of its first payload word.
         const uint32_t short_time = F == Form::Short ? (record.time_lo - g_cursor_lo) << 16 : 0;
@@ -1039,8 +1054,11 @@ private:
             if (__builtin_expect(ring_fits_before_end(index, kWords), 1)) {
                 volatile tt_l1_ptr uint32_t* const slots = ring_slots(index);
                 slots[0] = header + length_change<F>();
-                if constexpr (F == Form::Medium) {
+                if constexpr (F != Form::Short) {
                     slots[1] = record.time_lo;
+                }
+                if constexpr (F == Form::Full) {
+                    slots[2] = record.time_hi;
                 }
                 store_payload<F>(SlotStore{slots + kHeadWords}, short_time, record, parts);
                 wIndex = index + kWords;
@@ -1048,8 +1066,11 @@ private:
             }
         }
         ring_write_word(header + length_change<F>());
-        if constexpr (F == Form::Medium) {
+        if constexpr (F != Form::Short) {
             ring_write_word(record.time_lo);
+        }
+        if constexpr (F == Form::Full) {
+            ring_write_word(record.time_hi);
         }
         store_payload<F>(WordStore{}, short_time, record, parts);
     }
@@ -1104,13 +1125,15 @@ FORCE_INLINE uint32_t register_word(const Source& source, std::index_sequence<K.
 
 // A record with a run crosses publish_with's call by its source's address, which the run copies from; any other record
 // as its register words, so a small record stays in registers when the profiler isn't inlined.
-template <bool kImmediately, typename Data, typename Source, size_t... A>
+template <bool kImmediately, bool kRouted, typename Data, typename Source, size_t... A>
 FORCE_INLINE void publish_record(uint32_t header, const Source& source, std::index_sequence<A...>) {
+    // A record for the external process takes the full form and is published at once, with its RISC's SPSC_ROUTED_AT_0
+    // halfword changed ahead of its tail (publish_with), so a relay never ships it without seeing the change.
     if constexpr (kHasRun<Data>) {
-        publish_with<RecordWriter<Data, Source>, kImmediately>(header, &source);
+        publish_with<RecordWriter<Data, Source, kRouted>, kImmediately || kRouted, kRouted>(header, &source);
     } else {
         constexpr auto pieces = std::make_index_sequence<kPieces<Data>.size()>{};
-        publish_with<RecordWriter<Data, RegisterWords<Data>>, kImmediately>(
+        publish_with<RecordWriter<Data, RegisterWords<Data>, kRouted>, kImmediately || kRouted, kRouted>(
             header, register_word<Data, A>(source, pieces)...);
     }
 }
@@ -1125,8 +1148,13 @@ struct CallSite {
             using Data = RecordData<Values...>;
             constexpr bool immediately =
                 (std::is_same_v<std::remove_cv_t<decltype(Options)>, sp::PublishImmediately> || ...);
-            const uint32_t header = site_header<kMetadata, Data, ppfmt::record_w0(kFirstBody<Data>)>();
-            publish_record<immediately, Data>(
+            constexpr bool external =
+                (std::is_same_v<std::remove_cv_t<decltype(Options)>, sp::SendToExternalProcess> || ...);
+            const uint32_t header = site_header<
+                kMetadata,
+                Data,
+                ppfmt::record_w0(kFirstBody<Data>) | (external ? ppfmt::TO_EXTERNAL : 0u)>();
+            publish_record<immediately, external, Data>(
                 header,
                 record_source(values...),
                 std::make_index_sequence<std::tuple_size_v<decltype(RegisterWords<Data>::words)>>{});
@@ -1143,7 +1171,7 @@ private:
         asm("lui %0, %%hi(%1+%3)\n\taddi %0, %0, %%lo(%1+%3)  # %2"
             : "=r"(header)
             : "i"(&call_site_handle<kLocation, kMetadata, Data>),
-              "i"(&call_site_entry<kLocation, kMetadata, Data>),
+              "i"(&call_site_entry < kLocation, kMetadata, Data, (kTypeAndLength & ppfmt::TO_EXTERNAL) != 0 >),
               "i"(kTypeAndLength));
         return header;
     }

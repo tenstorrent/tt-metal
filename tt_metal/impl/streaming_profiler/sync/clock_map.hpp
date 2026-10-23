@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <limits>
 #include <mutex>
 #include <optional>
@@ -47,6 +48,17 @@ using HostNode = ClockNode<double>;
 
 struct ClockBases {
     int64_t root_refclk = 0, tsc = 0;
+};
+
+// A change to a ClockMap, which a copy of the map in another process makes too: a chip's node, a host node and the
+// refclk it makes the host series final up to, or a chip's series made final.
+struct ClockUpdate {
+    enum class Kind : uint32_t { Chip, Host, Finish };
+    Kind kind = Kind::Chip;
+    uint32_t dev = 0;
+    SyncNode chip;
+    HostNode host;
+    double until = 0.0;
 };
 
 // The most nodes a series holds, at most 1.5 GB at 24 B per node. A chip adds a node once per millisecond while its
@@ -112,6 +124,10 @@ public:
     void append_host(HostNode node, double until);
     // Makes every wall tick of the chip's series final.
     void finish(uint32_t dev);
+    // Hands each later change to `mirror` too, on the thread that makes it.
+    void mirror(std::function<void(const ClockUpdate&)> mirror) { mirror_ = std::move(mirror); }
+    // Makes the change `update` describes.
+    void apply(const ClockUpdate& update);
 
     // Returns the root refclk of the chip's wall tick plus `tick_fraction`, or nullopt before the chip's series has a
     // node.
@@ -179,6 +195,9 @@ public:
     // Returns the host TSC of a root refclk tick, or nullopt before the host series has a node.
     std::optional<int64_t> place_tsc(Reader& reader, double root) const noexcept;
     bool has_host_nodes() const noexcept;
+    // Returns the chip's newest wall tick its series is final up to, or the lowest int64 before it has one. The clock sync
+    // moves it on for as long as the capture runs.
+    int64_t covered(uint32_t dev) const noexcept { return chips_[dev].cover.load(std::memory_order_acquire); }
     // Returns whether no later node of either series can move the host time of the chip's wall tick.
     bool is_final(Reader& reader, uint32_t dev, int64_t wall) const noexcept;
 
@@ -188,6 +207,7 @@ private:
     std::deque<ClockSeries<int64_t>> chips_;
     ClockSeries<double> host_;
     const int64_t tsc_base_;
+    std::function<void(const ClockUpdate&)> mirror_;
 };
 
 // Maps host TSC to steady_clock ns. Appends take a lock, and reads never do. There is one SteadyClock per process,

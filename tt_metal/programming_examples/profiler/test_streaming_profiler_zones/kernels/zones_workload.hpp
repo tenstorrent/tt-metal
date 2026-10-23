@@ -23,6 +23,19 @@
 #define ZONE_CYC 0u
 #endif
 
+// Opt-in (--external-every N) on the data-movement RISCs: every N iterations, a counters snapshot for the external
+// process.
+#if defined(EXTERNAL_EVERY) && EXTERNAL_EVERY && !defined(COMPILE_FOR_TRISC)
+#include "api/debug/device_publish.h"
+struct ExternalCounters {
+    uint32_t iteration;
+    uint32_t counters[7];
+};
+struct ExternalName {
+    tt::tt_metal::experimental::streaming_profiler::String name;
+};
+#endif
+
 // Body busy-waits CYC spin-counts, calibrated so the zone displays ~CYC/2500 us in Tracy (displayed_ns ~=
 // CYC * 0.41 at the 1.35 GHz aiclk). Low register only with wrap-safe subtraction, tear-free for spins << 2^32.
 // Not kernel_profiler::WALL_CLOCK_LOW_INDEX: it lives inside the PROFILE_KERNEL block and breaks the
@@ -64,7 +77,7 @@ static constexpr int kWallClockLowIdx = 0;
 #if ZONE_MODE == 2
 #include "api/debug/device_publish.h"
 
-// The structs --bench 7 to 10 publish.
+// The structs --bench 7 to 12 publish.
 struct Name {
     tt::tt_metal::experimental::streaming_profiler::String name;
 };
@@ -120,6 +133,12 @@ void kernel_main() {
             DevicePublish<Name{"tight"_s}>(TightBits{i, uint8_t(i), uint16_t(i >> 1)});
 #elif BENCH_KIND == 10
             DevicePublish<Name{"padded"_s}>(i, Padded{uint8_t(i), i});
+#elif BENCH_KIND == 11
+            DevicePublish<Name{"routed"_s}, tt::tt_metal::experimental::streaming_profiler::kSendToExternalProcess>(
+                NocEvent{{uint16_t(i), uint16_t(i >> 1)}, i});
+#elif BENCH_KIND == 12
+            DevicePublish<Name{"immediate"_s}, tt::tt_metal::experimental::streaming_profiler::kPublishImmediately>(
+                NocEvent{{uint16_t(i), uint16_t(i >> 1)}, i});
 #endif
             // BENCH_DELAY nop iterations keep the ring from filling, so the marker's own cost is what is timed;
             // kind 0 (no marker) prices the loop and spin for subtraction.
@@ -143,6 +162,22 @@ void kernel_main() {
         DeviceRecordEvent(ZTAG "_Event");
         DeviceTimestampedData(ZTAG "_Data", ((uint64_t)0xF00D << 32) | it);
         DeviceTimestampedData(ZTAG "_Iter", it);
+#endif
+#if defined(EXTERNAL_EVERY) && EXTERNAL_EVERY && !defined(COMPILE_FOR_TRISC)
+        if (it % EXTERNAL_EVERY == EXTERNAL_PHASE) {
+#if EXTERNAL_TO_METAL
+            // The control: the same records, published as immediately, that stay in this process.
+            DevicePublish<
+                ExternalName{"zones counters"_s},
+                tt::tt_metal::experimental::streaming_profiler::kPublishImmediately>(
+                ExternalCounters{it, {it, it + 1, it + 2, it + 3, it + 4, it + 5, it + 6}});
+#else
+            DevicePublish<
+                ExternalName{"zones counters"_s},
+                tt::tt_metal::experimental::streaming_profiler::kSendToExternalProcess>(
+                ExternalCounters{it, {it, it + 1, it + 2, it + 3, it + 4, it + 5, it + 6}});
+#endif
+        }
 #endif
         ZONE(ZTAG "_Zone0", 2500u);    // ~1 us
         ZONE(ZTAG "_Zone1", 5000u);    // ~2 us

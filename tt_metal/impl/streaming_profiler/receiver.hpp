@@ -160,23 +160,38 @@ private:
     ClockBases bases_;
 };
 
+// A capture's records as the consumers read them: its streams of frames, the devices they come from, and the clock map
+// that places their times.
 class Receiver {
 public:
+    // The receiver of the mesh's own capture, or null when this process doesn't profile it.
     static std::unique_ptr<Receiver> create(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
-    ~Receiver();
-
+    Receiver() = default;
+    virtual ~Receiver() = default;
     Receiver(const Receiver&) = delete;
     Receiver& operator=(const Receiver&) = delete;
 
     // The streams that carry profiler records.
-    std::span<const ReceiverStream> streams() const { return streams_view_; }
-    const CaptureContext& capture_context() const { return programs_->capture_context(); }
-    // The absolute byte position up to which the device has written stream `stream`'s FIFO. Callable from any thread.
-    uint64_t live_head(uint32_t stream) const;
-    const ClockMap& clock_map() const { return clock_solver_.map(); }
+    virtual std::span<const ReceiverStream> streams() const = 0;
+    virtual const CaptureContext& capture_context() const = 0;
+    // The absolute byte position up to which stream `stream`'s FIFO has been written. Callable from any thread.
+    virtual uint64_t live_head(uint32_t stream) const = 0;
+    virtual const ClockMap& clock_map() const = 0;
+};
+
+// The receiver of this process's own capture, which reads its devices' sockets and solves its clock map.
+class DeviceReceiver final : public Receiver {
+public:
+    ~DeviceReceiver() override;
+
+    std::span<const ReceiverStream> streams() const override { return streams_view_; }
+    const CaptureContext& capture_context() const override { return programs_->capture_context(); }
+    uint64_t live_head(uint32_t stream) const override;
+    const ClockMap& clock_map() const override { return clock_solver_.map(); }
 
 private:
-    Receiver(tt::Cluster& cluster, std::unique_ptr<DevicePrograms> programs);
+    friend class Receiver;
+    DeviceReceiver(tt::Cluster& cluster, std::unique_ptr<DevicePrograms> programs);
 
     struct Stream {
         CapturedSocket captured;
@@ -222,6 +237,8 @@ private:
     std::vector<std::thread> ingest_threads_;
     std::atomic<uint32_t> sync_wake_{0};
     std::jthread sync_thread_;
+    // The link to the external process, when the capture has an external socket.
+    std::unique_ptr<external::ProfiledEnd> external_;
 };
 
 }  // namespace streaming_profiler

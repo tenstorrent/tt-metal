@@ -9,6 +9,7 @@
 //     DevicePublish<Name{"tiles"_s}>(count, ratio);  // the host reads Record<Arguments<V>, Name>
 //     DevicePublish<Name{"x"_s}>(Bf16{bits}, count);  // an argument can be a struct too
 //     DevicePublish<Name{"y"_s}, kPublishImmediately>(count);  // options follow the metadata
+//     DevicePublish<Name{"z"_s}, kSendToExternalProcess>(count);  // the external process gets it too
 //
 // Payload and metadata fields, and arguments, use fixed-width types: int8_t to int64_t, uint8_t to uint64_t, char,
 // float, double, bool, enums with one of those as their underlying type, String for text, and in a payload, Timestamp

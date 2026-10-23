@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -18,6 +19,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/context_types.hpp"
 #include "impl/streaming_profiler/capture_context.hpp"
+#include "impl/streaming_profiler/external_link.hpp"
 
 namespace tt {
 class Cluster;
@@ -95,6 +97,12 @@ public:
     // the producers. Only the first call does anything, and the destructor makes that call if nothing else has.
     void quiesce(const RelayStateFn& on_state);
     void verify_completeness(uint32_t device_index);
+    // Each relay that can copy records to an external process, in device, then relay order; empty when the capture has
+    // no external socket.
+    const std::vector<external::Hello::Relay>& external_relays() const { return external_relays_; }
+    // Points relay `relay` at an external process's buffer, or turns its copies off, and waits for the relay to follow.
+    bool attach_external(uint32_t relay, uint64_t noc_addr, uint32_t bytes);
+    void detach_external(uint32_t relay);
 
 private:
     struct L1Range {
@@ -160,12 +168,16 @@ private:
     struct EthL1 {
         uint32_t frames_cfg = 0, sync_cfg = 0, ctrl = 0, stage = 0, sample_ring = 0, sync_ring = 0, link = 0,
                  link_ring = 0;
+        // The eth relay's external socket config, 0 without an external process.
+        uint32_t external_cfg = 0;
     };
     // The L1 addresses of each relay's buffers on its DRAM core, and the address and size of its GDDR spool, which are
     // 0 when the spool is off. The spool is the HAL's PROFILER DRAM region, which MetalEnv sizes for it when the
     // streaming profiler is on, so it lies below every allocator's unreserved base.
     struct DriscL1 {
         uint32_t stage_base = 0, core_records = 0, ctrl = 0, cfg = 0, spool_addr = 0, spool_bytes = 0;
+        // The external socket's config, 0 without an external process.
+        uint32_t external_cfg = 0;
         uint64_t host_ctrl = 0;
     };
 
@@ -192,6 +204,7 @@ private:
     // receiver.
     void stop_links();
     void await_stop(const DeviceCtx& ctx, const ResidentCore& resident, const RelayStateFn& on_state);
+    std::pair<const DeviceCtx*, const ResidentCore*> external_relay(uint32_t relay) const;
     // Writes `armed` to PROFILER_ARMED on every producer of the chip. Clearing it once every relay is done releases a
     // producer blocked on a full ring.
     void write_producers_armed(const DeviceCtx& ctx, uint32_t armed);
@@ -208,6 +221,11 @@ private:
     bool fabric_link_sync_ = false;
     bool links_running_ = false;
     bool quiesced_ = false;
+    std::vector<external::Hello::Relay> external_relays_;
+    // The attach generations handed to the relays.
+    uint32_t external_generation_ = 0;
+    // Set once quiesce has stopped every relay, after which a detach has nothing to wait for.
+    std::atomic<bool> relays_stopped_ = false;
 };
 
 }  // namespace streaming_profiler

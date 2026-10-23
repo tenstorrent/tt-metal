@@ -167,6 +167,8 @@ enum class EnvVarID {
     TT_METAL_NOC_DEBUG_WATERMARK_MARGIN_MS,        // NOC debug dump: mid-run watermark margin (ms)
     TT_METAL_DISPATCH_PROGRESS_UPDATE_MS,          // Dispatch kernel progress update period in milliseconds
     TT_METAL_DISPATCH_TELEMETRY_DISABLE,           // Dispatch telemetry
+    // Turn off the streaming profiler's copies of records to an external process
+    TT_METAL_STREAMING_PROFILER_EXTERNAL_PROCESS_DISABLE,
 
     // ========================================
     // WATCHER SYSTEM
@@ -1147,6 +1149,15 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_STREAMING_PROFILER_ZONE_CSV=/tmp/zones.csv
         case EnvVarID::TT_METAL_STREAMING_PROFILER_ZONE_CSV:
             this->streaming_profiler_zone_csv_path = std::string(value);
+            break;
+
+        // TT_METAL_STREAMING_PROFILER_EXTERNAL_PROCESS_DISABLE
+        // Builds the streaming profiler's relays without the copies to an external process, which then gets none of
+        // the records sent with kSendToExternalProcess.
+        // Default: false (an external process gets them)
+        // Usage: export TT_METAL_STREAMING_PROFILER_EXTERNAL_PROCESS_DISABLE=1
+        case EnvVarID::TT_METAL_STREAMING_PROFILER_EXTERNAL_PROCESS_DISABLE:
+            this->streaming_profiler_external_process_disabled = is_env_enabled(value);
             break;
 
         // TT_METAL_DEVICE_PROFILER_DISPATCH

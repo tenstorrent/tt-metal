@@ -38,6 +38,9 @@ constexpr uint32_t kShipMinPct = 25;
 // 0 selects direct push: frames go straight from staging to the host FIFO.
 constexpr uint32_t kSpoolBase = get_named_compile_time_arg_val("spool_base");
 constexpr uint32_t kSpoolBytes = get_named_compile_time_arg_val("spool_bytes");
+// The external socket's config; 0 means no external process.
+constexpr uint32_t kExternalConfigAddr = get_named_compile_time_arg_val("external_socket_config_addr");
+constexpr bool kExternal = kExternalConfigAddr != 0;
 
 constexpr uint32_t kNumRisc = kernel_profiler::PROFILER_SPSC_TENSIX_RISC;
 static_assert(kNumRisc == 5, "the control scans are unrolled for exactly five RISCs");
@@ -70,10 +73,13 @@ static_assert(kNGens * 4 < experimental::kMaxOutstandingWrites, "the ship stream
 static_assert(kNBounce < experimental::kMaxOutstandingReads, "the drain stream could fill and drop an issue");
 // The layout of the kRecordBytes record the relay keeps in its L1 for each core it drains. The record starts with one
 // kCvReadBytes read of the core's control vector from word kCvBaseWord, which holds the lanes' state slots followed by
-// their tails. In that address order, one read sees each slot no later than its tail. The relay's copies of the lanes'
-// heads follow at kHeadWord, then the core's XY word and its peak take.
+// their tails, then the RISCs' SPSC_ROUTED_AT_0 halfwords. In that address
+// order, one read sees each slot no later than its tail and each tail no later than the routed halfwords written
+// before it. It is the frame's control block. The relay's copies of the lanes' heads follow at kHeadWord, then the
+// core's XY word and its peak take.
 constexpr uint32_t kCvBaseWord = kernel_profiler::SPSC_WIRE_CV_BASE;
-constexpr uint32_t kCvReadBytes = 64;
+constexpr uint32_t kCtrlBlockBytes = kWireControlWords * 4u;
+constexpr uint32_t kCvReadBytes = kCtrlBlockBytes;
 constexpr uint32_t kCvReadSrcOff = kCvBaseWord * 4u;
 constexpr uint32_t kRecordBytes = kernel_profiler::kRelayCoreRecordBytes;
 constexpr uint32_t kTailWord = kernel_profiler::SPSC_RING_TAIL_0 - kCvBaseWord;
@@ -81,11 +87,16 @@ constexpr uint32_t kTimerWord = kernel_profiler::SPSC_STATE_TIMER_0 - kCvBaseWor
 constexpr uint32_t kHeadWord = kCvReadBytes / 4u;
 constexpr uint32_t kXyWord = kHeadWord + kNumRisc;
 constexpr uint32_t kPeakWord = kXyWord + 1;  // the core's largest lane take at its last gather
+constexpr uint32_t kRoutedAtWord = kernel_profiler::SPSC_ROUTED_AT_0 - kCvBaseWord;
+constexpr uint32_t kRoutedAtWords = kCtrlBlockBytes / 4u - kRoutedAtWord;
+static_assert(kRoutedAtWords == 3, "mark_routed compares the routed halfwords as three words");
 static_assert((kPeakWord + 1u) * 4u <= kRecordBytes, "the core record overflows its bytes");
 static_assert(
-    kCvReadSrcOff % 64u == 0 && kCvReadBytes == 64u && kTimerWord < kTailWord && kTailWord + kNumRisc <= kHeadWord &&
-        kernel_profiler::spsc_state_prog_word(kNumRisc - 1u) < kCvBaseWord + kHeadWord,
-    "the control read is the one 64 B block holding the state slots and the tails");
+    kCvReadSrcOff % 64u == 0 && kCtrlBlockBytes == 64u && kTimerWord < kTailWord &&
+        kTailWord + kNumRisc <= kCtrlBlockBytes / 4u &&
+        kernel_profiler::spsc_state_prog_word(kNumRisc - 1u) < kCvBaseWord + kCtrlBlockBytes / 4u &&
+        kRoutedAtWords * 2u >= kNumRisc,
+    "the control read is the 64 B block holding the state slots and the tails, then the routed words");
 constexpr uint32_t kBounceBase0 = kStageBase + kNGens * kGenSlots * kSlotBytes;
 constexpr uint32_t kGenBytes = kGenSlots * kSlotBytes;
 constexpr uint32_t kGenBase[kNGens] = {kStageBase, kStageBase + kGenBytes};
@@ -132,6 +143,101 @@ static_assert(
         kSlotBytes % (kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS * 4u) == 0,
     "packed-gather congruence broken");
 
+static uint32_t external_copied;    // routed records copied to the external process
+static uint32_t external_notified;  // the external socket's bytes_sent as the host last saw it
+// In spool mode, the external socket's bytes_sent where its last whole copy ended, which is all the host is told: the
+// pump copies a frame a bounce cuts in two pieces, and a host the relay laps resumes at the bytes_sent it reads.
+static uint32_t external_whole;
+
+// Sends the external socket's bytes_sent once its copies have landed.
+__attribute__((noinline)) static void notify_external(const SocketSenderInterface& external) {
+    notify_bytes_sent(external);
+    external_notified = external.bytes_sent;
+}
+
+// In spool mode the pump copies marked frames to the external process from the bounce that drains them, so the copy
+// rides the spool's buffering instead of the sweep: a marked frame's first two pages, which hold its lanes' heads and
+// tails, and its routed lanes' pages. The pump reads frame headers only while marked frames are in the spool: the walk
+// starts at the first one and stops once it has passed the last. walk_at is the walk's spool offset and walk_end the
+// end of the frame it is in; for a marked frame, walk_frame is its start and [walk_head_end, walk_span) and
+// [walk_span, walk_span_end) bound what it copies past the frame's start.
+static uint32_t routed_pending;  // marked frames in the spool the walk hasn't passed
+static uint32_t walk_at;
+static uint32_t walk_end;
+static uint32_t walk_head_end;
+static uint32_t walk_span;
+static uint32_t walk_span_end;
+static bool walk_marked;
+
+FORCE_INLINE void note_routed(uint32_t at) {
+    if (routed_pending++ == 0) {
+        walk_at = at;
+        walk_end = at;
+    }
+}
+
+// A marked frame's first copied piece ends at its second page or at its lanes' first page, whichever is first, and its
+// second piece is its lanes' pages.
+FORCE_INLINE uint32_t marked_head_bytes(uint32_t w0) {
+    const uint32_t first = ((w0 >> kernel_profiler::SPSC_SPAN_ROUTED_FIRST_SHIFT) &
+                            kernel_profiler::SPSC_SPAN_ROUTED_PAGE_MASK) * kPageBytes;
+    return first < 2u * kPageBytes ? first : 2u * kPageBytes;
+}
+
+// The sweep marks a frame with the lanes whose routed halfword moved, bit r for lane r, where the copied form keeps its
+// first page.
+constexpr uint32_t kRoutedLaneShift = kernel_profiler::SPSC_SPAN_ROUTED_FIRST_SHIFT;
+
+// A marked frame's word 0 in its copied form: the pages of the runs of the marked lanes, found from the frame's heads
+// and tails as place_run laid them out, each up to the end of its RISC's newest routed record (the frame's own routed
+// halfword), after which the run holds no routed record; a run whose newest routed record lies past the
+// `words_in_hand` it can read is copied whole. 0 when there is nothing to copy.
+FORCE_INLINE uint32_t routed_span_w0(const volatile tt_l1_ptr uint32_t* frame, uint32_t mark, uint32_t words_in_hand) {
+    const uint32_t lanes = (mark >> kRoutedLaneShift) & ((1u << kNumRisc) - 1u);
+    uint32_t off = kPrefixWords + kWireControlWords;
+    uint32_t first = kSlotBytes, end = 0;
+    for (uint32_t r = 0; (lanes >> r) != 0; r++) {
+        const uint32_t lo = off;
+        const uint32_t start = frame[kernel_profiler::SPSC_PREFIX_HEAD_0 + r];
+        const uint32_t take = frame[kPrefixWords + kernel_profiler::SPSC_WIRE_TAIL_0 + r] - start;
+        if (take == 0) {
+            continue;
+        }
+        const bool image = (start & (kRingWords - 1u)) + take > kRingWords && wrap_image(take);
+        const uint32_t data = off + kernel_profiler::spsc_span_pack_pad(image ? 0u : start, off);
+        off = data + (image ? kRingWords : take);
+        if (((lanes >> r) & 1u) == 0) {
+            continue;
+        }
+        uint32_t hi = off;
+        if (!image) {
+            // In ring order, so the newest routed record's words are at its distance from the run's start.
+            const auto newest = static_cast<uint16_t>(
+                frame[kPrefixWords + kernel_profiler::SPSC_WIRE_ROUTED_AT_0 + r / 2u] >> (16u * (r % 2u)));
+            const int32_t ahead = static_cast<int16_t>(newest - static_cast<uint16_t>(start));
+            if (ahead < 0) {
+                continue;  // its RISC's routed records are all in earlier frames
+            }
+            // Its header word must be in hand: a bounce may hold only the frame's first part.
+            if (static_cast<uint32_t>(ahead) < take && data + ahead < words_in_hand) {
+                const uint32_t w0 = frame[data + ahead];
+                const uint32_t body_words =
+                    (w0 >> kernel_profiler::ppfmt::LENGTH_SHIFT) & kernel_profiler::ppfmt::LENGTH_MASK;
+                const uint32_t record_end = data + ahead + 1u + body_words;
+                hi = record_end < off ? record_end : off;
+            }
+        }
+        first = lo * 4u < first ? lo * 4u : first;
+        end = hi * 4u > end ? hi * 4u : end;
+    }
+    if (end == 0) {
+        return 0;
+    }
+    return kernel_profiler::spsc_span_w0() | kernel_profiler::SPSC_SPAN_TO_EXTERNAL |
+           (first / kPageBytes) << kernel_profiler::SPSC_SPAN_ROUTED_FIRST_SHIFT |
+           (page_round(end) / kPageBytes) << kernel_profiler::SPSC_SPAN_ROUTED_END_SHIFT;
+}
+
 // pass() never blocks: every wait is a state a later pass observes, so the pump can delay host delivery but
 // never the sweep. kSpoolBytes == 0 is the direct-push build, which never calls this.
 struct SpoolPump {
@@ -165,6 +271,7 @@ struct SpoolPump {
     uint32_t notified = 0;    // bytes_sent as the host last saw it
     uint32_t acked_seen = 0;  // the downstream's bytes_acked as last read
     uint32_t level = kLevelIdle;
+    SocketSenderInterface* external = nullptr;  // the external socket while an external process is attached
     SocketSenderInterface& sender_;
     volatile tt_l1_ptr uint32_t* acked_;  // the downstream's bytes_acked word
 
@@ -273,6 +380,100 @@ struct SpoolPump {
         }
     }
 
+    // Walks bounce i's frames from walk_at, for a bounce the walk reaches into, and copies the marked ones' pieces to the
+    // external process from the bounce itself, ahead of the bounce's own push so its write-ack line covers them. Frames
+    // that drain while no external process is attached are passed over. False when the copy would pass the external
+    // notify cap with writes still unacked; the bounce then waits a pass, as it does for its own cap.
+    __attribute__((noinline)) bool ship_routed(uint32_t i) {
+        const uint32_t hi = static_cast<uint32_t>(b[i].rd_end);
+        if (external != nullptr &&
+            external->bytes_sent - external_notified + b[i].bytes > kernel_profiler::SPSC_NOTIFY_CAP_BYTES) {
+            if (!ncrisc_noc_nonposted_writes_flushed(NOC_INDEX)) {
+                return false;
+            }
+            notify_external(*external);
+        }
+        // The drain DMA wrote the bounce behind the cache.
+        invalidate_l1_cache();
+        // Spool offset x of this bounce is at L1 address base + x. Bounces and frames start on pages and every bound
+        // the walk copies to is a page, so a frame's first page is always in one bounce and every copy is whole pages.
+        const uint32_t base = kBounceBase0 + i * kBounceBytes - (hi - b[i].bytes);
+        const auto copy = [&](uint32_t from, uint32_t to) __attribute__((always_inline)) {
+            if (static_cast<int32_t>(to - from) > 0) {
+                push_fifo(*external, base + from, external->write_ptr, to - from);
+                socket_push_pages(*external, (to - from) / kPageBytes);
+            }
+        };
+        // The walk's state lives in registers for the bounce; a frame the bounce cuts off resumes from the statics.
+        uint32_t at = walk_at;
+        uint32_t end = walk_end;
+        uint32_t pending = routed_pending;
+        bool marked = walk_marked;
+        uint32_t head_end = walk_head_end;
+        uint32_t span = walk_span;
+        uint32_t span_end = walk_span_end;
+        while (pending != 0 && static_cast<int32_t>(at - hi) < 0) {
+            if (at == end) {
+                volatile tt_l1_ptr uint32_t* frame = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + at);
+                uint32_t w0 = frame[0];
+                end = at + page_round((frame[kernel_profiler::SPSC_PREFIX_PAYLOAD_WORDS] + kPrefixWords) * 4u);
+                marked = (w0 & kernel_profiler::SPSC_SPAN_TO_EXTERNAL) != 0;
+                if (__builtin_expect(!marked, 1)) {
+                    at = static_cast<int32_t>(end - hi) < 0 ? end : hi;
+                    continue;
+                }
+                // A header the bounce cuts off (its tails are on the second page) is copied as the whole frame.
+                w0 = static_cast<int32_t>(at + 2u * kPageBytes - hi) <= 0
+                         ? routed_span_w0(frame, w0, (hi - at) / 4u)
+                         : kernel_profiler::spsc_span_w0() | kernel_profiler::SPSC_SPAN_TO_EXTERNAL |
+                               ((end - at) / kPageBytes) << kernel_profiler::SPSC_SPAN_ROUTED_END_SHIFT;
+                if (w0 == 0) {
+                    // Its lanes' runs are empty: nothing to copy, but the walk still passes a marked frame.
+                    head_end = span = span_end = at;
+                    at = static_cast<int32_t>(end - hi) < 0 ? end : hi;
+                    if (at == end) {
+                        pending--;
+                    }
+                    continue;
+                }
+                frame[0] = w0;
+                staged_store_fence();
+                head_end = at + marked_head_bytes(w0);
+                span = at + ((w0 >> kernel_profiler::SPSC_SPAN_ROUTED_FIRST_SHIFT) &
+                             kernel_profiler::SPSC_SPAN_ROUTED_PAGE_MASK) * kPageBytes;
+                span_end = at + ((w0 >> kernel_profiler::SPSC_SPAN_ROUTED_END_SHIFT) &
+                                 kernel_profiler::SPSC_SPAN_ROUTED_PAGE_MASK) * kPageBytes;
+            } else if (!marked) {
+                // The rest of an unmarked frame the last bounce cut off.
+                at = static_cast<int32_t>(end - hi) < 0 ? end : hi;
+                continue;
+            }
+            const uint32_t to = static_cast<int32_t>(end - hi) < 0 ? end : hi;
+            if (external != nullptr) {
+                const auto lo = [](uint32_t a, uint32_t b) { return static_cast<int32_t>(a - b) < 0 ? a : b; };
+                const auto hi_of = [](uint32_t a, uint32_t b) { return static_cast<int32_t>(a - b) > 0 ? a : b; };
+                copy(at, lo(to, head_end));
+                copy(hi_of(at, span), lo(to, span_end));
+                if (to == end) {
+                    external_whole = external->bytes_sent;
+                    external_copied++;
+                }
+            }
+            at = to;
+            if (at == end) {
+                pending--;
+            }
+        }
+        walk_at = at;
+        walk_end = end;
+        routed_pending = pending;
+        walk_marked = marked;
+        walk_head_end = head_end;
+        walk_span = span;
+        walk_span_end = span_end;
+        return true;
+    }
+
     FORCE_INLINE void ship(bool& did) {
         const uint32_t rdy = oldest_ready();
         if (rdy != kNone) {
@@ -296,6 +497,12 @@ struct SpoolPump {
                         return;
                     }
                     notify_now();
+                }
+                if constexpr (kExternal) {
+                    if (b[rdy].off == 0 && routed_pending != 0 &&
+                        static_cast<int32_t>(walk_at - static_cast<uint32_t>(b[rdy].rd_end)) < 0 && !ship_routed(rdy)) {
+                        return;
+                    }
                 }
                 push_fifo(sender_, kBounceBase0 + rdy * kBounceBytes + b[rdy].off, sender_.write_ptr, nb);
                 socket_push_pages(sender_, nb / kPageBytes);
@@ -327,13 +534,22 @@ struct SpoolPump {
 
     __attribute__((noinline)) void pass_cold() { pass(); }
 
+    // The external socket's bytes_sent goes out with the profiler's own, under the same flush.
     __attribute__((noinline)) void notify_now() {
         notify_bytes_sent(sender_);
         notified = sender_.bytes_sent;
+        if (external_pending()) {
+            const uint32_t sent = external_sent();
+            send_bytes_sent(*external, sent);
+            external_notified = sent;
+        }
     }
+    // What the host is told the external socket has sent. Direct-push mode copies a frame whole.
+    uint32_t external_sent() const { return kSpool ? external_whole : external->bytes_sent; }
+    bool external_pending() const { return kExternal && external != nullptr && external_sent() != external_notified; }
     // At the end of a sweep; notify_if_cap adds one before a push that would exceed the cap.
     FORCE_INLINE void notify() {
-        if (sender_.bytes_sent != notified) {
+        if (sender_.bytes_sent != notified || external_pending()) {
             notify_now();
         }
     }
@@ -394,11 +610,22 @@ FORCE_INLINE void gather_read(const GatherRegs& g, bool poll, uint32_t src, uint
 }
 FORCE_INLINE uint32_t heads(uint32_t c) { return record(c) + kHeadWord * 4u; }
 
+// Waits until command buffer `buf` on the read NoC takes a new command.
+FORCE_INLINE void wait_cmd_buf(uint32_t buf) {
+    while (!noc_cmd_buf_ready(kReadNoc, buf)) {
+    }
+}
+
+// Tags the tail-refresh buffer's next reads with transaction id `id`.
+FORCE_INLINE void cv_tag(uint32_t id) {
+    wait_cmd_buf(kCvCmdBuf);
+    NOC_CMD_BUF_WRITE_REG(kReadNoc, kCvCmdBuf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(id));
+}
+
 // Counted, not barriered: in-flight gather responses also bump the counter, which can only hand the scan
 // stale-but-valid tails (tails are monotonic).
 FORCE_INLINE void cv_issue(uint32_t c) {
-    while (!noc_cmd_buf_ready(kReadNoc, kCvCmdBuf)) {
-    }
+    wait_cmd_buf(kCvCmdBuf);
     NOC_CMD_BUF_WRITE_REG(kReadNoc, kCvCmdBuf, NOC_TARG_ADDR_COORDINATE, core_coord[c]);
     NOC_CMD_BUF_WRITE_REG(kReadNoc, kCvCmdBuf, NOC_RET_ADDR_LO, record(c));
     NOC_CMD_BUF_WRITE_REG(kReadNoc, kCvCmdBuf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
@@ -412,7 +639,7 @@ FORCE_INLINE void cv_issue(uint32_t lo, uint32_t hi) {
 
 // Lands every control read issued under transaction id `id`: 0 for tail refreshes and the seed, kProbeTxn for probes.
 FORCE_INLINE void cv_wait(uint32_t id) {
-    while (NOC_STATUS_READ_REG(kReadNoc, NIU_MST_REQS_OUTSTANDING_ID(id)) != 0) {
+    while (!ncrisc_noc_read_with_transaction_id_flushed(kReadNoc, id)) {
     }
     invalidate_l1_cache();
 }
@@ -435,8 +662,7 @@ FORCE_INLINE uint32_t frame_bytes(uint32_t slot) {
 // instruction of it lands in the lane walk.
 FORCE_INLINE void self_read_batch(const uint8_t* cores, uint32_t n, uint32_t slot) {
     for (uint32_t i = 0; i < n; i++) {
-        while (!noc_cmd_buf_ready(kReadNoc, kSelfCmdBuf)) {
-        }
+        wait_cmd_buf(kSelfCmdBuf);
         NOC_CMD_BUF_WRITE_REG(kReadNoc, kSelfCmdBuf, NOC_TARG_ADDR_LO, record(cores[i]));
         NOC_CMD_BUF_WRITE_REG(kReadNoc, kSelfCmdBuf, NOC_RET_ADDR_LO, slot + kPrefixWords * 4u);
         NOC_CMD_BUF_WRITE_REG(kReadNoc, kSelfCmdBuf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
@@ -446,10 +672,19 @@ FORCE_INLINE void self_read_batch(const uint8_t* cores, uint32_t n, uint32_t slo
 
 // Gather-read each live run straight to its packed wire offset; the pads keep read src == dst (mod 16 B) for
 // every piece, wrap continuations included. Returns the smallest per-core peak lane take.
-__attribute__((noinline)) uint32_t issue_batch(const uint8_t* cores, uint32_t n, uint32_t slot, uint32_t rb) {
+// Each core's SPSC_ROUTED_AT_0 halfwords as the relay last marked them: per RISC, the newest routed record whose frame
+// it has marked. A halfword that differs is a routed record still to mark. Ring positions move far less than 2^15
+// between two of the relay's reads, so 16 bits order them. Rows are four words so a core indexes them with a shift.
+static uint32_t routed_last[kMaxCores][4];
+// Nonzero when a core of the batch issue_batch just issued has routed halfwords that differ from routed_last.
+static uint32_t routed_changed;
+
+__attribute__((noinline)) uint32_t issue_batch(const uint8_t* cores, uint32_t n, uint32_t gen, uint32_t rb) {
+    uint32_t slot = kGenBase[gen];
     uint32_t min_peak = ~0u;
     const uint8_t* end = cores + n;
     const GatherRegs g = gather_regs();
+    uint32_t changed = 0;
     do {
         const uint32_t c = *cores++;
         // The head advance hides behind the NIU's acceptance of the same lane's read; nothing reads the record
@@ -490,6 +725,13 @@ __attribute__((noinline)) uint32_t issue_batch(const uint8_t* cores, uint32_t n,
                 });
         }
         frame[kernel_profiler::SPSC_PREFIX_XY] = rec[kXyWord];
+        if constexpr (kExternal) {
+            // mark_routed overwrites it for a frame it marks.
+            frame[0] = kernel_profiler::spsc_span_w0();
+            const uint32_t* last = routed_last[c];
+            changed |= (rec[kRoutedAtWord] ^ last[0]) | (rec[kRoutedAtWord + 1] ^ last[1]) |
+                       (rec[kRoutedAtWord + 2] ^ last[2]);
+        }
         // frame[0] is staged once at init; only the payload word varies.
         frame[kernel_profiler::SPSC_PREFIX_PAYLOAD_WORDS] = off - kPrefixWords;
         rec[kPeakWord] = peak;
@@ -498,19 +740,20 @@ __attribute__((noinline)) uint32_t issue_batch(const uint8_t* cores, uint32_t n,
         }
         slot += kSlotBytes;
     } while (cores != end);
+    if constexpr (kExternal) {
+        routed_changed = changed;
+    }
     return min_peak;
 }
 
 static FORCE_INLINE void program_command_buffers(uint32_t cv_src) {
     // Gathers carry transaction id kGatherTxn, tail refreshes id 0 and probes kProbeTxn: the NIU's outstanding count
     // per id lets each wait cover exactly the reads it consumes.
-    while (!noc_cmd_buf_ready(kReadNoc, read_cmd_buf)) {
-    }
+    wait_cmd_buf(read_cmd_buf);
     NOC_CMD_BUF_WRITE_REG(kReadNoc, read_cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(kGatherTxn));
     // Worker L1 addresses fit 32 bits, so the address-mid word is zero and set_state is the coordinate alone.
     NOC_CMD_BUF_WRITE_REG(kReadNoc, read_cmd_buf, NOC_TARG_ADDR_MID, 0);
-    while (!noc_cmd_buf_ready(kReadNoc, kCvCmdBuf)) {
-    }
+    wait_cmd_buf(kCvCmdBuf);
     noc_read_init_state<kCvCmdBuf>(kReadNoc);
     NOC_CMD_BUF_WRITE_REG(kReadNoc, kCvCmdBuf, NOC_PACKET_TAG, 0);
     NOC_CMD_BUF_WRITE_REG(kReadNoc, kCvCmdBuf, NOC_TARG_ADDR_LO, cv_src + kCvReadSrcOff);
@@ -524,8 +767,7 @@ static FORCE_INLINE void program_command_buffers(uint32_t cv_src) {
     NOC_CMD_BUF_WRITE_REG(kReadNoc, kCvCmdBuf, NOC_AT_LEN_BE, kCvReadBytes);
     // Loopback reads of this core's own records: the return coordinate the gathers use is this core, and in stream
     // mode a plain local address reaches DRISC L1 (drisc_mode.h).
-    while (!noc_cmd_buf_ready(kReadNoc, kSelfCmdBuf)) {
-    }
+    wait_cmd_buf(kSelfCmdBuf);
     noc_read_init_state<kSelfCmdBuf>(kReadNoc);
     NOC_CMD_BUF_WRITE_REG(kReadNoc, kSelfCmdBuf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(kGatherTxn));
     NOC_CMD_BUF_WRITE_REG(kReadNoc, kSelfCmdBuf, NOC_TARG_ADDR_MID, 0);
@@ -535,9 +777,8 @@ static FORCE_INLINE void program_command_buffers(uint32_t cv_src) {
         NOC_CMD_BUF_WRITE_REG(kReadNoc, kSelfCmdBuf, NOC_TARG_ADDR_COORDINATE, self);
         NOC_CMD_BUF_WRITE_REG(kReadNoc, kSelfCmdBuf, NOC_RET_ADDR_COORDINATE, self);
     }
-    NOC_CMD_BUF_WRITE_REG(kReadNoc, kSelfCmdBuf, NOC_AT_LEN_BE, kCvReadBytes);
-    while (!noc_cmd_buf_ready(kReadNoc, kHeadCmdBuf)) {
-    }
+    NOC_CMD_BUF_WRITE_REG(kReadNoc, kSelfCmdBuf, NOC_AT_LEN_BE, kCtrlBlockBytes);
+    wait_cmd_buf(kHeadCmdBuf);
     noc_write_init_state<kHeadCmdBuf, CQ_NOC_mkP>(kReadNoc, NOC_UNICAST_WRITE_VC);
     NOC_CMD_BUF_WRITE_REG(kReadNoc, kHeadCmdBuf, NOC_RET_ADDR_LO, cv_src + kernel_profiler::SPSC_RING_HEAD_0 * 4u);
     NOC_CMD_BUF_WRITE_REG(kReadNoc, kHeadCmdBuf, NOC_RET_ADDR_MID, 0);
@@ -587,6 +828,9 @@ static FORCE_INLINE void finish(SpoolPump& pump, SocketSenderInterface& sender) 
         }
     }
     pump.notify();
+    if constexpr (kExternal) {
+        relay_ctrl()->external.copied = external_copied;
+    }
     relay_ctrl()->done = kernel_profiler::kResidentAwaitingAcksWord;
     socket_barrier(sender);
     while (!ncrisc_noc_nonposted_writes_flushed(NOC_INDEX)) {
@@ -600,6 +844,102 @@ static FORCE_INLINE void finish(SpoolPump& pump, SocketSenderInterface& sender) 
     noc_async_write_clear_pcie_state(NOC_INDEX, write_cmd_buf);
     // After the socket barrier, so the host only sees `done` once every page is out.
     relay_ctrl()->done = kernel_profiler::kResidentDoneWord;
+}
+
+// Per generation, the slots mark_routed marked, bit i for slot i, for their emit.
+static uint8_t routed_marked[kNGens];
+
+// Marks each frame of the slots in `changed` (bit i for slot i) of the batch just gathered that holds a routed record the
+// relay hasn't marked yet: word 0 gets the lanes holding them, whose runs the pump finds after the spool. A record at or
+// past its lane's tail isn't in this frame yet and leaves its halfword unmarked, so the core's next frame is marked for
+// it. With no external process attached, the routed halfwords are taken as marked. The
+// routed halfwords come from the core's record, which a deferred tail refresh may already have moved past the frame; the
+// tails come from the record too, unless `refreshed` says the batch's own refresh was deferred, when they come from the
+// frame's control block. Returns the marked slots.
+__attribute__((noinline)) static uint32_t mark_routed(
+    bool attached, const uint8_t* cores, uint32_t changed, uint32_t gen, bool refreshed) {
+    uint32_t marked = 0;
+    static_assert(kGenSlots == 2, "a slot address is a select between two");
+    for (uint32_t i = 0; changed != 0; i++, changed >>= 1) {
+        if ((changed & 1u) == 0) {
+            continue;
+        }
+        const uint32_t c = cores[i];
+        const volatile tt_l1_ptr uint32_t* rec = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(record(c));
+        uint32_t* last = routed_last[c];
+        const uint32_t now0 = rec[kRoutedAtWord], now1 = rec[kRoutedAtWord + 1], now2 = rec[kRoutedAtWord + 2];
+        if (!attached) {
+            last[0] = now0;
+            last[1] = now1;
+            last[2] = now2;
+            continue;
+        }
+        volatile tt_l1_ptr uint32_t* frame =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kGenBase[gen] + (i == 0 ? 0u : kSlotBytes));
+        const volatile tt_l1_ptr uint32_t* tails = rec + kTailWord;
+        if (refreshed) {
+            // The loopback read wrote the frame's control block behind the cache.
+            invalidate_l1_cache();
+            tails = frame + kPrefixWords + kernel_profiler::SPSC_WIRE_TAIL_0;
+        }
+        // Lane r is halfword r % 2 of word r / 2. A moved halfword whose record is in this frame is marked; one at or past
+        // its lane's tail waits for the core's next frame.
+        uint32_t last0 = last[0], last1 = last[1], last2 = last[2];
+        uint32_t moved = 0;
+        const auto lane = [&](uint32_t r, uint32_t now, uint32_t& last_word) __attribute__((always_inline)) {
+            const uint32_t shift = 16u * (r % 2u);
+            const auto newest = static_cast<uint16_t>(now >> shift);
+            if (newest == static_cast<uint16_t>(last_word >> shift)) {
+                return;
+            }
+            moved |= 1u << r;
+            if (static_cast<int16_t>(newest - static_cast<uint16_t>(tails[r])) < 0) {
+                last_word = (last_word & ~(0xFFFFu << shift)) | uint32_t{newest} << shift;
+            }
+        };
+        lane(0, now0, last0);
+        lane(1, now0, last0);
+        lane(2, now1, last1);
+        lane(3, now1, last1);
+        lane(4, now2, last2);
+        last[0] = last0;
+        last[1] = last1;
+        last[2] = last2;
+        if (moved != 0) {
+            frame[0] = kernel_profiler::spsc_span_w0() | kernel_profiler::SPSC_SPAN_TO_EXTERNAL | moved << kRoutedLaneShift;
+            marked |= 1u << i;
+        }
+    }
+    return marked;
+}
+
+// In direct-push mode, copies a marked frame's pieces to the external process from staging, where retire_gen keeps
+// them until they have left.
+__attribute__((noinline)) static void push_marked(SocketSenderInterface& external, uint32_t slot) {
+    volatile tt_l1_ptr uint32_t* frame = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot);
+    // The loopback read wrote the frame's control block behind the cache.
+    invalidate_l1_cache();
+    const uint32_t w0 = routed_span_w0(frame, frame[0], kSlotWords);
+    if (w0 == 0) {
+        return;
+    }
+    frame[0] = w0;
+    staged_store_fence();
+    const uint32_t head = marked_head_bytes(w0);
+    const uint32_t first =
+        ((w0 >> kernel_profiler::SPSC_SPAN_ROUTED_FIRST_SHIFT) & kernel_profiler::SPSC_SPAN_ROUTED_PAGE_MASK) *
+        kPageBytes;
+    const uint32_t end =
+        ((w0 >> kernel_profiler::SPSC_SPAN_ROUTED_END_SHIFT) & kernel_profiler::SPSC_SPAN_ROUTED_PAGE_MASK) *
+        kPageBytes;
+    const uint32_t bytes = head + end - first;
+    if (external.bytes_sent - external_notified + bytes > kernel_profiler::SPSC_NOTIFY_CAP_BYTES) {
+        notify_external(external);
+    }
+    push_fifo(external, slot, external.write_ptr, head);
+    push_fifo(external, slot + first, external.write_ptr + head, end - first);
+    socket_push_pages(external, bytes / kPageBytes);
+    external_copied++;
 }
 
 // Every core is on exactly one list. The ship list persists across sweeps and is gathered in order off the
@@ -691,7 +1031,12 @@ __attribute__((noinline)) static void demote() {
 
 // A staged slot is its frame's wire image, so a frame is one write or one DMA; the trailing page fill is
 // never written, the host reads past it.
-static FORCE_INLINE void emit_slots(SpoolPump& pump, SocketSenderInterface& sender, uint32_t base, uint32_t count) {
+static FORCE_INLINE void emit_slots(SpoolPump& pump, SocketSenderInterface& sender, uint32_t gen, uint32_t count) {
+    const uint32_t base = kGenBase[gen];
+    uint32_t marked = 0;
+    if constexpr (kExternal) {
+        marked = routed_marked[gen];
+    }
     // Frames occupy whole pages on the wire, so the FIFO write pointer and the spool offset advance in lockstep.
     const uint32_t raw0 = frame_bytes(base);
     const uint32_t len0 = page_round(raw0);
@@ -708,6 +1053,14 @@ static FORCE_INLINE void emit_slots(SpoolPump& pump, SocketSenderInterface& send
             pump.pass_cold();
         }
         staged_store_fence();
+        if constexpr (kExternal) {
+            if (marked & 1u) {
+                note_routed(static_cast<uint32_t>(pump.wr));
+            }
+            if (marked & 2u) {
+                note_routed(static_cast<uint32_t>(pump.wr) + len0);
+            }
+        }
         // A full-span frame fills its slot exactly, so it and a full neighbour are wire-contiguous and ship as one
         // DMA.
         if (len1 != 0 && len0 != kSlotBytes) {
@@ -734,6 +1087,16 @@ static FORCE_INLINE void emit_slots(SpoolPump& pump, SocketSenderInterface& send
             push_fifo(sender, base + kSlotBytes, sender.write_ptr + len0, raw1);
         }
         socket_push_pages(sender, bytes / kPageBytes);
+        if constexpr (kExternal) {
+            if (marked != 0 && pump.external != nullptr) {
+                if (marked & 1u) {
+                    push_marked(*pump.external, base);
+                }
+                if (marked & 2u) {
+                    push_marked(*pump.external, base + kSlotBytes);
+                }
+            }
+        }
     }
 }
 
@@ -755,6 +1118,15 @@ void kernel_main() {
 
     SocketSenderInterface sender = create_sender_socket_interface(kSocketConfigAddr);
     set_sender_socket_page_size(sender, kPageBytes);
+    // The external socket's config is the host's to write while the relay runs: it follows relay_ctrl()->external.
+    SocketSenderInterface external{};
+    uint32_t external_attach = 0;
+    if constexpr (kExternal) {
+        external_copied = 0;
+        routed_marked[0] = routed_marked[1] = 0;
+        routed_pending = 0;
+        relay_ctrl()->external.attached = 0;
+    }
 
     volatile tt_l1_ptr uint32_t* stop = &relay_ctrl()->stop;
     // The host's launch check polls this; a DRISC that never leaves reset would otherwise wedge every producer
@@ -772,6 +1144,15 @@ void kernel_main() {
         deferred[i] = 0;
     }
     seed_heads(num_cores, coords, tails_seen);
+    if constexpr (kExternal) {
+        // The routed positions the cores show at launch predate the capture.
+        for (uint32_t c = 0; c < num_cores; c++) {
+            const volatile tt_l1_ptr uint32_t* rec = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(record(c));
+            for (uint32_t k = 0; k < kRoutedAtWords; k++) {
+                routed_last[c][k] = rec[kRoutedAtWord + k];
+            }
+        }
+    }
 
     uint32_t relieved = 0;
     uint32_t sweeps = 0;
@@ -798,6 +1179,25 @@ void kernel_main() {
         }
         sweeps++;
         *heartbeat = sweeps;
+        if constexpr (kExternal) {
+            const uint32_t attach = relay_ctrl()->external.attach;
+            if (attach != external_attach) {
+                // Every copy has landed before the external process may free the buffer it went to.
+                while (!ncrisc_noc_nonposted_writes_flushed(NOC_INDEX)) {
+                }
+                if (attach != 0) {
+                    external = create_sender_socket_interface(kExternalConfigAddr);
+                    set_sender_socket_page_size(external, kPageBytes);
+                    external_notified = 0;
+                    external_whole = 0;
+                }
+                // The walk restarts at the next frame marked, so a ring never starts partway through a frame.
+                routed_pending = 0;
+                external_attach = attach;
+                pump.external = attach != 0 ? &external : nullptr;
+                relay_ctrl()->external.attached = attach;
+            }
+        }
         const uint32_t relieved_at_sweep_start = relieved;
 
         sweep_live = false;
@@ -845,15 +1245,11 @@ void kernel_main() {
         // waited for after the loop.
         bool probe_pending = n_probe != 0;
         if (probe_pending) {
-            while (!noc_cmd_buf_ready(kReadNoc, kCvCmdBuf)) {
-            }
-            NOC_CMD_BUF_WRITE_REG(kReadNoc, kCvCmdBuf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(kProbeTxn));
+            cv_tag(kProbeTxn);
             for (uint32_t i = 0; i < n_probe; i++) {
                 cv_issue(probe_list[i]);
             }
-            while (!noc_cmd_buf_ready(kReadNoc, kCvCmdBuf)) {
-            }
-            NOC_CMD_BUF_WRITE_REG(kReadNoc, kCvCmdBuf, NOC_PACKET_TAG, 0);
+            cv_tag(0);
         }
 
         // One ship site: the last batch leaves through the same code, on the pass that finds nothing to issue. The
@@ -874,7 +1270,7 @@ void kernel_main() {
                     cv_wait(0);
                     retire_gen(gen);
                     n = (n_end - cur) < kGenSlots ? (n_end - cur) : kGenSlots;
-                    const uint32_t pk = issue_batch(&ship_list[cur], n, kGenBase[gen], ring_base);
+                    const uint32_t pk = issue_batch(&ship_list[cur], n, gen, ring_base);
                     if (pk < demote_below) {
                         note_demotions(&ship_list[cur], n, cur, demote_below);
                     }
@@ -903,7 +1299,7 @@ void kernel_main() {
 
                 if (pend_n != 0) {
                     const uint32_t pend_gen = gen ^ 1u;
-                    emit_slots(pump, sender, kGenBase[pend_gen], pend_n);
+                    emit_slots(pump, sender, pend_gen, pend_n);
                     if constexpr (kSpool) {
                         gen_dma_mark[pend_gen] = pump.dma_issued;
                     }
@@ -923,7 +1319,7 @@ void kernel_main() {
                 // Hardware-counted read barrier on the gathers' transaction id. The spin doubles as the pump's slot
                 // only at full pressure, where the pump's GDDR reads no longer contend with the gathers. The heads are
                 // NIU-sourced from L1, so no cache invalidate is needed before posting them.
-                while (NOC_STATUS_READ_REG(kReadNoc, NIU_MST_REQS_OUTSTANDING_ID(kGatherTxn)) != 0) {
+                while (!ncrisc_noc_read_with_transaction_id_flushed(kReadNoc, kGatherTxn)) {
                     if constexpr (kSpool) {
                         // Inline level means occupancy is over the 5/8 line, so nonempty holds.
                         if (pump.level >= SpoolPump::kLevelInline) {
@@ -935,6 +1331,12 @@ void kernel_main() {
                     cv_issue(ship_list[defer_ri + i]);
                 }
                 advance_heads(n, &ship_list[cur - n]);
+                if constexpr (kExternal) {
+                    routed_marked[gen] =
+                        routed_changed == 0
+                            ? 0u
+                            : mark_routed(external_attach != 0, &ship_list[cur - n], (1u << n) - 1u, gen, defer_nn != 0);
+                }
 
                 pend_n = n;
                 gen ^= 1u;

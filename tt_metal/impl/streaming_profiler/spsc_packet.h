@@ -30,7 +30,10 @@
 
 #define PP_LENGTH_SHIFT 20u
 #define PP_LENGTH_MASK 0x7Fu /* [26:20] */
-#define PP_ID_MASK 0xFFFFu   /* [15:0] is the call site's id. [19:16] are zero. */
+#define PP_ID_MASK 0xFFFFu   /* [15:0] is the call site's id. [16] is its destination, [19:17] zero. */
+/* A record's destination bit, which its call site fixes: the relays copy a record with PP_TO_EXTERNAL to the
+   external process too. */
+#define PP_TO_EXTERNAL (1u << 16)
 
 // BULK_SPAN: the identity-free whole-core frame, carrying the worker's own control vector so nothing on the wire
 // can disagree with the worker. Layout in hostdev/streaming_profiler_common.h (SPSC_SPAN_*), which this plain-C

@@ -269,7 +269,8 @@ private:
         for (uint32_t index = 0; index < sources.size(); index++) {
             const ReceiverStream& source = sources[index];
             attached->streams.push_back(AttachedStream{
-                .decoder = StreamDecoder(ctx.devices[source.dev], batches_.routes()),
+                .decoder =
+                    StreamDecoder(ctx.devices[source.dev], batches_.routes(), &receiver->clock_map(), source.dev),
                 .cursor = source.walked->load(std::memory_order_acquire),
                 .dev = source.dev,
                 .index = index});
