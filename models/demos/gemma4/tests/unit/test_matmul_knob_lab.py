@@ -12,8 +12,9 @@ replays per batch, ``GEMMA4_LAB_BATCHES`` batches; the median of the batch means
 at ``GEMMA4_LAB_DRAM_GBPS`` = 512 GB/s per P150, ratio) and one ``RESULT best ...`` line per shape.
 
 Boundary layouts (what the fused ops around the matmul produce / consume) are parameters:
-``GEMMA4_LAB_ACT`` = ``dram`` (DRAM interleaved, today's), ``l1`` (L1 interleaved) or ``ws[:<cores>]`` (L1
-width-sharded over the first <cores> worker cores; default the DRAM-sharded decode grid); ``GEMMA4_LAB_OUT`` =
+``GEMMA4_LAB_ACT`` = ``dram`` (DRAM interleaved, today's), ``l1`` (L1 interleaved), ``ws`` (the DRAM-sharded decode
+kernel's own activation layout, ``activation_memcfg(k, n)``: the rows x cols rectangle the fused norm / concat heads
+/ GeGLU producers target) or ``ws:<cores>`` (L1 width-sharded over the first <cores> worker cores); ``GEMMA4_LAB_OUT`` =
 ``dram`` / ``l1`` / ``ws`` (the matmul's L1 width-sharded output stays sharded); ``GEMMA4_LAB_IN1`` = ``both`` /
 ``il`` / ``ws`` (the DRAM-sharded kernel family needs the width-sharded weight, the 1D-multicast family the
 interleaved one). The layouts apply to every candidate, the baseline included.
@@ -539,12 +540,17 @@ class ShapeLab:
         )
 
     def _act_layout(self):
+        """``(kind, cores)``: ``ws`` without a count is the DRAM-sharded decode kernel's own activation layout
+        (``activation_memcfg(k, n)``: the rows x cols rectangle of ``_decode_core_grid``, cols <= 8, from (0, 0),
+        what the fused norm / concat heads / GeGLU producers target); ``ws:<cores>`` the first <cores> worker cores
+        row-major (``self.act_explicit``)."""
+        self.act_explicit = False
         if ACT.startswith("ws"):
-            cores = (
-                int(ACT.split(":")[1])
-                if ":" in ACT
-                else (self.ds_cores or _largest_divisor(self.kt, self.grid.x * self.grid.y))
-            )
+            if ":" in ACT:
+                self.act_explicit = True
+                cores = int(ACT.split(":")[1])
+            else:
+                cores = self.ds_cores or _largest_divisor(self.kt, self.grid.x * self.grid.y)
             if cores > self.grid.x * self.grid.y or self.kt % cores:
                 raise ValueError(
                     f"GEMMA4_LAB_ACT={ACT}: {cores} shards of {self.kt} K tiles on a {self.grid.x}x{self.grid.y} grid"
@@ -603,12 +609,15 @@ class ShapeLab:
         elif self.act_kind == "l1":
             self.x_act = ttnn.to_memory_config(self.x_dev, ttnn.L1_MEMORY_CONFIG)
             self.persistent.append(self.x_act)
+        elif self.ds_able and not self.act_explicit:
+            self.x_act = ttnn.to_memory_config(self.x32, self.ds_act_mc)  # the kernel's own grid: no reshard-in
+            self.persistent.append(self.x_act)
         else:
             self.x_act = ttnn.to_memory_config(self.x32, _width_sharded_memcfg(self.k, self.act_cores, self.grid))
             self.persistent.append(self.x_act)
         self.x_ds = None
         if self.ds_able:
-            if self.act_kind == "ws" and self.act_cores == self.ds_cores:
+            if self.act_kind == "ws" and self.x_act.memory_config() == self.ds_act_mc:
                 self.x_ds = self.x_act
             else:
                 self.x_ds = ttnn.to_memory_config(self.x32, self.ds_act_mc)
