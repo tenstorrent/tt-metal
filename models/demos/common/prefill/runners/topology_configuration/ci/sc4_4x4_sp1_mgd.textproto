@@ -78,4 +78,34 @@ graph_descriptors {
   }
 }
 
+# --- Pinnings ---------------------------------------------------------------
+# D2D pairs the two halves by mesh coordinate, so the bottom half is mirrored: TP row t on physical
+# row 7-t, which puts each top/bottom pair 1, 3, 1, 1 hops apart instead of 4, 2, 2, 4. The mapper
+# does not take that from TT_VISIBLE_DEVICES order; pinning mesh chips 0 and 1 (row 0, cols 0 and
+# 1) fixes both axes, since row 0 must sit on an end row of the half. Rev C only: on Rev A/B the
+# bottom half is trays 2 and 4. Positions from assemble_pipeline_binding.py predict, which derives
+# them per host from the cabling and checks that all SC4 hosts agree.
+# top halves: row 0 on physical row 0 (tray 1)
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "0,2,4,6" chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 1 }
+  board_revision: BH_REV_C
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "0,2,4,6" chip_id: 1 }
+  physical_asic_position { tray_id: 1 asic_location: 5 }
+  board_revision: BH_REV_C
+}
+# bottom halves: row 0 on physical row 7 (tray 3)
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "1,3,5,7" chip_id: 0 }
+  physical_asic_position { tray_id: 3 asic_location: 1 }
+  board_revision: BH_REV_C
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "1,3,5,7" chip_id: 1 }
+  physical_asic_position { tray_id: 3 asic_location: 5 }
+  board_revision: BH_REV_C
+}
+
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
