@@ -33,7 +33,7 @@ extern overlay::RemapperAPI g_remapper_configurator;
 #endif
 
 #if defined(COMPILE_FOR_TRISC)
-// Compute-thread slot (pack and unpack). ring_size is uint32 L1-aligned units so a DFB can span
+// Compute-thread slot (pack, unpack and TRISC3). ring_size is uint32 L1-aligned units so a DFB can span
 // full Quasar L1 (~4 MB). cursor_entry_idx is the write cursor on pack and the read cursor on
 // unpack; its byte offset is not stored but derived (advances in lockstep with stride_size /
 // stride_size_tiles).
@@ -81,13 +81,12 @@ struct LocalDFBInterface {
     uint8_t stride_size_tiles;
     uint8_t num_tcs_to_rr;
     uint8_t tc_idx;
-    uint8_t tensix_trisc_mask;
     uint16_t block_size;  // entries in one block; 1 unless the ring is BLOCKED
     uint16_t split_tc;    // one op (a whole block) is split across all of this hart's TCs
     uint16_t jump;        // cursor jump in entries, taken on each TC rotation
     DFBTCSlotSpan tc_slots;
 } __attribute__((packed));
-static_assert(sizeof(LocalDFBInterface) == 19, "LocalDFBInterface (pack TRISC) size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 18, "LocalDFBInterface (pack TRISC) size is incorrect");
 #elif defined(COMPILE_FOR_TRISC)
 struct LocalDFBInterface {
     uint16_t entry_size;
@@ -102,7 +101,7 @@ struct LocalDFBInterface {
     uint16_t jump;
     DFBTCSlotSpan tc_slots;
 } __attribute__((packed));
-static_assert(sizeof(LocalDFBInterface) == 17, "LocalDFBInterface (unpack TRISC) size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 17, "LocalDFBInterface (unpack TRISC / TRISC3) size is incorrect");
 #else
 struct LocalDFBInterface {
     uint32_t entry_size;

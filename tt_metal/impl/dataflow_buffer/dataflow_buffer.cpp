@@ -2461,15 +2461,12 @@ void ProgramImpl::finalize_single_dfb_config(
     // has_tensix_risc checks bits 8-11 (zero on Gen1 masks).
     //  - producer compute -> set trisc2 (bit 2)
     //  - consumer compute -> set trisc0 (bit 0)
-    //  - compute_endpoint_on_trisc3 -> set trisc3 (bit 3) instead of either
+    // TODO: if/when consumer-compute can target trisc3 instead of trisc0, that
+    // selection would need a dedicated DataflowBufferConfig field.
+    dfb->tensix_trisc_mask = (has_tensix_risc(config.producer_risc_mask) ? (1u << 2) : 0u) |
+                             (has_tensix_risc(config.consumer_risc_mask) ? (1u << 0) : 0u);
+
     const bool is_intra_tensix = config.tensix_scope.has_value() && *config.tensix_scope == TensixScope::INTRA;
-    TT_FATAL(
-        !(config.compute_endpoint_on_trisc3 && is_intra_tensix),
-        "compute_endpoint_on_trisc3 is not supported for an intra-Tensix DFB");
-    const uint8_t producer_trisc_bit = config.compute_endpoint_on_trisc3 ? (1u << 3) : (1u << 2);
-    const uint8_t consumer_trisc_bit = config.compute_endpoint_on_trisc3 ? (1u << 3) : (1u << 0);
-    dfb->tensix_trisc_mask = (has_tensix_risc(config.producer_risc_mask) ? producer_trisc_bit : 0u) |
-                             (has_tensix_risc(config.consumer_risc_mask) ? consumer_trisc_bit : 0u);
 
     // Intra-tensix: producer and consumer share the same Neo bit — overlap is intentional.
     if (!is_intra_tensix) {
