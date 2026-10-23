@@ -95,21 +95,16 @@ void kernel_main() {
             read_tile_block_transposed(cb_key, key_address_generator, key_start_idx, Sk_chunk_t, qWt, tile_bytes);
 
 #ifdef USE_ATTN_MASK
-            // Arbitrary mask: Sq_chunk_t x Sk_chunk_t tiles of this step, row-major.
-            {
-                constexpr uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
-                cb_reserve_back(cb_attn_mask, mask_tiles);
-                uint32_t l1_addr = get_write_ptr(cb_attn_mask);
-                for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-                    uint32_t src_tile_id = (first_row_tile + r) * Ht + h_start;
-                    for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
-                        noc_async_read_page(src_tile_id, mask_address_generator, l1_addr);
-                        src_tile_id += 1U;
-                        l1_addr += tile_bytes;
-                    }
-                }
-                noc_async_read_barrier();
-                cb_push_back(cb_attn_mask, mask_tiles);
+            // Arbitrary mask: Sq_chunk_t x Sk_chunk_t tiles of this step, row-major; the mask is
+            // (1, 1, S, S), so a row's Sk_chunk_t tiles are contiguous.
+            for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                read_tiles_by_row(
+                    cb_attn_mask,
+                    mask_address_generator,
+                    (first_row_tile + r) * Ht + h_start,
+                    Sk_chunk_t,
+                    tile_bytes,
+                    Sk_chunk_t);
             }
 #endif
             // Note: For CAUSAL_MASK, the two reusable mask tiles are generated once by the writer.
