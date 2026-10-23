@@ -1260,6 +1260,15 @@ class TtCsaIndexer(TtIndexerBase):
         self.tp_shard_kv = False
         self.default_compute_kernel_config = default_compute_kernel_config
         self.hifi4_fp32_compute_kernel_config = hifi4_fp32_compute_kernel_config
+        # indexer_score defaults to LoFi when q and k are both bfp8; HiFi2 recovers its accuracy (HiFi4 adds
+        # nothing measurable). The op runs bf16 DEST only.
+        self._score_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
         self.weight_cache_path = weight_cache_path
         self.layer_idx = layer_idx
         self.layer_num = layer_num
@@ -1390,20 +1399,22 @@ class TtCsaIndexer(TtIndexerBase):
         """Compressed-entry capacity, as opposed to the token counts accepted by forward."""
         return self.seq_len
 
+    # The stems below accumulate in fp32: their outputs are ranked by top-k, and bf16 accumulation is
+    # enough error to swap entries at the selection boundary.
     def _apply_index_hadamard(self, tensor: ttnn.Tensor, *, dtype) -> ttnn.Tensor:
         return ttnn.matmul(
             tensor,
             self._index_hadamard,
             dtype=dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.default_compute_kernel_config,
+            compute_kernel_config=self.hifi4_fp32_compute_kernel_config,
         )
 
     def _q_stem(self, qr: ttnn.Tensor) -> ttnn.Tensor:
         q = ttnn.linear(
             qr,
             self._idx_wq_b,
-            compute_kernel_config=self.default_compute_kernel_config,
+            compute_kernel_config=self.hifi4_fp32_compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
         )
@@ -1420,7 +1431,7 @@ class TtCsaIndexer(TtIndexerBase):
         weights = ttnn.linear(
             hidden_states,
             self._idx_wproj,
-            compute_kernel_config=self.default_compute_kernel_config,
+            compute_kernel_config=self.hifi4_fp32_compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return self._tp_reduce_scatter_sequence(weights)
@@ -1531,6 +1542,7 @@ class TtCsaIndexer(TtIndexerBase):
             block_cyclic_chunk_local=seq_len,
             kv_len=valid_keys,
             key_compression_ratio=self.compress_rate,
+            compute_kernel_config=self._score_compute_kernel_config,
         )
         idx = ttnn.experimental.topk_large_indices(logits, k=self.index_topk_capacity, valid_length=valid_keys)
         if self.tp_factor > 1:

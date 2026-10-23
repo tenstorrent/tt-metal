@@ -93,6 +93,7 @@ class TtV4AttentionBase(LightweightModule):
         self._sinks_sparse = None
 
         self.wq_a = self.ops.to_tt_linear_weight(q_a_proj_weight, tp_shard_dim=2)
+        self.q_lora_compute_kernel_config = None  # ttnn.linear's default; TtCSA overrides it
         self.wq_b = self.ops.to_tt_linear_weight(q_b_proj_weight, tp_shard_dim=3)
         self.q_a_norm_weight = self.ops.from_torch(q_a_norm_weight.detach().reshape(1, 1, 1, -1))
         self.q_b_norm_weight = self.ops.from_torch(torch.ones(1, 1, 1, self.head_dim))
@@ -239,7 +240,12 @@ class TtV4AttentionBase(LightweightModule):
         if len(input_shape) != 4 or input_shape[1] != 1:
             raise ValueError(f"Expected hidden_states shape [B, 1, S, hidden], got {input_shape}")
 
-        q = ttnn.linear(hidden_states, self.wq_a, memory_config=self.memory_config)
+        q = ttnn.linear(
+            hidden_states,
+            self.wq_a,
+            memory_config=self.memory_config,
+            compute_kernel_config=self.q_lora_compute_kernel_config,
+        )
 
         # Row-parallel -> partial sums; all-reduce rebuilds the full q_lora, replicated across TP.
         if self.tp_factor > 1:

@@ -83,8 +83,10 @@ void kernel_main() {
             add_tiles_bcast_rows(candidate_score_cb, bias_cb, candidate, 0, kWeight, candidate & 3);
             sub_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_max);
             sub_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_max, 0, kWeight);
-            exp_tile_init<true>();
-            exp_tile<true>(kWeight);
+            // Exact exp: the approximate one leaves ~2% relative error in the pooled rows, which the
+            // indexer's top-k turns into swapped selections.
+            exp_tile_init<false>();
+            exp_tile<false>(kWeight);
 
             if (candidate == 0) {
                 copy_dest_values_init();

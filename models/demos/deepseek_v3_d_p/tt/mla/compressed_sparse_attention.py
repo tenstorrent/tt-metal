@@ -135,6 +135,8 @@ class TtCSA(TtV4AttentionBase):
 
     def __init__(self, device, *, indexer_reference, indexer_settings, **kwargs):
         super().__init__(device, **kwargs)
+        # q_lora is the indexer's q_residual, so it gets fp32 accumulation like the indexer's own stems.
+        self.q_lora_compute_kernel_config = _compute_kernel_config(device, fp32=True)
         # The indexer is sized by max_seq_len and the slab width, which only alloc_state knows, so it is
         # built there; these hold what it needs until then.
         self._indexer_reference = indexer_reference

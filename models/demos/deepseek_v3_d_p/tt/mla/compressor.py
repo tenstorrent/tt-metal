@@ -238,6 +238,8 @@ class TtCompressorBase(LightweightModule):
             memory_config=memory_config,
         )
         self._mask_consts = None  # built by alloc_tables, and only when the caller wants a mask block
+        # None keeps ttnn.linear's default (HiFi2, bf16 accumulation); TtCSACompressor overrides it.
+        self.projection_compute_kernel_config = None
 
     @staticmethod
     def prepare_input(hidden: torch.Tensor, sp_factor: int, compress_rate: int):
@@ -274,8 +276,9 @@ class TtCompressorBase(LightweightModule):
         self._entry_index = self.ops.rope_index_base(chunk_tokens // self.sp_factor // self.compress_rate)
 
     def _project(self, hidden_states):
-        kv = ttnn.linear(hidden_states, self.wkv, memory_config=self.memory_config)
-        gate = ttnn.linear(hidden_states, self.wgate, memory_config=self.memory_config)
+        config = self.projection_compute_kernel_config
+        kv = ttnn.linear(hidden_states, self.wkv, memory_config=self.memory_config, compute_kernel_config=config)
+        gate = ttnn.linear(hidden_states, self.wgate, memory_config=self.memory_config, compute_kernel_config=config)
 
         if self.tp_factor > 1:
             kv = self._tp_all_reduce(kv)
@@ -530,6 +533,15 @@ class TtCSACompressor(TtCompressorBase):
             raise ValueError(f"TtCSACompressor requires compress_rate=4, got {self.compress_rate}")
         self.rope_head_dim = int(rope_head_dim)
         self.rms_norm_eps = float(rms_norm_eps)
+        # fp32 accumulation: CSA's keys feed the indexer's top-k, where bf16 accumulation over the hidden
+        # contraction is enough error to swap entries at the selection boundary.
+        self.projection_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
         if preloaded_weights is None:
             self._init_compression_weights(
                 kv_proj_weight=kv_proj_weight,
