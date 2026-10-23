@@ -1360,6 +1360,26 @@ void Cluster::configure_ethernet_cores_for_fabric_routers(
     }
 }
 
+void Cluster::configure_ethernet_cores_for_remote_transfers(
+    ChipId mmio_chip_id, const std::set<tt_fabric::chan_id_t>& eth_chans) {
+    if (this->arch_ != tt::ARCH::WORMHOLE_B0 || this->target_type_ != tt::TargetDevice::Silicon || eth_chans.empty()) {
+        return;
+    }
+    const auto& soc_desc = this->get_soc_desc(mmio_chip_id);
+    std::unordered_set<tt::umd::CoreCoord> eth_cores;
+    std::string eth_chans_str;
+    for (const auto eth_chan : eth_chans) {
+        eth_cores.insert(soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL));
+        eth_chans_str += fmt::format("{}{}", eth_chans_str.empty() ? "" : ", ", eth_chan);
+    }
+    log_debug(
+        tt::LogMetal,
+        "Pinning remote transfer cores of MMIO chip {} to ethernet channel(s) {}",
+        mmio_chip_id,
+        eth_chans_str);
+    this->driver_->configure_active_ethernet_cores_for_mmio_device(mmio_chip_id, eth_cores);
+}
+
 void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_planes) {
     if (num_routing_planes == std::numeric_limits<uint8_t>::max()) {
         // default behavior, reserve whatever cores are available
