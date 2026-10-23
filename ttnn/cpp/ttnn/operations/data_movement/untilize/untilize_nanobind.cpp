@@ -58,10 +58,12 @@ void bind_untilize(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("use_multicore") = true,
         nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("runtime_rows") = false,
         nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
             Verification only: runs the native untilize prim unconditionally. Not part of the ttnn API;
-            use ttnn.untilize, which selects a prim on its own.
+            use ttnn.untilize, which selects a prim on its own. `runtime_rows` makes the multi-core
+            interleaved program derive its per-core rows on device, so one program serves every height.
         )doc");
 
     mod.def(

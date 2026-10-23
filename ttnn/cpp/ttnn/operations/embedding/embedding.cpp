@@ -9,6 +9,7 @@
 #include "device/embedding_device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include "ttnn/operations/data_movement/untilize/untilize_force.hpp"
 #include <ttnn/operations/copy/typecast/typecast.hpp>
 
 namespace ttnn {
@@ -21,14 +22,20 @@ ttnn::Tensor embedding(
     ttnn::prim::EmbeddingsType embeddings_type,
     const std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor,
+    bool runtime_rows) {
     if (pad_token.has_value()) {
         embeddings_type = ttnn::prim::EmbeddingsType::PADDED;
     }
     Tensor mutable_weight = weight_arg;
 
     if (mutable_weight.layout() == ttnn::TILE_LAYOUT) {
-        mutable_weight = ttnn::to_layout(mutable_weight, ttnn::ROW_MAJOR_LAYOUT);
+        // runtime_rows: the native multi-core prim with its own runtime rows, so an interleaved table's row
+        // count stays out of the hash (the routed untilize may pick the codegen prim, keyed on the full shape).
+        mutable_weight = runtime_rows && !mutable_weight.is_sharded()
+                             ? ttnn::operations::data_movement::detail::untilize_force_native(
+                                   mutable_weight, std::nullopt, true, std::nullopt, runtime_rows)
+                             : ttnn::to_layout(mutable_weight, ttnn::ROW_MAJOR_LAYOUT);
     }
     auto hidden_embedding_dim = mutable_weight.logical_shape()[-1];
     auto original_input_rank = input_tensor.logical_shape().rank();
@@ -65,7 +72,8 @@ ttnn::Tensor embedding(
         embeddings_type,
         memory_config,
         pad_token,
-        optional_output_tensor);
+        optional_output_tensor,
+        runtime_rows);
     // Don't include batch_size if there was none
     if (original_input_rank == 1) {
         embeddings = ttnn::reshape(embeddings, Shape({sentence_size, hidden_embedding_dim}));
