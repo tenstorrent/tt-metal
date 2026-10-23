@@ -324,6 +324,7 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self._mtp_predict_trace_page_table: ttnn.Tensor | None = None
         self._sampling_trace_logits_device: ttnn.Tensor | None = None
         self._sampling_trace_logits_host: ttnn.Tensor | None = None
+        self._sampling_trace_precompiled = False
         self.enable_trace = enable_trace
         self.enable_mem_profile = enable_mem_profile
         self.signpost = signpost
@@ -388,7 +389,12 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         if sample_on_device:
             # Warmup already compiles this path when tracing; avoid double precompile.
-            self._sample_tokens_device(decode_logits, enable_trace=enable_trace, skip_precompile=True)
+            self._sample_tokens_device(
+                decode_logits,
+                enable_trace=enable_trace,
+                skip_precompile=True,
+                precompile_trace=self.enable_trace,
+            )
         else:
             self._sample_on_host(decode_logits)
 
@@ -1184,6 +1190,7 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         enable_trace: bool = False,
         user_slots: list[int] | None = None,
         skip_precompile: bool = False,
+        precompile_trace: bool = False,
     ) -> ttnn.Tensor:
         assert getattr(self, "sampling_generator", None) is not None, (
             "_sample_tokens_device called before the sampling generator was created "
@@ -1230,6 +1237,12 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 sampling_logits = self._sampling_trace_logits_device
             else:
                 sampling_logits = padded_logits
+
+        if precompile_trace and not enable_trace and self._trace_id is None and not self._sampling_trace_precompiled:
+            # Traced sampling writes the sampler's persistent output, a different program-cache key
+            # from this eager call. Capture skips precompile, so compile those programs while no trace is live.
+            self.sampling_generator.precompile(sampling_logits, all_configs=True)
+            self._sampling_trace_precompiled = True
 
         self.sampling_generator.seed_manager.get_new_values(self._sampling_device_slots(user_slots))
         try:
@@ -1294,7 +1307,7 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 reset_sampling_state=reset_sampling_state,
             )
         return self._sample_tokens_device(
-            tt_logits, enable_trace=enable_trace, user_slots=user_slots, skip_precompile=True
+            tt_logits, enable_trace=enable_trace, user_slots=user_slots, skip_precompile=True, precompile_trace=True
         )
 
     def _tokens_from_device(self, tt_out_tok, mesh_device, batch_size_per_row: int) -> torch.Tensor:
