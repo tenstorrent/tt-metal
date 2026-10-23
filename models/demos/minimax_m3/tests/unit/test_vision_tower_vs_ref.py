@@ -1,69 +1,50 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Full-tower PCC test for M3VLVisionModel vs the HF reference goldens.
+End-to-end PCC test for M3VLVisionModel (tower, then projector) vs the Torch reference.
 
-Two checks per grid:
-  - `forward_tower` (patch_embed -> pre_layrnorm -> 32 blocks) vs `tower_out`.
-  - full `forward` (tower + projector) vs `final`.
+Two checks per grid, from the same pixel values:
+  - forward_tower (patch embed, pre_layrnorm, num_layers blocks) vs the reference tower output;
+  - forward (tower and projector) vs the reference vision tokens.
 
-These accumulate bf16 error across 32 layers, so the threshold is 0.95
-(per the plan's full-tower target).
+Random weights and pixel values (conftest.py), no checkpoint. CI runs 2 layers. The checkpoint has 32;
+that depth is for a real-weight test, since random weights say little about error built up over 32 layers.
 
-Run:
-    MESH_DEVICE=N150 TT_METAL_LOGGER_LEVEL=FATAL \
-        pytest models/demos/minimax_m3/tests/unit/test_vision_tower_vs_ref.py -q
+Run (the second line adds the 448x448, 672x672 and 640x480 grids to the CI grid, 224x224):
+    pytest models/demos/minimax_m3/tests/unit/test_vision_tower_vs_ref.py
+    M3_VISION_ALL_GRIDS=1 pytest models/demos/minimax_m3/tests/unit/test_vision_tower_vs_ref.py
 """
 from __future__ import annotations
 
-import os
-
 import pytest
 import torch
-from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.minimax_m3.tt.vision.model import M3VLVisionModel
+from models.demos.minimax_m3.tt.vision.model_config import MiniMaxM3VLModelArgs
 
-
-def _to_torch(out_tt, mesh_device, shape):
-    is_mesh = type(mesh_device).__name__ == "MeshDevice"
-    out = ttnn.to_torch(out_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0) if is_mesh else None)
-    if is_mesh and out.shape[0] != 1:
-        out = out[:1]
-    return out.view(*shape)
+from ..test_factory import parametrize_mesh_with_fabric
+from .vision_helpers import assert_pcc, grid_name, parametrize_vision_grids, to_host
 
 
 @torch.no_grad()
-@pytest.mark.parametrize(
-    "mesh_device",
-    [{"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(os.environ.get("MESH_DEVICE"), (1, 1))],
-    indirect=True,
-)
-@pytest.mark.parametrize("grid_tag", ["224x224", "448x448"])
-def test_m3vl_vision_tower(mesh_device, model_args, reference, goldens, grid_tag):
-    """Full vision tower (and tower+projector) match the HF goldens at PCC >= 0.95."""
-    pcc_threshold = 0.95
-    g = goldens(grid_tag)
-    pixel_values = g["pixel_values"].float()  # (L, 1176)
-    grid = g["image_grid_thw"]
-    tower_ref = g["tower_out"].float()  # (L, 1280)
-    final_ref = g["final"].float()  # (L//4, 6144)
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
+@pytest.mark.parametrize("num_layers", [2], ids=lambda n: f"layers{n}")
+@parametrize_vision_grids()
+def test_vision_tower_vs_ref(mesh_device, device_params, grid_thw, num_layers, vision_reference, vision_activations):
+    """Tower output and vision tokens match the reference at PCC >= 0.99."""
+    acts = vision_activations(grid_thw, num_layers)
+    pixel_values, grid = acts["pixel_values"], acts["grid_thw"]
+    tower_ref, final_ref = acts["tower.out"], acts["final"]
 
-    model = M3VLVisionModel.from_torch(mesh_device, reference, model_args, with_projector=True, dtype=ttnn.bfloat16)
+    model_args = MiniMaxM3VLModelArgs(mesh_device=mesh_device, dtype=ttnn.bfloat16, num_hidden_layers=num_layers)
+    model = M3VLVisionModel.from_torch(
+        mesh_device, vision_reference(num_layers), model_args, with_projector=True, dtype=ttnn.bfloat16
+    )
+    name = f"{grid_name(grid_thw)} layers={num_layers}"
 
-    # Tower-only.
-    tower_tt = _to_torch(model.forward_tower(pixel_values, grid), mesh_device, tower_ref.shape)
-    t_pass, t_msg = comp_pcc(tower_ref, tower_tt, pcc_threshold)
-    t_rel = (torch.linalg.norm(tower_tt.float() - tower_ref) / torch.linalg.norm(tower_ref)).item()
-    logger.info(f"[tower {grid_tag}] {comp_allclose(tower_ref, tower_tt)} {t_msg} relL2={t_rel:.4f}")
+    tower_tt = to_host(model.forward_tower(pixel_values, grid), mesh_device, tower_ref.shape)
+    assert_pcc(f"tower {name}", tower_ref, tower_tt, 0.99)
 
-    # Full (tower + projector).
-    final_tt = _to_torch(model.forward(pixel_values, grid), mesh_device, final_ref.shape)
-    f_pass, f_msg = comp_pcc(final_ref, final_tt, pcc_threshold)
-    f_rel = (torch.linalg.norm(final_tt.float() - final_ref) / torch.linalg.norm(final_ref)).item()
-    logger.info(f"[final {grid_tag}] {comp_allclose(final_ref, final_tt)} {f_msg} relL2={f_rel:.4f}")
-
-    assert t_pass, f"tower PCC below threshold for {grid_tag}: {t_msg}"
-    assert f_pass, f"final PCC below threshold for {grid_tag}: {f_msg}"
+    final_tt = to_host(model.forward(pixel_values, grid), mesh_device, final_ref.shape)
+    assert_pcc(f"final {name}", final_ref, final_tt, 0.99)

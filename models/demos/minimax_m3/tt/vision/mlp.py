@@ -79,7 +79,7 @@ class M3VLMLP(LightweightModule):
         ref: torch.nn.Module,
         dtype=ttnn.bfloat16,
     ) -> "M3VLMLP":
-        """Construct from a torch MiniMaxM3VLVisionMLP reference module.
+        """Construct from a torch MLP with fc1 and fc2: VisionMLP of the Torch reference (reference/vision.py).
 
         Pulls out fc1/fc2 weights+biases and the dimensions implied by their shapes.
         """

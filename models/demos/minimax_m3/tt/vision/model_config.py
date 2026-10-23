@@ -1,35 +1,18 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-MiniMaxM3VLModelArgs — config for the MiniMax-M3-VL vision tower + projector.
+MiniMaxM3VLModelArgs: dimensions of the MiniMax-M3 vision tower and projector for the TT modules.
 
-Unlike the MoonViT scaffold this is based on, the HF reference for M3-VL
-cannot be loaded in the main tt-metal env: the `MiniMaxM3VLVisionModel`
-class only exists in transformers >= 5.x, while the repo pins 4.53. So we
-use a **golden-file** flow: a sibling generator (`tests/gen_goldens.py`)
-runs in an isolated transformers-5.12 venv to produce reference activations
-on disk, and the ttnn PCC tests compare against those goldens. Module
-weights are read directly from the checkpoint safetensors (no transformers
-dependency) by `_m3_loader.py`.
-
-All hyperparameters below are the authoritative values from
-`MiniMaxAI/MiniMax-M3`'s `config.vision_config` (verified 2026-06-09).
+The defaults are the checkpoint's config.vision_config; the Torch reference (reference/vision.py,
+MiniMaxM3VisionConfig) has the same defaults. The checkpoint directory comes from HF_MODEL with no
+default, as for the text model (tt/model_config.py). Only the real-weight loader (loader.build_reference)
+reads it, so the random-weight unit tests run without it.
 """
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Any
-
-# Checkpoint snapshot (vision shards 00026 + 00059) and golden cache.
-DEFAULT_SNAPSHOT_DIR = os.environ.get(
-    "MINIMAX_M3_SNAPSHOT",
-    "/localdev/zbaczewski/hf_cache/hub/models--MiniMaxAI--MiniMax-M3/snapshots/051e8f961274fb4e18ac3b57991f13bffedde212",
-)
-DEFAULT_GOLDENS_DIR = os.environ.get(
-    "MINIMAX_M3_GOLDENS",
-    os.path.join(os.path.dirname(__file__), "..", "..", "tests", "goldens"),
-)
+from typing import Any, Optional
 
 
 def _next_tile_multiple(x: int, tile: int = 32) -> int:
@@ -38,7 +21,7 @@ def _next_tile_multiple(x: int, tile: int = 32) -> int:
 
 @dataclass
 class MiniMaxM3VLModelArgs:
-    """Vision-tower hyperparameters for MiniMax-M3-VL (clip_vision_model + 3D RoPE)."""
+    """Vision tower hyperparameters for MiniMax-M3 (a CLIP vision tower with 3D RoPE)."""
 
     mesh_device: Any = None
     dtype: Any = None  # ttnn.bfloat16 (kept Any to avoid importing ttnn at module import)
@@ -59,8 +42,8 @@ class MiniMaxM3VLModelArgs:
     projector_hidden_size: int = 6144
     text_hidden_size: int = 6144  # final vision-token dim (= LLM embedding dim)
 
-    snapshot_dir: str = field(default_factory=lambda: DEFAULT_SNAPSHOT_DIR)
-    goldens_dir: str = field(default_factory=lambda: os.path.abspath(DEFAULT_GOLDENS_DIR))
+    # Checkpoint directory, from HF_MODEL (None when it is not set).
+    snapshot_dir: Optional[str] = field(default_factory=lambda: os.getenv("HF_MODEL"))
 
     # ---- derived ----
     @property

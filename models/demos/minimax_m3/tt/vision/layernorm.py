@@ -28,10 +28,8 @@ TILE = ttnn.TILE_SIZE  # 32
 class M3VLLayerNorm(LightweightModule):
     """Interleaved LayerNorm with learned weight + bias.
 
-    Construct either by passing the torch weight/bias tensors directly
-    (preferred for tests — the HF reference module already exposes
-    them on its state_dict) or via the state_dict + key pattern used
-    elsewhere in tt-metal.
+    Construct it from the weight and bias tensors, or with from_torch from an
+    nn.LayerNorm, such as those of the Torch reference (reference/vision.py).
     """
 
     def __init__(

@@ -1,82 +1,53 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-PCC test for M3VLAttention vs the HF reference (golden activations).
+PCC test for M3VLAttention (packed QKV, 3D RoPE, full SDPA) vs the Torch reference.
 
-The encoder block applies layer_norm1 then self_attn, so the attention
-input is the golden `layer_norm1.out`; the expected output is `attn.out`.
-cos/sin are computed host-side from `image_grid_thw`.
+Runs layer 0's self-attention on the input it gets inside the reference tower (the layer_norm1 output).
+The RoPE cos and sin are computed on host from the image grid, as the tower does. Random weights and
+pixel values (conftest.py), no checkpoint.
 
 Run:
-    MESH_DEVICE=N150 TT_METAL_LOGGER_LEVEL=FATAL \
-        pytest models/demos/minimax_m3/tests/unit/test_vision_attention_vs_ref.py -q
+    pytest models/demos/minimax_m3/tests/unit/test_vision_attention_vs_ref.py
 """
 from __future__ import annotations
 
-import os
-
-import pytest
 import torch
-from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.minimax_m3.tt.vision.attention import M3VLAttention
 from models.demos.minimax_m3.tt.vision.rope import rope_cos_sin_padded
 
+from ..test_factory import parametrize_mesh_with_fabric
+from .vision_helpers import assert_pcc, grid_name, parametrize_vision_grids, to_device, to_host
+
 
 @torch.no_grad()
-@pytest.mark.parametrize(
-    "mesh_device",
-    [{"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(os.environ.get("MESH_DEVICE"), (1, 1))],
-    indirect=True,
-)
-@pytest.mark.parametrize("grid_tag", ["224x224", "448x448"])
-def test_m3vl_attention(mesh_device, model_args, reference, goldens, grid_tag):
-    """encoder layer-0 self-attention matches the HF golden at PCC >= 0.99."""
-    pcc_threshold = 0.99
-    g = goldens(grid_tag)
-    x_in = g["layer_norm1.out"].float()  # attn input (L, 1280)
-    ref_out = g["attn.out"].float()  # (L, 1280)
-    grid = g["image_grid_thw"].to(torch.int64)
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
+@parametrize_vision_grids()
+def test_vision_attention_vs_ref(mesh_device, device_params, grid_thw, vision_reference, vision_activations):
+    """Layer 0 self-attention matches the reference at PCC >= 0.99."""
+    acts = vision_activations(grid_thw)
+    x_in, ref_out = acts["layer0.self_attn.in"], acts["layer0.self_attn.out"]
+    reference = vision_reference()
+    config = reference.config
 
     tt_attn = M3VLAttention.from_torch(
         mesh_device,
         reference.layers[0].self_attn,
-        hidden_size=model_args.hidden_size,
-        num_heads=model_args.num_attention_heads,
-        head_dim=model_args.head_dim,
+        hidden_size=config.hidden_size,
+        num_heads=config.num_attention_heads,
+        head_dim=config.head_dim,
         dtype=ttnn.bfloat16,
     )
-
-    cos_pt, sin_pt = rope_cos_sin_padded(
-        grid,
-        head_dim=model_args.head_dim,
-        padded_head_dim=model_args.padded_head_dim,
-        theta=model_args.rope_theta,
-        spatial_merge_size=model_args.spatial_merge_size,
+    cos, sin = rope_cos_sin_padded(
+        acts["grid_thw"],
+        head_dim=config.head_dim,
+        padded_head_dim=tt_attn.padded_head_dim,
+        theta=config.rope_theta,
+        spatial_merge_size=config.spatial_merge_size,
     )
-    cos_tt, sin_tt = tt_attn.stage_cos_sin(cos_pt, sin_pt)
+    cos_tt, sin_tt = tt_attn.stage_cos_sin(cos, sin)
+    out = to_host(tt_attn(to_device(x_in, mesh_device), cos_tt, sin_tt), mesh_device, ref_out.shape)
 
-    L, D = x_in.shape
-    is_mesh = type(mesh_device).__name__ == "MeshDevice"
-    x_tt = ttnn.from_torch(
-        x_in.to(torch.bfloat16).view(1, 1, L, D).contiguous(),
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
-    )
-    out_tt = ttnn.to_torch(
-        tt_attn(x_tt, cos_tt, sin_tt),
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0) if is_mesh else None,
-    )
-    if is_mesh and out_tt.shape[0] != 1:
-        out_tt = out_tt[:1]
-    out_tt = out_tt.view(L, D)
-
-    passing, pcc_msg = comp_pcc(ref_out, out_tt, pcc_threshold)
-    rel_l2 = (torch.linalg.norm(out_tt.float() - ref_out) / torch.linalg.norm(ref_out)).item()
-    logger.info(f"[attention {grid_tag} L={L}] {comp_allclose(ref_out, out_tt)} {pcc_msg} relL2={rel_l2:.4f}")
-    assert passing, f"attention PCC below threshold for {grid_tag}: {pcc_msg}"
+    assert_pcc(f"attention {grid_name(grid_thw)} L={x_in.shape[0]}", ref_out, out, 0.99)
