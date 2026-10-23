@@ -24,7 +24,7 @@
                 "block_size": "128",
                 "max_model_len": "1048576",
                 "max_num_seqs": "4",
-                "max_num_batched_tokens": "4096",
+                "max_num_batched_tokens": "16384",
                 "max-log-len": "32",
                 "seed": "9472",
                 "additional_config": "{\"tt\": {\"fabric_config\": \"FABRIC_1D_RING\", \"l1_small_size\": 16384, \"trace_region_size\": 1200000000, \"sample_on_device_mode\": \"all\"}}",
@@ -37,7 +37,8 @@
                 "limit-mm-per-prompt": "{\"image\": 16}",
                 "mm-processor-cache-gb": 0,
                 "chat-template-content-format": "openai",
-                "enable-prefix-caching": true
+                "enable-prefix-caching": true,
+                "long-prefill-token-threshold": "4096"
             },
             "override_tt_config": {
                 "fabric_config": "FABRIC_1D_RING",
@@ -62,7 +63,8 @@
                 "DSV41_VISION": "1",
                 "DSV41_VLLM_CHUNK": "512",
                 "DSV41_APC": "1",
-                "DSV41_PF_PAGED": "read"
+                "DSV41_PF_PAGED": "read",
+                "DSV41_VLLM_MAX_PARTIAL": "4"
             },
             "tensor_cache_timeout": 7200.0,
             "system_requirements": null,
