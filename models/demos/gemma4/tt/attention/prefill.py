@@ -13,6 +13,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.gemma4.custom_ops.qkv_norm_rope_prefill import QkvNormRopePrefill
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 
 from .operations import (
@@ -675,6 +676,24 @@ def _sdpa_single_chunk(tt_q, tt_k, tt_v, config, seq_len, sliding_window, comput
     )
 
 
+def _fused_prefill_qkv_ok(tt_q, cos_cache, weights) -> bool:
+    """GEMMA4_QKV_NORM_ROPE_PREFILL=1 and the fused op's contract: bf16 TILE interleaved [B, H, S, D] heads with
+    S a multiple of 32 and D of 64, the layer's sliced [1, 1, >= S, D] cos cache and the TILE gamma rows."""
+    if not QkvNormRopePrefill.enabled():
+        return False
+    if getattr(weights, "q_norm_tile", None) is None:
+        return False
+    if tt_q.layout != ttnn.TILE_LAYOUT or tt_q.dtype != ttnn.bfloat16 or tt_q.is_sharded():
+        return False
+    shape = [int(v) for v in tt_q.shape]
+    if len(shape) != 4 or shape[2] % 32 or shape[3] % 64:
+        return False
+    if shape[0] * shape[2] > 8192:  # per-core unit lists stay well under the runtime-arg limit (64 units)
+        return False
+    cs = [int(v) for v in cos_cache.shape]
+    return len(cs) == 4 and cs[0] == 1 and cs[1] == 1 and cs[2] >= shape[2] and cs[3] == shape[3]
+
+
 def _prefill_forward_single(
     hidden_states,
     cos_cache,
@@ -791,36 +810,55 @@ def _prefill_forward_single(
         memory_config=act_mc,
     )
 
-    tt_q = apply_per_head_norm(
-        tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc, fp32_accumulate=True
-    )
-
-    if shared_kv is not None:
-        tt_k.deallocate(True)
-        tt_v.deallocate(True)
-        tt_k, tt_v = shared_kv
+    if _fused_prefill_qkv_ok(tt_q, cos_cache, weights):
+        # GEMMA4_QKV_NORM_ROPE_PREFILL=1: the three per-head norms (with their flatten / unflatten reshapes) and
+        # the q / k RoPE as one program (custom_ops/qkv_norm_rope_prefill); KV-shared layers norm + rotate q only
+        gq = weights.q_norm_tile
+        gk = weights.k_norm_tile if weights.k_norm_tile is not None else gq
+        own_kv = shared_kv is None
+        nq, nk, nv = QkvNormRopePrefill.op(
+            tt_q, tt_k if own_kv else None, tt_v if own_kv else None, gq, gk, cos_cache, sin_cache, config.rms_norm_eps
+        )
+        for t in (tt_q, tt_k, tt_v):
+            t.deallocate(True)
+        tt_q = nq
+        tt_k, tt_v = (nk, nv) if own_kv else shared_kv
     else:
-        # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
-        tt_k = apply_per_head_norm(
-            tt_k,
-            weights.k_norm_weight,
+        tt_q = apply_per_head_norm(
+            tt_q,
+            weights.q_norm_weight,
             config.rms_norm_eps,
             with_scale=True,
             memory_config=act_mc,
             fp32_accumulate=True,
         )
-        tt_v = apply_per_head_norm(
-            tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=act_mc, fp32_accumulate=True
-        )
 
-    # RoPE Q (and K, unless KV-shared — then K comes already-RoPE'd from the
-    # source layer). A concat(Q,K)->rope->split fusion was evaluated to collapse
-    # the two rotary_embedding calls into one, but it adds concat+split device
-    # kernels for no throughput benefit (RoPE is ~1% of the step), so Q and K are
-    # rotated separately.
-    tt_q = apply_rope(tt_q, cos_cache, sin_cache, memory_config=act_mc)
-    if shared_kv is None:
-        tt_k = apply_rope(tt_k, cos_cache, sin_cache, memory_config=act_mc)
+        if shared_kv is not None:
+            tt_k.deallocate(True)
+            tt_v.deallocate(True)
+            tt_k, tt_v = shared_kv
+        else:
+            # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
+            tt_k = apply_per_head_norm(
+                tt_k,
+                weights.k_norm_weight,
+                config.rms_norm_eps,
+                with_scale=True,
+                memory_config=act_mc,
+                fp32_accumulate=True,
+            )
+            tt_v = apply_per_head_norm(
+                tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=act_mc, fp32_accumulate=True
+            )
+
+        # RoPE Q (and K, unless KV-shared — then K comes already-RoPE'd from the
+        # source layer). A concat(Q,K)->rope->split fusion was evaluated to collapse
+        # the two rotary_embedding calls into one, but it adds concat+split device
+        # kernels for no throughput benefit (RoPE is ~1% of the step), so Q and K are
+        # rotated separately.
+        tt_q = apply_rope(tt_q, cos_cache, sin_cache, memory_config=act_mc)
+        if shared_kv is None:
+            tt_k = apply_rope(tt_k, cos_cache, sin_cache, memory_config=act_mc)
 
     # A sliding-window continuation on the bounded substrate without a stash (the request's first chunk replayed the
     # traced short bucket, which records none): rebuild the prior window from the ring before the fill stash below
@@ -1412,36 +1450,55 @@ def prefill_forward(
     )
     ttnn.deallocate(xqkv)
 
-    tt_q = apply_per_head_norm(
-        tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc, fp32_accumulate=True
-    )
-
-    if shared_kv is not None:
-        tt_k.deallocate(True)
-        tt_v.deallocate(True)
-        tt_k, tt_v = shared_kv
+    if _fused_prefill_qkv_ok(tt_q, cos_cache, weights):
+        # GEMMA4_QKV_NORM_ROPE_PREFILL=1: the three per-head norms (with their flatten / unflatten reshapes) and
+        # the q / k RoPE as one program (custom_ops/qkv_norm_rope_prefill); KV-shared layers norm + rotate q only
+        gq = weights.q_norm_tile
+        gk = weights.k_norm_tile if weights.k_norm_tile is not None else gq
+        own_kv = shared_kv is None
+        nq, nk, nv = QkvNormRopePrefill.op(
+            tt_q, tt_k if own_kv else None, tt_v if own_kv else None, gq, gk, cos_cache, sin_cache, config.rms_norm_eps
+        )
+        for t in (tt_q, tt_k, tt_v):
+            t.deallocate(True)
+        tt_q = nq
+        tt_k, tt_v = (nk, nv) if own_kv else shared_kv
     else:
-        # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
-        tt_k = apply_per_head_norm(
-            tt_k,
-            weights.k_norm_weight,
+        tt_q = apply_per_head_norm(
+            tt_q,
+            weights.q_norm_weight,
             config.rms_norm_eps,
             with_scale=True,
             memory_config=act_mc,
             fp32_accumulate=True,
         )
-        tt_v = apply_per_head_norm(
-            tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=act_mc, fp32_accumulate=True
-        )
 
-    # RoPE Q (and K, unless KV-shared — then K comes already-RoPE'd from the
-    # source layer). A concat(Q,K)->rope->split fusion was evaluated to collapse
-    # the two rotary_embedding calls into one, but it adds concat+split device
-    # kernels for no throughput benefit (RoPE is ~1% of the step), so Q and K are
-    # rotated separately.
-    tt_q = apply_rope(tt_q, cos_cache, sin_cache, memory_config=act_mc)
-    if shared_kv is None:
-        tt_k = apply_rope(tt_k, cos_cache, sin_cache, memory_config=act_mc)
+        if shared_kv is not None:
+            tt_k.deallocate(True)
+            tt_v.deallocate(True)
+            tt_k, tt_v = shared_kv
+        else:
+            # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
+            tt_k = apply_per_head_norm(
+                tt_k,
+                weights.k_norm_weight,
+                config.rms_norm_eps,
+                with_scale=True,
+                memory_config=act_mc,
+                fp32_accumulate=True,
+            )
+            tt_v = apply_per_head_norm(
+                tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=act_mc, fp32_accumulate=True
+            )
+
+        # RoPE Q (and K, unless KV-shared — then K comes already-RoPE'd from the
+        # source layer). A concat(Q,K)->rope->split fusion was evaluated to collapse
+        # the two rotary_embedding calls into one, but it adds concat+split device
+        # kernels for no throughput benefit (RoPE is ~1% of the step), so Q and K are
+        # rotated separately.
+        tt_q = apply_rope(tt_q, cos_cache, sin_cache, memory_config=act_mc)
+        if shared_kv is None:
+            tt_k = apply_rope(tt_k, cos_cache, sin_cache, memory_config=act_mc)
 
     if kv_cache is not None and shared_kv is None:
         k_cache, v_cache = kv_cache
