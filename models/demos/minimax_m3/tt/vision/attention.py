@@ -177,7 +177,7 @@ class M3VLAttention(LightweightModule):
     def from_torch(
         cls,
         mesh_device,
-        ref_attn: torch.nn.Module,  # _Attn with q_proj/k_proj/v_proj/out_proj
+        ref_attn: torch.nn.Module,  # VisionAttention (reference/vision.py): q_proj/k_proj/v_proj/out_proj
         hidden_size: int,
         num_heads: int,
         head_dim: int,

@@ -32,7 +32,7 @@ class M3VLProjector(LightweightModule):
     def __init__(
         self,
         mesh_device,
-        ref_projector: torch.nn.Module,  # _Projector with linear_1/linear_2/merge_linear_1/merge_linear_2
+        ref_projector: torch.nn.Module,  # MultiModalProjector (reference/vision.py): linear_1/2, merge_linear_1/2
         spatial_merge_size: int,
         dtype=ttnn.bfloat16,
     ):

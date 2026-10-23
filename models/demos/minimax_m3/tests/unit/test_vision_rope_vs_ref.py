@@ -1,72 +1,87 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """
-Test the 3D vision RoPE cos/sin precompute against the HF golden.
+Host-side checks of the 3D vision RoPE in tt/vision/rope.py vs the Torch reference. No device.
 
-The rotary cos/sin are a host-side, position-only precompute (no device
-involvement), so this test runs on CPU. It reproduces HF's
-`MiniMaxM3VL3DRotaryEmbedding` from `image_grid_thw` and checks it matches
-the golden `rope.cos`/`rope.sin` (captured from the HF rotary module).
+rope.py computes the cos and sin on host; the device applies them as x * cos + (x @ R) * sin, with the
+head dim padded from 80 to 96 (tt/vision/attention.py). The tests check, for square, non-square,
+two-frame and two-image grids:
+  - rope_cos_sin equals the reference's cos and sin bit for bit;
+  - the padded form (rope_cos_sin_padded with rope_rotate_matrix) gives the reference rotation on the
+    80 real dims and zeros on the 16 pad dims;
+  - apply_rope_ref equals the reference's apply_rope.
 
-It also self-checks `apply_rope_ref` against an inline HF-style application.
+Without a device these tests have no mesh id, so the 1-card leg's -k "1x1 ..." does not select them.
 
 Run:
-    pytest models/demos/minimax_m3/tests/unit/test_vision_rope_vs_ref.py -q
+    pytest models/demos/minimax_m3/tests/unit/test_vision_rope_vs_ref.py
 """
 from __future__ import annotations
 
 import pytest
 import torch
-from loguru import logger
+import torch.nn.functional as F
 
-from models.demos.minimax_m3.tt.vision.rope import apply_rope_ref, rope_cos_sin
+from models.demos.minimax_m3.reference import vision as ref
+from models.demos.minimax_m3.tt.vision.rope import apply_rope_ref, rope_cos_sin, rope_cos_sin_padded, rope_rotate_matrix
 
+HEAD_DIM, PADDED_HEAD_DIM, NUM_HEADS, THETA, MERGE = 80, 96, 16, 10000.0, 2
 
-@torch.no_grad()
-@pytest.mark.parametrize("grid_tag", ["224x224", "448x448"])
-def test_m3vl_rope_cos_sin(model_args, goldens, grid_tag):
-    """Host cos/sin precompute matches the HF golden (near bit-exact, fp32 trig)."""
-    g = goldens(grid_tag)
-    grid = g["image_grid_thw"].to(torch.int64)  # (num_images, 3)
-    cos_ref = g["rope.cos"].float()  # (L, 78)
-    sin_ref = g["rope.sin"].float()
-
-    cos, sin = rope_cos_sin(
-        grid,
-        head_dim=model_args.head_dim,
-        theta=model_args.rope_theta,
-        spatial_merge_size=model_args.spatial_merge_size,
-    )
-    assert cos.shape == cos_ref.shape, f"cos shape {tuple(cos.shape)} != {tuple(cos_ref.shape)}"
-
-    cos_err = (cos - cos_ref).abs().max().item()
-    sin_err = (sin - sin_ref).abs().max().item()
-    logger.info(
-        f"[rope {grid_tag}] L={cos.shape[0]} rot_dim={cos.shape[1]} max|dcos|={cos_err:.2e} max|dsin|={sin_err:.2e}"
-    )
-    assert cos_err < 1e-4 and sin_err < 1e-4, f"rope cos/sin mismatch: dcos={cos_err}, dsin={sin_err}"
+# (t, h, w) patch grid of each image in the sequence.
+ROPE_GRIDS = {
+    "h16w16": [(1, 16, 16)],
+    "h32w32": [(1, 32, 32)],
+    "h48w48": [(1, 48, 48)],
+    "h34w46": [(1, 34, 46)],
+    "h46w34": [(1, 46, 34)],
+    "t2h16w16": [(2, 16, 16)],
+    "two_images": [(1, 16, 16), (1, 34, 46)],
+}
+parametrize_rope_grids = pytest.mark.parametrize("grid_thw", list(ROPE_GRIDS.values()), ids=list(ROPE_GRIDS))
 
 
 @torch.no_grad()
-def test_apply_rope_ref_matches_hf():
-    """apply_rope_ref reproduces the HF apply_rotary_pos_emb_vision math."""
-    torch.manual_seed(0)
-    L, H, hd, rot = 12, 4, 80, 78
-    q = torch.randn(1, L, H, hd)
-    k = torch.randn(1, L, H, hd)
-    cos = torch.randn(L, rot)
-    sin = torch.randn(L, rot)
+@parametrize_rope_grids
+def test_vision_rope_cos_sin_vs_ref(grid_thw):
+    """rope_cos_sin equals the reference's cos and sin, bit for bit."""
+    grid = torch.tensor(grid_thw)
+    cos, sin = rope_cos_sin(grid, head_dim=HEAD_DIM, theta=THETA, spatial_merge_size=MERGE)
+    ref_cos, ref_sin = ref.rope_cos_sin(grid, HEAD_DIM, THETA, MERGE)
+    assert cos.shape == (int(grid.prod(dim=-1).sum()), 3 * ref.rope_axis_dim(HEAD_DIM))
+    assert torch.equal(cos, ref_cos), (cos - ref_cos).abs().max()
+    assert torch.equal(sin, ref_sin), (sin - ref_sin).abs().max()
 
-    def hf_rotate_half(x):
-        x1, x2 = x[..., : x.shape[-1] // 2], x[..., x.shape[-1] // 2 :]
-        return torch.cat((-x2, x1), dim=-1)
 
-    c, s = cos[None, :, None, :], sin[None, :, None, :]
-    qr, qp = q[..., :rot], q[..., rot:]
-    kr, kp = k[..., :rot], k[..., rot:]
-    q_hf = torch.cat([qr * c + hf_rotate_half(qr) * s, qp], dim=-1)
-    k_hf = torch.cat([kr * c + hf_rotate_half(kr) * s, kp], dim=-1)
+@torch.no_grad()
+@parametrize_rope_grids
+def test_vision_rope_padded_vs_ref(grid_thw):
+    """x * cos + (x @ R) * sin over the padded head dim equals the reference rotation, with zero pad dims."""
+    grid = torch.tensor(grid_thw)
+    num_patches = int(grid.prod(dim=-1).sum())
+    generator = torch.Generator().manual_seed(0)
+    q = torch.randn(1, num_patches, NUM_HEADS, HEAD_DIM, generator=generator)
+    k = torch.randn(1, num_patches, NUM_HEADS, HEAD_DIM, generator=generator)
+    ref_q, ref_k = ref.apply_rope(q, k, *ref.rope_cos_sin(grid, HEAD_DIM, THETA, MERGE))
 
-    q_ours, k_ours = apply_rope_ref(q, k, cos, sin)
-    assert torch.allclose(q_ours, q_hf, atol=1e-6), (q_ours - q_hf).abs().max()
-    assert torch.allclose(k_ours, k_hf, atol=1e-6), (k_ours - k_hf).abs().max()
+    cos, sin = rope_cos_sin_padded(
+        grid, head_dim=HEAD_DIM, padded_head_dim=PADDED_HEAD_DIM, theta=THETA, spatial_merge_size=MERGE
+    )
+    rotate = rope_rotate_matrix(HEAD_DIM, PADDED_HEAD_DIM)
+    for name, x, x_ref in (("q", q, ref_q), ("k", k, ref_k)):
+        heads = F.pad(x, (0, PADDED_HEAD_DIM - HEAD_DIM)).transpose(1, 2)  # (1, heads, L, 96), as on device
+        out = (heads * cos + (heads @ rotate) * sin).transpose(1, 2)
+        torch.testing.assert_close(out[..., :HEAD_DIM], x_ref, rtol=1e-6, atol=1e-6, msg=lambda m: f"{name}: {m}")
+        assert torch.all(out[..., HEAD_DIM:] == 0), f"{name}: nonzero pad dims"
+
+
+@torch.no_grad()
+def test_vision_apply_rope_ref_vs_ref():
+    """apply_rope_ref equals the reference's apply_rope."""
+    grid = torch.tensor(ROPE_GRIDS["h34w46"])
+    num_patches = int(grid.prod(dim=-1).sum())
+    generator = torch.Generator().manual_seed(0)
+    q = torch.randn(1, num_patches, NUM_HEADS, HEAD_DIM, generator=generator)
+    k = torch.randn(1, num_patches, NUM_HEADS, HEAD_DIM, generator=generator)
+    cos, sin = ref.rope_cos_sin(grid, HEAD_DIM, THETA, MERGE)
+    for ours, theirs in zip(apply_rope_ref(q, k, cos, sin), ref.apply_rope(q, k, cos, sin)):
+        assert torch.equal(ours, theirs), (ours - theirs).abs().max()
