@@ -8,6 +8,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
 
+#include "metal/common/program_utils.hpp"
 #include "metal/common/tensor_validation.hpp"
 
 using namespace tt::tt_metal;
@@ -95,18 +96,16 @@ void QkvCausalConv1dSiluBackwardOperation::validate_on_program_cache_miss(
             op_name);
     }
 
-    const auto* mesh = in.input.device();
-    const uint64_t available_l1_bytes =
-        mesh->l1_size_per_core() - mesh->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint64_t l1_bytes = available_l1_bytes(*in.input.device());
     const uint64_t required_l1_bytes = qkv_conv_bw_l1_bytes(
         attrs.channel_chunk_size / tw, datatype_to_dataformat_converter(in.input.dtype()), in.input.element_size());
     TT_FATAL(
-        required_l1_bytes <= available_l1_bytes,
+        required_l1_bytes <= l1_bytes,
         "{}: channel_chunk_size = {} needs {} bytes of L1 per core, only {} are available",
         op_name,
         attrs.channel_chunk_size,
         required_l1_bytes,
-        available_l1_bytes);
+        l1_bytes);
 }
 
 QkvCausalConv1dSiluBackwardOperation::spec_return_value_t QkvCausalConv1dSiluBackwardOperation::compute_output_specs(

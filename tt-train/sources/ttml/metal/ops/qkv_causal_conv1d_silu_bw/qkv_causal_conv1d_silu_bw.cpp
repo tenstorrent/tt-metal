@@ -11,16 +11,13 @@
 #include <vector>
 
 #include "device/qkv_causal_conv1d_silu_bw_device_operation.hpp"
+#include "metal/common/program_utils.hpp"
 
 namespace ttml::metal {
 
 namespace {
 
 constexpr uint32_t max_chunk = 256;
-
-uint64_t available_l1_bytes(const ttnn::distributed::MeshDevice& device) {
-    return device.l1_size_per_core() - device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-}
 
 bool chunk_fits_l1(uint32_t chunk, uint64_t l1_bytes) {
     constexpr auto bf16 = tt::DataFormat::Float16_b;
