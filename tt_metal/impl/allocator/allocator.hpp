@@ -41,7 +41,7 @@ public:
 
     virtual ~AllocatorImpl();
 
-    DeviceAddr allocate_buffer(Buffer* buffer);
+    DeviceAddr allocate_buffer(Buffer* buffer, std::optional<DeviceAddr> requested_address = std::nullopt);
 
     // Set/clear device allocators for HYBRID mode mesh-level lockstep allocation.
     // When set, allocate_buffer() queries these allocators' per-bank ranges
