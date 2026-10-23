@@ -255,7 +255,7 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
  *       function, and @ref _llk_math_reduce_uninit_ after it to restore modified state.
  */
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
-inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape)
+inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape)
 {
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_reduce_", tensor_shape);
 
@@ -480,6 +480,12 @@ inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity>
 inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
 {
+    // There is no min-pool instruction - the FPU has GMPOOL (max) and GAPOOL (average/sum).
+    static_assert(
+        type != PoolType::MIN,
+        "The FPU reduce has no MIN: the hardware provides GMPOOL (max) and GAPOOL (average) only. "
+        "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce).");
+
     reduce_configure_addrmod<type, dim, math_fidelity>(tensor_shape);
     reduce_configure_mop<type, dim, math_fidelity>(tensor_shape);
 

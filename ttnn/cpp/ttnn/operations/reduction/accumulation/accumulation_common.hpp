@@ -25,7 +25,9 @@ Tensor preprocess_input_tensor(
     const int32_t& cum_axis,
     permutation_t& permutation,
     int32_t& accumulation_axis,
-    std::optional<DataType>& dtype);
+    std::optional<DataType>& dtype,
+    bool reverse_order,
+    ttnn::prim::AccumulationOp op);
 
 Tensor postprocess_output_tensor(
     const Tensor& output_tensor,
@@ -41,6 +43,7 @@ Tensor accumulation_invoke(
     std::optional<Tensor> optional_out,
     const bool& reverse_order,
     const std::optional<MemoryConfig>& memory_config,
-    ttnn::prim::AccumulationOp op);
+    ttnn::prim::AccumulationOp op,
+    bool disable_compensation = false);
 
 }  // namespace ttnn::operations::reduction::accumulation::common

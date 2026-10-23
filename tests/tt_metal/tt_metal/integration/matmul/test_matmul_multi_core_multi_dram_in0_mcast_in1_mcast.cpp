@@ -41,6 +41,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -505,13 +506,12 @@ bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(const std::shared_ptr<dist
     auto activations_tile_layout =
         convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(activations_tilized));
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-    auto* device = mesh_device->get_devices()[0];
-    pass &= move_tiles_to_dram(device, activations, M, K, in0_dram_addr);
+    pass &= move_tiles_to_dram(*mesh_device, activations, M, K, in0_dram_addr);
 
     auto identity_tilized = tilize_swizzled(identity, K * 32, N * 32);
     auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(identity_tilized));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-    pass &= move_tiles_to_dram(device, weights, K, N, in1_dram_addr);
+    pass &= move_tiles_to_dram(*mesh_device, weights, K, N, in1_dram_addr);
     log_debug(LogTest, "Copying inputs to dram complete");
 
     log_debug(LogTest, "Writing kernel runtime args to device");
@@ -560,10 +560,10 @@ bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(const std::shared_ptr<dist
         for (int j = 0; j < N; j++) {
             auto golden_tile = tt_metal::get_col_slice(row, N, j, 32, N * 32);
             int tile_id = (i * N) + j;
-            int dram_bank = tile_id % device->num_dram_channels();
-            uint32_t dram_address = ((tile_id / device->num_dram_channels()) * single_tile_size) + out_dram_addr;
+            int dram_bank = tile_id % mesh_device->num_dram_channels();
+            uint32_t dram_address = ((tile_id / mesh_device->num_dram_channels()) * single_tile_size) + out_dram_addr;
             std::vector<uint32_t> result_vec;
-            tt_metal::detail::ReadFromDeviceDRAMChannel(device, dram_bank, dram_address, single_tile_size, result_vec);
+            slow_dispatch::ReadFromDRAMChannel(*mesh_device, dram_bank, dram_address, single_tile_size, result_vec);
             auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
             auto result_flat_layout =
                 convert_layout_tile_nfaces_to_tile_swizzled(ttsl::make_const_span(result_bfp16));

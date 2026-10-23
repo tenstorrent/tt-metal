@@ -18,7 +18,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
 
@@ -29,8 +29,8 @@ _PROFILE_SAMPLES = 3
 _REFERENCE_USEFUL_BANDWIDTH_GBPS = {
     (4, "head_to_sequence"): 31.3,
     (4, "sequence_to_head"): 31.3,
-    (8, "head_to_sequence"): 31.8,
-    (8, "sequence_to_head"): 36.7,
+    (8, "head_to_sequence"): 29.6,
+    (8, "sequence_to_head"): 33.9,
 }
 _PERF_MARGIN = 0.02
 

@@ -34,7 +34,7 @@ from loguru import logger
 
 import ttnn
 
-from ....layers.module import Module, Parameter
+from ....layers.module import Module, Parameter, release_device_cache
 from ....utils.conv3d import _FP32_BLOCKINGS, _ntuple, aligned_channels, get_conv3d_config, register_conv3d_configs
 from ....utils.tensor import local_device_to_torch
 
@@ -75,9 +75,9 @@ _H3_ENCODER_BLOCKINGS = {
 _H3_BLOCKING_ENTRIES = {
     (in_c, out_c, kernel): blocking
     for (in_c, out_c), blocking in _H3_ENCODER_BLOCKINGS.items()
-    # The k1 shortcuts keep the fallback: a 1x1x1 conv is a matmul and cheap either way.
     for kernel in ((3, 3, 3), (1, 3, 3))
 }
+
 register_conv3d_configs(_H3_BLOCKING_ENTRIES)
 # register_conv3d_configs only updates the bf16 fallback table, but get_conv3d_config
 # short-circuits to _FP32_BLOCKINGS when the weights are fp32 -- so for an fp32 encoder the
@@ -85,6 +85,10 @@ register_conv3d_configs(_H3_BLOCKING_ENTRIES)
 # swept value that lands in conv3d.py itself wins over these entries.
 for _key, _blocking in _H3_BLOCKING_ENTRIES.items():
     _FP32_BLOCKINGS.setdefault(_key, _blocking)
+
+# b1_res0 k1 conv_shortcut, bf16 only (the fallback is ~190x slower; an fp32 k1 blocking hung the device).
+# The M block must stay tile-aligned: faster non-aligned sweep winners are silently wrong.
+register_conv3d_configs({(128, 256, (1, 1, 1)): (128, 256, 16, 1, 32)})
 
 
 class MiniMaxH3CausalConv3d(Module):
@@ -113,6 +117,7 @@ class MiniMaxH3CausalConv3d(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config=None,
         ccl_manager=None,
+        pixel_norm: tuple[Sequence[float], Sequence[float]] | None = None,
     ) -> None:
         super().__init__()
 
@@ -154,6 +159,16 @@ class MiniMaxH3CausalConv3d(Module):
         # sharded, so this stays a local concat of zeros.
         self.time_pad = 0 if self.collapse_temporal else self.kernel_size[0] - 1
 
+        self.pixel_norm = pixel_norm
+        self.causal_pad_values: tuple[float, ...] | None = None
+        if pixel_norm is not None:
+            mean, std = pixel_norm
+            assert (
+                len(mean) == len(std) == in_channels
+            ), f"pixel_norm has {len(mean)} channels for a {in_channels}-channel conv"
+            if self.time_pad > 0:
+                self.causal_pad_values = tuple(255.0 * m for m in mean)
+
         # Padding is asymmetric in general: H3's downsamplers pre-pad ``(0,1,0,1)`` reflect
         # (one extra row at the bottom, one column at the right) so a stride-2 conv lands on
         # exactly ceil(size/2). Carrying that here rather than in the model means one code
@@ -192,6 +207,20 @@ class MiniMaxH3CausalConv3d(Module):
             w_factor=self.width_factor,
         )
 
+        # Blocking tables are tuned at one temporal tap, but CBs scale with input T, so multi-tap
+        # (ref2va encoder) overflows L1; shrink H_out_block by the tap count to compensate.
+        if temporal_taps > 1 and self.conv_config.H_out_block > 1:
+            self.conv_config = ttnn.Conv3dConfig(
+                weights_dtype=self.conv_config.weights_dtype,
+                output_layout=self.conv_config.output_layout,
+                T_out_block=self.conv_config.T_out_block,
+                W_out_block=self.conv_config.W_out_block,
+                H_out_block=max(1, self.conv_config.H_out_block // temporal_taps),
+                C_out_block=self.conv_config.C_out_block,
+                C_in_block=self.conv_config.C_in_block,
+                compute_with_storage_grid_size=self.conv_config.compute_with_storage_grid_size,
+            )
+
         from models.common.utility_functions import is_blackhole
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -226,6 +255,15 @@ class MiniMaxH3CausalConv3d(Module):
         if self.collapse_temporal:
             # Only the final temporal tap survives a single frame.
             weight = weight[:, :, -1:].contiguous()
+
+        if self.pixel_norm is not None:
+            mean, std = self.pixel_norm
+            scale = torch.tensor([1.0 / (255.0 * s) for s in std], dtype=weight.dtype).view(1, -1, 1, 1, 1)
+            shift = torch.tensor([-m / s for m, s in zip(mean, std)], dtype=weight.dtype).view(1, -1, 1, 1, 1)
+            if bias is None:
+                bias = torch.zeros(weight.shape[0], dtype=weight.dtype)
+            bias = bias + (weight * shift).sum(dim=(1, 2, 3, 4))
+            weight = weight * scale
 
         # torch conv3d weight is (out, in, kt, kh, kw); dim 1 is the in-channel axis.
         if self.in_channels != self.unpadded_in_channels:
@@ -274,7 +312,7 @@ class MiniMaxH3CausalConv3d(Module):
         if not dims:
             return x_BTHWC
 
-        x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
+        x_BTHWC = self.ccl_manager.neighbor_pad(
             x_BTHWC,
             dims=dims,
             pad_left=pad_left,
@@ -288,6 +326,11 @@ class MiniMaxH3CausalConv3d(Module):
             x_BTHWC = reflect_edge_correction(x_BTHWC, dim, before, after, edge_masks=self._edge_masks.get(dim))
         return x_BTHWC
 
+    def deallocate_weights(self) -> None:
+        super().deallocate_weights()
+        # Eviction must take the lazily cached device constants with the weights (see `release_device_cache`).
+        release_device_cache(self._causal_zeros)
+
     def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
         """``x_BTHWC``: ``(B, T, H, W, C)`` ROW_MAJOR, C already tile-aligned."""
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"conv3d needs ROW_MAJOR, got {x_BTHWC.layout}"
@@ -297,7 +340,9 @@ class MiniMaxH3CausalConv3d(Module):
         if any(self.external_pad_h) or any(self.external_pad_w):
             x_BTHWC = self._halo_pad(x_BTHWC)
         if self.time_pad > 0:
-            x_BTHWC = causal_pad_t(x_BTHWC, self.time_pad, self.mesh_device, self._causal_zeros)
+            x_BTHWC = causal_pad_t(
+                x_BTHWC, self.time_pad, self.mesh_device, self._causal_zeros, values=self.causal_pad_values
+            )
 
         out = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
@@ -316,27 +361,37 @@ class MiniMaxH3CausalConv3d(Module):
 
 
 def causal_pad_t(
-    x_BTHWC: ttnn.Tensor, pad: int, mesh_device: ttnn.MeshDevice, cache: dict | None = None
+    x_BTHWC: ttnn.Tensor,
+    pad: int,
+    mesh_device: ttnn.MeshDevice,
+    cache: dict | None = None,
+    values: Sequence[float] | None = None,
 ) -> ttnn.Tensor:
-    """Prepend ``pad`` zero frames on T. Nothing is appended -- that is the causality.
+    """Prepend ``pad`` constant frames on T. Nothing is appended -- that is the causality.
 
-    ``cache`` holds the zero block across calls. Without it this allocates and **writes**
-    a fresh zero tensor on every convolution -- 34 MB at block 0, thirteen times per unit --
-    and `ttnn.zeros(device=...)` is a host-to-device write, which both costs PCIe time on
-    the critical path and makes the encoder impossible to capture into a trace
-    ("Writes are not supported during trace capture"). The block is constant, so one
-    allocation serves every call.
+    ``values`` is the per-channel fill (zeros by default).
+
+    ``cache`` holds the block across calls. Without it this allocates and **writes**
+    a fresh tensor on every convolution -- 34 MB at block 0, thirteen times per unit --
+    and a host-to-device write both costs PCIe time on the critical path and makes the
+    encoder impossible to capture into a trace ("Writes are not supported during trace
+    capture"). The block is constant, so one allocation serves every call.
     """
     B, _, H, W, C = x_BTHWC.shape
     key = (B, pad, H, W, C, x_BTHWC.get_dtype())
-    zeros = None if cache is None else cache.get(key)
-    if zeros is None:
-        zeros = ttnn.zeros(
-            (B, pad, H, W, C), dtype=x_BTHWC.get_dtype(), layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
-        )
+    block = None if cache is None else cache.get(key)
+    if block is None:
+        if values is None:
+            block = ttnn.zeros(
+                (B, pad, H, W, C), dtype=x_BTHWC.get_dtype(), layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
+            )
+        else:
+            filled = torch.zeros(B, pad, H, W, C)
+            filled[..., : len(values)] = torch.tensor(list(values))
+            block = ttnn.from_torch(filled, dtype=x_BTHWC.get_dtype(), layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
         if cache is not None:
-            cache[key] = zeros
-    return ttnn.concat([zeros, x_BTHWC], dim=1)
+            cache[key] = block
+    return ttnn.concat([block, x_BTHWC], dim=1)
 
 
 def reflect_edge_correction(

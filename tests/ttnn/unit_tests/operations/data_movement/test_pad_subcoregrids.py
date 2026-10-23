@@ -279,7 +279,7 @@ def test_pad_subcoregrids_program_cache(device):
 # ────────────────────────────────────────────────────────────────────────────────
 # Test: Validation — sub_core_grids with sharded input should fail
 # ────────────────────────────────────────────────────────────────────────────────
-def test_pad_subcoregrids_rejects_sharded(device):
+def test_pad_subcoregrids_rejects_sharded(device, expect_error):
     """Verify that sub_core_grids with sharded input raises an error."""
     torch_input = torch.rand(1, 1, 64, 64).bfloat16()
     input_tensor = ttnn.from_torch(
@@ -300,7 +300,7 @@ def test_pad_subcoregrids_rejects_sharded(device):
     input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem)
 
     sub_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))])
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, r"must not exceed number of cores"):
         ttnn.pad(
             input_tensor,
             padding=((0, 0), (0, 0), (0, 32), (0, 0)),
@@ -313,7 +313,7 @@ def test_pad_subcoregrids_rejects_sharded(device):
 # ────────────────────────────────────────────────────────────────────────────────
 # Test: Validation — sub_core_grids with use_multicore=False should fail
 # ────────────────────────────────────────────────────────────────────────────────
-def test_pad_subcoregrids_rejects_singlecore(device):
+def test_pad_subcoregrids_rejects_singlecore(device, expect_error):
     """Verify that sub_core_grids with use_multicore=False raises an error."""
     torch_input = torch.rand(1, 1, 32, 32).bfloat16()
     input_tensor = ttnn.from_torch(
@@ -324,7 +324,7 @@ def test_pad_subcoregrids_rejects_singlecore(device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     sub_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))])
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, r"sub_core_grids is only supported when use_multicore"):
         ttnn.pad(
             input_tensor,
             padding=((0, 0), (0, 0), (0, 32), (0, 32)),

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/compute/topk.h"
 
 /**
  * @brief Before packing UInt16 value tiles from 32-bit DEST, move values into the packer-visible high half.
@@ -42,13 +43,25 @@ void prepare_uint16_fp32_dest_value_tiles_for_pack(uint32_t dst_tile_a, uint32_t
  * The function assumes that the input and index buffers contain at least Wt tiles,
  * and that Wt is a multiple of 2. It reserves space in the output buffers, processes
  * tiles in pairs, and pushes the results to the output buffers upon completion.
+ *
+ * @tparam stable_sort Run the index-aware comparator-stable network: on exact value
+ * ties the paired index tiles are compare-exchanged so ties resolve in the original
+ * (ascending-index) order.
+ * @tparam tie_order The GLOBAL sort order, never the per-pair local direction, which
+ * this helper deliberately alternates to build the bitonic sequence.
  */
-FORCE_INLINE
-void sort_Wt_tiles_row_to_bitonic_sequence(
-    DataflowBuffer& input_dfb,
-    DataflowBuffer& index_dfb,
-    DataflowBuffer& input_transposed_dfb,
-    DataflowBuffer& index_transposed_dfb,
+template <
+    bool stable_sort = false,
+    ckernel::TopkTieOrder tie_order = ckernel::TopkTieOrder::Unset,
+    typename InputDFB,
+    typename IndexDFB,
+    typename InputTransposedDFB,
+    typename IndexTransposedDFB>
+FORCE_INLINE void sort_Wt_tiles_row_to_bitonic_sequence(
+    InputDFB& input_dfb,
+    IndexDFB& index_dfb,
+    InputTransposedDFB& input_transposed_dfb,
+    IndexTransposedDFB& index_transposed_dfb,
     const uint32_t Wt,
     const bool switch_dir,
     const bool ascending,
@@ -75,7 +88,11 @@ void sort_Wt_tiles_row_to_bitonic_sequence(
         transpose_tile(index_dfb.get_id(), 1, 3);
 
         // llk_topk_sort -> inplace
-        ckernel::topk_local_sort(0, (int)ascending_local, end_phase);
+        if constexpr (stable_sort) {
+            ckernel::topk_canonicalize_negzero_values(0);
+        }
+        ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, /*fused=*/false, /*rank_stamped=*/false, tie_order>(
+            0, (int)ascending_local, end_phase);
 
         // UInt16-in-32b-DEST: mode-9 packer fixup before packing values (#50215).
         prepare_uint16_fp32_dest_value_tiles_for_pack(0, 1);
@@ -125,9 +142,9 @@ void sort_Wt_tiles_row_to_bitonic_sequence(
  * @param dest_dfb Destination circular buffer where packed tiles will be stored.
  * @param Wt Number of tiles to process (width in tiles).
  */
-FORCE_INLINE
-void transpose_and_pack(
-    DataflowBuffer& transposed_dfb, DataflowBuffer& dest_dfb, uint32_t Wt, bool prepare_uint16_value_for_pack = false) {
+template <typename SrcDFB, typename DstDFB>
+FORCE_INLINE void transpose_and_pack(
+    SrcDFB& transposed_dfb, DstDFB& dest_dfb, uint32_t Wt, bool prepare_uint16_value_for_pack = false) {
     constexpr uint32_t one_tile = 1;
 
     // Transpose from sorting by column to right structure
@@ -203,8 +220,8 @@ constexpr uint32_t ilog2(uint32_t n) { return 31 - __builtin_clz(n); }
  *
  * @param packer_unpacker_sync_dfb The circular buffer used for synchronization.
  */
-FORCE_INLINE
-void sync_packer_unpacker(DataflowBuffer& packer_unpacker_sync_dfb) {
+template <typename DFB>
+FORCE_INLINE void sync_packer_unpacker(DFB& packer_unpacker_sync_dfb) {
     constexpr uint32_t ONE_TILE = 1;
 
     // This double sequence forces both the packer and the unpacker to wait for the other.
@@ -252,12 +269,12 @@ void sync_packer_unpacker(DataflowBuffer& packer_unpacker_sync_dfb) {
  * @param dst_dfb Destination circular buffer to which tile will be copied.
  * @param dst_tile_id Index of the tile in the destination circular buffer.
  */
-FORCE_INLINE
-void copy_tile_between_cbs(
+template <typename SrcDFB, typename DstDFB>
+FORCE_INLINE void copy_tile_between_cbs(
     uint32_t& last_used_cb_index,
-    DataflowBuffer& src_dfb,
+    SrcDFB& src_dfb,
     uint32_t src_tile_id,
-    DataflowBuffer& dst_dfb,
+    DstDFB& dst_dfb,
     uint32_t dst_tile_id = 0,
     bool prepare_uint16_value_for_pack = false) {
     // Constants

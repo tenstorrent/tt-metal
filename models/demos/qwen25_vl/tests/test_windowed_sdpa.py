@@ -7,7 +7,6 @@ This demonstrates how cu_window_seqlens can be used to create block-diagonal
 attention patterns without explicitly passing an attention mask.
 """
 
-import os
 import time
 from contextlib import contextmanager
 from functools import lru_cache
@@ -17,6 +16,7 @@ import torch
 
 import ttnn
 from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
+from models.demos.qwen25_vl.tt.model_config import qwen25_vl_mesh_shape
 
 
 @contextmanager
@@ -36,11 +36,7 @@ def timer(description="Operation"):
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [qwen25_vl_mesh_shape()],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -276,7 +272,23 @@ def test_windowed_sdpa_basic(
     covered = output[:, :, covered_lo:covered_hi, :]
     covered_standard = output_standard[:, :, covered_lo:covered_hi, :]
     max_diff = torch.max(torch.abs(covered - covered_standard)).item()
-    assert max_diff < 1e-2, f"Max difference {max_diff} exceeds tolerance"
+    # The two runs are different device schedules of the same kernel: the masked reference visits
+    # every K chunk with a bfp4 mask, the windowed run narrows the K range and stamps its own mask,
+    # so their flash-attention rescaling sequences differ. Each output element is a sum of
+    # probability-weighted V rows, so its absolute error scales with the magnitude of the largest
+    # terms (about max |output|), not with the element's own magnitude: a 0.3 output can carry the
+    # rounding of 1.5-sized terms. Allow two bf16 ulps (one per schedule) of the largest reference
+    # value, floored at the old 1e-2 gate. With the accurate exponential (#57180) the plain 1e-2
+    # bound is below that noise for outputs above 1.
+    # A non-finite reference would make ref_scale and the tolerance infinite and let inf <= inf pass, so
+    # reject non-finite outputs first.
+    assert torch.isfinite(covered_standard).all(), "non-finite values in the masked reference output"
+    assert torch.isfinite(covered).all(), "non-finite values in the windowed output"
+    ref_scale = covered_standard.abs().max().item()
+    tolerance = max(1e-2, 2 * 2**-7 * ref_scale)
+    assert (
+        max_diff <= tolerance
+    ), f"Max difference {max_diff} exceeds {tolerance:.4g} (two bf16 ulps of the largest reference value {ref_scale:.4g})"
 
     # Assert shapes match
     assert output.shape == output_standard.shape, f"Shape mismatch: {output.shape} vs {output_standard.shape}"

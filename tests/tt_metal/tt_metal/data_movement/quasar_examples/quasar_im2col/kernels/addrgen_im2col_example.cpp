@@ -6,7 +6,7 @@
 //
 // The HW inner/outer loops cover one kernel patch (dilation-aware strides).
 // SW vertical and horizontal loops slide the kernel window over all output positions,
-// writing src_base before each patch — matching CMDBUF_WR_REG(...SRC_BASE...) in the original.
+// writing src_base before each patch — matching the cmdbuf_wr_reg(...SRC_BASE...) write in the original.
 //
 // HW loop structure per output position:
 //   for (outer = 0; outer < eff_kH * row_bytes; outer += row_bytes * dil_h) {  // kernel rows
@@ -87,8 +87,7 @@ void kernel_main() {
                 uint64_t dest_addr = peek_dest_addrgen_0();
                 pop_src_addrgen_0();
                 pop_dest_addrgen_0();
-                DPRINT << "  Source address: " << HEX() << (uint64_t)src_addr << " Destination address: " << HEX()
-                       << (uint64_t)dest_addr << ENDL();
+                DEVICE_PRINT("  Source address: 0x{:x} Destination address: 0x{:x}\n", src_addr, dest_addr);
             }
         }
     }

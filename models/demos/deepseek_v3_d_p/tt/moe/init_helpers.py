@@ -24,11 +24,45 @@ from models.common.utility_functions import is_blackhole
 # Fabric packet payload limits (conservative round values below hardware maximums).
 MAX_PAYLOAD_SIZE_BH = 14 * 1024  # Blackhole hardware max ~15232 B
 MAX_PAYLOAD_SIZE_WH = 7 * 1024  # Wormhole hardware max ~7616 B
+CMB_FABRIC2D_ROUTING_INFO_BYTES = 64
 
 
 def get_max_payload_size() -> int:
     """Return the arch-appropriate fabric payload size. Deferred to avoid probing hardware at import time."""
-    return MAX_PAYLOAD_SIZE_BH if is_blackhole() else MAX_PAYLOAD_SIZE_WH
+    return (MAX_PAYLOAD_SIZE_BH if is_blackhole() else MAX_PAYLOAD_SIZE_WH) + CMB_FABRIC2D_ROUTING_INFO_BYTES
+
+
+def combine_overlap_payload_size(routed_emb_dim: int) -> int:
+    """The fabric payload the routed expert / combine_fabric2d overlap needs: combine_fabric2d sends a bfloat16
+    token that does not fit one packet as two halves, the routing tail riding on the second."""
+    return routed_emb_dim + CMB_FABRIC2D_ROUTING_INFO_BYTES
+
+
+def routed_expert_combine_overlap_enabled(model_cfg) -> bool:
+    """Whether the model opts into TtMoe's routed expert / combine_fabric2d overlap. Off unless the config names
+    ROUTED_EXPERT_COMBINE_OVERLAP = True (Kimi K2.7 and GLM 5.3 today)."""
+    return getattr(model_cfg, "ROUTED_EXPERT_COMBINE_OVERLAP", False)
+
+
+def routed_expert_combine_overlap_arg(model_cfg):
+    """TtMoe's overlap_routed_expert_with_combine for ``model_cfg``: None (on wherever it fits) for a model that
+    opts in, False (the separate ops) for every other. Every TtMoe builder passes this, tests included, so a model
+    is measured the way it runs."""
+    return None if routed_expert_combine_overlap_enabled(model_cfg) else False
+
+
+def moe_fabric_payload_size(model_cfg) -> int:
+    """The fabric payload to open a mesh with for a model whose MoE is TtMoe.
+
+    On Blackhole a model that opts into the overlap (routed_expert_combine_overlap_enabled) overlaps the routed
+    expert with combine_fabric2d, so the mesh needs room for half a bf16 token plus combine's routing tail.
+    Everywhere else TtMoe runs the routed expert then combine as separate ops, and the model's own
+    FABRIC_PAYLOAD_SIZE stands. TtMoe reads the payload back to decide whether to overlap, so a mesh opened any
+    other way simply runs without it. Deferred to avoid probing hardware at import time.
+    """
+    if is_blackhole() and routed_expert_combine_overlap_enabled(model_cfg):
+        return max(model_cfg.FABRIC_PAYLOAD_SIZE, combine_overlap_payload_size(model_cfg.EMB_SIZE))
+    return model_cfg.FABRIC_PAYLOAD_SIZE
 
 
 @dataclass
@@ -740,7 +774,7 @@ def load_captured_routing(
     ---------------------------------------------
         layer:                  int, MoE layer index (e.g. 27)
         col:                    int, Galaxy column [0, 4) to simulate
-        model:                  str, model name ("dsv3", "kimi26", "glm52"); selects the per-model
+        model:                  str, model name ("dsv3", "kimi26", "glm53"); selects the per-model
                                 capture file when captured_indices_path is unset
         captured_indices_path:  path to the capture safetensors; if falsy, falls back to
                                 CODE_DEBUG_5K_CHUNKED / "expert_routing_MODELNAME.safetensors"
@@ -775,8 +809,9 @@ def load_captured_routing(
         # Lazy import: transformer_helpers imports from this module in places.
         from models.demos.deepseek_v3_d_p.utils.transformer_helpers import CODE_DEBUG_5K_CHUNKED
 
-        if model not in {"dsv3", "kimi26", "glm52"}:
-            raise ValueError(f"Unknown model {model!r}; expected one of dsv3, kimi26, glm52")
+        # "kimi26" not "kimi27": https://github.com/tenstorrent/tt-metal/issues/54972
+        if model not in {"dsv3", "kimi26", "glm53"}:
+            raise ValueError(f"Unknown model {model!r}; expected one of dsv3, kimi26, glm53")
 
         # Keep naming in this convention in order for other models to be consistent.
         path = CODE_DEBUG_5K_CHUNKED / f"expert_routing_{model}.safetensors"
@@ -1010,7 +1045,7 @@ def load_gate_weights_from_hf(
         layer_idx: Transformer layer index (must be an MoE layer, i.e. >= 3 for DeepSeek-V3)
         dtype: Target dtype for the returned weight AND for ``e_score_correction_bias``. The
             checkpoints store the bias as fp32, but it is downcast here on purpose: the device gate
-            (``ttnn.experimental.deepseek_grouped_gate``) requires a bf16 bias, so keeping it wider
+            (``moe_grouped_topk``) requires a bf16 bias, so keeping it wider
             on the host would only put the reference and the device on different precisions at the
             top-k tie-break.
         key_prefix_template: HF key prefix with a ``{layer_idx}`` placeholder. Defaults to the

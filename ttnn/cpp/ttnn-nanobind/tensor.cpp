@@ -38,6 +38,7 @@
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/tensor/types.hpp"
@@ -523,6 +524,16 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             },
             nb::arg("enable"),
             "Enable or disable experimental per-core L1 allocation on this MemoryConfig.")
+        .def(
+            "experimental_set_range_lockstep_allocation",
+            [](MemoryConfig& self, bool enable) {
+                experimental::range_lockstep_allocation::set_range_lockstep_allocation(self, enable);
+            },
+            nb::arg("enable"),
+            "Enable or disable experimental range lockstep L1 allocation on this MemoryConfig. The buffer still "
+            "takes one address, but the allocator only keeps it clear of per-core allocations on the cores the "
+            "buffer occupies, rather than every core. Only safe when nothing reaches the buffer on a core it was "
+            "not allocated on -- a multicast writes to every core in its rectangle, for instance.")
         .def_prop_ro(
             "interleaved",
             [](const MemoryConfig& memory_config) {
@@ -668,6 +679,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("filename"),
             nb::arg("tensor"),
             nb::arg("mode") = DumpTensorMode::DISTRIBUTED_GATHER,
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Dump tensor to file using FlatBuffer format with inline file storage.
             )doc")
@@ -676,6 +688,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::overload_cast<const std::string&, MeshDevice*>(&load_tensor_flatbuffer),
             nb::arg("file_name"),
             nb::arg("device") = nullptr,
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Load tensor to file using FlatBuffer format with inline file storage.
             )doc");

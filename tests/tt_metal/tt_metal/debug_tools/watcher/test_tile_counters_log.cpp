@@ -17,6 +17,7 @@
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher tile counter log feature.
@@ -43,9 +44,8 @@ void RunTest(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto* device = mesh_device->get_devices()[0];
     CoreCoord logical_core = {0, 0};
-    CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
+    CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(logical_core);
     const experimental::NodeCoord node{static_cast<uint32_t>(logical_core.x), static_cast<uint32_t>(logical_core.y)};
 
     // Allocate L1 buffer for sync flag
@@ -55,7 +55,7 @@ void RunTest(
         mesh_device.get());
     uint32_t tensix_sync_addr = sync_buffer->address();
     std::vector<uint32_t> zero_data = {0};
-    tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, tensix_sync_addr, zero_data);
+    slow_dispatch::WriteToL1(*mesh_device, logical_core, tensix_sync_addr, zero_data);
 
     // DFB config: 1 DM producer -> 4 NEO unpacker consumers
     // use_remapper: true -> all (remapper enabled), false -> strided (bypass mode)
@@ -81,7 +81,13 @@ void RunTest(
         .compiler_options = {.defines = {{"DFB_PRODUCER", "1"}}},
         .dfb_bindings = {experimental::ProducerOf(TILE_COUNTER_DFB, "tile_counter_dfb")},
         .compile_time_args = {{"num_entries", NUM_ENTRIES_PER_PRODUCER}},
-        .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .config_2xx =
+                    experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                        .disable_dfb_implicit_sync_for_all = true,
+                    },
+            },
     };
 
     // NEO compute consumer kernel (4 threads = 4 Neo clusters)
@@ -101,7 +107,7 @@ void RunTest(
             {{"num_entries", entries_per_consumer},
              {"num_consumers_to_run", NUM_CONSUMERS_TO_RUN},
              {"sync_flag_addr", tensix_sync_addr}},
-        .hw_config = experimental::ComputeGen2Config{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
     experimental::WorkUnitSpec wu{
@@ -127,7 +133,7 @@ void RunTest(
         LogTest,
         "Running DM->NEO test ({}) on device {} core {}[{}]...",
         mode_name,
-        device->id(),
+        mesh_device->get_device_ids()[0],
         logical_core,
         virtual_core);
 
@@ -155,7 +161,7 @@ void RunTest(
 
     auto release_threads = [&]() {
         std::vector<uint32_t> release_data = {1};
-        tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, tensix_sync_addr, release_data);
+        slow_dispatch::WriteToL1(*mesh_device, logical_core, tensix_sync_addr, release_data);
         distributed::Finish(mesh_device->mesh_command_queue());
     };
 

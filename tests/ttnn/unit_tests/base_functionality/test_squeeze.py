@@ -116,18 +116,23 @@ def test_squeeze_multiple_dims(device, input_shape, dims, layout):
     ],
 )
 @pytest.mark.parametrize(
-    "input_shape, dims, expected_exception",
+    "input_shape, dims, expected_exception, expected_message",
     [
-        ((1, 1, 1, 256), [4], RuntimeError),  # Out of range positive index
-        ((1, 1, 1, 256), [-5], RuntimeError),  # Out of range negative index
-        ((1, 1, 1, 256), [0, 0], RuntimeError),  # Duplicate indices
-        ((1, 1, 1, 256), [0, -4], RuntimeError),  # Duplicate indices (positive and negative)
+        ((1, 1, 1, 256), [4], RuntimeError, "Dimension out of range"),  # Out of range positive index
+        ((1, 1, 1, 256), [-5], RuntimeError, "Dimension out of range"),  # Out of range negative index
+        ((1, 1, 1, 256), [0, 0], RuntimeError, "appears multiple times"),  # Duplicate indices
+        (
+            (1, 1, 1, 256),
+            [0, -4],
+            RuntimeError,
+            "appears multiple times",
+        ),  # Duplicate indices (positive and negative)
     ],
 )
-def test_squeeze_error_cases(device, input_shape, dims, expected_exception, layout):
+def test_squeeze_error_cases(device, input_shape, dims, expected_exception, expected_message, layout, expect_error):
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
-    with pytest.raises(expected_exception):
+    with expect_error(expected_exception, expected_message):
         ttnn.squeeze(input_tensor, dims)
 
 

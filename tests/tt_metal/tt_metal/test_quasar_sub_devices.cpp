@@ -13,6 +13,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/sub_device.hpp>
+#include "impl/sub_device/sub_device_impl.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 #include <array>
 #include <cstdint>
@@ -81,7 +83,7 @@ distributed::MeshWorkload create_l1_write_workload(
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
-            .hw_config = experimental::DataMovementGen2Config{}}},
+            .hw_config = experimental::DataMovementHardwareConfig{}}},
         .work_units = {experimental::WorkUnitSpec{
             .name = "writer_" + id, .kernels = {kernel_name}, .target_nodes = target_nodes}},
     };
@@ -98,9 +100,9 @@ distributed::MeshWorkload create_l1_write_workload(
     return workload;
 }
 
-uint32_t read_l1_word(IDevice* device, const experimental::NodeCoord& node, uint32_t address) {
+uint32_t read_l1_word(distributed::MeshDevice& mesh_device, const experimental::NodeCoord& node, uint32_t address) {
     std::vector<uint32_t> output(1, 0);
-    detail::ReadFromDeviceL1(device, node, address, sizeof(uint32_t), output);
+    slow_dispatch::ReadFromL1(mesh_device, node, address, sizeof(uint32_t), output);
     return output[0];
 }
 
@@ -115,15 +117,16 @@ SyncWorkloads create_sync_workloads(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const SubDevice& incrementer_sub_device,
     const SubDevice& waiter_sub_device) {
-    const auto waiter_node = waiter_sub_device.cores(HalProgrammableCoreType::TENSIX).ranges().front().start_coord;
-    const auto& incrementer_nodes = incrementer_sub_device.cores(HalProgrammableCoreType::TENSIX);
+    const auto waiter_node =
+        waiter_sub_device.impl()->cores(HalProgrammableCoreType::TENSIX).ranges().front().start_coord;
+    const auto& incrementer_nodes = incrementer_sub_device.impl()->cores(HalProgrammableCoreType::TENSIX);
     const auto syncer_node = incrementer_nodes.ranges().back().end_coord;
     const auto waiter_physical = mesh_device->worker_core_from_logical_core(waiter_node);
     const auto syncer_physical = mesh_device->worker_core_from_logical_core(syncer_node);
     const auto all_nodes = CoreRangeSet(CoreRange(waiter_node, waiter_node))
                                .merge(incrementer_nodes)
                                .merge(CoreRangeSet(CoreRange(syncer_node, syncer_node)));
-    auto semaphore = CreateGlobalSemaphore(mesh_device.get(), all_nodes, 0);
+    auto semaphore = CreateGlobalSemaphore(*mesh_device, all_nodes, 0);
 
     const experimental::KernelSpecName waiter_kernel{"quasar_sub_device_waiter"};
     experimental::ProgramSpec waiter_spec{
@@ -133,7 +136,7 @@ SyncWorkloads create_sync_workloads(
             .source = "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/persistent_waiter.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "num_inc", "sync_core_x", "sync_core_y"}},
-            .hw_config = experimental::DataMovementGen2Config{}}},
+            .hw_config = experimental::DataMovementHardwareConfig{}}},
         .work_units = {experimental::WorkUnitSpec{
             .name = "waiter", .kernels = {waiter_kernel}, .target_nodes = experimental::NodeCoord(waiter_node)}},
     };
@@ -158,7 +161,7 @@ SyncWorkloads create_sync_workloads(
             .source = "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/syncer.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"sem_addr"}},
-            .hw_config = experimental::DataMovementGen2Config{}}},
+            .hw_config = experimental::DataMovementHardwareConfig{}}},
         .work_units = {experimental::WorkUnitSpec{
             .name = "syncer", .kernels = {syncer_kernel}, .target_nodes = experimental::NodeCoord(syncer_node)}},
     };
@@ -179,7 +182,7 @@ SyncWorkloads create_sync_workloads(
             .source = "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/incrementer.cpp",
             .num_threads = 1,
             .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "waiter_core_x", "waiter_core_y"}},
-            .hw_config = experimental::DataMovementGen2Config{}}},
+            .hw_config = experimental::DataMovementHardwareConfig{}}},
         .work_units = {experimental::WorkUnitSpec{
             .name = "incrementer", .kernels = {incrementer_kernel}, .target_nodes = incrementer_nodes}},
     };
@@ -251,11 +254,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDevicePartitionsWorkerGrid) {
         distributed::EnqueueMeshWorkload(cq, workloads.back(), /*blocking=*/i + 1 == partitions.size());
     }
 
-    IDevice* device = mesh_device->get_devices()[0];
     for (size_t i = 0; i < partitions.size(); ++i) {
         const uint32_t value = 0x11110000u + (static_cast<uint32_t>(i) << 16);
         for (const auto& node : partitions[i]) {
-            EXPECT_EQ(read_l1_word(device, node, address), value);
+            EXPECT_EQ(read_l1_word(*mesh_device, node, address), value);
         }
     }
 }
@@ -333,10 +335,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceShardedL1BufferAllocation
         EXPECT_EQ(outputs[i], inputs[i]);
     }
 
-    IDevice* device = mesh_device->get_devices()[0];
     for (size_t i = 0; i < partitions.size(); ++i) {
         for (const auto& node : partitions[i]) {
-            EXPECT_EQ(read_l1_word(device, node, buffers[i]->address()), inputs[i].front());
+            EXPECT_EQ(read_l1_word(*mesh_device, node, buffers[i]->address()), inputs[i].front());
         }
     }
 }
@@ -400,7 +401,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceManagerSwitching) {
     const auto split_manager = mesh_device->create_sub_device_manager(split_sub_devices, kLocalL1Size);
     const uint32_t address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
-    IDevice* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
 
     mesh_device->load_sub_device_manager(combined_manager);
@@ -417,7 +417,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceManagerSwitching) {
         "combined_manager");
     distributed::EnqueueMeshWorkload(cq, combined_workload, /*blocking=*/true);
     for (const auto& node : nodes) {
-        EXPECT_EQ(read_l1_word(device, node, address), 0x33330000u);
+        EXPECT_EQ(read_l1_word(*mesh_device, node, address), 0x33330000u);
     }
 
     mesh_device->load_sub_device_manager(split_manager);
@@ -441,7 +441,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceManagerSwitching) {
     for (size_t i = 0; i < partitions.size(); ++i) {
         const uint32_t value = 0x44440000u + (static_cast<uint32_t>(i) << 16);
         for (const auto& node : partitions[i]) {
-            EXPECT_EQ(read_l1_word(device, node, address), value);
+            EXPECT_EQ(read_l1_word(*mesh_device, node, address), value);
         }
     }
 }

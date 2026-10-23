@@ -34,9 +34,9 @@ prefill, and 200 generated tokens x 2 repeat batches of decode. 749,552 recorded
 python-level calls over 42 distinct ops.
 
 - **38 op files, 134 distinct cases, covering 511,259 captured calls.**
-- **Value coverage: 121 of 134 cases (438,269 of 511,259 calls) are checked against a
-  torch golden**, 2 more (28,944 calls) against the paged-cache postcondition, and 11
-  (44,046 calls) on shape/dtype/placement/finiteness only — rope, both SDPAs, `argmax`,
+- **Value coverage: 126 of 134 cases (467,357 of 511,259 calls) are checked against a
+  torch golden**, 2 more (28,944 calls) against the paged-cache postcondition, and 6
+  (14,958 calls) on shape/dtype/placement/finiteness only — both SDPAs, `argmax`,
   `pad` and `scatter` (see `graph_case.GOLDEN`'s header comment for why each).
 - **37 of 134 cases are marked `emulator`**, spread over 19 of the 38 ops.
 - 4 ops are deliberately not generated (`SKIP_OPS`): `ttnn.deallocate` (234,969 calls,

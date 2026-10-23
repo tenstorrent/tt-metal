@@ -11,6 +11,8 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_numeric_metrics
 
 UINT16_MAX = 65535
+# Smallest tile-aligned width whose indices need 32 bits: 65536 still fits (largest index 65535).
+W_NEEDS_UINT32 = UINT16_MAX + 1 + 32
 TEST_PADDING_VALUE = -42
 
 
@@ -30,8 +32,10 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
 
     # Input tensor
     shape = [N, C, H, W]
-    ttnn_indices_dtype = ttnn.uint16 if W <= UINT16_MAX else ttnn.uint32
-    torch_indices_dtype = torch.uint16 if W <= UINT16_MAX else torch.uint32
+    # Index width follows the tile-padded width; 16 bits hold every width up to 65536 (index 65535).
+    padded_W = -(-W // 32) * 32
+    ttnn_indices_dtype = ttnn.uint16 if padded_W <= UINT16_MAX + 1 else ttnn.uint32
+    torch_indices_dtype = torch.uint16 if padded_W <= UINT16_MAX + 1 else torch.uint32
     torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
     input = torch.randn(shape, dtype=torch_dtype) * 0.9
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
@@ -127,8 +131,9 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
         (1, 1, 32, 64, 3, 4),
         (1, 1, 32, 8192, 3, 6),
         (1, 2048, 1, 64, 1, 8),
-        (1, 1, 32, 32768, 3, 3000),
-        (1, 1, 32, 18992, 3, 3000),
+        # Kt = 94 output tiles, Wt = 97: fills the whole insertion cascade, then merges the last
+        # three tiles in steady state. The wide k=3000 shapes are in the reduction nightly.
+        (1, 1, 32, 3100, 3, 3000),
         (1, 1, 32, 18992, 3, 32),
         (1, 1, 32, 10000, 3, 32),
         (1, 1, 32, 64128, 3, 32),
@@ -215,6 +220,25 @@ def test_topk_sub_core_grids(N, C, H, W, dim, k, dtype, sorted, largest, device,
     run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids, pass_indices_tensor)
 
 
+@pytest.mark.parametrize("W", [40, 1000])
+@pytest.mark.parametrize("largest", [True, False])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+def test_topk_padded_width_sentinel_ties(W, largest, dtype, device):
+    """Rows with fewer than k values beyond the pad sentinel must not return indices into the padding."""
+    k = 32
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    torch.manual_seed(0)
+    torch_input = torch.full((1, 1, 32, W), float("-inf") if largest else float("inf"), dtype=torch_dtype)
+    torch_input[..., :10] = torch.randn((1, 1, 32, 10), dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True)
+    values = ttnn.to_torch(ttnn_values)
+    indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+    assert bool((indices < W).all()), "index points into the padding"
+    assert_equal(torch.topk(torch_input, k, dim=-1, largest=largest, sorted=True).values, values)
+    assert_equal(values, torch.gather(torch_input, -1, indices))
+
+
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16,),
@@ -225,8 +249,8 @@ def test_topk_sub_core_grids(N, C, H, W, dim, k, dtype, sorted, largest, device,
 @pytest.mark.parametrize(
     "N, C, H, W, dim, k",
     (
-        (1, 1, 32, 151936, 3, 50),
-        (1, 1, 32, 128256, 3, 50),
+        # Narrowest width needing 32-bit indices; the 151936 / 128256 vocab widths are in the reduction nightly.
+        (1, 1, 32, W_NEEDS_UINT32, 3, 50),
         (1, 1, 16, 20, 3, 16),
     ),
 )
@@ -400,10 +424,12 @@ def test_topk_preallocated_dtype_raise(value_dtype, index_dtype, device, expect_
         (64, ttnn.bfloat16, ttnn.uint16, False),
         (64, ttnn.bfloat16, ttnn.uint32, False),
         (UINT16_MAX + 1, ttnn.bfloat16, ttnn.uint32, False),
-        (UINT16_MAX + 1, ttnn.bfloat16, ttnn.uint16, True),
+        (UINT16_MAX + 1, ttnn.bfloat16, ttnn.uint16, False),
+        (W_NEEDS_UINT32, ttnn.bfloat16, ttnn.uint32, False),
+        (W_NEEDS_UINT32, ttnn.bfloat16, ttnn.uint16, True),
         (64, ttnn.float32, ttnn.uint16, True),
     ],
-    ids=["w64_u16", "w64_u32", "w65536_u32", "w65536_u16_raises", "fp32_u16_raises"],
+    ids=["w64_u16", "w64_u32", "w65536_u32", "w65536_u16", "w65568_u32", "w65568_u16_raises", "fp32_u16_raises"],
 )
 def test_topk_preallocated_indices_width(W, input_dtype, index_dtype, raises, device, expect_error):
     # index_dtype is the preallocated output indices tensor. A 16-bit one on an input that needs
@@ -450,6 +476,23 @@ def test_topk_fp32_input_with_uint16_indices_tensor_raise(device, expect_error):
 
     with expect_error(RuntimeError, "Optional indices tensor must be UINT32 when input tensor is FLOAT32"):
         ttnn.topk(ttnn_input, k=k, dim=-1, largest=True, sorted=True, indices_tensor=indices_tensor)
+
+
+def test_topk_stable_with_indices_tensor_raise(device, expect_error):
+    # Stable tie-breaking against caller-supplied labels has no defined contract (the engines
+    # disagree when labels are not monotonic in position); the prim rejects the combination.
+    torch.manual_seed(0)
+    k = 32
+    shape = [1, 1, 32, 64]
+
+    input_torch = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(input_torch, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    indices_torch = torch.zeros(shape, dtype=torch.uint16)
+    indices_tensor = ttnn.from_torch(indices_torch, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+
+    with expect_error(RuntimeError, "does not support a custom indices_tensor"):
+        ttnn.topk(ttnn_input, k=k, dim=-1, largest=True, sorted=True, stable=True, indices_tensor=indices_tensor)
 
 
 def test_topk_narrower_indices_tensor_raise(device, expect_error):
@@ -553,11 +596,76 @@ def test_topk_indices_tensor_labels_above_uint16_max(device):
     assert_equal(torch.gather(torch_input, -1, indices - offset), ttnn.to_torch(values))
 
 
+@pytest.mark.parametrize("with_indices_tensor", (False, True), ids=("auto_indices", "uint16_indices_tensor"))
+@pytest.mark.parametrize("placement", ("end", "spread"))
+def test_topk_w65536_uint16_indices_are_exact(placement, with_indices_tensor, device):
+    """A 65536-wide row has indices 0..65535, which fit 16 bits exactly, so the op returns UINT16
+    indices and accepts a UINT16 indices_tensor. The top-k is planted at known columns -- the very
+    last ones (index 65535 first) or spread across the row including 0 and 65535 -- and every
+    returned index must be that column."""
+    W, k = UINT16_MAX + 1, 32
+    columns = (
+        list(range(W - 1, W - 1 - k, -1))
+        if placement == "end"
+        else ([65535, 0, 32767, 65504, 1, 40000, 65534, 12345] + list(range(50000, 50024)))
+    )
+    torch.manual_seed(0)
+    torch_input = torch.rand(1, 1, 32, W) * 0.5  # background in [0, 0.5)
+    planted = torch.linspace(10.0, 1.0, k)  # distinct, descending, far above the background
+    torch_input[..., columns] = planted
+    ttnn_input = ttnn.from_torch(torch_input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    kwargs = {}
+    if with_indices_tensor:
+        kwargs["indices_tensor"] = ttnn.from_torch(
+            torch.arange(W, dtype=torch.int32).repeat(1, 1, 32, 1), ttnn.uint16, layout=ttnn.Layout.TILE, device=device
+        )
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k=k, dim=-1, largest=True, sorted=True, **kwargs)
+
+    assert ttnn_indices.dtype == ttnn.uint16
+    indices = ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64) & 0xFFFF
+    assert_equal(torch.tensor(columns).repeat(1, 1, 32, 1), indices)
+    assert_equal(planted.to(torch.bfloat16).repeat(1, 1, 32, 1), ttnn.to_torch(ttnn_values))
+
+
+@pytest.mark.parametrize("largest", (True, False))
+@pytest.mark.parametrize("k", (32, 64))
+@pytest.mark.parametrize("pattern", ("tie_saturation", "cascade_displacement"))
+def test_topk_stable_w65536_uint16_ties(pattern, k, largest, device):
+    """stable=True at W=65536: the indices fit 16 bits (largest 65535), so this width runs the
+    comparator-stable UINT16 path rather than the rank-stamped 32-bit engine (W_NEEDS_UINT32 and
+    above). Tie-heavy rows -- bulk +-0.5 with the k cut inside the dominant tie group, plus extreme
+    spikes that include the last column, index 65535 -- must break ties by ascending original index
+    exactly as torch-stable does, all the way to the maximum 16-bit index."""
+    torch.manual_seed(11)
+    W = UINT16_MAX + 1
+    shape = [1, 1, 32, W]
+    levels = torch.tensor([-0.5, 0.5], dtype=torch.bfloat16)
+    input = levels[torch.randint(0, 2, shape)]
+    if pattern == "tie_saturation":
+        # 48 strided columns across the row, the first at index 0 and the last at index 65535.
+        extreme_cols = torch.cat([torch.arange(47) * 1291, torch.tensor([W - 1])])
+    else:
+        # 48 strided columns clustered at the top of the row, starting at index 65535.
+        extreme_cols = W - 1 - torch.arange(48) * 157
+    input[..., extreme_cols[0::4]] = 2.0
+    input[..., extreme_cols[1::4]] = 1.0
+    input[..., extreme_cols[2::4]] = -2.0
+    input[..., extreme_cols[3::4]] = -1.0
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True)
+
+    assert ttnn_indices.dtype == ttnn.uint16
+    assert_equal(golden_values, ttnn.to_torch(ttnn_values))
+    assert_equal(order, ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64) & 0xFFFF)
+
+
 def test_topk_indices_tensor_too_narrow_raises(device, expect_error):
-    # W is past 65535, so the op resolves the index dtype to UINT32 and sizes the index CB 32-bit,
+    # W is past 65536, so the op resolves the index dtype to UINT32 and sizes the index CB 32-bit,
     # but the payload here is UINT16. Reject rather than read a 16-bit tensor at a 32-bit stride.
     k = 32
-    W = UINT16_MAX + 1  # smallest width that forces UINT32
+    W = W_NEEDS_UINT32  # smallest tile-aligned width that forces UINT32
     shape = [1, 1, 32, W]
 
     ttnn_input = ttnn.from_torch(
@@ -830,7 +938,7 @@ def test_topk_multicore_values_beyond_first_tile_row(num_rows, largest, device):
 # (input[index] == value, in-range, unique), never index-order equality.
 # ---------------------------------------------------------------------------
 
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
 
 def run_topk_large_k_routed_test(N, C, H, W, k, device):
@@ -844,9 +952,10 @@ def run_topk_large_k_routed_test(N, C, H, W, k, device):
     ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=True, sorted=True)
 
     # Index dtype contract must match the stock device op: UINT16 iff the
-    # tile-padded width fits 16 bits, else UINT32.
+    # tile-padded width fits 16 bits -- every width up to and including 65536,
+    # whose largest index is 65535 -- else UINT32.
     padded_w = 32 * ((W + 31) // 32)
-    uint16_expected = padded_w <= UINT16_MAX
+    uint16_expected = padded_w <= UINT16_MAX + 1
     assert ttnn_indices.dtype == (ttnn.uint16 if uint16_expected else ttnn.uint32)
 
     desired_shape = [N, C, H, k]
@@ -940,26 +1049,31 @@ def test_topk_large_k_routed_single_row(device):
 @pytest.mark.skipif(
     not is_blackhole(), reason="large-k routing is Blackhole-only; stock single-core takes minutes at these shapes"
 )
-def test_topk_large_k_routed_neginf_lanes(device):
+@pytest.mark.parametrize("W", (UINT16_MAX + 1, W_NEEDS_UINT32), ids=("w65536_u16", "w65568_u32"))
+def test_topk_large_k_routed_neginf_lanes(W, device):
     # Rows whose top-k contains exact -inf: the routed path clamps the op's
     # input to the lowest finite bf16 (the op then sees no -inf and stamps a
     # REAL source position for every lane — its 0xFFFFFFFF sentinel never
     # fires) and gathers values from the ORIGINAL tensor, so -inf values are
     # bit-exact and -inf lanes carry real positions (stock/torch parity).
-    # W=65536 is tile-aligned, so every returned index must be a real
+    # W is tile-aligned, so every returned index must be a real
     # in-range column.
     torch.manual_seed(2005)
-    W, k, finite_count = 65536, 512, 100  # W=65536 -> tile-padded > 65535 -> uint32 indices
+    # At W=65536 the indices are UINT16 and the largest real index is 65535, so no lane may come
+    # back as a 16-bit sentinel; W=65568 covers the 32-bit path.
+    k, finite_count = 512, 100
     torch_input = torch.full((1, 1, 32, W), -float("inf"), dtype=torch.bfloat16)
     finite = (torch.randn(1, 1, 32, finite_count) * 0.9).to(torch.bfloat16)
     torch_input[..., :finite_count] = finite
 
     ttnn_input = ttnn.from_torch(torch_input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
     ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=True, sorted=True)
-    assert ttnn_indices.dtype == ttnn.uint32
+    assert ttnn_indices.dtype == (ttnn.uint16 if W <= UINT16_MAX + 1 else ttnn.uint32)
 
     torch_values = ttnn.to_torch(ttnn_values)
-    torch_indices = ttnn.to_torch(ttnn_indices, dtype=torch.uint32).to(torch.int64)
+    torch_indices = ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64) & (
+        0xFFFF if W <= UINT16_MAX + 1 else 0xFFFFFFFF
+    )
     pyt_values, _ = torch.topk(torch_input, k, dim=-1, largest=True, sorted=True)
 
     # Values match torch exactly, including the -inf tail.
@@ -1053,3 +1167,426 @@ def test_topk_large_k_routing_engages(device):
     ttnn.graph.begin_graph_capture()
     ttnn.topk(ttnn_input, 32, dim=-1, largest=True, sorted=True)
     assert not ran_large_indices(ttnn.graph.end_graph_capture())
+
+
+@pytest.mark.parametrize(
+    "W, k",
+    (
+        (64, 4),
+        (64, 8),
+        (64, 16),
+        (64, 32),
+        (64, 64),
+        (8192, 32),  # W >= 8192 -> multi-core path
+        (8192, 64),
+    ),
+)
+@pytest.mark.parametrize("largest", [True, False])
+def test_topk_stable_index_parity(W, k, largest, device):
+    """stable=True must break exact-value ties by lowest original index, matching torch's
+    stable ordering bit-exactly for both values and indices (no tie tolerance)."""
+    torch.manual_seed(0)
+    shape = [1, 1, 32, W]
+    # Only 8 distinct values across W elements per row -> many exact ties in every row.
+    input = torch.randint(0, 8, shape).to(torch.bfloat16)
+
+    # torch.topk is NOT stable, so derive the golden from a stable argsort instead.
+    order = torch.argsort(input, dim=-1, descending=largest, stable=True)[..., :k]
+    golden_values = torch.gather(input, -1, order)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    # k < 32 is padded up to a tile-aligned k internally and sliced back to k on output.
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True)
+
+    ttnn_torch_values = ttnn.to_torch(ttnn_values)
+    ttnn_torch_indices = ttnn.to_torch(ttnn_indices).to(torch.int64)
+
+    assert_equal(golden_values, ttnn_torch_values)
+    assert_equal(order, ttnn_torch_indices)
+
+
+def _stable_topk_golden(input, k, largest):
+    # torch.topk is NOT stable, so derive the golden from a stable argsort instead.
+    order = torch.argsort(input, dim=-1, descending=largest, stable=True)[..., :k]
+    values = torch.gather(input, -1, order)
+    return values, order
+
+
+@pytest.mark.parametrize("logit_scale", (1.0, 4.0, 8.0))
+def test_topk_stable_single_row_sigmoid_ties(logit_scale, device):
+    """Single-row, non-pow2 W, k > 64: the PanSegformerHead box selection (300 queries x 3 classes)."""
+    torch.manual_seed(0)
+    # bf16 sigmoid saturates near 1.0, so the top 100 holds long runs of exact ties.
+    input = torch.sigmoid(torch.randn(1, 900) * logit_scale).to(torch.bfloat16)
+    golden_values, order = _stable_topk_golden(input, 100, largest=True)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, 100, dim=-1, largest=True, sorted=True, stable=True)
+
+    assert_equal(golden_values, ttnn.to_torch(ttnn_values))
+    assert_equal(order, ttnn.to_torch(ttnn_indices).to(torch.int64))
+
+
+@pytest.mark.parametrize("W, k", ((8192, 32),))  # multi-core band, 32-bit index CBs
+@pytest.mark.parametrize("index_dtype", (ttnn.uint32, ttnn.int32))
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_stable_index_parity_32bit_preallocated(W, k, index_dtype, largest, device):
+    """stable=True with preallocated 32-bit index outputs must keep the torch-stable
+    tie order. Routes 32-bit index CBs through the multi-core band (W in [8192, 65535),
+    pow2, k <= 64), i.e. the comparator-stable network with UInt32 index transport."""
+    torch.manual_seed(1)
+    shape = [1, 1, 32, W]
+    # Few distinct values (negative and positive) -> many exact ties in every row.
+    input = torch.randint(-4, 4, shape).to(torch.bfloat16)
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    out_shape = shape.copy()
+    out_shape[-1] = k
+    value_tensor = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    index_tensor = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.int32), index_dtype, layout=ttnn.Layout.TILE, device=device
+    )
+
+    ttnn_values, ttnn_indices = ttnn.topk(
+        ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True, output_tensor=(value_tensor, index_tensor)
+    )
+    assert ttnn_indices.dtype == index_dtype
+
+    ttnn_torch_values = ttnn.to_torch(ttnn_values)
+    ttnn_torch_indices = ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64)
+
+    assert_equal(golden_values, ttnn_torch_values)
+    assert_equal(order, ttnn_torch_indices)
+
+
+@pytest.mark.parametrize("k", (32, 64))
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_stable_multicore_prealloc_ties(k, largest, device):
+    """Tie-heavy MULTICORE stable coverage (W=8192, preallocated UINT32 indices force 32-bit
+    index CBs through the multicore band, i.e. the index-aware comparator engine): rows
+    dominated by the two middle tie levels (+-0.5) with the k cut inside the dominant group,
+    plus scattered +-2.0/+-1.0 spikes. The width chunk is split across local cores whose sort
+    directions ALTERNATE, so ties must keep ascending-original-index order through every
+    direction-flipped core's merges/rebuilds and the final core's gather merge — the tie class
+    a rank-stamped engine would need mirrored range stamps for (implemented and silicon-
+    validated, then dropped: measured +10..16% vs the comparator at every multicore width —
+    the band is DM-bound and the Float32 tag transport costs more than the comparator saves).
+    k=64 exercises the two-tile split merge calls. Strict torch-stable parity."""
+    torch.manual_seed(11)
+    W = 8192
+    shape = [1, 1, 32, W]
+    levels = torch.tensor([-0.5, 0.5], dtype=torch.bfloat16)
+    input = levels[torch.randint(0, 2, shape)]
+    # 48 spike columns strided across the whole row (multiple per local-core chunk),
+    # interleaved across the four extreme levels.
+    spike_cols = torch.arange(48) * 167
+    input[..., spike_cols[0::4]] = 2.0
+    input[..., spike_cols[1::4]] = 1.0
+    input[..., spike_cols[2::4]] = -2.0
+    input[..., spike_cols[3::4]] = -1.0
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    out_shape = shape.copy()
+    out_shape[-1] = k
+    value_tensor = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    index_tensor = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.int32), ttnn.uint32, layout=ttnn.Layout.TILE, device=device
+    )
+    ttnn_values, ttnn_indices = ttnn.topk(
+        ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True, output_tensor=(value_tensor, index_tensor)
+    )
+    assert ttnn_indices.dtype == ttnn.uint32
+
+    assert_equal(golden_values, ttnn.to_torch(ttnn_values))
+    assert_equal(order, ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64))
+
+
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_stable_multicore_prealloc_signed_zero(largest, device):
+    """bf16 +-0.0 tie class on the multicore comparator engine (W=8192, preallocated UINT32
+    indices): torch treats +-0 as ONE tie class broken by index, across the per-core chunks
+    and the final core's gather merges."""
+    torch.manual_seed(12)
+    W, k = 8192, 32
+    shape = [1, 1, 32, W]
+    input = torch.randn(shape, dtype=torch.bfloat16).abs() + 0.5  # positive normals
+    zero_cols = torch.arange(48) * 167
+    input[..., zero_cols[0::2]] = 0.0
+    input[..., zero_cols[1::2]] = -0.0
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    out_shape = shape.copy()
+    out_shape[-1] = k
+    value_tensor = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    index_tensor = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.int32), ttnn.uint32, layout=ttnn.Layout.TILE, device=device
+    )
+    ttnn_values, ttnn_indices = ttnn.topk(
+        ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True, output_tensor=(value_tensor, index_tensor)
+    )
+
+    assert_equal(golden_values, ttnn.to_torch(ttnn_values))
+    assert_equal(order, ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64))
+
+
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_stable_multicore_fused_signed_zero(largest, device):
+    """bf16 +-0.0 tie class on the multicore FUSED-KEY engine (W=8192, default UINT16 indices): the
+    bf16 -> 32-bit-DEST widening datacopy folds -0.0 into +0.0 before the keys are fused, so both
+    zeros form ONE tie class broken by index, like torch. Zeros straddle the k cut for smallest."""
+    torch.manual_seed(12)
+    W, k = 8192, 32
+    shape = [1, 1, 32, W]
+    input = torch.randn(shape, dtype=torch.bfloat16).abs() + 0.5  # positive normals
+    zero_cols = torch.arange(48) * 167
+    input[..., zero_cols[0::2]] = 0.0
+    input[..., zero_cols[1::2]] = -0.0
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True)
+    # u16 indices + bf16 values in the multicore band is exactly the fused-key engine's gate.
+    assert ttnn_indices.dtype == ttnn.uint16
+
+    assert_equal(golden_values, ttnn.to_torch(ttnn_values))
+    assert_equal(order, ttnn.to_torch(ttnn_indices).to(torch.int64))
+
+
+@pytest.mark.parametrize("W, k", ((64, 32), (8192, 32)))
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_stable_index_parity_float32(W, k, largest, device):
+    """stable=True with FLOAT32 values must keep the torch-stable tie order. FLOAT32
+    forces 32-bit index CBs and fp32 dest, exercising the INT32 index load/store arms
+    of the comparator-stable network (single-core at W=64; W=8192 takes whatever the
+    factory selects for fp32 in the multi-core band)."""
+    torch.manual_seed(2)
+    shape = [1, 1, 32, W]
+    # Small integers, exactly representable in fp32 -> exact ties, both signs.
+    input = torch.randint(-4, 4, shape).to(torch.float32)
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.float32, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True)
+
+    ttnn_torch_values = ttnn.to_torch(ttnn_values)
+    ttnn_torch_indices = ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64)
+
+    assert_equal(golden_values, ttnn_torch_values)
+    assert_equal(order, ttnn_torch_indices)
+
+
+@pytest.mark.parametrize("W, k", ((W_NEEDS_UINT32, 32), (W_NEEDS_UINT32, 16), (131072, 32)))
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_stable_index_parity_wide_u32(W, k, largest, device):
+    """stable=True at W > 65536: indices no longer fit 16 bits, so the auto-selected
+    index dtype is UINT32 and the single-core path runs the RANK-STAMPED fast engine
+    (sign-conditioned local-rank tags on the unstable network, true u32 indices riding
+    index tracking) — bf16-family only; fp32 keeps the comparator. k > 32 runs the
+    chain-rank stamped insertion cascade."""
+    torch.manual_seed(3)
+    shape = [1, 1, 32, W]
+    input = torch.randint(-4, 4, shape).to(torch.bfloat16)
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True)
+    assert ttnn_indices.dtype == ttnn.uint32
+
+    ttnn_torch_values = ttnn.to_torch(ttnn_values)
+    ttnn_torch_indices = ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64)
+
+    assert_equal(golden_values, ttnn_torch_values)
+    assert_equal(order, ttnn_torch_indices)
+
+
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_stable_wide_tie_saturation(largest, device):
+    """Tie-heavy rank-stamped coverage at W=65568 (the smallest tile-aligned width that needs 32-bit indices): rows bulk-filled from the two middle
+    levels (+-0.5), plus 12 scattered occurrences each of +-2.0 and +-1.0 at strided
+    columns. In each direction the top-32 therefore spans THREE exact-tie groups —
+    two extreme groups (12 elements each) entirely inside the top-k, and the k=32 cut
+    landing inside the third (dominant ~32k-element) group — so every tie must break by
+    ascending original index across the full 2049-tile insertion pipeline (accumulator
+    vs incoming chunk at every step). Strict torch-stable parity on values and indices."""
+    torch.manual_seed(5)
+    W, k = W_NEEDS_UINT32, 32
+    shape = [1, 1, 32, W]
+    levels = torch.tensor([-0.5, 0.5], dtype=torch.bfloat16)
+    input = levels[torch.randint(0, 2, shape)]
+    # 48 distinct strided columns (1291 * 47 < W, so no modular collisions), interleaved
+    # across the four extreme levels -> 12 scattered occurrences each, spanning many
+    # insertion chunks. Same columns in every row; ties still break per-row by index.
+    extreme_cols = torch.arange(48) * 1291
+    input[..., extreme_cols[0::4]] = 2.0
+    input[..., extreme_cols[1::4]] = 1.0
+    input[..., extreme_cols[2::4]] = -2.0
+    input[..., extreme_cols[3::4]] = -1.0
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True)
+    assert ttnn_indices.dtype == ttnn.uint32
+
+    assert_equal(golden_values, ttnn.to_torch(ttnn_values))
+    assert_equal(order, ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64))
+
+
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_stable_wide_signed_zero(largest, device):
+    """bf16 +-0.0 tie class at W=65568 (the smallest tile-aligned width that needs 32-bit indices) on the rank-stamped engine: the local-position
+    stamp folds -0.0 into +0.0 before tagging, so the whole zero group breaks by index
+    like torch (which treats +-0 as one tie class). Zeros straddle the k cut for the
+    smallest direction; normals cover the largest direction."""
+    torch.manual_seed(6)
+    W, k = W_NEEDS_UINT32, 32
+    shape = [1, 1, 32, W]
+    input = torch.randn(shape, dtype=torch.bfloat16).abs() + 0.5  # positive normals
+    # 48 zeros per row, alternating +0.0 / -0.0, scattered across the row (so the zero
+    # tie group spans many insertion chunks and straddles k=32 for smallest).
+    zero_cols = torch.arange(48) * 1291 % W
+    input[..., zero_cols[0::2]] = 0.0
+    input[..., zero_cols[1::2]] = -0.0
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True)
+
+    # torch.eq treats -0.0 == 0.0, so the values check is sign-insensitive by design
+    # (the device canonicalizes -0.0 to +0.0 inside the compute).
+    assert_equal(golden_values, ttnn.to_torch(ttnn_values))
+    assert_equal(order, ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64))
+
+
+@pytest.mark.parametrize("largest", (True, False))
+@pytest.mark.parametrize("k", (64, 128))
+def test_topk_stable_wide_cascade_parity(k, largest, device):
+    """k > 32 at W=65568 (the smallest tile-aligned width that needs 32-bit indices) runs the multi-tile insertion CASCADE (output_tiles = k/32)
+    on the rank-stamped engine with CHAIN-RANK stamps: each level re-stamps its
+    accumulator tile with that tile's round-start chain-position range while the
+    loser tile's tags ride to the next level. Plain data-random parity."""
+    torch.manual_seed(7)
+    W = W_NEEDS_UINT32
+    shape = [1, 1, 32, W]
+    input = torch.randint(-4, 4, shape).to(torch.bfloat16)
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True)
+
+    assert_equal(golden_values, ttnn.to_torch(ttnn_values))
+    assert_equal(order, ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64))
+
+
+@pytest.mark.parametrize("largest", (True, False))
+@pytest.mark.parametrize("k", (64, 128))
+def test_topk_stable_wide_cascade_displacement_ties(k, largest, device):
+    """The cascade's adversarial tie pattern: rows dominated by the two middle tie
+    levels (+-0.5) with the k cut landing INSIDE the dominant tie group, plus rare
+    extreme spikes (+-2.0 / +-1.0) concentrated at HIGH columns. The late spikes
+    displace long-accumulated low-index ties out of upper accumulator tiles mid-round,
+    so displaced OLD elements (lower original index) meet NEWER accumulator entries at
+    every lower cascade level — exactly the case naive per-level position stamps break
+    (the displaced element would be ranked after the accumulator ties it must precede).
+    Chain-rank stamps keep those ties in true index order; strict torch-stable parity."""
+    torch.manual_seed(9)
+    W = W_NEEDS_UINT32
+    shape = [1, 1, 32, W]
+    levels = torch.tensor([-0.5, 0.5], dtype=torch.bfloat16)
+    input = levels[torch.randint(0, 2, shape)]
+    # 48 spike columns clustered in the top eighth of the row (all >= 7*W/8), strided to
+    # stay distinct, interleaved across the four extreme levels. They arrive in the last
+    # rounds of the insertion pipeline, after the accumulator chain is full of ties.
+    spike_cols = W - 1 - torch.arange(48) * 157
+    input[..., spike_cols[0::4]] = 2.0
+    input[..., spike_cols[1::4]] = 1.0
+    input[..., spike_cols[2::4]] = -2.0
+    input[..., spike_cols[3::4]] = -1.0
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True)
+    assert ttnn_indices.dtype == ttnn.uint32
+
+    assert_equal(golden_values, ttnn.to_torch(ttnn_values))
+    assert_equal(order, ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64))
+
+
+def test_topk_stable_wide_program_cache(device):
+    """Program-cache behavior across the rank-stamp variants: W=65568 stable k=32
+    (rank-stamped, single tile), W=65568 unstable (plain network) and W=65568
+    stable k=64 (rank-stamped CASCADE, two output tiles) must be three DISTINCT
+    cache entries — the gate inputs (stable flag, k) are covered by the program
+    hash — and a cache-hit rerun of the rank-stamped program on fresh data must
+    stay torch-stable-correct (guards the classic works-first-time /
+    wrong-on-second-run failure mode)."""
+    torch.manual_seed(8)
+    W = W_NEEDS_UINT32
+    # 64 rows: a shape no other test in this module uses at this width, so the three
+    # programs below are guaranteed fresh entries regardless of what ran earlier in
+    # the same device session.
+    shape = [1, 1, 64, W]
+
+    def run(stable, k, seed):
+        torch.manual_seed(seed)
+        input = torch.randint(-4, 4, shape).to(torch.bfloat16)
+        ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+        v, i = ttnn.topk(ttnn_input, k, dim=-1, largest=True, sorted=True, stable=stable)
+        return input, ttnn.to_torch(v), ttnn.to_torch(i, dtype=torch.int32).to(torch.int64)
+
+    base_entries = device.num_program_cache_entries()
+
+    inp, v, i = run(stable=True, k=32, seed=100)  # rank-stamped
+    golden_v, golden_i = _stable_topk_golden(inp, 32, True)
+    assert_equal(golden_v, v)
+    assert_equal(golden_i, i)
+    after_first = device.num_program_cache_entries()
+    assert after_first > base_entries, "first rank-stamped run must MISS the program cache"
+
+    run(stable=False, k=32, seed=101)  # unstable network: different program
+    after_unstable = device.num_program_cache_entries()
+    assert after_unstable > after_first, "stable and unstable topk must not share a cache entry"
+
+    run(stable=True, k=64, seed=102)  # rank-stamped cascade (Ktiles=2): different program
+    after_k64 = device.num_program_cache_entries()
+    assert after_k64 > after_unstable, "k=32 and k=64 rank-stamped programs must not share a cache entry"
+
+    # Cache-hit rerun of the rank-stamped program on fresh data.
+    inp2, v2, i2 = run(stable=True, k=32, seed=103)
+    assert device.num_program_cache_entries() == after_k64, "rerun must HIT the program cache"
+    golden_v2, golden_i2 = _stable_topk_golden(inp2, 32, True)
+    assert_equal(golden_v2, v2)
+    assert_equal(golden_i2, i2)
+
+
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_stable_float32_signed_zero(largest, device):
+    """FLOAT32 rows mixing +0.0 and -0.0: torch treats them as one tie class (broken by
+    index); the sign-magnitude comparator must not split them into two classes."""
+    torch.manual_seed(4)
+    W, k = 64, 32
+    shape = [1, 1, 32, W]
+    input = torch.randn(shape, dtype=torch.float32)
+    # Interleave +0.0 / -0.0 across half of each row, spanning the k boundary for both
+    # directions (the rest are +/- normals).
+    input[..., 0:32:2] = 0.0
+    input[..., 1:32:2] = -0.0
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.float32, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True)
+
+    ttnn_torch_values = ttnn.to_torch(ttnn_values)
+    ttnn_torch_indices = ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64)
+
+    # torch.eq treats -0.0 == 0.0, so the values check is sign-insensitive by design.
+    assert_equal(golden_values, ttnn_torch_values)
+    assert_equal(order, ttnn_torch_indices)

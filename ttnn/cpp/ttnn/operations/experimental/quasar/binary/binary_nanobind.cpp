@@ -1077,6 +1077,62 @@ void bind_div(
 }
 
 // Free functions for multiply and divide with fast_and_approximate_mode
+Tensor bias_gelu_fast_approx_tensor_scalar(
+    const Tensor& input_tensor_a,
+    unary::ScalarVariant value,
+    bool fast_and_approximate_mode,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<ttnn::Tensor>& output_tensor,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt) {
+    return bias_gelu(
+        input_tensor_a,
+        value,
+        dtype,
+        memory_config,
+        output_tensor,
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        sub_core_grids,
+        sub_device_id,
+        fast_and_approximate_mode);
+}
+
+Tensor bias_gelu_fast_approx_tensor_tensor(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    bool fast_and_approximate_mode,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<ttnn::Tensor>& output_tensor,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt) {
+    return bias_gelu(
+        input_tensor_a,
+        input_tensor_b,
+        dtype,
+        memory_config,
+        output_tensor,
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        sub_core_grids,
+        sub_device_id,
+        fast_and_approximate_mode);
+}
+
 Tensor multiply_fast_approx_tensor_scalar(
     const Tensor& input_tensor_a,
     unary::ScalarVariant value,
@@ -1826,14 +1882,15 @@ void py_module(nb::module_& mod) {
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
-    detail::bind_binary_operation<"bias_gelu">(
+    detail::bind_binary_operation_with_fast_approx<"bias_gelu">(
         mod,
         R"doc(Computes bias_gelu of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|bias_gelu|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        static_cast<detail::BinaryOpTensorScalarFn>(&bias_gelu),
-        static_cast<detail::BinaryOpTensorTensorFn>(&bias_gelu),
-        ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        &detail::bias_gelu_fast_approx_tensor_scalar,
+        &detail::bias_gelu_fast_approx_tensor_tensor,
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc",
+        R"doc(When :attr:`fast_and_approximate_mode` is `True`, the gelu uses the fast lookup-table approximation.
+        When it is `False` (default), the accurate gelu is used, matching the default of :attr:`ttnn.gelu`.)doc");
 
     detail::bind_binary_operation_with_fast_approx<"multiply">(
         mod,
@@ -1914,7 +1971,7 @@ void py_module(nb::module_& mod) {
 
     detail::bind_bitwise_binary_ops_operation<"bitwise_right_shift">(
         mod,
-        R"doc(Perform bitwise_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31))doc",
+        R"doc(Perform bitwise_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. Int32 uses an arithmetic shift; uint32 uses a logical shift. For uint32, shift counts >= 32 saturate to 31 for both scalar and tensor counts, matching scalar `right_shift_tile`. For int32, counts outside [0, 31] produce 0.)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         static_cast<detail::BitwiseScalarFn>(&bitwise_right_shift),
         static_cast<detail::BitwiseTensorFn>(&bitwise_right_shift),
@@ -1932,7 +1989,7 @@ void py_module(nb::module_& mod) {
 
     detail::bind_binary_operation<"logical_right_shift">(
         mod,
-        R"doc(Perform logical_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31). Logical right shift fills vacated bits with zeros. Equivalent to integer division by 2^shift_amt.)doc",
+        R"doc(Perform logical_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. Vacated bits are filled with zeros. Shift counts outside [0, 31] produce 0. Equivalent to integer division by 2^shift_amt for in-range counts.)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|logical_right_shift|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         static_cast<detail::BinaryOpTensorScalarFn>(&logical_right_shift),
         static_cast<detail::BinaryOpTensorTensorFn>(&logical_right_shift),

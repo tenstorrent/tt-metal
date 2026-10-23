@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal {
 
@@ -102,6 +103,11 @@ tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype)
         case tt::tt_metal::DataType::FP8_E4M3: return tt::DataFormat::Fp8_e4m3;
         default: TT_THROW("Unsupported DataType"); return tt::DataFormat::Float16_b;  // for clang-tidy
     }
+}
+
+tt::DataFormat cb_dataformat_for(tt::tt_metal::DataType datatype) {
+    return datatype == tt::tt_metal::DataType::INT8 ? tt::DataFormat::UInt8
+                                                    : datatype_to_dataformat_converter(datatype);
 }
 
 tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataformat) {

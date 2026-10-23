@@ -12,6 +12,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/ccl/shared_with_host/snake_ring.hpp"
 #include <tt-metalium/global_semaphore.hpp>
 #include "ttnn/global_semaphore.hpp"
 
@@ -25,7 +26,6 @@
 namespace ttnn::experimental::prim {
 
 struct RingAttentionAllGatherAsyncParams {
-    std::vector<IDevice*> devices;
     int32_t dim = 0;
     uint32_t num_links = 1;
     uint32_t ring_size = 0;
@@ -35,9 +35,13 @@ struct RingAttentionAllGatherAsyncParams {
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     std::optional<uint32_t> cluster_axis;
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
+    bool full_mesh = false;
+    ttnn::ccl::snake_ring::Orientation snake_orientation = ttnn::ccl::snake_ring::Orientation::Row;
+    uint32_t mesh_rows = 0;
+    uint32_t mesh_cols = 0;
+    std::optional<uint64_t> route_plan_hash;
 
     RingAttentionAllGatherAsyncParams(
-        std::vector<IDevice*> devices,
         int32_t dim,
         uint32_t num_links,
         uint32_t ring_size,
@@ -46,8 +50,12 @@ struct RingAttentionAllGatherAsyncParams {
         std::vector<GlobalSemaphore> semaphore,
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
         std::optional<uint32_t> cluster_axis,
-        ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR) :
-        devices(std::move(devices)),
+        ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
+        bool full_mesh = false,
+        ttnn::ccl::snake_ring::Orientation snake_orientation = ttnn::ccl::snake_ring::Orientation::Row,
+        uint32_t mesh_rows = 0,
+        uint32_t mesh_cols = 0,
+        std::optional<uint64_t> route_plan_hash = std::nullopt) :
         dim(dim),
         num_links(num_links),
         ring_size(ring_size),
@@ -56,18 +64,45 @@ struct RingAttentionAllGatherAsyncParams {
         semaphore(std::move(semaphore)),
         sub_device_id(sub_device_id),
         cluster_axis(cluster_axis),
-        core_allocation_strategy(core_allocation_strategy) {}
+        core_allocation_strategy(core_allocation_strategy),
+        full_mesh(full_mesh),
+        snake_orientation(snake_orientation),
+        mesh_rows(mesh_rows),
+        mesh_cols(mesh_cols),
+        route_plan_hash(route_plan_hash) {}
 
     // Restrict program-cache hashing and the canonical key to structure-affecting fields only.
-    // Excludes runtime-only `devices` (raw IDevice* pointers), `semaphore` (GlobalSemaphore objects
-    // whose addresses are passed to runtime args), and `core_allocation_strategy` (effectively
-    // constant; not part of the historical custom hash). `sub_device_id` is the structural source of
-    // the worker-core range set the previous custom hash encoded.
+    // Excludes `semaphore` (GlobalSemaphore objects whose addresses are passed to runtime args) and
+    // `core_allocation_strategy` (effectively constant; not part of the historical custom hash).
+    // `sub_device_id` is the structural source of the worker-core range set the previous custom hash
+    // encoded.
     static constexpr auto attribute_names = std::forward_as_tuple(
-        "dim", "num_links", "ring_size", "output_mem_config", "topology", "sub_device_id", "cluster_axis");
+        "dim",
+        "num_links",
+        "ring_size",
+        "output_mem_config",
+        "topology",
+        "sub_device_id",
+        "cluster_axis",
+        "full_mesh",
+        "snake_orientation",
+        "mesh_rows",
+        "mesh_cols",
+        "route_plan_hash");
     auto attribute_values() const {
         return std::forward_as_tuple(
-            dim, num_links, ring_size, output_mem_config, topology, sub_device_id, cluster_axis);
+            dim,
+            num_links,
+            ring_size,
+            output_mem_config,
+            topology,
+            sub_device_id,
+            cluster_axis,
+            full_mesh,
+            snake_orientation,
+            mesh_rows,
+            mesh_cols,
+            route_plan_hash);
     }
 };
 

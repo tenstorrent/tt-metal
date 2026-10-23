@@ -154,19 +154,19 @@ def clamp_max_bw(x, y):
 
 
 def gelu_bw_none(x, y):
-    ttnn.gelu_bw(x, y, approximate="none")
+    ttnn.gelu_bw(x, y, variant=ttnn.GeluVariant.Accurate)
 
 
 def gelu_bw_tanh(x, y):
-    ttnn.gelu_bw(x, y, approximate="tanh")
+    ttnn.gelu_bw(x, y, variant=ttnn.GeluVariant.Tanh)
 
 
 def bias_gelu_unary_bw_none(x, y):
-    ttnn.bias_gelu_bw(x, y, bias=3.1, approximate="none")
+    ttnn.bias_gelu_bw(x, y, bias=3.1, variant=ttnn.GeluVariant.Accurate)
 
 
 def bias_gelu_unary_bw_tanh(x, y):
-    ttnn.bias_gelu_bw(x, y, bias=3.1, approximate="tanh")
+    ttnn.bias_gelu_bw(x, y, bias=3.1, variant=ttnn.GeluVariant.Tanh)
 
 
 def softplus_bw(x, y):
@@ -1351,22 +1351,6 @@ def swiglu_1(x):
     ttnn.swiglu(x, -1)
 
 
-def glu_2(x):
-    ttnn.glu(x, -2)
-
-
-def geglu_2(x):
-    ttnn.geglu(x, -2)
-
-
-def reglu_2(x):
-    ttnn.reglu(x, -2)
-
-
-def swiglu_2(x):
-    ttnn.swiglu(x, -2)
-
-
 def repeat(x):
     ttnn.repeat(x, ttnn.Shape((1, 1, 1, 4)))
 
@@ -2122,22 +2106,6 @@ all_unary_ops = [
         "name": "ttnn.swiglu_dim_3",
     },
     {
-        "op": glu_2,
-        "name": "ttnn.glu_dim_2",
-    },
-    {
-        "op": geglu_2,
-        "name": "ttnn.geglu_dim_2",
-    },
-    {
-        "op": reglu_2,
-        "name": "ttnn.reglu_dim_2",
-    },
-    {
-        "op": swiglu_2,
-        "name": "ttnn.swiglu_dim_2",
-    },
-    {
         "op": repeat,
         "name": "ttnn.repeat",
     },
@@ -2397,11 +2365,11 @@ def where_bw(x, y, z):
 
 
 def bias_gelu_bw_none(x, y, z):
-    ttnn.bias_gelu_bw(x, y, z, approximate="none")
+    ttnn.bias_gelu_bw(x, y, z, variant=ttnn.GeluVariant.Accurate)
 
 
 def bias_gelu_bw_tanh(x, y, z):
-    ttnn.bias_gelu_bw(x, y, z, approximate="tanh")
+    ttnn.bias_gelu_bw(x, y, z, variant=ttnn.GeluVariant.Tanh)
 
 
 def lerp_bw_1(x, y, z):

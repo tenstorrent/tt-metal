@@ -57,6 +57,9 @@ class SweepsConfig:
     measure_perf_with_cache: bool = False
     measure_device_perf: bool = False
     measure_memory: bool = False
+    # With measure_device_perf, keep building sweep inputs on the device (sweep_utils/tensor_setup.py
+    # otherwise builds them on the host). The setup programs then count toward the op.
+    device_side_setup: bool = False
     dry_run: bool = False
     sweeps_tag: str | None = None
     skip_modules: str | None = None
@@ -91,6 +94,7 @@ def create_config_from_args(args) -> SweepsConfig:
         measure_perf_with_cache=args.perf_with_cache,
         measure_device_perf=args.device_perf,
         measure_memory=args.measure_memory,
+        device_side_setup=args.device_side_setup or os.environ.get("TTNN_SWEEP_DEVICE_SIDE_SETUP") == "1",
         dry_run=args.dry_run,
         sweeps_tag=args.tag,
         skip_modules=args.skip_modules,
@@ -747,6 +751,19 @@ def _is_device_hang_message(message) -> bool:
 _DEVICE_FATAL_SIGNATURES = (
     "unexpected run_mailbox value",
     "read unexpected run_mailbox",
+    # The PCIe link to a board is returning all-ones, i.e. the board has fallen off the bus.
+    # UMD raises it as PcieHangError from device/tt_device/tt_device_error.cpp:
+    #   Read 0xffffffff over PCIe ID 13: the board should be reset.
+    # Same class as the run_mailbox wedge and just as sticky -- a board that stops answering
+    # over PCIe does not come back within the job, and every subsequent vector fails on it
+    # identically. Seen on scheduled lead-models run 35046397921 job mesh8x4_col_2d, where all
+    # 23 of the job's failing vectors carried this one message and were booked as test
+    # failures; three sibling Galaxy lanes in the same run independently reported a failed
+    # tt-smi reset of device 16 and a device canary of 2+2 != 4 returning 0.0 across all
+    # 32768 elements, so the board really was gone rather than the op being wrong.
+    # Matched on the invariant tail: both the value read and the PCIe ID are format
+    # substitutions in the UMD message and vary between boards and faults.
+    "the board should be reset",
 )
 
 
@@ -885,6 +902,19 @@ _FABRIC_INFRA_SIGNATURES = (
     # failures for one broken runner. Nothing was tested, so this is NOT_RUN + abort.
     "devices are available in the system mesh",
     "requested_size <= system_size",
+    # The host's mesh came up in a SHAPE the traced topology cannot be mapped into, which is the
+    # sibling of the two signatures above (those are "not enough chips", this is "wrong shape").
+    # SystemMesh::Impl::get_mapped_devices rotates the requested shape looking for a fit and
+    # throws from tt_metal/distributed/system_mesh.cpp:220 when none of the rotations fit:
+    #   Requested mesh is too big and is not rotatable: MeshShape([4, 4]) and
+    #   SystemMesh MeshShape([32, 1]), offset MeshCoordinate([0, 0])
+    # Seen on scheduled lead-models runs 35482911171 (158 occurrences) and 35552969641, where a
+    # Galaxy host enumerated as a 32x1 system mesh: every 2D lane (4x8, 8x4, 4x4) failed to open
+    # its mesh and was booked as FAIL_ASSERT_EXCEPTION, while the 1x32 lane on the same host ran
+    # -- so the vectors were fine and the host's shape was not. Mesh open happens before any
+    # kernel runs, so nothing was tested: NOT_RUN + abort.
+    # Matched on the invariant part of the format string; both shapes and the offset vary.
+    "too big and is not rotatable",
     # The fabric routers never reached the synced state, so the control plane never came up and
     # no kernel ran. Seen on lead-models run 30696173498 job mesh4x4_col_2d_conv2d (a HEALTHY
     # 32-chip runner, topology OK):
@@ -947,6 +977,26 @@ def _set_crash_hang_defaults(result):
     result["num_cores"] = None
     result["peak_l1_memory_aggregate"] = None
     result["peak_l1_memory_device"] = None
+
+
+def _stamp_result_footer(result, original_vector_data):
+    """Stamp the fields every exported result must carry, whatever path produced it.
+
+    end_time_ts is not optional downstream: result_destination maps it to OpTest.test_end_ts,
+    whose pydantic model rejects None, so a result that reaches export without it takes the
+    whole export down with a ValidationError (#54543).
+
+    Most results get these from the footer at the end of the execute_suite loop body, but the
+    paths that abort the suite `break` before reaching it, and the marking helpers in
+    _populate_result_from_response (canary failure, profiler readback failure, infra
+    classification) deliberately set only status/exception. Rather than have each of those
+    remember the footer, they all call this.
+    """
+    result["original_vector_data"] = original_vector_data
+    result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
+    result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+    result["host"] = get_hostname()
+    result["user"] = get_username()
 
 
 def _mark_infra_abort(result, reason: str):
@@ -1322,6 +1372,10 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
 
                 if abort_suite:
                     if infra_abort or config.skip_on_timeout:
+                        # This branch breaks out before the footer at the end of the loop body,
+                        # so stamp it here: the vector that caused the abort is exported like
+                        # any other result and must carry end_time_ts (#54543).
+                        _stamp_result_footer(result, original_vector_data)
                         results.append(result)
                         suite_pbar.update()
                         skip_reason = (
@@ -1357,14 +1411,9 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                 logger.error(f"Device reset failed unrecoverably: {e}. Aborting remaining tests in suite.")
                 result["status"] = TestStatus.FAIL_CRASH_HANG
                 result["exception"] = str(e)
-                # This path breaks before the common footer that stamps this; set it here
-                # so the abort record carries original_vector_data like every other result.
-                result["original_vector_data"] = original_vector_data
                 result["e2e_perf"] = None
-                result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
-                result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
-                result["host"] = get_hostname()
-                result["user"] = get_username()
+                # This path also breaks before the common footer.
+                _stamp_result_footer(result, original_vector_data)
                 results.append(result)
                 suite_pbar.update()
                 for j in range(i + 1, len(test_vectors)):
@@ -1392,12 +1441,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
             finally:
                 ttnn.operation_tracer.set_sweep_source_hash(None)
 
-        # Add the original test vector data to the result
-        result["original_vector_data"] = original_vector_data
-        result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
-        result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
-        result["host"] = get_hostname()
-        result["user"] = get_username()
+        _stamp_result_footer(result, original_vector_data)
 
         suite_pbar.update()
         results.append(result)
@@ -2145,6 +2189,14 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--device-side-setup",
+        required=False,
+        action="store_true",
+        help="With --device-perf, build sweep inputs on the device instead of on the host; the setup programs then "
+        "count toward the op. TTNN_SWEEP_DEVICE_SIDE_SETUP=1 has the same effect.",
+    )
+
+    parser.add_argument(
         "--measure-memory",
         required=False,
         action="store_true",
@@ -2226,6 +2278,16 @@ if __name__ == "__main__":
 
     if config.measure_device_perf and not _should_skip_device_profiler(config):
         enable_profiler()
+        if config.device_side_setup:
+            logger.info(
+                "Device perf: --device-side-setup, sweep inputs are built on the device and their programs "
+                "count toward the op"
+            )
+        elif config.trace_params:
+            logger.warning(
+                "--trace-params with --device-perf records the host-side setup calls (from_torch without a "
+                "device, then to_device) instead of the module's own; use --device-side-setup for a faithful trace"
+            )
     elif config.measure_device_perf:
         logger.info(
             f"Skipping device profiler for {config.module_name!r} "

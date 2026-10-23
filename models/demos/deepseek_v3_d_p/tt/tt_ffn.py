@@ -18,10 +18,12 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import (
+    ACTIVATION_CLAMPED_SILU_GLU,
     ACTIVATION_SILU,
     ACTIVATION_SITU,
     COMPUTE_KERNEL_CONFIG_HIFI2,
     TtSharedExpert,
+    clamped_silu_glu,
     situ_glu,
 )
 
@@ -62,6 +64,7 @@ class TtFfn(TtSharedExpert):
         activation: str = ACTIVATION_SILU,
         situ_beta: Optional[float] = None,
         situ_linear_beta: Optional[float] = None,
+        clamped_silu_glu_limit: Optional[float] = None,
     ):
         """Initialize TtFfn — same signature as before plus the GLU activation, no sub-device parameters."""
         super().__init__(
@@ -79,6 +82,7 @@ class TtFfn(TtSharedExpert):
             activation=activation,
             situ_beta=situ_beta,
             situ_linear_beta=situ_linear_beta,
+            clamped_silu_glu_limit=clamped_silu_glu_limit,
             # subdevice_id / subdevice_cores intentionally left as defaults (None) —
             # TtFfn's overridden forward() does not use them.
         )
@@ -149,6 +153,8 @@ class TtFfn(TtSharedExpert):
             # the per-chip width, and K3's 33792 is 8448 at TP=4, past the 3072 bound. So the
             # intermediates land in DRAM anyway. Correctness first; #53625 tracks perf.
             activated = situ_glu(gate_out, up_out, self.situ_beta, self.situ_linear_beta)
+        elif self.activation == ACTIVATION_CLAMPED_SILU_GLU:
+            activated = clamped_silu_glu(gate_out, up_out, self.clamped_silu_glu_limit)
         else:
             activated = ttnn.mul(
                 gate_out,

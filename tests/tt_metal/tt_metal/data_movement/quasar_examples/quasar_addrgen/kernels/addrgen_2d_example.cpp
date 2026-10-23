@@ -9,7 +9,7 @@
 //                      must equal inner_count * outer_count (4 * 4 = 16 for the default config)
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "experimental/kernel_args.h"
 #include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"
 #include <cstdint>
@@ -18,12 +18,12 @@ using namespace overlay;
 
 // 4 cols x 4 rows
 constexpr uint32_t src_base = 0x30000;
-constexpr LoopConfig src_inner_cfg = {.stride = 128, .end_addr = 4 * 128};    // 4 cols, 128B apart
-constexpr LoopConfig src_outer_cfg = {.stride = 1024, .end_addr = 4 * 1024};  // 4 rows, 1024B apart
+constexpr LoopConfig src_inner_cfg = {.stride = 128, .end = 4 * 128};    // 4 cols, 128B apart
+constexpr LoopConfig src_outer_cfg = {.stride = 1024, .end = 4 * 1024};  // 4 rows, 1024B apart
 
 constexpr uint32_t dst_base = 0x40000;
-constexpr LoopConfig dst_inner_cfg = {.stride = 128, .end_addr = 4 * 128};
-constexpr LoopConfig dst_outer_cfg = {.stride = 1024, .end_addr = 4 * 1024};
+constexpr LoopConfig dst_inner_cfg = {.stride = 128, .end = 4 * 128};
+constexpr LoopConfig dst_outer_cfg = {.stride = 1024, .end = 4 * 1024};
 
 void kernel_main() {
     constexpr uint32_t src_stride_en = get_arg(args::src_stride_en);
@@ -52,8 +52,7 @@ void kernel_main() {
         uint64_t dest_addr = peek_dest_addrgen_0();
         pop_src_addrgen_0();
         pop_dest_addrgen_0();
-        DPRINT << "  Source address: " << HEX() << (uint32_t)src_addr << " Destination address: " << HEX()
-               << (uint32_t)dest_addr << ENDL();
+        DEVICE_PRINT("  Source address: 0x{:x} Destination address: 0x{:x}\n", src_addr, dest_addr);
     }
 }
 // /* Real loop with noc */

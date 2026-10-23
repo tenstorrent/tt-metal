@@ -41,13 +41,22 @@ constexpr uint32_t kReadyTokenB = 15;
 // enough that the dispatch engine's ready wait sees a change soon after clearing its inputs.
 constexpr uint32_t kReadySpinIterations = 200;
 
+// Group ids are four bits on the wire.
+constexpr uint32_t kNumGroupIds = 16;
+
 namespace fds_epoch {
 
+// Where group status is sticky, a lane's bit stays set after its input register is cleared, so the
+// previous epoch's dones and ready tokens would still count. The inputs are cleared first: capture is
+// change-triggered, so nothing sets a bit again until a lane changes in this epoch.
 inline void clear_dispatch_inputs(uint32_t worker_mask) {
     for (uint32_t mask = worker_mask, neo = 0; mask != 0; mask >>= 1, neo++) {
         if (mask & 1u) {
             overlay::FdsDispatch::fds_clear_neo_status(neo);
         }
+    }
+    for (uint32_t group_id = 0; group_id < kNumGroupIds; group_id++) {
+        overlay::FdsDispatch::fds_write_group_status(group_id, ~worker_mask);
     }
 }
 
@@ -56,6 +65,9 @@ inline void clear_worker_inputs(uint32_t dispatch_mask) {
         if (mask & 1u) {
             overlay::FdsNeo::fds_clear_de_status(inst);
         }
+    }
+    for (uint32_t group_id = 0; group_id < kNumGroupIds; group_id++) {
+        overlay::FdsNeo::fds_write_group_status(group_id, ~dispatch_mask);
     }
     overlay::FdsNeo::fds_clear_done();
 }
@@ -80,7 +92,7 @@ inline bool wait_for_workers(uint32_t worker_mask, uint32_t num_ready, uint32_t 
 
 inline void pulse_ready(uint32_t& ready_token, uint32_t iteration) {
     if (iteration % kReadySpinIterations == 0) {
-        overlay::FdsNeo::fds_done(/*ad_enable=*/false, ready_token);
+        overlay::FdsNeo::fds_done(ready_token);
         ready_token = (ready_token == kReadyTokenA) ? kReadyTokenB : kReadyTokenA;
     }
 }

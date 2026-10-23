@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -23,7 +24,8 @@ struct InboundSocketServiceSyncParams {
     uint32_t scratch_cb_index = 0;
     uint32_t metadata_size_bytes = 0;  // 0 disables the metadata path
     tt::tt_metal::DeviceAddr metadata_l1_addr = 0;
-    CoreRange worker_cores{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}};
+    uint32_t overhang_size_bytes = 0;  // trailing bytes of every page split into a second output; 0 disables
+    tt::tt_metal::CoreRange worker_cores{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}};
 
     // Per-mesh-coordinate state, indexed row-major as (row * mesh_num_cols + col).
     // The service core (and thus the consumed-counter address) may differ per
@@ -38,6 +40,12 @@ struct InboundSocketServiceSyncInputs {
     // The service's persistent backing tensor (read by the kernel). Supplies the
     // mesh device + per-shard spec; the output tensors mirror its spec.
     const Tensor& backing;
+
+    // Caller-owned destinations, one per output: when set, the op writes into
+    // them instead of allocating.
+    std::optional<Tensor> tokens_out;
+    std::optional<Tensor> overhang_out;
+    std::optional<Tensor> metadata_out;
 };
 
 }  // namespace ttnn::experimental::prim

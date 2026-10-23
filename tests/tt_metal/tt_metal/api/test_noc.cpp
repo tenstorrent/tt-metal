@@ -35,6 +35,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "llrt/hal.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -99,7 +100,7 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
     auto arch = tt::get_arch_from_string(get_umd_arch_name());
     std::shared_ptr<distributed::MeshDevice> mesh_device;
     ChipId id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
-    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
     mesh_device = distributed::MeshDevice::create_unit_mesh(
         id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
 
@@ -107,6 +108,7 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
     switch (arch) {
         case tt::ARCH::WORMHOLE_B0: unharvested_logical_grid_size = CoreCoord(8, 10); break;
         case tt::ARCH::BLACKHOLE: unharvested_logical_grid_size = CoreCoord(14, 10); break;
+        case tt::ARCH::QUASAR: unharvested_logical_grid_size = CoreCoord(8, 4); break;
         default: TT_THROW("Unsupported arch {}", get_umd_arch_name());
     }
     auto logical_grid_size = mesh_device->logical_grid_size();
@@ -138,7 +140,7 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
 TEST(NOC, TensixVerifyNocNodeIDs) {
     std::shared_ptr<distributed::MeshDevice> mesh_device;
     const unsigned int device_id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
-    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
     mesh_device = distributed::MeshDevice::create_unit_mesh(
         device_id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
 
@@ -172,7 +174,7 @@ TEST(NOC, TensixVerifyNocIdentityTranslationTable) {
     }
     std::shared_ptr<distributed::MeshDevice> mesh_device;
     ChipId id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
-    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
     mesh_device = distributed::MeshDevice::create_unit_mesh(
         id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
 
@@ -657,7 +659,7 @@ TEST_F(MeshDeviceFixture, TensixTestNocStreamRegs) {
 
 TEST_F(MeshDeviceFixture, ActiveEthTestNocStreamRegs) {
     auto mesh_device = this->devices_[0];
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     // Skip if no active ethernet cores on this device
     if (device->get_active_ethernet_cores(true).empty()) {
@@ -672,7 +674,7 @@ TEST_F(MeshDeviceFixture, ActiveEthTestNocStreamRegs) {
 
 TEST_F(MeshDeviceFixture, IdleEthTestNocStreamRegs) {
     auto mesh_device = this->devices_[0];
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     // Skip if no idle ethernet cores on this device
     if (device->get_inactive_ethernet_cores().empty()) {

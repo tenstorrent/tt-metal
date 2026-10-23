@@ -29,16 +29,29 @@ class RMSNorm(nn.Module):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 cache_file_name=get_cache_file_name(tensor_cache_path, "weight"),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=self.mesh_config.shard_mapper(mesh_device, mesh_dims=(None, -2))
-                if self.is_distributed
-                else None,
+                mesh_mapper=(
+                    self.mesh_config.shard_mapper(mesh_device, mesh_dims=(None, -2)) if self.is_distributed else None
+                ),
             )
+            # TILE gamma enables the large-tensor RMSNorm path, which bounds L1 usage
+            # for FP32 intermediate buffers in the 5376-wide prefill norm.
+            # Keep the row-major copy for the width-sharded decode path.
+            flat_weight = ttnn.reshape(self.tt_weight, (1, 1, 1, hf_config.hidden_size))
+            self.tt_weight_tile = ttnn.to_layout(flat_weight, ttnn.TILE_LAYOUT)
         else:
             self.tt_weight = None
+            self.tt_weight_tile = None
 
         self.eps = hf_config.rms_norm_eps
         self.mesh_device = mesh_device
-
+        # Match the reference's FP32 prefill RMSNorm computation.
+        self.prefill_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
         # Decode width-sharded fast path. The plain (interleaved) rms_norm runs
         # the RMS reduction over the full hidden width on few cores — ~76 us for
         # a single-token [1,1,32,hidden] norm on Gemma4-31B (hidden=5376). Width-
@@ -160,15 +173,20 @@ class RMSNorm(nn.Module):
                 if self._sharded_cfg:
                     return self._forward_sharded(x)
 
+            is_prefill = len(x.shape) == 4 and x.shape[-2] > ttnn.TILE_SIZE
+            compute_kernel_config = self.prefill_compute_kernel_config if is_prefill else None
+            weight = self.tt_weight_tile if is_prefill and self.tt_weight_tile is not None else self.tt_weight
             if self.with_scale:
                 tt_output = ttnn.rms_norm(
                     x,
-                    weight=self.tt_weight,
+                    weight=weight,
                     epsilon=self.eps,
+                    compute_kernel_config=compute_kernel_config,
                 )
             else:
                 tt_output = ttnn.rms_norm(
                     x,
                     epsilon=self.eps,
+                    compute_kernel_config=compute_kernel_config,
                 )
             return tt_output

@@ -8,27 +8,24 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // Retrieve arguments
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t start_tile_idx = get_arg_val<uint32_t>(1);
-    uint32_t end_tile_idx = get_arg_val<uint32_t>(2);
-    uint32_t start_padding_tile_idx = get_arg_val<uint32_t>(3);
-    uint32_t end_padding_tile_idx = get_arg_val<uint32_t>(4);
+    uint32_t start_tile_idx = get_arg(args::start_tile_idx);
+    uint32_t end_tile_idx = get_arg(args::end_tile_idx);
+    uint32_t start_padding_tile_idx = get_arg(args::start_padding_tile_idx);
+    uint32_t end_padding_tile_idx = get_arg(args::end_padding_tile_idx);
 
     // Compile-time constants
-    constexpr uint32_t element_size = get_compile_time_arg_val(0);
-    constexpr uint32_t dfb_id_out0 = get_compile_time_arg_val(1);
-    constexpr uint32_t C = get_compile_time_arg_val(2);
-    constexpr uint32_t H = get_compile_time_arg_val(3);
-    constexpr uint32_t W = get_compile_time_arg_val(4);
-    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(5);
-    constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(6);
-    constexpr uint32_t FACE_HEIGHT = get_compile_time_arg_val(7);
-    constexpr uint32_t FACE_WIDTH = get_compile_time_arg_val(8);
-    constexpr bool needs_padding = get_compile_time_arg_val(9) == 1;
-    constexpr auto dst_args = TensorAccessorArgs<10>();
+    constexpr auto element_size = get_arg(args::element_size);
+    constexpr auto C = get_arg(args::C);
+    constexpr auto H = get_arg(args::H);
+    constexpr auto W = get_arg(args::W);
+    constexpr auto TILE_HEIGHT = get_arg(args::tile_height);
+    constexpr auto TILE_WIDTH = get_arg(args::tile_width);
+    constexpr auto FACE_HEIGHT = get_arg(args::face_height);
+    constexpr auto FACE_WIDTH = get_arg(args::face_width);
 
     // Derived compile-time constants
     constexpr uint32_t TILE_HW = TILE_HEIGHT * TILE_WIDTH;
@@ -46,11 +43,10 @@ void kernel_main() {
     constexpr uint32_t SUBTILE_LINE_BYTES = FACE_WIDTH * element_size;
 
     // Initialize address generator
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(tensor::dst);
 
     Noc noc;
-    DataflowBuffer dfb(dfb_id_out0);
-    DataflowBuffer dfb_padding(tt::CBIndex::c_1);
+    DataflowBuffer dfb(dfb::out0);
 
     // Calculate actual data height in the last tile
     constexpr uint32_t H_last_tile = H - (H_t - 1) * TILE_HEIGHT;
@@ -162,7 +158,11 @@ void kernel_main() {
     }
 
     // add padding
-    if constexpr (needs_padding) {
+    // The padding buffer is bound (and this block compiled) only when the host determined the
+    // channel dim does not fill a whole tile; see the NEEDS_PADDING define on this kernel's spec.
+#ifdef NEEDS_PADDING
+    {
+        DataflowBuffer dfb_padding(dfb::pad);
         dfb_padding.wait_front(1);
 
         uint32_t l1_read_ptr = dfb_padding.get_read_ptr();
@@ -202,4 +202,5 @@ void kernel_main() {
         noc.async_write_barrier();
         dfb_padding.pop_front(1);
     }
+#endif
 }

@@ -4,12 +4,14 @@
 #include "sigmoid_gated_rms_norm_device_operation.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <initializer_list>
 
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
 
 using namespace tt::tt_metal;
 
@@ -63,16 +65,23 @@ void SigmoidGatedRmsNormOperation::validate_on_program_cache_miss(
     const auto& gate_shape = in.gate.logical_shape();
     const auto& weight_shape = in.weight.logical_shape();
     TT_FATAL(input_shape.rank() == 3, "sigmoid_gated_rms_norm: input must be [B*H,T,V]");
-    TT_FATAL(gate_shape.rank() == 3, "sigmoid_gated_rms_norm: gate must be [B,T,H*V]");
+    TT_FATAL(gate_shape.rank() == 3, "sigmoid_gated_rms_norm: gate must be rank 3 [B,T,W]");
     TT_FATAL(weight_shape.rank() == 1, "sigmoid_gated_rms_norm: weight must be [V]");
     TT_FATAL(
         input_shape[0] == attrs.batch * attrs.num_heads && input_shape[1] == attrs.sequence &&
             input_shape[2] == attrs.value_dim,
         "sigmoid_gated_rms_norm: input shape does not match derived attributes");
     TT_FATAL(
+        attrs.gate_column_offset % tt::constants::TILE_WIDTH == 0,
+        "sigmoid_gated_rms_norm: gate_column_offset must be tile aligned");
+    const uint64_t gate_width = uint64_t{attrs.num_heads} * attrs.value_dim;
+    TT_FATAL(
         gate_shape[0] == attrs.batch && gate_shape[1] == attrs.sequence &&
-            gate_shape[2] == attrs.num_heads * attrs.value_dim,
-        "sigmoid_gated_rms_norm: gate must have shape [B,T,H*V]");
+            gate_shape[2] >= attrs.gate_column_offset + gate_width,
+        "sigmoid_gated_rms_norm: gate {} must be [B, T, W] and hold H*V = {} columns at gate_column_offset {}",
+        gate_shape,
+        gate_width,
+        attrs.gate_column_offset);
     TT_FATAL(in.weight.logical_volume() == attrs.value_dim, "sigmoid_gated_rms_norm: weight volume must equal V");
     TT_FATAL(attrs.batch > 0, "sigmoid_gated_rms_norm: batch must be positive");
     TT_FATAL(
@@ -96,6 +105,22 @@ SigmoidGatedRmsNormOperation::tensor_return_value_t SigmoidGatedRmsNormOperation
     return {create_device_tensor(specs[0], in.input.device())};
 }
 
+tt::tt_metal::operation::OpPerformanceModelGeneral<SigmoidGatedRmsNormOperation::tensor_return_value_t>
+SigmoidGatedRmsNormOperation::create_op_performance_model(
+    const operation_attributes_t& attrs, const tensor_args_t& in, tensor_return_value_t& outputs) {
+    using namespace kda_performance_model;
+
+    const double rows = static_cast<double>(attrs.batch) * attrs.num_heads * attrs.sequence;
+    const double elements = rows * attrs.value_dim;
+    const KdaFpuWork work{
+        .fpu_multiply_ops = 4.0 * elements,
+        .fpu_add_ops = rows,
+        .fpu_reduction_ops = rows * (attrs.value_dim - 1.0),
+    };
+    const std::array<const Tensor*, 3> inputs = {&in.input, &in.gate, &in.weight};
+    return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
+}
+
 Tensor sigmoid_gated_rms_norm(
     const Tensor& input,
     const Tensor& gate,
@@ -104,7 +129,8 @@ Tensor sigmoid_gated_rms_norm(
     float epsilon,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    DataType output_dtype) {
+    DataType output_dtype,
+    uint32_t gate_column_offset) {
     const auto& input_shape = input.logical_shape();
     TT_FATAL(input_shape.rank() == 3, "sigmoid_gated_rms_norm: input must be [B*H,T,V]");
     TT_FATAL(num_heads > 0, "sigmoid_gated_rms_norm: num_heads must be positive");
@@ -120,7 +146,8 @@ Tensor sigmoid_gated_rms_norm(
             .epsilon = epsilon,
             .output_mem_config = output_mem_config,
             .output_dtype = output_dtype,
-            .compute_kernel_config = compute_kernel_config},
+            .compute_kernel_config = compute_kernel_config,
+            .gate_column_offset = gate_column_offset},
         SigmoidGatedRmsNormInputs{.input = input, .gate = gate, .weight = weight});
     return results[0];
 }

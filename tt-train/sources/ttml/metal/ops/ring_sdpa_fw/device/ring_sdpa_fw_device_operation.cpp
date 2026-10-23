@@ -6,6 +6,8 @@
 
 #include <tt-metalium/host_api.hpp>
 
+#include "metal/ops/common/ring_sdpa_utils.hpp"
+
 namespace ttml::metal::ops::ring_sdpa_fw {
 
 using namespace tt::tt_metal;
@@ -13,12 +15,15 @@ using namespace ttnn;
 
 void RingSDPAFwDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    TT_FATAL(tensor_args.query.device() != nullptr, "Query tensor must be on device");
-    TT_FATAL(tensor_args.key.device() != nullptr, "Key tensor must be on device");
-    TT_FATAL(tensor_args.value.device() != nullptr, "Value tensor must be on device");
-
-    TT_FATAL(attrs.ring_size > 0, "Ring size must be > 0");
-    TT_FATAL(attrs.step < attrs.ring_size, "Step must be < ring_size");
+    validate_ring_attributes(attrs, tensor_args.query);
+    validate_ring_qkv(tensor_args.query, tensor_args.key, tensor_args.value);
+    if (tensor_args.preallocated_output.has_value()) {
+        validate_output_like_tensor(
+            tensor_args.preallocated_output.value(), "Preallocated output", tensor_args.query, tensor_args.value);
+    }
+    if (tensor_args.preallocated_intermediates.has_value()) {
+        validate_intermediates_tensor(tensor_args.preallocated_intermediates.value(), tensor_args.query);
+    }
 }
 
 RingSDPAFwDeviceOperation::spec_return_value_t RingSDPAFwDeviceOperation::compute_output_specs(

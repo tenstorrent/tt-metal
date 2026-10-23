@@ -57,7 +57,8 @@ uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor) {
     // Need to debug this to work on wide tensors that are higher than a single tile
     const auto& tile_shape = tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tensor_width = tensor.padded_shape()[-1];
-    uint32_t tensor_height = tensor.physical_volume() / tensor_width;
+    // tensor_width is 0 for a zero-width input; the height is 0 there in any case.
+    uint32_t tensor_height = tensor_width == 0 ? 0 : tensor.physical_volume() / tensor_width;
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
     uint32_t num_tiles_per_row = tensor_width / tile_width;
@@ -86,7 +87,8 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_a = tensor_args.input;
 
     uint32_t tensor_width = input_tensor_a.padded_shape()[-1];
-    uint32_t tensor_height = input_tensor_a.physical_volume() / tensor_width;
+    // tensor_width is 0 for a zero-width input; the height is 0 there in any case.
+    uint32_t tensor_height = tensor_width == 0 ? 0 : input_tensor_a.physical_volume() / tensor_width;
 
     bool input_is_sharded = input_tensor_a.is_sharded();
     bool output_is_sharded = operation_attributes.output_mem_config.is_sharded();
@@ -120,8 +122,11 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
         // when the tensor is one tile row tall. Taller tensors deadlock in the writer's wait_front
         // rather than failing, so reject them here. `get_pf_type` holds the same restriction for the
         // non-sub-core column-parallel factory this one derives from.
+        // The restriction protects a kernel that never runs for an empty input - there is no work
+        // to parallelize and no program is built - so a height of 0 is allowed through. It can only
+        // be 0 when the volume is 0, so this does not loosen anything for a non-empty tensor.
         TT_FATAL(
-            tensor_height == input_tensor_a.tensor_spec().tile().get_tile_shape()[0],
+            tensor_height == 0 || tensor_height == input_tensor_a.tensor_spec().tile().get_tile_shape()[0],
             "sub_core_grid untilize only supports tensors one tile row tall, got height {} with tile height {}",
             tensor_height,
             input_tensor_a.tensor_spec().tile().get_tile_shape()[0]);
@@ -269,7 +274,7 @@ UntilizeDeviceOperation::spec_return_value_t UntilizeDeviceOperation::compute_ou
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const auto& input_tensor = tensor_args.input;
-    DataType output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
+    DataType output_dtype = ttnn::operations::data_movement::untilize_output_dtype(input_tensor.dtype());
 
     return {tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
@@ -327,13 +332,17 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
         identical_shard_specs |= input_tensor_a.nd_shard_spec().has_value() &&
                                  output_tensor.nd_shard_spec().has_value() &&
                                  input_tensor_a.nd_shard_spec().value() == output_tensor.nd_shard_spec().value();
-        if (identical_shard_specs) {
+        // The ND-identical factory is a Gen1 (ProgramDescriptor / DataMovementKernel) zero-copy path not
+        // ported to Quasar; on Quasar fall through to the general ND-shard-input factory (ported, non
+        // zero-copy) selected below.
+        if (identical_shard_specs && input_tensor_a.device()->arch() != tt::ARCH::QUASAR) {
             return UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory{};
         }
     }
 
     uint32_t tensor_width = input_tensor_a.padded_shape()[-1];
-    uint32_t tensor_height = input_tensor_a.physical_volume() / tensor_width;
+    // tensor_width is 0 for a zero-width input; the height is 0 there in any case.
+    uint32_t tensor_height = tensor_width == 0 ? 0 : input_tensor_a.physical_volume() / tensor_width;
 
     const auto& tile_shape = input_tensor_a.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];

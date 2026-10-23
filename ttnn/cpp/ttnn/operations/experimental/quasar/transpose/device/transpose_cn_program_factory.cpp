@@ -56,7 +56,7 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
     uint32_t stick_size = (row_major) ? page_shape[1] * input_tensor.element_size() : tt::tile_size(cb_data_format);
 
     Buffer* src0_buffer = input_tensor.buffer();
-    IDevice* device = input_tensor.device();
+    MeshDevice* device = input_tensor.device();
 
     uint32_t num_tensor_pages = input_tensor.physical_volume() / page_size;
 
@@ -133,8 +133,7 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
             },
         .runtime_arg_schema =
             {.runtime_arg_names = {"N", "C", "HtWt", "batch_step", "channel_step", "num_pages", "start_id", "hw", "n"}},
-        .hw_config =
-            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // Writer KernelSpec.
@@ -158,8 +157,7 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
                 {"write_size", stick_size},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config =
-            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     spec.kernels.push_back(std::move(reader));

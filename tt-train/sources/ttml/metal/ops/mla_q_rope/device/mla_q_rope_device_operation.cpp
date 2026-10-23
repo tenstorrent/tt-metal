@@ -4,8 +4,7 @@
 
 #include "mla_q_rope_device_operation.hpp"
 
-#include <enchantum/enchantum.hpp>
-
+#include "metal/common/tensor_validation.hpp"
 #include "mla_q_rope_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -15,61 +14,49 @@ void MlaQRopeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
 
-    auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
-        TT_FATAL(
-            tensor.storage_type() == ttnn::StorageType::DEVICE,
-            "MlaQRope requires {} on device. Got {}",
-            name,
-            enchantum::to_string(tensor.storage_type()));
-        TT_FATAL(tensor.buffer() != nullptr, "MlaQRope: {} buffer must be allocated.", name);
-        TT_FATAL(
-            tensor.layout() == tt::tt_metal::Layout::TILE,
-            "MlaQRope requires {} TILE layout. Got {}",
-            name,
-            enchantum::to_string(tensor.layout()));
-        TT_FATAL(
-            tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
-            "MlaQRope requires {} BFLOAT16. Got {}",
-            name,
-            enchantum::to_string(tensor.dtype()));
-        TT_FATAL(
-            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-            "MlaQRope requires {} INTERLEAVED. Got {}",
-            name,
-            enchantum::to_string(tensor.memory_config().memory_layout()));
-    };
-
     const auto& q_in = tensor_args.q_in;
     const auto& cos = tensor_args.cos_cache;
     const auto& sin = tensor_args.sin_cache;
     const auto& trans = tensor_args.trans_mat;
 
-    check_tensor(q_in, "q_in");
-    check_tensor(cos, "cos_cache");
-    check_tensor(sin, "sin_cache");
-    check_tensor(trans, "trans_mat");
+    check_device_tensor(q_in, "MlaQRope", "q_in");
+    check_device_tensor(cos, "MlaQRope", "cos_cache");
+    check_device_tensor(sin, "MlaQRope", "sin_cache");
+    check_device_tensor(trans, "MlaQRope", "trans_mat");
 
     TT_FATAL(
         q_in.device() == cos.device() && cos.device() == sin.device() && sin.device() == trans.device(),
         "MlaQRope: all tensors must be on the same device.");
 
-    const auto q_shape = q_in.padded_shape();
+    // Semantic dims come from logical_shape so a TILE-padded width cannot
+    // masquerade as a multiple of qk_head. qk_head and S are required to be
+    // tile-aligned below, so accepted inputs still have the same padded geometry.
+    const auto q_shape = q_in.logical_shape();
     TT_FATAL(q_shape.rank() == 4U, "MlaQRope: q_in must be rank-4. Got {}", q_shape.rank());
-    TT_FATAL(q_shape[1] >= 1U, "MlaQRope: q_in must have at least one head.");
 
+    TT_FATAL(args.qk_rope_dim != 0U, "MlaQRope: qk_rope_dim must be non-zero.");
     const uint32_t qk_head = args.qk_nope_dim + args.qk_rope_dim;
-    TT_FATAL(
-        q_shape[3] == qk_head,
-        "MlaQRope: q_in dim 3 must equal qk_nope_dim + qk_rope_dim = {}. Got {}",
-        qk_head,
-        q_shape[3]);
+    if (args.packed_input) {
+        TT_FATAL(q_shape[1] == 1U, "MlaQRope: packed q_in dim 1 must be 1. Got {}", q_shape[1]);
+        TT_FATAL(
+            q_shape[3] % qk_head == 0U && q_shape[3] / qk_head >= 1U,
+            "MlaQRope: packed q_in dim 3 must be a positive multiple of qk_head={}. Got {}",
+            qk_head,
+            q_shape[3]);
+    } else {
+        TT_FATAL(q_shape[1] >= 1U, "MlaQRope: head-major q_in must have at least one head.");
+        TT_FATAL(
+            q_shape[3] == qk_head,
+            "MlaQRope: head-major q_in dim 3 must equal qk_nope_dim + qk_rope_dim = {}. Got {}",
+            qk_head,
+            q_shape[3]);
+    }
 
     TT_FATAL(
         args.qk_nope_dim % TILE_WIDTH == 0,
         "MlaQRope: qk_nope_dim ({}) must be a multiple of TILE_WIDTH ({})",
         args.qk_nope_dim,
         TILE_WIDTH);
-    TT_FATAL(args.qk_rope_dim != 0U, "MlaQRope: qk_rope_dim must be non-zero.");
     TT_FATAL(
         args.qk_rope_dim % TILE_WIDTH == 0,
         "MlaQRope: qk_rope_dim ({}) must be a multiple of TILE_WIDTH ({})",
@@ -80,6 +67,16 @@ void MlaQRopeDeviceOperation::validate_on_program_cache_miss(
         "MlaQRope: S ({}) must be a multiple of TILE_HEIGHT ({})",
         q_shape[2],
         TILE_HEIGHT);
+    // Tile-aligned logical dims 2-3 match padded, so validate / factory / compute_output_specs
+    // can all use logical_shape without disagreeing on n_heads or S.
+    const auto q_padded = q_in.padded_shape();
+    TT_FATAL(
+        q_shape[2] == q_padded[2] && q_shape[3] == q_padded[3],
+        "MlaQRope: q_in logical dims 2-3 must equal padded (tile-aligned). logical=[{}, {}], padded=[{}, {}]",
+        q_shape[2],
+        q_shape[3],
+        q_padded[2],
+        q_padded[3]);
 
     const auto cos_shape = cos.padded_shape();
     TT_FATAL(cos_shape == sin.padded_shape(), "MlaQRope: cos and sin shapes must match.");
@@ -111,16 +108,29 @@ void MlaQRopeDeviceOperation::validate_on_program_cache_miss(
 }
 
 MlaQRopeDeviceOperation::spec_return_value_t MlaQRopeDeviceOperation::compute_output_specs(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& q_in = tensor_args.q_in;
+    const auto q_shape = q_in.logical_shape();
+    const uint32_t B = q_shape[0];
+    const uint32_t S = q_shape[2];
+    const uint32_t qk_head = args.qk_nope_dim + args.qk_rope_dim;
+
+    ttnn::Shape out_shape;
+    if (args.packed_input) {
+        const uint32_t n_heads = q_shape[3] / qk_head;
+        out_shape = ttnn::Shape({B, n_heads, S, qk_head});
+    } else {
+        const uint32_t n_heads = q_shape[1];
+        out_shape = ttnn::Shape({B, 1U, S, n_heads * qk_head});
+    }
+
     return tt::tt_metal::TensorSpec(
-        q_in.logical_shape(),
-        tt::tt_metal::TensorLayout(q_in.dtype(), tt::tt_metal::Layout::TILE, q_in.memory_config()));
+        out_shape, tt::tt_metal::TensorLayout(q_in.dtype(), tt::tt_metal::Layout::TILE, q_in.memory_config()));
 }
 
 MlaQRopeDeviceOperation::tensor_return_value_t MlaQRopeDeviceOperation::create_output_tensors(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    auto spec = compute_output_specs({}, tensor_args);
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    auto spec = compute_output_specs(args, tensor_args);
     return ttnn::create_device_tensor(spec, tensor_args.q_in.device());
 }
 
@@ -154,12 +164,14 @@ ttml::metal::ops::mla_q_rope::device::MlaQRopeDeviceOperation::tensor_return_val
     const ttnn::Tensor& sin_cache,
     const ttnn::Tensor& trans_mat,
     uint32_t qk_nope_dim,
-    uint32_t qk_rope_dim) {
+    uint32_t qk_rope_dim,
+    bool packed_input) {
     using OperationType = ttml::metal::ops::mla_q_rope::device::MlaQRopeDeviceOperation;
 
     auto attrs = OperationType::operation_attributes_t{
         .qk_nope_dim = qk_nope_dim,
         .qk_rope_dim = qk_rope_dim,
+        .packed_input = packed_input,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .q_in = q_in,

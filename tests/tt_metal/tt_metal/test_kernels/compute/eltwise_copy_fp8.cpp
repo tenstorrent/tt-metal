@@ -9,7 +9,7 @@
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
-    uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+    std::uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
 
     CircularBuffer cb0(tt::CBIndex::c_0);
     CircularBuffer cb16(tt::CBIndex::c_16);
@@ -17,7 +17,7 @@ void kernel_main() {
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
     copy_init(tt::CBIndex::c_0);
 
-    for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
+    for (std::uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         tile_regs_acquire();
 
         cb0.wait_front(1);

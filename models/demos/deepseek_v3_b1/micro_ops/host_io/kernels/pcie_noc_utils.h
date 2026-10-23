@@ -13,6 +13,11 @@
 // APIs can be made more stateful, especially for the HostIO op, since the PCIe
 // NOC encoding is constant.
 
+// These helpers write MID from the full 64 bit address on every burst, so back to back calls need no
+// cleanup. Clear it with noc_async_read_clear_pcie_state or noc_async_write_clear_pcie_state on the same
+// command buffer before any on-chip transfer on that buffer, and before the kernel exits, since firmware
+// does not reset MID between kernels.
+
 FORCE_INLINE void noc_async_wide_write_any_len_with_state(
     uint32_t noc, uint32_t src_addr, uint32_t dst_noc_addr, uint64_t dst_addr, uint32_t len_bytes) {
     while (len_bytes > NOC_MAX_BURST_SIZE) {

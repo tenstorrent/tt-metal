@@ -80,3 +80,71 @@ def test_plus_one_with_neg_entries_nd(device, input_shape, val):
     ttnn.plus_one(input_tensor, skip_negative_entries=True)
     output_tensor = ttnn.to_torch(input_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("w", [4, 8, 32])
+def test_plus_one_program_cache(device, w):
+    """Two distinct same-spec DRAM tensors: the second call is a program-cache hit, so the
+    cached program must be re-bound to the second tensor's buffer. A stale binding would
+    increment the first tensor again and leave the second untouched — validating both
+    tensors catches either failure."""
+    torch_a = torch.randint(32000, (w,))
+    torch_b = torch.randint(32000, (w,))
+
+    tensor_a = ttnn.from_torch(torch_a, dtype=ttnn.int32, device=device)
+    tensor_b = ttnn.from_torch(torch_b, dtype=ttnn.int32, device=device)
+
+    ttnn.plus_one(tensor_a)
+    ttnn.plus_one(tensor_b)
+    assert device.num_program_cache_entries() == 1
+
+    assert_with_pcc(torch_a + 1, ttnn.to_torch(tensor_a), 0.9999)
+    assert_with_pcc(torch_b + 1, ttnn.to_torch(tensor_b), 0.9999)
+
+
+@pytest.mark.parametrize("w", [4, 8, 32])
+def test_plus_one_sharded_program_cache(device, w):
+    """L1-sharded inputs: the program's working buffer is the input shard itself, so on a
+    program-cache hit the framework must re-apply the second tensor's shard address.
+    Validating both tensors catches a stale rebinding in either direction."""
+    shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (1, w), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    torch_a = torch.randint(32000, (1, w))
+    torch_b = torch.randint(32000, (1, w))
+
+    tensor_a = ttnn.from_torch(torch_a, dtype=ttnn.int32, device=device, memory_config=memory_config)
+    tensor_b = ttnn.from_torch(torch_b, dtype=ttnn.int32, device=device, memory_config=memory_config)
+
+    ttnn.plus_one(tensor_a)
+    ttnn.plus_one(tensor_b)
+    assert device.num_program_cache_entries() == 1
+
+    assert_with_pcc(torch_a + 1, ttnn.to_torch(tensor_a), 0.9999)
+    assert_with_pcc(torch_b + 1, ttnn.to_torch(tensor_b), 0.9999)
+
+
+@pytest.mark.parametrize("input_shape", [(32,), (4, 32), (2, 8, 32)])
+def test_plus_one_l1_interleaved(device, input_shape):
+    """L1-interleaved input is incremented in place, like DRAM input."""
+    torch_input_tensor = torch.randint(32000, input_shape)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.int32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    ttnn.plus_one(input_tensor)
+    assert torch.equal(ttnn.to_torch(input_tensor), torch_input_tensor + 1)
+
+
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
+def test_plus_one_multi_core_sub_core_grids(device, memory_config):
+    """Interleaved input on a multi-core sub_core_grids is incremented exactly once."""
+    torch_input_tensor = torch.randint(32000, (4, 32))
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.int32, device=device, memory_config=memory_config)
+    ttnn.plus_one(
+        input_tensor, sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))])
+    )
+    assert torch.equal(ttnn.to_torch(input_tensor), torch_input_tensor + 1)

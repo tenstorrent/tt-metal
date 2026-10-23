@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/common.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/tile_move_copy.h"
+#include "api/compute/tile_move_copy.h"  // dummy_unpack (TEN-4746)
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/debug/dprint.h"
 #include "dev_mem_map.h"
 #include "experimental/kernel_args.h"
 
@@ -16,8 +16,8 @@ void kernel_main() {
     const uint32_t result_l1_addr = get_arg(args::result_l1_addr);
 
     DataflowBuffer dfb(dfb::in);
+    // copy_init not needed: drain uses dummy_unpack (UNPACR_NOP), not copy_tile.
     compute_kernel_hw_startup(dfb.get_id(), dfb.get_id());
-    copy_init(dfb.get_id());
 
     // Keep both entries at the front so tile_index 1 exercises fifo_page_size stride.
     // Each TRISC thread writes the same mailbox-broadcast results to its own L1 slot so
@@ -37,28 +37,31 @@ void kernel_main() {
     results[5] = static_cast<uint32_t>(dfb.read_tile_value<uint16_t>(1, 0));
     results[6] = static_cast<uint32_t>(dfb.read_tile_value<uint16_t>(1, 1));
 
-    tile_regs_acquire();
+    // Drain without tile_regs_acquire/copy_tile/release: that path left PACK's Tensix busy so
+    // firmware tensix_sync() after kernel_main hung with MEM_READ_NO_RESPONSE. TEN-4746 still
+    // requires a real UNPACR between wait_front and pop_front — use UNPACR_NOP via dummy_unpack.
     for (uint32_t i = 0; i < num_entries_per_consumer; ++i) {
-        copy_tile(dfb.get_id(), 0, 0);  // dummy copy to avoid UNPACK wait -> pop trap on Quasar
+        dummy_unpack(dfb.get_id());
         dfb.pop_front(1);
     }
-    tile_regs_release();
 
-#if defined(TRISC_UNPACK) || defined(TRISC_MATH) || defined(TRISC_PACK)
+#if defined(TRISC_UNPACK)
+    constexpr uint32_t result_slot = 0;
+#elif defined(TRISC_MATH)
+    constexpr uint32_t result_slot = 1;
+#elif defined(TRISC_PACK)
+    constexpr uint32_t result_slot = 2;
+#elif defined(TRISC_ISOLATE_SFPU)
+    constexpr uint32_t result_slot = 3;
+#endif
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH) || defined(TRISC_PACK) || defined(TRISC_ISOLATE_SFPU)
 #ifdef ARCH_QUASAR
     const uint32_t result_l1_ptr_addr = result_l1_addr + MEM_L1_UNCACHED_BASE;
 #else
     const uint32_t result_l1_ptr_addr = result_l1_addr;
 #endif
-    volatile tt_l1_ptr uint32_t* const out =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(result_l1_ptr_addr);
-#if defined(TRISC_UNPACK)
-    constexpr uint32_t slot_base = 0 * k_num_results;
-#elif defined(TRISC_MATH)
-    constexpr uint32_t slot_base = 1 * k_num_results;
-#elif defined(TRISC_PACK)
-    constexpr uint32_t slot_base = 2 * k_num_results;
-#endif
+    volatile tt_l1_ptr uint32_t* const out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(result_l1_ptr_addr);
+    const uint32_t slot_base = result_slot * k_num_results;
     for (uint32_t i = 0; i < k_num_results; ++i) {
         out[slot_base + i] = results[i];
     }

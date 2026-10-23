@@ -21,6 +21,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 # DeepSeek 671B RMSNorm dimensions
 EMB_DIM = 7168
@@ -153,6 +154,9 @@ class TtDistributedRmsNorm(LightweightModule):
         stats_memcfg: ttnn.MemoryConfig = None,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
+        output_memcfg: ttnn.MemoryConfig = None,
+        use_fused: bool = False,
+        post_use_2d_core_grid: bool = False,
     ):
         """
         Initialize TtDistributedRmsNorm module.
@@ -168,6 +172,8 @@ class TtDistributedRmsNorm(LightweightModule):
             input_memcfg: Optional memory config for input (e.g., L1 sharded)
             sharded_progcfg: Optional sharded program config for layernorm
             stats_memcfg: Optional memory config for gathered stats (e.g., L1 sharded)
+            output_memcfg: Optional memory config for the normalized output
+            use_fused: Use the fused distributed op; unsupported tensor shapes raise in the op.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -180,11 +186,18 @@ class TtDistributedRmsNorm(LightweightModule):
 
         # Memory configs (None = use DRAM interleaved)
         self.input_memcfg = input_memcfg
+        self.output_memcfg = output_memcfg
+        # Split the post-all-gather normalize over tile rows AND width (one row per core) instead of
+        # rows only. Measured per shape, so opt-in: at [640, 1024] per device it is 17.9 us vs 33.9.
+        self.post_use_2d_core_grid = post_use_2d_core_grid
         self.sharded_progcfg = sharded_progcfg
         self.stats_memcfg = stats_memcfg
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
         self._gathered_stats = None
+        self._use_fused = False
+        self.fused_weight = None
+        self.tt_ccl = None
 
         logger.debug(f"Initializing TtDistributedRmsNorm with emb_dim={emb_dim}, epsilon={epsilon}")
         logger.debug(f"Mesh shape: {mesh_device.shape}, num_devices={self.num_devices}")
@@ -207,6 +220,26 @@ class TtDistributedRmsNorm(LightweightModule):
         else:
             logger.debug("Creating random sharded weight")
             self.weight = self._create_random_sharded_weight()
+
+        if use_fused:
+            assert sharded_progcfg is None, "Fused RMSNorm does not accept a sharded program config"
+            assert stats_memcfg in (None, ttnn.DRAM_MEMORY_CONFIG), "Fused RMSNorm uses DRAM stats"
+            # Preserve the existing on-disk weight cache. Convert once at model
+            # setup; the fused operator broadcasts a tiled row of affine weights.
+            local_width = self.emb_dim // self.mesh_device.shape[self.cluster_axis]
+            self.fused_weight = ttnn.to_layout(ttnn.reshape(self.weight, (1, 1, 1, local_width)), ttnn.TILE_LAYOUT)
+            self.tt_ccl = get_tt_ccl(self.mesh_device)
+        self.set_fused_enabled(use_fused)
+
+    @property
+    def use_fused(self):
+        return self._use_fused
+
+    def set_fused_enabled(self, enabled: bool):
+        """Toggle eager fusion without allocating resources during trace setup."""
+        if enabled and (self.fused_weight is None or self.tt_ccl is None):
+            raise ValueError("Fused RMSNorm must be initialized with use_fused=True before enabling it")
+        self._use_fused = enabled
 
     def _create_sharded_weight_from_torch(self, torch_weight: torch.Tensor) -> ttnn.Tensor:
         """
@@ -261,6 +294,24 @@ class TtDistributedRmsNorm(LightweightModule):
             x = ttnn.to_memory_config(x, memory_config=self.input_memcfg)
             logger.debug("Moved input to specified memory config")
 
+        if self.use_fused:
+            semaphores, stats = self.tt_ccl.get_fused_rmsnorm_resources(
+                x, self.fused_weight, self.cluster_axis, self.num_links
+            )
+            return ttnn.experimental.dit_fused_distributed_rmsnorm(
+                x,
+                self.cluster_axis,
+                self.mesh_device,
+                semaphores,
+                topology=self.topology,
+                epsilon=self.epsilon,
+                weight=self.fused_weight,
+                persistent_output_buffer=stats,
+                num_preferred_links=self.num_links,
+                dtype=x.dtype,
+                memory_config=self.output_memcfg or ttnn.DRAM_MEMORY_CONFIG,
+            )
+
         # TP=1: the cluster axis has length 1, so every device already holds the full hidden dim and
         # there is nothing to distribute. Take the plain fused op. This is not just an optimisation --
         # BOTH gathers below abort on a singleton axis rather than degenerating to a copy
@@ -273,6 +324,7 @@ class TtDistributedRmsNorm(LightweightModule):
                 epsilon=self.epsilon,
                 weight=self.weight,
                 program_config=self.sharded_progcfg,
+                memory_config=self.output_memcfg,
             )
 
         # Step 1: Pre-all-gather - each device computes local sum(x^2)
@@ -331,7 +383,9 @@ class TtDistributedRmsNorm(LightweightModule):
             epsilon=self.epsilon,
             weight=self.weight,
             dtype=ttnn.bfloat16,
+            memory_config=self.output_memcfg,
             program_config=self.sharded_progcfg,
+            use_2d_core_grid=self.post_use_2d_core_grid or None,
         )
         if not use_high_bw_all_gather:
             ttnn.deallocate(tt_gathered_stats)

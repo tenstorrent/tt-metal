@@ -15,8 +15,8 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from tt_py_test_utils_common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from tests.ttnn.utils_for_testing import comp_pcc, assert_equal
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
@@ -231,9 +231,9 @@ def test_cast_to_fp8_power_of_two_scale_e4m3fn_boundary(device):
 
     y_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(e4m3_tt, scale_tt, output_dtype=ttnn.float32)
     y = ttnn.to_torch(y_tt).float()
-    # The hardware packer truncates instead of rounding to nearest. Values can
-    # therefore land one E4M3FN ULP below the mathematical result.
-    expected_output = torch.tensor([224.0, 240.0, 416.0, 448.0])
+    # Power-of-two scales and their reciprocals are exact, so every boundary
+    # value is representable after scaling and must round-trip exactly.
+    expected_output = (block_maxima / expected_scale).to(torch.float8_e4m3fn).float() * expected_scale
     actual_output = y[0, ::BLOCK_W]
     assert torch.equal(
         actual_output, expected_output
@@ -378,7 +378,7 @@ def _pack_scale_metadata(input_scale):
 @pytest.mark.parametrize("label, counts", TOKEN_COUNT_AWARE_CASES, ids=[c[0] for c in TOKEN_COUNT_AWARE_CASES])
 def test_token_count_aware_cast_back(device, label, counts, scales_from_metadata, output_dtype):
     torch.manual_seed(0)
-    H = KimiK26Config.EMB_SIZE
+    H = KimiK27Config.EMB_SIZE
 
     experts_per_chip = len(counts)
     # This chip owns non-contiguous global ids (odd slots) out of a wider routed-expert space.

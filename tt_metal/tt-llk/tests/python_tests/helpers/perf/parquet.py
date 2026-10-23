@@ -156,7 +156,7 @@ def stamp_provenance(
 ):
     """Add the run-context columns (added by CI, not produced by the test).
 
-    ``test_name`` is per test; the rest identify the run. ``pipeline`` ("PR" or
+    ``test_name`` is per test; the rest identify the run. ``pipeline`` ("pr" or
     "nightly") is how PR and nightly rows share one schema but stay distinguishable.
     """
     out = df.copy()

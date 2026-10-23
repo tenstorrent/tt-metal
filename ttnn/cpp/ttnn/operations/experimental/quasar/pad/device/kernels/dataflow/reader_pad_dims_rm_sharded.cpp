@@ -6,11 +6,11 @@
 // Device-side NoC logic is unchanged; resource access uses Metal 2.0 named handles. Self-loop DFBs are
 // no longer permitted on data-movement kernels, so:
 //   - The input shard is read via tensor::input (a TensorAccessor over the resident shard): its local L1
-//     base address is recovered with NOC_LOCAL_ADDR_OFFSET(s.get_noc_addr(0)) and used as the source offset
+//     base address is recovered with noc_address_backend::extract_local_address(s.get_noc_addr(0)) and used as the source offset
 //     for the remote NoC reads against neighbouring shards. (No more cb_in0 borrowed fake-CB self-loop.)
 //   - cb_pad is now a CROSS-KERNEL DFB: this reader PRODUCES the pad-value stick once (fill moved here
 //     from the writer); the writer CONSUMES it. (No more writer self-loop.)
-//   - c_16 output shard is written in place via tensor::output (NOC_LOCAL_ADDR_OFFSET(s_out.get_noc_addr(0)));
+//   - c_16 output shard is written in place via tensor::output (noc_address_backend::extract_local_address(s_out.get_noc_addr(0)));
 //     the reader writes the gathered real sticks, the writer writes the pad sticks (no borrowed DFB).
 //   - The legacy variable-length arg tail (read_noc_x/y, num_stick_chunks, chunk lists) is runtime varargs.
 #include <stdint.h>
@@ -21,12 +21,16 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
+#if !defined(ARCH_QUASAR)
+#include "ckernel.h"
+#endif
 #include "experimental/kernel_args.h"
 
 // Pad-value fill helpers (moved here from the writer; identical logic). The reader produces cb_pad so a
 // single DM kernel no longer both produces and consumes it.
+template <typename DFB>
 inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
-    Noc& noc, DataflowBuffer& cb, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {
+    Noc& noc, DFB& cb, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());
 
     for (uint32_t i = 0; i < num_bytes_risc / 2; ++i) {
@@ -34,6 +38,13 @@ inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
     }
 
     uint32_t pad_val_addr = cb.get_write_ptr();
+    // The loop-back reads below source the words just stored, so the stores must reach L1 first.
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    flush_l2_cache_range(
+        static_cast<uintptr_t>(pad_val_addr), static_cast<size_t>(num_bytes_risc / 2 * sizeof(uint32_t)));
+#else
+    (void)ckernel::load_blocking(ptr + (num_bytes_risc / 2) - 1);
+#endif
     uint32_t l1_write_addr = pad_val_addr;
 
     for (uint32_t i = 0; i < num_noc_transfer; ++i) {
@@ -51,8 +62,9 @@ inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
     noc.async_read_barrier();
 }
 
+template <typename DFB>
 inline __attribute__((always_inline)) void fill_pad_dfb_with_zero(
-    Noc& noc, DataflowBuffer& cb, const uint32_t num_bytes_risc, uint32_t num_noc_transfer) {
+    Noc& noc, DFB& cb, const uint32_t num_bytes_risc, uint32_t num_noc_transfer) {
     noc.async_write_zeros(cb, num_bytes_risc * num_noc_transfer);
     noc.write_zeros_l1_barrier();
 }
@@ -98,12 +110,12 @@ void kernel_main() {
     // Local input-shard base L1 address (the source offset replicated across all sharded cores). Recovered
     // from the resident input TensorAccessor instead of a borrowed fake-CB self-loop.
     const auto s = TensorAccessor(tensor::input);
-    uint32_t l1_read_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(s.get_noc_addr(0));
+    uint32_t l1_read_addr = noc_address_backend::extract_local_address(s.get_noc_addr(0));
 
     // Output shard base from the resident output TensorAccessor (written in place; no borrowed
     // co-write DFB — both reader and writer address the output shard directly).
     const auto s_out = TensorAccessor(tensor::output);
-    uint32_t l1_write_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(s_out.get_noc_addr(0));
+    uint32_t l1_write_addr = noc_address_backend::extract_local_address(s_out.get_noc_addr(0));
 
     uint32_t chunk_ptr_offset = 0;
     uint32_t read_noc_xy_ptr_offset = 0;

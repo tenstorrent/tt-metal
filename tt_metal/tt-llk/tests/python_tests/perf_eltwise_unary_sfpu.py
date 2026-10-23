@@ -10,6 +10,7 @@ from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
     FastMode,
+    FusedSort,
     MathOperation,
     StableSort,
     Transpose,
@@ -23,6 +24,7 @@ from helpers.test_variant_parameters import (
     APPROX_MODE,
     CLAMP_NEGATIVE,
     FAST_MODE,
+    FUSED_SORT,
     ITERATIONS,
     LOOP_FACTOR,
     MATH_OP,
@@ -68,8 +70,13 @@ _OPS_WITH_STABLE_SORT = {
     MathOperation.TopKRebuild,
 }
 
+# The defuse sweep belongs to the fused engine only.
+_OPS_FUSED_ONLY = {MathOperation.TopKDefuse}
+
 
 def _get_dest_acc_modes(mathop, formats):
+    if mathop in _OPS_FUSED_ONLY:
+        return [DestAccumulation.Yes]
     if mathop in _OPS_WITHOUT_DEST_ACC:
         return [DestAccumulation.No]
     # TestConfig promotes dest_acc=No to Yes for outlier format combos, so asking
@@ -85,6 +92,14 @@ def _get_fast_modes(mathop):
     return [FastMode.No]
 
 
+def _get_fused_sort_modes(mathop):
+    if mathop in _OPS_FUSED_ONLY:
+        return [FusedSort.Yes]
+    if mathop in _OPS_WITH_STABLE_SORT:
+        return [FusedSort.Yes, FusedSort.No]
+    return [FusedSort.No]
+
+
 def _get_stable_sort_modes(mathop):
     if mathop in _OPS_WITH_STABLE_SORT:
         return [StableSort.Yes, StableSort.No]
@@ -98,12 +113,13 @@ def _get_stable_sort_modes(mathop):
 # here. Sorted so the parametrize ids are stable across runs.
 PERF_SWEEP_OPS = sorted(sfpu_unary_ops(), key=lambda op: op.name)
 
-# Five PerfRunTypes per variant, so all 97 registry ops against all 16 format pairs is
-# ~30k ELF builds and profiled runs on llk_perf_tests.yaml's five shards, against ~6.4k
-# before the reroute -- and it buys little, since an SFPU kernel's math cost is its
-# instruction sequence while the format pair moves unpack/pack cycles, which these ops
-# already characterise. So every op is still swept (with its own dest_acc / fast_mode /
-# stable_sort / approx_mode), but only the pre-reroute set carries the full 16-pair matrix.
+# Five PerfRunTypes per variant, so every registry op against every _FULL_FORMAT_PAIRS pair
+# would multiply the ELF builds and profiled runs on llk_perf_tests.yaml's five shards
+# (97 ops x 16 pairs was ~30k, against ~6.4k before the reroute) -- and it buys little,
+# since an SFPU kernel's math cost is its instruction sequence while the format pair moves
+# unpack/pack cycles, which these ops already characterise. So every op is still swept
+# (with its own dest_acc / fast_mode / stable_sort / approx_mode), but only the pre-reroute
+# set carries the full _FULL_FORMAT_PAIRS matrix.
 _FULL_FORMAT_MATRIX_OPS = frozenset(
     {
         MathOperation.Reciprocal,
@@ -121,7 +137,6 @@ _FULL_FORMAT_MATRIX_OPS = frozenset(
 
 _FULL_FORMATS = [
     DataFormat.Float32,
-    DataFormat.Float16,
     DataFormat.Float16_b,
     DataFormat.Bfp8_b,
 ]
@@ -167,6 +182,7 @@ def _get_formats(mathop):
     ],  # Number of SFPU iterations
     fast_mode=lambda mathop: _get_fast_modes(mathop),
     stable_sort=lambda mathop: _get_stable_sort_modes(mathop),
+    fused_sort=lambda mathop: _get_fused_sort_modes(mathop),
     input_dimensions=[
         [128, 64],  # tile_cnt: 8
     ],  # Specifying different input sizes to cover different tile counts
@@ -181,8 +197,21 @@ def test_perf_eltwise_unary_sfpu(
     iterations,
     fast_mode,
     stable_sort,
+    fused_sort,
     input_dimensions,
 ):
+    if fused_sort == FusedSort.Yes and (
+        stable_sort == StableSort.Yes
+        or dest_acc == DestAccumulation.No
+        or formats.input_format != DataFormat.Float16_b
+        or formats.output_format != DataFormat.Float16_b
+    ):
+        # Fused keys: bf16-only, 32-bit DEST, and mutually exclusive with the comparator-stable
+        # mode -- only the (Float16_b -> Float16_b, dest_acc=Yes) rows are meaningful.
+        pytest.skip(
+            "fused sort requires bf16 formats, dest_acc=Yes, and stable_sort=No"
+        )
+
     # Calculate tile count from input dimensions
     tile_count_A, tile_count_B, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
@@ -205,6 +234,7 @@ def test_perf_eltwise_unary_sfpu(
             ITERATIONS(iterations),
             FAST_MODE(fast_mode),
             STABLE_SORT(stable_sort),
+            FUSED_SORT(fused_sort),
             CLAMP_NEGATIVE(False),
         ],
         runtimes=[
@@ -269,6 +299,7 @@ def _extra_slice_config(formats, mathop, dest_acc, unpack_to_dest, input_dimensi
             ITERATIONS(32),
             FAST_MODE(FastMode.No),
             STABLE_SORT(StableSort.No),
+            FUSED_SORT(FusedSort.No),
             CLAMP_NEGATIVE(False),
         ],
         runtimes=[

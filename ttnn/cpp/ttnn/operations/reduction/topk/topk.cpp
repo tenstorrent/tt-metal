@@ -26,6 +26,8 @@
 
 #include <cstdint>
 #include <limits>
+#include <mutex>
+#include <tt-logger/tt-logger.hpp>
 
 namespace ttnn::operations::reduction::topk {
 namespace {
@@ -117,16 +119,24 @@ std::vector<Tensor> post_topk_transform_tensor(
 
     // Slice adjustment for tile-aligned K values
     // OP requires K to be tile-aligned (multiples of 32), but user wants exact K
-    // If we had to round up K for op, slice down to the requested K value
+    // If we had to round up K for op, trim the result down to the requested K value
     if (adjusted_k != k) {
-        const auto output_shape = result[0].logical_shape();
-        ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
-        ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-        ttsl::SmallVector<uint32_t> end_index = {output_shape[0], output_shape[1], output_shape[2], k};
-
-        // Slice both values and indices tensors to remove extra elements beyond requested K
-        result[0] = ttnn::slice(result[0], start_index, end_index, step, input_memory_config);
-        result[1] = ttnn::slice(result[1], start_index, end_index, step, input_memory_config);
+        // The kernels write whole tiles of adjusted_k columns, so for a 4D last-dim call the requested k is a
+        // logical width change on the same buffer; the other cases still go through slice.
+        if (orig_rank == 4 && is_dim_last_idx) {
+            for (auto& tensor : result) {
+                auto logical_shape = tensor.logical_shape();
+                logical_shape[3] = k;
+                tensor = tensor.reshape(logical_shape, tensor.padded_shape());
+            }
+        } else {
+            const auto output_shape = result[0].logical_shape();
+            ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
+            ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+            ttsl::SmallVector<uint32_t> end_index = {output_shape[0], output_shape[1], output_shape[2], k};
+            result[0] = ttnn::slice(result[0], start_index, end_index, step, input_memory_config);
+            result[1] = ttnn::slice(result[1], start_index, end_index, step, input_memory_config);
+        }
     }
 
     // Rank restoration - convert from op-required 4D back to original rank
@@ -263,6 +273,12 @@ constexpr uint32_t large_k_route_k_multiple = 16;
 // Lifting it is a separate, perf-validated change.
 constexpr uint32_t large_k_route_max_width = 1u << 19;
 
+// Python sampling queries this exact predicate through the nanobind helper
+// ttnn._ttnn.operations.reduction._sampling_topk_would_route_to_large_indices
+// before relaxing its call shape (the binding lives on the reduction
+// submodule; only registered ttnn operations are hoisted to top-level ttnn).
+// Keep that helper wired to this implementation so policy changes cannot
+// drift.
 bool should_route_to_topk_large_indices(
     const Tensor& transformed_tensor,
     const uint32_t k,
@@ -388,6 +404,24 @@ std::vector<Tensor> run_topk_large_indices_route(const Tensor& transformed_tenso
 }  // namespace
 
 }  // namespace ttnn::operations::reduction::topk
+
+namespace ttnn::operations::reduction::topk::detail {
+
+bool sampling_topk_would_route_to_large_indices(const Tensor& input_tensor, const uint32_t k) {
+    TT_FATAL(is_device_tensor(input_tensor), "Sampling top-k route query requires an on-device tensor");
+    return CMAKE_UNIQUE_NAMESPACE::should_route_to_topk_large_indices(
+        input_tensor,
+        k,
+        /*largest=*/true,
+        /*stable=*/false,
+        /*is_dim_last_idx=*/true,
+        /*has_user_indices_tensor=*/false,
+        /*has_preallocated_outputs=*/false,
+        /*has_sub_core_grids=*/false,
+        /*user_memory_config=*/std::nullopt);
+}
+
+}  // namespace ttnn::operations::reduction::topk::detail
 
 namespace ttnn {
 
@@ -552,8 +586,16 @@ std::vector<Tensor> topk(
     const uint32_t adjusted_k =
         operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::get_nearest_supported_k_value(k, tile_width);
 
+    // Padding fills can write through rank-only views, so isolate the input before transforming it.
+    auto working_input = input_tensor;
+    if (input_tensor.layout() == TILE_LAYOUT &&
+        (input_tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
+         input_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH != 0)) {
+        working_input = ttnn::clone(input_tensor, std::nullopt, std::nullopt, std::nullopt);
+    }
+
     // Dimension reordering - move target dimension to last position
-    Tensor transposed_tensor = ::reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
+    Tensor transposed_tensor = ::reduction_common::perform_transpose(working_input, is_dim_last_idx, dim, -1);
 
     // Rank normalization - convert to 4D tensor format
     Tensor transformed_tensor = ::reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
@@ -607,8 +649,7 @@ std::vector<Tensor> topk(
     const auto pad_val = largest ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity();
 
     // A caller-supplied indices tensor must keep describing the same tile grid as the input the
-    // device op actually sees, so it is padded in lockstep. The pad slots hold +/-inf values and
-    // can never be selected, so the index value used to pad is irrelevant.
+    // device op actually sees, so it is padded in lockstep.
     auto padded_indices_tensor = indices_tensor;
     if (pad_amount > 0) {
         ttsl::SmallVector<std::array<uint32_t, 2>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, pad_amount}};
@@ -638,6 +679,34 @@ std::vector<Tensor> topk(
         output_tensors = std::optional<std::tuple<Tensor, Tensor>>{std::nullopt};
     }
 
+    // Padded rows sort stably so real +/-inf values beat the +/-inf pad slots they tie with.
+    const auto arch = padded_tensor.device()->arch();
+    const bool row_is_padded = pad_amount > 0 || current_dim_size % static_cast<int>(tile_width) != 0;
+    const bool index_output_is_32bit = output_tensors.has_value()
+                                           ? std::get<1>(output_tensors.value()).dtype() != DataType::UINT16
+                                           : ttnn::prim::is_uint32_index_required(padded_tensor, -1);
+    const bool stable_needs_extra_l1 = padded_tensor.dtype() != DataType::FLOAT32 && index_output_is_32bit;
+    const bool use_stable = stable || (row_is_padded && !padded_indices_tensor.has_value() && !stable_needs_extra_l1 &&
+                                       (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE));
+    if (row_is_padded && !use_stable) {
+        // Once per process: topk runs inside per-step model loops.
+        static std::once_flag padded_unstable_warned;
+        std::call_once(padded_unstable_warned, [&] {
+            log_warning(
+                tt::LogOp,
+                "topk: the reduced dimension (size {}) is padded with {} and is not sorted stably automatically "
+                "here (custom indices_tensor, non-float32 input needing 32-bit indices, or no stable support on "
+                "this architecture). A row with fewer than k={} values other than {} can select padding: "
+                "positional indices can then point past the reduced dimension; a custom indices_tensor returns its "
+                "padding label (0 by default). With positional indices on Wormhole or Blackhole, stable=true "
+                "avoids this but can run out of L1 for large k. This warning is emitted once per process.",
+                current_dim_size,
+                pad_val,
+                k,
+                pad_val);
+        });
+    }
+
     // Execute TopK operation
     auto [output_value_tensor, output_index_tensor] = ttnn::prim::topk(
         padded_tensor,
@@ -645,7 +714,7 @@ std::vector<Tensor> topk(
         -1,
         largest,
         sorted,
-        stable,
+        use_stable,
         input_memory_config,
         used_sub_core_grids,
         padded_indices_tensor,

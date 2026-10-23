@@ -52,7 +52,6 @@ ALWI void process_tile(
 
     exp_dfb_bcast.wait_front(num_tiles_per_cycle);
 
-    compute_kernel_hw_startup(CB_OTHER, cb_llk_post);
     for (uint32_t j = tile_start; j < freq; ++j) {
         exp_dfb_other.wait_front(num_tiles_per_cycle);
         exp_dfb_llk_post.reserve_back(num_tiles_per_cycle);
@@ -72,7 +71,6 @@ ALWI void process_tile(
         exp_dfb_other.pop_front(num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(CB_OTHER);
         pack_reconfig_data_format(cb_llk_post, cb_out);
-        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
 
         exp_dfb_out.reserve_back(num_tiles_per_cycle);
         exp_dfb_llk_post.wait_front(num_tiles_per_cycle);

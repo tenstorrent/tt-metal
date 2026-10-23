@@ -12,11 +12,15 @@
 
 namespace ttnn::operations::experimental::deepseek::moe::deepseek_moe_gate {
 
-// Build executable program descriptor from current tensors / scalars (used on cache hit and miss).
+// Tensor-backed circular buffers. create_descriptor and override_runtime_arguments both use these indices.
+inline constexpr uint8_t kInputCb = 0;
+inline constexpr uint8_t kBiasCb = 1;
+inline constexpr uint8_t kOutputCb = 2;
+inline constexpr uint8_t kInputIndicesCb = 3;
+inline constexpr uint8_t kOutputIndicesCb = 4;
+
+// Build executable program descriptor from current tensors / scalars (cache miss only).
 tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     const tensor_args_t& tensor_args, const operation_attributes_t& operation_attrs);
-
-// Structural hash excluding buffer addresses (matches generic_op program-cache semantics).
-[[nodiscard]] std::uint64_t hash_moe_gate_program_structure(const tt::tt_metal::ProgramDescriptor&);
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::deepseek_moe_gate

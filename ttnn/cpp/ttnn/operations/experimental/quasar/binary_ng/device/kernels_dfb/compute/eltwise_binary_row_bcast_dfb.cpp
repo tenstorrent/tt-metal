@@ -66,10 +66,17 @@ void kernel_main() {
     DataflowBuffer dfb_post_lhs(dfb_post_lhs_id);
     DataflowBuffer dfb_post_rhs(dfb_post_rhs_id);
     DataflowBuffer dfb_out(dfb_out_id);
+    // An activation chain reads its operand from the pre ring. Each object drains once, at kernel exit.
+#if HAS_ACTIVATIONS(LHS)
+    DataflowBuffer dfb_pre_lhs(dfb_pre_lhs_id);
+#endif
+#if HAS_ACTIVATIONS(RHS)
+    DataflowBuffer dfb_pre_rhs(dfb_pre_rhs_id);
+#endif
 
     compute_kernel_hw_startup(dfb_post_lhs_id, dfb_post_rhs_id, dfb_out_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
@@ -85,7 +92,6 @@ void kernel_main() {
         pack_init(dfb_llk_post_id);
 #endif
         reconfig_data_format(dfb_bcast_id, dfb_bcast_id);
-        pack_reconfig_data_format(dfb_llk_post_id);
         unary_bcast_init<BroadcastType::ROW>(dfb_bcast_id);
 
         tile_regs_acquire();
@@ -105,17 +111,12 @@ void kernel_main() {
         // writes the wrong buffer (the ~constant-output symptom). Mirrors eltwise_utils_dfb.hpp.
         pack_init(dfb_out_id);
 #endif
-#if defined(ARCH_BLACKHOLE)
-        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
-#elif defined(ARCH_QUASAR)
-        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
-#endif
 
         // --- Binary op (verbatim from eltwise_binary_no_bcast_dfb.cpp's body, single tile). ---
-        PREPROCESS(LHS, dfb_pre_lhs_id, dfb_post_lhs_id, dfb_out_id, num_tiles_per_cycle);
+        PREPROCESS(LHS, dfb_pre_lhs, dfb_post_lhs, dfb_out_id, num_tiles_per_cycle);
         dfb_post_lhs.wait_front(num_tiles_per_cycle);
 
-        PREPROCESS(RHS, dfb_pre_rhs_id, dfb_post_rhs_id, dfb_out_id, num_tiles_per_cycle);
+        PREPROCESS(RHS, dfb_pre_rhs, dfb_post_rhs, dfb_out_id, num_tiles_per_cycle);
         dfb_post_rhs.wait_front(num_tiles_per_cycle);
 
         binary_tiles_init<true, BINARY_OP_TYPE>(dfb_post_lhs_id, dfb_post_rhs_id);

@@ -1,0 +1,11 @@
+# Downloaded weights and sample data
+data/
+reference/golden/
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+01_plan.md
+02_plan.md
+03_plan.md
+04_plan.md

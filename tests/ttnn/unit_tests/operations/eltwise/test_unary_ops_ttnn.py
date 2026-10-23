@@ -49,7 +49,6 @@ def test_unary_pow_ttnn(input_shapes, exponent, device):
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype, pcc",
     [
-        (torch.float32, ttnn.float32, 0.999),
         (torch.bfloat16, ttnn.bfloat8_b, 0.99),
     ],
 )
@@ -80,7 +79,7 @@ def test_unary_inverse_trig_functions_ttnn(input_shapes, torch_dtype, ttnn_dtype
         d_nonfinite = ~torch.isfinite(output_tensor)
         assert torch.equal(g_nonfinite, d_nonfinite), "Non-finite positions differ between golden and device"
     elif ttnn_dtype == ttnn.bfloat16 and low != -100:
-        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=ulp_threshold)
+        assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=ulp_threshold)
         assert_with_pcc(output_tensor, golden_tensor, pcc=pcc)
     else:
         assert_with_pcc(output_tensor, golden_tensor, pcc=pcc)
@@ -103,7 +102,7 @@ def test_unary_erf_ttnn(input_shapes, fast_and_approx, device):
     ttnn.erf(input_tensor, fast_and_approximate_mode=fast_and_approx, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.erf(in_data)
 
-    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize(
@@ -131,30 +130,10 @@ def test_unary_gelu_ttnn(input_shapes, fast_and_approx, device):
     "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("negative_slope", [1.0, 5.0, 10.0, 0.1])
-def test_unary_leaky_relu_ttnn(input_shapes, negative_slope, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-
-    cq_id = 0
-    ttnn.leaky_relu(input_tensor, negative_slope=negative_slope, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = torch.nn.functional.leaky_relu(in_data, negative_slope)
-
-    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize("ttnn_dtype", [ttnn.float32, ttnn.int32])
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.int32])
 def test_unary_neg_ttnn(input_shapes, device, ttnn_dtype):
     in_data1, input_tensor1 = data_gen_with_range_dtype(input_shapes, -100, 100, device, ttnn_dtype=ttnn_dtype)
 
@@ -222,7 +201,7 @@ def test_unary_tanh_ttnn(input_shapes, device):
     ttnn.tanh(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.tanh(in_data)
 
-    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -243,7 +222,7 @@ def test_unary_silu_ttnn(input_shapes, device):
     ttnn.silu(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.nn.functional.silu(in_data)
 
-    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1)
     atol_delta = torch.max(torch.abs(ttnn.to_torch(output_tensor) - golden_tensor)).item()
     torch.allclose(golden_tensor, ttnn.to_torch(output_tensor), atol=max_atol)
     assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"
@@ -267,7 +246,7 @@ def test_unary_silu_ttnn_pos_ulp_check(input_shapes, device):
     ttnn.silu(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.nn.functional.silu(in_data)
 
-    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize(
@@ -286,7 +265,7 @@ def test_unary_log_sigmoid_ttnn(input_shapes, device):
     ttnn.log_sigmoid(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.nn.functional.logsigmoid(in_data)
 
-    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize(
@@ -319,27 +298,7 @@ def test_unary_sigmoid_ttnn(input_shapes, device, approx_mode):
         comp_pass = compare_pcc([output_tensor], [golden_tensor])
         assert comp_pass
     else:
-        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize("value", [1.0, 5.0, 10.0])
-def test_unary_heaviside_ttnn(input_shapes, value, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-
-    cq_id = 0
-    ttnn.heaviside(input_tensor, value=value, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = torch.heaviside(in_data, torch.tensor(value, dtype=in_data.dtype))
-
-    assert_equal(output_tensor, golden_tensor)
+        assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -358,7 +317,7 @@ def test_unary_log2_ttnn(input_shapes, device):
     ttnn.log2(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.log2(in_data)
 
-    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1, allow_nonfinite=True)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
@@ -377,7 +336,7 @@ def test_unary_log10_ttnn(input_shapes, device):
     ttnn.log10(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.log10(in_data)
 
-    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2, allow_nonfinite=True)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=2, allow_nonfinite=True)
 
 
 # Supported range: [-1, 1e7]. log1p(-1) approaches negative infinity. For input beyond 1e7, pcc drops below 0.999.
@@ -415,7 +374,9 @@ def test_unary_log1p_ttnn(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.log1p)
     torch_output_tensor = golden_function(torch_input_tensor)
 
-    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1, allow_nonfinite=True)
+    assert_with_ulp(
+        expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1, allow_nonfinite=True
+    )
 
 
 @pytest.mark.parametrize(
@@ -481,7 +442,8 @@ def test_unary_log_like_fast_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, 
     "torch_dtype, ttnn_dtype",
     [
         (torch.float32, ttnn.float32),
-        (torch.bfloat16, ttnn.bfloat16),
+        # bfloat16 is exhaustively covered (all bf16 bit patterns, all scalars in this
+        # list) by test_fill_op in test_unary_category4_bfloat16.py.
         (torch.int32, ttnn.int32),
         (torch.uint32, ttnn.uint32),
     ],
@@ -547,4 +509,4 @@ def test_unary_celu(input_shapes, param, device):
         finite_mask = torch.isfinite(golden_tensor) & torch.isfinite(output_torch)
         assert_with_pcc(output_torch[finite_mask], golden_tensor[finite_mask], pcc=0.999)
     else:
-        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
+        assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1)

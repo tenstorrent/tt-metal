@@ -31,7 +31,8 @@ namespace {
 // Copy a block of n_tiles from one input DFB into the output DFB. The caller must have programmed
 // the unpack BFD for `in` (via copy_tile_to_dst_init_short) before calling this. No per-tile
 // re-init: the single init before the block covers every tile in it.
-void copy_block(DataflowBuffer& in, std::uint32_t in_id, DataflowBuffer& out, std::uint32_t n_tiles) {
+template <typename DFBIn, typename DFBOut>
+void copy_block(DFBIn& in, std::uint32_t in_id, DFBOut& out, std::uint32_t n_tiles) {
     for (std::uint32_t t = 0; t < n_tiles; ++t) {
         in.wait_front(1);
         out.reserve_back(1);
@@ -68,10 +69,16 @@ void kernel_main() {
         copy_init(dfb::in0);
         copy_block(dfb_in0, dfb::in0, dfb_out, tiles_per_input);
 
+        DPRINT("after copy_block in0\n");
+
         copy_init(dfb::in1);
         copy_block(dfb_in1, dfb::in1, dfb_out, tiles_per_input);
 
+        DPRINT("after copy_block in1\n");
+
         copy_init(dfb::in2);
         copy_block(dfb_in2, dfb::in2, dfb_out, tiles_per_input);
+
+        DPRINT("after copy_block in2\n");
     }
 }

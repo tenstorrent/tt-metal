@@ -14,23 +14,23 @@ D2D socket: a non-first rank receives an activation (not tokens) and a non-last 
 state instead of filling the LM head. KV-chunk-table migration is supported (single-rank) via
 ``build_kv_chunk_table`` (a multi-config table; see ``tt/runners/kv_chunk_table.py``).
 
-Input convention (shared with the engine's H2D socket): ``make_chunk_input`` returns the chunk's
+Input convention (shared with the engine's H2D socket): ``make_forward_input`` returns the forward's
 token IDs as an SP-sharded uint32 tensor — the SAME per-chip layout the request-mode socket delivers.
-``prefill_chunk`` embeds that token tensor on device, so the standalone (trace) and request (socket)
+``prefill_forward`` embeds that token tensor on device, so the standalone (trace) and request (socket)
 paths feed identical tensors into the forward and share one code path. The embedding lives here (M3
 embeds in ``prepare_inputs_prefill``, separate from the model forward), unlike DeepSeek which embeds
 inside ``forward``.
 
-The cache holds ``num_users * num_layers`` slots (user-major batch); each ``prefill_chunk`` call fills
-``slot_id``'s layers for one chunk at the given absolute KV offset, running the cache-read attention
-path against the already-written prefix.
+The cache holds ``num_users * num_layers`` rows (slot-major: cache_row = slot_id * num_layers + layer_idx); each
+``prefill_forward`` call fills every PrefillChunk into its slot_id at its absolute KV offset, running the
+cache-read attention path against the already-written prefix. ``prefill_chunk`` is the one-chunk form.
 
 Reference: models/demos/deepseek_v3_d_p/tt/tt_prefill_runtime.py (interface) and
 tests/galaxy_prefill_kv_pcc.py (cache readback + RoPE swizzle convention).
 """
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 
@@ -38,7 +38,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.mla.utils import block_cyclic_reorder, blockcyclic_positions
+from models.common.utils import block_cyclic_reorder
+from models.demos.minimax_m3.tt.prefill_chunk import PrefillChunk, pack_forward_tokens, validate_chunks
+from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
 
 
 @dataclass
@@ -46,10 +48,13 @@ class TtPrefillRuntimeConfig:
     num_layers: int  # layers built/cached by this runtime (== model total for single-rank)
     max_seq_len: int  # per-user KV-cache length in tokens; must be a multiple of chunk_size
     mesh_shape: tuple = (8, 4)  # (SP rows, TP cols) on the Blackhole galaxy
-    chunk_size: int = 5120  # tokens per prefill_chunk() call; one-shot sets this == max_seq_len
+    chunk_size: int = 5120  # tokens per chunk, the KV / RoPE block-cyclic period; one-shot sets this == max_seq_len
+    # Tokens per forward: forward_tokens_budget // chunk_size chunks (prefill_forward). None = chunk_size.
+    forward_tokens_budget: Optional[int] = None
     num_users: int = 1  # independent cache slots (user-major batch)
     sp_axis: int = 0
     tp_axis: int = 1
+    # Topology of the legacy CCLs (high_bw_all_gather derives its own from the fabric); see tt/ccl.py.
     topology: ttnn.Topology = ttnn.Topology.Linear
     use_ep_moe: bool = True
     expert_weight_dtype: ttnn.DataType = ttnn.bfloat4_b
@@ -72,6 +77,17 @@ class TtPrefillRuntimeConfig:
     # The runner picks the per-layer ack transport from this: traced runs use the host callback, untraced
     # ones the D2H service. M3 has no traced path, so it stays False.
     use_trace: bool = False
+    # MoE layers: run the shared expert on its own sub-device concurrently with dispatch (the runner's
+    # PrefillRunParams.overlap_shared_expert_with_dispatch). Off: it runs before the MoE on the full grid.
+    overlap_shared_expert: bool = True
+
+    def __post_init__(self):
+        if self.forward_tokens_budget is None:
+            self.forward_tokens_budget = self.chunk_size
+
+    @property
+    def forward_chunks(self) -> int:
+        return self.forward_tokens_budget // self.chunk_size
 
     @property
     def sp_factor(self) -> int:
@@ -95,6 +111,10 @@ class TtPrefillRuntime:
         assert (
             config.max_seq_len % config.chunk_size == 0
         ), f"max_seq_len ({config.max_seq_len}) must be a multiple of chunk_size ({config.chunk_size})"
+        budget = config.forward_tokens_budget
+        assert (
+            budget >= config.chunk_size and budget % config.chunk_size == 0
+        ), f"forward_tokens_budget ({budget}) must be a positive multiple of chunk_size ({config.chunk_size})"
         # The KV cache, its slot addressing and gather_layer are all sized by config.num_layers, while
         # the model builds one layer per entry of layer_indices. If those disagree, a layer addresses
         # past the per-user cache stride and silently corrupts another slot.
@@ -105,7 +125,6 @@ class TtPrefillRuntime:
 
         self.model_built = False
         self.compiled = False
-        # Per-layer LayerAck callback, registered via set_layer_ack_channel() after compile.
         self._on_layer_complete = None
         # Per-layer completion sink for pipelined prefill, registered via set_layer_completion_sink().
         self._layer_completion_sink = None
@@ -133,7 +152,8 @@ class TtPrefillRuntime:
             f"Building TtPrefillRuntime model: num_layers={self.config.num_layers} "
             f"first_layer_idx={self.config.first_layer_idx} is_first_rank={self.config.is_first_rank} "
             f"is_last_rank={self.config.is_last_rank} max_seq_len={self.config.max_seq_len} "
-            f"chunk_size={self.config.chunk_size} num_users={self.config.num_users} "
+            f"chunk_size={self.config.chunk_size} forward_tokens_budget={self.config.forward_tokens_budget} "
+            f"num_users={self.config.num_users} "
             f"mesh_shape={self.config.mesh_shape}"
         )
         mesh_config = MeshConfig((rows, cols), tp=cols)
@@ -150,12 +170,13 @@ class TtPrefillRuntime:
             max_local_batch_size=1,
             sequence_parallel=True,
             use_ep_moe=self.config.use_ep_moe,
-            ep_seq_len_per_chip=self.config.chunk_size // self.config.sp_factor,
+            ep_seq_len_per_chip=self.config.forward_tokens_budget // self.config.sp_factor,
             expert_weight_dtype=self.config.expert_weight_dtype,
             first_layer_idx=self.config.first_layer_idx,
             layer_indices=self.config.layer_indices,
             is_first_rank=self.config.is_first_rank,
             is_last_rank=self.config.is_last_rank,
+            overlap_shared_expert=self.config.overlap_shared_expert,
         )
         self.model_built = True
 
@@ -177,16 +198,66 @@ class TtPrefillRuntime:
 
         def build(dev_mat):
             # one-time D2H of the model's replicated cos/sin (device-0 copy), sliced to the cache capacity
-            full = ttnn.to_torch(ttnn.get_device_tensors(dev_mat)[0])[:, :, :cache_seq, :]
+            full = ttnn.to_torch(ttnn.get_device_tensors(dev_mat)[0])
+            assert full.shape[2] >= cache_seq, (
+                f"KV capacity {cache_seq} exceeds the model's RoPE table ({full.shape[2]} positions = "
+                f"max_position_embeddings); the indexed rope would be silently truncated"
+            )
+            full = full[:, :, :cache_seq, :]
             bc = block_cyclic_reorder(full, chunk_local, sp, seq_dim=2)
             return ttnn.from_torch(bc, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=mapper)
 
         rs = self.model.rope_setup
         self.rope_indexed = [build(rs.cos_matrix_prefill), build(rs.sin_matrix_prefill)]
 
+    def reconfigure_capacity(self, max_seq_len: int) -> None:
+        """Re-target the resident model at a different per-user KV-cache capacity WITHOUT rebuilding it.
+
+        Everything sized by ``max_seq_len`` lives outside the weights: the engine-owned KV cache (the
+        caller re-allocates it via ``allocate_kv_caches`` and passes the new handle into ``compile`` /
+        ``prefill_chunk``), the indexed RoPE tables (rebuilt here) and the config the asserts / compile
+        sweep / ``gather_layer`` un-rotation read (swapped here). The CCL scratch buffers are keyed by
+        shape, so a new capacity just adds an entry. ``forward_tokens_budget`` stays fixed: it is baked into the
+        MoE dispatch buffers at build time. Call ``compile(new_kv_cache)`` afterwards — the JIT buckets
+        for the new cache shapes are not warm.
+
+        Why: on a 1D fabric the MSA index_k gather moves close to the whole slot capacity per chunk
+        (msa._gather_tp_sharded_index_k), so a run in an over-sized cache pays for capacity it never reads.
+        Fitting the cache to each run keeps a resident-model sweep faithful to a standalone run.
+        """
+        assert self.model_built
+        assert (
+            max_seq_len % self.config.chunk_size == 0
+        ), f"max_seq_len ({max_seq_len}) must be a multiple of chunk_size ({self.config.chunk_size})"
+        if max_seq_len == self.config.max_seq_len:
+            return
+        logger.info(f"TtPrefillRuntime.reconfigure_capacity: max_seq_len {self.config.max_seq_len} -> {max_seq_len}")
+        old_config, old_rope = self.config, self.rope_indexed
+        self.config = replace(self.config, max_seq_len=max_seq_len)
+        try:
+            self._build_indexed_rope()  # builds the NEW tables first: a failure leaves the old capacity intact
+        except Exception:
+            self.config, self.rope_indexed = old_config, old_rope
+            raise
+        for t in old_rope:
+            ttnn.deallocate(t)
+        # The CCL scratch (ring-gather / high_bw-gather) is keyed by shape and the cache-read entries are
+        # capacity-sized: drop them so re-targets do not accumulate dead DRAM (~0.7 GB/chip per capacity at 1M).
+        self.model.ccl_manager.release_scratch_buffers()
+        self.compiled = False
+
+    def release_sub_device_managers(self) -> None:
+        """Remove the MoE overlap sub-device manager before the mesh is closed. Idempotent."""
+        if self.model_built:
+            self.model.release_sub_device_managers()
+
+    def release_trace(self) -> None:
+        """The prefill runner's pre-close hook. M3 has no trace; this releases the sub-device managers."""
+        self.release_sub_device_managers()
+
     def make_placeholder_activation(self) -> ttnn.Tensor:
         """Zero hidden-state activation matching the decoder-layer-boundary residual and the D2D receiver
-        backing: global ``[1, 1, chunk_size, hidden_size]`` bf16 TILE DRAM, sequence sharded across the SP
+        backing: global ``[1, 1, forward_tokens_budget, hidden_size]`` bf16 TILE DRAM, sequence sharded across the SP
         rows and the embedding sharded (or replicated) across the TP cols per
         ``pipeline_activation_emb_tp_sharded`` — the same layout as the runner's D2D_MAPPER_CONFIG. Warm-up
         stand-in for a non-first pipeline rank, which receives the real activation over the D2D socket at
@@ -196,7 +267,7 @@ class TtPrefillRuntime:
         dims[cfg.sp_axis] = 2  # seq across SP rows
         if cfg.pipeline_activation_emb_tp_sharded:
             dims[cfg.tp_axis] = 3  # emb across TP cols (else replicated on tp -> left None)
-        zeros = torch.zeros(1, 1, cfg.chunk_size, self.hf_config.hidden_size, dtype=torch.bfloat16)
+        zeros = torch.zeros(1, 1, cfg.forward_tokens_budget, self.hf_config.hidden_size, dtype=torch.bfloat16)
         return ttnn.from_torch(
             zeros,
             device=self.mesh_device,
@@ -206,34 +277,44 @@ class TtPrefillRuntime:
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=tuple(dims), mesh_shape=cfg.mesh_shape),
         )
 
-    def make_chunk_input(self, token_ids: list) -> ttnn.Tensor:
-        """Build one chunk's device input for ``prefill_chunk``. On the first rank: the chunk's token IDs
-        as an SP-sharded uint32 ROW_MAJOR DRAM tensor of per-chip shape ``(1, 1, chunk_size // sp)`` — row r
-        holds the contiguous token slice ``[r*s_local : (r+1)*s_local]``, replicated across the TP cols.
-        This is the SAME per-chip layout the request-mode H2D socket delivers, so both paths feed one code
-        path; ``prefill_chunk`` embeds it on device. (M3 uses a contiguous — non-balanced — SP shard,
-        matching ``prepare_inputs_prefill`` and the block-cyclic layout ``_build_indexed_rope`` assumes.)
+    def make_chunk_input(self, token_ids: list, actual_start: int = 0) -> ttnn.Tensor:
+        """One chunk's input for ``prefill_chunk``: ``make_forward_input`` with a single chunk."""
+        assert self.config.forward_chunks == 1, "a packed runtime takes make_forward_input / prefill_forward"
+        return self.make_forward_input([token_ids], [actual_start])
+
+    def make_forward_input(self, chunk_tokens: list, starts: list) -> ttnn.Tensor:
+        """Build one forward's device input for ``prefill_forward``. On the first rank: the chunks' token IDs
+        as an SP-sharded uint32 ROW_MAJOR DRAM tensor of per-chip shape ``(1, 1, forward_tokens_budget // sp)``,
+        replicated across the TP cols. ``chunk_tokens`` holds one natural-order chunk_size token list per
+        chunk (pad the tail; an empty chunk is all pad) and ``starts`` the chunks' actual_start. Chip r receives,
+        in chunk order, each chunk's tokens at ``rotated_chunk_positions(start)[r]`` — the contiguous slice
+        ``[r*s_local : (r+1)*s_local]`` for a chunk-aligned start, rotated for a mid-slab one (a multi-turn
+        resume) so the KV writer and indexed RoPE see each token at its true position. This is the SAME
+        per-chip layout the request-mode H2D socket delivers (the engine's H2D connector applies the same
+        reshuffle), so both paths feed one code path; ``prefill_forward`` embeds it on device.
 
         On a non-first pipeline rank the input is a hidden-state activation (received over the D2D socket at
         run time), not token IDs — return a placeholder activation of the right spec for warm-up."""
         if not self.config.is_first_rank:
             return self.make_placeholder_activation()
-        assert len(token_ids) == self.config.chunk_size, (
-            f"chunk input must be exactly chunk_size={self.config.chunk_size} tokens (pad the tail), "
-            f"got {len(token_ids)}"
-        )
-        sp = self.config.sp_factor
-        s_local = self.config.chunk_size // sp
-        tok = torch.tensor(token_ids, dtype=torch.int32).reshape(sp, 1, s_local)
+        cfg = self.config
+        n = cfg.forward_chunks
+        assert len(chunk_tokens) == n, f"{len(chunk_tokens)} chunks for a forward of {n}"
+        for token_ids in chunk_tokens:
+            assert len(token_ids) == cfg.chunk_size, (
+                f"chunk input must be exactly chunk_size={cfg.chunk_size} tokens (pad the tail), "
+                f"got {len(token_ids)}"
+            )
+        sp = cfg.sp_factor
+        tok = torch.tensor(pack_forward_tokens(chunk_tokens, starts, sp), dtype=torch.int32)
+        tok = tok.reshape(sp, 1, cfg.forward_tokens_budget // sp)
         return ttnn.from_torch(
             tok,
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device, mesh_shape=self.config.mesh_shape, dims=(self.config.sp_axis, None)
-            ),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=cfg.mesh_shape, dims=(cfg.sp_axis, None)),
         )
 
     def _embed_tokens(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
@@ -248,20 +329,47 @@ class TtPrefillRuntime:
         return x
 
     def compile(self, kv_cache) -> None:
-        """Warm up every KV-length the served loop can reach so no served chunk pays a first-run JIT.
-        Sweep the full per-user cache in chunk steps; each warm-up writes slot 0, which the real run overwrites."""
+        """Warm the program cache so no served forward pays a first-run JIT.
+
+        For a fixed cache capacity a chunk runs one of exactly THREE program sets per layer, so three warm-up
+        forwards cover the served loop: (i) the FIRST chunk (start == 0: no-cache attention variants,
+        exact-size gathers), followed by cache-read chunks when forward_tokens_budget > chunk_size, (ii) a full
+        CACHE-READ chunk (start > 0), (iii) a RAGGED chunk (end < start + chunk_size: the MoE padding-config
+        variant). (ii) and (iii) fill the rest of the forward with empty chunks (zero rows). Every
+        per-chunk offset — kv_actual / cached_len, logical_n, kv_len, chunk_start_idx, gathered_dim_size,
+        slot — is a runtime argument excluded from the op hashes (update_padded_kv_cache, ring_joint SDPA with
+        kv_actual_isl, indexer_score_msa, topk_large_indices valid_length, sparse_sdpa_msa,
+        high_bw_all_gather), so sweeping every KV-length bucket (the previous behaviour: max_seq_len /
+        chunk_size chunks, 196 at 1M) re-ran the same programs and still missed variant (iii). What IS hashed
+        is the cache capacity itself (gather buffer shapes, sparse_sdpa T), which is why reconfigure_capacity()
+        invalidates this warm-up. The warm-up writes slots the real run overwrites."""
         assert self.model_built
-        chunk = self.config.chunk_size
-        starts = list(range(0, self.config.max_seq_len - chunk + 1, chunk))
-        logger.info(f"TtPrefillRuntime.compile() — warming {len(starts)} KV-length buckets ({chunk}-token chunks)")
+        cfg = self.config
+        chunk, n_chunks = cfg.chunk_size, cfg.forward_chunks
+        per_slot = cfg.max_seq_len // chunk
+        cache_read_start = chunk if per_slot >= 2 else 0
+        empty = PrefillChunk(slot_id=0, actual_start=0, actual_end=0)
+
+        def fill(k):  # k-th chunk of filling slots 0, 1, ... in order; empty once every slot is full
+            slot_id, i = divmod(k, per_slot)
+            return PrefillChunk(slot_id, i * chunk, (i + 1) * chunk) if slot_id < cfg.num_users else empty
+
+        plan = [
+            [fill(k) for k in range(n_chunks)],
+            [PrefillChunk(0, cache_read_start, cache_read_start + chunk)] + [empty] * (n_chunks - 1),
+            [PrefillChunk(0, cache_read_start, cache_read_start + chunk // 2)] + [empty] * (n_chunks - 1),
+        ]
+        logger.info(
+            f"TtPrefillRuntime.compile() — warming first / cache-read / ragged forwards ({n_chunks} x {chunk}-token "
+            f"chunks, capacity {cfg.max_seq_len})"
+        )
         t0 = time.perf_counter()
-        for start in starts:
-            self.prefill_chunk(
-                self.make_chunk_input([0] * chunk), kv_cache, slot_id=0, actual_start=start, actual_end=start + chunk
-            )
+        for chunks in plan:
+            inp = self.make_forward_input([[0] * chunk] * n_chunks, [c.actual_start for c in chunks])
+            self.prefill_forward(inp, kv_cache, chunks)
         ttnn.synchronize_device(self.mesh_device)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
-        logger.info(f"[prefill timing] task_id=WARMUP buckets={len(starts)} runtime.compile() = {warmup_ms:.2f} ms")
+        logger.info(f"[prefill timing] task_id=WARMUP variants={len(plan)} runtime.compile() = {warmup_ms:.2f} ms")
         self.compiled = True
 
     def prefill_chunk(
@@ -277,80 +385,118 @@ class TtPrefillRuntime:
         *,
         skip_lm_head: bool = True,
         get_last_token: int = -1,
+        metadata_msg=None,
     ):
-        """Prefill ONE chunk into user ``slot_id``'s slice of the engine-owned ``kv_cache``. With
-        ``skip_lm_head`` (the default) returns None — single-rank is headless, the populated cache is the
-        output, read back via ``gather_layer``; otherwise returns the LM-head logits. Drives the
-        cache-read attention path for actual_start > 0.
+        """Prefill ONE chunk ``[actual_start, actual_end)`` into slot ``slot_id``: ``prefill_forward`` with a
+        single chunk (forward_tokens_budget == chunk_size). See prefill_forward for the arguments."""
+        assert self.config.forward_chunks == 1, "a packed runtime takes prefill_forward with forward_chunks chunks"
+        return self.prefill_forward(
+            input_tensor,
+            kv_cache,
+            [PrefillChunk(slot_id, actual_start, actual_end)],
+            request_id,
+            d2h_service,
+            record_dev,
+            skip_lm_head=skip_lm_head,
+            get_last_token=get_last_token,
+            metadata_msg=metadata_msg,
+        )
 
-        [actual_start, actual_end) is the absolute KV-position range of this chunk's real tokens:
-        actual_start is the cache write offset (the valid prefix already cached) and actual_end is past
-        the last real token (the tail of the final chunk may be pad, so actual_end < actual_start +
-        chunk_size). The chunk occupies physical positions [actual_start, actual_start + chunk_size);
-        causality makes the pad tail inert. Call once per chunk, in order — a chunk's KV must be written
-        before the next chunk reads it. If a LayerAck channel is registered, the model bumps it per layer.
+    def prefill_forward(
+        self,
+        input_tensor: ttnn.Tensor,
+        kv_cache,
+        chunks: list,
+        request_id: int = 0,
+        d2h_service=None,
+        record_dev=None,
+        *,
+        skip_lm_head: bool = True,
+        get_last_token: int = -1,
+        metadata_msg=None,
+    ):
+        """Prefill ONE forward of ``forward_tokens_budget // chunk_size`` ``chunks`` (tt/prefill_chunk.py) into the
+        engine-owned ``kv_cache``. Norms, projections and the MoE run once on all rows; the attention core
+        (RoPE, KV write, SP gathers, SDPA) runs per non-empty chunk against its slot_id. With ``skip_lm_head``
+        (the default) returns None — single-rank is headless, the populated cache is the output, read back
+        via ``gather_layer``; otherwise returns the LM-head logits (one-chunk forwards only).
+
+        Each chunk's [actual_start, actual_end) is the absolute KV-position range of its real tokens:
+        actual_start is the cache write offset (the valid prefix already cached) and actual_end is past the last
+        real token (the tail of a request's final chunk may be pad, so actual_end < actual_start + chunk_size).
+        The chunk occupies physical positions [actual_start, actual_start + chunk_size); causality makes the pad
+        tail inert. A slot's chunks are consecutive in pack order (only the last may be partial), so each
+        chunk's KV is written before the next one reads it; across forwards, call in order. Empty chunks
+        (actual_start == actual_end) fill the tail of a partial batch and touch no slot. If a LayerAck channel
+        is registered, the model bumps it per layer.
 
         On a non-last pipeline rank this returns the slice's output hidden-state activation (which the
         engine ships to the next rank over the D2D socket); the last/single rank keeps its headless
         cache-fill contract (returns None under skip_lm_head).
 
         Args:
-            input_tensor: on the first rank, this chunk's SP-sharded uint32 token tensor (make_chunk_input
+            input_tensor: on the first rank, this forward's SP-sharded uint32 token tensor (make_forward_input
                 or the H2D socket), embedded on device here then deallocated. On a non-first rank, the
                 hidden-state activation handed over the D2D socket — used directly (the first decoder layer
                 consumes/frees it), NOT embedded.
-            kv_cache: the engine-owned MiniMaxKVCache (from the adapter's allocate_kv_cache); this
-                chunk's KV is written into it. The same object is passed on every call.
-            slot_id: cache user slot to fill, in [0, num_users).
-            actual_start: absolute KV pos of the chunk's first token (the cache write offset).
-            actual_end: absolute KV pos past the chunk's last real (non-pad) token.
-            request_id: the engine's chunk counter, part of the runner's call contract. Only the
-                pipelined layer-completion sink needs it (to build a globally-dense
-                seq = request_id * num_layers + layer_idx); this runtime's single-rank LayerAck
-                channel carries no payload, so it is accepted and ignored.
-            d2h_service: the device-side per-layer ack transport. This runtime emits acks only through
-                the host callback (set_layer_ack_channel), so a caller asking for the D2H path gets a
-                loud error rather than silently missing acks.
-            record_dev: the chunk's metadata tensor, passed on every call and unused here (it is the
-                record the D2H ack would carry).
+            kv_cache: the engine-owned MiniMaxKVCache (from the adapter's allocate_kv_cache); the chunks'
+                KV is written into it. The same object is passed on every call.
+            chunks: the forward's PrefillChunk list, in pack order (validate_chunks).
+            request_id: the runner's forward index, part of the runner's call contract; unused here.
+            d2h_service: the device-side per-layer ack transport. When None, acks go through the host sink
+                (set_layer_completion_sink).
+            record_dev: the forward's metadata tensor, unused here.
+            metadata_msg: the forward's raw socket metadata tensor, sent as the D2H ack record.
         """
-        if d2h_service is not None:
-            raise NotImplementedError(
-                "MiniMax-M3 prefill emits layer acks via set_layer_ack_channel, not the D2H path; "
-                "run with PREFILL_ENABLE_LAYER_ACK=0 or wire the D2H ack into this runtime."
-            )
-        assert self.model_built, "build the model before prefill_chunk()"
-        assert 0 <= slot_id < self.config.num_users, f"slot_id {slot_id} out of range [0, {self.config.num_users})"
-        assert (
-            actual_start + self.config.chunk_size <= self.config.max_seq_len
-        ), f"chunk at actual_start={actual_start} exceeds per-user cache {self.config.max_seq_len}"
-        assert (
-            actual_start < actual_end <= actual_start + self.config.chunk_size
-        ), f"[actual_start={actual_start}, actual_end={actual_end}) not within one chunk of {self.config.chunk_size}"
+        assert d2h_service is None or (
+            metadata_msg is not None and len(chunks) == 1
+        ), "the D2H ack needs metadata_msg and one chunk per forward (the record names one chunk)"
+        cfg = self.config
+        assert self.model_built, "build the model before prefill_forward()"
+        # A chunk may start mid-slab (multi-turn continuation resumes at a tile boundary): the input rotation
+        # (make_forward_input / the engine's H2D reshuffle), the KV writer, indexed rope, ring-joint SDPA, the MSA
+        # indexer / sparse_sdpa_msa and the MoE padding config all derive this device's rotated positions from
+        # the chunk's actual_start, on the writer's tile-row grid.
+        validate_chunks(
+            chunks,
+            chunk_size=cfg.chunk_size,
+            forward_chunks=cfg.forward_chunks,
+            num_users=cfg.num_users,
+            max_seq_len=cfg.max_seq_len,
+        )
+        assert skip_lm_head or len(chunks) == 1, "a packed forward is headless (KV only)"
 
         # First rank embeds the SP-sharded tokens. On a non-first rank the input is already the upstream
         # hidden state, fed straight in — the first decoder layer frees it, so don't deallocate it here.
-        if self.config.is_first_rank:
+        if cfg.is_first_rank:
             x_embd = self._embed_tokens(input_tensor)
             ttnn.deallocate(input_tensor)
         else:
             x_embd = input_tensor
 
-        # Whole-cache indexed rope built once (self.rope_indexed); the indexed op picks this chunk's rows
-        # on-device from kv_actual_global (= actual_start, threaded via cached_len + indexed_rope=True). No
-        # per-chunk host reshard, and the tensors are persistent (do NOT deallocate them here). The KV
-        # cache is engine-owned and passed in. If a LayerAck channel is registered, the model bumps it
-        # once per layer via on_layer_complete.
-        # Pipelined mode registers a completion sink keyed by (global_layer_idx, request_id); bind request_id
-        # per call so the synchronous per-layer callback reads no mutable state. Single-host mode uses the ack.
-        if self._layer_completion_sink is not None:
+        # Whole-cache indexed rope built once (self.rope_indexed); the indexed op picks each chunk's rows
+        # on-device from kv_actual_global (= the chunk's actual_start, threaded via indexed_rope=True). No per-chunk
+        # host reshard, and the tensors are persistent (do NOT deallocate them here). The KV cache is
+        # engine-owned and passed in. If a LayerAck channel is registered, the model bumps it once per layer
+        # via on_layer_complete.
+        # on_layer_complete runs once the layer is enqueued; the ack must not reach the host before the
+        # layer's cache writes have executed.
+        if d2h_service is not None:
+
+            def on_layer_complete(layer_idx: int) -> None:
+                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
+
+        elif self._layer_completion_sink is not None:
+            # Pipelined mode: bind the forward's chunks per call so the synchronous callback reads no mutable state.
             sink = self._layer_completion_sink
 
             def on_layer_complete(layer_idx: int) -> None:
-                # The model reports a rank-local index; the sink's seq = request_id * total_layers +
-                # layer_idx needs the GLOBAL index, else every rank's local layer k collides at one seq
-                # and all but the first rank's completion is dropped.
-                sink(self.config.first_layer_idx + layer_idx, request_id)
+                ttnn.synchronize_device(self.mesh_device)
+                # The model reports a rank-local layer index. Empty chunks write no KV, so they report nothing.
+                global_layer = cfg.first_layer_idx + layer_idx
+                for c in chunks:
+                    if not c.is_empty:
+                        sink.layers_completed(global_layer, global_layer + 1, c.slot_id, c.actual_start, c.actual_end)
 
         else:
             on_layer_complete = self._on_layer_complete
@@ -358,19 +504,16 @@ class TtPrefillRuntime:
             x_embd,
             rot_mats_global=self.rope_indexed,
             kv_cache=kv_cache,
-            cached_len=actual_start,  # valid prefix already in the cache before this chunk
-            user_id=slot_id,
             get_last_token=get_last_token,
             skip_lm_head=skip_lm_head,  # default: cache-fill only (skip final norm + lm_head)
             indexed_rope=True,
             on_layer_complete=on_layer_complete,
-            # Real tokens in THIS chunk. Only the final chunk of a ragged prompt is short; every other
-            # chunk is full and the MoE's padding config resolves to None. Without this the padded tail
-            # is routed and dispatched as if real: wasted dispatch work that also eats per-expert
-            # dispatch-buffer capacity.
-            actual_isl=actual_end - actual_start,
+            # Each chunk's real-token range drives its attention core and the MoE padding config. Without
+            # the ranges the padded tails are routed and dispatched as if real: wasted dispatch work that
+            # also eats per-expert dispatch-buffer capacity.
+            chunks=chunks,
         )
-        if not self.config.is_last_rank:
+        if not cfg.is_last_rank:
             # Middle rank: hand the slice's output hidden state to the next rank.
             return out
         if skip_lm_head:
@@ -379,25 +522,15 @@ class TtPrefillRuntime:
             return None
         return out  # logits [1,1,chunk_local,vocab_shard], SP-sharded on seq / TP-sharded on vocab
 
-    def set_layer_ack_channel(self, layer_ack_channel) -> None:
-        """Register the per-layer LayerAck channel (engine-created + owned). ``prefill_chunk`` bumps it
-        once per layer (``inject(1)``); the scheduler reads the delta. The ack carries no payload. Called
-        by the engine in single-rank request mode."""
-        assert self.compiled, "Call compile() before set_layer_ack_channel()"
-
-        def on_layer_complete(layer_idx: int) -> None:
-            layer_ack_channel.inject(1)
-
-        self._on_layer_complete = on_layer_complete
-
     def set_layer_completion_sink(self, sink) -> None:
-        """Register a per-layer completion sink for pipelined (multi-rank) prefill. ``sink`` is called once
-        per layer as ``sink(layer_idx, request_id)`` — the global layer index plus the current request/chunk
-        id (bound per ``prefill_chunk`` call, so the sink reads no mutable runtime state). Replaces the
-        single-host ack-counter inject: the runner pushes a full completion into the host-local
-        LayerCompletionQueue and the LayerCompletionRouter re-emits it in seq order to the scheduler channel."""
+        """Register the completion sink for pipelined prefill, fired per layer for each non-empty chunk of the
+        prefill_forward() call."""
         assert self.compiled, "Call compile() before set_layer_completion_sink()"
         self._layer_completion_sink = sink
+
+    def set_d2h_ack_service(self, service) -> None:
+        """The runner calls this only for traced runtimes; this one takes the service per forward in prefill_forward."""
+        raise NotImplementedError("MiniMax-M3 prefill does not trace")
 
     def gather_layer(self, kv_cache, slot_id: int, layer_idx: int, n_tokens: int):
         """Read one layer's device cache back to NATURAL token order (un-rotating the block-cyclic SP
@@ -405,25 +538,26 @@ class TtPrefillRuntime:
         swizzled over the rotary slice — the caller reconciles vs the HF golden). Shapes:
         k,v -> [1, num_kv_heads, n_tokens, head_dim]; index_k -> [1, 1, n_tokens, head_dim] (zeros on
         dense layers, which carry no index_k). Optional bring-up hook — never used in production
-        serving."""
-        sp = self.config.sp_factor
-        cols = self.config.tp_factor  # K/V head c on col c; index_k replicated -> read col 0
-        nkv = self.hf_config.num_key_value_heads
-        slot = slot_id * self.config.num_layers + layer_idx
-        # shard-row -> natural global position (inverse of the update_padded_kv_cache writer).
-        p = blockcyclic_positions(sp, self.config.chunk_size, self.config.max_seq_len)
+        serving.
 
-        def gather(cache_tensor, col):
-            dts = ttnn.get_device_tensors(cache_tensor)
-            dev = torch.cat([ttnn.to_torch(dts[r * cols + col])[slot, 0].float() for r in range(sp)], dim=0)
-            nat = torch.empty_like(dev)
-            nat[p] = dev
-            return nat[:n_tokens]
+        Thin wrapper over ``read_slot_kv`` + ``naturalize_kv_block``. A caller that walks EVERY layer
+        should read the slot once and un-rotate each layer itself instead of calling this per layer.
+        """
+        from models.demos.minimax_m3.tt.runners.prefill_kv_validation import naturalize_kv_block
 
-        k = torch.stack([gather(kv_cache.k, c) for c in range(nkv)], dim=0).unsqueeze(0)
-        v = torch.stack([gather(kv_cache.v, c) for c in range(nkv)], dim=0).unsqueeze(0)
-        index_k = gather(kv_cache.index_k, 0).unsqueeze(0).unsqueeze(0)
-        return k, v, index_k
+        k_blk, v_blk, ik_blk = self.read_slot_kv(kv_cache, slot_id)
+        cfg = self.config
+        return (
+            naturalize_kv_block(k_blk[layer_idx], n_tokens, cfg.sp_factor, cfg.chunk_size, cfg.max_seq_len).unsqueeze(
+                0
+            ),
+            naturalize_kv_block(v_blk[layer_idx], n_tokens, cfg.sp_factor, cfg.chunk_size, cfg.max_seq_len).unsqueeze(
+                0
+            ),
+            naturalize_kv_block(ik_blk[layer_idx], n_tokens, cfg.sp_factor, cfg.chunk_size, cfg.max_seq_len).unsqueeze(
+                0
+            ),
+        )
 
     def kv_migration_stages(self, kv_cache, first_layer_idx=None, num_my_layers=None):
         """One ``KvCacheStage`` per migratable device cache, in the order ``build_kv_chunk_table``
@@ -448,8 +582,8 @@ class TtPrefillRuntime:
         stage_layouts=None,
     ) -> str:
         """Build + serialize M3's multi-config KV chunk address table (k_h0..N, v_h0..N, index_k) to
-        ``path`` and return it. The engine then PUBLISHES it to the migration worker (this issues no
-        comms). Called by the runner when PREFILL_ENABLE_MIGRATION=1 / PREFILL_MOCK_MIGRATION=1.
+        ``path`` and return it. This issues no comms; the runner then either publishes the table to the
+        migration worker (PREFILL_ENABLE_MIGRATION=1) or leaves it on disk.
 
         Multi-rank (pipeline-parallel): this rank owns layers [first_layer_idx, first_layer_idx +
         num_my_layers). The runner all-gathers one layout per ``kv_migration_stages`` entry (k, v,
@@ -472,32 +606,106 @@ class TtPrefillRuntime:
             head_dim=self.hf_config.head_dim,
             path=path,
             stage_layouts=stage_layouts,
+            index_k_layers=self.msa_layer_ids(),
         )
 
-    def read_slot_kv(self, kv_cache, slot: int):
-        """Read one slot's KV cache from device to host: ``[k, v, index_k]``, one host tensor per cache
-        tensor, each ``[num_layers, heads(or 1), seq_cache, head_dim]`` (index_k collapsed to one TP
-        replica), in the raw on-device (block-cyclic) layout — not un-rotated to natural token order.
-        DRAM_MEMORY_CONFIG on the slice is REQUIRED — the cache is ND-sharded ROUND_ROBIN_1D, and slicing
-        into another ND-shard miscomputes the DRAM core on host read-back."""
-        mesh_device = self.mesh_device
-        num_layers = self.config.num_layers
+    def msa_layer_ids(self) -> set[int]:
+        """Global ids of the MSA (block-sparse) layers — the only layers that write an index_k (layers 3-59 on
+        M3). Read through the same helper as ``Layer``, so the table can't disagree with the model."""
+        ids = {i for i, f in enumerate(sparse_attention_freq(self.hf_config) or []) if f}
+        if not ids:
+            logger.warning(
+                "[migration] the config has no MSA layers (sparse_attention_freq missing or use_sparse_attention "
+                "off): the KV chunk table publishes no index_k rows"
+            )
+        return ids
 
-        def _block(tensor, collapse_tp: bool):
+    def read_slot_kv(self, kv_cache, slot_id: int, n_tokens: int | None = None):
+        """Read one slot's KV cache from device to host: ``[k, v, index_k]``, one host tensor per cache
+        tensor, each ``[num_layers, heads(or 1), seq_read, head_dim]`` (index_k collapsed to one TP
+        replica), in the raw on-device (block-cyclic) layout — not un-rotated to natural token order.
+
+        ``n_tokens`` bounds the read to the first ``ceil(n_tokens / chunk_size)`` chunks: the block-cyclic
+        writer puts slab k of every chip at local rows ``[k*chunk_local, (k+1)*chunk_local)``, so the first
+        ``k`` chunks live in the first ``k*chunk_local`` rows of EVERY chip and the composed block is exactly
+        the layout of a ``k*chunk_size`` cache — un-rotate it with ``naturalize_kv_block(...,
+        max_seq_len=k*chunk_size)`` (see ``read_seq_len``). Without the bound a 1M-capacity slot is ~120 GB
+        of fp32 per cache on host. ``None`` reads the whole capacity.
+
+        One device slice + one mesh compose per cache. DRAM_MEMORY_CONFIG on the slice is required —
+        the cache is ND-sharded ROUND_ROBIN_1D, and slicing into another ND-shard miscomputes the DRAM
+        core on host read-back.
+
+        A TP-deduped index_k (``kv_cache.index_k_tp_axis``) is returned in the SAME layout as the replicated
+        one: its per-column stripes are re-interleaved on host, so callers need no special case.
+        """
+        start = slot_id * self.config.num_layers
+        end = start + self.config.num_layers
+        seq_read = self.read_seq_len(n_tokens)
+        rows = seq_read // self.config.sp_factor  # per-chip rows holding the first seq_read positions
+        composer = ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(2, 1), mesh_shape=self.mesh_device.shape)
+
+        def _slot_block(tensor, *, collapse_tp: bool = False):
+            """This slot's packed-cache rows, gathered to host in one mesh compose.
+
+            ``ConcatMesh2dToTensor`` ``dims=(2, 1)`` so SP concatenates on seq and TP on heads — one
+            ``to_torch`` instead of per-chip ``get_device_tensors``. ``collapse_tp`` keeps a single TP
+            replica (index_k is replicated across cols). Returns
+            ``[end - start, heads(or 1), seq_cache, head_dim]`` in on-device (block-cyclic) seq order.
+            """
             s = list(tensor.shape)
             sl = ttnn.slice(
                 tensor,
-                [slot * num_layers, 0, 0, 0],
-                [(slot + 1) * num_layers, s[1], s[2], s[3]],
+                [start, 0, 0, 0],
+                [end, s[1], min(rows, s[2]), s[3]],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            block = ttnn.to_torch(
-                sl, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
-            ).float()  # [num_layers, nkv (or cols), seq_cache, head_dim]
+            host = ttnn.to_torch(sl, mesh_composer=composer).float()
             ttnn.deallocate(sl)
-            return block[:, :1] if collapse_tp else block
+            return host[:, :1] if collapse_tp else host
 
-        return [_block(kv_cache.k, False), _block(kv_cache.v, False), _block(kv_cache.index_k, True)]
+        def _tp_sharded_slot_block(tensor):
+            """A TP-deduped cache's slot, re-interleaved to the TP-replicated layout ``[L, 1, sp*rows, hd]``.
+
+            Chip (s, t) holds stripe t (``chunk_local/tp`` rows) of every slab n at local rows
+            ``n*stripe + i``; the compose stacks the cols on dim 1, so ``host[:, t, s*n_slabs*stripe +
+            n*stripe + i]`` moves to ``s*n_slabs*chunk_local + n*chunk_local + t*stripe + i``."""
+            sp, tp = self.config.sp_factor, self.mesh_device.shape[kv_cache.index_k_tp_axis]
+            chunk_local = self.config.chunk_size // sp
+            stripe = chunk_local // tp
+            assert rows % chunk_local == 0, f"read of {rows} rows/chip is not a whole number of {chunk_local}-row slabs"
+            n_slabs = rows // chunk_local
+            s = list(tensor.shape)
+            assert n_slabs * stripe <= s[2], f"read of {n_slabs} slabs past the {s[2]}-row index_k cache"
+            sl = ttnn.slice(
+                tensor,
+                [start, 0, 0, 0],
+                [end, s[1], n_slabs * stripe, s[3]],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            host = ttnn.to_torch(sl, mesh_composer=composer).float()  # [L, tp, sp*n_slabs*stripe, hd]
+            ttnn.deallocate(sl)
+            n_l, hd = host.shape[0], host.shape[3]
+            host = host.reshape(n_l, tp, sp, n_slabs, stripe, hd).permute(0, 2, 3, 1, 4, 5)
+            return host.reshape(n_l, 1, sp * n_slabs * chunk_local, hd)
+
+        if kv_cache.index_k_tp_axis is None:
+            index_k = _slot_block(kv_cache.index_k, collapse_tp=True)
+        else:
+            index_k = _tp_sharded_slot_block(kv_cache.index_k)
+        return [
+            _slot_block(kv_cache.k),
+            _slot_block(kv_cache.v),
+            index_k,
+        ]
+
+    def read_seq_len(self, n_tokens: int | None) -> int:
+        """Cache length (tokens) that ``read_slot_kv(n_tokens=...)`` returns: the first ``ceil(n_tokens /
+        chunk_size)`` chunks, i.e. the ``max_seq_len`` to pass to ``naturalize_kv_block`` for that block."""
+        if n_tokens is None:
+            return self.config.max_seq_len
+        chunk = self.config.chunk_size
+        return min(self.config.max_seq_len, -(-n_tokens // chunk) * chunk)
 
     def kv_cache_pcc_check(
         self,

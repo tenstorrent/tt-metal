@@ -3,15 +3,14 @@
 
 import itertools
 import math
-from dataclasses import dataclass, replace
-from enum import Enum
+import struct
+from dataclasses import replace
 from typing import Dict
 
 import pytest
 import torch
-from conftest import skip_for_quasar
 from helpers.chip_architecture import ChipArchitecture
-from helpers.data_format_inference import is_format_combination_outlier
+from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -20,14 +19,26 @@ from helpers.golden_generators import (
     get_golden_generator,
     quantize_input_to_unpack_format,
 )
+from helpers.llk_params import (
+    ApproximationMode,
+)
 from helpers.llk_params import BroadcastType as LlkBroadcastType
-from helpers.llk_params import DestAccumulation, DestSync, MathOperation, format_dict
+from helpers.llk_params import (
+    DestAccumulation,
+    DestSync,
+    DstRoundingMode,
+    MathOperation,
+    PerfRunType,
+    format_dict,
+)
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
     runtime,
 )
+from helpers.perf.core import create_test_or_perf_config
+from helpers.sfpu_accuracy_budget import assert_against_contract
 from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
     _SFPU_BINARY_OPS,
@@ -47,45 +58,61 @@ from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     BROADCAST_TYPE,
+    ITERATIONS,
+    LOOP_FACTOR,
     MATH_OP,
     NUM_BLOCKS,
+    NUM_FACES,
     NUM_TILES_IN_BLOCK,
+    SFPU_BCAST_DIM,
+    SFPU_DST_ROUNDING_MODE,
+    SIGN_MAGNITUDE_FORMAT,
     TILE_COUNT,
-    TemplateParameter,
+    ZERO_POINT,
     generate_input_dim,
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.tilize_untilize import tilize
-from helpers.utils import passed_test
+from helpers.utils import (
+    assert_bf16_separates_rne,
+    assert_bit_exact,
+    bf16_from_bits,
+    fp32_bits_as_int32,
+    int32_to_smag32,
+    passed_test,
+)
 
 # =============================================================================
 # Shared skip helpers
 # =============================================================================
 
 
-def _skip_fp32_no_dest_acc(formats, dest_acc):
-    """32-bit (Float32) inputs need a 32-bit dest, i.e. dest_acc=Yes."""
+def fp32_no_dest_acc_skip_reason(formats, dest_acc):
+    """Why a driver calling :func:`_skip_fp32_no_dest_acc` skips this variant, or
+    ``None``. The exact-op guard in test_sfpu_accuracy_budget.py asks it too, so its
+    exclusions cannot drift from the skip."""
     if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+        return "32-bit inputs need a 32-bit Dest (dest_acc=Yes)"
+    return None
 
 
-def _skip_bh_float16_no_dest_acc(formats, dest_acc):
-    """Blackhole can't run Float16 SFPU input without a 32-bit dest intermediate."""
-    if (
-        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-        and formats.input_format == DataFormat.Float16
-        and dest_acc == DestAccumulation.No
-    ):
-        pytest.skip(
-            "Float16_a isn't supported for SFPU on Blackhole without being converted to 32-bit intermediate format in dest register"
-        )
+def _skip_fp32_no_dest_acc(formats, dest_acc):
+    """32-bit inputs need a 32-bit Dest (dest_acc=Yes)."""
+    reason = fp32_no_dest_acc_skip_reason(formats, dest_acc)
+    if reason:
+        pytest.skip(reason)
+
+
+def _resolve_perf_args(is_perf, perf_report, run_types):
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+    if run_types is None:
+        run_types = [PerfRunType.L1_TO_L1]
+    return run_types
 
 
 def _skip_sfpu_lcm_dest_acc_bh(mathop, dest_acc):
-    """SfpuLcm dest_acc=Yes is codegen-sensitive on Blackhole and hangs (extra dest SFPLOAD after
-    SFPU): it passes on an unperturbed build but any codegen shift -- extra nops, an inlining change
-    -- tips it into a TENSIX timeout. Disabled until the missing stall is added. See tt-metal#52997.
-    """
+    """SfpuLcm dest_acc=Yes is codegen-sensitive on Blackhole and hangs. See tt-metal#52997."""
     if (
         TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
         and mathop == MathOperation.SfpuLcm
@@ -96,109 +123,26 @@ def _skip_sfpu_lcm_dest_acc_bh(mathop, dest_acc):
         )
 
 
-# =============================================================================
-# Shared crafted-stimuli helpers
-#
-# Several predicate/paired ops (mask, isclose, eq/ne, lt/gt/le/ge) need operand
-# tiles filled from *different* per-position data, which the default random sweep
-# can't express. These builders produce those StimuliSpecs. (logsigmoid also lives
-# here, but it is a plain single-distribution spec that never reads in1.)
-# =============================================================================
+# Shared crafted-stimuli helpers. Several predicate/paired ops (mask, isclose, eq/ne,
+# lt/gt/le/ge) need their two operand tiles filled from different per-position data, which
+# the default random sweep cannot express. These builders produce those StimuliSpecs.
 
 # Number of faces per tile for the [64, 32] two-tile binary harness layout
 # (a 32x32 tile is 4 faces of 16x16, and input_dimensions=[64, 32] is 8 faces).
 _FACES_PER_TILE = 4
+
+#: The approximation mode the contract-gated drivers below compile, and so the one their
+#: contract names.
+_APPROX_MODE = ApproximationMode.No
 _ELEMENTS_PER_TILE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
-
-
-# Per-op (atol, rtol) overrides for the binary suite, mirroring CUSTOM_TOLERANCES in
-# test_eltwise_unary_sfpu.py. `None` keeps the format default (0.05 / 0.05 for the float formats).
-#
-# Only two ops belong here: their error is a property of the op's own *composition* rather than
-# of the stimuli, so it grows with the operands however the domain is drawn. Both were previously
-# kept accurate by capping the registry domain instead -- pow at 3, xlogy's x at 4 -- which never
-# evaluated the op where it is interesting. Every number below is measured on a Blackhole p150b
-# over the widened domains, max across Float16_b and Float32 at dest_acc=Yes, ~32k elements per
-# cell. Re-measure before widening either domain further.
-#
-#   pow -- a**b is exp(b * ln a), so relative error tracks the product handed to the shared
-#   exp approximation:
-#     A<=3  B<=3  (b*ln a = 3.30)   max_rel  10.00%
-#     A<=8  B<=3  (6.24)            max_rel  10.24%
-#     A<=8  B<=4  (8.32)            max_rel  13.35%   <- the domain now registered
-#     A<=16 B<=4  (11.09)           max_rel  10.34%
-#   ~Flat in the operands rather than growing, so the fixed 5% rtol had been capping the domain,
-#   not the op; rtol=0.15 clears 13.35% with margin. A<=16 was rejected separately: it drives
-#   |golden| to 6.2e4, within 1.06x of Float16's ceiling.
-#
-#   xlogy -- x * log(y), so *absolute* error scales with x while a fixed atol does not
-#   (relative is meaningless: xlogy(0, y) = 0, making any error there infinitely relative):
-#     x<=4   max_abs 0.25 (Float16_b) / 0.058 (Float32)
-#     x<=8   max_abs 0.50            / 0.116            <- the domain now registered
-#     x<=16  max_abs 1.00            / 0.232
-#     x<=32  max_abs 2.00            / 0.464
-#   Linear in x, matching error ~ x * abs_err(ln y), which is why no fixed atol could hold.
-#   Float16_b dominates because at |golden| ~ 72 a bfloat16 ULP is already 0.5 -- mostly output
-#   quantization, not the kernel. atol=0.6 covers x<=8 with 20% margin.
-BINARY_CUSTOM_TOLERANCES = {
-    # Listed per output format only to keep Bfp8_b out of it. pow's error is *relative* -- the
-    # measurement above is ~flat in the operands -- so unlike xlogy's absolute error it does not
-    # scale with the output format's precision, and the same rtol is the right shape for every
-    # float column. Measured: reverting ->Float16 to the 0.05 default fails all 15 of its pow
-    # variants on a Wormhole n300, so 0.15 is the op's requirement there too, not a loosening.
-    #
-    # Bfp8_b is the exception and is deliberately absent: its default rtol is 0.2, so an override
-    # of 0.15 would *tighten* it, and at 0.2 a lane that misses the tolerance can still be caught
-    # by the block-lattice fallback in passed_test. Falling through keeps both.
-    MathOperation.SfpuElwpow: {
-        DataFormat.Float32: (None, 0.15),
-        DataFormat.Float16_b: (None, 0.15),
-        DataFormat.Float16: (None, 0.15),
-    },
-    # Keyed by *output format*, because the measurement above splits by nearly 5x: applying
-    # Float16_b's atol to Float32 would accept five times the error that format was measured to
-    # produce. Float16 is measured separately on a Wormhole n300 over x <= 8 and requires 0.0989
-    # against a 0.05 format default; 0.12 is that with the same ~20% margin as the other two.
-    MathOperation.SfpuXlogy: {
-        DataFormat.Float32: (0.14, None),  # 0.116 measured, same ~20% margin as bf16
-        DataFormat.Float16_b: (0.6, None),
-        DataFormat.Float16: (0.12, None),  # 0.0989 measured
-    },
-}
-
-# Fallback for an output format the per-format table does not list: no override at all, so
-# `helpers/utils.py`'s per-format tolerance applies. Bfp8_b is the only such format left, and
-# it does not need one -- its verdict comes from _bfp_block_aware_compare's lattice check
-# rather than from a flat atol, and it passes on the default.
-#
-# Not the widest measured value: an unlisted format sits on its format default (0.05 for Float16,
-# 0.1 for Bfp8_b), and handing those 0.6 would loosen them 12x and 6x on columns the measurement
-# never covered.
-#
-# Reading the measurement: passed_test judges with torch.isclose(golden, res, rtol, atol), so the
-# bound is atol + rtol * |res| and the atol a format actually needs is max(|g - r| - rtol * |r|),
-# not max|g - r| -- which is why the raw figures above sit well above the atols they justify.
-_UNLISTED_FORMAT_TOLERANCE = (None, None)
-
-
-def _custom_tolerances(mathop, output_format):
-    """The (atol, rtol) override for *mathop*, per output format where it has one."""
-    entry = BINARY_CUSTOM_TOLERANCES.get(mathop)
-    if entry is None:
-        return (None, None)
-    if isinstance(entry, dict):
-        return entry.get(output_format, _UNLISTED_FORMAT_TOLERANCE)
-    return entry
 
 
 def _build_paired_tile_override(pairs, dtype):
     """Two-tile raw override from a list of (A, B) pairs: tile 0 holds every A, tile 1
     every B, paired by index (tilize pairs them that way).
 
-    *pairs* is cycled to fill a whole tile rather than zero-padded, so the override
-    divides evenly into whatever buffer the driver picks and every element is a pair the
-    caller meant to drive. The three edge builders below all need exactly this — an
-    interesting pair list is always far shorter than a tile — and differ only in *dtype*.
+    *pairs* is cycled to fill a whole tile rather than zero-padded, so every element is a
+    pair the caller meant to drive.
     """
     if not pairs:
         raise ValueError("_build_paired_tile_override() needs at least one pair")
@@ -208,13 +152,11 @@ def _build_paired_tile_override(pairs, dtype):
 
 
 def _pair_operand_specs(spec_A, spec_B, input_dimensions):
-    """Interleave two per-operand specs across *every* tile pair in the buffer.
+    """Interleave two per-operand specs across every tile pair in the buffer.
 
     The kernel reads operand 0 from the even tile of each pair and operand 1 from the odd
-    one, so per-operand stimuli have to alternate every 4 faces for the whole buffer.
-    The list must cover the real tile count: `face_specs` is applied positionally and is
-    not cycled, so a short list leaves later pairs with operand 0's distribution on both
-    sides. Entries for operand 0's faces stay None to fall through to the base spec.
+    one, so the specs alternate every 4 faces across the whole buffer. `face_specs` is
+    applied positionally and not cycled, so the list has to cover the real tile count.
     """
     tiles = (input_dimensions[0] * input_dimensions[1]) // _ELEMENTS_PER_TILE
     if tiles % 2:
@@ -234,33 +176,26 @@ def _face_spec(dist):
 def _positions_and_ramp(size):
     """The (positions, 1..8 ramp) pair every paired builder below is built from.
 
-    `size` is whatever the generator passes per face (256 for a 16x16 face), so the
-    builders never assume a face size. The ramp repeats 1..8: non-zero everywhere, so
-    mask's passthrough is detectable, and of order 1, so the +/-1.0 and +2.0 offsets the
-    other operand adds are unambiguous against any rounding.
+    `size` is whatever the generator passes per face, so the builders never assume a face
+    size. The ramp is non-zero everywhere and of order 1, so the offsets the other operand
+    adds stay unambiguous against any rounding.
     """
     positions = torch.arange(size, dtype=torch.float32)
     return positions, 1.0 + (positions % 8)
 
 
-# =============================================================================
-# Which ops take their domain from _OP_DOMAIN_REGISTRY
-#
-# Every op driven through sfpu_binary() belongs to exactly one of the three sets below,
-# and _classify_stimuli_source() enforces that in the driver. The classification is the
-# only record of *why* an op is fed what it is fed, so an unclassified op is a coverage
-# question nobody asked rather than a default anybody chose.
+# Which ops take their domain from _OP_DOMAIN_REGISTRY. Every op driven through sfpu_binary()
+# belongs to exactly one of the three sets below, and _classify_stimuli_source() enforces that
+# in the driver, so an unclassified op is a coverage question nobody asked rather than a
+# default anybody chose:
 #
 #   _REGISTRY_DOMAIN_OPS            - rerouted onto the op's registered domain.
 #   _UNREGISTERED_BINARY_OPS        - no registry entry exists; keeps the format default.
-#   _REGISTERED_DEFAULT_STIMULI_OPS - a registry entry exists but is deliberately not
-#                                     used here, with the reason recorded per op.
+#   _REGISTERED_DEFAULT_STIMULI_OPS - a registry entry exists but is deliberately not used
+#                                     here, with the reason recorded per op.
 #
-# The reroute is float-only on purpose: SfpuElwadd/SfpuElwsub and the shift ops also run
-# through test_eltwise_binary_sfpu_int, where a float domain like uniform(-1, 1) would collapse
-# to {-1, 0, 1} and gut the int coverage. Ops with crafted stimuli (mask / isclose /
-# eq-ne / logsigmoid / shift edge cases) pass their own spec and ignore any default.
-# =============================================================================
+# The reroute is float-only on purpose: several of these ops also run on an integer format,
+# where a float domain would collapse to a handful of values and gut the int coverage.
 
 _REGISTRY_DOMAIN_OPS = frozenset(
     {
@@ -271,6 +206,8 @@ _REGISTRY_DOMAIN_OPS = frozenset(
         MathOperation.SfpuElwdiv,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
+        MathOperation.SfpuLogaddexp,
+        MathOperation.SfpuLogaddexp2,
     }
 )
 
@@ -312,14 +249,13 @@ _UNREGISTERED_BINARY_OPS = frozenset(
         MathOperation.SfpuRemainderInt32,
         MathOperation.SfpuRemainderUint32,
         MathOperation.SfpuRsubInt32,
+        MathOperation.SfpuCopyDest,
     }
 )
 
-# Ops with an _OP_DOMAIN_REGISTRY entry that this suite deliberately does not read, and
-# why. Distinct from _UNREGISTERED_BINARY_OPS: there the registry has nothing to offer,
-# here it has something we are choosing not to take. Without this set the three shift ops
-# sat outside both lists, so the consistency check below passed while saying nothing about
-# them — the exact silent-drift hole it exists to close.
+# Ops with an _OP_DOMAIN_REGISTRY entry that this suite deliberately does not read, and why.
+# Distinct from _UNREGISTERED_BINARY_OPS: there the registry has nothing to offer, here it
+# has something we are choosing not to take.
 _REGISTERED_DEFAULT_STIMULI_OPS: Dict[MathOperation, str] = {
     MathOperation.SfpuElwLeftShift: "driven as Int32 here; the registered float domain "
     "uniform(0, 255) is for the shift *amount* and the value operand needs the full "
@@ -334,26 +270,21 @@ _REGISTERED_DEFAULT_STIMULI_OPS: Dict[MathOperation, str] = {
 _OPS_NOT_USING_SHARED_DRIVER: Dict[MathOperation, str] = {
     MathOperation.SfpuAddTopRow: "test_eltwise_binary_sfpu_add_top_row builds its own stimuli, "
     "golden and TestConfig (the top-row semantics need a [64, 32] single-pair layout)",
+    MathOperation.SfpuQuant: "test_eltwise_binary_sfpu_quant stages fp32 bits in an Int32 tile "
+    "and passes a zero-point the shared float driver does not have",
+    MathOperation.SfpuRequant: "as SfpuQuant",
+    MathOperation.SfpuDequant: "as SfpuQuant; the output tile is Float32",
 }
 
 
 def _assert_domain_sets_consistent():
     """The three stimulus-source sets must be disjoint and consistent with the registry.
 
-    Each half fails quietly otherwise: an op in _REGISTRY_DOMAIN_OPS with no registry
-    entry raises deep inside the driver mid-sweep; an op that gains a domain while sitting
-    in _UNREGISTERED_BINARY_OPS silently keeps the positive-only default; and an op in no
-    set at all keeps the default while looking, to a reader of this file, like it was never
-    considered.
-
-    Totality — every op reaching the driver is classified — cannot be asserted here,
-    because the set of ops this suite drives is only known once pytest has collected the
-    parametrize lists. _classify_stimuli_source() enforces it in the driver instead.
-
-    What *can* be asserted here is family totality: every op sfpu_domains records as a
-    binary SFPU op is either classified or declared as not using the shared driver. That
-    catches an op added to the family and to no list at all, which the driver-side check
-    cannot see until something drives it.
+    Every way of getting this wrong fails quietly otherwise -- an op keeps the positive-only
+    default while looking, to a reader, like it was considered. Totality over the ops this
+    suite actually drives cannot be checked until pytest has collected, so
+    _classify_stimuli_source() enforces that half in the driver; what is checked here is
+    family totality against sfpu_domains._SFPU_BINARY_OPS.
     """
     missing = sorted(
         op.name
@@ -414,11 +345,9 @@ _CLASSIFIED_STIMULI_OPS = (
 def _classify_stimuli_source(mathop):
     """True if *mathop* reads its domain from the registry; False if it keeps the default.
 
-    Raises for an op in none of the three declared sets. That is the case the collection
-    -time assertion cannot see: adding an op to a parametrize list is enough to drive it,
-    and an unclassified op would silently inherit generate_stimuli's positive-only
-    uniform(0.1, 1.1) — which is finding #1 of the coverage audit, reintroduced one op at
-    a time.
+    Raises for an op in none of the three declared sets -- the case the collection-time
+    assertion cannot see, since adding an op to a parametrize list is enough to drive it and
+    an unclassified op would silently inherit the positive-only format default.
     """
     if mathop not in _CLASSIFIED_STIMULI_OPS:
         raise KeyError(
@@ -476,11 +405,9 @@ def _eq_ne_stimuli_specs():
 def _comparison_stimuli_specs():
     """Three-way paired stimuli for lt/gt/le/ge: a < b, a == b, a > b in equal thirds.
 
-    Independent random draws land arbitrarily close together, and a near-tie the kernel
-    and the total-order golden round differently reads as a failure. The gaps here are
-    +/-1.0 against operands of order 1, far wider than any rounding, so every element's
-    verdict is unambiguous. The exact-equality third is the point: it is the only input
-    where lt/gt and le/ge disagree, and a random sweep essentially never produces it.
+    The exact-equality third is the point: it is the only input where lt/gt and le/ge
+    disagree, and a random sweep essentially never produces it. The +/-1.0 gaps are far
+    wider than any rounding, so every other element's verdict is unambiguous too.
     """
 
     def a_face(size, dtype, generator):
@@ -497,9 +424,8 @@ def _comparison_stimuli_specs():
 
 
 def _logsigmoid_stimuli_spec():
-    # logsigmoid(x) = -softplus(-x). in1 (exp(-x)) is only read in the x > 4 branch, so
-    # restrict x to [-8, 3.9] (never uses in1) and sweep the passthrough (x < -4) and
-    # polynomial (-4 < x < 4) branches. The distribution is invoked per 16x16 face (size 256).
+    # logsigmoid(x) = -softplus(-x). in1 is only read in the x > 4 branch, so x is restricted
+    # to [-8, 3.9], which sweeps the passthrough and polynomial branches without it.
     def dist(size, dtype, generator):
         return torch.linspace(-8.0, 3.9, size).to(dtype)
 
@@ -509,9 +435,10 @@ def _logsigmoid_stimuli_spec():
 # =============================================================================
 # Shared driver
 #
-# Every test below (except add_top_row and the separate broadcast kernel) runs
-# through sfpu_binary(): it builds the [64, 32] two-tile stimuli, computes the
-# golden per tile-pair, and drives sources/sfpu_binary_test.cpp.
+# Every test below (except add_top_row, the quant family, and the separate
+# broadcast kernel) runs through sfpu_binary(): it builds the two-tile stimuli,
+# computes the golden per tile-pair, and drives sources/sfpu_binary_test.cpp.
+# Perf counterparts call the same helper with is_perf=True.
 # =============================================================================
 
 
@@ -526,82 +453,124 @@ def sfpu_binary(
     twos_complement=False,
     input_dimensions=None,
     unspecified_nonfinite_sign=False,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+    iterations=32,
+    approx_mode=ApproximationMode.No,
+    dst_rounding_mode=DstRoundingMode.Default,
+    check_contract=True,
 ):
     """*unspecified_nonfinite_sign* compares a non-finite result by magnitude only.
 
-    For the one case where the sign genuinely is not specified: a NaN the kernel *generated*,
-    packed as a signed infinity through a pipeline too narrow to hold it, on Wormhole, where
-    `SFPMAD.md` says that NaN's sign "might or might not be set". Better than withdrawing the
-    variant -- the magnitude, the finiteness and every finite lane stay checked, so a kernel
-    returning a finite value, a zero or a NaN where an infinity is due still fails.
-
-    Scoped per lane, from the mask the golden records while the NaN is still a NaN, because a
-    tensor holds both kinds of non-finite at once: `specials_in` drives `inf - inf`, whose sign
-    the ISA leaves open, alongside `0 - (-inf)`, whose `+inf` IEEE fully specifies. Same per-lane
-    scoping test_sfpu_reduce uses.
+    For the one case where the sign genuinely is not specified: a NaN the kernel generated,
+    packed as a signed infinity through a pipeline too narrow to hold it, on Wormhole. The
+    magnitude, the finiteness and every finite lane stay checked. Scoped per lane, because one
+    tensor can hold both a non-finite whose sign the ISA leaves open and one it specifies.
     """
 
-    # Seed the draw so the stimuli are identical run to run. Nothing below sets a seed,
-    # and an unseeded redraw makes a variant sitting near its tolerance pass or fail
-    # depending on the draw -- an unreproducible failure. eltwise_unary_sfpu seeds too.
+    # Seed the draw so the stimuli are identical run to run; an unseeded redraw makes a
+    # variant near its tolerance fail unreproducibly.
     torch.manual_seed(0)
 
-    # FP32 destination tiles occupy twice the register space. Keep four full destination
-    # blocks for those formats and four blocks of eight tiles for the remaining formats.
+    # Default tensor size. 32-bit formats use [128, 128]. 16-bit formats use
+    # [256, 128]. dest_acc=No fills that tensor as four blocks of eight tiles.
+    # dest_acc=Yes holds four tiles, so the same tensor is eight blocks of four.
     if input_dimensions is None:
         input_dimensions = (
             [128, 128] if formats.input_format.is_32_bit() else [256, 128]
         )
 
-    # Per-operand domains. Both operands live in buffer_A (even tile = in0, odd tile = in1),
-    # so there is no spec_B knob in generate_stimuli — the two specs are interleaved into one
-    # spec's face_specs here, where the tile count is known.
-    #
-    # Ops in _REGISTRY_DOMAIN_OPS take their domain from _OP_DOMAIN_REGISTRY, which is what
-    # makes the registered undefined-range holes (SfpuElwdiv divisor, SfpuXlogy B,
-    # SfpuElwpow A) reachable. Unlike the unary sweep, most ops here are not registered; a
-    # missing entry falls back to generate_stimuli's format default rather than raising.
-    reads_registry = _classify_stimuli_source(mathop)
-    if spec_A is None and reads_registry and not formats.input_format.is_integer():
-        specs = exclude_undefined_pair(mathop, for_op(mathop, formats.input_format))
-        spec_A, spec_B = specs.spec_A, specs.spec_B
-
-    if spec_B is not None:
-        if spec_A is None:
+    # Different L1 formats cannot share buffer_A: Operand strides one tile size.
+    # Each operand gets its own buffer, and the golden is interleaved afterwards.
+    # Only Float16_b x Bfp8_b is modeled: a 32-bit operand would set unpack_to_dest
+    # and hang on the dest handshake.
+    mixed_formats = formats.input_format != formats.input_format_B
+    if mixed_formats:
+        if (formats.input_format, formats.input_format_B) != (
+            DataFormat.Float16_b,
+            DataFormat.Bfp8_b,
+        ):
+            raise ValueError("mixed input formats only support Float16_b x Bfp8_b")
+        if broadcast_type not in (None, LlkBroadcastType.None_):
+            raise ValueError("mixed input formats do not support broadcast")
+        if src_A_override is not None or spec_A is not None or spec_B is not None:
             raise ValueError(
-                "spec_B requires spec_A (it fills the odd tile of each pair)"
+                "mixed input formats take neither an override nor a domain spec"
             )
-        spec_A = _pair_operand_specs(spec_A, spec_B, input_dimensions)
+        src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+            stimuli_format_A=formats.input_format,
+            input_dimensions_A=input_dimensions,
+            stimuli_format_B=formats.input_format_B,
+            input_dimensions_B=input_dimensions,
+        )
+        elements_per_tile = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
+        golden_a = quantize_input_to_unpack_format(
+            src_A.flatten(), formats.input_format
+        )
+        golden_b = quantize_input_to_unpack_format(
+            src_B.flatten(), formats.input_format_B
+        )
+        golden_src = torch.stack(
+            (
+                golden_a.flatten().view(tile_cnt_A, elements_per_tile),
+                golden_b.flatten().view(tile_cnt_B, elements_per_tile),
+            ),
+            dim=1,
+        ).reshape(-1)
+        stimuli_b_format = formats.input_format_B
+        result_tile_cnt = tile_cnt_A + tile_cnt_B
+        block_dimensions = [
+            DEFAULT_TILE_R_DIM,
+            DEFAULT_TILE_C_DIM * result_tile_cnt,
+        ]
+    else:
+        # Per-operand domains. Both operands live in buffer_A (even tile = in0, odd tile = in1),
+        # so there is no spec_B knob in generate_stimuli -- the two specs are interleaved into one
+        # spec's face_specs here, where the tile count is known. Unlike the unary sweep, most ops
+        # here are not registered, and a missing entry falls back to the format default.
+        reads_registry = _classify_stimuli_source(mathop)
+        if spec_A is None and reads_registry and not formats.input_format.is_integer():
+            specs = exclude_undefined_pair(mathop, for_op(mathop, formats.input_format))
+            spec_A, spec_B = specs.spec_A, specs.spec_B
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-        spec_A=spec_A,
-    )
+        if spec_B is not None:
+            if spec_A is None:
+                raise ValueError(
+                    "spec_B requires spec_A (it fills the odd tile of each pair)"
+                )
+            spec_A = _pair_operand_specs(spec_A, spec_B, input_dimensions)
 
-    # The kernel only consumes buffer_A (operand 0 = tile 0, operand 1 = tile 1), so an
-    # explicit src_A fully controls inputs for edge cases; src_B stays random but unused.
-    if src_A_override is not None:
-        override = src_A_override.to(src_A.dtype).flatten()
-        if src_A.numel() % override.numel() != 0:
-            raise ValueError(
-                "SFPU binary override must contain a whole number of tile pairs"
-            )
-        src_A = override.repeat(src_A.numel() // override.numel())
+        src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+            stimuli_format_A=formats.input_format,
+            input_dimensions_A=input_dimensions,
+            stimuli_format_B=formats.input_format,
+            input_dimensions_B=input_dimensions,
+            spec_A=spec_A,
+        )
 
-    # generate_stimuli round-trips Bfp4_b and Bfp2_b stimuli through their pack/unpack
-    # quantization but not Bfp8_b: the Bfp8_b format default only ever draws values that
-    # are already representable (integer 0..2 plus k/16), so nothing needed it. A registry
-    # domain -- or an src_A_override -- draws arbitrary values, and then the device sees
-    # Bfp8_b-quantized operands while the golden still sees the unrounded bf16 originals.
-    # That is the same golden/hardware split Phase 0 fixed inside UnarySFPUGolden. Quantize
-    # the golden's copy only, before broadcast: src_A keeps the unrounded values because
-    # the packer applies exactly this rounding when it writes the buffer to L1.
-    golden_src = src_A
-    if formats.input_format == DataFormat.Bfp8_b:
-        golden_src = quantize_input_to_unpack_format(golden_src, DataFormat.Bfp8_b)
+        # The kernel only consumes buffer_A (operand 0 = tile 0, operand 1 = tile 1), so an
+        # explicit src_A fully controls inputs for edge cases; src_B stays random but unused.
+        if src_A_override is not None:
+            override = src_A_override.to(src_A.dtype).flatten()
+            if src_A.numel() % override.numel() != 0:
+                raise ValueError(
+                    "SFPU binary override must contain a whole number of tile pairs"
+                )
+            src_A = override.repeat(src_A.numel() // override.numel())
+
+        # generate_stimuli does not round-trip Bfp8_b stimuli through their pack/unpack
+        # quantization, so a registry domain or an override would leave the device seeing
+        # quantized operands while the golden sees the unrounded originals. Quantize the golden's
+        # copy only: src_A keeps the unrounded values, since the packer rounds on the way to L1.
+        golden_src = src_A
+        if formats.input_format == DataFormat.Bfp8_b:
+            golden_src = quantize_input_to_unpack_format(golden_src, DataFormat.Bfp8_b)
+        stimuli_b_format = formats.input_format
+        result_tile_cnt = tile_cnt_A
+        block_dimensions = input_dimensions
 
     if broadcast_type is not None and broadcast_type != LlkBroadcastType.None_:
         generate_broadcast_golden = get_golden_generator(BroadcastGolden)
@@ -616,12 +585,15 @@ def sfpu_binary(
             tile_cnt=tile_cnt_A,
         )
 
-    # ONLY Blackhole needs this for some reason
-    #
-    # Hoisted above the golden call, which now models the Dest width from the *effective*
-    # dest_acc -- computing the golden first would model a 16-bit Dest for a variant that runs
-    # with a 32-bit one here. Nothing in between reads dest_acc, so the move is behaviour-
-    # preserving for every existing caller.
+    # The kernel runs with a 32-bit Dest where the hardware needs one -- an exponent-B
+    # input packed to Float16 (`effective_dest_acc`, the rule TestConfig applies
+    # silently), a Float16/Float32 input on Blackhole -- so dest_acc
+    # is promoted here too. Hoisted above the golden, which models the Dest width from
+    # it, and above the contract, whose `dest: "Yes"` rows describe the kernel that ran.
+    # Left at No, both would describe a variant that never executed.
+    dest_acc = effective_dest_acc(
+        formats.input_format, formats.output_format, dest_acc, TestConfig.CHIP_ARCH
+    )
     if (
         formats.input_format in [DataFormat.Float16, DataFormat.Float32]
         and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
@@ -632,17 +604,22 @@ def sfpu_binary(
     golden_format = (
         DataFormat.Float16_b
         if formats.input_format == DataFormat.Bfp8_b
+        or formats.input_format_B == DataFormat.Bfp8_b
         else formats.input_format
     )
-    elements_per_pair = 2 * 32 * 32
+    elements_per_pair = 2 * _ELEMENTS_PER_TILE
     golden_chunks = []
     generated_nan_chunks = []
+    # WH/BH copy_dest_value copies src1 onto the even dest tile. The shared
+    # _copy_dest golden still returns its first argument, which Quasar uses for
+    # a src0 copy, so only this call swaps the pair.
+    src1_idx, src2_idx = (1, 0) if mathop == MathOperation.SfpuCopyDest else (0, 1)
     for offset in range(0, golden_src.numel(), elements_per_pair):
         chunk = generate_golden(
             mathop,
             golden_src[offset : offset + elements_per_pair],
-            0,
-            1,
+            src1_idx,
+            src2_idx,
             0,
             32,
             [64, 32],
@@ -651,9 +628,8 @@ def sfpu_binary(
             output_format=formats.output_format,
             collect_generated_nan=unspecified_nonfinite_sign,
         )
-        # Asked of the return value rather than of the build mode: DummyGoldenGenerator stands in
-        # for the golden during --compile-producer and returns a bare tensor whatever it is asked
-        # for, and that phase skips before the comparison below anyway.
+        # Asked of the return value rather than of the build mode, since the golden is stubbed
+        # out during --compile-producer.
         if isinstance(chunk, tuple):
             chunk, generated_nan = chunk
             generated_nan_chunks.append(generated_nan)
@@ -663,38 +639,63 @@ def sfpu_binary(
     bcast = broadcast_type if broadcast_type else LlkBroadcastType.None_
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
+        DestSync.Half, dest_acc, formats, block_dimensions, TILE_DIMENSIONS
     )
 
-    configuration = TestConfig(
-        "sources/sfpu_binary_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
+    run_types = _resolve_perf_args(is_perf, perf_report, run_types)
+
+    # Int32 ADD/SUB are sign-magnitude end to end. Other ops here ignore the flag.
+    sign_magnitude = formats.input_format == DataFormat.Int32 and mathop in (
+        MathOperation.SfpuElwadd,
+        MathOperation.SfpuElwsub,
+    )
+
+    test_config_kwargs = {
+        "test_name": "sources/sfpu_binary_test.cpp",
+        "formats": formats,
+        "templates": [
+            generate_input_dim(block_dimensions, block_dimensions),
             MATH_OP(mathop=mathop),
-            APPROX_MODE(),
+            APPROX_MODE(approx_mode),
+            ITERATIONS(iterations),
             BROADCAST_TYPE(bcast),
+            SFPU_BCAST_DIM(LlkBroadcastType.None_),
+            SFPU_DST_ROUNDING_MODE(dst_rounding_mode),
+            SIGN_MAGNITUDE_FORMAT(sign_magnitude),
         ],
-        runtimes=[
-            TILE_COUNT(tile_cnt_A),
+        "runtimes": [
+            TILE_COUNT(result_tile_cnt),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            LOOP_FACTOR(loop_factor),
+            NUM_FACES(),
+            ZERO_POINT(0),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
-            formats.input_format,
+            stimuli_b_format,
             formats.output_format,
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
+            tile_count_res=result_tile_cnt,
             twos_complement=twos_complement,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=formats.input_format.is_32_bit(),
-        compile_time_formats=True,
+        "dest_acc": dest_acc,
+        "unpack_to_dest": formats.input_format.is_32_bit(),
+        "compile_time_formats": True,
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
+    if is_perf:
+        configuration.run(perf_report)
+        return
+
     res_from_L1 = configuration.run().result
 
     torch_format = format_dict[formats.output_format]
@@ -704,17 +705,15 @@ def sfpu_binary(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"
 
-    # Per-op tolerances, for the two ops whose error is a property of the op's own
-    # composition rather than of the stimuli, and per output format where the error splits by
-    # format. See BINARY_CUSTOM_TOLERANCES.
-    custom_atol, custom_rtol = _custom_tolerances(mathop, formats.output_format)
+    # The contract tolerance cannot tell truncation from round-to-nearest-even.
+    # Callers that pass check_contract=False compare bit-exactly themselves.
+    if not check_contract:
+        return res_tensor, golden_tensor
 
     if unspecified_nonfinite_sign and generated_nan_chunks:
-        # Clear the sign only on the lanes that held a generated NaN *and* where both sides are
-        # non-finite. A golden +inf against a hardware 5.0 still compares +inf vs 5.0 and still
-        # fails; a golden +inf against a hardware NaN likewise, because abs() leaves a NaN a NaN
-        # and passed_test's both-NaN clause needs both. So this excuses one bit on the lanes the
-        # ISA declines to pin, and nothing else anywhere.
+        # Clear the sign only on lanes that held a generated NaN and where both sides are
+        # non-finite, so this excuses one bit on the lanes the ISA declines to pin and nothing
+        # else: a golden +inf against a hardware 5.0, or against a NaN, still fails.
         unspecified = (
             torch.cat(generated_nan_chunks)
             & ~torch.isfinite(golden_tensor)
@@ -723,25 +722,28 @@ def sfpu_binary(
         golden_tensor = torch.where(unspecified, golden_tensor.abs(), golden_tensor)
         res_tensor = torch.where(unspecified, res_tensor.abs(), res_tensor)
 
-    assert passed_test(
+    assert_against_contract(
+        mathop,
+        formats,
+        dest_acc,
         golden_tensor,
         res_tensor,
-        formats.output_format,
-        custom_atol=custom_atol,
-        custom_rtol=custom_rtol,
-    ), "Assert against golden failed"
+        approx_mode=_APPROX_MODE,
+    )
 
 
 # =============================================================================
 # Float ops
 # =============================================================================
 
+# The bf16/fp32 matrix most of the sweeps below share.
+_BF16_FP32_FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
 
-@parametrize(
+# Shared with perf_eltwise_binary_sfpu.py so the two sweeps stay aligned.
+FLOAT_SWEEP = dict(
     formats=input_output_formats(
         [
             DataFormat.Float32,
-            DataFormat.Float16,
             DataFormat.Float16_b,
             DataFormat.Bfp8_b,
         ]
@@ -759,6 +761,9 @@ def sfpu_binary(
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
+        MathOperation.SfpuLogaddexp,
+        MathOperation.SfpuLogaddexp2,
+        MathOperation.SfpuCopyDest,
         # Eq/Ne and Lt/Gt/Le/Ge are excluded from this *random* sweep: independent draws
         # are never equal (the Eq/Ne golden collapses to a constant) and near-ties that
         # the kernel and the total-order golden round differently read as failures. They
@@ -767,71 +772,19 @@ def sfpu_binary(
     ],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_eltwise_binary_sfpu_float(
-    formats,
-    dest_acc,
-    mathop,
-    bcast_dim,
-):
-    _skip_fp32_no_dest_acc(formats, dest_acc)
-    _skip_bh_float16_no_dest_acc(formats, dest_acc)
-
-    # POW/XLOGY are only covered on the float formats: under Bfp8_b the coarse
-    # quantization pushes small operands to values that produce -inf/NaN (log/pow),
-    # so Bfp8_b coverage for these ops is intentionally skipped.
-    if formats.input_format == DataFormat.Bfp8_b and mathop in (
-        MathOperation.SfpuElwpow,
-        MathOperation.SfpuXlogy,
-    ):
-        pytest.skip("Bfp8_b is not supported for POW/XLOGY coverage")
-
-    if bcast_dim == LlkBroadcastType.Row and (
-        dest_acc == DestAccumulation.Yes
-        or is_format_combination_outlier(
-            formats.input_format, formats.output_format, dest_acc
-        )
-    ):
-        pytest.skip(
-            "Row broadcast with FP32 dest: B2D datacopy uses MOVB2D which can't handle FP32 dest format conversion"
-        )
-
-    sfpu_binary(
-        formats,
-        dest_acc,
-        mathop,
-        broadcast_type=bcast_dim,
-    )
-
-
-@parametrize(
+DIV_SWEEP = dict(
     formats=input_output_formats(
         [
             DataFormat.Float32,
-            DataFormat.Float16,
             DataFormat.Float16_b,
         ]
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_eltwise_binary_sfpu_div(formats, dest_acc):
-    # DIV routes through the dedicated production kernel (calculate_sfpu_binary_div);
-    # split out from the float sweep since the reciprocal path is precision-sensitive.
-    _skip_fp32_no_dest_acc(formats, dest_acc)
-    _skip_bh_float16_no_dest_acc(formats, dest_acc)
-
-    sfpu_binary(
-        formats,
-        dest_acc,
-        MathOperation.SfpuElwdiv,
-        broadcast_type=LlkBroadcastType.None_,
-    )
-
-
-@parametrize(
+FLOAT_EXTENDED_SWEEP = dict(
     formats=input_output_formats(
         [
             DataFormat.Float32,
-            DataFormat.Float16,
             DataFormat.Float16_b,
             DataFormat.Bfp8_b,
         ]
@@ -844,45 +797,249 @@ def test_eltwise_binary_sfpu_div(formats, dest_acc):
     ],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_eltwise_binary_sfpu_float_extended(formats, dest_acc, mathop):
+MASK_SWEEP = dict(
+    formats=_BF16_FP32_FORMATS,
+    mathop=[MathOperation.SfpuMask],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+ATAN2_SWEEP = dict(
+    formats=_BF16_FP32_FORMATS,
+    mathop=[MathOperation.SfpuAtan2],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+EQ_NE_SWEEP = dict(
+    formats=_BF16_FP32_FORMATS,
+    mathop=[MathOperation.SfpuElwEq, MathOperation.SfpuElwNe],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+FLOAT_COMPARISON_SWEEP = dict(
+    formats=_BF16_FP32_FORMATS,
+    mathop=[
+        MathOperation.SfpuElwLt,
+        MathOperation.SfpuElwGt,
+        MathOperation.SfpuElwLe,
+        MathOperation.SfpuElwGe,
+    ],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+ISCLOSE_SWEEP = dict(
+    formats=_BF16_FP32_FORMATS,
+    mathop=[MathOperation.SfpuIsclose],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+LOGSIGMOID_SWEEP = dict(
+    formats=_BF16_FP32_FORMATS,
+    mathop=[MathOperation.SfpuLogsigmoid],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+
+
+@parametrize(**FLOAT_SWEEP)
+def test_eltwise_binary_sfpu_float(
+    formats,
+    dest_acc,
+    mathop,
+    bcast_dim,
+    **run_kwargs,
+):
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+
+    # copy_dest_value copies src1 onto src0 and does not broadcast. A broadcast
+    # row would compare against the broadcast golden, which this kernel does not
+    # compute.
+    if mathop == MathOperation.SfpuCopyDest and bcast_dim != LlkBroadcastType.None_:
+        pytest.skip("COPY_DEST does not broadcast; the None_ row covers the kernel")
+
+    # Bfp8_b quantization can map small positive operands to zero, making xlogy's
+    # logarithm -inf. LOGADDEXP and LOGADDEXP2 are skipped here too: their +/-200
+    # domain under Bfp8_b's shared-exponent quantization collapses most of the
+    # |a - b| < 20 correction band this sweep exists to exercise. Perf compares
+    # no golden, so those rows still run.
+    if (
+        not run_kwargs.get("is_perf")
+        and formats.input_format == DataFormat.Bfp8_b
+        and mathop
+        in (
+            MathOperation.SfpuXlogy,
+            MathOperation.SfpuLogaddexp,
+            MathOperation.SfpuLogaddexp2,
+        )
+    ):
+        pytest.skip(
+            "Bfp8_b input is not supported for XLOGY/LOGADDEXP/LOGADDEXP2 coverage"
+        )
+
+    if (
+        bcast_dim == LlkBroadcastType.Row
+        and effective_dest_acc(formats.input_format, formats.output_format, dest_acc)
+        == DestAccumulation.Yes
+    ):
+        pytest.skip(
+            "Row broadcast with FP32 dest: B2D datacopy uses MOVB2D which can't handle FP32 dest format conversion"
+        )
+
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        broadcast_type=bcast_dim,
+        **run_kwargs,
+    )
+
+
+# One directed point: Float16_b x Bfp8_b -> Float16_b. Quasar has no block-float.
+# Shared with perf_eltwise_binary_sfpu.py so the two sweeps stay aligned.
+MIXED_FORMAT_SWEEP = dict(
+    formats=[
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp8_b)
+    ],
+    mathop=[MathOperation.SfpuElwadd],
+    dest_acc=[DestAccumulation.No],
+)
+
+
+@parametrize(**MIXED_FORMAT_SWEEP)
+def test_eltwise_binary_sfpu_mixed_format(formats, mathop, dest_acc, **run_kwargs):
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        input_dimensions=[32, 32],
+        **run_kwargs,
+    )
+
+
+def _tile_from_pairs(pairs):
+    """Row-major operand tiles from cycled (a, b) pairs. One tile each."""
+    src = _build_paired_tile_override(pairs, torch.float32)
+    a = src[:_ELEMENTS_PER_TILE].to(torch.bfloat16)
+    b = src[_ELEMENTS_PER_TILE:].to(torch.bfloat16)
+    return src, a, b
+
+
+# One in0/in1 pair. The golden's first tile is the result in row-major order.
+_EXACT_DIMS = [64, 32]
+_BF16_FORMATS = InputOutputFormat(
+    input_format=DataFormat.Float16_b, output_format=DataFormat.Float16_b
+)
+# Sums whose low 16 bits are a tie and whose kept mantissa bit is odd, so
+# round-to-nearest-even steps up and truncation does not.
+_RNE_ADD_PAIRS = (
+    (0x3F00, 0x3F03),
+    (0x3F00, 0x3F0F),
+    (0x3F00, 0x3F1B),
+    (0x3F00, 0x3F27),
+)
+# Finite products that separate RNE from truncation, then 0 * +inf, stored as +0.
+_PRODUCTION_MUL_PAIRS = (
+    (0x0000, 0x7F80),
+    (0x3F01, 0x3F42),
+    (0x3F01, 0x3F45),
+    (0x3F01, 0x3F48),
+)
+
+
+def test_eltwise_binary_sfpu_bf16_rne_exact():
+    """NearestEven ADD on Float16_b with a 16-bit Dest, bit-exact against RNE.
+
+    The contract tolerance also passes a truncated store, so this compares
+    the device result to the golden with torch.equal.
+    """
+    src, a, b = _tile_from_pairs(
+        [(bf16_from_bits(x), bf16_from_bits(y)) for x, y in _RNE_ADD_PAIRS]
+    )
+    assert_bf16_separates_rne(a.float() + b.float())
+    res, golden = sfpu_binary(
+        _BF16_FORMATS,
+        DestAccumulation.No,
+        MathOperation.SfpuElwadd,
+        src_A_override=src,
+        input_dimensions=_EXACT_DIMS,
+        dst_rounding_mode=DstRoundingMode.NearestEven,
+        check_contract=False,
+    )
+    assert_bit_exact(res, golden, "NearestEven ADD")
+
+
+def test_eltwise_binary_sfpu_mul_production_exact():
+    """Production mul is RNE, and 0 * inf stores 0 rather than a NaN."""
+    src, a, b = _tile_from_pairs(
+        [(bf16_from_bits(x), bf16_from_bits(y)) for x, y in _PRODUCTION_MUL_PAIRS]
+    )
+    finite = torch.isfinite(a.float() * b.float())
+    assert_bf16_separates_rne((a.float() * b.float())[finite])
+    res, golden = sfpu_binary(
+        _BF16_FORMATS,
+        DestAccumulation.No,
+        MathOperation.SfpuElwmul,
+        src_A_override=src,
+        input_dimensions=_EXACT_DIMS,
+        check_contract=False,
+    )
+    zero = (a == 0) | (b == 0)
+    if not bool(zero.any()):
+        raise AssertionError("production mul stimulus has no zero input")
+    # IEEE 0 * inf is not +0, so a golden that keeps it does not check the store.
+    got_zero = golden[:_ELEMENTS_PER_TILE][zero]
+    if not torch.equal(got_zero, torch.zeros_like(got_zero)):
+        raise AssertionError("golden did not model production 0 * x = +0")
+    assert_bit_exact(res, golden, "production mul")
+
+
+@parametrize(**DIV_SWEEP)
+def test_eltwise_binary_sfpu_div(formats, dest_acc, **run_kwargs):
+    # DIV routes through the dedicated production kernel (calculate_sfpu_binary_div);
+    # split out from the float sweep since the reciprocal path is precision-sensitive.
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+
+    sfpu_binary(
+        formats,
+        dest_acc,
+        MathOperation.SfpuElwdiv,
+        broadcast_type=LlkBroadcastType.None_,
+        **run_kwargs,
+    )
+
+
+@parametrize(**FLOAT_EXTENDED_SWEEP)
+def test_eltwise_binary_sfpu_float_extended(formats, dest_acc, mathop, **run_kwargs):
     # max/min (SFPSWAP) and fmod/remainder (fp32 reciprocal) binary kernels with no
     # dedicated production BinaryOp; driven through the same in-DST harness as add/sub.
     _skip_fp32_no_dest_acc(formats, dest_acc)
-    _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
-    # fmod/remainder divide by b via a reciprocal; Bfp8_b's coarse quantization blows up
-    # the quotient for small divisors (mirrors the pow/xlogy Bfp8_b skip above).
-    if formats.input_format == DataFormat.Bfp8_b and mathop in (
-        MathOperation.SfpuBinaryFmod,
-        MathOperation.SfpuBinaryRemainder,
+    # fmod/remainder divide by b via a reciprocal, and Bfp8_b's coarse quantization blows up
+    # the quotient for small divisors. It only shows when the output is Bfp8_b as well: a
+    # Bfp8_b input into any of the float outputs passes, so the guard is scoped to
+    # Bfp8_b -> Bfp8_b rather than to every Bfp8_b input.
+    if (
+        formats.input_format == DataFormat.Bfp8_b
+        and formats.output_format == DataFormat.Bfp8_b
+        and mathop
+        in (
+            MathOperation.SfpuBinaryFmod,
+            MathOperation.SfpuBinaryRemainder,
+        )
     ):
-        pytest.skip("Bfp8_b is not supported for fmod/remainder coverage")
+        pytest.skip("Bfp8_b -> Bfp8_b is not supported for fmod/remainder coverage")
 
     sfpu_binary(
         formats,
         dest_acc,
         mathop,
         broadcast_type=LlkBroadcastType.None_,
+        **run_kwargs,
     )
 
 
-@parametrize(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
-    mathop=[MathOperation.SfpuMask],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-)
-def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop):
+@parametrize(**MASK_SWEEP)
+def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop, **run_kwargs):
     # float mask: data at tile0, mask at tile1. Output is data where mask != 0, else 0.
     # Crafted stimuli so the mask carries real zeros.
     _skip_fp32_no_dest_acc(formats, dest_acc)
 
-    # One tile pair only, unlike every other op here. calculate_mask hard-codes its
-    # operands -- data at dst_reg[0], mask at dst_reg[32], result in place -- and ignores
-    # the forwarded dst indices, so only the in0=0/in1=1/out=0 placement computes anything
-    # (see calculate_mask_binary in helpers/include/sfpu_test_helpers.h). On a larger
-    # buffer the kernel's `tile += 2` loop would mask tile 0 of each block repeatedly and
-    # pack tiles 2/4/6 out unmasked, against a golden that masks every pair. [64, 32] is
-    # 2 tiles = 1 block = 1 pair, so the only pair driven is the one the adapter supports.
+    # One tile pair only, unlike every other op here: calculate_mask hard-codes its operands
+    # and ignores the forwarded dst indices, so only the first placement computes anything.
+    # [64, 32] is one pair, which is the only one the adapter supports.
     spec_A, spec_B = _mask_stimuli_specs()
     sfpu_binary(
         formats,
@@ -892,17 +1049,15 @@ def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop):
         spec_A=spec_A,
         spec_B=spec_B,
         input_dimensions=[64, 32],
+        **run_kwargs,
     )
 
 
-@parametrize(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
-    mathop=[MathOperation.SfpuAtan2],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-)
-def test_eltwise_binary_sfpu_atan2(formats, dest_acc, mathop):
+@parametrize(**ATAN2_SWEEP)
+def test_eltwise_binary_sfpu_atan2(formats, dest_acc, mathop, **run_kwargs):
     # atan2(y, x): y = tile0, x = tile1. Signed [-5, 5] gives mixed signs so all quadrants
-    # (and the |y|>=|x| / x<0 branches) are exercised; minimax approximation matched under PCC.
+    # (and the |y|>=|x| / x<0 branches) are exercised. A minimax approximation: gated by
+    # its step budget on Wormhole, and by tolerance + PCC elsewhere.
     _skip_fp32_no_dest_acc(formats, dest_acc)
 
     sfpu_binary(
@@ -910,72 +1065,47 @@ def test_eltwise_binary_sfpu_atan2(formats, dest_acc, mathop):
         dest_acc,
         mathop,
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0),
+        **run_kwargs,
     )
 
 
-@parametrize(
-    formats=input_output_formats(
-        [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32]
-    ),
-    mathop=[MathOperation.SfpuElwEq, MathOperation.SfpuElwNe],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-)
-def test_eltwise_binary_sfpu_eq_ne(formats, dest_acc, mathop):
+@parametrize(**EQ_NE_SWEEP)
+def test_eltwise_binary_sfpu_eq_ne(formats, dest_acc, mathop, **run_kwargs):
     # Eq/Ne(a, b) with a = tile0, b = tile1. Crafted paired stimuli give a non-constant 0/1
     # golden so the equal branch is exercised (the default random sweep never is).
     _skip_fp32_no_dest_acc(formats, dest_acc)
-    _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
     spec_A, spec_B = _eq_ne_stimuli_specs()
-    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B, **run_kwargs)
 
 
-@parametrize(
-    formats=input_output_formats(
-        [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32]
-    ),
-    mathop=[
-        MathOperation.SfpuElwLt,
-        MathOperation.SfpuElwGt,
-        MathOperation.SfpuElwLe,
-        MathOperation.SfpuElwGe,
-    ],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-)
-def test_eltwise_binary_sfpu_float_comparison(formats, dest_acc, mathop):
+@parametrize(**FLOAT_COMPARISON_SWEEP)
+def test_eltwise_binary_sfpu_float_comparison(formats, dest_acc, mathop, **run_kwargs):
     # lt/gt/le/ge(a, b) with a = tile0, b = tile1. Crafted so a third of the elements are
     # exactly equal and the rest differ by +/-1.0: the tie is what distinguishes the strict
     # comparisons from the non-strict ones, and the wide gaps keep every other element's
     # verdict independent of rounding. See _comparison_stimuli_specs.
     _skip_fp32_no_dest_acc(formats, dest_acc)
-    _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
     spec_A, spec_B = _comparison_stimuli_specs()
-    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B, **run_kwargs)
 
 
-@parametrize(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
-    mathop=[MathOperation.SfpuIsclose],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-)
-def test_eltwise_binary_sfpu_isclose(formats, dest_acc, mathop):
+@parametrize(**ISCLOSE_SWEEP)
+def test_eltwise_binary_sfpu_isclose(formats, dest_acc, mathop, **run_kwargs):
     # isclose(a, b) = |a - b| <= atol + rtol*|b|, a = tile0, b = tile1. torch default
     # tolerances (fixed in the C++ dispatch); crafted stimuli give a non-constant 0/1 mix.
     _skip_fp32_no_dest_acc(formats, dest_acc)
 
     spec_A, spec_B = _isclose_stimuli_specs()
-    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B, **run_kwargs)
 
 
-@parametrize(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
-    mathop=[MathOperation.SfpuLogsigmoid],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-)
-def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop):
-    # logsigmoid(x) with x = tile0. Piecewise poly/passthrough approximation matched under
-    # PCC; x swept over [-8, 3.9]. The x > 4 (-exp(-x)) branch needs a device-computed
+@parametrize(**LOGSIGMOID_SWEEP)
+def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop, **run_kwargs):
+    # logsigmoid(x) with x = tile0. Piecewise poly/passthrough approximation, gated by its
+    # step budget on Wormhole and by tolerance + PCC elsewhere; x swept over [-8, 3.9].
+    # The x > 4 (-exp(-x)) branch needs a device-computed
     # exp(-x) operand the shared harness can't provide, left to a future driver.
     _skip_fp32_no_dest_acc(formats, dest_acc)
 
@@ -984,7 +1114,170 @@ def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop):
         dest_acc,
         mathop,
         spec_A=_logsigmoid_stimuli_spec(),
+        **run_kwargs,
     )
+
+
+# =============================================================================
+# Quant family. One tile pair: operand A in tile 0, the fp32 scale in tile 1.
+# Six rows: quant / requant / dequant, each with and without sign-magnitude.
+# =============================================================================
+
+_QUANT_INT8_MIN = -127
+_QUANT_INT8_MAX = 127
+_QUANT_OPS = [
+    MathOperation.SfpuQuant,
+    MathOperation.SfpuRequant,
+    MathOperation.SfpuDequant,
+]
+QUANT_SWEEP = dict(
+    mathop=_QUANT_OPS,
+    sign_magnitude=[False, True],
+)
+
+
+def _run_quant(
+    mathop,
+    sign_magnitude,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+    iterations=32,
+    approx_mode=ApproximationMode.No,
+):
+    """Stage the Quasar quant stimuli on the shared WH/BH binary kernel."""
+    n = _ELEMENTS_PER_TILE
+    tile_cnt_A = 2
+    is_dequant = mathop == MathOperation.SfpuDequant
+    a_is_int = mathop != MathOperation.SfpuQuant
+    output_format = DataFormat.Float32 if is_dequant else DataFormat.Int32
+    # Wide enough that |a| near 2000 saturates the int8 clamp on both signs.
+    scale = torch.rand(n, dtype=torch.float32) * 0.2 + 0.01
+    zero_point = 3.0
+
+    if a_is_int:
+        a_float = torch.randint(-2000, 2000, (n,), dtype=torch.int32).to(torch.float32)
+    else:
+        a_float = (torch.rand(n, dtype=torch.float32) - 0.5) * 4000.0
+
+    # Dyadic edges, so they do not depend on the random draw. 0.25 and 0.5 are
+    # exact in fp32. Lane 2 is an exact half (4.5 = 3 * 0.5 + zp); 5.5 would
+    # round to 6 under both tie rules. Lane 3 is in (-0.5, 0), which
+    # SFPSTOCHRND flushes to +0 on both Wormhole and Blackhole.
+    a_float[0], scale[0] = 4000.0, 0.25
+    a_float[1], scale[1] = -4000.0, 0.25
+    a_float[2], scale[2] = 3.0, 0.5
+    a_float[3], scale[3] = -13.0, 0.25
+
+    if a_is_int:
+        a_vals = a_float.to(torch.int32)
+        a_staged = int32_to_smag32(a_vals) if sign_magnitude else a_vals
+    else:
+        a_staged = fp32_bits_as_int32(a_float)
+
+    src_A = torch.cat((a_staged, fp32_bits_as_int32(scale)))
+    input_dimensions = [64, 32]
+    formats = InputOutputFormat(DataFormat.Int32, output_format)
+    dest_acc = DestAccumulation.Yes
+
+    if is_dequant:
+        golden_active = ((a_float - zero_point) * scale).to(torch.float32)
+        out_dtype = torch.float32
+    else:
+        prod = a_float * scale + zero_point
+        # SFPSTOCHRND rounds ties away from zero. torch.round ties to even, so
+        # 4.5 would become 4 and miss the tie the planted lane is there to hit.
+        rounded = torch.sign(prod) * torch.floor(prod.abs() + 0.5)
+        clamped = torch.clamp(rounded, _QUANT_INT8_MIN, _QUANT_INT8_MAX).to(torch.int32)
+        # SFPSTOCHRND clears the sign when the magnitude rounds to 0, on both
+        # Wormhole and Blackhole, so a negative product that rounds to 0 stays +0.
+        neg_zero = (clamped == 0) & (prod < 0)
+        if sign_magnitude:
+            golden_active = int32_to_smag32(clamped)
+        else:
+            golden_active = clamped.clone()
+        assert (clamped == _QUANT_INT8_MIN).any() and (
+            clamped == _QUANT_INT8_MAX
+        ).any(), f"{mathop.name} stimuli never reach the int8 clamp"
+        assert clamped[2] == 5, f"{mathop.name} exact half must round away from zero"
+        assert (
+            neg_zero.any()
+        ), f"{mathop.name} stimuli never round a negative value to 0"
+        assert (
+            golden_active[neg_zero] == 0
+        ).all(), f"{mathop.name} negative-zero lanes must stay +0"
+        out_dtype = torch.int32
+
+    zp_for_kernel = -zero_point if is_dequant else zero_point
+    zp_bits = struct.unpack("<I", struct.pack("<f", zp_for_kernel))[0]
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
+    )
+    run_types = _resolve_perf_args(is_perf, perf_report, run_types)
+    test_config_kwargs = {
+        "test_name": "sources/sfpu_binary_test.cpp",
+        "formats": formats,
+        "templates": [
+            generate_input_dim(input_dimensions, input_dimensions),
+            MATH_OP(mathop=mathop),
+            APPROX_MODE(approx_mode),
+            ITERATIONS(iterations),
+            BROADCAST_TYPE(LlkBroadcastType.None_),
+            SFPU_BCAST_DIM(LlkBroadcastType.None_),
+            # The shared math driver reads this for every op. Quant does not use it.
+            SFPU_DST_ROUNDING_MODE(),
+            SIGN_MAGNITUDE_FORMAT(sign_magnitude),
+        ],
+        "runtimes": [
+            TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            LOOP_FACTOR(loop_factor),
+            NUM_FACES(),
+            ZERO_POINT(zp_bits),
+        ],
+        "variant_stimuli": StimuliConfig(
+            src_A,
+            DataFormat.Int32,
+            src_A[:n],
+            DataFormat.Int32,
+            output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=1,
+            tile_count_res=tile_cnt_A,
+            twos_complement=True,
+        ),
+        "dest_acc": dest_acc,
+        "unpack_to_dest": True,
+        "disable_format_inference": True,
+        "compile_time_formats": True,
+    }
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+    )
+    fc = configuration.formats_config[0]
+    fc.pack_src = output_format
+    fc.pack_dst = output_format
+    fc.pack_S_src = output_format
+    fc.pack_S_dst = output_format
+    if is_perf:
+        configuration.run(perf_report)
+        return
+
+    res_from_L1 = configuration.run().result
+    res_tensor = torch.tensor(res_from_L1, dtype=out_dtype).flatten()
+    assert passed_test(
+        golden_active, res_tensor[:n], output_format
+    ), f"{mathop.name} sign_magnitude={sign_magnitude} mismatch"
+
+
+@parametrize(**QUANT_SWEEP)
+def test_eltwise_binary_sfpu_quant(mathop, sign_magnitude, **run_kwargs):
+    _run_quant(mathop, sign_magnitude, **run_kwargs)
 
 
 # =============================================================================
@@ -992,7 +1285,7 @@ def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop):
 # =============================================================================
 
 
-@parametrize(
+INT_SWEEP = dict(
     formats=input_output_formats(
         [
             DataFormat.Int32,
@@ -1011,29 +1304,27 @@ def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop):
     ],
     dest_acc=[DestAccumulation.Yes],
 )
+
+
+@parametrize(**INT_SWEEP)
 def test_eltwise_binary_sfpu_int(
     formats,
     dest_acc,
     mathop,
+    **run_kwargs,
 ):
-    # The random half of the Int32 coverage. This variant takes generate_stimuli's integer
-    # default, uniform(0, INT32_MAX // 2 - 1) -- positive-only and tie-free, so it cannot tell
-    # SfpuElwLe from SfpuElwLt. See the two tests below for the rest.
+    # The random half of the Int32 coverage, on the positive-only tie-free integer default --
+    # so it cannot tell SfpuElwLe from SfpuElwLt. The two tests below cover the rest.
     sfpu_binary(
         formats,
         dest_acc,
         mathop,
+        **run_kwargs,
     )
 
 
-# The four ordered Int32 comparisons, which are the same MathOperation members the float
-# comparison sweep drives. sfpu_operations.h routes them to calculate_binary_comp_int32 when
-# MATH_FORMAT is Int32 -- subtract, fold the sign -- so this is a different kernel from the fp32
-# two-vector compare, reached through the same enum entry.
-#
-# These are also the kernel the five Quasar-only `*Int` members reach; see the alias guard in
-# test_sfpu_domains (test_quasar_int_binary_members_alias_covered_kernels) for why coverage audit
-# section 4.5 lists them as untested and the kernels are not.
+# The four ordered Int32 comparisons. Same MathOperation members as the float comparison
+# sweep, routed to the integer kernel. test_sfpu_domains asserts this list stays these four.
 _INT_COMPARISON_OPS = [
     MathOperation.SfpuElwLt,
     MathOperation.SfpuElwGt,
@@ -1050,13 +1341,9 @@ _INT_COMPARISON_OPS = [
 def test_eltwise_binary_sfpu_int_comparison_ties(formats, dest_acc, mathop):
     """The exact-equality input, which the random Int32 sweep never produces.
 
-    `a == b` is the *only* input on which lt/gt disagree with le/ge, so without it a comparator
-    with its tie inverted passes the whole integer sweep. Measured on the default integer spec,
-    uniform(0, INT32_MAX // 2 - 1), a 1024-element draw contained 0 ties and 0 negatives.
-
-    Reuses the float sweep's three-way builder: a third of the elements are exactly equal and the
-    rest differ by +/-1, an exact gap on an integer axis. Same shape as
-    test_eltwise_binary_sfpu_eq_ne_int, which had this for eq/ne already.
+    `a == b` is the only input on which lt/gt disagree with le/ge, so without it a comparator
+    with its tie inverted passes the whole integer sweep. Reuses the float sweep's three-way
+    builder, whose +/-1 gaps are exact on an integer axis.
     """
     spec_A, spec_B = _comparison_stimuli_specs()
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
@@ -1065,15 +1352,10 @@ def test_eltwise_binary_sfpu_int_comparison_ties(formats, dest_acc, mathop):
 def _int_comparison_negative_spec():
     """Paired Int32 stimuli that straddle zero, including a tie at zero.
 
-    The kernel normalises to LT(a, b) by computing `a - b` and reading the sign, so operands of
-    opposite sign are the case the fold exists for, and the random draw never produces one.
-    Values stay small (|v| <= 8) so `a - b` cannot overflow -- overflow is what
-    test_eltwise_binary_sfpu_int_extremes drives deliberately, and mixing the two would leave a failure
-    with two candidate causes.
-
-    twos_complement=True is required, not incidental: sign-magnitude L1 encoding cannot round-trip
-    a negative through Dst -- the same delivery limitation that made the unary RightShift sweep
-    positive-only. test_eltwise_binary_sfpu_rsub_int32 takes the same route.
+    Operands of opposite sign are the case the kernel's sign fold exists for, and the random
+    draw never produces one. Values stay small so `a - b` cannot overflow, which
+    test_eltwise_binary_sfpu_int_extremes drives separately. twos_complement=True is required:
+    a sign-magnitude L1 encoding cannot round-trip a negative through Dst.
     """
 
     def a_face(size, dtype, generator):
@@ -1098,9 +1380,8 @@ def _int_comparison_negative_spec():
 def test_eltwise_binary_sfpu_int_comparison_across_zero(formats, dest_acc, mathop):
     """Negative and mixed-sign Int32 operands, which the positive-only default never reaches.
 
-    The float sweep was fixed to draw from the op's signed domain; the integer default was left at
-    uniform(0, INT32_MAX // 2 - 1), so a comparator that mishandled operand sign entirely would
-    pass every other Int32 test in this file.
+    Without these a comparator that mishandled operand sign entirely would pass every other
+    Int32 test in this file.
     """
     spec_A, spec_B = _int_comparison_negative_spec()
     sfpu_binary(
@@ -1113,7 +1394,84 @@ def test_eltwise_binary_sfpu_int_comparison_across_zero(formats, dest_acc, matho
     )
 
 
+def _int_arith_negative_spec():
+    """Paired Int32 stimuli where both operands independently take either sign.
+
+    The Int32 add/sub kernels convert each operand out of sign-magnitude before the integer
+    add and the result back into it, so three sign folds run per element. The positive-only
+    default never sets an operand's sign bit, which leaves the two input-side folds unreached
+    by every other Int32 test here -- only the output-side one is exercised, and then only
+    because `a - b` on non-negative operands still goes negative.
+
+    The two operands vary at different rates so the face walks the full 8x8 product of
+    operand values rather than a single diagonal. A mirrored pair would collapse `a + b` to a
+    constant zero and test nothing. Values stay small so neither sum nor difference can
+    overflow; test_eltwise_binary_sfpu_int_extremes drives the range ends separately.
+    """
+
+    def a_face(size, dtype, generator):
+        positions = torch.arange(size, dtype=torch.float32)
+        # -4..3, cycling every 8 elements.
+        return ((positions % 8) - 4.0).to(dtype)
+
+    def b_face(size, dtype, generator):
+        positions = torch.arange(size, dtype=torch.float32)
+        # -4..3, cycling every 64, so each a value meets every b value, including (0, 0).
+        return (((positions // 8) % 8) - 4.0).to(dtype)
+
+    return _face_spec(a_face), _face_spec(b_face)
+
+
 @parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuElwadd, MathOperation.SfpuElwsub],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_int_arith_across_zero(formats, dest_acc, mathop):
+    """Negative and mixed-sign operands for the Int32 add/sub kernels.
+
+    Covers the input-side sign folds in _add_int_ / _sub_int_, which no other Int32 test in
+    this file reaches.
+
+    Unlike test_eltwise_binary_sfpu_int_comparison_across_zero above, this one keeps the
+    sign-magnitude default rather than passing twos_complement=True. These kernels are
+    sign-magnitude end to end -- operands in, result out -- so two's-complement stimuli are
+    read back with the sign bit as a magnitude bit and every negative lane diverges. The
+    comparison ops can take either encoding on the way out only because they emit 0 or 1.
+    """
+    spec_A, spec_B = _int_arith_negative_spec()
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuElwadd, MathOperation.SfpuElwsub],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_int_arith_wide_signed(formats, dest_acc, mathop):
+    """Large-magnitude operands of both signs for the Int32 add/sub kernels.
+
+    across_zero above walks every combination of operand sign but only at magnitude <= 4, and
+    the positive-only default reaches wide magnitudes but never sets an operand's sign bit.
+    Between them a sign fold that only misbehaves on a wide bit pattern -- the shape a cast
+    defect usually takes -- goes unseen.
+
+    Bounds are +-2**29 so neither the sum nor the difference can leave the +-(2**31 - 1) that
+    sign-magnitude Dst represents. A and B draw distinct values because the paired face walk
+    advances one shared RNG stream across faces, not because of the per-spec seed, which
+    generate_face ignores whenever an external generator is supplied.
+    """
+    bound = float(2**29)
+    spec_A = StimuliSpec(
+        distribution=DistributionKind.UNIFORM, low=-bound, high=bound, seed=0
+    )
+    spec_B = StimuliSpec(
+        distribution=DistributionKind.UNIFORM, low=-bound, high=bound, seed=1
+    )
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
+
+
+BITWISE_SWEEP = dict(
     formats=input_output_formats([DataFormat.Int32]),
     mathop=[
         MathOperation.SfpuBitwiseAnd,
@@ -1122,9 +1480,12 @@ def test_eltwise_binary_sfpu_int_comparison_across_zero(formats, dest_acc, matho
     ],
     dest_acc=[DestAccumulation.Yes],
 )
-def test_eltwise_binary_sfpu_bitwise(formats, dest_acc, mathop):
+
+
+@parametrize(**BITWISE_SWEEP)
+def test_eltwise_binary_sfpu_bitwise(formats, dest_acc, mathop, **run_kwargs):
     # int32 bitwise AND/OR/XOR: exact on the full default int range.
-    sfpu_binary(formats, dest_acc, mathop)
+    sfpu_binary(formats, dest_acc, mathop, **run_kwargs)
 
 
 # Ops whose kernel interprets DST as unsigned; run them under UInt32 (the rest are Int32).
@@ -1162,11 +1523,14 @@ _INT_BINARY_STIMULI = {
 }
 
 
-@parametrize(
+INT_UNIFORM_SWEEP = dict(
     mathop=list(_INT_BINARY_STIMULI),
     dest_acc=[DestAccumulation.Yes],
 )
-def test_eltwise_binary_sfpu_int_uniform(mathop, dest_acc):
+
+
+@parametrize(**INT_UNIFORM_SWEEP)
+def test_eltwise_binary_sfpu_int_uniform(mathop, dest_acc, **run_kwargs):
     _skip_sfpu_lcm_dest_acc_bh(mathop, dest_acc)
     int_format = DataFormat.UInt32 if mathop in _UINT32_BINARY_OPS else DataFormat.Int32
     formats = InputOutputFormat(int_format, int_format)
@@ -1176,39 +1540,94 @@ def test_eltwise_binary_sfpu_int_uniform(mathop, dest_acc):
         dest_acc,
         mathop,
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=low, high=high),
+        **run_kwargs,
     )
 
 
+_DIV_INT32_SIGNED_DIVIDENDS = [
+    *integer_specials(DataFormat.Int32),
+    -7,
+    7,
+    -100,
+    100,
+    -(2**24 + 1),
+    2**24 + 1,
+    -0x55555555,
+    0x55555555,
+]
+_DIV_INT32_SIGNED_DIVISORS = [
+    v for v in integer_specials(DataFormat.Int32) if v != 0
+] + [-2, 2, -3, 3, -7, 7, -(2**16 + 1), 2**16 + 1]
+_DIV_INT32_BOUNDARY_DIVISORS = [-3, 3, -7, 7, -12345, 12345, -(2**16 + 1), 2**16 + 1]
+_DIV_INT32_BOUNDARY_QUOTIENTS = [-1000, -1, 1, 1000]
+
+
+def _build_div_int32_signed_src():
+    """Two-tile Int32 signed (dividend, divisor) pairs, including mixed signs the positive sweep misses.
+
+    Also places q*b-1, q*b, and q*b+1 so floor and trunc disagree on one side of each exact quotient.
+    """
+    pairs = list(
+        itertools.product(_DIV_INT32_SIGNED_DIVIDENDS, _DIV_INT32_SIGNED_DIVISORS)
+    )
+    pairs += [
+        (q * b + off, b)
+        for b in _DIV_INT32_BOUNDARY_DIVISORS
+        for q in _DIV_INT32_BOUNDARY_QUOTIENTS
+        for off in (-1, 0, 1)
+    ]
+    return _build_paired_tile_override(pairs, torch.int32)
+
+
 @parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuDivInt32, MathOperation.SfpuDivInt32Floor],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_div_int32_signed(formats, dest_acc, mathop):
+    # twos_complement=True for the same reason as test_eltwise_binary_sfpu_int_extremes: the
+    # kernel reads two's-complement Dst, and sign-magnitude stimuli cannot carry INT32_MIN.
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        src_A_override=_build_div_int32_signed_src(),
+        twos_complement=True,
+    )
+
+
+RSUB_INT32_SWEEP = dict(
     formats=input_output_formats([DataFormat.Int32]),
     mathop=[MathOperation.SfpuRsubInt32],
     dest_acc=[DestAccumulation.Yes],
 )
-def test_eltwise_binary_sfpu_rsub_int32(formats, dest_acc, mathop):
-    sfpu_binary(formats, dest_acc, mathop, twos_complement=True)
 
 
-@parametrize(
+@parametrize(**RSUB_INT32_SWEEP)
+def test_eltwise_binary_sfpu_rsub_int32(formats, dest_acc, mathop, **run_kwargs):
+    sfpu_binary(formats, dest_acc, mathop, twos_complement=True, **run_kwargs)
+
+
+EQ_NE_INT_SWEEP = dict(
     formats=input_output_formats([DataFormat.Int32]),
     mathop=[MathOperation.SfpuEqInt, MathOperation.SfpuNeInt],
     dest_acc=[DestAccumulation.Yes],
 )
-def test_eltwise_binary_sfpu_eq_ne_int(formats, dest_acc, mathop):
+
+
+@parametrize(**EQ_NE_INT_SWEEP)
+def test_eltwise_binary_sfpu_eq_ne_int(formats, dest_acc, mathop, **run_kwargs):
     # int32 eq/ne via calculate_binary_eq_int (exact 0/1 over the raw INT32 dest bits).
     # Reuse the paired eq/ne stimuli so ~50% of positions compare equal — the equal branch
     # a plain random int sweep would essentially never hit.
     spec_A, spec_B = _eq_ne_stimuli_specs()
-    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B, **run_kwargs)
 
 
-# =============================================================================
-# Integer shift edge cases
-#
-# Deterministic edge-case coverage for the integer shift ops: shift amounts
-# outside [0, 31] -> 0, arithmetic right-shift sign-extends, negatives shift
-# correctly. INT32_MIN is excluded (sign-magnitude Dst can't represent -2^31);
-# see the xfail test below and docs/SFPU_INT32_SHIFT.md.
-# =============================================================================
+# Integer shift edge cases: shift amounts outside [0, 31], arithmetic sign extension, and
+# negative operands, INT32_MIN included. These tests pack two's complement, which is the encoding
+# native Int32 tiles carry in Dst, so the whole int32 range round-trips -- including 0x80000000,
+# which sign-magnitude packing would turn into "negative zero".
 
 _INT32_MIN = -(2**31)
 
@@ -1237,7 +1656,7 @@ _SHIFT_EDGE_VALUES = [
     0x55555555,
     -0x55555555,
     0x7FFFFFFF,  # INT32_MAX
-    -0x80000000,  # INT32_MIN (filtered out per-op; see _build_shift_edge_case_src)
+    -0x80000000,  # INT32_MIN
 ]
 
 # Shift amounts now live in sfpu_domains.SHIFT_EDGE_AMOUNTS, because the unary shift sweep
@@ -1266,14 +1685,9 @@ def _shift_reference(mathop, value, shift):
 
 def _build_shift_edge_case_src(mathop):
     """Build a deterministic [64, 32] Int32 operand: tile 0 holds values, tile 1 holds
-    per-element shift amounts (tilize pairs them by index). Walks the cartesian product of
-    interesting (value, shift) pairs; pairs touching INT32_MIN are dropped (sign-magnitude
-    Dst can't represent -2^31)."""
-    pairs = [
-        (v, s)
-        for v, s in itertools.product(_SHIFT_EDGE_VALUES, _SHIFT_EDGE_AMOUNTS)
-        if v != _INT32_MIN and _shift_reference(mathop, v, s) != _INT32_MIN
-    ]
+    per-element shift amounts (tilize pairs them by index). Walks the full cartesian product of
+    interesting (value, shift) pairs, INT32_MIN included."""
+    pairs = list(itertools.product(_SHIFT_EDGE_VALUES, _SHIFT_EDGE_AMOUNTS))
     return _build_paired_tile_override(pairs, torch.int32)
 
 
@@ -1287,78 +1701,49 @@ def _build_shift_edge_case_src(mathop):
     dest_acc=[DestAccumulation.Yes],
 )
 def test_eltwise_binary_sfpu_int_shift_edge_cases(
-    request,
     formats,
     dest_acc,
     mathop,
 ):
-    if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE:
-        # xfail rather than skip so a Blackhole kernel port surfaces as XPASS instead of
-        # staying silently green-by-omission. The bug is an external dependency of this
-        # suite, not a task in it, but a skip cannot tell us when it is fixed.
-        request.node.add_marker(
-            pytest.mark.xfail(
-                reason="Blackhole shift kernels (left / arithmetic right / logical right) "
-                "are unmigrated TTI microcode whose predicated out-of-range/sign handling "
-                "breaks under INT32_2S_COMP for negative operands, so all three diverge "
-                "from the two's-complement golden. See docs/SFPU_INT32_SHIFT.md.",
-                strict=False,
-            )
-        )
-
+    # twos_complement=True is required, not decorative, and for the same reason as in
+    # test_eltwise_binary_sfpu_int_extremes: the shift kernels operate on Dst bits directly, so
+    # sign-magnitude stimuli would hand them 0x80000001 for -1 and every negative lane would
+    # diverge from the two's-complement golden. Native Int32 tiles are 2's complement in Dst
+    # (see binary_shift.h), so this is also the encoding the kernels see in production.
     sfpu_binary(
         formats,
         dest_acc,
         mathop,
         src_A_override=_build_shift_edge_case_src(mathop),
+        twos_complement=True,
     )
 
 
-# =============================================================================
-# Deliberate edge values (Phase 4, binary side)
-#
-# _build_shift_edge_case_src above is the shape this generalizes: walk the cartesian
-# product of both operands' interesting values into a two-tile override tensor, which
-# tilize pairs by index. The product is the point — a divisor of 0 against a positive, a
-# negative and a zero numerator are three different cases, and element-wise pairing would
-# test one of them.
-#
-# Values come from sfpu_domains.edge_pair_values(), so the ops enrol by having a registered
-# singularity rather than by being listed here.
-# =============================================================================
+# Deliberate edge values, generalizing _build_shift_edge_case_src above: walk the cartesian
+# product of both operands' interesting values into a two-tile override tensor, which tilize
+# pairs by index. The product is the point -- a divisor of 0 against a positive, a negative and
+# a zero numerator are three different cases. Values come from sfpu_domains.edge_pair_values(),
+# so ops enrol by having a registered singularity rather than by being listed here.
 
 
-# The edge-pair probe is partitioned before it is driven, and the partition is what makes
-# the xfails below mean anything. One tensor holding every pole of an op mixes failure
-# classes that have nothing to do with each other: div's lost zero sign is documented
-# Wormhole SFPMAD behaviour that Blackhole is documented to fix, while div(0, 0) returning
-# inf is the kernel's own reciprocal composition and fixed nowhere. Bundled into one
-# variant, one xfail covers both — so the zero sign improving on Blackhole still reports
-# XFAIL rather than the XPASS it was recorded to produce, and a *new* mismatch anywhere in
-# the tensor is invisible for as long as either known one survives.
-#
-# Classified by what the golden says the answer is, rather than by a per-op predicate on
-# the operands, because that is where the classes actually live and the golden is the
-# authority on it: `fmod(-2, +1/64)` is a negative-zero case and `fmod(+2, -1/64)` is not,
-# which no reading of the operand signs gets right.
+# The edge-pair probe is partitioned before it is driven, and the partition is what makes the
+# xfails below mean anything: one tensor holding every pole of an op mixes unrelated failure
+# classes, so a single xfail covers all of them and a new mismatch stays invisible for as long
+# as any known one survives. Classified by what the golden answers rather than by a predicate
+# on the operands, since no reading of the operand signs gets the classes right.
 _EDGE_CLASS_BOTH_ZERO = "both_zero"
 _EDGE_CLASS_NAN = "nan_golden"
 _EDGE_CLASS_NEGATIVE_ZERO = "negative_zero_golden"
 _EDGE_CLASS_ORDINARY = "ordinary"
 
-# Cat B: a non-finite *operand*, as opposed to a non-finite answer. Its own class because the
-# existing four classify by what the golden *answers*, and on that axis a NaN input and `x % 0`
-# land in the same bucket despite being IEEE propagation and the kernel's own composition
-# respectively -- one xfail over two causes.
+# Cat B: a non-finite operand, as opposed to a non-finite answer. Its own class because the
+# other four classify by what the golden answers, which would file IEEE propagation and the
+# kernel's own composition in the same bucket.
 _EDGE_CLASS_SPECIALS_IN = "specials_in"
 
-# Order is documentation, not mechanism: whichever class comes first builds the shared ELF for the
-# compile-producer pass (conftest._collapse_runtime_only_variants keeps one item per compile key),
-# and the test body guards against an empty or gated representative starving the others of a
-# binary. No class is non-empty for every op, which is what that guard is for.
-#
-# 0/0, xlogy(0, 0) and 0**0 are indeterminate forms produced by the kernel's own composition (a
-# reciprocal, an exp(b·ln a)), a different cause from x % 0 even where both goldens are NaN.
+# Order matters only for the compile-producer pass: whichever class comes first builds the ELF
+# all of them share, and the test body guards against an empty representative starving the
+# others of a binary.
 _EDGE_CLASSES = (
     _EDGE_CLASS_ORDINARY,
     _EDGE_CLASS_BOTH_ZERO,
@@ -1370,18 +1755,16 @@ _EDGE_CLASSES = (
 
 def _classify_edge_pair(mathop, a, b):
     """Which failure class the pair (*a*, *b*) belongs to for *mathop*."""
-    # Tested before the others because it is a property of the *input*, and the remaining classes
-    # are properties of the output. A NaN operand produces a NaN answer, so without this first
-    # every cat-B pair would be filed as nan_golden alongside `x % 0`.
+    # Tested first because it is a property of the input and the other classes are properties
+    # of the output, so otherwise every cat-B pair would be filed as nan_golden.
     if not (math.isfinite(a) and math.isfinite(b)):
         return _EDGE_CLASS_SPECIALS_IN
     if a == 0.0 and b == 0.0:
         return _EDGE_CLASS_BOTH_ZERO
 
-    # Instantiate BinarySFPUGolden directly rather than through get_golden_generator: the harness
-    # swaps in a DummyGoldenGenerator during --compile-producer, and that stub has no `ops`
-    # mapping. This runs at *stimulus-build* time, which happens in both phases, so it cannot use
-    # the proxy. Same fix as helpers/compressed_utils.py's matmul golden.
+    # Instantiated directly rather than through get_golden_generator: this runs at
+    # stimulus-build time, which happens in both build phases, and the --compile-producer stub
+    # has no `ops` mapping.
     result = float(BinarySFPUGolden().ops[mathop](torch.tensor(a), torch.tensor(b)))
     if math.isnan(result):
         return _EDGE_CLASS_NAN
@@ -1393,13 +1776,9 @@ def _classify_edge_pair(mathop, a, b):
 def _edge_pairs_for_class(mathop, formats, edge_class, dest_acc, specials=False):
     """The operand pairs of *edge_class* for this op and pipeline.
 
-    Extracted so the override builder and the generated-NaN predicate below select from the same
-    list -- a second copy of this filter is how the gate and the stimulus would come to disagree
-    about which pairs a class contains.
-
-    *dest_acc* sizes the ULP steps around each pole: at dest_acc=No the DEST is 16-bit, so
-    a probe stepped by an fp32 ULP lands back on the pole it was straddling. See
-    sfpu_domains.probe_spacing_format().
+    Extracted so the override builder and the generated-NaN predicate select from the same
+    list. *dest_acc* sizes the ULP steps around each pole, since at dest_acc=No a probe stepped
+    by an fp32 ULP would land back on the pole it was straddling.
     """
     return [
         pair
@@ -1414,11 +1793,9 @@ def _edge_pairs_for_class(mathop, formats, edge_class, dest_acc, specials=False)
     ]
 
 
-# The ops this suite drives on an integer format. This sweep is float — its format axis is
-# Float16_b/Float32 and the override built above carries float values — so an integer op
-# that gains a singularity belongs in test_eltwise_binary_sfpu_int_extremes or the shift edge tests
-# rather than here. Assembled from the lists that already drive them, so the two cannot
-# disagree.
+# The ops this suite drives on an integer format. This sweep is float, so an integer op that
+# gains a singularity belongs in test_eltwise_binary_sfpu_int_extremes or the shift edge tests
+# instead. Assembled from the lists that already drive them, so the two cannot disagree.
 _INT_DRIVEN_BINARY_OPS = frozenset(
     set(_INT_BINARY_STIMULI)
     | set(_UINT32_BINARY_OPS)
@@ -1433,16 +1810,10 @@ _INT_DRIVEN_BINARY_OPS = frozenset(
     }
 )
 
-# Derived rather than listed, which is what the section header above promises: an op joins
-# this sweep by gaining an _OP_SINGULARITIES entry in sfpu_domains. Today that resolves to
-# div and fmod/remainder (which divide by B), xlogy (log of B) and pow (exp(B·ln A)). The
-# two intersections are what this sweep can actually drive — the same table holds the unary
-# poles (Reciprocal, Log, Asin, ...), and _CLASSIFIED_STIMULI_OPS is the declared set of ops
-# reaching sfpu_binary().
-# An op joins by gaining *either* a registered singularity or a cat-B entry, which keeps this a
-# derivation rather than a list. The cat-B half matters for the 16 float ops with no pole: `add`,
-# `sub`, `mul`, `max`, `min` and the six comparisons are smooth everywhere, so
-# ops_with_singularity() alone can never collect them.
+# Derived rather than listed: an op joins this sweep by gaining either a registered
+# singularity or a cat-B entry in sfpu_domains. The cat-B half matters for the float ops with
+# no pole -- add, sub, mul, max, min and the comparisons are smooth everywhere, so
+# ops_with_singularity() alone could never collect them.
 _BINARY_EDGE_OPS = sorted(
     (
         (ops_with_singularity() | set(BINARY_SPECIALS_READY_OPS))
@@ -1459,180 +1830,36 @@ assert _BINARY_EDGE_OPS, (
 )
 
 
-# What driving the poles found on Wormhole, cross-checked against tt-isa-documentation.
-# One of the two causes is documented hardware behaviour; the other is not.
-#
-# DOCUMENTED, and expected to XPASS on Blackhole:
-#
-#   The sign of a zero result is lost -- div(0, -x) returns +0.0 where IEEE gives -0.0,
-#   fmod/remainder likewise for a negative divisor, as does xlogy(0, tiny). This is SFPMAD,
-#   which all of these ops are built on:
-#     Wormhole  — "If the output (before rounding) is denormal or negative zero, it'll be
-#                  flushed to positive zero."          (WormholeB0/.../SFPMAD.md)
-#     Blackhole — "If the output (after rounding) is denormal, it'll be flushed to
-#                  sign-preserved zero."               (BlackholeA0/.../SFPMAD.md)
-#   and Blackhole's page lists "improved edge-case handling of NaNs and of negative zero"
-#   among its upgrades over Wormhole. A documented Wormhole limitation that Blackhole is
-#   documented to fix, so the xfails below are non-strict precisely to report XPASS there.
-#
-# RETRACTED — "0/0 and x%0 return inf where IEEE says nan" was the pack path, not a kernel:
-#
-#   The kernels return a genuine NaN. BinarySFPUGolden did not model the store to Dest or the pack
-#   out of it, so on a pipeline too narrow to hold a NaN the packer's substituted infinity
-#   (SFPSTORE: "NaN is also converted to infinity") read as the kernel having produced one.
-#   Measured on a Wormhole n150 once the golden modelled both steps: div(0, 0), xlogy(0, 0),
-#   fmod(x, 0) and remainder(x, 0) all PASS wherever a NaN reaches L1 and diverge only where
-#   nan_survives_to_l1() is False -- a statement about the pipeline, not the arithmetic.
-#
-#   What is left on the narrowing cells is the *sign* of the substituted infinity: canonical-
-#   positive on Blackhole by specification, explicitly unspecified on Wormhole. So these classes
-#   are asserted on Blackhole and gated off on Wormhole by generated_nan_sign_is_asserted().
-#
-#   The finite poles agreed all along (div(-2, ±1/64) = ∓128, every ±inf lines up).
-#
-# Those groups are the classes the probe partitions into, and _EDGE_CLASS_NEGATIVE_ZERO -- the
-# documented one -- is now the only class with an entry left below. _EDGE_CLASS_BOTH_ZERO
-# (indeterminate forms, 0**0) and _EDGE_CLASS_NAN (x % 0) were emptied by the retraction above
-# and by the pow fix, so they are asserted rather than tolerated. _EDGE_CLASS_ORDINARY holds
-# everything that agreed -- ±inf poles, finite quotients, exact remainders -- likewise
-# asserted, which is only possible now it does not share a tensor with the others.
-#
-# Non-strict xfails per Phase 0's approximate-exp precedent, so a case still executes and reports
-# XPASS if behaviour changes; enumerated per (input, output, dest_acc) rather than by predicate so
-# a combination drifting in or out shows up here. Keyed by (op, edge class): a class XPASSing
-# across the board loses its entry, one XPASSing on Blackhole alone becomes arch-gated.
-_BINARY_EDGE_COMBINATIONS = {
-    MathOperation.SfpuElwdiv: (
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-    ),
-    MathOperation.SfpuXlogy: (
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-    ),
-    MathOperation.SfpuBinaryFmod: (
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-    ),
-    MathOperation.SfpuBinaryRemainder: (
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-    ),
-}
-
-_ZERO_SIGN_ISA_NOTE = (
-    "the lost zero sign is documented Wormhole SFPMAD behaviour ('flushed to positive "
-    "zero'); Blackhole is documented to preserve it, so expect XPASS there"
-)
-
-# Which classes of each op are expected to diverge, and why — one reason per class, so the
-# xfail says what it is waiting for. A class absent from an op's dict is asserted to pass:
-# the ±inf poles, the finite quotients and the exact remainders all agreed on Wormhole.
-_BINARY_EDGE_REASON = {
-    MathOperation.SfpuElwdiv: {
-        _EDGE_CLASS_NEGATIVE_ZERO: f"div(0, -x) returns +0.0, not -0.0 "
-        f"({_ZERO_SIGN_ISA_NOTE}).",
-    },
-    MathOperation.SfpuXlogy: {
-        _EDGE_CLASS_NEGATIVE_ZERO: f"xlogy(0, tiny) returns +0.0, not -0.0 "
-        f"({_ZERO_SIGN_ISA_NOTE}).",
-    },
-    MathOperation.SfpuBinaryFmod: {
-        _EDGE_CLASS_NEGATIVE_ZERO: f"fmod loses the sign of a zero result "
-        f"({_ZERO_SIGN_ISA_NOTE}).",
-    },
-    MathOperation.SfpuBinaryRemainder: {
-        _EDGE_CLASS_NEGATIVE_ZERO: f"remainder loses the sign of a zero result "
-        f"({_ZERO_SIGN_ISA_NOTE}).",
-    },
-}
-
-# Deleted rather than kept: the _EDGE_CLASS_BOTH_ZERO entries for SfpuElwdiv, SfpuXlogy,
-# SfpuBinaryFmod and SfpuBinaryRemainder, and the _EDGE_CLASS_NAN entries for the latter two. All
-# six recorded "returns inf where IEEE says nan", which the retraction above shows to be the pack
-# substitution rather than the arithmetic. They are not replaced by xfails on the narrowing cells
-# either -- generated_nan_sign_is_asserted() gates those off on Wormhole.
-#
-# Also deleted: the _EDGE_CLASS_BOTH_ZERO entry for SfpuElwpow, which recorded 0**0 returning 0
-# against a golden 1 -- Wormhole's reading; Blackhole returned +inf for it.
-# calculate_sfpu_binary_power now ends in an IEEE pow(x, 0) == 1 guard (see the kernel comment for
-# the NaN-predicate root cause), so both_zero asserts 0**0 and 0**-0.0 instead. The -0.0 exponent
-# is a committed Operand.B edge in sfpu_domains._OP_OPERAND_EDGE_POINTS; without it this class
-# would pass against a kernel that dropped setsgn.
-
-# No op may claim a divergence without a combination list to apply it to, and none may
-# list combinations with nothing to apply them to.
-assert set(_BINARY_EDGE_REASON) == set(_BINARY_EDGE_COMBINATIONS), (
-    "_BINARY_EDGE_REASON and _BINARY_EDGE_COMBINATIONS disagree on which ops diverge: "
-    f"{set(_BINARY_EDGE_REASON) ^ set(_BINARY_EDGE_COMBINATIONS)}"
-)
-assert all(
-    cls in _EDGE_CLASSES for classes in _BINARY_EDGE_REASON.values() for cls in classes
-), "_BINARY_EDGE_REASON names an edge class that _classify_edge_pair never returns"
-
-# Edge classes whose divergence is a *Wormhole* limitation, so on Blackhole the case is
-# asserted rather than tolerated.
-#
-# The SFPMAD negative-zero split quoted above, confirmed: measured on a Blackhole p150b, the
-# negative-zero class XPASSed on all 16 cells it is claimed for (div, xlogy, fmod and remainder,
-# at both dest_acc values) and nothing else XPASSed. So a zero result's sign is *checked* there
-# and a regression fails rather than returning to XFAIL. The indeterminate-form classes
-# (both_zero, nan_golden) are not gated here -- see the retraction above
-# _BINARY_EDGE_COMBINATIONS; what remains of them on Wormhole is handled per lane by
-# generated_nan_sign_is_asserted().
-_WORMHOLE_ONLY_EDGE_CLASSES = frozenset({_EDGE_CLASS_NEGATIVE_ZERO})
+# Driving the poles found nothing left to tolerate on Wormhole. The negative-zero class used
+# to carry a non-strict xfail for div, xlogy, fmod and remainder on the grounds that SFPMAD
+# flushes a zero result to positive zero; all 16 cells XPASS, and neither arm of
+# passed_test can see the sign of a zero: torch.isclose compares them equal, and the ULP
+# arm's value-order index ranks both zeros the same. The indeterminate forms
+# are asserted too, now that the golden models the packer substituting an infinity for a NaN
+# the pipeline was too narrow to hold; what remains of them on Wormhole is that infinity's
+# sign, handled per lane by generated_nan_sign_is_asserted() rather than by an xfail.
 
 
 @pytest.mark.nightly
 @parametrize(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    formats=_BF16_FP32_FORMATS,
     mathop=_BINARY_EDGE_OPS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     # runtime(): the class selects which values go in the override tensor and nothing
     # else, so all four share one ELF instead of compiling the same kernel four times.
     edge_class=runtime(list(_EDGE_CLASSES)),
 )
-def test_eltwise_binary_sfpu_edges(request, formats, dest_acc, mathop, edge_class):
+def test_eltwise_binary_sfpu_edges(formats, dest_acc, mathop, edge_class):
     """Drive one class of each binary op's registered pole against its counterparts.
 
     One variant per (op, class) rather than per op: see the comment above _EDGE_CLASSES for
     why a single tensor holding every pole cannot report which behaviour changed.
     """
     _skip_fp32_no_dest_acc(formats, dest_acc)
-    _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
-    # A Wormhole-only class is asserted on Blackhole, not tolerated — see
-    # _WORMHOLE_ONLY_EDGE_CLASSES for the measurement that established which those are.
-    arch_fixed = (
-        edge_class in _WORMHOLE_ONLY_EDGE_CLASSES
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-    )
-
-    reason = _BINARY_EDGE_REASON.get(mathop, {}).get(edge_class)
-    if (
-        reason is not None
-        and not arch_fixed
-        and (
-            (formats.input_format, formats.output_format, dest_acc)
-            in _BINARY_EDGE_COMBINATIONS[mathop]
-        )
-    ):
-        request.node.add_marker(pytest.mark.xfail(reason=reason, strict=False))
-
-    # Cat B. Two independent gates, both must pass: BINARY_SPECIALS_READY_OPS says this op's
-    # *golden* defines an answer for a non-finite operand, specials_safe() says this *pipeline*
-    # delivers one intact. Neither implies the other.
-    #
-    # dest_acc as passed, which is right on Wormhole and conservative on Blackhole: sfpu_binary()
-    # promotes it to Yes there, and promotion only ever *widens* Dest.
+    # Cat B. Two independent gates, both must pass: BINARY_SPECIALS_READY_OPS says the golden
+    # defines an answer for a non-finite operand, specials_safe() says the pipeline delivers one
+    # intact. dest_acc as passed, which is conservative on Blackhole, where it is promoted later.
     specials = mathop in BINARY_SPECIALS_READY_OPS and specials_safe(
         formats.input_format, formats.output_format, dest_acc
     )
@@ -1642,15 +1869,10 @@ def test_eltwise_binary_sfpu_edges(request, formats, dest_acc, mathop, edge_clas
     )
 
     if not pairs and TestConfig.BUILD_MODE == BuildMode.PRODUCE:
-        # The compile-producer pass must not skip on a runtime-only axis. `edge_class` is a
-        # runtime() axis, so conftest._collapse_runtime_only_variants keeps one item per compile
-        # key and *that* item builds the ELF all classes share; a skip here leaves the others
-        # running against a binary that was never built, which presents as TENSIX TIMED OUT rather
-        # than as a skip.
-        #
-        # The ELF depends only on the compile-time axes (op, formats, dest_acc), never on which
-        # values go in the tensor, so any non-empty pair list compiles the right kernel. Take the
-        # unfiltered list; the consumer still applies the class filter and still skips.
+        # The compile-producer pass must not skip on a runtime-only axis: one item per compile
+        # key builds the ELF all classes share, and skipping it leaves the others running against
+        # a binary that was never built. The ELF does not depend on which values go in the
+        # tensor, so the unfiltered list compiles the right kernel; the consumer still skips.
         pairs = edge_pair_values(
             mathop,
             formats.input_format,
@@ -1666,14 +1888,10 @@ def test_eltwise_binary_sfpu_edges(request, formats, dest_acc, mathop, edge_clas
             + ("" if specials else " (cat B is off for this op or this pipeline)")
         )
 
-    # Where the golden's answer is a NaN the op *invented*, a narrowing pipeline turns its sign
-    # into the observable result, and Wormhole's SFPMAD leaves that sign unspecified -- so assert
-    # the magnitude there rather than withdrawing the variant. Blackhole specifies the canonical
-    # NaN and keeps the full assertion.
-    #
-    # Pipeline and arch only: which *lanes* carry an invented NaN is the golden's own mask, since
-    # `specials_in` is classified by an operand being non-finite and so mixes `inf - inf` with
-    # `0 - (-inf)`. sfpu_binary() applies it per lane.
+    # Where the golden's answer is a NaN the op invented, a narrowing pipeline turns its sign
+    # into the observable result and Wormhole leaves that sign unspecified, so assert the
+    # magnitude there rather than withdrawing the variant. This decides pipeline and arch only;
+    # which lanes carry an invented NaN is the golden's own mask, applied by sfpu_binary().
     unspecified_sign = generated_nan_sign_is_asserted(
         formats.input_format,
         formats.output_format,
@@ -1691,28 +1909,13 @@ def test_eltwise_binary_sfpu_edges(request, formats, dest_acc, mathop, edge_clas
     )
 
 
-# Integer extremes (cat C). Delivered as a raw override rather than a StimuliSpec because
-# CustomStrategy clamps integers through _get_integer_bounds, which returns info.min + 1 —
-# so a spec asking for INT32_MIN silently yields INT32_MIN + 1, the worst failure mode for
-# an edge test.
-#
-# Scope is deliberately narrow, and _INT_BINARY_STIMULI above is why: almost every int
-# binary kernel documents a *sub-range* it is valid on (div/fmod < 2**24 for an exact
-# int->fp32 reciprocal, mul < ~46340 so the product stays under 2**31, lcm assuming
-# |a|,|b| < 2**15, max/min non-negative so signed and unsigned agree). Feeding those the
-# int32 extremes would produce failures that are documented limitations rather than
-# findings. The bitwise ops are the exception — "exact on the full default int range" — so
-# they and the exact eq/ne comparisons are what cat C can honestly cover here.
-#
-# INT32_MIN itself is excluded: sign-magnitude Dst reads 0x80000000 as "negative zero" and
-# cannot round-trip it. That is hardware, not a gap, and it already has a dedicated xfail
-# (test_eltwise_binary_sfpu_int_shift_int32_min_unsupported). INT32_MIN + 1 stands in for it.
-#
-# The four *ordered* comparisons join the exact eq/ne pair on the same reasoning:
-# calculate_binary_comp_int32 documents no sub-range, so the extremes are inside what the kernel
-# promises and a divergence there is a finding. They also have the most to prove at these values
-# -- the kernel normalises by computing `a - b` and folding the sign, and
-# `INT32_MAX - (INT32_MIN + 1)` does not fit in int32.
+# Integer extremes (cat C). Delivered as a raw override rather than a StimuliSpec, because a
+# spec asking for INT32_MIN is silently clamped to INT32_MIN + 1 -- the worst failure mode for
+# an edge test. Scope is deliberately narrow: most int binary kernels document a sub-range they
+# are valid on (see _INT_BINARY_STIMULI), so feeding them the extremes would produce documented
+# limitations rather than findings. The bitwise ops and the exact comparisons document no such
+# range, so they are what cat C can honestly cover. INT32_MIN itself is excluded because
+# sign-magnitude Dst cannot round-trip it; it has its own xfail below.
 _INT_EXTREME_OPS = [
     MathOperation.SfpuBitwiseAnd,
     MathOperation.SfpuBitwiseOr,
@@ -1737,12 +1940,9 @@ def _build_int_extremes_src():
     dest_acc=[DestAccumulation.Yes],
 )
 def test_eltwise_binary_sfpu_int_extremes(formats, dest_acc, mathop):
-    # twos_complement=True is required, not decorative. Without it the buffer is packed
-    # sign-magnitude, and the bitwise kernels then operate on the wrong bits for negative
-    # operands: (INT32_MIN+1) & -1 came back as -1 instead of INT32_MIN+1. The existing
-    # test_eltwise_binary_sfpu_bitwise never caught this because its default stimuli are
-    # positive-only, so nothing had established that these kernels need the two's-
-    # complement pack path. test_eltwise_binary_sfpu_rsub_int32 already sets the same flag.
+    # twos_complement=True is required, not decorative: without it the buffer is packed
+    # sign-magnitude and the bitwise kernels operate on the wrong bits for negative operands.
+    # test_eltwise_binary_sfpu_bitwise cannot catch that -- its stimuli are positive-only.
     sfpu_binary(
         formats,
         dest_acc,
@@ -1752,13 +1952,6 @@ def test_eltwise_binary_sfpu_int_extremes(formats, dest_acc, mathop):
     )
 
 
-@pytest.mark.xfail(
-    reason="Dst stores int32 as sign-magnitude with range +-(2^31 - 1). INT32_MIN "
-    "(0x80000000) is 'negative zero' and cannot round-trip through Dst, so shifts that "
-    "consume or produce it diverge from the two's-complement golden. This is a hardware "
-    "limitation of the Wormhole SFPU load/store path; see docs/SFPU_INT32_SHIFT.md.",
-    strict=False,
-)
 @parametrize(
     formats=input_output_formats(
         [
@@ -1768,13 +1961,14 @@ def test_eltwise_binary_sfpu_int_extremes(formats, dest_acc, mathop):
     mathop=_SHIFT_EDGE_OPS,
     dest_acc=[DestAccumulation.Yes],
 )
-def test_eltwise_binary_sfpu_int_shift_int32_min_unsupported(
+def test_eltwise_binary_sfpu_int_shift_int32_min(
     formats,
     dest_acc,
     mathop,
 ):
-    # Every value lane is INT32_MIN shifted by 0: the golden expects INT32_MIN back, but
-    # HW loads it as sign-magnitude "negative zero", so this is expected to fail.
+    # Every value lane is INT32_MIN shifted by 0, so the golden expects INT32_MIN back. Worth its
+    # own test because 0x80000000 is the one value whose round-trip depends entirely on the Dst
+    # encoding: two's complement carries it, sign-magnitude reads it as "negative zero".
     num_elements = 32 * 32
     value_grid = [_INT32_MIN] * num_elements
     shift_grid = [0] * num_elements
@@ -1784,6 +1978,7 @@ def test_eltwise_binary_sfpu_int_shift_int32_min_unsupported(
         dest_acc,
         mathop,
         src_A_override=src,
+        twos_complement=True,
     )
 
 
@@ -1795,8 +1990,7 @@ def test_eltwise_binary_sfpu_int_shift_int32_min_unsupported(
 # layout — different enough from sfpu_binary() to keep separate.
 # =============================================================================
 
-
-@parametrize(
+ADD_TOP_ROW_SWEEP = dict(
     formats=input_output_formats(
         [
             DataFormat.Float32,
@@ -1808,12 +2002,20 @@ def test_eltwise_binary_sfpu_int_shift_int32_min_unsupported(
     mathop=[MathOperation.SfpuAddTopRow],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop):
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip(
-            "32-bit integer formats require DestAccumulation.Yes (HW cannot unpack into SrcA/SrcB)"
-        )
 
+
+def _run_sfpu_add_top_row(
+    formats,
+    dest_acc,
+    mathop,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+    iterations=32,
+    approx_mode=ApproximationMode.No,
+):
     input_dimensions = [64, 32]
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -1844,21 +2046,30 @@ def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop):
         DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
     )
 
-    configuration = TestConfig(
-        "sources/sfpu_binary_test.cpp",
-        formats,
-        templates=[
+    run_types = _resolve_perf_args(is_perf, perf_report, run_types)
+
+    test_config_kwargs = {
+        "test_name": "sources/sfpu_binary_test.cpp",
+        "formats": formats,
+        "templates": [
             generate_input_dim(input_dimensions, input_dimensions),
             MATH_OP(mathop=mathop),
-            APPROX_MODE(),
+            APPROX_MODE(approx_mode),
+            ITERATIONS(iterations),
             BROADCAST_TYPE(LlkBroadcastType.None_),
+            SFPU_BCAST_DIM(LlkBroadcastType.None_),
+            SFPU_DST_ROUNDING_MODE(),
+            SIGN_MAGNITUDE_FORMAT(False),
         ],
-        runtimes=[
+        "runtimes": [
             TILE_COUNT(tile_cnt_A),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            LOOP_FACTOR(loop_factor),
+            NUM_FACES(),
+            ZERO_POINT(0),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -1868,11 +2079,21 @@ def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop):
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=formats.input_format.is_32_bit(),
-        disable_format_inference=True,
-        compile_time_formats=True,
+        "dest_acc": dest_acc,
+        "unpack_to_dest": formats.input_format.is_32_bit(),
+        "disable_format_inference": True,
+        "compile_time_formats": True,
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
+    if is_perf:
+        configuration.run(perf_report)
+        return
+
     res_from_L1 = configuration.run().result
 
     torch_format = format_dict[formats.output_format]
@@ -1882,9 +2103,22 @@ def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop):
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"
 
-    assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
-    ), "Assert against golden failed"
+    # Without this a row for SfpuAddTopRow would be inert.
+    assert_against_contract(
+        mathop,
+        formats,
+        dest_acc,
+        golden_tensor,
+        res_tensor,
+        approx_mode=_APPROX_MODE,
+    )
+
+
+@parametrize(**ADD_TOP_ROW_SWEEP)
+def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop, **run_kwargs):
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+
+    _run_sfpu_add_top_row(formats, dest_acc, mathop, **run_kwargs)
 
 
 # =============================================================================
@@ -1893,41 +2127,9 @@ def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop):
 # SFPU binary with row/column broadcast (BCAST_COL / BCAST_ROW). Uses its own
 # 3-tile kernel source (sources/sfpu_binary_bcast_test.cpp) with a custom init
 # and full-tile driver; InstrModLoadStore::DEFAULT works for any float dest
-# format (compute is FP32).
+# format (compute is FP32). Unpack is always BroadcastType::NONE; the dim lives
+# in dest as SFPU_BCAST_DIM, not unpack BROADCAST_TYPE.
 # =============================================================================
-
-
-class BroadcastType(Enum):
-    # Values must match ckernel::BroadcastType in llk_defs.h
-    # (NONE=0, COL=1, ROW=2, SCALAR=3) because the kernel does
-    # `static_cast<BroadcastType>(BCAST_DIM_VAL)`.
-    COL = 1
-    ROW = 2
-
-
-@dataclass
-class SFPU_BCAST_DIM(TemplateParameter):
-    bcast_dim: BroadcastType
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t BCAST_DIM_VAL = {self.bcast_dim.value};"
-
-
-@dataclass
-class INPUT_TILE_A(TemplateParameter):
-    """Base DST tile index for input A.
-
-    The kernel derives the other tile indices from this single value:
-      INPUT_TILE_A      -> data tile
-      INPUT_TILE_A + 1  -> bcast tile
-      INPUT_TILE_A + 2  -> result tile
-    """
-
-    tile_index: int = 0
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t INPUT_TILE_A_VAL = {self.tile_index};"
-
 
 _BCAST_BINARY_OPS = {
     MathOperation.SfpuElwadd: torch.add,
@@ -1935,11 +2137,32 @@ _BCAST_BINARY_OPS = {
     MathOperation.SfpuElwmul: torch.mul,
 }
 
+BCAST_SWEEP = dict(
+    # Only same-format in/out combinations are supported by the broadcast kernel,
+    # so `same=True` (a full Cartesian product would also blow past the 100-combo
+    # Python test guideline).
+    formats=input_output_formats(
+        [
+            DataFormat.Float32,
+            DataFormat.Float16_b,
+            DataFormat.Bfp8_b,
+        ],
+        same=True,
+    ),
+    bcast_dim=[LlkBroadcastType.Row, LlkBroadcastType.Column],
+    mathop=[
+        MathOperation.SfpuElwadd,
+        MathOperation.SfpuElwsub,
+        MathOperation.SfpuElwmul,
+    ],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+
 
 def _golden_sfpu_binary_bcast(
     src_A: torch.Tensor,
     src_B: torch.Tensor,
-    bcast_dim: BroadcastType,
+    bcast_dim: LlkBroadcastType,
     op,
     stimuli_format: DataFormat,
 ) -> torch.Tensor:
@@ -1949,7 +2172,7 @@ def _golden_sfpu_binary_bcast(
     a = src_A.flatten()[:1024].reshape(32, 32)
     b = src_B.flatten()[:1024].reshape(32, 32)
 
-    if bcast_dim == BroadcastType.ROW:
+    if bcast_dim == LlkBroadcastType.Row:
         b_bcast = b[0].unsqueeze(0).expand_as(b)
     else:
         b_bcast = b[:, 0].unsqueeze(1).expand_as(b)
@@ -1958,45 +2181,19 @@ def _golden_sfpu_binary_bcast(
     return tilize(golden_rm, stimuli_format=stimuli_format)
 
 
-@skip_for_quasar
-@parametrize(
-    # Only same-format in/out combinations are supported by the broadcast kernel,
-    # so `same=True` (a full Cartesian product would also blow past the 100-combo
-    # Python test guideline).
-    formats=input_output_formats(
-        [
-            DataFormat.Float32,
-            DataFormat.Float16,
-            DataFormat.Float16_b,
-            DataFormat.Bfp8_b,
-        ],
-        same=True,
-    ),
-    bcast_dim=[BroadcastType.ROW, BroadcastType.COL],
-    mathop=[
-        MathOperation.SfpuElwadd,
-        MathOperation.SfpuElwsub,
-        MathOperation.SfpuElwmul,
-    ],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-)
-def test_eltwise_binary_sfpu_bcast(
+def _run_sfpu_binary_bcast(
     formats,
     bcast_dim,
     mathop,
     dest_acc,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+    iterations=32,
+    approx_mode=ApproximationMode.No,
 ):
-    _skip_fp32_no_dest_acc(formats, dest_acc)
-    _skip_bh_float16_no_dest_acc(formats, dest_acc)
-
-    # Mirror sfpu_binary(): on Blackhole, Float16/Float32 inputs require
-    # dest_acc=Yes (32-bit dest), so silently upgrade the parametrized value.
-    if (
-        formats.input_format in [DataFormat.Float16, DataFormat.Float32]
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-    ):
-        dest_acc = DestAccumulation.Yes
-
     input_dimensions = [32, 32]
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -2017,22 +2214,41 @@ def test_eltwise_binary_sfpu_bcast(
         src_A, src_B, bcast_dim, _BCAST_BINARY_OPS[mathop], golden_format
     )
 
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
+    )
+
+    run_types = _resolve_perf_args(is_perf, perf_report, run_types)
+
     # Only FP32 inputs with dest_acc=Yes take the unpack-to-dest path; all
     # other float formats go through srcA + MATH datacopy into dest.
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
 
-    configuration = TestConfig(
-        "sources/sfpu_binary_bcast_test.cpp",
-        formats,
-        templates=[
+    test_config_kwargs = {
+        "test_name": "sources/sfpu_binary_bcast_test.cpp",
+        "formats": formats,
+        "templates": [
+            generate_input_dim(input_dimensions, input_dimensions),
             MATH_OP(mathop=mathop),
+            APPROX_MODE(approx_mode),
+            ITERATIONS(iterations),
+            BROADCAST_TYPE(LlkBroadcastType.None_),
             SFPU_BCAST_DIM(bcast_dim),
-            INPUT_TILE_A(tile_index=0),
+            # Unread by this kernel. Present so the report columns match sfpu_binary.
+            SFPU_DST_ROUNDING_MODE(),
+            SIGN_MAGNITUDE_FORMAT(False),
         ],
-        runtimes=[],
-        variant_stimuli=StimuliConfig(
+        "runtimes": [
+            TILE_COUNT(tile_cnt_A + tile_cnt_B),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            LOOP_FACTOR(loop_factor),
+            NUM_FACES(),
+            ZERO_POINT(0),
+        ],
+        "variant_stimuli": StimuliConfig(
             tilize(src_A, stimuli_format=formats.input_format),
             formats.input_format,
             tilize(src_B, stimuli_format=formats.input_format),
@@ -2042,9 +2258,19 @@ def test_eltwise_binary_sfpu_bcast(
             tile_count_B=tile_cnt_B,
             tile_count_res=1,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=unpack_to_dest,
+        "dest_acc": dest_acc,
+        "unpack_to_dest": unpack_to_dest,
+        "compile_time_formats": True,
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
 
@@ -2055,6 +2281,26 @@ def test_eltwise_binary_sfpu_bcast(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
-    assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
-    ), "Assert against golden failed"
+    # approx_mode unset: this kernel compiles no APPROX_MODE.
+    assert_against_contract(mathop, formats, dest_acc, golden_tensor, res_tensor)
+
+
+@parametrize(**BCAST_SWEEP)
+def test_eltwise_binary_sfpu_bcast(
+    formats,
+    bcast_dim,
+    mathop,
+    dest_acc,
+    **run_kwargs,
+):
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+
+    # Mirror sfpu_binary(): on Blackhole, Float16/Float32 inputs require
+    # dest_acc=Yes (32-bit dest), so silently upgrade the parametrized value.
+    if (
+        formats.input_format in [DataFormat.Float16, DataFormat.Float32]
+        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+    ):
+        dest_acc = DestAccumulation.Yes
+
+    _run_sfpu_binary_bcast(formats, bcast_dim, mathop, dest_acc, **run_kwargs)

@@ -35,7 +35,7 @@ static void open_and_close_device() {
         ids.push_back(id);
     }
     ASSERT_GT(ids.size(), 0);
-    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
 
     // Open one unit mesh per MMIO chip. Multi-chip boards (e.g. P300) expose more than one
     // MMIO chip, so assert against the number of chips opened rather than hardcoding a single device.
@@ -122,7 +122,12 @@ TEST(TensixReleaseOwnership, ReleaseOwnershipWithSubprocess) {
 namespace {
 
 constexpr const char* kTdpLimitEnvVar = "TT_METAL_TDP_LIMIT_WATTS";
-constexpr uint32_t kTestTdpLimitWatts = 200;
+
+// Firmware caps a limit request at the board's max_tdp_limit, which only Galaxy populates;
+// elsewhere the cap collapses onto the board default, so the limit can only be lowered. 75 W is
+// below the default of every Blackhole board and above the 50 W floor firmware accepts, so it is
+// the one value the whole fleet takes.
+constexpr uint32_t kTestTdpLimitWatts = 75;
 
 // Mirrors TDP_LIMIT_MIN_FIRMWARE_VERSION in UMD's firmware_utils.cpp, which is file-local there.
 const umd::FirmwareBundleVersion kMinTdpLimitFirmware(19, 11, 0);

@@ -6,12 +6,14 @@
 
 #include "experimental/llk_unpack_A_top32_rm.h"
 #include "llk_unpack_common_api.h"
+#include "sanitizer/api.h"
 
 /*******************************************
  * LLK UNPACK A — Top32 row-major transpose
  *******************************************/
 
 inline void llk_unpack_A_top32_rm_init(const std::uint32_t operand) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t src_format = get_operand_src_format(operand_id);
     const std::uint32_t dst_format = get_operand_dst_format(operand_id);
@@ -25,6 +27,7 @@ inline void llk_unpack_A_top32_rm_init(const std::uint32_t operand) {
 
 inline void llk_unpack_A_top32_rm(
     const std::uint32_t operand, const std::uint32_t tile_index, const std::uint32_t num_faces) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t src_format = get_operand_src_format(operand_id);
     const std::uint32_t dst_format = get_operand_dst_format(operand_id);

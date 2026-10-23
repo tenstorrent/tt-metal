@@ -18,11 +18,14 @@
 # Env (all optional):
 #   TT_METAL_HOME      repo root. Defaults to this script's location, so a normal checkout needs
 #                      nothing set. Override only if you are running the script from outside its repo.
-#   HF_MODEL           real MiniMax-M3 weights dir     [/mnt/models/MiniMaxAI/MiniMax-M3-ref]
+#   HF_MODEL           real MiniMax-M3 weights dir     [/mnt/weka/model-weights/llm/minimax/MiniMax-M3]
 #   GOLDEN_DIR         golden traces to tile tokens from
 #   SRC_TRACE          a specific metadata.json to tile from (overrides GOLDEN_DIR)
 #   EXPERT_DTYPE       bf4 | bf8                       [bf4]
 #   PREFILL_TPS_ITERS  timed repetitions per config    [5]
+#   M3_FABRIC          1d | 1d_ring | 2d | 2d_torus_xy (utils/fabric_env.py, same names as the runner's
+#                      PREFILL_FABRIC_MODE); ring/torus select the torus_xy mesh graph descriptor. [1d]
+#   M3_CCL_TOPOLOGY    linear | ring for the legacy CCLs (ring needs a ring/torus fabric).    [linear]
 #   LOGDIR             where to write the run log      [$TT_METAL_HOME/prefill_perf_logs]
 #
 # Companion: run_prefill_profile.sh in this directory breaks one chunk down per zone.
@@ -33,8 +36,15 @@ set -uo pipefail
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export TT_METAL_HOME="${TT_METAL_HOME:-$(cd "$_SCRIPT_DIR/../../../.." && pwd)}"
 
-export TT_MESH_GRAPH_DESC_PATH="${TT_MESH_GRAPH_DESC_PATH:-$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto}"
-export HF_MODEL="${HF_MODEL:-/mnt/models/MiniMaxAI/MiniMax-M3-ref}"
+# 1d_ring / 2d_torus_* refuse the plain mesh descriptor on Blackhole (topology_mapper.cpp,
+# ring_requires_torus), so those fabrics select the torus-XY descriptor; 1d keeps the plain mesh.
+export M3_FABRIC="${M3_FABRIC:-1d}"
+_DESC_DEFAULT="$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
+case "$M3_FABRIC" in
+  1d_ring|2d_torus_*) _DESC_DEFAULT="$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto" ;;
+esac
+export TT_MESH_GRAPH_DESC_PATH="${TT_MESH_GRAPH_DESC_PATH:-$_DESC_DEFAULT}"
+export HF_MODEL="${HF_MODEL:-/mnt/weka/model-weights/llm/minimax/MiniMax-M3}"
 export EXPERT_DTYPE="${EXPERT_DTYPE:-bf4}"
 export PREFILL_TPS_ITERS="${PREFILL_TPS_ITERS:-5}"
 export PREFILL_SKIP_PCC=1     # perf only — skip the per-layer golden KV PCC

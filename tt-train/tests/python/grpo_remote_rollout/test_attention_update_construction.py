@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+import ttnn
 
 from _completer_utils import as_update_input, generate_one, open_completer, to_torch_2d
 

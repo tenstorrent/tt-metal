@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <cerrno>
+#include <stdexcept>
 #include "tt_stl/assert.hpp"
 #include "fmt/format.h"
 
@@ -27,6 +28,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <filesystem>
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -40,12 +42,16 @@ protected:
     std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
 
     void SetUp() override {
+        TT_FATAL(
+            !get_shared_devices().initialized,
+            "Shared DEVICE_PRINT devices are still open. A DevicePrint suite must release them in "
+            "TearDownTestSuite before a per-test fixture opens its own devices.");
+
         std::vector<ChipId> ids;
         for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
             ids.push_back(id);
         }
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
         id_to_device_ = distributed::MeshDevice::create_unit_meshes(
             ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config);
         this->devices_.clear();
@@ -55,7 +61,7 @@ protected:
 
         this->DetectDispatchMode();
         this->arch_ = tt::tt_metal::MetalContext::instance().get_cluster().arch();
-        init_max_cbs();
+        init_max_dfbs();
     }
 
     void TearDown() override {
@@ -64,7 +70,7 @@ protected:
         // and a hung core will fail that check. Tensix/DRAM cores don't need this.
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         for (auto& [device_id, device] : id_to_device_) {
-            for (const auto& logical_core : device->get_devices()[0]->get_inactive_ethernet_cores()) {
+            for (const auto& logical_core : device->impl().get_devices()[0]->get_inactive_ethernet_cores()) {
                 CoreCoord virtual_core =
                     cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
                 cluster.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
@@ -108,6 +114,19 @@ public:
         if (wait_for_dump) {
             int curr_count = MetalContext::instance().watcher_server()->dump_count();
             while (MetalContext::instance().watcher_server()->dump_count() < curr_count + 2) {;}
+        }
+    }
+
+    // For a program that deliberately trips the watcher. The host's wait for the program aborts once the watcher
+    // trips, but the program may complete first, so the throw is tolerated rather than required. Callers verify
+    // the watcher error itself.
+    void RunProgramExpectingWatcherError(
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device, distributed::MeshWorkload& workload) {
+        try {
+            RunProgram(mesh_device, workload);
+        } catch (const std::runtime_error& e) {
+            log_info(tt::LogTest, "Caught exception (one is expected in this test)");
+            EXPECT_NE(std::string(e.what()).find("Aborting wait due to watcher error"), std::string::npos) << e.what();
         }
     }
 
@@ -255,10 +274,21 @@ protected:
 };
 
 class DevicePrintFixture : public DebugToolsMeshFixture {
+public:
+    static constexpr uint32_t kTestDispatchFullUs = 2000;
+
+    static void TearDownTestSuite() { ReleaseSharedDevices(); }
+
+    void RequestFreshDevicesAfterThisTest() { request_fresh_devices_ = true; }
+
 protected:
     int memfd_ = -1;
+    bool request_fresh_devices_{};
     tt::llrt::TargetSelection dprint_previous_targets_{};
     bool test_mode_previous_{};
+    uint32_t dispatch_full_us_previous_{};
+    bool dispatch_full_us_lowered_{};
+    inline static std::string shared_devices_fingerprint_;
 
     void SetUp() override {
         // Save previous DPRINT / test-mode state so TearDown can restore it. TearDown runs even
@@ -295,26 +325,114 @@ protected:
         rtoptions.set_test_mode_enabled(true);
         rtoptions.set_watcher_enabled(false);
 
-        ExtraSetUp();
+        dispatch_full_us_previous_ = rtoptions.get_device_print_dispatch_full_us();
+        dispatch_full_us_lowered_ = (getenv("TT_METAL_DEVICE_PRINT_DISPATCH_FULL_US") == nullptr);
+        if (dispatch_full_us_lowered_) {
+            rtoptions.set_device_print_dispatch_full_us(kTestDispatchFullUs);
+        }
 
-        // Parent class initializes devices and any necessary flags
-        DebugToolsMeshFixture::SetUp();
+        ExtraSetUp();
+        AcquireSharedDevices();
+
+        if (const auto& dprint_server = MetalContext::instance().dprint_server()) {
+            dprint_server->reset_for_new_run();
+        }
     }
 
     void TearDown() override {
-        // Parent class tears down devices
-        DebugToolsMeshFixture::TearDown();
+        auto& shared = get_shared_devices();
+        const auto& dprint_server = MetalContext::instance().dprint_server();
+        if (HasFailure() || request_fresh_devices_ || (dprint_server && dprint_server->hang_detected())) {
+            shared.needs_recovery = true;
+        }
+        request_fresh_devices_ = false;
+        this->devices_.clear();
+        this->id_to_device_.clear();
+
         ExtraTearDown();
 
         auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
         rtoptions.set_feature_targets(tt::llrt::RunTimeDebugFeatureDprint, dprint_previous_targets_);
         rtoptions.set_test_mode_enabled(test_mode_previous_);
         rtoptions.set_watcher_enabled(watcher_previous_enabled);
+        if (dispatch_full_us_lowered_) {
+            rtoptions.set_device_print_dispatch_full_us(dispatch_full_us_previous_);
+        }
 
         if (memfd_ >= 0) {
             close(memfd_);
             memfd_ = -1;
         }
+    }
+
+    std::string DevicePrintConfigFingerprint() const {
+        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        const auto targets = rtoptions.get_feature_targets(tt::llrt::RunTimeDebugFeatureDprint);
+        std::string fingerprint = fmt::format(
+            "enabled={} all_chips={} one_file_per_risc={} prepend={} checkpoint={}",
+            targets.enabled,
+            targets.all_chips,
+            targets.one_file_per_risc,
+            targets.prepend_device_core_risc,
+            rtoptions.get_checkpoint_enabled());
+        fingerprint += fmt::format(
+            " l1_small={} trace_region={} dispatch_full_us={}",
+            l1_small_size_,
+            trace_region_size_,
+            rtoptions.get_device_print_dispatch_full_us());
+        fingerprint += " chip_ids=[";
+        for (int chip_id : targets.chip_ids) {
+            fingerprint += fmt::format("{},", chip_id);
+        }
+        fingerprint += "] mesh_coords=[";
+        for (const auto& [row, col] : targets.mesh_coords) {
+            fingerprint += fmt::format("({},{}),", row, col);
+        }
+        fingerprint += "] all_cores=[";
+        for (const auto& [core_type, debug_class] : targets.all_cores) {
+            fingerprint += fmt::format("{}:{},", static_cast<int>(core_type), debug_class);
+        }
+        fingerprint += "] cores=[";
+        for (const auto& [core_type, core_coords] : targets.cores) {
+            fingerprint += fmt::format("{}:", static_cast<int>(core_type));
+            for (const auto& core : core_coords) {
+                fingerprint += fmt::format("{}-{};", core.x, core.y);
+            }
+        }
+        fingerprint += "]";
+        return fingerprint;
+    }
+
+    void AcquireSharedDevices() {
+        auto& shared = get_shared_devices();
+        const std::string fingerprint = DevicePrintConfigFingerprint();
+        if (shared.initialized && (shared.needs_recovery || fingerprint != shared_devices_fingerprint_)) {
+            ReleaseSharedDevices();
+        }
+        if (!shared.initialized) {
+            create_shared_devices(l1_small_size_, trace_region_size_);
+            shared_devices_fingerprint_ = fingerprint;
+            log_info(tt::LogTest, "DEVICE_PRINT: opened shared devices for config {}", fingerprint);
+        }
+        this->id_to_device_ = shared.id_to_device;
+        this->devices_ = shared.devices;
+
+        this->DetectDispatchMode();
+        this->arch_ = tt::tt_metal::MetalContext::instance().get_cluster().arch();
+        init_max_dfbs();
+    }
+
+    static void ReleaseSharedDevices() {
+        auto& shared = get_shared_devices();
+        if (!shared.initialized) {
+            shared_devices_fingerprint_.clear();
+            return;
+        }
+
+        destroy_shared_devices();
+
+        // Deliberately NOT calling MetalContext::teardown() here.
+        shared_devices_fingerprint_.clear();
     }
 
     // Override this function in child classes for additional setup commands between DPRINT setup
@@ -328,13 +446,19 @@ public:
     // Hardware config for a single-threaded data-movement kernel, portable across generations.
     static experimental::DataMovementHardwareConfig SingleThreadDmConfig(tt::ARCH arch) {
         if (arch == tt::ARCH::QUASAR) {
-            return experimental::DataMovementGen2Config{};
+            return experimental::DataMovementHardwareConfig{};
         }
-        return experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+        return experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::NOC_0,
+                },
+        };
     }
 
     // Compiles the kernel and returns the path to its ELF, so the caller can inspect the binary.
-    std::string CompileKernel(const std::string& kernel_path, stl::Span<const uint32_t> runtime_args = {}) {
+    std::string CompileKernel(const std::string& kernel_path, ttsl::Span<const uint32_t> runtime_args = {}) {
         // Get the first available mesh device
         auto mesh_device = this->devices_.at(0);
 
@@ -344,7 +468,6 @@ public:
         Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
         SetSingleDmPrintArgs(program, runtime_args);
 
-        auto* device = mesh_device->get_devices()[0];
         program.impl().compile(mesh_device.get());
 
         const auto& hal = tt::tt_metal::MetalContext::instance().hal();
@@ -355,8 +478,8 @@ public:
         const int riscv_id = static_cast<int>(kernel->get_kernel_processor_type(0));
 
         const auto& build_state =
-            tt::tt_metal::BuildEnvManager::get_instance(extract_context_id(device))
-                .get_kernel_build_state(device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+            tt::tt_metal::BuildEnvManager::get_instance(extract_context_id(mesh_device.get()))
+                .get_kernel_build_state(mesh_device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
 
         return build_state.get_target_out_path(kernel->get_full_kernel_name());
     }
@@ -365,7 +488,7 @@ public:
     void RunProgram(
         const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         const std::string& kernel_path,
-        stl::Span<const uint32_t> runtime_args = {}) {
+        ttsl::Span<const uint32_t> runtime_args = {}) {
         auto spec = MakeSingleDmPrintSpec(mesh_device->arch(), kernel_path, runtime_args.size());
         Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
         SetSingleDmPrintArgs(program, runtime_args);
@@ -420,7 +543,7 @@ private:
 
     // SetProgramRunArgs requires an entry for every kernel that declares runtime args and rejects
     // entries for kernels that declare none, so this is a no-op when the kernel takes no arguments.
-    static void SetSingleDmPrintArgs(Program& program, stl::Span<const uint32_t> runtime_args) {
+    static void SetSingleDmPrintArgs(Program& program, ttsl::Span<const uint32_t> runtime_args) {
         if (runtime_args.empty()) {
             return;
         }

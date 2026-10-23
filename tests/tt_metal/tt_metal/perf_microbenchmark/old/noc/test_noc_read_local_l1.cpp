@@ -36,6 +36,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using namespace tt;
 using std::chrono::duration_cast;
@@ -180,8 +181,7 @@ int main(int argc, char** argv) {
         for (int r = 0; r < num_cores_r; ++r) {
             for (int c = 0; c < num_cores_c; ++c) {
                 CoreCoord core = {(size_t)c, (size_t)r};
-                tt_metal::detail::WriteToDeviceL1(
-                    device->get_devices()[0], core, activations_addr, packed_tensors[(r * num_cores_c) + c]);
+                slow_dispatch::WriteToL1(*device, core, activations_addr, packed_tensors[(r * num_cores_c) + c]);
             }
         }
 
@@ -190,8 +190,7 @@ int main(int argc, char** argv) {
             for (int c = 0; c < num_cores_c; ++c) {
                 CoreCoord core = {(size_t)c, (size_t)r};
                 std::vector<uint32_t> result_vec;
-                tt_metal::detail::ReadFromDeviceL1(
-                    device->get_devices()[0], core, activations_addr, total_tiles_size_bytes, result_vec);
+                slow_dispatch::ReadFromL1(*device, core, activations_addr, total_tiles_size_bytes, result_vec);
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
                 if (tensors[(r * num_cores_c) + c].get_values() != result_bfp16) {
                     log_error(LogTest, "{}/{} - value read from l1 is wrong", r, c);
@@ -248,8 +247,7 @@ int main(int argc, char** argv) {
                 for (int c = 0; c < num_cores_c; ++c) {
                     std::vector<uint32_t> result_vec;
                     CoreCoord core = {(size_t)c, (size_t)r};
-                    tt_metal::detail::ReadFromDeviceL1(
-                        device->get_devices()[0], core, dst_cb_addr, cb_tiles * single_tile_size, result_vec);
+                    slow_dispatch::ReadFromL1(*device, core, dst_cb_addr, cb_tiles * single_tile_size, result_vec);
                     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
                     auto sliced_tensor =
                         slice_vec(tensors[(r * num_cores_c) + c].get_values(), (Nt - cb_tiles) * 1024, (Nt * 1024) - 1);

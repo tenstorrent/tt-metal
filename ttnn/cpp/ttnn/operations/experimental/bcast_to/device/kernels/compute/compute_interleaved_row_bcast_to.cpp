@@ -4,31 +4,33 @@
 
 #include <cstdint>
 #include "api/compute/bcast.h"
-#include "api/compute/eltwise_binary.h"
-#include "tools/profiler/kernel_profiler.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/broadcast/bcast.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "api/debug/kernel_profiler.hpp"
+#include "experimental/kernel_args.h"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
-    uint32_t arg_index = 0;
-    uint32_t start_n = get_arg_val<uint32_t>(arg_index++);
-    uint32_t start_c = get_arg_val<uint32_t>(arg_index++);
-    uint32_t start_t = get_arg_val<uint32_t>(arg_index++);
-    uint32_t start_th = get_arg_val<uint32_t>(arg_index++);
-    uint32_t start_tw = get_arg_val<uint32_t>(arg_index++);
-    uint32_t num_tiles = get_arg_val<uint32_t>(arg_index++);
-    uint32_t n_stride = get_arg_val<uint32_t>(arg_index++);
-    uint32_t c_stride = get_arg_val<uint32_t>(arg_index++);
-    uint32_t N = get_arg_val<uint32_t>(arg_index++);
-    uint32_t C = get_arg_val<uint32_t>(arg_index++);
-    uint32_t Ht = get_arg_val<uint32_t>(arg_index++);
-    uint32_t Wt = get_arg_val<uint32_t>(arg_index++);
+    uint32_t start_n = get_arg(args::start_n);
+    uint32_t start_c = get_arg(args::start_c);
+    uint32_t start_t = get_arg(args::start_t);
+    uint32_t start_th = get_arg(args::start_th);
+    uint32_t start_tw = get_arg(args::start_tw);
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t n_stride = get_arg(args::n_stride);
+    uint32_t c_stride = get_arg(args::c_stride);
+    uint32_t N = get_arg(args::N);
+    uint32_t C = get_arg(args::C);
+    uint32_t Ht = get_arg(args::Ht);
+    uint32_t Wt = get_arg(args::Wt);
 
-    constexpr auto cb_id_src = get_compile_time_arg_val(0);
-    constexpr auto cb_id_dst = get_compile_time_arg_val(1);
-    CircularBuffer cb_src(cb_id_src);
-    CircularBuffer cb_dst(cb_id_dst);
-    compute_kernel_hw_startup(cb_id_src, cb_id_dst);
-    unary_bcast_init<BroadcastType::ROW>(cb_id_src);
+    DataflowBuffer dfb_src(dfb::src);
+    DataflowBuffer dfb_dst(dfb::dst);
+    compute_kernel_hw_startup(dfb::src, dfb::dst);
+    unary_bcast_init<BroadcastType::ROW>(dfb::src);
 
     uint32_t HtWt = Ht * Wt;
     uint32_t num_tiles_read = 0;
@@ -36,18 +38,21 @@ void kernel_main() {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_th = 0) {
             for (uint32_t th = start_th; th < Ht && num_tiles_read < num_tiles; ++th, start_tw = 0) {
                 for (uint32_t tw = start_tw; tw < Wt && num_tiles_read < num_tiles; ++tw) {
-                    cb_src.wait_front(1);
-                    tile_regs_acquire();
-                    unary_bcast<BroadcastType::ROW>(cb_id_src, 0, 0);
-                    tile_regs_commit();
-
-                    cb_src.pop_front(1);
-                    cb_dst.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(0, cb_id_dst);
-
-                    cb_dst.push_back(1);
-                    tile_regs_release();
+                    ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+                        ckl::IterationShape::one_tile(),
+                        // The caller owns setup, so the chain must not reconfigure formats.
+                        ckl::UnaryBcast<
+                            ckl::BroadcastDim::Row,
+                            ckl::input(
+                                dfb::src,
+                                ckl::WaitPolicy::PerTile,
+                                ckl::PopPolicy::PerTile,
+                                ckl::DataFormatReconfig::Disabled)>{dfb_src},
+                        ckl::PackTile<ckl::output(
+                            dfb::dst,
+                            ckl::ReservePolicy::PerTile,
+                            ckl::PushPolicy::PerTile,
+                            ckl::DataFormatReconfig::Disabled)>{dfb_dst});
                     ++num_tiles_read;
                 }
             }

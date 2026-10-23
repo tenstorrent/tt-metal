@@ -17,6 +17,34 @@ struct UnicastEndpoint {
 };
 
 /**
+ * @brief Endpoint for a fully composed unicast NoC address (e.g. a TensorAccessor or
+ * get_noc_addr result, optionally offset within the target). The address is treated as
+ * opaque - it is never decomposed into coordinates - so callers stay independent of the
+ * active NoC address backend.
+ */
+struct PrecomposedUnicastEndpoint {};
+
+template <>
+struct noc_traits_t<PrecomposedUnicastEndpoint> {
+    struct src_args_type {
+        uint64_t noc_addr{};
+    };
+    struct dst_args_type {
+        uint64_t noc_addr{};
+    };
+    template <Noc::AddressType address_type>
+    static auto src_addr(const PrecomposedUnicastEndpoint&, const Noc&, const src_args_type& args) {
+        static_assert(address_type == Noc::AddressType::NOC);
+        return args.noc_addr;
+    }
+    template <Noc::AddressType address_type>
+    static auto dst_addr(const PrecomposedUnicastEndpoint&, const Noc&, const dst_args_type& args) {
+        static_assert(address_type == Noc::AddressType::NOC);
+        return args.noc_addr;
+    }
+};
+
+/**
  * @brief Wrapper around calculating multicast noc address given 2D multicast rectangle and address. This
  * allows direct address to be supplied to NoC apis
  */
@@ -31,6 +59,9 @@ struct MulticastEndpoint {
 /**
  * @brief Wrapper around calculating noc address targeting a bank managed by the allocator (either DRAM or
  * L1) given bank id and address. This allows direct address to be supplied to NoC apis
+ *
+ * Legacy: takes an absolute bank address, for buffers not bound as a tensor. For a tensor use
+ * BankView(accessor) (api/tensor/noc_traits.h), which takes an offset into the tensor instead.
  */
 enum class AllocatorBankType { L1, DRAM };
 

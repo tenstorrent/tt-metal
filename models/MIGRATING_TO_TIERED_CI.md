@@ -111,8 +111,8 @@ When porting `<your-model>`:
   [`models/model_targets.yaml`](./model_targets.yaml) for every (model,
   SKU, batch_size) combination your test runs. The CI verifier checks
   the test's benchmark payload against these on every run and fails on
-  drift. Tier 3 models are exempt from perf targets, but accuracy
-  targets still apply. See
+  drift. Tier 3 models set `enforce_perf: false` so perf is reported but
+  does not fail the job; accuracy targets still apply. See
   [Performance / accuracy targets](#performance--accuracy-targets) for
   the schema and SKU-aliasing rules. Ongoing standardization is
   tracked in [#42671](https://github.com/tenstorrent/tt-metal/issues/42671).
@@ -225,6 +225,7 @@ Use the same shape as the existing entries. Minimal e2e example:
       tier: <1|2|3>
   owner_id: U03XXXXXXXX # <Owner Name>
   team: models
+  budget_type: e2e
 ```
 
 Minimal unit example:
@@ -241,10 +242,18 @@ Minimal unit example:
       tier: <1|2|3>
   owner_id: U03XXXXXXXX # <Owner Name>
   team: models
+  budget_type: unit
 ```
 
 A model can run on multiple SKUs by adding more entries under `skus:`,
 each with its own `timeout` and `tier`.
+
+`budget_type` names which of the team's allowances in
+[`.github/time_budget.yaml`](../.github/time_budget.yaml) the entry is charged
+against — `e2e`, `unit`, `sweep` or `device_perf`, matching the registry you
+added it to. Every entry needs one: pr-gate sums the timeouts per
+(team, budget_type, sku) across all registries and fails if the total exceeds
+the budget.
 
 ### Test conventions
 
@@ -301,7 +310,7 @@ authoritative mapping before relying on it.
 | `weights-cache-mode` | Host source mounted at `/mnt/MLPerf/huggingface` | Used by SKUs |
 |---|---|---|
 | `cloud-mlperf` | `/mnt/MLPerf/huggingface` (shared NFS) | `bh_p150`, `bh_loudbox` |
-| `yyz4-mnt-models` | `/mnt/models/huggingface` (YYZ4 Exabox NFS mount) | `bh_quietbox_2`, `bh_quietbox_2_iommu` |
+| `yyz4-mnt-models` | `/mnt/models/huggingface` (YYZ4 Exabox NFS mount) | `bh_quietbox_2` |
 | `local-disk` | `/localdev/blackhole_demos/huggingface_data` (per-runner) | `bh_p150_perf` |
 | `lfc` | `/localdev/blackhole_demos/huggingface_data` (per-runner, `:rw`; not pre-populated — see below) | `bh_p300`, `bh_p300_viommu`, `bh_p150b_civ2` |
 | *(field absent)* | `/mnt/MLPerf` — the **whole tree**, not just `huggingface` | all WH SKUs, BH Galaxy, `bh_p100*`, `bh_sc*`, and every other SKU with no `weights-cache-mode` |
@@ -504,8 +513,10 @@ Every tiered model is expected to declare:
   `decode_t/s/u`, `decode_t/s` for LLMs; `fps` for vision classifiers),
   each with a tolerance for slack.
 
-**Tier 3 models are exempt from perf targets** (the perf fields can be
-omitted or set to `{}`), but accuracy targets still apply.
+**Tier 3 models are exempt from perf enforcement.** Set `enforce_perf: false`
+on the entry (the perf fields can be omitted or set to `{}`). Measured perf
+is still printed by the CI step. Accuracy targets on an active entry still
+apply.
 
 ### Tolerances
 

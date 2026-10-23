@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Pytest plugin for the sparse-MLA (DSA) tests — GLM-5.1.
+Pytest plugin for the sparse-MLA (DSA) tests.
 
 This is a real plugin module (NOT a conftest), registered via ``pytest_plugins`` in this package's
 conftest (``tests/sparse_mla/conftest.py``). Living under the sparse_mla/ subtree scopes its options
@@ -10,7 +10,7 @@ and markers: they register only when these sparse tests are collected, so dense 
 never see them. Because it is referenced by its dotted name and never auto-loaded as a conftest, pytest
 registers it exactly once.
 
-It carries what the sparse suites must share: the ``perf`` / ``trace`` markers (for the out-of-band
+It carries what the sparse suites must share: the ``perf`` marker (for the out-of-band
 suites that run separately from the fast correctness matrix) and the ``--ds-*`` MLA/indexer knobs with
 their ``ds_*`` fixtures.
 """
@@ -33,13 +33,9 @@ def pytest_configure(config):
 
     The sparse-MLA correctness suite (test_sparse_mla.py) is small/fast enough (~2 min) to run
     wholesale, so it carries no tier/intent markers. Only the out-of-band suites are marked, so CI can
-    exclude them with e.g. -m "not perf and not trace".
+    exclude them with e.g. -m "not perf".
     """
-    for line in (
-        "perf: per-op device-kernel timing (run under tracy, separate from correctness)",
-        "trace: official trace-bundle parity tests (run separately from the correctness matrix)",
-    ):
-        config.addinivalue_line("markers", line)
+    config.addinivalue_line("markers", "perf: per-op device-kernel timing (run under tracy, separate from correctness)")
 
 
 def pytest_addoption(parser):
@@ -67,14 +63,6 @@ def pytest_addoption(parser):
         help="Path to a .pt file with the MLA/indexer input hidden states [..., seq, hidden]; "
         "default is deterministic randn(seed).",
     )
-    g.addoption(
-        "--ds-kpe-layout",
-        choices=["interleaved", "vllm"],
-        default="interleaved",
-        help="k_pe RoPE layout for the KV-cache reference comparison (test_sparse_mla_vs_trace.py). "
-        "'interleaved' (default): our/official layout — assert latent PCC + frame-invariant k_pe L2. "
-        "'vllm': reindex our k_pe to vLLM's half-split layout and assert element-wise PCC (cross-stack).",
-    )
 
 
 @pytest.fixture
@@ -99,8 +87,3 @@ def ds_repo(request):
 @pytest.fixture
 def ds_input(request):
     return request.config.getoption("--ds-input")
-
-
-@pytest.fixture
-def ds_kpe_layout(request):
-    return request.config.getoption("--ds-kpe-layout")

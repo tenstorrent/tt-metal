@@ -175,7 +175,7 @@ inline void _llk_math_transpose_dest_(const std::uint32_t dst_index)
     // for SrcA[MatrixUnit.SrcABank].AllowedClient == SrcClient::MatrixUnit.
     // Wait condition SRCB_VLD is required as MOVD2B doesn't automatically wait
     // for SrcB[MatrixUnit.SrcBBank].AllowedClient == SrcClient::MatrixUnit.
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
 
     // Both paths run a MOVD2B/MOVB2D/MOVA2D transpose sequence that flushes any datum with a zero low
     // byte (e.g. bf16 0x4400 = 768.0) when the Src zero-substitution flag is at the operand DEFAULT,

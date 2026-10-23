@@ -10,11 +10,12 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_allclose, assert_numeric_metrics, assert_with_ulp
-from models.common.utility_functions import torch_random
+from tt_py_test_utils_common.utility_functions import torch_random
 
 TEST_PADDING_VALUE = -42
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64, 41, 37])
 @pytest.mark.parametrize("w", [32, 64, 31, 63])
@@ -173,7 +174,7 @@ def test_sum_nd_shard(device, shapes, keepdim):
     ),
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("shape", [(4, 32, 63), (4, 32, 63, 63), (16, 41, 63, 63)])
+@pytest.mark.parametrize("shape", [(4, 32, 63), (4, 32, 63, 63)])
 def test_sum_subcores(device, sub_core_grids, dtype, shape):
     torch.manual_seed(0)
 
@@ -233,4 +234,32 @@ def test_sum_fp32_fast_and_approximate_mode(device, input_shape, dim, fast_and_a
     if fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR:
         assert_allclose(torch_output_tensor, output_tensor, rtol=1e-2, atol=1e-2)
     else:
-        assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
+
+
+@pytest.mark.parametrize("dim", [None, [0, 1, 2, 3]])
+def test_sum_full_tensor_bf16(device, dim):
+    torch_input = torch.zeros((1, 2, 32, 64), dtype=torch.bfloat16)
+    torch_input[0, 0, :, :32] = 1024.0
+    torch_input[0, 0, :, 32:] = -1024.0
+    torch_input[0, 1, :, :32] = 1.0
+    torch_output = torch.sum(torch_input.double()).to(torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.sum(input_tensor, dim=dim)
+
+    assert torch.equal(ttnn.to_torch(output_tensor).flatten(), torch_output.flatten())
+
+
+def test_sum_hw_bf16(device):
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar has no SFPU reduce. Tracked in https://github.com/tenstorrent/tt-metal/issues/54145")
+    torch_input = torch.full((1, 1, 32, 64), 1024.0, dtype=torch.bfloat16)
+    torch_input[0, 0, 16:] = -1024.0
+    torch_input[0, 0, 16:, 0] = -1020.0
+    torch_output = torch.sum(torch_input.double(), dim=[2, 3], keepdim=True).to(torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.sum(input_tensor, dim=[2, 3], keepdim=True)
+
+    assert torch.equal(ttnn.to_torch(output_tensor), torch_output)

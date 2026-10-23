@@ -1,7 +1,0 @@
-interface:
-  display_name: "Full Model"
-  short_description: "Build a TTNN full model and generator"
-  default_prompt: "Use $full-model to assemble a complete TTNN autoregressive model and generator from working block or decoder code, validate end-to-end behavior against the HuggingFace reference, make the low-level prefill/decode API suitable for a later serving adapter, and report full-model accuracy plus generator-level performance."
-
-policy:
-  allow_implicit_invocation: true

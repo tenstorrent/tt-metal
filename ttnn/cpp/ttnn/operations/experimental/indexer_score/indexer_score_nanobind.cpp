@@ -29,7 +29,7 @@ void bind_indexer_score(nb::module_& mod) {
         R"doc(
         DeepSeek-V3.2 DSA / GLM-5 lightning-indexer scorer.
 
-        score[b, 0, s, t] = sum_h relu(q[b,h,s,:] . k[b,t,:]) * weights[b,h,s]
+        score[b, 0, s, t] = sum_h relu(q[b,h,s,:] . k[b,0,t,:]) * weights[b,0,s,h]
 
         ReLU(q.kT) gated by the learned per-head weights and summed over ALL Hi
         index heads into one shared selection row [B, 1, Sq, T]. For MiniMax M3's
@@ -38,13 +38,18 @@ void bind_indexer_score(nb::module_& mod) {
         Args:
             q: [B, Hi, Sq, D] bf16 or bfp8_b tiled (post non-interleaved RoPE)
             k: [B, 1, T, D] bf16 or bfp8_b tiled, single shared head
-            weights: [B, Hi, Sq, 1] bf16 tiled learned per-head gates (scale
-                pre-folded)
+            weights: [B, 1, Sq, Hi] bf16 tiled learned per-head gates (scale
+                pre-folded).
             chunk_start_idx: absolute global position of rank 0's query row 0
                 (rank 0 = lowest seq_shard_axes[0] (SP) coord; causality: key t
-                visible to query s iff t <= chunk_start + s). OMIT on a mesh ->
-                deduced as T - sp_ring*Sq (sp_ring = mesh extent along the SP axis,
+                visible to query s iff t < floor((chunk_start + s + 1) /
+                key_compression_ratio)). OMIT on a mesh -> deduced from compressed K
+                as T*key_compression_ratio - sp_ring*Sq (sp_ring = mesh extent along the SP axis,
                 whole mesh if unset). Single device: set to history + rank*Sq per rank.
+            key_compression_ratio: query tokens represented by one K-cache row. 1
+                (default) preserves legacy behavior; 4 enables compressed-key DSA.
+                K sequence/output/kv_len are compressed rows, while query and
+                chunk_start_idx geometry remain token units.
             program_config: work-unit knobs (q_chunk_size, k_chunk_size,
                 head_group_size; elements, tile-aligned). Defaults always fit
                 L1; raise head_group_size (0 = all resident) for performance.
@@ -58,7 +63,10 @@ void bind_indexer_score(nb::module_& mod) {
                 recompile.
             kv_len: optional int. Valid prefix of a k allocated at its full T;
                 the rest is masked out. Tile-aligned, in (0, T], with
-                chunk_start_idx + Sq <= kv_len. Re-applied each dispatch, so a
+                chunk_start_idx < kv_len -- the chunk must BEGIN inside the valid
+                prefix, but its causal window MAY end past kv_len (and past T):
+                those trailing rows are pad queries with no keys to attend.
+                Re-applied each dispatch, so a
                 serving loop growing kv_len (<= T) reuses one program -- no
                 recompile. Only output columns [0, kv_len) are written.
             seq_shard_axes: the mesh axes the query seq is sharded over, outermost
@@ -82,13 +90,18 @@ void bind_indexer_score(nb::module_& mod) {
                 mask/pool stay exact. Unset (or sp==1) = contiguous K (no remap). Pair
                 with block_cyclic_chunk_local. Interface matches ttnn.transformer.sparse_sdpa.
             block_cyclic_chunk_local: optional int, REQUIRED with block_cyclic_sp_axis.
-                The per-shard chunk length (chunk_size_global / sp). Cross-checked
+                The per-shard chunk length in QUERY-TOKEN rows (chunk_size_global / sp);
+                the physical K chunk is this value / key_compression_ratio. Cross-checked
                 against q: must equal q_isl (Sq, seq sharded only on the SP axis) or
                 tp*q_isl (tp = mesh_size/sp). The tp*q_isl case with tp>1 (seq sharded
                 across BOTH axes) has two forms: seq_shard_axes=[] uses flat row-major
                 linearization over all devices (linear-approximate under a mid-slab
                 start); seq_shard_axes=[sp, tp] names both axes, giving the rotation-exact
                 2D geometry (see seq_shard_axes above).
+            block_cyclic_cache_tp_sharded: optional bool (default False). KV dedup: the K cache is striped
+                across ALL sp*tp devices (linear chip = sp_coord*tp + tp_coord), so only the invP key
+                remap moves to (sp*tp, block_cyclic_chunk_local/tp) -- the causal geometry is unchanged.
+                Needs block_cyclic_chunk_local divisible by tp with a tile-aligned quotient.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -98,13 +111,15 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("weights"),
         nb::kw_only(),
         nb::arg("chunk_start_idx") = std::nullopt,
+        nb::arg("key_compression_ratio") = 1,
         nb::arg("program_config") = IndexerScoreProgramConfig{},
         nb::arg("compute_kernel_config") = std::nullopt,
         nb::arg("cache_batch_idx") = std::nullopt,
         nb::arg("kv_len") = std::nullopt,
         nb::arg("seq_shard_axes") = std::nullopt,
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
-        nb::arg("block_cyclic_chunk_local") = std::nullopt);
+        nb::arg("block_cyclic_chunk_local") = std::nullopt,
+        nb::arg("block_cyclic_cache_tp_sharded") = false);
 
     ttnn::bind_function<"indexer_score_msa", "ttnn.experimental.">(
         mod,
@@ -150,7 +165,9 @@ void bind_indexer_score(nb::module_& mod) {
                 recompile. Same semantics as indexer_score_dsa.
             kv_len: optional int. Valid prefix of a k allocated at its full T;
                 the rest is masked out. Tile-aligned, in (0, T], with
-                chunk_start_idx + Sq <= kv_len. When block-max-pooling
+                chunk_start_idx < kv_len -- the chunk must BEGIN inside the valid
+                prefix, but its causal window MAY end past kv_len (and past T).
+                When block-max-pooling
                 (block_size > 0) it must also be a multiple of block_size (whole
                 blocks are written). Re-applied each dispatch (a serving loop
                 growing kv_len reuses one program). Only columns/blocks within
@@ -165,6 +182,12 @@ void bind_indexer_score(nb::module_& mod) {
                 reads the permuted cache back in natural token order so the per-group
                 scores (and the block-max-pool, which pools token-contiguous blocks)
                 come out correct. Unset = contiguous K.
+            block_cyclic_cache_tp_sharded: optional bool (default False). KV dedup, same
+                semantics as indexer_score_dsa: the index-key cache is striped across ALL
+                sp*tp devices (linear chip = sp_coord*tp + tp_coord), so only the key remap
+                moves to (sp*tp, block_cyclic_chunk_local/tp); the causal geometry is
+                unchanged. Needs block_cyclic_chunk_local divisible by tp with a tile-aligned
+                quotient.
 
         Returns: score [B, num_groups, Sq, T_out] bf16 row-major (T_out = T, or
             T/block_size when block-max-pooling); future/pad columns/blocks -inf.
@@ -183,7 +206,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("kv_len") = std::nullopt,
         nb::arg("seq_shard_axes") = std::nullopt,
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
-        nb::arg("block_cyclic_chunk_local") = std::nullopt);
+        nb::arg("block_cyclic_chunk_local") = std::nullopt,
+        nb::arg("block_cyclic_cache_tp_sharded") = false);
 
     ttnn::bind_function<"ring_indexer_score_dsa", "ttnn.experimental.">(
         mod,
@@ -199,22 +223,46 @@ void bind_indexer_score(nb::module_& mod) {
         scoring; the reader gates each K band on ONLY the SP shards that band touches, so it scores already-
         arrived shards while farther slabs are still in flight. DSA only -- there is no fused MSA variant.
 
+        Trace-safe capture: pass ``cache_batch_idx_tensor`` (a 1-element uint32 ROW_MAJOR DRAM tensor holding
+        the USER id) instead of ``cache_batch_idx``, together with ``index_cache_num_layers`` /
+        ``index_cache_layer_idx``; the reader recomposes the flat slot on-device. A host ``cache_batch_idx``
+        is re-patched per dispatch and a replay never re-runs that patch, so every replay would score
+        against the slot that was live at capture time.
+
+        For trace replay, ``chunk_start_idx_tensor`` supplies the dynamic chunk position on-device. It must
+        be a 1-element UINT32 row-major DRAM tensor and requires block-cyclic layout. Do not also provide
+        ``chunk_start_idx`` or ``kv_len``; the kernel derives ``kv_len`` from the tensor value.
+
+        ``valid_end_tensor`` (optional, requires ``chunk_start_idx_tensor``) carries this chunk's REAL token
+        end. Without it the derived ``kv_len`` is the end of the PADDED window, so a partial final chunk
+        scores key columns the request never wrote -- causally masked for real query rows, but not for pad
+        rows, whose top-k then diverges from the host-scalar path's. Supply it and the kernel caps the bound
+        at ``ceil32(valid_end)``, reproducing the scalar bound exactly and narrowing the scored extent. Pass
+        the same bound to ``topk_large_indices`` or the two drift: a looser score with a tighter top-k drops
+        real keys, the reverse ranks a stale tail.
+
         Args:
             q: [B, Hi, Sq, D] bf16/bfp8_b tiled (post non-interleaved RoPE); see indexer_score_dsa
             k: [B, 1, T, D] bf16/bfp8_b tiled PERSISTENT all-gather OUTPUT buffer, T = sp*sll. B must be 1
                 when cache_batch_idx is set; the gather fills remote SP shards in place
-            weights: [B, Hi, Sq, 1] bf16 tiled learned per-head gates (scale pre-folded)
+            weights: [B, 1, Sq, Hi] bf16 tiled learned per-head gates (scale pre-folded)
             k_local: [B, 1, sll, D] bf16/bfp8_b tiled, interleaved or ND-sharded DRAM -- this chip's SP
                 shard and the all-gather INPUT; sll = T/sp; must match k's dtype
             ag_multi_device_global_semaphore: list of the all-gather's out-ready global semaphores; requires
                 >= 2 (the forward and backward ring directions)
-            cluster_axis: mesh axis that is the SP ring -- both the gather axis and the causality axis.
-                REQUIRED here (optional in indexer_score_dsa)
-            topology: ttnn.Topology -- ttnn.Topology.Linear (non-torus grid) or ttnn.Topology.Ring
+            cluster_axis: optional mesh axis that is the SP ring -- both the gather axis and the causality
+                axis. Pass 0 or 1 for the existing independent axis-ring mode. Explicit None selects one
+                direct-neighbor snake ring over the complete 2D mesh; tensor shards and causal ranks remain
+                in canonical row-major mesh order. The keyword is required even though its value is optional.
+            topology: ttnn.Topology -- ttnn.Topology.Linear (non-torus grid) or ttnn.Topology.Ring for an
+                axis ring. Complete-mesh mode requires ttnn.Topology.Ring.
             num_links: int, fabric links for the gather (default 1)
             ag_sub_device_id: optional ttnn.SubDeviceId scoping the AG worker cores (kept disjoint from the
                 compute grid so transport and compute cores do not collide)
             chunk_start_idx: optional int, rank 0's global query start; see indexer_score_dsa
+            key_compression_ratio: 1 (default) for legacy DSA, or 4 for compressed keys.
+                Query/chunk geometry is in token units; k, k_local, output width, and
+                kv_len are compressed-key rows.
             program_config: IndexerScoreProgramConfig work-unit knobs; see indexer_score_dsa.
                 head_group_size must be 0 (all Hi resident) or Hi -- head streaming is not supported here
             compute_kernel_config: optional DeviceComputeKernelConfig (only math_fidelity honored)
@@ -225,10 +273,20 @@ void bind_indexer_score(nb::module_& mod) {
             seq_subshard_axis: optional int, 2D SP×TP -- the (TP) mesh axis the query rows are ALSO block-cyclic
                 sub-sharded over, on top of the SP shard. The K cache stays SP-sharded + TP-replicated (the ring
                 AG still gathers along cluster_axis), so only the causal query geometry gains the tp_rank*Sq
-                sub-offset. nullopt = query sharded on the SP axis only. See indexer_score_dsa.
+                sub-offset. nullopt = query sharded on the SP axis only. Must be unset in complete-mesh mode.
+                See indexer_score_dsa.
             block_cyclic_sp_axis: optional int, mesh axis the cache was striped over; MUST equal cluster_axis;
-                see indexer_score_dsa
-            block_cyclic_chunk_local: optional int, per-shard chunk length; required with block_cyclic_sp_axis
+                see indexer_score_dsa. Must be unset in complete-mesh mode because all devices are SP ranks.
+            block_cyclic_chunk_local: optional int, per-shard chunk length. Axis mode requires it together with
+                block_cyclic_sp_axis. It is expressed in query-token rows (physical K chunk is divided by
+                key_compression_ratio). In complete-mesh mode pass this argument alone; SP is the complete mesh
+                size and the value must equal q's local sequence length Sq. Leaving it unset selects contiguous
+                K placement.
+            block_cyclic_cache_tp_sharded: optional bool (default False). KV dedup: the K cache is striped
+                across ALL sp*tp devices (linear chip = sp_coord*tp + tp_coord), so the invP key remap
+                decodes (sp*tp, block_cyclic_chunk_local/tp) while the causal geometry stays on the query
+                pair (sp, block_cyclic_chunk_local). Requires block_cyclic_sp_axis, and a per-stripe chunk
+                that is tile-aligned. k_local must hold whole stripes. See indexer_score_dsa.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -244,13 +302,20 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("num_links") = 1,
         nb::arg("ag_sub_device_id") = nb::none(),
         nb::arg("chunk_start_idx") = nb::none(),
+        nb::arg("key_compression_ratio") = 1,
         nb::arg("program_config") = IndexerScoreProgramConfig{},
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("cache_batch_idx") = nb::none(),
         nb::arg("kv_len") = nb::none(),
         nb::arg("seq_subshard_axis") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
-        nb::arg("block_cyclic_chunk_local") = nb::none());
+        nb::arg("block_cyclic_chunk_local") = nb::none(),
+        nb::arg("block_cyclic_cache_tp_sharded") = false,
+        nb::arg("chunk_start_idx_tensor") = nb::none(),
+        nb::arg("valid_end_tensor") = nb::none(),
+        nb::arg("cache_batch_idx_tensor") = nb::none(),
+        nb::arg("index_cache_num_layers") = 1,
+        nb::arg("index_cache_layer_idx") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail

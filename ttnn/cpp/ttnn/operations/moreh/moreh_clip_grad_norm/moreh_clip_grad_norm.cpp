@@ -37,9 +37,9 @@ std::vector<OutputDataType> cast_vec(ttsl::Span<const InputDataType> data_to_con
 
 namespace ttnn::operations::moreh::moreh_clip_grad_norm {
 
-inline uint32_t get_num_device_cores(IDevice* device) {
-    const auto num_cores_x = static_cast<uint32_t>(device->compute_with_storage_grid_size().x);
-    const auto num_cores_y = static_cast<uint32_t>(device->compute_with_storage_grid_size().y);
+inline uint32_t get_num_device_cores(const MeshDevice& device) {
+    const auto num_cores_x = static_cast<uint32_t>(device.compute_with_storage_grid_size().x);
+    const auto num_cores_y = static_cast<uint32_t>(device.compute_with_storage_grid_size().y);
     return num_cores_x * num_cores_y;
 }
 
@@ -69,7 +69,7 @@ Tensor moreh_clip_grad_norm(
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4);
 
     // Loop variable
-    const auto max_num_inputs = operations::moreh::moreh_clip_grad_norm::get_num_device_cores(device);
+    const auto max_num_inputs = operations::moreh::moreh_clip_grad_norm::get_num_device_cores(*device);
     const auto total_num_inputs = static_cast<uint32_t>(inputs.size());
     const auto num_iter = (total_num_inputs + max_num_inputs - 1) / max_num_inputs;
     // Store intermediate reduction of Sum[|e|^p]

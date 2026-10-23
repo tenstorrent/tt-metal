@@ -29,8 +29,8 @@ void kernel_main() {
     constexpr bool gamma_has_value = get_compile_time_arg_val(0) == 1;
     constexpr bool beta_has_value = get_compile_time_arg_val(1) == 1;
     constexpr auto input_args = TensorAccessorArgs<2>();
-    constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+    constexpr auto gamma_args = TensorAccessorArgs<decltype(input_args)::next_compile_time_args_offset()>();
+    constexpr auto beta_args = TensorAccessorArgs<decltype(gamma_args)::next_compile_time_args_offset()>();
 
     constexpr uint32_t onetile = 1;
 
