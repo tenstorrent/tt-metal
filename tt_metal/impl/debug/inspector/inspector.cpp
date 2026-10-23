@@ -452,7 +452,7 @@ void Inspector::global_semaphore_created(const distributed::MeshBuffer* buffer, 
         inspector::GlobalSemaphoreData semaphore_data;
         semaphore_data.address = buffer->address();
         semaphore_data.cores = cores;
-        for (const auto* device : buffer->device()->get_devices()) {
+        for (const auto* device : buffer->device()->impl().get_devices()) {
             semaphore_data.chip_ids.push_back(device->id());
         }
         std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);

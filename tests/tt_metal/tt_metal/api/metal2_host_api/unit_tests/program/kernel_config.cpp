@@ -8,12 +8,14 @@
 #include <gmock/gmock.h>
 #include <cstdint>
 #include <filesystem>
+#include <string>
 #include <variant>
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
+#include "impl/context/metal_context.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -71,6 +73,35 @@ TEST_F(ProgramSpecTestGen1, CPU_CompilerIncludePathsForwardedToKernelConfig) {
     const auto built_compute_variant = built_compute->config();
     const auto& built_compute_config = std::get<ComputeConfig>(built_compute_variant);
     EXPECT_EQ(built_compute_config.compiler_include_paths, compute_paths);
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_SharedDedicatedNocIsBriscNoc) {
+    // BRISC firmware issues its own NoC traffic on the launch message's brisc_noc_id. When the two DM
+    // kernels share one dedicated NOC, that is the shared NOC, whichever kernel the lowering visits last.
+    for (const NOC noc : {NOC::NOC_0, NOC::NOC_1}) {
+        SCOPED_TRACE("noc=" + std::to_string(static_cast<int>(noc)));
+        auto brisc_kernel = MakeMinimalGen1DMKernel("brisc_kernel", DataMovementProcessor::RISCV_0);
+        auto ncrisc_kernel = MakeMinimalGen1DMKernel("ncrisc_kernel", DataMovementProcessor::RISCV_1);
+        for (auto* kernel : {&brisc_kernel, &ncrisc_kernel}) {
+            auto& cfg = (*std::get<DataMovementHardwareConfig>(kernel->hw_config).config_1xx);
+            cfg.noc = noc;
+            cfg.dedicated_noc_sharing = DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC;
+        }
+
+        ProgramSpec spec;
+        spec.name = "test_program";
+        spec.kernels = {brisc_kernel, ncrisc_kernel};
+        spec.work_units = std::vector<WorkUnitSpec>{
+            MakeMinimalWorkUnit("work_unit", NodeCoord{0, 0}, {"brisc_kernel", "ncrisc_kernel"})};
+        Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+        const uint32_t tensix_index = MetalContext::instance(program.impl().get_context_id())
+                                          .hal()
+                                          .get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        const auto& kernel_groups = program.impl().get_kernel_groups(tensix_index);
+        ASSERT_EQ(kernel_groups.size(), 1u);
+        EXPECT_EQ(kernel_groups[0]->launch_msg.view().kernel_config().brisc_noc_id(), static_cast<uint8_t>(noc));
+    }
 }
 
 // ----------------------------------------------------------------------------
