@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import shlex
 import sys
 from enum import Enum
 from pathlib import Path
@@ -84,7 +85,16 @@ def is_4row_arch():
 _cached_chip_architecture = None
 
 
-def _simulator_architecture():
+def cli_flag_given(flag):
+    """Whether a pytest flag is on the command line or in PYTEST_ADDOPTS.
+
+    For code that runs at import, before pytest has parsed its options. Flags that only come from
+    the ini file's addopts are not seen here; pytest_configure checks the parsed options.
+    """
+    return flag in sys.argv or flag in shlex.split(os.environ.get("PYTEST_ADDOPTS", ""))
+
+
+def simulator_architecture():
     """Read arch_name from the soc_descriptor.yaml UMD loads for the simulator, if one is configured.
 
     The RTL simulator path is a directory holding the descriptor; for ttsim it sits next to the .so.
@@ -94,7 +104,7 @@ def _simulator_architecture():
     )
     if not sim_path:
         return None
-    sim_path = Path(sim_path)
+    sim_path = Path(sim_path).expanduser()
     soc_descriptor = (
         sim_path if sim_path.is_dir() else sim_path.parent
     ) / "soc_descriptor.yaml"
@@ -120,10 +130,10 @@ def _pcie_architecture():
 def _detect_chip_architecture():
     # Same gate the pytest plugin uses to pick the simulator over silicon. xdist workers never get
     # here: they inherit the CHIP_ARCH the controller writes back.
-    if "--run-simulator" in sys.argv and (arch := _simulator_architecture()):
+    if cli_flag_given("--run-simulator") and (arch := simulator_architecture()):
         return arch
     # Silicon first, so a stray simulator env var does not override the card in the machine.
-    arch = _pcie_architecture() or _simulator_architecture()
+    arch = _pcie_architecture() or simulator_architecture()
     if arch is None:
         raise RuntimeError(
             "Could not detect the chip architecture: no Tenstorrent PCIe device and no simulator "
