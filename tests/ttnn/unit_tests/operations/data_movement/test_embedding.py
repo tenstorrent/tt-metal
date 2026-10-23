@@ -997,3 +997,24 @@ def test_embedding_fused_width_or_dtype_change_misses(device):
     device.disable_and_clear_program_cache()
     device.enable_program_cache()
     assert_program_cache_flat(device, run, variants, miss_indices=(2, 3, 4))
+
+
+@pytest.mark.parametrize(
+    "batch_size, sentence_sizes, hidden_embedding_dim",
+    [(1, [32], 768), (32, [32], 4096), (1, [32], 16384), (1, [148 * 32, 13 * 32], 32)],
+    ids=["one_block", "decode_batch", "chunked_divisible", "long_then_short"],
+)
+def test_embedding_fused_idle_cores(device, batch_size, sentence_sizes, hidden_embedding_dim):
+    """Fused tilized gather with fewer blocks than cores, on the first call and on a cache hit after a longer
+    one: the idle cores return before tilize. The guard is only observable with TT_METAL_WATCHER=1 (the
+    kernel_lib tilize asserts num_blocks > 0); without it the idle cores run an empty loop and pass anyway."""
+    torch.manual_seed(0)
+    vocabulary_size = 512
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    for sentence_size in sentence_sizes:
+        indices = torch.randint(0, vocabulary_size, (batch_size, sentence_size))
+        _run_fused_gather(device, indices, torch_weights)
+    assert device.num_program_cache_entries() == 1

@@ -41,6 +41,10 @@ void kernel_main() {
     const uint32_t weight_offset = 0;
     const uint32_t num_blocks = end_block - start_block;
     const uint32_t input_page_size = blocks_per_batch * input_block_size_bytes;
+    // A core past the end of a short input has nothing to stage, so it skips the weight cache fill.
+    if (num_blocks == 0) {
+        return;
+    }
 #else
     const uint32_t input_start_id = get_arg(args::input_start_id);
     const uint32_t input_start_offset = get_arg(args::input_start_offset);

@@ -34,6 +34,10 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_arg(args::num_cores);
     const auto [start_block, end_block] = embeddings_fused_block_range(core_idx, blocks_per_batch, batch, num_cores);
     const uint32_t per_core_block_cnt = end_block - start_block;
+    // The kernel_lib tilize asserts num_blocks > 0, so a core past the end of a short input returns.
+    if (per_core_block_cnt == 0) {
+        return;
+    }
 #else
     constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
 #endif
