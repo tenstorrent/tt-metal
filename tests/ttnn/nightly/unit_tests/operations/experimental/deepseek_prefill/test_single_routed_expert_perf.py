@@ -41,117 +41,111 @@ _CEILING_ONLY = 1.0
 # median still has a long right tail (glm-256 spans 192-208us over 15 runs); >=512 holds inside 1.5%.
 _LOW_ISL_MARGIN = 0.08
 
-# Device duration in ns per (model, active), x_rm layout: ONE sweep on a BH p150b (2026-09-15),
-# each case a median of _ITERS dispatches. Recalibrate on the perf runner (DDR-speed dependent):
-# each case logs an "RT-CAL" line in this dict's format, so one run regenerates the table.
-# The 32/64/96 entries in this file's tables are the midpoint of three sweeps on a BH p150b
-# (2026-10-23), a later calibration than the rest of each table.
+# Device duration in ns per (model, active), x_rm layout: the midpoint of three sweeps on a BH p150b
+# (2026-10-23), each case a median of _ITERS dispatches. Recalibrate on the perf runner (DDR-speed
+# dependent): each case logs an "RT-CAL" line in this dict's format, so one run regenerates the table.
 _EXPECTED_NS: dict[tuple[str, int], int] = {
-    ("kimi_k2_7", 0): 3_128,
-    ("kimi_k2_7", 32): 124_388,
-    ("kimi_k2_7", 64): 124_685,
-    ("kimi_k2_7", 96): 125_802,
-    ("kimi_k2_7", 128): 119_261,
-    ("kimi_k2_7", 256): 123_408,
-    ("kimi_k2_7", 512): 161_361,
-    ("kimi_k2_7", 768): 225_130,
-    ("kimi_k2_7", 1024): 294_258,
-    ("kimi_k2_7", 2048): 579_644,
-    ("kimi_k2_7", 4096): 1_151_677,
-    ("kimi_k2_7", 5120): 1_435_744,
-    ("glm_53", 0): 3_093,
-    ("glm_53", 32): 102_876,
-    ("glm_53", 64): 103_164,
-    ("glm_53", 96): 104_517,
-    ("glm_53", 128): 105_461,
-    ("glm_53", 256): 108_710,
-    ("glm_53", 512): 143_111,
-    ("glm_53", 768): 197_479,
-    ("glm_53", 1024): 258_010,
-    ("glm_53", 2048): 507_291,
-    ("glm_53", 4096): 1_010_650,
-    ("glm_53", 5120): 1_257_824,
+    ("kimi_k2_7", 0): 1_966,
+    ("kimi_k2_7", 32): 124_359,
+    ("kimi_k2_7", 64): 124_565,
+    ("kimi_k2_7", 96): 125_633,
+    ("kimi_k2_7", 128): 126_939,
+    ("kimi_k2_7", 256): 130_984,
+    ("kimi_k2_7", 512): 149_362,
+    ("kimi_k2_7", 768): 199_282,
+    ("kimi_k2_7", 1024): 260_971,
+    ("kimi_k2_7", 2048): 507_555,
+    ("kimi_k2_7", 4096): 1_007_220,
+    ("kimi_k2_7", 5120): 1_252_930,
+    ("glm_53", 0): 1_945,
+    ("glm_53", 32): 102_729,
+    ("glm_53", 64): 103_136,
+    ("glm_53", 96): 104_414,
+    ("glm_53", 128): 105_323,
+    ("glm_53", 256): 109_037,
+    ("glm_53", 512): 132_175,
+    ("glm_53", 768): 175_030,
+    ("glm_53", 1024): 229_006,
+    ("glm_53", 2048): 444_156,
+    ("glm_53", 4096): 877_486,
+    ("glm_53", 5120): 1_092_959,
 }
 
 # Same measurement and key as _EXPECTED_NS, with the weights DRAM ND-sharded: a core fetches its
 # whole K-row weight slice in ONE NoC request instead of one per tile. Its own table because the gain
-# lands where this op is weight-read bound -- 1.15x at 128 active tokens, 1.10x at 256, 1.03x at 512, flat from 1024 up -- so the interleaved
-# bands reject the low-ISL cases outright.
-#
-# ONE sweep on a BH p150b (2026-09-15), each case a median of _ITERS dispatches. The interleaved
-# table above is the midpoint of THREE sweeps; these carry no cross-sweep spread, so the low-ISL
-# entries are the thin ones -- which is what _LOW_ISL_MARGIN is there to absorb.
+# lands where this op is weight-read bound -- 1.21-1.29x at 128 active tokens, 1.19-1.26x at 256, 1.08x
+# at 512, flat from 1024 up -- so the interleaved bands reject the low-ISL cases outright. Same
+# calibration as above.
 _NDSHARD_EXPECTED_NS: dict[tuple[str, int], int] = {
-    ("kimi_k2_7", 0): 3_028,
-    ("kimi_k2_7", 32): 98_635,
-    ("kimi_k2_7", 64): 96_267,
-    ("kimi_k2_7", 96): 98_188,
-    ("kimi_k2_7", 128): 103_905,
-    ("kimi_k2_7", 256): 111_867,
-    ("kimi_k2_7", 512): 156_073,
-    ("kimi_k2_7", 768): 224_354,
-    ("kimi_k2_7", 1024): 294_217,
-    ("kimi_k2_7", 2048): 579_130,
-    ("kimi_k2_7", 4096): 1_148_860,
-    ("kimi_k2_7", 5120): 1_437_110,
-    ("glm_53", 0): 3_076,
-    ("glm_53", 32): 85_933,
-    ("glm_53", 64): 86_604,
-    ("glm_53", 96): 87_061,
-    ("glm_53", 128): 91_694,
-    ("glm_53", 256): 98_510,
-    ("glm_53", 512): 138_469,
-    ("glm_53", 768): 197_873,
-    ("glm_53", 1024): 258_023,
-    ("glm_53", 2048): 506_622,
-    ("glm_53", 4096): 1_003_975,
-    ("glm_53", 5120): 1_257_886,
+    ("kimi_k2_7", 0): 1_894,
+    ("kimi_k2_7", 32): 98_741,
+    ("kimi_k2_7", 64): 97_564,
+    ("kimi_k2_7", 96): 98_584,
+    ("kimi_k2_7", 128): 98_536,
+    ("kimi_k2_7", 256): 103_627,
+    ("kimi_k2_7", 512): 137_798,
+    ("kimi_k2_7", 768): 200_584,
+    ("kimi_k2_7", 1024): 264_731,
+    ("kimi_k2_7", 2048): 509_620,
+    ("kimi_k2_7", 4096): 1_001_749,
+    ("kimi_k2_7", 5120): 1_248_580,
+    ("glm_53", 0): 1_882,
+    ("glm_53", 32): 86_813,
+    ("glm_53", 64): 86_176,
+    ("glm_53", 96): 86_820,
+    ("glm_53", 128): 86_805,
+    ("glm_53", 256): 91_855,
+    ("glm_53", 512): 122_194,
+    ("glm_53", 768): 173_301,
+    ("glm_53", 1024): 232_407,
+    ("glm_53", 2048): 447_034,
+    ("glm_53", 4096): 877_213,
+    ("glm_53", 5120): 1_091_630,
 }
 
 
 # Kimi K3 runs SiTU-GLU at the post-projection dims, so its K axis is ROUTED_EXPERT_HIDDEN_SIZE and
-# it cannot be driven from SINGLE_EXPERT_MODELS (which reads config.EMB_SIZE). x_rm layout on a BH
-# p150b (2026-09-15), each case a median of _ITERS dispatches.
+# it cannot be driven from SINGLE_EXPERT_MODELS (which reads config.EMB_SIZE). Same calibration as
+# above.
 #
 # K3's per_core_N_d is 11 -- PRIME, so the down matmul has no divisor reaching a 3-tile subblock and
-# rests on the ragged-tail path to avoid running 1x1, which costs 1.20-1.24x from 512 up. One sweep,
-# not the midpoint of three.
+# rests on the ragged-tail path to avoid running 1x1, which costs 1.20-1.24x from 512 up.
 _K3_SITU_EXPECTED_NS: dict[int, int] = {
-    0: 3_099,
-    32: 106_384,
-    64: 106_519,
-    96: 107_468,
-    128: 108_502,
-    256: 109_698,
-    512: 153_084,
-    768: 212_070,
-    1024: 277_401,
-    2048: 547_310,
-    4096: 1_100_281,
-    5120: 1_368_318,
+    0: 1_939,
+    32: 106_453,
+    64: 106_530,
+    96: 107_186,
+    128: 107_728,
+    256: 110_347,
+    512: 148_823,
+    768: 216_073,
+    1024: 274_782,
+    2048: 541_065,
+    4096: 1_070_632,
+    5120: 1_334_741,
 }
 
-# Kimi K3 SiTU-GLU counterpart of _NDSHARD_EXPECTED_NS: 1.16x at 128, 1.14x at 256, flat from 1024.
+# Kimi K3 SiTU-GLU counterpart of _NDSHARD_EXPECTED_NS: 1.12x at 128, 1.13x at 256, flat from 1024.
 _K3_SITU_NDSHARD_EXPECTED_NS: dict[int, int] = {
-    0: 3_106,
-    32: 96_072,
-    64: 95_444,
-    96: 96_913,
-    128: 93_428,
-    256: 96_435,
-    512: 147_440,
-    768: 210_729,
-    1024: 277_589,
-    2048: 547_691,
-    4096: 1_084_730,
-    5120: 1_360_024,
+    0: 1_894,
+    32: 96_487,
+    64: 96_415,
+    96: 96_821,
+    128: 96_426,
+    256: 97_405,
+    512: 145_427,
+    768: 215_173,
+    1024: 279_044,
+    2048: 544_120,
+    4096: 1_076_451,
+    5120: 1_343_579,
 }
 
-# K3's DRAM weight read is 18.58 MB against a ~117 us floor, so its knee sits a token count later
-# than kimi_k2_7's or glm_53's: 512 is the first case where compute starts to cover the read, and it
-# keeps _LOW_ISL_MARGIN because the long right tail that margin exists for is a run-to-run effect,
-# not one three consecutive sweeps expose. Everything past the knee holds inside the usual 3%.
-_K3_KNEE_TOKENS = 512
+# K3's DRAM weight read is 18.58 MB against a ~117 us floor, so its knee sits later than kimi_k2_7's
+# or glm_53's: 512 is the first case where compute starts to cover the read, and 768 still spread
+# 3.7-4.1% across three sweeps, which the usual 3% would not hold. Both keep _LOW_ISL_MARGIN;
+# everything past 768 holds inside 3%.
+_K3_KNEE_TOKENS = 768
 
 
 def _baseline_or_skip(table, key, label: str):
