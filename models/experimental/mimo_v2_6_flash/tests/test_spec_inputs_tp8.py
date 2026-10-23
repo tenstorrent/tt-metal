@@ -347,7 +347,9 @@ def int_words(t):
 
 
 def upload_ints(plan, values, t):
-    host = torch.tensor(values, dtype=torch.int32).reshape(t.shape)
+    """Copy int32 ``values`` into the replicated row-major tensor ``t`` (reshaped by ``tuple(t.shape)``: older ttnn
+    builds' Shape is not a sequence torch's reshape accepts)."""
+    host = torch.tensor(values, dtype=torch.int32).reshape(tuple(t.shape))
     rep = plan.replicate()
     ttnn.copy_host_to_device_tensor(
         ttnn.from_torch(host, dtype=t.dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep), t
