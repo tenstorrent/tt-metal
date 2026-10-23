@@ -1,7 +1,6 @@
 # Wan2.2 perf on a Bin6 BH Galaxy: 4x8 ring
 
-Branch: `jameslee/test-pr60190-dram-endpoints` @ `adfc799f3a1` (PR #60190 DRAM endpoints + DRAM-harvest VAE chunking). PR #60190 is a do-not-merge draft and is not part of the branch this file is published on; Wan needs it to run on 7-bank Blackhole.
-Machine: `bh-glx-120-b10u20` (single BH Galaxy, 32 Blackhole chips, firmware bundle 19.13.2).
+Branch: `jameslee/test-pr60190-dram-endpoints` @ `adfc799f3a1` (PR #60190 DRAM endpoints + DRAM-harvest VAE chunking).Machine: `bh-glx-120-b10u20` (single BH Galaxy, 32 Blackhole chips, firmware bundle 19.13.2).
 Run 2026-10-20 by a Claude Code session for jameslee@tenstorrent.com.
 
 ## TL;DR
