@@ -82,6 +82,314 @@ notes:
     entries that describe the per-chunk decode.'
   closed: '2026-10-16T07:41:26'
   why_closed: FIX.1 passed (6bdacef2561)
+- id: OV-7
+  tasks:
+  - R.5
+  status: closed
+  t: '2026-10-16T10:25:12'
+  text: 'The overseer stopped attempt 1 (reference): R.5 is not about rewriting the reference: write only (a) the hook official_taps(spec,
+    layers, tokens, chunk, chunk_size) in bringup/hooks.py and (b) bringup/official_taps.yaml (schema and contract: models/demos/common/bringup/testing/official_floor.py
+    and noise_floor.py). A working capture already exists for chunk 0, layers 0-3 (a CPU experiment, not the run''s code):
+    /localdev/dnijemcevic/bringup/noise_floor_experiments_2026-10-16/official_floor.py, function capture_official: it builds
+    the official oracle (reference/hf_oracle.build_oracle, dtype bf16 = the official GPU configuration) and maps attn_hc
+    / ffn_hc = Block.hc_mixes (told apart by fn is blk.hc_attn_fn), attn_collapse / ffn_collapse = the 1st / 2nd Block.hc_pre,
+    attn_residual / ffn_residual = the 1st / 2nd Block.hc_post, attn_norm / ffn_norm = the RMSNorm modules, attention =
+    blk.attn (inputs: the q_norm output and the kv_norm output object, roped and fp8-quantized in place afterwards: read
+    it after the run), router = blk.ffn.gate (dense weights scattered from (weights, indices)). Still to map: the remaining
+    steps of every block type (q_a, kv, experts, shared_expert, moe_add, engram_*, compressor, indexer, ...), every step''s
+    inputs in the framework step''s input order, the chunk you are asked for (run chunks 0..chunk; the tests use the component
+    golden''s last chunk) and the dtypes in official_taps.yaml (the official code''s own: e.g. the mixes are computed and
+    handed on in fp32; kv is a quantizer''s output: fixed). The gate is python -m models.demos.common.bringup.testing.official_floor
+    (CPU).'
+  closed: '2026-10-16T13:02:25'
+  why_closed: R.5 passed
+- id: OV-8
+  tasks:
+  - R.5
+  status: closed
+  t: '2026-10-16T11:49:35'
+  text: 'Your hook and official_taps.yaml from attempt 2 are in the tree and were gated by the overseer (the gate had crashed
+    on a framework bug, since fixed): 129 of 136 steps pass the tap-map check, none unmapped. The 7 that fail are all stateful
+    (compressor L02 1.23x, L14 1.04x, L20 1.03x; attention L03 1.04x, L20 1.6x, L21 2.2x, L24 2.3x of the check''s limit):
+    the fp32 step read the golden''s prefix caches while the official output came from the official run''s own caches. The
+    framework now takes, per layer, _state: {start: ..., end: ...} from the hook: the layer''s state as the official run
+    had it at the chunk''s start and end, in the reference''s own state format (what DS41Reference.state_tensors returns;
+    models/demos/common/bringup/testing/official_floor.py docstring and _ctx). Keep the map; add the official state for
+    every layer (the sources'' end state matters for the layers that read another layer''s top-k or caches). Do not change
+    official_taps.yaml''s dtypes to make a step pass. Gate log: /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/run1/logs/R.5.log'
+  closed: '2026-10-16T12:14:58'
+  why_closed: 'state done (attention passes); the compressor disagreement accepted: the check now takes an explanation (F80,
+    014011cffcb)'
+- id: OV-9
+  tasks:
+  - R.5
+  status: closed
+  t: '2026-10-16T12:14:58'
+  text: 'Your disagreement on the compressors is accepted: the official compressor rounds to bf16 inside the step, and the
+    check was wrong to count that as a mapping error. The framework (014011cffcb) now passes such a step when official_taps.yaml
+    carries explained: ''<why, with the evidence>'' for it. Add that for the compressor (every block type that has one),
+    with the evidence that the fp32 step with model.py''s internal bf16 roundings emulated reproduces the official output
+    bit for bit. Make the evidence durable: move the emulation from /tmp/r5chk/chk.py into the model''s reference directory
+    (e.g. reference/official_checks.py, runnable on the hook''s taps) and name it in the explanation. Do not mark anything
+    explained that you have not shown this way; do not change any dtype. Then the gate (python -m models.demos.common.bringup.testing.official_floor)
+    must pass.'
+  closed: '2026-10-16T13:02:25'
+  why_closed: R.5 passed (bd800529e37); the compressor explanation checked against model.py:462/485
+- id: OV-10
+  tasks:
+  - FIX.4
+  status: closed
+  t: '2026-10-16T14:34:59'
+  text: 'The overseer stopped attempt 1 (overseer): New evidence; read /localdev/dnijemcevic/bringup/device_floor_probes/REPORT.md
+    first. The probe measured every stage on the device: the RMS stage is exact (sum of x^2 1e-6, rsqrt 5e-7): do NOT extend
+    the rms_norm fork, leave the RMS stage as it is. The linear is already at its best settings (rel 6.4e-4 on the mixes,
+    only 2e-5..3.5e-4 at the step output). Essentially all of the mixes'' error (7.2e-4 of 7.4e-4; the -3.4e-4 bias; the
+    1-3 % comb column) comes from ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn: it does its fp32 work on the FPU
+    (SEL matmul, add_tiles, the RB / CB sum matmuls, mul_tiles) and its SFPU copies read without UnpackToDestFp32, each
+    a TF32 truncation; the same Sinkhorn from fp32 SFPU ops measures 5e-8. Fix: fork the op (bringup-fork-op skill: ttnn/ttnn/bringup/,
+    behind an option, default off) and make it fp32: UnpackToDestFp32 on every copy_tile input, SFPU fp32 binary ops instead
+    of add_tiles / mul_tiles, exact SFPU sums instead of the RB / CB matmuls, the SEL matmul as data movement; keep it fast
+    (today 0.08 ms; the stock 400-op chain is 1.91 ms and is not acceptable as the default). Measure the step against the
+    floor and the kernel''s time. Optional and free: feed the linear x as a bf16 tensor (same precision, 0.49 vs 0.87 ms).
+    L0 attn_hc may stay ~3.3x its unusually low floor (the linear''s in-tile truncation; no multi-pass): report it, the
+    owner will waive it.'
+  closed: '2026-10-16T15:08:36'
+  why_closed: superseded by OV-12 (use ttnn.bringup.mhc_pre_xing, not a fork of mhc_split_sinkhorn)
+- id: OV-11
+  tasks:
+  - FIX.4
+  status: closed
+  t: '2026-10-16T14:55:34'
+  text: 'Owner: both Sinkhorn arithmetics behind a switch. Fork option (default = today''s FPU kernel, unchanged program
+    when off) + model setting in tt/settings.py (e.g. HC_SINKHORN: sfpu_fp32 | fpu) whose default and max_precision value
+    is sfpu_fp32 (the reference''s precision); fpu stays selectable for A/B (later only as a perf pick). Record both paths''
+    measured error vs the floor and kernel time in the setting''s description.'
+  closed: '2026-10-16T18:16:44'
+- id: OV-12
+  tasks:
+  - FIX.4
+  status: closed
+  t: '2026-10-16T15:08:28'
+  text: 'The overseer stopped attempt 2 (overseer): Wrong op to fork (owner). Do NOT fork ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn:
+    delete ttnn/ttnn/bringup/mhc_split_sinkhorn/ and revert its INDEX.md / bringup_nanobind.cpp registration. The bring-up
+    fork mhc_pre_ttnn already has an fp32 SFPU Sinkhorn: ttnn.bringup.mhc_pre_xing (CHANGELOG ''mhc_pre_xing''; kernels/mhc_pre_xing_compute.cpp:
+    coefficients and a plain-SFPI Sinkhorn lane-wise in fp32, accurate exp, Newton reciprocal / rsqrt; ~21 us per call on
+    xing40''s 4x2), the sibling of the mhc_pre_xing_pack you already use: it takes the all-reduced packed row (column 24
+    = sum x^2) and returns hc [.., T, 24] = [pre | post | comb]. Its math is Xing''s, not DeepSeek''s; compare it with the
+    official kernel (/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/hf/inference/kernel.py hc_split_sinkhorn_kernel):
+    DeepSeek pre = sigmoid(m * scale0 + base) + eps (Xing: no + eps); DeepSeek comb: softmax over the row + eps, then column
+    / (column sum + eps), then (iters - 1) x (row / (row sum + eps), column / (column sum + eps)) (Xing: clamp logits, exp(L
+    - rowmax), then iters x (row, column)); no clamp in DeepSeek. Extend mhc_pre_xing behind options (default off: Xing''s
+    program unchanged, its tests and xing40 / glm53 cases still pass; bringup-fork-op skill) for the DeepSeek variant, and
+    use it in tt/mhc.py in place of mhc_split_sinkhorn, with a setting in tt/settings.py (default the new fp32 path; the
+    old mhc_split_sinkhorn path selectable for A/B). Measure: the Sinkhorn alone, the whole mixes step, per layer per chunk,
+    before / after, both paths; the error vs the floor per step (golden inputs).'
+  closed: '2026-10-16T18:16:44'
+- id: OV-13
+  tasks:
+  - FIX.4
+  status: closed
+  t: '2026-10-16T17:09:44'
+  text: 'OWNER WAIVER SIGNED (2026-10-16): the noise-floor checks of attn_hc and ffn_hc in every layer are waived (hc_fn
+    fp32 weight: the FPU holds at most 10 bits; the fixed rounding is a per-column bias no single-pass format removes, DS41-43).
+    Do not try to pass the own-floor column / bias checks; keep the overall error within its limit, finish the Sinkhorn
+    option (fork default off, Xing / GLM cases pass, fork regression), the HC_SINKHORN timing table, and report.'
+  closed: '2026-10-16T18:16:44'
+- id: OV-14
+  tasks:
+  - K.1
+  status: open
+  t: '2026-10-17T19:14:34'
+  text: 'This run serves a non-contiguous layer subset (0,1,2,3,14,20,21,24). The contract test (models/demos/common/bringup/testing/contract.py,
+    F100) serves it as 8 engine layers 0..7 and sets PREFILL_LAYER_IDS to the model layers: the adapter/runtime must map
+    engine index -> model layer with contract.layer_ids_from_env(first_layer_idx, num_layers) and expose the list as rt.layer_ids;
+    acks, the KV table and the read-back use the engine index.'
+- id: OV-15
+  tasks:
+  - P.3
+  status: open
+  t: '2026-10-18T07:52:24'
+  text: 'The overseer stopped attempt 2 (perf): the settings lint flagged 173 environment reads that are the imported fork''s
+    own pre-existing tuning knobs (Marko''s MIMO_FL_*), not this task''s; converting them is out of scope; the framework
+    lint is being fixed to judge only lines the task adds'
+- id: OV-16
+  tasks:
+  - P.3
+  status: open
+  t: '2026-10-18T07:57:17'
+  text: 'Attempts 2 and 3 were stopped by the overseer: the settings-lint problems were the imported fork''s own pre-existing
+    MIMO_FL_* / FLAT_CMB_LOG environment knobs, not yours. The framework now flags only environment reads a change ADDS
+    to a fork (F106); on your attempt-1 tree that is 0 violations. Do not convert, remove or mark Marko''s existing knobs.
+    Attempt 1''s work is in the tree uncommitted: the [N, K] / routing-weight / fp8 q(h) / bf16 x-h-y options, EXPERTS_KERNEL=flat,
+    all 16 frozen expert tests passing at bfp8, flat 149.3 ms vs unified 176.8 ms experts per chunk. Finish what attempt
+    1 left: the fork''s regression with the options off (unit suite vs the import commit 9003c0fd2ca: 18 passed / 14 failed
+    there, the 12 tp2/tp4 p.nsg == 1 failures pre-existing), GLM-5.3''s use of the op unchanged, CHANGELOG / INDEX, BREADCRUMBS.
+    Do not redo what passed. Note: make EXPERTS_KERNEL''s default unified again (the brief did not ask to flip it; accepting
+    the pick flips it, F104).'
+- id: OV-17
+  tasks:
+  - P.4
+  status: open
+  t: '2026-10-18T16:00:08'
+  text: 'Owner (2026-10-18): the P.4 comparison now measures EXPERTS_PRECISION=glm with EXPERTS_IMPL=bfp8 (bfp8 weights,
+    no bfp4) against full precision. Your attempt-1 code (EXPERTS_PRECISION setting, MAX_PRECISION entries, the glm path
+    in tt/experts.py) is in the tree uncommitted and already supports it. Only check that glm + bfp8 runs (one frozen expert
+    component test with DS41_EXPERTS_PRECISION=glm DS41_EXPERTS_IMPL=bfp8 for a smoke check; it may fail its limit, that
+    is information, not a problem to fix) and time the experts once (tt/perf_experts.py); update BREADCRUMBS with the number.
+    Change nothing else; do not flip defaults.'
+- id: OV-18
+  tasks:
+  - P.5
+  status: open
+  t: '2026-10-18T18:30:39'
+  text: 'Owner (2026-10-18): besides the exact fp32 reduce-scatter, add a second value CCL_IMPL=fabric_bf16: the three partial
+    sums (ATTN_O_SUM, EXPERTS_SUM, HC_TP_SUM) typecast to bf16 and reduced with ttnn.bringup.fabric_reduce_scatter''s existing
+    FPU add (no new fork option needed), as Marko runs GLM-5.3 (glm53_flash_d_p_lb BREADCRUMBS: GLM_SCATTER_OP=fabric_bf16,
+    9.34 -> 8.95 s at 56k, top1 0.8767 -> 0.8804). This task''s A/B stays CCL_IMPL=fabric (exact) vs stock; a later task
+    (P.6) compares fabric_bf16 vs fabric, so just implement the value, run one frozen component test with it as a smoke
+    check (it may exceed a limit: that is information, not a problem to fix) and report its per-op collective time next
+    to stock and fabric. Default stays stock.'
+- id: OV-19
+  tasks:
+  - X.3
+  status: open
+  t: '2026-10-19T07:24:33'
+  text: 'The overseer stopped attempt 1 (fix): X.3''s timeline check failed because the profiler buffer is too small (device
+    4906 programs per chip vs 6312 in op mode, TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 in the gate command); a gate-command
+    setting, not the model; the overseer raises it'
+- id: OV-20
+  tasks:
+  - X.3
+  status: closed
+  t: '2026-10-20T20:26:29'
+  text: 'The overseer stopped attempt 3 (fix): X.3''s full-target ladder fails only on the top-k index overlap (L24 0.695;
+    all index layers dropped since 10-17: L02 0.90->0.84, L14 0.96->0.85, L20 0.95->0.83, L24 0.92->0.69) while every layer
+    PCC holds (>= 0.9944). The overseer first bisects which accepted pick caused it (P.16''s per-chunk caches vs P.13 precision)
+    before any fix; do not raise precision to clear an overlap number.'
+  closed: '2026-10-21T05:32:28'
+  why_closed: 'owner chose option 1: waiver of the overlap check under native numerics (F124, spec tests.waivers ladder.state_overlap);
+    X.3 reruns its gate'
+- id: OV-21
+  tasks:
+  - X.3
+  status: closed
+  t: '2026-10-21T06:15:59'
+  text: 'The overseer stopped attempt 5 (fix): X.3 fails only on its measurements (prefill_ms_full missing, timeline_ok
+    0) while every test passed; the profiling harness, not the model: the overseer fixes it'
+  closed: '2026-10-21T06:18:04'
+  why_closed: 'measurement causes found: F125 (prefill) + memo note for X.3'
+- id: OV-22
+  tasks:
+  - X.3
+  status: closed
+  t: '2026-10-21T06:18:03'
+  text: 'Only timeline_ok fails, the rest of X.3 passes (prefill_ms_full is no longer asked, F125). Cause: the P.16 ChunkMemo
+    (tt/sparse_attention.py) drops a slot only after the last loaded layer that reads it (model.memo_last). The op profile
+    runs only layers 20 and 24, so a slot whose last reader is another layer survives the run, and the timeline run right
+    after it (no state reload in between) reuses it and issues one op fewer (3795 vs 3794 calls). The same leak would hand
+    stale data to the next chunk whenever a slot''s last reader does not run (its keys carry no chunk). Fix in the model:
+    clear the memo at every chunk start (begin_chunk, or key the slots by chunk start), so every run of a chunk builds the
+    shared tensors itself. Do not change the profiler or the gate. Check: the X.3 gate''s timeline_ok == 1 and the device
+    time unchanged (about 104 ms per chunk).'
+  closed: '2026-10-21T06:18:32'
+  why_closed: moved into a fix job (memo cleared at chunk start), gated by X.3
+- id: OV-23
+  tasks:
+  - FIX.5
+  status: open
+  t: '2026-10-21T07:00:06'
+  text: 'Retry with paths: FIX.5 may now write models/demos/deepseek_v41_flash_d_p/tt (F127). Apply your own patch: clear
+    state.memo at the start of TtDS41Model.begin_chunk, before the engram early return. Your correction stands (the slot
+    keys carry the chunk start; the stale hit is only a rerun of the same chunk, plus the unread slot''s memory). Then the
+    gate (X.3''s checks) must give timeline_ok == 1 with device time and PCC unchanged.'
+- id: OV-24
+  tasks:
+  - FIX.5
+  status: open
+  t: '2026-10-21T09:42:19'
+  text: 'The overseer stopped attempt 2 (overseer): owner: stop now; the end-to-end checks compare against rounded goldens
+    with fixed bars (F80''s deferred item). F128 first; FIX.5''s edits (memo cleared per chunk, held input wrappers) stay
+    in the tree and are gated under F128''s limits.'
+- id: OV-25
+  tasks:
+  - FIX.6
+  status: open
+  t: '2026-10-21T11:53:41'
+  text: 'The overseer stopped attempt 2 (overseer): FIX.6''s gate passed every check; only its commit failed (state.json
+    502 KB > the repo''s 500 KB pre-commit limit), a framework issue the overseer fixes'
+- id: OV-26
+  tasks:
+  - FIX.9
+  status: open
+  t: '2026-10-22T01:43:56'
+  text: 'The overseer stopped attempt 2 (overseer): FIX.9''s gate failed only because frozen expert tests read the defaults
+    key component_col_factor, renamed by F138; the overseer fixes the framework, then the gate reruns'
+- id: OV-27
+  tasks:
+  - FIX.9
+  status: open
+  t: '2026-10-22T02:02:14'
+  text: 'The overseer stopped attempt 4 (overseer): the gate fails only on frozen custom component tests (no noise floor
+    under F138); the overseer re-renders them from the templates and re-freezes'
+- id: OV-28
+  tasks:
+  - FIX.9
+  status: open
+  t: '2026-10-22T04:03:28'
+  text: 'The overseer stopped attempt 6 (overseer): FIX.9 fails only on the bfp4 expert-weight format gap (device = CPU
+    at device formats within 0.015); a precision decision for the owner, not a code fix'
+- id: OV-29
+  tasks:
+  - FIX.9
+  status: open
+  t: '2026-10-22T06:12:57'
+  text: 'Owner decision 2026-10-22: the expert weights stay bfp4; the experts step carries an owner waiver in the spec (tests.waivers.experts).
+    Do not switch EXPERTS_IMPL. If the gate still fails, report which check (a structural limit is not waived).'
+- id: OV-30
+  tasks:
+  - FIX.5
+  status: open
+  t: '2026-10-22T07:59:28'
+  text: 'The overseer stopped attempt 5 (overseer): FIX.5''s gate passed every metric; only the commit failed (results/FIX.5_profile.json
+    613 KB > the 500 KB hook), a framework issue the overseer fixes'
+- id: OV-31
+  tasks:
+  - FIX.10
+  status: open
+  t: '2026-10-22T14:17:45'
+  text: 'The overseer stopped attempt 2 (overseer): the gate''s only failure is test_swap_swa_12_experts (block out carries
+    the bfp4 experts gap; router step TF32 accumulation): both are owner waivers being added to the spec now; nothing to
+    change in the code'
+- id: OV-32
+  tasks:
+  - FIX.10
+  status: open
+  t: '2026-10-22T16:01:17'
+  text: 'The overseer stopped attempt 3 (overseer): diagnosis done (DS41-102): indexer swap checks fail on order (positional
+    match vs a set) and bf16-score tie flips (format limit, device recall 0.9942 = CPU at bf16 0.9946, official bf16 0.964);
+    overseer adds the owner-delegated format-limit waiver; no code change needed'
+- id: OV-33
+  tasks:
+  - FIX.10
+  status: open
+  t: '2026-10-22T16:50:52'
+  text: 'The overseer stopped attempt 4 (overseer): the gate''s remaining failure is the indexer swap check that the owner-delegated
+    waiver should cover; the waiver is not applied on the integer-output path: framework fix by the overseer'
+- id: OV-34
+  tasks:
+  - O.1
+  status: open
+  t: '2026-10-23T03:56:22'
+  text: 'The overseer stopped attempt 3 (optests): the uncovered call''s signature includes extra_key, a value that changes
+    every run (DS41-109); no case can match it: framework fix (signature without volatile args) by the overseer'
+- id: OV-35
+  tasks:
+  - O.1
+  status: open
+  t: '2026-10-23T04:08:57'
+  text: 'F179 (framework, live): a fork call''s capture signature now leaves out volatile args (flat_routed_expert extra_key),
+    so the uncovered call has a stable sig across runs. Re-capture, add the one missing flat_routed_expert case with the
+    NEW sig, verify with the coverage check, then finish. Existing cases still match through sig_full; do not rewrite them.'
 fixes:
 - id: FIX.2
   title: attention back to the reference's precision (no fp32 scores raised for a fixed bar)
@@ -141,7 +449,7 @@ fixes:
   why: 'obsolete: the input-nudge floor (precision brainstorm, handoff section 7) explains the device router''s flips; no
     exact router matmul'
 - id: FIX.4
-  title: 'the hc mixes (attn_hc, ffn_hc): find and fix the device''s -4e-4 bias and 4-34x excess error'
+  title: 'the hc mixes (attn_hc, ffn_hc): fp32 SFPU Sinkhorn in the tree; pass the gate'
   gate:
   - C.swa.attn_hc
   - C.swa.ffn_hc
@@ -150,15 +458,159 @@ fixes:
   - C.enc_source.attn_hc
   - S.swa.15
   - S.swa_engram.18
-  status: held
+  status: placed
   t: '2026-10-16T09:58:47'
-  text: 'The device hc mixes (attn_hc, ffn_hc: tt/mhc.py) are 3.8-34x above their noise floor with a steady bias of -4e-4
-    (the official code computes them in fp32; measured by the precision brainstorm, /localdev/dnijemcevic/bringup/handoff_precision_noise_floor_2026-10-16.md
-    section 6, table and finding 3). A CPU emulation of the FPU''s TF32 rounding (in-tile partial dots, TF32 weights) accounts
-    for only 5e-6 - 6e-5, so the cause is elsewhere in tt/mhc.py (rsqrt, sigmoid, the Sinkhorn iterations, a bf16 intermediate,
-    a constant). Dump the device''s mix outputs (pre, post, comb) once for layer 0 chunk 1, compare each with the fp32 CPU
-    step on the same inputs, locate the stage where the bias and the excess appear, and fix it on the device at the reference''s
-    precision (the official code is fp32 here). Do not loosen any check. Record the stage-by-stage numbers in BREADCRUMBS.md
-    and the mechanism in known_issues.md. The gate reruns the passed mix component tests and both whole-block swap tests
-    under the new floor.'
+  text: 'State (2026-10-16 18:20): the fix is in the tree and committed (c50953498f6, 89302eddd15): ttnn.bringup.mhc_pre_xing(deepseek=True),
+    HC_SINKHORN=sfpu_fp32 by default. The fork option is off by default; the Xing / GLM cases and the fork regression pass
+    (checked by the overseer: do not rerun them, and do not rebuild unless you change C++). The owner waived the hc steps''
+    noise-floor checks (spec tests.waivers), and the own-floor row / column / bias checks only print WARN lines (F89): never
+    work on a WARN or WAIVED line. Your job: run the gate below once. If it passes, finish with one line in BREADCRUMBS.md.
+    If a test fails on a gating check (a FAIL line that is not WARN / WAIVED, and not the rel=1 lines of the precompile
+    pass), fix that cause in the model''s code (tt/) at the reference''s precision with the device''s normal settings (HiFi4,
+    fp32 accumulation, approx modes off; no multi-pass or split matmuls); a change to a shared op goes through its bring-up
+    fork behind an option. Do not re-measure the Sinkhorn timing.'
   hold: the official-arithmetic + input-nudge floor installed (handoff section 7, steps 1-3)
+  released: '2026-10-16T13:08:18'
+  placed: '2026-10-16T14:31:25'
+- id: FIX.5
+  title: P.16 ChunkMemo cleared at every chunk start
+  gate:
+  - X.3
+  status: placed
+  t: '2026-10-21T06:18:32'
+  text: 'X.3 fails only timeline_ok (every test passes; prefill_ms_full is no longer asked, F125). Cause: the P.16 ChunkMemo
+    (tt/sparse_attention.py) drops a slot only after the last loaded layer that reads it (model.memo_last). X.3''s op profile
+    runs only layers 20 and 24, so a slot whose last reader is another layer survives the run; the timeline run right after
+    it (no state reload between) reuses it and issues one op fewer (3795 vs 3794 calls). The same leak would hand stale
+    data to the next chunk whenever a slot''s last reader does not run (the slot keys carry no chunk). Fix in the model:
+    clear the memo at every chunk start (begin_chunk, or key the slots by the chunk start), so every run of a chunk builds
+    its shared tensors itself. Do not change the profiler, the gate or the precision. Measure: the X.3 gate passes with
+    timeline_ok == 1, device time unchanged (about 104 ms per chunk), worst layer PCC unchanged.'
+  placed: '2026-10-21T06:18:46'
+- id: FIX.6
+  title: 'Reference numerics switch: official | native (full precision)'
+  gate:
+  - R.2
+  - R.3
+  status: placed
+  t: '2026-10-21T09:43:45'
+  text: 'Owner rule (F128, framework being changed meanwhile): every accuracy check compares the device with the CPU reference
+    at FULL precision; the reference at its own shipped precision only sets the allowed margin. F112 made hooks.reference
+    take numerics, but this model''s hook never did (tt/settings.py NUMERICS: ''the reference hook has no numerics switch
+    for this model''). Add it: hooks.reference(spec, layers=None, dtype=None, numerics=''official''), passed to DS41Reference.
+    ''official'' = today''s arithmetic, bit for bit (default; R.2 / R.3 / goldens unchanged until the framework switches).
+    ''native'' = full precision: every activation fp8 / fp4 quant-dequant in reference/kernels.py and ds41_ref.py (act_quant_dequant,
+    fp4_quant_dequant, fp4_act_quant, the window-KV fp8 q-dq, the compressed-KV / index key / index query fp4 q-dq, the
+    TF32 rounding of gate inputs, any bf16 cast of an intermediate) becomes the identity, all in fp32 / the given dtype;
+    the checkpoint''s weights stay their exact dequantized values (they are the model). One switch, not per step (reference/interface.py
+    docstring). Checks: R.2 and R.3 pass unchanged (official); add a CPU test under reference/ that native and official
+    agree to within the rounding (rel per layer at 4096, ~1e-2) and that native has no quantizer call left (patch the K.*
+    quantizers to raise under native). Report the per-layer rel of official vs native at s4096 (the margins F128 will use).'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/reference
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  placed: '2026-10-21T09:43:50'
+- id: FIX.7
+  title: Reference official numerics at the GPU's shipped dtype (bf16 activations)
+  gate:
+  - R.2
+  - R.3
+  status: placed
+  t: '2026-10-21T14:55:31'
+  text: 'Owner rule (framework F128 / F134 / F136): the margin of every accuracy check is the real reference''s distance
+    from full precision, and the real reference is DeepSeek''s GPU code: bf16 activations, fp32 accumulation in every GEMM,
+    its fp8 / fp4 roundings. Today DS41Reference refuses any dtype but fp32 (reference/ds41_ref.py:525), so numerics=''official''
+    is fp32 compute plus the q-dq only, and the framework''s drift / margin source (generate_golden --numerics official,
+    reference.drift replay at reference.shipped_dtype = bfloat16, spec) cannot run. Make DS41Reference(numerics=''official'',
+    dtype=torch.bfloat16) compute like the GPU code: keep every activation in bf16 exactly where DeepSeek''s inference code
+    keeps it in bf16 (bringup/official_taps.yaml lists the official dtypes per step; the oracle hooks.hf_model in bf16 is
+    the ground truth), GEMMs with bf16 / fp8 / fp4 inputs accumulating in fp32 then rounded to the output''s dtype, fp32
+    where the GPU code computes in fp32 (router, mHC / Sinkhorn, norms'' statistics if so). numerics=''native'' stays fp32
+    everywhere and must not change (bit-identical to today: it is the golden target); numerics=''official'' at dtype fp32
+    stays as today (R.2 / R.3 compare it with the fp32 oracle). Add a CPU test under reference/: official at bf16 vs hooks.hf_model(spec,
+    None) (the bf16 GPU configuration) over a short prefix (e.g. 512 tokens, layers 0-3) agrees per layer within a few bf16
+    roundings, and native is unchanged. Report per-layer rel of official-bf16 vs native at s4096 (the new margins).'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/reference
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  placed: '2026-10-21T14:55:38'
+- id: FIX.8
+  title: 'Migrate DeepSeek onto F131-F142: shipped settings everywhere, parity code deleted'
+  gate:
+  - M.1
+  - L.last
+  - K.1
+  status: placed
+  t: '2026-10-21T20:14:48'
+  text: 'The framework now follows the owner''s two rules (F128-F142; read models/demos/common/bringup/skill/bringup/SKILL.md
+    ''Accuracy'' and dev/BREADCRUMBS.md F128-F142): the device always runs the shipped realistic settings (no max-precision
+    tables or device runs, F137), every check compares with the full-precision CPU reference within the real reference''s
+    margin (goldens and drift regenerated, pinned), gates are err_* <= limit (F135). The model does not import today because
+    Settings no longer takes max_precision. Do: (1) tt/settings.py without MAX_PRECISION and the max_precision= argument;
+    the settings lint (testing/settings_lint.py) must pass: no setting may default to an emulation. (2) Delete every parity-only
+    path (precision_debt_report.md section 6 J1, /localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/reports/precision_debt_report.md):
+    tt/quant.py quantizers, NUMERICS and every official branch, COMPRESSOR_X (round_tf32), ENGRAM_KV_QDQ (qdq), exact_mm.py,
+    window_exact.py, ATTN_IN_MM, WINDOW_PIECES, WINDOW_SDPA high_precision / exact and the _OUT / _SCORES / _PROBS settings,
+    the model''s use of acc_unpack_fp32; keep only the shipped path. (3) Port the framework''s contract-helper changes for
+    this model from the dev tree (reports/fix8_dev_model_diffs.patch: tests/bringup/contract/caches.py and server_rules.py
+    take their limits from testing/e2e_limits; apply the intent to today''s files, ignore its tt/settings.py hunk where
+    it conflicts with (1)). The shipped defaults must not change numerically (device time and layer errors as before). Gate:
+    M.1, L.last, K.1 against the new limits. FIX.5''s uncommitted edits (tt/model.py held input wrappers and begin_chunk
+    memo clear, tt/sparse_attention.py doc) are in the tree: keep them. Report: what was deleted (files, settings, lines),
+    device ms per chunk and every err_* vs its limit from the gates.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/contract
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  placed: '2026-10-21T20:15:19'
+- id: FIX.9
+  title: 'One expert pipeline: the shipped flat + weighted combine path only (J2)'
+  gate:
+  - C.swa.experts
+  - C.swa.shared_expert
+  - C.enc_source.experts
+  - C.enc_source.shared_expert
+  - C.dec_candidate.experts
+  - C.dec_candidate.shared_expert
+  - C.dec_reuse.experts
+  - C.dec_reuse.shared_expert
+  - L.last
+  status: placed
+  t: '2026-10-21T22:44:44'
+  text: 'precision_debt_report.md section 6 J2 (/localdev/dnijemcevic/bringup/deepseek_v41_flash_d_p/reports/precision_debt_report.md).
+    Since F137 the per-step tests run the shipped settings, so the second expert pipeline that existed only for max-precision
+    per-step tests is dead code: delete the separate combine path (EXPERTS_COMBINE=separate), the routing-weight pieces,
+    the loop / unified / fp4_decode kernels and EXPERTS_DECODE, and the linear shared expert (SHARED_EXPERT_IMPL=linear);
+    the flat routed expert with the weighted combine and the shared expert inside the flat op are the only path. Remove
+    the DeepSeek-only fork options it alone used (routing_weights and fp8_act_quant on the flat / unified fork ops, their
+    two test_ds41_h_options.py files) only if no other model uses them (grep every model''s code and the forks'' tests/cases.py);
+    keep option-off behaviour of each touched fork unchanged and run each touched fork''s unit suite. Shipped numerics must
+    not change (device time and per-layer errors as before). Gate: the experts and shared-expert component tests of four
+    block types and L.last at the new limits. Report what was deleted and the gate numbers.'
+  hold: R.5 (per-step floors on the new goldens) must pass first
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - ttnn/ttnn/bringup
+  released: '2026-10-21T23:44:33'
+  placed: '2026-10-21T23:44:35'
+- id: FIX.10
+  title: Remove the second copy of the compressed history that P.21 (STATIC_TABLES, f66d16327b6) added
+  gate:
+  - P.21
+  - K.1
+  - L.last
+  status: placed
+  t: '2026-10-22T13:46:46'
+  text: 'Remove the second copy of the compressed history that P.21 (STATIC_TABLES, f66d16327b6) added. Today each KV source
+    keeps the served cache (server order, read back by the serving contract) AND the AttnTable (natural order + window area):
+    +1.25 GiB per chip per slot at 524,288 tokens for the full model (4 sources), +2.5 GiB at 1M, which breaks galaxy_4x4''s
+    planned 26.5 of 27.2 GiB at 524k. Make ONE storage serve both: keep the served cache itself in the table''s natural
+    order (or make the table a view into the served cache with the window area as a small separate buffer), so the compressor
+    writes each chunk''s rows once. The serving contract''s KV read-back (K.1 contract tests) must still pass, and the decode
+    side''s expected layout must still be met; if the contract fixes the server order, convert at read-back, not per chunk.
+    Report memory per chip per slot before/after (this box and the plan''s full-model numbers on galaxy_4x4 / 8x4 at 524k
+    and 1M), chunk wall and device time (must not lose P.21''s gain: quick wall ~103.5 ms), and the err_* metrics vs limits.
+    Delete the duplicate path; no new switch unless the old layout must stay selectable.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  placed: '2026-10-22T13:46:56'
