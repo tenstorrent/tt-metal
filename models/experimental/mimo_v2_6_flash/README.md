@@ -27,6 +27,7 @@ in [doc/tp8_dp4_plan.md](doc/tp8_dp4_plan.md).
 | `reference/mtp.py`, `reference/spec_decode.py` | fp32 MTP layer (vLLM's `MiMoV2MTP`), the drafters (one layer, or one layer per draft) and the device program's mirror; host bookkeeping of MTP speculative decoding (verify passes, draft rows, the stash, the MTP ring) |
 | `tt/mtp.py` | `TtMiMoMTP`: the MTP layers as a traced 3-token drafter on one replica (draft i + 1 from layer i, or one layer) |
 | `tt/mtp_backfill.py`, `reference/mtp_backfill.py` | The target-hidden history (decode, verify and prefill write it) and the MTP ring backfill from it (`kernels/mtp_history.cpp`); their host mirror |
+| `tt/dflash.py`, `reference/dflash.py` | `TtDFlash`: the checkpoint's DFlash draft model (`dflash/`, 5 dense layers) as a traced one-pass drafter on one replica (`MIMO_SPEC_DECODE=dflash`): the decode / verify traces keep target layers 0/11/23/35/47's outputs, the draft program writes the committed rows into a context ring and drafts [anchor, 7 masks] non-causally; the fp32 reference as vLLM's `qwen3_dflash` runs it |
 | `tt/verify_sampler.py`, `reference/sample_verify.py` | Speculative acceptance on device (the plugin's `fused_sample`): the verify's accept walk on the device sampler's candidates (`kernels/sample_verify.cpp`), and its host layouts and integer mirror |
 | `tt/spec_inputs.py`, `tt/spec_chain.py`, `reference/spec_inputs.py`, `reference/spec_chain.py` | A verify's and a draft's packed inputs, derived on device; the MTP draft chained behind the verify and its acceptance (`kernels/spec_chain.cpp`), with one result page per pass; their torch / integer mirrors |
 | `tt/generator_vllm.py` | `MiMoV2ForCausalLM`, the vllm-tt-plugin model class: DP=4 as in-process lanes, vLLM-owned hybrid KV (1 global + 5 SWA KV cache groups). Launch and results in [doc/vllm_integration/README.md](doc/vllm_integration/README.md) |
@@ -49,6 +50,7 @@ pytest models/experimental/mimo_v2_6_flash/tests/test_moe_decode_tp8.py         
 pytest models/experimental/mimo_v2_6_flash/tests/test_model_tp8_dp4.py            # 48 layers vs the fp32 golden
 pytest models/experimental/mimo_v2_6_flash/tests/test_model_chunked_tp8_dp4.py    # 48 layers: chunked, prefix hit
 pytest models/experimental/mimo_v2_6_flash/tests/test_model_traced_tp8_dp4.py     # traced decode, device greedy loop
+pytest models/experimental/mimo_v2_6_flash/tests/test_dflash_tp8.py               # DFlash drafter vs the fp32 reference
 python models/experimental/mimo_v2_6_flash/tests/perf/decode_bandwidth.py --steps 32 --repeats 5
 python models/experimental/mimo_v2_6_flash/tests/perf/prefill_time.py             # 4K prompt, 32K in 4K chunks, one row
 ```

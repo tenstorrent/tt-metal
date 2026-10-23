@@ -732,6 +732,8 @@ class MiMoV2ForCausalLM:
                 handle = self.models[lane].prefill_enqueue_batch(chunks)
             else:
                 (chunk, slot, _), start = chunks[0], rows_of_pass[0][3]
+                if not continues[rows_of_pass[0][0]]:
+                    self.dflash_ring[lane] = None  # a request's first chunk: the ring holds none of its rows
                 self._dflash_continue(lane, slot, start, start + chunk.numel() - 1)
                 handle = self.models[lane].prefill_enqueue(
                     chunk, slot, start_pos=start, history_continues=continues[rows_of_pass[0][0]]
