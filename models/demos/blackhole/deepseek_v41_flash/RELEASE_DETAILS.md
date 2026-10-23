@@ -1,5 +1,26 @@
 # DeepSeek-V4.1-Flash on Blackhole Galaxy: release details (test logs, bisect tables, long-form findings; the short release notes are in RELEASE_NOTES.md)
 
+## Single chunk trace, per-row chunk starts, no admission window (branch `ssinghal/dsv4p1-single`)
+
+| Item | What it is | Switch | Measured (4 users, 1,048,576 tokens, adaptive speculative k, APC on, trace region 1.2 GB) |
+|---|---|---|---|
+| Single prefill chunk trace | ONE chunk trace at the build's maximum context, replayed for every chunk of every prompt whatever its length; the index-key slab is position indexed (current chunk + history, valid prefix read from a device tensor by the new `kv_len_tensor` argument of `indexer_score_dsa`); replaces the per-width small contexts (`DSV41_PF_SMALL_BUCKET`) | default when read mode + bf16 pool + the `kv_len_tensor` op are present (`DSV41_PF_SINGLE=0` restores the per-S_pad traces; a missing op logs the reason and falls back) | one prefill trace, +6.0 MiB/bank; per-chunk replay 99 ms at 16k, 102 ms at 64k (8-layer probe) against 237 ms for the old 1M-wide trace; APC snapshots / restore of the slab bit-identical |
+| Per-row chunk starts | every mesh row replays ITS OWN chunk position in one trace replay (RoPE tables, masks, window ids, valid length, hand-off indices, drafter taps are per row), so users that vLLM admits step by step cost the same as aligned users; without it users at different positions needed one replay per distinct position (3 per 512-token step) | default with the single trace and one prefill slot per mesh row (`DSV41_PF_PERROW=0` restores the window loop; image-input launches keep the window loop) | 4 users at different positions: logits bit-identical to each user's own lone prefill (max diff 0.0), 7 replays instead of 16 |
+| No admission window | the adapter capability `prefill_admission_window_ms` defaults to 0; nothing is held | `TT_PREFILL_ADMIT_WINDOW_MS` / `DSV41_PREFILL_ADMIT_MS` stay as experiment knobs | window-off, old window loop, budget 67,584, 4 concurrent distinct prompts: TTFT 67.8 / 180 / 380 s at 32k / 64k / 128k, stall of a running request 43.8 s |
+| First step of an idle engine capped (plugin `prefill_first_step_tokens`, branch `ssinghal/dsv4p1-single` of the plugin repo) | the first prefill step of an idle engine is one chunk: requests arriving a few ms later share the next step instead of trailing a lone request that took the whole budget; nothing is held | adapter capability `prefill_first_step_tokens` (default one chunk, `DSV41_PREFILL_FIRST_STEP`); plugin `TT_PREFILL_FIRST_STEP_TOKENS` | see the table below |
+| Scheduler budget of the B=4 / 1M specs | `max_num_batched_tokens` 16,384 (APC spec), `long-prefill-token-threshold` 4,096, `DSV41_VLLM_MAX_PARTIAL=4` (all four prompts may be part-way through their prefill) | in `assets/runtime_spec_b4_k5_1048576*.json` (not the vision specs) | |
+
+4 concurrent distinct cold prompts, TTFT of the last first token (s), per-row single trace, first step capped, plugin `ff71d29` + the cap:
+
+| ISL | budget 8,192 / threshold 2,048 | budget 16,384 / threshold 4,096 (shipped) | demo (aligned, same pool) |
+|---|---|---|---|
+| 32k | 28.0 | 25.8 | 22.9-26.5 |
+| 64k | 53.8 | 49.2 | 45.6-49.7 |
+| 128k | 110.7 | 100.5 | 98.0-99.9 |
+| longest decode gap of a running request while 3 x 32k prefill | 3.5 s | 6.2 s | |
+
+The remaining difference to an aligned call is the per-step host work of a call (about 0.2-0.3 s: Engram hashing and uploads of the first window, APC snapshot reads, key export), which a larger step amortises; a larger step lengthens the decode stall.
+
 ## This release: image `0.24.0-0655530-4743e01` (vLLM 0.31.0)
 
 | | |

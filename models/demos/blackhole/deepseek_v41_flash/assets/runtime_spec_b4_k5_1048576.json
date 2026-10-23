@@ -34,7 +34,8 @@
                 "hf-overrides": "{\"architectures\":[\"TTDeepseekV41ForCausalLM\"]}",
                 "speculative_config": "{\"method\": \"custom_class\", \"model\": \"vllm_tt_plugin.model_owned_drafter\", \"num_speculative_tokens\": 5}",
                 "port": "8000",
-                "enable-prefix-caching": true
+                "enable-prefix-caching": true,
+                "long-prefill-token-threshold": "4096"
             },
             "override_tt_config": {
                 "fabric_config": "FABRIC_1D_RING",
@@ -58,7 +59,8 @@
                 "DSV41_BUILD_SLOTS": "0",
                 "DSV41_VLLM_CHUNK": "512",
                 "DSV41_APC": "1",
-                "DSV41_PF_PAGED": "read"
+                "DSV41_PF_PAGED": "read",
+                "DSV41_VLLM_MAX_PARTIAL": "4"
             },
             "tensor_cache_timeout": 7200.0,
             "system_requirements": null,

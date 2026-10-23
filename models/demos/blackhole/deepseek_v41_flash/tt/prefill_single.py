@@ -45,7 +45,13 @@ def per_row_enabled(slots_per_row=1):
     """Per-ROW chunk starts (DSV41_PF_PERROW, default on with the single trace): every mesh row replays its own chunk position in ONE trace replay (users admitted step by step by the scheduler sit at
     different positions; the window loop needed one replay per distinct position). Needs one prefill slot per mesh row (DSV41_PREFILL_UP=1).
     """
-    return enabled() and int(slots_per_row) == 1 and os.environ.get("DSV41_PF_PERROW", "1") == "1"
+    return (
+        enabled()
+        and int(slots_per_row) == 1
+        and os.environ.get("DSV41_PF_PERROW", "1") == "1"
+        and os.environ.get("DSV41_VISION", "0")
+        != "1"  # (image prompts: not validated with per-row starts yet, they keep the window loop)
+    )
 
 
 def slot_s0(s0, n):

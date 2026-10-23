@@ -54,3 +54,22 @@ def test_missing_op_falls_back(monkeypatch):
     monkeypatch.setattr(PS, "kv_len_tensor_available", lambda: False)
     on, why = PS.resolve_server_default(512, 1048576)
     assert not on and "kv_len_tensor" in why
+
+
+def test_slot_s0_and_per_row_switch(monkeypatch):
+    assert PS.slot_s0(512, 4) == [512] * 4
+    assert PS.slot_s0([0, 512, 1024, 1536], 4) == [0, 512, 1024, 1536]
+    try:
+        PS.slot_s0([0, 512], 4)
+        raised = False
+    except AssertionError:
+        raised = True
+    assert raised
+    monkeypatch.setenv("DSV41_PF_SINGLE", "1")
+    assert PS.per_row_enabled(1)
+    assert not PS.per_row_enabled(2)  # one prefill slot per mesh row only
+    monkeypatch.setenv("DSV41_PF_PERROW", "0")
+    assert not PS.per_row_enabled(1)
+    monkeypatch.delenv("DSV41_PF_PERROW")
+    monkeypatch.setenv("DSV41_VISION", "1")
+    assert not PS.per_row_enabled(1)  # image prompts keep the window loop
