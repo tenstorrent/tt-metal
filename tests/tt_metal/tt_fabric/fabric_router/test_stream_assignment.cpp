@@ -85,7 +85,7 @@ TEST(StreamAssignmentTest, CreditPlanKeepsEachVcsReasons) {
     EXPECT_FALSE(plan.vc_uses_counters(2));
     EXPECT_TRUE(plan.any_vc_uses_counters());
     EXPECT_EQ(
-        plan.reasons(1),
+        plan.get_l1_counters_reasons(1),
         (std::vector<L1CreditCounterReason>{L1CreditCounterReason::MULTI_TXQ, L1CreditCounterReason::EXPRESS}));
 
     // Invalid VC index should throw
