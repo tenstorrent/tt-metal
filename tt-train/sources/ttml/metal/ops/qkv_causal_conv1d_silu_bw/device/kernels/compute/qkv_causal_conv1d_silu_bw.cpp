@@ -27,7 +27,8 @@ constexpr uint32_t batch_size(uint32_t base) {
 }
 
 // out = sum_tap weights[w] * copy_tap, w = tap (preact) or 3 - tap (grad_input). ELWMUL accumulates into DST, and tap 0
-// lands on the half the previous tile_regs_release left zeroed.
+// lands on the half the previous tile_regs_release left zeroed. This relies on the LLK dropping the clear flag that
+// mul_tiles_bcast_rows passes on the no-dest-reuse path; if that path ever honours it, the taps stop summing.
 template <uint32_t channel_tiles_per_block>
 void conv(uint32_t shifted_cb, bool reversed, DataflowBuffer& out, uint32_t out_cb) {
     out.reserve_back(channel_tiles_per_block);
