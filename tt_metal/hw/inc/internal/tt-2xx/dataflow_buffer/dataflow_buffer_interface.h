@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include "dataflow_buffer_config.h"
+#include "core_config.h"  // MaxDMProcessorsPerCoreType
 #ifndef COMPILE_FOR_TRISC
 #include "internal/tt-2xx/quasar/overlay/remapper_api.hpp"
 #endif
@@ -27,6 +28,9 @@ extern thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS];
 // Cached L1 byte address of the DFB config region; set once during setup_local_dfb_interfaces
 // so DataflowBuffer::DataflowBuffer() can call dfb_ensure_ready without a separate parameter.
 extern thread_local uintptr_t g_dfb_config_base_addr;
+// Logical ids of the DFBs this hart is bound to this launch (bit per id); set by
+// setup_local_dfb_interfaces, read by the kernel-exit finish.
+extern thread_local uint32_t g_dfb_bound_mask;
 #ifndef COMPILE_FOR_TRISC
 extern volatile TxnDFBDescriptor g_txn_dfb_descriptor[32];
 extern overlay::RemapperAPI g_remapper_configurator;
@@ -131,6 +135,33 @@ struct LocalDFBInterface {
 static_assert(sizeof(DFBTCSlot) == 16, "DFBTCSlot size is incorrect");
 static_assert(sizeof(LocalDFBInterface) == 128, "LocalDFBInterface size is incorrect");
 
+namespace dfb {
+// DM0 (ISR) and DM1 (remapper) never run kernels, so kernel DMs are DM2 onward.
+constexpr uint8_t FIRST_KERNEL_DM_HART = 2;
+constexpr uint8_t NUM_KERNEL_DM_HARTS = MaxDMProcessorsPerCoreType - FIRST_KERNEL_DM_HART;
+static_assert(NUM_KERNEL_DM_HARTS == MAX_PRODUCERS_PER_DFB, "kernel DMs and DFB producer slots must agree");
+}  // namespace dfb
+
+// Implicit-sync progress of this DM on one DFB. A DM hart is either a producer or a consumer of a given DFB,
+// never both (DM self-loops are rejected), so one struct covers whichever side it is.
+// Firmware hands it to DM0 when the kernel returns and zeroes it for the next launch (dfb_dm_kernel_exit).
+struct DFBImplicitProgress {
+    uint16_t loop;      // completed txn-id batches, mod 2^16 like the tile counters
+    uint8_t pos;        // entries issued into the current batch, < num_entries_per_txn_id
+    uint8_t share;      // entries per op; DM0 needs it to split the last batch over the counters
+    uint8_t txn_idx;    // index into txn_ids[] of the current batch
+    uint8_t share_pos;  // STRIDED side: entries of the current op issued so far
+    uint8_t _pad[2];
+};
+static_assert(sizeof(DFBImplicitProgress) == 8, "DFBImplicitProgress size is incorrect");
+extern thread_local DFBImplicitProgress g_dfb_progress[dfb::NUM_DFBS];
+
+// Kernel-exit handoff from each kernel DM to DM0.
+// A record holds a DM's loop, pos and share on one implicit-sync DFB side, indexed by the
+// side's lowest txn id. A DM signals that its records are written through its run state
+// (RUN_SYNC_MSG_DFB_FINISHING).
+extern uint32_t g_dfb_exit_record[dfb::NUM_KERNEL_DM_HARTS][NUM_DFB_POOL_TXN_IDS];
+
 #endif
 
 #if defined(COMPILE_FOR_TRISC)
@@ -163,7 +194,8 @@ struct TxnDFBDescriptor {
         uint8_t tiles_to_post;
         uint8_t tiles_to_ack;
     } __attribute__((packed));
-    uint8_t _pad[12];  // pad 20 → 32 bytes
+    dfb_dm0_finish_info_t finish;  // read only by DM0's kernel-exit flush, not by the ISR
+    uint8_t _pad[10];              // pad 22 → 32 bytes
 };
 static_assert(sizeof(TxnDFBDescriptor) == 32, "TxnDFBDescriptor size is incorrect");
 static_assert(
@@ -178,3 +210,6 @@ static_assert(
 static_assert(
     offsetof(TxnDFBDescriptor, tiles_to_post) == offsetof(dfb_dm0_txn_descriptor_image_t, tiles_to_post_or_ack),
     "TxnDFBDescriptor tiles_to_post must match dfb_dm0_txn_descriptor_image_t tiles_to_post_or_ack");
+static_assert(
+    offsetof(TxnDFBDescriptor, finish) == offsetof(dfb_dm0_txn_descriptor_image_t, finish),
+    "TxnDFBDescriptor finish must match dfb_dm0_txn_descriptor_image_t finish");

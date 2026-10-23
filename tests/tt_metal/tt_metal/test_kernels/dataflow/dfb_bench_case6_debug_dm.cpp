@@ -5,9 +5,8 @@
 // DM producer kernel for BenchmarkCaseSixDebug.
 //
 // Single 1Sx1A DFB (logical id 0): DM4 (t0) → Neo0 (t0).
-// Uses explicit reserve_back / push_back (implicit_sync=false) so producer
-// finish() does not spin in handle_final_credits WTP1 waiting for ISR-posted
-// producer TC credits. Matches the passing DMTensixTest1xDFB1Sx1S producer path.
+// Uses explicit reserve_back / push_back (implicit_sync=false). Matches the
+// passing DMTensixTest1xDFB1Sx1S producer path.
 
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"

@@ -7,9 +7,10 @@
 // preload_*_counter exists solely so the D1 implicit-sync uint16-wrap test can
 // fast-forward DFB credit counters into a near-wrap state BEFORE the kernel
 // issues any reserve_back / push_back / async_read / async_write. Both the HW
-// counter (posted/acked) AND the kernel-side shadow state (loop_cnt + txn_id
-// index + tiles_*) must be advanced together so they stay in the same epoch —
-// otherwise prepare_implicit_*'s modular comparison can't detect "caught up."
+// counter (posted/acked) AND the kernel-side shadow state (the DFB's
+// DFBImplicitProgress: batch count + txn_id index) must be advanced together so
+// they stay in the same epoch — otherwise prepare_implicit_*'s modular
+// comparison can't detect "caught up."
 //
 // Usage rules:
 //   - Call AFTER the DFB has been constructed (`DataflowBuffer dfb(...)`)
@@ -34,33 +35,27 @@
 
 #include "api/dataflow/dataflow_buffer.h"
 
+// `value` was added to every counter, i.e. value / per_tc whole txn-id batches. `value` must be a
+// multiple of per_tc so the DFB stays on a batch boundary.
+inline void preload_implicit_progress(const LocalDFBInterface& intf, DFBImplicitProgress& progress, uint16_t value) {
+    const uint16_t per_tc = intf.num_entries_per_txn_id_per_tc;
+    if (per_tc > 0 && intf.num_txn_ids > 0) {
+        ASSERT(value % per_tc == 0);
+        progress.loop = value / per_tc;
+        progress.txn_idx = static_cast<uint8_t>(progress.loop % intf.num_txn_ids);
+    }
+}
+
 template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline void preload_posted_cursor(DataflowBuffer<Pap, Cap>& dfb, uint16_t value) {
     ASSERT(value % dfb.get_producer_share() == 0);
-    const uint16_t per_tc = dfb.local_dfb_interface_.num_entries_per_txn_id_per_tc;
-    if (per_tc > 0 && dfb.local_dfb_interface_.num_txn_ids > 0) {
-        dfb.ptxn_id_loop_cnt_ = value / per_tc;
-        dfb.ptxn_id_index_ = static_cast<uint8_t>(dfb.ptxn_id_loop_cnt_ % dfb.local_dfb_interface_.num_txn_ids);
-    }
-    // `value` was added to every round-robin counter. The software cursor counts
-    // issues globally, so it is value * N (broadcast posts one issue to every
-    // counter, so the cursor stays `value`). N is 1 for the D1 wrap test.
-    dfb.ptiles_read_ = dfb.local_dfb_interface_.broadcast_tc
-                           ? value
-                           : static_cast<uint32_t>(value) * dfb.local_dfb_interface_.num_tcs_to_rr;
+    preload_implicit_progress(dfb.local_dfb_interface_, dfb.implicit_progress(), value);
 }
 
 template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline void preload_acked_cursor(DataflowBuffer<Pap, Cap>& dfb, uint16_t value) {
     ASSERT(value % dfb.get_consumer_share() == 0);
-    const uint16_t per_tc = dfb.local_dfb_interface_.num_entries_per_txn_id_per_tc;
-    if (per_tc > 0 && dfb.local_dfb_interface_.num_txn_ids > 0) {
-        dfb.ctxn_id_loop_cnt_ = value / per_tc;
-        dfb.ctxn_id_index_ = static_cast<uint8_t>(dfb.ctxn_id_loop_cnt_ % dfb.local_dfb_interface_.num_txn_ids);
-    }
-    dfb.ctiles_written_ = dfb.local_dfb_interface_.broadcast_tc
-                              ? value
-                              : static_cast<uint32_t>(value) * dfb.local_dfb_interface_.num_tcs_to_rr;
+    preload_implicit_progress(dfb.local_dfb_interface_, dfb.implicit_progress(), value);
 }
 
 template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
