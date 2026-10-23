@@ -15,9 +15,8 @@
  * programming the srcA/srcB ALU format registers from the operand's dest data format and enabling 32-bit dest
  * when EN_32BIT_DEST is set, then loads the bank0 replay buffer with the transpose-dest MOP.
  *
- * @note Uses the state-tracked _configure_mov_ops_explicit_alu_data_format_state_ so a following
- * op (datacopy/matmul/reduce/binary) detects the non-default ALU state and reconfigures back to
- * default.
+ * @note Programs @ref AluCfgType::MOV_OPS_EXPLICIT_FORMAT, so a following op
+ * (datacopy/matmul/reduce/binary) sees a different tracked state and reconfigures back to default.
  *
  * @tparam transpose_of_faces Transpose faces as well.
  * @tparam EN_32BIT_DEST True if dest is in 32-bit mode.
@@ -27,7 +26,7 @@ template <bool transpose_of_faces = true, bool EN_32BIT_DEST = false>
 inline void llk_math_transpose_dest_init(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const DataFormat operand_format = static_cast<DataFormat>(get_operand_dst_format(operand_id));
-    _configure_mov_ops_explicit_alu_data_format_state_<EN_32BIT_DEST>(operand_format, operand_format);
+    _configure_alu_cfg_<AluCfgType::MOV_OPS_EXPLICIT_FORMAT, EN_32BIT_DEST>(operand_format, operand_format);
     _llk_math_transpose_dest_init_<transpose_of_faces, EN_32BIT_DEST>();
 }
 
