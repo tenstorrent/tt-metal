@@ -12,7 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
@@ -61,6 +61,8 @@ _REGRESSION_CASE = _PerformanceCase(
     value_dim=64,
     expected_duration_ns=13_299,
 )
+# TODO: Switch to Galaxy SP8xTP4's per-device shape (24 heads, 20 chunks) once the scan's time at that shape is
+# deterministic; on an 11x10 grid each head gets 2 value blocks and single calls vary by tens of percent.
 _PRODUCTION_CASE = _PerformanceCase(
     "pr7-leaf-bh96-n20-k128-v128",
     batch_heads=96,
@@ -213,6 +215,7 @@ def test_recurrent_chunk_scan_contract_and_trace(
         dtypes=(ttnn.bfloat16, ttnn.float32),
         shapes=((batch_heads, num_chunks, CHUNK_SIZE, value_dim), (batch_heads, key_dim, value_dim)),
         expected_memory_config=output_memory,
+        nrmse_threshold=0.004,
     )
 
 
@@ -276,7 +279,13 @@ def test_recurrent_chunk_scan_is_device_deterministic(zero_actual_start, device:
         name="recurrent outputs device-side exact-value determinism marker",
     )
     for name, golden, output in zip(("token_output", "final_state"), expected, outputs, strict=True):
-        assert_accurate(golden, output, name=f"deterministic recurrent reference {name}", pcc_threshold=0.999)
+        assert_accurate(
+            golden,
+            output,
+            name=f"deterministic recurrent reference {name}",
+            pcc_threshold=0.999,
+            nrmse_threshold=0.006,
+        )
     assert tuple(reference[0].shape) == (
         case.batch_heads,
         case.num_chunks,
@@ -307,12 +316,14 @@ def test_recurrent_chunk_scan_cache_hit_rebinds_fresh_tensors(
         outputs_a,
         names=("token_output", "final_state"),
         context="cache miss tensors",
+        nrmse_threshold=0.006,
     )
     assert_outputs_accurate(
         recurrent_oracle(host_b, state_b_host),
         outputs_b,
         names=("token_output", "final_state"),
         context="cache hit fresh tensors",
+        nrmse_threshold=0.006,
     )
 
 
@@ -353,12 +364,15 @@ def test_recurrent_chunk_scan_approximate_math_uses_distinct_accurate_program(
     approximate = run_recurrent(inputs, state, compute_kernel_config=approximate_config, actual_start=zero_actual_start)
     assert device.num_program_cache_entries() == entries + 1
     expected = recurrent_oracle(host_inputs, host_state)
-    assert_outputs_accurate(expected, exact, names=("token_output", "final_state"), context="exact recurrent math")
+    assert_outputs_accurate(
+        expected, exact, names=("token_output", "final_state"), context="exact recurrent math", nrmse_threshold=0.006
+    )
     assert_outputs_accurate(
         expected,
         approximate,
         names=("token_output", "final_state"),
         context="approximate recurrent math",
+        nrmse_threshold=0.006,
     )
 
 
