@@ -22,6 +22,7 @@
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_serialization.hpp"  // serialize_tracked_arg<T> definitions, used via track_function_start
 #include "ttnn/up_front_compile.hpp"           // up-front parallel precompile collect hook
+#include "ttnn/program_fingerprint.hpp"        // TT_METAL_PROGRAM_FINGERPRINT_DIR dump
 #include "ttnn/distributed/api.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
@@ -189,6 +190,29 @@ inline void log_operation(
 
 #endif
 
+// Out of line, so the fingerprint dump (ttnn/program_fingerprint.hpp) adds nothing to the dispatch path but its flag.
+template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
+[[gnu::noinline]] void record_program_fingerprint(
+    const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
+    const typename mesh_device_operation_t::tensor_args_t& tensor_args,
+    const typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
+    distributed::MeshDevice* mesh_device,
+    tt::tt_metal::distributed::MeshWorkload& workload,
+    bool program_cache_hit) {
+    std::vector<const Tensor*> args;
+    std::vector<const Tensor*> returns;
+    ttsl::reflection::visit_object_of_type<Tensor>([&](const Tensor& t) { args.push_back(&t); }, tensor_args);
+    ttsl::reflection::visit_object_of_type<Tensor>(
+        [&](const Tensor& t) { returns.push_back(&t); }, tensor_return_value);
+    ttnn::program_fingerprint::record(
+        get_operation_name<mesh_device_operation_t>(operation_attributes),
+        program_cache_hit,
+        *mesh_device,
+        workload,
+        args,
+        returns);
+}
+
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void enqueue_mesh_workload(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -228,6 +252,13 @@ void enqueue_mesh_workload(
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     ttnn::graph::track_mesh_workload_execution(workload, mesh_device, runtime_id);
+
+    // After the enqueue, which pads each core's runtime args to its kernel group's longest: a miss and a hit then
+    // record the same lists.
+    if (ttnn::program_fingerprint::enabled()) [[unlikely]] {
+        record_program_fingerprint<mesh_device_operation_t>(
+            operation_attributes, tensor_args, tensor_return_value, mesh_device, workload, program_cache_hit);
+    }
 
     TracyOpMeshWorkload(
         mesh_device,
