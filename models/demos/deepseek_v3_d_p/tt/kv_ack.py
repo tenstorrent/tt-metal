@@ -45,6 +45,8 @@ def zero_pad_and_ack(
     metadata_msg,
     on_layer_complete,
     trace_controller,
+    tp_axis: Optional[int] = None,
+    alias_layer_ids: tuple = (),
 ) -> None:
     """Zero this chunk's pad window in the KV cache and tell migration the layer is done.
 
@@ -53,6 +55,9 @@ def zero_pad_and_ack(
 
     Only call this on a layer that actually wrote KV. A Kimi-K3 KDA layer writes none, so its block
     skips it — there is no pad window to clean and no slot to ack.
+
+    ``alias_layer_ids`` ack right after ``global_layer_idx``, in order: table rows published at this
+    layer's addresses (decode MTP levels sharing one KV cache), so they are done when it is.
     """
     # Chunked-prefill migration handoff. MLA's update_padded_kv_cache wrote this chunk as full
     # 32-row tiles, leaving stale data between the last real token (actual_end) and the next
@@ -92,6 +97,7 @@ def zero_pad_and_ack(
                     layer_num,
                     seq_len_local * sp_factor,
                     sp_axis,
+                    tp_axis=tp_axis,
                 )
             else:
                 ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
@@ -102,6 +108,7 @@ def zero_pad_and_ack(
                     actual_end,
                     seq_len_local * sp_factor,
                     sp_axis,
+                    tp_axis=tp_axis,
                 )
         _t_zero = time.perf_counter() if _ACK_TIMING else 0.0
         if d2h_service is not None:
@@ -113,6 +120,10 @@ def zero_pad_and_ack(
             # pass a persistent record (TtPrefillRuntime._trace_metadata_msg), never the per-chunk
             # socket tensor, whose address moves every chunk.
             ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
+            # A record carries no layer id: the host numbers a rank's records by arrival, so each alias
+            # needs a record of its own.
+            for _ in alias_layer_ids:
+                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
         else:
             # Trace path: route the ack through the controller. At capture it splits the trace here (a host
             # shm bump cannot live inside a trace); at replay the controller fires the ack between the two
@@ -122,10 +133,11 @@ def zero_pad_and_ack(
             # is False (and on_layer_complete is None there, so neither fires).
             tc = trace_controller
             if tc is not None and tc.has_layer_ack():
-                tc.layer_ack(global_layer_idx)
+                tc.layer_ack(global_layer_idx, *alias_layer_ids)
             else:
                 ttnn.synchronize_device(mesh_device)
-                on_layer_complete(global_layer_idx)
+                for layer_idx in (global_layer_idx, *alias_layer_ids):
+                    on_layer_complete(layer_idx)
         if _ACK_TIMING:
             _end = time.perf_counter()
             logger.info(
