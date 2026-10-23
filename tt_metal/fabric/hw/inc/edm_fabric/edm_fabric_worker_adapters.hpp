@@ -16,6 +16,7 @@
 #include "hostdevcommon/fabric_common.h"
 #include "edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_credit_counter.hpp"
 #include "api/alignment.h"
 #include "api/debug/assert.h"
 
@@ -218,7 +219,7 @@ struct WorkerToFabricEdmSenderBase {
                 ? reinterpret_cast<volatile tt_reg_ptr uint32_t*>(from_remote_buffer_free_slots_ptr)
                 : reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
                       get_stream_reg_read_addr(this->worker_credits_stream_id));
-        this->edm_buffer_remote_free_slots_update_addr = get_stream_reg_write_addr(sender_channel_credits_stream_id);
+        this->edm_buffer_remote_free_slots_counter = make_fabric_credit_counter(sender_channel_credits_stream_id);
         this->edm_buffer_local_free_slots_update_ptr =
             !I_USE_STREAM_REG_FOR_CREDIT_RECEIVE
                 ? reinterpret_cast<volatile tt_reg_ptr uint32_t*>(from_remote_buffer_free_slots_ptr)
@@ -388,13 +389,16 @@ struct WorkerToFabricEdmSenderBase {
         ncrisc_noc_write_set_state</*posted=*/posted, /*one_packet=*/false>(
             noc, this->data_noc_cmd_buf, edm_core_noc_addr, 0, NOC_UNICAST_WRITE_VC);
 
-        const uint64_t credit_noc_addr =
-            get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
-        const uint32_t packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
         // Keep the credit inline write non-posted for now; only the payload/header transport path is toggled by
         // `posted`.
-        noc_inline_dw_write_set_state</*posted=*/false, /*set_val=*/true>(
-            credit_noc_addr, packed_val, 0xF, this->sync_noc_cmd_buf, noc, NOC_UNICAST_WRITE_VC);
+        fabric_credit_counter_add_set_state</*posted=*/false>(
+            this->edm_noc_x,
+            this->edm_noc_y,
+            this->edm_buffer_remote_free_slots_counter,
+            -1,
+            this->sync_noc_cmd_buf,
+            noc,
+            NOC_UNICAST_WRITE_VC);
     }
 
     template <bool posted = false>
@@ -647,7 +651,7 @@ struct WorkerToFabricEdmSenderBase {
     // Downstream router will increment this when it frees up a slot
     volatile tt_reg_ptr uint32_t* edm_buffer_local_free_slots_read_ptr;
     volatile tt_reg_ptr uint32_t* edm_buffer_local_free_slots_update_ptr;
-    size_t edm_buffer_remote_free_slots_update_addr;
+    FabricCreditCounter edm_buffer_remote_free_slots_counter;
     size_t edm_connection_handshake_l1_addr;
     size_t edm_worker_location_info_addr;
     // Note that for persistent (fabric to fabric connections), this only gets read once and actually points to the free
@@ -683,23 +687,15 @@ private:
     FORCE_INLINE void update_edm_buffer_free_slots(uint8_t noc = get_fabric_worker_noc()) {
         if constexpr (stateful_api) {
             if constexpr (enable_deadlock_avoidance) {
-                noc_inline_dw_write_with_state<true, false, true, false, false, InlineWriteDst::REG>(
-                    0,  // val unused
-                    this->edm_buffer_remote_free_slots_update_addr,
-                    this->sync_noc_cmd_buf,
-                    noc);
+                fabric_credit_counter_add_with_state</*update_counter=*/false, /*posted=*/true>(
+                    this->edm_buffer_remote_free_slots_counter, this->sync_noc_cmd_buf, noc);
             } else {
-                noc_inline_dw_write_with_state<false, true, false, false, false, InlineWriteDst::REG>(
-                    0,  // val unused
-                    0,  // addr unused
-                    this->sync_noc_cmd_buf,
-                    noc);
+                fabric_credit_counter_add_with_state</*update_counter=*/true, /*posted=*/false>(
+                    this->sync_noc_cmd_buf, noc);
             }
         } else {
-            auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
-            const uint64_t noc_sem_addr =
-                get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
-            noc_inline_dw_write<InlineWriteDst::REG>(noc_sem_addr, packed_val, 0xf, noc);
+            fabric_credit_counter_add(
+                this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_counter, -1, noc);
         }
         if constexpr (I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             // Write to the atomic increment stream register (write of -1 will subtract 1)

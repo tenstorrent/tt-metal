@@ -12,6 +12,7 @@
 // #include "hostdevcommon/fabric_common.h"
 #include "edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_credit_counter.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "fabric_edm_packet_header_validate.hpp"
 #include "api/alignment.h"
@@ -87,7 +88,7 @@ struct RouterStaticSizedChannelWriterAdapter {
 
         this->edm_buffer_local_free_slots_read_ptr =
             reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_stream_reg_read_addr(this->worker_credits_stream_id));
-        this->edm_buffer_remote_free_slots_update_addr = get_stream_reg_write_addr(sender_channel_credits_stream_id);
+        this->edm_buffer_remote_free_slots_counter = make_fabric_credit_counter(sender_channel_credits_stream_id);
         this->edm_buffer_local_free_slots_update_ptr =
             reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_stream_reg_write_addr(this->worker_credits_stream_id));
         this->edm_connection_handshake_l1_addr = connected_to_persistent_fabric
@@ -160,12 +161,14 @@ public:
         uint64_t edm_noc_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, EDM_TO_DOWNSTREAM_NOC);
         noc_async_write_one_packet_with_trid_set_state<true>(
             edm_noc_addr, this->data_noc_cmd_buf, EDM_TO_DOWNSTREAM_NOC, EDM_TO_DOWNSTREAM_NOC_VC);
-        const uint64_t noc_sem_addr = get_noc_addr(
-            this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, EDM_TO_DOWNSTREAM_NOC);
-        noc_sem_addr_ = noc_sem_addr;
-        auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
-        noc_inline_dw_write_set_state<true, true>(
-            noc_sem_addr, packed_val, 0xF, this->sync_noc_cmd_buf, EDM_TO_DOWNSTREAM_NOC, EDM_TO_DOWNSTREAM_NOC_VC);
+        fabric_credit_counter_add_set_state</*posted=*/true>(
+            this->edm_noc_x,
+            this->edm_noc_y,
+            this->edm_buffer_remote_free_slots_counter,
+            -1,
+            this->sync_noc_cmd_buf,
+            EDM_TO_DOWNSTREAM_NOC,
+            EDM_TO_DOWNSTREAM_NOC_VC);
     }
 
     template <bool RISC_CPU_DATA_CACHE_ENABLED>
@@ -208,7 +211,6 @@ public:
     FORCE_INLINE uint32_t get_worker_credits_stream_id() const { return this->worker_credits_stream_id; }
 
 private:
-    mutable uint64_t noc_sem_addr_;
     std::array<uint32_t, EDM_NUM_BUFFER_SLOTS> edm_buffer_slot_addrs;
 
     uint32_t worker_credits_stream_id;
@@ -216,7 +218,7 @@ private:
     // Downstream router will increment this when it frees up a slot
     volatile tt_reg_ptr uint32_t* edm_buffer_local_free_slots_read_ptr;
     volatile tt_reg_ptr uint32_t* edm_buffer_local_free_slots_update_ptr;
-    size_t edm_buffer_remote_free_slots_update_addr;
+    FabricCreditCounter edm_buffer_remote_free_slots_counter;
     size_t edm_connection_handshake_l1_addr;
     size_t edm_worker_location_info_addr;
     // Note that for persistent (fabric to fabric connections), this only gets read once and actually points to the free
@@ -258,23 +260,15 @@ private:
     FORCE_INLINE void update_edm_buffer_free_slots(uint8_t noc = noc_index) {
         if constexpr (stateful_api) {
             if constexpr (enable_deadlock_avoidance) {
-                noc_inline_dw_write_with_state<true, false, true, false, false, InlineWriteDst::REG>(
-                    0,  // val unused
-                    this->edm_buffer_remote_free_slots_update_addr,
-                    this->sync_noc_cmd_buf,
-                    noc);
+                fabric_credit_counter_add_with_state</*update_counter=*/false, /*posted=*/true>(
+                    this->edm_buffer_remote_free_slots_counter, this->sync_noc_cmd_buf, noc);
             } else {
-                noc_inline_dw_write_with_state<false, false, true, false, false, InlineWriteDst::REG>(
-                    0,  // val unused
-                    0,  // addr unused
-                    this->sync_noc_cmd_buf,
-                    noc);
+                fabric_credit_counter_add_with_state</*update_counter=*/false, /*posted=*/true>(
+                    this->sync_noc_cmd_buf, noc);
             }
         } else {
-            auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
-            const uint64_t noc_sem_addr =
-                get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
-            noc_inline_dw_write<InlineWriteDst::REG>(noc_sem_addr, packed_val, 0xf, noc);
+            fabric_credit_counter_add(
+                this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_counter, -1, noc);
         }
         // Local free-slots consume: same stream page as the poll, update-reg folded at init.
         *this->edm_buffer_local_free_slots_update_ptr = pack_value_for_inc_on_write_stream_reg_write(-1);
