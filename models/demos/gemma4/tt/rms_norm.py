@@ -122,7 +122,9 @@ class RMSNorm(nn.Module):
         out.deallocate(True)
         return out_interleaved
 
-    def forward(self, x):
+    def forward(self, x, out_memory_config=None):
+        """``out_memory_config``: a width-sharded decode-matmul activation layout for the fused decode norm's output
+        (GEMMA4_NORM_FUSED=2 rows only; ignored on the other paths)."""
         if self.is_distributed:
             activation_grid_bounding_box_size = x.memory_config().shard_spec.grid.bounding_box().grid_size()
             shard_height, shard_width = x.memory_config().shard_spec.shape
@@ -181,7 +183,7 @@ class RMSNorm(nn.Module):
                 # GEMMA4_NORM_FUSED=2: one program on 22 cores with FPU broadcasts (custom_ops/fused_norm_decode);
                 # the layer-level forms (residual add, two inputs, three outputs) are taken by tt/layer.py.
                 gamma = self.tt_weight_full if self.with_scale else None
-                return FusedNormDecode.op(x, [gamma], self.eps)[0]
+                return FusedNormDecode.op(x, [gamma], self.eps, out_memory_configs=[out_memory_config])[0]
             if (
                 self.with_scale
                 and self.tt_weight is not None
