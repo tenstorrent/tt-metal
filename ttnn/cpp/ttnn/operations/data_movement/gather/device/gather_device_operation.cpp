@@ -9,6 +9,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 
 using namespace tt::tt_metal;
 
@@ -122,6 +123,26 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
         tensor_args.input_index_tensor.storage_type());
 
     TT_FATAL(attributes.sparse_grad == false, "Sparse gradient is not supported yet.");
+
+    if (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR) {
+        const auto output_spec = compute_output_specs(attributes, tensor_args);
+        const uint32_t output_elem_size = tensor_args.output_tensor.has_value()
+                                              ? tensor_args.output_tensor->element_size()
+                                              : tensor_args.input_tensor.element_size();
+        auto check_shard_row = [](const MemoryConfig& mc, uint32_t element_size, const char* role) {
+            TT_FATAL(
+                !has_subaligned_shard_row(mc, element_size),
+                "gather: ROW_MAJOR {} shard row of {} B is not a multiple of the buffer alignment. Reach this op "
+                "through ttnn::gather, which moves such tensors to interleaved memory, rather than calling the "
+                "device operation directly.",
+                role,
+                mc.shard_spec()->shape[1] * element_size);
+        };
+        check_shard_row(tensor_args.input_tensor.memory_config(), tensor_args.input_tensor.element_size(), "input");
+        check_shard_row(
+            tensor_args.input_index_tensor.memory_config(), tensor_args.input_index_tensor.element_size(), "index");
+        check_shard_row(output_spec.memory_config(), output_elem_size, "output");
+    }
 }
 
 GatherDeviceOperation::spec_return_value_t GatherDeviceOperation::compute_output_specs(
@@ -188,6 +209,19 @@ GatherDeviceOperation::create_op_performance_model(
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, {output}, ideal_dev_clock_cycles);
     return result;
+}
+
+bool has_subaligned_shard_row(const MemoryConfig& memory_config, uint32_t element_size) {
+    if (!memory_config.is_sharded() || !memory_config.shard_spec().has_value()) {
+        return false;
+    }
+    const auto layout = memory_config.memory_layout();
+    if (layout != TensorMemoryLayout::BLOCK_SHARDED && layout != TensorMemoryLayout::WIDTH_SHARDED) {
+        return false;
+    }
+    const uint32_t alignment =
+        (memory_config.buffer_type() == BufferType::DRAM) ? hal::get_dram_alignment() : hal::get_l1_alignment();
+    return (memory_config.shard_spec()->shape[1] * element_size) % alignment != 0;
 }
 
 Tensor gather(
