@@ -17,8 +17,9 @@ Unset:
 - `TT_METAL_SKIP_LOADING_FW`
 - `TT_METAL_FORCE_REINIT`
 - `TT_METAL_SIMULATOR`
+- `TT_METAL_QUASAR_VARIANT` (the L2 cache-controller addresses the MM4x kernels use are those of the unset or 2.0.2 variant)
 
-Rows 2c and 2d set the variables named in their rows. Every other row leaves them unset.
+Rows 2c, 2d and 125 set the variables named in their rows. Every other row leaves them unset.
 
 From row 2b onward, prefix each command with `TT_METAL_OPERATION_TIMEOUT_SECONDS=600 timeout 3600` until a passing 32 KiB local run gives calibrated values. Then set both from that run.
 
@@ -147,8 +148,8 @@ Every source in the existing DM suite gets exactly one disposition, picked by th
 | Value | Rule |
 |---|---|
 | `B-port` | MM8 builds a Mimir analogue |
-| `covered` | The upstream test cannot run, but an existing MM3-7 test exercises its intent on that descriptor |
-| `B-blocked` | An analogue is possible but needs a named capability or runtime change, or another stage (4.x) |
+| `covered` | The upstream test cannot run, but an existing MM3-7 or MM4x test exercises its intent on that descriptor |
+| `B-blocked` | An analogue is possible but needs a named capability or runtime change |
 | `C` | Mimir has no analogue at all: no multicast, no NoC atomics, no PCIe, Eth, compute, L1 banks or worker cores |
 | `out-of-scope` | Not part of MM-8 |
 
@@ -175,14 +176,14 @@ Source paths are relative to `tests/tt_metal/tt_metal/`. A `gap` in a covered-by
 | `data_movement/one_packet/test_one_packet.cpp` | covered | `*MimirRemoteTl1Direct.SizeAlignment*` | gap | SizeAlignment runs with read_back=false; 1x1 gap: sub-word and odd-size TL1 transfers (D4); iDMA max packet size is in iDMA probe case 4 | `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
 | `data_movement/interleaved_to_sharded_hardcoded/test_interleaved_to_sharded_hardcoded.cpp` | C | — | — | Hardcoded Tensix/CB kernel; no worker cores | — |
 | `data_movement/multi_interleaved/test_multi_interleaved.cpp` | B-blocked | — | — | Interleaved bank addressing from a CCE (D3); CBs | — |
-| `data_movement/dram_sharded/test_dram_sharded.cpp` | covered | `*MimirLocalDram.CceReadsDramToTl1*`, `*MimirRemoteDram.ReadToTl1*`, `MimirPrefetcher.MM7T1Local0To1`, `MimirPrefetcher.MM7T1Local3To2`, `MimirPrefetcher.MM7T1D2d0To2`, `MimirPrefetcher.MM7T1D2d3To1` | `*MimirLocalDram.CceReadsDramToTl1*`, `MimirPrefetcher.MM7T1Local0To1` | Intent: read DRAM shards into TL1 | *Trid* cases: B-blocked on 4.x MM43; `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
-| `data_movement/transaction_id/test_transaction_id.cpp` | B-blocked | — | — | 4.x MM43 (iDMA command-buffer trids) | `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
+| `data_movement/dram_sharded/test_dram_sharded.cpp` | covered | `*MimirLocalDram.CceReadsDramToTl1*`, `*MimirRemoteDram.ReadToTl1*`, `MimirPrefetcher.MM7T1Local0To1`, `MimirPrefetcher.MM7T1Local3To2`, `MimirPrefetcher.MM7T1D2d0To2`, `MimirPrefetcher.MM7T1D2d3To1` | `*MimirLocalDram.CceReadsDramToTl1*`, `MimirPrefetcher.MM7T1Local0To1` | Intent: read DRAM shards into TL1 | *Trid* cases: covered by `MM43/MimirTridIdma.UniqueIdsLocalGddr*`; `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
+| `data_movement/transaction_id/test_transaction_id.cpp` | covered | `MM43/MimirTridIdma.BarrierThenDependent*`, `MM43/MimirTridIdma.UniqueIds*` | `MM43/MimirTridIdma.BarrierThenDependent*`, `MM43/MimirTridIdma.UniqueIds*` | iDMA command-buffer trids: unique trids, per-trid ack wait, then the dependent transfer; final data gates, stale data right after the ack is recorded (MIM-628) | `_2_0` variants: B-blocked (KernelSpec is TENSIX-only) |
 | `data_movement/direct_write/test_direct_write.cpp` | covered | `*MimirRemoteTl1Direct.SizeAlignment*` | gap | 4 B case of SizeAlignment; upstream tests inline dword writes, which the CCE does not have, so the 4 B CPU store is a stand-in; 1x1 gap: sub-word direct write (D4) | Mcast cases: C |
 | `data_movement/pcie_read_bw/test_pcie_read_bw.cpp` | C | — | — | No PCIe | — |
 | `data_movement/pcie_write_bw/test_pcie_write_bw.cpp` | C | — | — | No PCIe | — |
 | `data_movement/device_pcie_loopback/test_device_pcie_loopback.cpp` | C | — | — | No PCIe | — |
 | `data_movement/pcie_mid_cleanup/test_pcie_mid_cleanup.cpp` | C | — | — | No PCIe | — |
-| `data_movement/atomics/test_atomic_semaphore_bandwidth.cpp` | B-blocked | — | — | 4.x MM42 (local AMO, iDMA accumulate); the NoC-atomic form has no ITN equivalent | — |
+| `data_movement/atomics/test_atomic_semaphore_bandwidth.cpp` | covered | `MM42/MimirAtomicLocal.Hotspot*` | `MM42/MimirAtomicLocal.Hotspot*` | The value and count sweep as amoadd.w on a cached own-TL1 word with one, two and eight harts; the NoC-atomic form has no ITN equivalent | — |
 | `data_movement/multicast_atomics/test_multicast_atomic_semaphore.cpp` | C | — | — | No multicast, no NoC atomics | — |
 | `data_movement/noc_api_latency/test_noc_api_latency.cpp` | C | — | — | NoC API latency; no CCE NoC | — |
 | `data_movement/noc_estimator_tests/test_noc_estimator.cpp` | C | — | — | NoC estimator; no CCE NoC | — |
@@ -271,6 +272,7 @@ The table is kept by hand, with no checker script. These three checks are redone
 1. Every `data_movement/sources.cmake` source has exactly one row.
 2. Every covered-by filter that is not `gap` or `—` matches at least one test in `mimir_tests --gtest_list_tests`. A 2x-only test also lists on 1x1, so the 1x1 column names only tests that run there.
 3. Every `MM8/` test listed by `--gtest_list_tests --gtest_filter='MM8/*'` is matched by some covered-by filter and by some run row.
+4. Every test listed by `--gtest_list_tests --gtest_filter='MM41/*:MM42/*:MM43/*:MM42Detector/*'` is matched by exactly one row from 81 to 130.
 
 ## MM-8 DM regression
 
@@ -293,6 +295,127 @@ New rule: after any row that ends on a host deadline, start a fresh emulator ses
 | 78 | `MM8/MimirDmIm2col.*` | Im2col full image and dilation 1, compared on the host | all |
 | 79 | `MM8/MimirDmDramUnary.*` | Reader and writer harts on one CCE, GDDR to TL1 to GDDR with a DRAM semaphore; the semaphores are at the runtime's addresses, initialised at launch and end at the chunk count; guards before and after the destination and the staging ring | all |
 | 80 | `MM8/MimirDmScopedLockClm.*` | Scoped-lock CLM cases: invalidate on acquire, flush on release (in TL1 at the first read), locked range only; unlocked lines stay cached in both invalidate cases | all |
+
+## MM4x: test plan Sections 4.1-4.3
+
+`MM41` covers Section 4.1 (CCE caches), `MM42` Section 4.2 (atomics) and `MM43` Section 4.3 (transaction IDs). `MM42Detector` holds the non-gating MIM-560 detector, so `MM42/*` does not run it. The plan is `~/.claude/plans/the-changes-in-this-cozy-lollipop.md`.
+
+### MM4x probe results
+
+Each probe ran on the `mimir_2x_package` emulator (soc-zebu-04) on 2026-10-22, on all four CCEs, one case per invocation, against `61d03f6e674` plus the uncommitted MM4x tree. Kernels were built from a frozen copy of `test_kernels/cce`. Logs are in `/localdev/sagarwal/mm4x_runs_2026-10-22/mm4x/probe_logs_final/`.
+
+| Probe | Result | Rows that depend on it |
+|---|---|---|
+| `MM41/MimirCacheProbe.EightHartLaunch/*` | yes: all eight harts of every CCE ran a kernel and posted status | Every 8-hart MM4x case |
+| `MM41/MimirCacheProbe.SnoopConfig/*` | `NOC_SNOOP_TL_MASTER_CFG` = 0x6 (default) on every CCE. L2 CONFIGURATION = 0x06060804: 4 banks, 8 ways, 64 sets, 64 B lines (128 KiB). Chippy's reset value (8 banks, 32 sets) and the "4-way" comment in `overlay_addresses.h` do not match it | `MimirCacheCoherence.DirtyLineRace` starting value; MM41 stress sizes |
+| `MM41/MimirCacheProbe.L2Geometry/*` | Masks identical on every CCE. `cflush.d.l1 x0` alone never reached TL1 (bit 0 never set), so it stops in L2. Replacement is not LRU: at strides of 16 KiB and more the dirty target was evicted after as few as 3 same-set reads and survived some counts above 8, the same way on every CCE. 8 KiB strides (two sets) evicted it at every count from 17. Conflict stride 16 KiB | `MimirCacheStress.ReuseThrash` strides; `DirtyEvictionPartialLine` and `DirtyLineRace` eviction sweeps (24 same-set reads) |
+| `MM42/MimirAtomicProbe.TwoHartAmo/*` | yes: 2 harts x 64 amoadd.w and 64 LR/SC adds; totals, return-value sums and the host view all correct. 0 SC failures, so the two harts may barely have overlapped | Every multi-hart AMO case |
+| `MM43/MimirTridProbe.Width/*` | TR_ID written as 17 reads back 17 (the register keeps bit 4), but the command counts on trid 1: pending 1 on trid 1, 0 on trid 17. Consistent with MIM-539 (TRID[4] dropped); an out-of-range counter read would look the same | Records only; range tests use trids 0-15 |
+| `MM43/MimirTridProbe.PendingVisible/*` | 12 pending on one trid during a 16 x 8 KiB burst to local GDDR, on every CCE | NominalDepth and Saturate high-water asserts |
+| `MM43/MimirTridProbe.Scope/*` | shared: while hart 0 had 11 commands pending on trid 5, hart 1 of the same CCE read 11 on its own command buffer. Pending counters are per CCE, not per hart. Whether CCEs share them is not tested | `MimirTridIdma.MultiHart` gives each hart its own trids |
+| `MM43/MimirTridProbe.DepthBeyond16/*` | 32 x 2 KiB over trids 0-15 twice: landed, 404 VC-space stall cycles in all, at most 1 pending per trid, so earlier commands had finished before their trid was reused | Non-gating |
+
+A first pass of these probes compiled the live kernel sources while they were being edited (a relative kernel path resolves against the working directory first, `kernel.cpp` `resolve_path`). That pass was discarded. Its Scope runs failed because the observer kernel was mid-edit.
+
+### MM4x run order
+
+Rows 81 onward continue from row 80. They use the same environment and timeout prefix as rows 2b onward, plus a fresh session and bring-up before row 81. Run each case as its own invocation (`--gtest_list_tests` with the row's filter lists them) and add `--gtest_output=xml:<dir>/<descriptor>_<row>.xml`. Every `MM4x` suite is a `TEST_P` over the CCE index (`/Cce0` to `/Cce3`), except where the row says otherwise; 2x-only cases skip at runtime on `mimir_1x1`. "Own row" marks a hang-prone case: run it alone, and after any host deadline or any kernel timeout code start a fresh session and run bring-up before the next row (MIM-601).
+
+| # | Filter | Covers | Own row | Descriptors |
+|---|---|---|---|---|
+| 81 | `MM41/MimirMm4xCompile.*` | Compile only: every MM4x kernel builds for all eight harts of CCE 0; nothing launches | — | all |
+| 82 | `MM41/MimirCacheProbe.EightHartLaunch/*` | Probe: all eight harts of a CCE run a kernel | yes | all |
+| 83 | `MM41/MimirCacheProbe.SnoopConfig/*` | Probe: snoop-master config and L2 CONFIGURATION | yes | all |
+| 84 | `MM42/MimirAtomicProbe.TwoHartAmo/*` | Probe: two-hart amoadd.w and LR/SC totals | yes | all |
+| 85 | `MM41/MimirCacheProbe.L2Geometry/*` | Probe: dirty-line eviction against stride and count | yes | all |
+| 86 | `MM43/MimirTridProbe.Width/*` | Probe: TR_ID 17 | yes | all |
+| 87 | `MM43/MimirTridProbe.PendingVisible/*` | Probe: highest pending count on one trid | yes | all |
+| 88 | `MM43/MimirTridProbe.Scope/*` | Probe: pending counters per hart or shared | yes | all |
+| 89 | `MM43/MimirTridProbe.DepthBeyond16/*` | Probe: 32 commands over 16 trids | yes | all |
+
+Stop after row 89: the gated cases below take their constants from these results (see MM4x probe results). Then rerun the MM-8 rows whose kernels MM4x changed (75, 76 and 80, with `Op/L1InvalidateFull` last) before row 90.
+
+| # | Filter | Covers | Own row | Descriptors |
+|---|---|---|---|---|
+| 90 | `MM41/MimirCacheOps.L1DcacheFlushLine/*:MM41/MimirCacheOps.L1DcacheFlushFull/*` | cflush line and whole L1 D$, then the L2 flush; records whether cflush alone reached TL1 | — | all |
+| 91 | `MM41/MimirCacheOps.DirtyEvictionPartialLine/*` | Partial-line cached writes evicted by same-set reads; untouched bytes intact | — | all |
+| 92 | `MM41/MimirCacheSharedL2.*` | Same line and offset, same line other offset, adjacent line: one writer and one reader (the no-flush read records, the read after the flush and invalidate gates), and eight concurrent writers | — | all |
+| 93 | `MM41/MimirCacheScopedLock.MultiConsumer/*:MM41/MimirCacheScopedLock.RingWrap/*` | Seven consumers of one producer; a four-slot ring over twelve rounds | — | all |
+| 94 | — | Removed on 2026-10-23 with R1: section 4.1 does not name INVALIDATEFLUSHDIRTY, and `flush_l2_cache_full` (row 75) covers the L2 full flush | — | — |
+| 95 | `MM41/MimirCacheOps.FlushFenceOrdering/*` | Flush without fence, fence without flush (both record), L1 then L2 flush and the full hierarchy (`cflush.d.l1 x0` then `flush_l2_cache_full` each pass; both gate), producer racing a consumer hart; the full-hierarchy leg runs last | yes | all |
+| 96 | `MM41/MimirCacheOps.FullInvalidate/*` | Whole-L1 D$ discard after a full clean (`cflush.d.l1 x0`, then FLUSH64 of every cacheable TL1 line, in the same asm block), then a FULLINVALIDATE wipe with a bounded poll. A wipe that never reads 0 needs a fresh session, so run this row last | yes | all |
+| 97 | `MM41/MimirCacheWriterProbe.ExternalWriters/*_Host_*:*_RemoteCce_*:*_SiblingSpa_SnoopOffInvalidate:*_SiblingSpa_InvalidateOnly` | External-writer probe: host, remote CCE and sibling SPA writers, snoop off with INVALIDATE64 and INVALIDATE64 only | — | all (RemoteCce 2x only) |
+| 98 | `MM41/MimirCacheWriterProbe.ExternalWriters/*_SiblingSpa_SnoopOn` | Sibling SPA writer with RegionAttrs bit 30 set on its remap entry 1 (R2); asserts the cached re-read is fresh with no invalidate | yes | all |
+| 99 | `MM41/MimirCacheWriterProbe.ExternalWriters/*_LocalIdma_*` | Same-CCE iDMA writer, three modes. Snoop on uses the iDMA snoop packet tag and asserts the reader is refreshed, as GRENSV-2290 expects (chippy `cce_xcce_snoop_dma` sets the tag the same way). Rows 100-101 use the same snoop-on rule | yes, per case | all |
+| 100 | `MM41/MimirCacheWriterProbe.ExternalWriters/*_LocalGddrIdma_*` | iDMA from local GDDR, three modes | yes, per case | all |
+| 101 | `MM41/MimirCacheWriterProbe.ExternalWriters/*_RemoteGddrIdma_*` | iDMA from remote GDDR, three modes | yes, per case | 2x only |
+| 102 | `MM41/MimirCacheScopedLock.NonSnoopingProducer/*` | Sibling-CCE SPA producer, consumer under the scoped lock | — | all |
+| 103 | `MM41/MimirCacheCoherence.CrossCce/*` | Cached stores flushed and read by the sibling over SPA, and the reverse | — | all |
+| 104 | `MM41/MimirCacheCoherence.CrossCceSnoopOn/*` | Sibling iDMA with the snoop packet tag into a warm cached reader; asserts no stale word (GRENSV-2290) | yes | all |
+| 105 | `MM41/MimirCacheCoherence.CrossD2d/*` | CrossCce with the CCE at the same location on the other Mimir; one route per case | yes, per case | 2x only |
+| 106 | `MM41/MimirCacheCoherenceRace.DirtyLineRace/*` | One case per CCE and snoop-master config (`Cce{n}_Cfg{c}`, the default 0x6 first): neighbour or same words x evict, FLUSH64 or INVALIDATE64 against a sibling iDMA writer; 0x6 gates (it relies on the iDMA snoop tag, GRENSV-2290), the other configs record; each case restores the config | yes, per case | all |
+| 107 | `MM41/MimirCacheStress.ReuseThrash/*` | Sequential, 16 KiB conflict-stride and seeded random patterns, 2 KiB to 192 KiB; cycles recorded | — | all |
+| 108 | `MM41/MimirCacheStress.PerfSweep/*` | The four MM-8 write paths at 64, 128 and 192 KiB; cycles recorded, no timing asserts | — | all |
+| 109 | `MM41/MimirCacheStress.PreloadChurn/*` | Sibling iDMA preload with and without the snoop tag, then the hot-set re-read; both legs gate (the snoop leg per GRENSV-2290). Records how many stale words the hart's cache still held from earlier launches before each leg drops them | yes | all |
+| 110 | `MM42/MimirAtomicLocal.OpMatrix/*:MM42/MimirAtomicLocal.Hotspot/*:MM42/MimirAtomicLocal.Distributed/*:MM42/MimirAtomicLocal.LrScCas/*:MM42/MimirAtomicLocal.Wrap/*:MM42/MimirAtomicLocal.Ordering/*:MM42/MimirAtomicLocal.CleanDirtyLine/*:MM42/MimirAtomicLocal.Storm/*:MM42/MimirAtomicLocal.NeighbourWriteRace/*:MM42/MimirAtomicLocal.Soak/*` | Tier A: every amo*.w/.d and LR/SC CAS; one, two and eight senders (atomic_semaphore_bandwidth sweep); distributed words; wrap; ordering; clean and dirty lines; mixed-op storm; hart stores beside AMOs; seeded soak. Contention is recorded per leg | — | all |
+| 111 | `MM42/MimirAtomicItnControl.*` | Sibling CCE writes a word and a flag over SPA; this CCE waits with uncached loads, invalidates, then AMOs | — | all |
+| 112 | `MM42/MimirAtomicLocal.CleanDirtyLineSnoopedWrite/*` | AMO after a sibling iDMA with the snoop tag, no invalidate; asserts the AMO sees the iDMA value (GRENSV-2290) | yes | all |
+| 113 | `MM8/MimirDmIdma.*` | Row 74 again: the single-trid baseline before the MM43 rows | as row 74 | as row 74 |
+| 114 | `MM43/MimirTridIdma.UniqueIdsOwnTl1/*:MM43/MimirTridIdma.UniqueIdsSiblingTl1/*:MM43/MimirTridIdma.ReuseWrap/*:MM43/MimirTridIdma.DuplicateId/*:MM43/MimirTridIdma.BarrierThenDependent*` | Per-command trid over 0-15 to own and sibling TL1; reuse and wrap; duplicate IDs; barrier then dependent read or write (stale-at-ack counts record) | — | all |
+| 115 | `MM43/MimirTridIdma.UniqueIdsLocalGddr/*` | GDDR0 and GDDR1 writes, reads from both on VC 5 | yes | all |
+| 116 | `MM43/MimirTridIdma.NominalDepth/*` | 16 trids back to back, mixed targets, the VC rewritten per command | yes | all |
+| 117 | `MM43/MimirTridIdma.MixedTargets/*` | One table batch over own TL1, sibling TL1, GDDR0/1 and (2x) remote, host-verified remote | yes | all |
+| 118 | `MM43/MimirTridIdma.Saturate/*` | Maximum outstanding per backend VC with 8 KiB commands, then combined (total pending across the table's trids) | yes | all |
+| 119 | `MM43/MimirTridIdma.MultiHart/*` | Eight harts, each with its own trids (Scope: counters are per CCE) | yes | all |
+| 120 | `MM43/MimirTridIdma.Fairness/*` | One CCE at depth 16 while other CCEs issue table traffic | yes | all |
+| 121 | `MM43/MimirTridIdma.Soak/*` | Seeded random targets, sizes and trid order with repeated wrap | yes | all |
+| 122 | `MM43/MimirTridRemote.RemoteTl1/*` | Remote TL1, both directions, host-verified; one route per case | yes, per case | 2x only |
+| 123 | `MM43/MimirTridRemote.RemoteGddr/*` | Remote GDDR, both directions, host-verified; one route per case | yes, per case | 2x only |
+| 124 | `MM43/MimirTridConcurrent.WithPrefetcher/*` | Trid stream on CCE 1 while CCE 0 prefetches to CCE 2; overlap asserted, otherwise a skip | yes | 2x only |
+| 125 | `TT_METAL_FORCE_REINIT=1` prefix, filter `MM43/MimirTridReset.NoStaleIdAfterReinit/*` | All 16 pending counts read 0 after a hart reinit, then every trid completes a command | yes | all |
+| 126 | `MM42/MimirAccumProbe.FmtOpMatrix/*` | iDMA L1 accumulate per (format, op) against the host model; stops at the first point that does not ack | yes | all |
+| 127 | `MM42/MimirAccumProbe.DirtyLine/*` | Accumulate onto a dirty cached line; records whether the write-back replaced the result | — | all |
+| 128 | `MM42/MimirAtomicIdmaAccum.SingleHart/*:MM42/MimirAtomicIdmaAccum.AllHartsShared/*:MM42/MimirAtomicIdmaAccum.AllHartsDisjoint/*:MM42/MimirAtomicIdmaAccum.BackToBack/*:MM42/MimirAtomicIdmaAccum.MixedPathControl/*` | Tier M: INT32 accumulate, op 0x9, VC 5, one and eight harts, shared and disjoint, bursts on both command buffers, AMO then accumulate then AMO | — | all |
+| 129 | `MM42/MimirAtomicIdmaAccum.MaxOutstanding/*` | 64 posted accumulates over trids 0-15 | yes | all |
+| 130 | `MM42Detector/MimirKnownIssue.Mim560Detector/*` | MIM-560 detector: AMO, accumulate and uncached partial stores on one line while the sibling CCE streams SPA stores (ITN writes) into it, released by the host once the AMO loop has started. Non-gating; 0 corruption is inconclusive. Runs last | yes | all |
+
+Notes on the rows:
+- Rows 82 to 89 are the probes; their results are in MM4x probe results.
+- `MimirTridIdma` cases with a table (NominalDepth, MixedTargets, Saturate's combined leg, Fairness, Soak) rewrite the command buffer's VC per command while earlier trids are pending. Nothing showed that safe before these rows.
+- Fairness runs one hart on several CCEs; the Scope probe tested only harts of one CCE, so whether CCEs share pending counters is not known.
+- MM-8 `Op/L1InvalidateLine` passes only while nothing touches the stack between the stores and the per-line discard. A 4.x kernel change that grew `kernel_main`'s frame broke it once (2 of 4 dirty lines were evicted to L2 before the discard); MM4x modes now run in a separate `noinline` function.
+- Rows 98 and 106 write CCE uncore registers from the host through the SMC (RegionAttrs bit 30 on remap entry 1; the snoop-master config). Each guard restores the value it found.
+
+### MM4x results
+
+On `mimir_2x_package` (rv-zebu-08, one session after bring-up, 2026-10-22), every MM4x case ran once on CCE 0, or on its first route for the per-route rows, against `61d03f6e674` plus the uncommitted MM4x tree. Kernels were built from a copy of `test_kernels/cce` that was refreshed only between cases. Each case ran against the tree as it stood when it ran: fixes that landed during the run are noted in their rows, and the final tree has not run end to end. The other CCEs and routes, row 96 and `mimir_1x1` have not run. Logs, XML and the run scripts are in `/localdev/sagarwal/mm4x_runs_2026-10-22/` (`mm4x/runs/`, `mm4x/xml/`, `mm4x/pass2.list`).
+
+| Rows | Result |
+|---|---|
+| 81 | pass (5 kernels) |
+| 75, 76, 80 (MM-8 rerun) | pass, all 19 cases. `Op/L1InvalidateLine` first failed with a 4.x kernel whose larger `kernel_main` frame evicted 2 of 4 dirty lines before the discard; it passed after the MM4x modes moved to a `noinline` function |
+| 90-93, 97-105, 107, 108, 110-117, 119-130 | pass. Rows 104 and 112 ran in their record-only versions; the current versions assert the snoop (see rows 99-101) |
+| 94 | fail, finding: INVALIDATEFLUSHDIRTY is a no-op on this emulator. After `cflush x0` and a write of 1 (as chippy's `mimir_cce_mem_sweep_cached` does), the cached stores never reached TL1; a cached read still returned them and a FLUSH64 then wrote them. Writing 0xFF (AllHarts) behaves the same, and the register reads 0 at once. R1 (`invalidate_flush_dirty_l2_full`) therefore did not clean. R1 and these cases were removed on 2026-10-23; the finding is for the hardware owners |
+| 95 | fail on the full-hierarchy leg only, in the version where that leg used R1 (complete at the consumer's first read in 1 of 8 passes, as for fence without flush). Flush without fence 8/8, fence without flush 1/8, L1 then L2 8/8. The leg now uses `flush_l2_cache_full` and has not run |
+| 96 | not run: it was held while its clean used R1. It now cleans with FLUSH64 and has not run |
+| 98, 99-101 | Ran in the version whose snoop-on legs only recorded. External writers: no writer is snooped by default; INVALIDATE64 alone gives a fresh read (it also clears the hart's L1 D$ line). A sibling SPA writer with RegionAttrs bit 30 (R2) is snooped. The iDMA snoop packet tag is not honoured on these paths: the reader stayed stale for local, local-GDDR and remote-GDDR iDMA writers. It is honoured for a sibling CCE's TL1-to-TL1 iDMA (backend VC 2): rows 104 and 112 read fresh in both versions. The current version asserts the GRENSV-2290 behaviour, so the snoop-on legs of rows 99-101 and PreloadChurn's snoop leg (a GDDR-sourced copy on VC 5) are expected to fail on this emulator until the tag is honoured |
+| 106 | On CCE 0: `Cfg6` (default 0x6, in the version where it did not yet gate), `Cfg0` and `Cfg2` pass. `Cfg1` (0x1, first in the earlier all-config form) and `Cfg3` (0x3), the two configs with `disable_inline_writes`=1 that ran: a sibling iDMA write into a line the hart held dirty was acked but never became visible in TL1 within the budget, and the case stopped for a fresh session. iDMA health checks and SnoopConfig (0x6 restored) passed after the first stop. `Cfg4`, `Cfg5` and `Cfg7` have not run |
+| 109 | pass after a fix (the snoop leg first read lines the invalidate leg had left cached; the host's re-seed of TL1 is not snooped). That version recorded the snoop leg; the current version gates it and is expected to fail (see rows 99-101) |
+| 110 | pass after a fix: 8-hart CAS increments on one word needed up to 3059 (.w) and 3571 (.d) tries for one increment, past the first 1024-try cap; LR/SC adds (0 SC failures even with 8 harts, which interleaved 4088 times) and AMOs never starved |
+| 118 | per-backend legs pass with 8 KiB commands (pending high water VC0 13, VC1 13, VC2 10, VC3 14, VC5 2). The combined table leg reached only 1 pending per trid, which cannot show combined saturation; it now asserts the total pending across its trids instead. That version has not run |
+| 124 | pass: overlap seen in the window (sender pages 0 to 256, stream rounds 0 to 1) |
+| 125 | pass with `TT_METAL_FORCE_REINIT=1` |
+| 130 | inconclusive: 0 corrupted words, but in that version (sibling iDMA as the ITN source) the ITN writes did not overlap the AMO rounds; the accumulate did. The host-released SPA stream has not run |
+
+On `mimir_1x1` (soc-c-23, 2026-10-23), every MM4x case that runs on 1x1 ran once on CCE 0 and CCE 1 against the current tree (R1 removed): 167 cases, including the 5 compile rows and row 125. The cases that skip on 1x1 (CCE 2 and 3, rows marked 2x only, the remote-CCE legs) were not run. After each case that stopped for a fresh session, bring-up was rerun and `SnoopConfig` and an iDMA case passed before the next case. 154 pass and 13 fail; after the `kModeTridTable` change (row 118) Saturate passes, so 156 pass and 11 fail, all in rows 99, 100, 106 and 109.
+
+| Rows | Result on `mimir_1x1` |
+|---|---|
+| Every row 81-130 not listed below, apart from the rows marked 2x only | pass. Row 95's full-hierarchy leg is complete at the flag in 8 of 8 passes. Row 96: the discard leaves TL1 old (0 of 64 new words) and the wipe turns 64 stale cached words fresh. Rows 104 and 112 read fresh: a sibling CCE's TL1-to-TL1 iDMA (VC 2) with the snoop tag is snooped. Row 130 saw the ITN writes and the accumulate overlap the AMO rounds, with 0 corrupted words (recorded as inconclusive, not evidence against MIM-560) |
+| 99, 100 | fail on the `SnoopOn` legs on both CCEs, as expected: after an iDMA with the snoop tag from the reader's own CCE (own TL1, local GDDR), the cached reader stayed stale on all 64 words. The snoop-off-with-invalidate and invalidate-only legs pass |
+| 106 | `Cfg0`, `Cfg2`, `Cfg4` and `Cfg6` pass on both CCEs. The configs with bit 0 set fail intermittently: CCE 0 fails `Cfg1`, `Cfg3` and `Cfg7` and passes `Cfg5`; CCE 1 fails `Cfg1` and `Cfg5` and passes `Cfg3` and `Cfg7`. Each failure is on a neighbour-line leg (`Neighbour_Flush64`, or `Neighbour_Evict` for CCE 0 `Cfg7`): a sibling iDMA write was acked but never became visible in TL1, and the case stopped for a fresh session |
+| 109 | fail on the snoop leg on both CCEs, as expected: a sibling CCE's iDMA from GDDR (VC 5) with the snoop tag left the hot set stale (1664 stale words at the first read, 0 of 4 rounds complete). The invalidate leg passes, 4 of 4 rounds |
+| 118 | pass on both CCEs after a kernel change. In the first run the combined leg failed: the total pending across the table's trids never exceeded 1, while every trid's count cleared 366 cycles after the last issue and the data took about 4.9M cycles to land, so each count cleared on accept (MIM-628) before the table loop issued the next entry. `kModeTridTable` now resolves every entry before the first issue and records the largest gap between issues. With it the total reached 2 with a largest gap of 263 cycles, so commands to different backends were pending together. The per-backend legs reached VC0 13, VC1 13, VC2 10, VC5 2 in both runs. MixedTargets, NominalDepth, Fairness and Soak, the other table cases, passed again on both CCEs with the change |
 
 ## Fresh-session rule
 
