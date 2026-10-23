@@ -69,79 +69,77 @@ models/experimental/bevformer/
 ## Model Structure
 
 BEVFormer-base's PyTorch reference (`reference/bevformer.py`, `build_bevformer_base(200, 200)`), the
-repeated bottlenecks folded; each module points to its TTNN implementation.
+repeated bottlenecks folded.
 
 ```
-BEVFormer(                                                            ----> tt/tt_bevformer.py (TTBEVFormer)
-  (img_backbone): ResNet(                                             ----> tt/tt_resnet.py (TTResNet)
+BEVFormer(
+  (img_backbone): ResNet(
     (conv1): Conv2d(3, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
-    (bn1): BatchNorm2d(64)                                            ----> folded into conv1 (tt/model_preprocessing.py)
+    (bn1): BatchNorm2d(64)
     (relu): ReLU(inplace=True)
     (maxpool): MaxPool2d(kernel_size=3, stride=2, padding=1)
-    (layer1): ResLayer(                                               ----> tt/tt_resnet.py (TTResLayer)
-      (0-2): 3 x Bottleneck(                                          ----> tt/tt_resnet.py (TTBottleneck)
-        (conv1): Conv2d(256, 64, kernel_size=(1, 1), bias=False)      (64 in block 0)
+    (layer1): ResLayer(
+      (0-2): 3 x Bottleneck(
+        (conv1): Conv2d(256, 64, kernel_size=(1, 1), bias=False)  (64 in block 0)
         (conv2): Conv2d(64, 64, kernel_size=(3, 3), padding=(1, 1), bias=False)
         (conv3): Conv2d(64, 256, kernel_size=(1, 1), bias=False)
-        (bn1-3): BatchNorm2d                                          ----> folded into conv1-3
-        (downsample): Conv2d(64, 256, kernel_size=(1, 1)) + BatchNorm2d   (block 0)
+        (bn1-3): BatchNorm2d
+        (downsample): Conv2d(64, 256, kernel_size=(1, 1)) + BatchNorm2d  (block 0)
       )
     )
-    (layer2): ResLayer(                                               ----> tt/tt_resnet.py (TTResLayer)
-      (0-3): 4 x Bottleneck(                                          ----> tt/tt_resnet.py (TTBottleneck)
-        (conv1): Conv2d(512, 128, kernel_size=(1, 1), bias=False)     (256 in, stride 2 in block 0)
+    (layer2): ResLayer(
+      (0-3): 4 x Bottleneck(
+        (conv1): Conv2d(512, 128, kernel_size=(1, 1), bias=False)  (256 in, stride 2 in block 0)
         (conv2): Conv2d(128, 128, kernel_size=(3, 3), padding=(1, 1), bias=False)
         (conv3): Conv2d(128, 512, kernel_size=(1, 1), bias=False)
-        (downsample): Conv2d(256, 512, kernel_size=(1, 1), stride=(2, 2)) + BatchNorm2d   (block 0)
+        (downsample): Conv2d(256, 512, kernel_size=(1, 1), stride=(2, 2)) + BatchNorm2d  (block 0)
       )
     )
-    (layer3): ResLayer(                                               ----> tt/tt_resnet.py (TTResLayer)
-      (0-22): 23 x Bottleneck(                                        ----> tt/tt_resnet.py (TTBottleneck)
-        (conv1): Conv2d(1024, 256, kernel_size=(1, 1), bias=False)    (512 in, stride 2 in block 0)
-        (conv2): ModulatedDeformConv2dPack(                           ----> tt/tt_resnet.py (TTModulatedDeformConv2dPack),
-                                                                            tt/tt_modulated_deform_conv.py
+    (layer3): ResLayer(
+      (0-22): 23 x Bottleneck(
+        (conv1): Conv2d(1024, 256, kernel_size=(1, 1), bias=False)  (512 in, stride 2 in block 0)
+        (conv2): ModulatedDeformConv2dPack(
           (conv_offset): Conv2d(256, 27, kernel_size=(3, 3), padding=(1, 1))
         )
         (conv3): Conv2d(256, 1024, kernel_size=(1, 1), bias=False)
-        (downsample): Conv2d(512, 1024, kernel_size=(1, 1), stride=(2, 2)) + BatchNorm2d   (block 0)
+        (downsample): Conv2d(512, 1024, kernel_size=(1, 1), stride=(2, 2)) + BatchNorm2d  (block 0)
       )
     )
-    (layer4): ResLayer(                                               ----> tt/tt_resnet.py (TTResLayer)
-      (0-2): 3 x Bottleneck(                                          ----> tt/tt_resnet.py (TTBottleneck)
-        (conv1): Conv2d(2048, 512, kernel_size=(1, 1), bias=False)    (1024 in, stride 2 in block 0)
-        (conv2): ModulatedDeformConv2dPack(                           ----> tt/tt_resnet.py (TTModulatedDeformConv2dPack),
-                                                                            tt/tt_modulated_deform_conv.py
+    (layer4): ResLayer(
+      (0-2): 3 x Bottleneck(
+        (conv1): Conv2d(2048, 512, kernel_size=(1, 1), bias=False)  (1024 in, stride 2 in block 0)
+        (conv2): ModulatedDeformConv2dPack(
           (conv_offset): Conv2d(512, 27, kernel_size=(3, 3), padding=(1, 1))
         )
         (conv3): Conv2d(512, 2048, kernel_size=(1, 1), bias=False)
-        (downsample): Conv2d(1024, 2048, kernel_size=(1, 1), stride=(2, 2)) + BatchNorm2d   (block 0)
+        (downsample): Conv2d(1024, 2048, kernel_size=(1, 1), stride=(2, 2)) + BatchNorm2d  (block 0)
       )
     )
   )
-  (img_neck): FPN(                                                    ----> tt/tt_fpn.py (TTFPN)
-    (lateral_convs): ModuleList(                                      ----> tt/tt_fpn.py (TTConvModule)
+  (img_neck): FPN(
+    (lateral_convs): ModuleList(
       (0): ConvModule((conv): Conv2d(512, 256, kernel_size=(1, 1)))
       (1): ConvModule((conv): Conv2d(1024, 256, kernel_size=(1, 1)))
       (2): ConvModule((conv): Conv2d(2048, 256, kernel_size=(1, 1)))
     )
-    (fpn_convs): ModuleList(                                          ----> tt/tt_fpn.py (TTConvModule)
+    (fpn_convs): ModuleList(
       (0-2): 3 x ConvModule((conv): Conv2d(256, 256, kernel_size=(3, 3), padding=(1, 1)))
       (3): ConvModule((conv): Conv2d(256, 256, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1)))
     )
   )
-  (transformer): PerceptionTransformer(                               ----> tt/tt_perception_transformer.py (TTPerceptionTransformer)
-    (encoder): BEVFormerEncoder(                                      ----> tt/tt_encoder.py (TTBEVFormerEncoder)
+  (transformer): PerceptionTransformer(
+    (encoder): BEVFormerEncoder(
       (layers): ModuleList(
-        (0-5): 6 x BEVFormerLayer(                                    ----> tt/tt_encoder.py (TTBEVFormerLayer)
+        (0-5): 6 x BEVFormerLayer(
           (attentions): ModuleList(
-            (0): TemporalSelfAttention(                               ----> tt/tt_temporal_self_attention.py (TTTemporalSelfAttention)
+            (0): TemporalSelfAttention(
               (sampling_offsets): Linear(in_features=512, out_features=128, bias=True)
               (attention_weights): Linear(in_features=512, out_features=64, bias=True)
               (value_proj): Linear(in_features=256, out_features=256, bias=True)
               (output_proj): Linear(in_features=256, out_features=256, bias=True)
             )
-            (1): SpatialCrossAttention(                               ----> tt/tt_spatial_cross_attention.py (TTSpatialCrossAttention)
-              (deformable_attention): MSDeformableAttention3D(        ----> tt/tt_ms_deformable_attention.py (TTMSDeformableAttention)
+            (1): SpatialCrossAttention(
+              (deformable_attention): MSDeformableAttention3D(
                 (sampling_offsets): Linear(in_features=256, out_features=512, bias=True)
                 (attention_weights): Linear(in_features=256, out_features=256, bias=True)
                 (value_proj): Linear(in_features=256, out_features=256, bias=True)
@@ -150,7 +148,7 @@ BEVFormer(                                                            ----> tt/t
             )
           )
           (ffns): ModuleList(
-            (0): FFN(                                                 ----> tt/tt_common.py (TTFFN)
+            (0): FFN(
               (layers): Sequential(
                 (0): Sequential(
                   (0): Linear(in_features=256, out_features=512, bias=True)
@@ -161,12 +159,12 @@ BEVFormer(                                                            ----> tt/t
             )
           )
           (norms): ModuleList(
-            (0-2): 3 x LayerNorm((256,), eps=1e-05)                   ----> tt/tt_common.py (layer_norm)
+            (0-2): 3 x LayerNorm((256,), eps=1e-05)
           )
         )
       )
     )
-    (can_bus_mlp): Sequential(                                        ----> tt/tt_perception_transformer.py (TTPerceptionTransformer)
+    (can_bus_mlp): Sequential(
       (0): Linear(in_features=18, out_features=128, bias=True)
       (1): ReLU(inplace=True)
       (2): Linear(in_features=128, out_features=256, bias=True)
@@ -174,19 +172,19 @@ BEVFormer(                                                            ----> tt/t
       (norm): LayerNorm((256,), eps=1e-05)
     )
   )
-  (head): BEVFormerHead(                                              ----> tt/tt_head.py (TTBEVFormerHead)
-    (query_embedding): Embedding(900, 512)                            ----> uploaded once (tt/model_preprocessing.py)
-    (reference_points): Linear(in_features=256, out_features=3, bias=True)  ----> computed once (tt/model_preprocessing.py)
-    (decoder): DetectionTransformerDecoder(                           ----> tt/tt_decoder.py (TTDetectionTransformerDecoder)
+  (head): BEVFormerHead(
+    (query_embedding): Embedding(900, 512)
+    (reference_points): Linear(in_features=256, out_features=3, bias=True)
+    (decoder): DetectionTransformerDecoder(
       (layers): ModuleList(
-        (0-5): 6 x DetrTransformerDecoderLayer(                       ----> tt/tt_decoder.py (TTDetrTransformerDecoderLayer)
+        (0-5): 6 x DetrTransformerDecoderLayer(
           (attentions): ModuleList(
-            (0): MultiheadAttention(                                  ----> tt/tt_decoder.py (TTMultiheadAttention)
+            (0): MultiheadAttention(
               (attn): MultiheadAttention(
                 (out_proj): Linear(in_features=256, out_features=256, bias=True)
               )
             )
-            (1): MSDeformableAttention(                               ----> tt/tt_ms_deformable_attention.py (TTMSDeformableAttention)
+            (1): MSDeformableAttention(
               embed_dims=256, num_heads=8, num_levels=1, num_points=4
               (value_proj): Linear(in_features=256, out_features=256, bias=True)
               (sampling_offsets): Linear(in_features=256, out_features=64, bias=True)
@@ -195,15 +193,15 @@ BEVFormer(                                                            ----> tt/t
             )
           )
           (ffns): ModuleList(
-            (0): FFN(...)                                             ----> tt/tt_common.py (TTFFN)
+            (0): FFN(...)
           )
           (norms): ModuleList(
-            (0-2): 3 x LayerNorm((256,), eps=1e-05)                   ----> tt/tt_common.py (layer_norm)
+            (0-2): 3 x LayerNorm((256,), eps=1e-05)
           )
         )
       )
     )
-    (cls_branches): ModuleList(                                       ----> tt/tt_head.py (TTBEVFormerHead)
+    (cls_branches): ModuleList(
       (0-5): 6 x Sequential(
         (0): Linear(in_features=256, out_features=256, bias=True)
         (1): LayerNorm((256,), eps=1e-05)
@@ -214,7 +212,7 @@ BEVFormer(                                                            ----> tt/t
         (6): Linear(in_features=256, out_features=10, bias=True)
       )
     )
-    (reg_branches): ModuleList(                                       ----> tt/tt_decoder.py (TTDetectionTransformerDecoder._reg_branch)
+    (reg_branches): ModuleList(
       (0-5): 6 x Sequential(
         (0): Linear(in_features=256, out_features=256, bias=True)
         (1): ReLU()
@@ -223,13 +221,79 @@ BEVFormer(                                                            ----> tt/t
         (4): Linear(in_features=256, out_features=10, bias=True)
       )
     )
-  )                                                                   (box coder: tt/tt_nms_free_coder.py (TTNMSFreeCoder))
-  (bev_embedding): Embedding(40000, 256)                              ----> uploaded once (tt/model_preprocessing.py)
-  (positional_encoding): LearnedPositionalEncoding(                   ----> computed once (tt/model_preprocessing.py)
+  )  (box coder)
+  (bev_embedding): Embedding(40000, 256)
+  (positional_encoding): LearnedPositionalEncoding(
     (row_embed): Embedding(200, 128)
     (col_embed): Embedding(200, 128)
   )
 )
+```
+
+Indented under each file are the modules from the tree it implements, with the class in parentheses.
+
+```
+tt/tt_bevformer.py
+    BEVFormer (TTBEVFormer)
+
+tt/tt_resnet.py
+    img_backbone (TTResNet)
+    img_backbone.layer1-4 (TTResLayer)
+    img_backbone.layer1-4 Bottleneck (TTBottleneck)
+    img_backbone.layer3-4.conv2 (TTModulatedDeformConv2dPack)
+
+tt/tt_modulated_deform_conv.py
+    img_backbone.layer3-4.conv2 (TTModulatedDeformConv2dDevice)
+
+tt/tt_fpn.py
+    img_neck (TTFPN)
+    img_neck.lateral_convs (TTConvModule)
+    img_neck.fpn_convs (TTConvModule)
+
+tt/tt_perception_transformer.py
+    transformer (TTPerceptionTransformer)
+    transformer.can_bus_mlp (TTPerceptionTransformer)
+
+tt/tt_encoder.py
+    transformer.encoder (TTBEVFormerEncoder)
+    transformer.encoder layers (TTBEVFormerLayer)
+    encoder FFN (TTBEVFormerLayer)
+
+tt/tt_temporal_self_attention.py
+    TemporalSelfAttention (TTTemporalSelfAttention)
+
+tt/tt_spatial_cross_attention.py
+    SpatialCrossAttention (TTSpatialCrossAttention)
+
+tt/tt_ms_deformable_attention.py
+    encoder MSDeformableAttention3D (TTMSDeformableAttention)
+    decoder MSDeformableAttention (TTMSDeformableAttention)
+
+tt/tt_common.py
+    decoder FFN (TTFFN)
+    encoder norms (layer_norm)
+    decoder norms (layer_norm)
+
+tt/tt_head.py
+    head (TTBEVFormerHead)
+    head.cls_branches (TTBEVFormerHead)
+
+tt/tt_decoder.py
+    head.decoder (TTDetectionTransformerDecoder)
+    head.decoder layers (TTDetrTransformerDecoderLayer)
+    MultiheadAttention (TTMultiheadAttention)
+    head.reg_branches (_reg_branch)
+
+tt/tt_nms_free_coder.py
+    box coder (TTNMSFreeCoder)
+
+tt/model_preprocessing.py
+    img_backbone.bn1, folded into conv1
+    Bottleneck bn1-3, folded into conv1-3
+    head.query_embedding, uploaded once
+    bev_embedding, uploaded once
+    head.reference_points, computed once
+    positional_encoding, computed once
 ```
 
 ## Details
