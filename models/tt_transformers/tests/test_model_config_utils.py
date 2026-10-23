@@ -250,7 +250,7 @@ def test_xattn_kv_prefill_mem_cfg_fits_the_device_grid(monkeypatch, grid_x, grid
         max_grid_size=ttnn.CoreGrid(x=grid_x, y=grid_y), n_kv_heads=8, num_devices=num_devices, head_dim=128
     )
     args.find_grid = MethodType(ModelArgs.find_grid, args)
-    seq_len = num_chunks * 1632  # Llama-3.2-11B-Vision: nearest_32(1601) tokens per chunk
+    seq_len = num_chunks * 1632
     mem_cfg = ModelArgs.get_xattn_kv_prefill_mem_config(args, seq_len)
     shard_spec = mem_cfg.shard_spec
     size = shard_spec.grid.bounding_box().grid_size()
