@@ -263,6 +263,11 @@ class Qwen36MLP:
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
         self._fuse_gateup_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices) and use_gateup_agmm
+        # Dense MLP: the model config's precision (args.mlp_gateup_dtype / mlp_math_fidelity; None = the qwen36 default).
+        # The MoE shared expert passes its own dtypes and stays LoFi.
+        dense = down_dtype is None
+        if dense and gateup_dtype is None:
+            gateup_dtype = getattr(args, "mlp_gateup_dtype", None)
         self.weights = load_mlp_weights(
             mesh_device,
             state_dict,
@@ -272,8 +277,8 @@ class Qwen36MLP:
             down_dtype=down_dtype,
             gateup_dtype=gateup_dtype,
         )
-        # Dense MLP: QWEN36_MLP_FIDELITY (default hifi2). MoE shared expert (down_dtype passed) stays LoFi.
-        fid = tpc.mlp_fidelity(ttnn.MathFidelity.LoFi if down_dtype is not None else None)
+        # Dense MLP: args.mlp_math_fidelity, else QWEN36_MLP_FIDELITY (default hifi2). MoE shared expert stays LoFi.
+        fid = tpc.mlp_fidelity(getattr(args, "mlp_math_fidelity", None) if dense else ttnn.MathFidelity.LoFi)
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=fid, fp32_dest_acc_en=True, packer_l1_acc=False
         )

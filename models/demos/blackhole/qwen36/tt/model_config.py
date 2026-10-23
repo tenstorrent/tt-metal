@@ -163,6 +163,11 @@ class Qwen36ModelArgs(ModelArgs):
         # cap (channels) for the GDN prefill conv's channel_chunk_size (gdn/tp.py kda_channel_chunk_size); smaller chunks
         # spread work over more cores (bit-exact)
         self.kda_conv_chunk_cap = 512
+        # Dense-MLP precision of this model; None = the qwen36 default (BFP8 gate/up + HiFi2, tuned for Qwen3.8 accuracy;
+        # QWEN36_MLP_GATEUP_BFP8 / QWEN36_MLP_FIDELITY, see tpc.resolve_mlp_gateup_dtype / tpc.mlp_fidelity). A derived
+        # model config sets its own (pplx_decider_v1_27b: BFP4 + LoFi).
+        self.mlp_gateup_dtype = None
+        self.mlp_math_fidelity = None
 
         # TP config (num_devices>1 only). 27B (1,4) sharded dims + DRAM matmul cfgs; see tp_common.py.
         self.num_devices = mesh_device.get_num_devices() if mesh_device is not None else 1
