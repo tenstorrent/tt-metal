@@ -1,0 +1,9 @@
+ansible
+ansible-lint
+check-copyright @ git+https://github.com/espressif/check-copyright.git@master
+loguru
+pydantic
+toolz
+defusedxml
+pytest
+PyYAML

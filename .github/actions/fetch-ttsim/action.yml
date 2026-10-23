@@ -1,0 +1,127 @@
+name: Fetch TTSim
+description: |
+  Publish one simulator binary of the pinned tenstorrent/ttsim release as a run artifact
+  named ttsim-lib-<library>, for the sim jobs in this run to consume via
+  .github/actions/setup-ttsim.
+
+  One library per invocation, so the artifact name identifies its contents. Callers run this
+  as a matrix over their load-test-matrix job's sim-libs output, which means only the
+  libraries that run's matrix actually needs are fetched. Because the name is the same in
+  every pipeline, a library another impl already published in this run is reused instead of
+  downloaded again: sanity runs three sim impls that all need libttsim_bh.so, and only the
+  first one fetches and stores it.
+
+  A library another impl already published in this run is reused rather than downloaded again:
+  the action probes for it first, and the upload replaces rather than duplicates. Pair this with
+  a per-library concurrency group on the calling job so two impls cannot probe before either has
+  published.
+
+  The release tag comes from tt_metal/ttsim-version. ttsim is a public repo, so the default
+  GITHUB_TOKEN is enough to read its releases and no third-party downloader is involved.
+
+  The caller must have checked out this action's directory and the version file, e.g.
+    sparse-checkout: |
+      .github/actions/fetch-ttsim
+      tt_metal/ttsim-version
+
+inputs:
+  lib:
+    description: A single libttsim_*.so asset name, as emitted per entry by prepare_test_matrix.py's sim-libs output.
+    required: true
+  version-file:
+    description: File holding the tenstorrent/ttsim release tag to download.
+    required: false
+    default: 'tt_metal/ttsim-version'
+  github-token:
+    description: Token used for the release download and the artifact lookup.
+    required: false
+    default: ${{ github.token }}
+  retention-days:
+    description: Artifact retention. One day by default; it is only consumed within the run.
+    required: false
+    default: '1'
+
+runs:
+  using: composite
+  steps:
+    - name: Validate input
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ -z "${{ inputs.lib }}" ]]; then
+          echo "::error::No library given. Run this as a matrix over the matrix job's sim-libs output."
+          exit 1
+        fi
+
+    # Probe by downloading the artifact rather than by listing the run's artifacts:
+    # GET /runs/{id}/artifacts lags unpredictably while a run is in progress (a leg missed an
+    # artifact created 11s earlier while another saw one created 4s later), whereas this is the
+    # read path every sim job uses. A failure means no consumer could read it either, so
+    # fetching is the right response.
+    - name: Probe for a copy a sibling impl already published
+      id: probe
+      # Expected to fail for whichever leg gets there first; that is the signal to fetch.
+      continue-on-error: true
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: ttsim-lib-${{ inputs.lib }}
+        path: /tmp/ttsim
+
+    - name: Report probe result
+      id: check
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ "${{ steps.probe.outcome }}" == "success" && -f "/tmp/ttsim/${{ inputs.lib }}" ]]; then
+          echo "ttsim-lib-${{ inputs.lib }} is already published in this run; skipping the download."
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "ttsim-lib-${{ inputs.lib }} is not published yet; fetching it."
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Download ttsim release binary
+      if: ${{ steps.check.outputs.exists != 'true' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+        if [[ ! -f "${{ inputs.version-file }}" ]]; then
+          echo "::error::${{ inputs.version-file }} not found. Add it to the job's sparse-checkout."
+          exit 1
+        fi
+        version=$(tr -d '[:space:]' < "${{ inputs.version-file }}")
+        if [[ -z "$version" ]]; then
+          echo "::error::${{ inputs.version-file }} is empty; expected a tenstorrent/ttsim release tag."
+          exit 1
+        fi
+
+        echo "Downloading ${{ inputs.lib }} from tenstorrent/ttsim@$version"
+        rm -rf /tmp/ttsim
+        mkdir -p /tmp/ttsim
+        gh release download "$version" \
+          --repo tenstorrent/ttsim \
+          --pattern '${{ inputs.lib }}' \
+          --dir /tmp/ttsim
+
+        # Failing here names the missing binary; letting it through would fail every sim job
+        # later in setup-ttsim instead.
+        if [[ ! -f "/tmp/ttsim/${{ inputs.lib }}" ]]; then
+          echo "::error::tenstorrent/ttsim@$version has no asset ${{ inputs.lib }}. Check ttsim_lib in .github/sku_config.yaml against the pinned release."
+          exit 1
+        fi
+        ls -lh "/tmp/ttsim/${{ inputs.lib }}"
+
+    - name: Upload ttsim binary artifact
+      if: ${{ steps.check.outputs.exists != 'true' }}
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      with:
+        name: ttsim-lib-${{ inputs.lib }}
+        path: /tmp/ttsim/${{ inputs.lib }}
+        # Replace rather than accumulate: if the probe ran before a sibling's copy was visible,
+        # this keeps the run at one artifact per library instead of two. Safe because consumers
+        # need the whole fetch-ttsim job, so none can read during the replace.
+        overwrite: true
+        if-no-files-found: error
+        retention-days: ${{ inputs.retention-days }}

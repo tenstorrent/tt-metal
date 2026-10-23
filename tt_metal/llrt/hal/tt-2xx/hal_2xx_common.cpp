@@ -1,0 +1,200 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "hal_2xx_common.hpp"
+#include "rtoptions.hpp"
+#include <enchantum/enchantum.hpp>
+#include "impl/kernels/kernel.hpp"
+
+namespace tt::tt_metal::hal_2xx {
+
+std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInterface::Params& params) const {
+    std::vector<std::string> defines;
+    // Upper bound: ENABLE_L1_DATA_CACHE, at most 4 from the core type switch (ACTIVE_ETH / IDLE_ETH),
+    // and PROGRAMMABLE_CORE_TYPE.
+    defines.reserve(6);
+    const auto& l1_cache_enable_processors =
+        params.rtoptions.get_feature_processors(tt::llrt::RunTimeDebugFeatureEnableL1DataCache);
+    auto processor_index = hal_.get_processor_index(params.core_type, params.processor_class, params.processor_id);
+    if (params.rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureEnableL1DataCache) and
+        l1_cache_enable_processors.contains(params.core_type, processor_index)) {
+        defines.push_back("ENABLE_L1_DATA_CACHE");
+    }
+    switch (params.core_type) {
+        case HalProgrammableCoreType::TENSIX:
+            switch (params.processor_class) {
+                case HalProcessorClassType::DM:
+                    defines.push_back(fmt::format("COMPILE_FOR_DM={}", params.processor_id));
+                    break;
+                case HalProcessorClassType::COMPUTE: {
+                    switch (static_cast<experimental::quasar::QuasarComputeProcessor>(params.processor_id)) {
+                        case experimental::quasar::QuasarComputeProcessor::NEO_0_COMPUTE_0:
+                        case experimental::quasar::QuasarComputeProcessor::NEO_1_COMPUTE_0:
+                        case experimental::quasar::QuasarComputeProcessor::NEO_2_COMPUTE_0:
+                        case experimental::quasar::QuasarComputeProcessor::NEO_3_COMPUTE_0:
+                            defines.push_back("UCK_CHLKC_UNPACK");
+                            break;
+                        case experimental::quasar::QuasarComputeProcessor::NEO_0_COMPUTE_1:
+                        case experimental::quasar::QuasarComputeProcessor::NEO_1_COMPUTE_1:
+                        case experimental::quasar::QuasarComputeProcessor::NEO_2_COMPUTE_1:
+                        case experimental::quasar::QuasarComputeProcessor::NEO_3_COMPUTE_1:
+                            defines.push_back("UCK_CHLKC_MATH");
+                            break;
+                        case experimental::quasar::QuasarComputeProcessor::NEO_0_COMPUTE_2:
+                        case experimental::quasar::QuasarComputeProcessor::NEO_1_COMPUTE_2:
+                        case experimental::quasar::QuasarComputeProcessor::NEO_2_COMPUTE_2:
+                        case experimental::quasar::QuasarComputeProcessor::NEO_3_COMPUTE_2:
+                            defines.push_back("UCK_CHLKC_PACK");
+                            break;
+                        case experimental::quasar::QuasarComputeProcessor::NEO_0_COMPUTE_3:
+                        case experimental::quasar::QuasarComputeProcessor::NEO_1_COMPUTE_3:
+                        case experimental::quasar::QuasarComputeProcessor::NEO_2_COMPUTE_3:
+                        case experimental::quasar::QuasarComputeProcessor::NEO_3_COMPUTE_3:
+                            defines.push_back("UCK_CHLKC_ISOLATE_SFPU");
+                            break;
+                        default: TT_THROW("Invalid processor id {}", params.processor_id);
+                    }
+                    defines.push_back(fmt::format("COMPILE_FOR_TRISC={}", params.processor_id));
+                    break;
+                }
+            }
+            break;
+        case HalProgrammableCoreType::ACTIVE_ETH: {
+            defines.push_back(fmt::format("PROCESSOR_INDEX={}", processor_index));
+            defines.push_back("COMPILE_FOR_ERISC");
+            defines.push_back("ERISC");
+            defines.push_back("RISC_B0_HW");
+            break;
+        }
+        case HalProgrammableCoreType::IDLE_ETH: {
+            defines.push_back(fmt::format("PROCESSOR_INDEX={}", processor_index));
+            defines.push_back(fmt::format("COMPILE_FOR_IDLE_ERISC={}", params.processor_id));
+            defines.push_back("ERISC");
+            defines.push_back("RISC_B0_HW");
+            break;
+        }
+        case HalProgrammableCoreType::DISPATCH: {
+            TT_ASSERT(params.processor_class == HalProcessorClassType::DM);
+            defines.push_back(fmt::format("COMPILE_FOR_DM={}", params.processor_id));
+            defines.push_back("COMPILE_FOR_DISPATCH_ENGINE=1");
+            break;
+        }
+        default:
+            TT_ASSERT(
+                false,
+                "Unsupported programmable core type {} to query defines",
+                enchantum::to_string(params.core_type));
+            break;
+    }
+
+    // Index into kernel_config_base[] / mailboxes for the core type of this build.
+    defines.push_back(fmt::format(
+        "PROGRAMMABLE_CORE_TYPE={}",
+        static_cast<int>(hal_.get_programmable_core_type_index(params.core_type))));
+
+    return defines;
+}
+
+std::vector<std::string> HalJitBuildQueryBase::srcs(const HalJitBuildQueryInterface::Params& params) const {
+    std::vector<std::string> srcs;
+
+    switch (params.core_type) {
+        case HalProgrammableCoreType::TENSIX:
+            switch (params.processor_class) {
+                case HalProcessorClassType::DM:
+                    if (params.is_fw) {
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-2xx/dm.cc");
+                    } else {
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-2xx/dmk.cc");
+                    }
+                    break;
+                case HalProcessorClassType::COMPUTE:
+                    if (params.is_fw) {
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-2xx/trisc.cc");
+                    } else {
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-2xx/trisck.cc");
+                    }
+                    break;
+            }
+            break;
+        case HalProgrammableCoreType::ACTIVE_ETH:
+
+            break;
+        case HalProgrammableCoreType::IDLE_ETH:
+            switch (params.processor_id) {
+                case 0:
+                    if (params.is_fw) {
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/idle_erisc.cc");
+                    } else {
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/idle_erisck.cc");
+                    }
+                    break;
+                case 1:
+                    if (params.is_fw) {
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/subordinate_idle_erisc.cc");
+                    } else {
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/idle_erisck.cc");
+                    }
+                    break;
+                default: TT_THROW("Invalid processor id {}", params.processor_id);
+            }
+            break;
+        case HalProgrammableCoreType::DISPATCH:
+            switch (params.processor_class) {
+                case HalProcessorClassType::DM:
+                    if (params.is_fw) {
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-2xx/dispatch_dm.cc");
+                    } else {
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-2xx/dmk.cc");
+                    }
+                    break;
+                case HalProcessorClassType::COMPUTE: TT_THROW("DISPATCH cores do not have compute processors");
+            }
+            break;
+        default:
+            TT_ASSERT(
+                false, "Unsupported programmable core type {} to query srcs", enchantum::to_string(params.core_type));
+            break;
+    }
+    return srcs;
+}
+
+std::string HalJitBuildQueryBase::target_name(const HalJitBuildQueryInterface::Params& params) const {
+    switch (params.core_type) {
+        case HalProgrammableCoreType::TENSIX:
+            switch (params.processor_class) {
+                case HalProcessorClassType::DM: return fmt::format("dm{}", params.processor_id); break;
+                case HalProcessorClassType::COMPUTE:
+                    return fmt::format(
+                        "trisc{}",
+                        params.processor_id % experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
+            }
+        case HalProgrammableCoreType::ACTIVE_ETH: return "erisc";
+        case HalProgrammableCoreType::IDLE_ETH:
+            return params.processor_id == 0 ? "idle_erisc" : "subordinate_idle_erisc";
+        case HalProgrammableCoreType::DISPATCH:
+            TT_ASSERT(params.processor_class == HalProcessorClassType::DM);
+            return fmt::format("dispatch_dm{}", params.processor_id);
+        default:
+            TT_THROW(
+                "Unsupported programmable core type {} to query target name", enchantum::to_string(params.core_type));
+    }
+}
+
+std::string HalJitBuildQueryBase::weakened_firmware_target_name(const HalJitBuildQueryInterface::Params& params) const {
+    if (params.core_type == HalProgrammableCoreType::TENSIX && params.processor_class == HalProcessorClassType::DM) {
+        return "dm0";
+    }
+    if (params.core_type == HalProgrammableCoreType::DISPATCH && params.processor_class == HalProcessorClassType::DM) {
+        return "dispatch_dm0";
+    }
+    if (params.core_type == HalProgrammableCoreType::TENSIX &&
+        params.processor_class == HalProcessorClassType::COMPUTE) {
+        return fmt::format(
+            "trisc{}", params.processor_id % experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
+    }
+    return target_name(params);
+}
+
+}  // namespace tt::tt_metal::hal_2xx

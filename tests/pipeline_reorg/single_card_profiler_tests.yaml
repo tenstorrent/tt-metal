@@ -1,0 +1,112 @@
+# This file defines the test matrix for the single card profiler tests pipeline.
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: Function name from tests/scripts/single_card/run_single_card_profiler_tests.sh.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+- name: Mid-run device data dump
+  cmd: run_mid_run_data_dump
+  skus:
+    wh_n150_civ2:
+      timeout: 5
+    wh_n300_civ2:
+      timeout: 5
+    bh_p100a_civ2_viommu:
+      timeout: 5
+    bh_p150b_civ2_viommu:
+      timeout: 5
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+  budget_type: profiler
+
+- name: Device profiler regressions
+  cmd: run_device_profiler_test
+  skus:
+    wh_n150_civ2:
+      timeout: 25
+    wh_n300_civ2:
+      timeout: 25
+    bh_p100a_civ2_viommu:
+      timeout: 25
+    bh_p150b_civ2_viommu:
+      timeout: 25
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+  budget_type: profiler
+
+- name: Perf op report
+  cmd: run_perf_op_report_test
+  skus:
+    wh_n150_civ2:
+      timeout: 8
+    wh_n300_civ2:
+      timeout: 8
+    bh_p100a_civ2_viommu:
+      timeout: 8
+    bh_p150b_civ2_viommu:
+      timeout: 8
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn
+  budget_type: profiler
+
+- name: Realtime profiler suite
+  cmd: run_realtime_profiler_test
+  skus:
+    wh_n150_civ2:
+      timeout: 15
+    wh_n300_civ2:
+      timeout: 15
+    bh_p100a_civ2_viommu:
+      timeout: 15
+    bh_p150b_civ2_viommu:
+      timeout: 15
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+  budget_type: profiler
+
+- name: L1 accumulate profiler
+  cmd: run_accumulate_profiler_test
+  skus:
+    wh_n150_civ2:
+      timeout: 6
+    wh_n300_civ2:
+      timeout: 6
+    bh_p100a_civ2_viommu:
+      timeout: 6
+    bh_p150b_civ2_viommu:
+      timeout: 6
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+  budget_type: profiler
+
+- name: Streaming profiler sanity
+  cmd: run_streaming_profiler_test
+  skus:
+    # Blackhole only: the streaming profiler needs programmable DRAM (DRISC) cores for its relay, so there
+    # is nothing to run on wh_n150/wh_n300.
+    bh_p100a_civ2_viommu:
+      timeout: 5
+    bh_p150b_civ2_viommu:
+      timeout: 5
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+  budget_type: profiler
+
+- name: Sync events profiler
+  cmd: run_sync_events_test
+  skus:
+    # Blackhole only: sync events use the streaming profiler.
+    bh_p100a_civ2_viommu:
+      timeout: 3
+    bh_p150b_civ2_viommu:
+      timeout: 3
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+  budget_type: profiler

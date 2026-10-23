@@ -1,0 +1,1045 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Tests for SramCompressedExpertSlots — SRAM hot expert slots using CompressedTensor.
+
+Validates:
+  - Dataclass structure and is_dram_flags routing helper
+  - Single-device slot preparation with per-core L1 allocation
+  - ExpertKernel fmt metadata tensor creation from slots
+  - Expert index encoding and selection meta for SRAM/DRAM routing
+  - BSPM real-assignment path: 0 bfp8 tiles, real {bfp4, bfp2, zero} assignment
+"""
+
+import os
+from pathlib import Path
+
+import numpy as np
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from conftest import requires_hybrid_allocator
+from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
+from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import quantize_dequantize_bfp
+from models.demos.deepseek_v3_b1.micro_ops.matmul_expert.op import create_expert_fmt_tensors, encode_expert_indices
+from models.demos.deepseek_v3_b1.weights.cache import CacheConfig, CacheContext, TensorCache
+from models.demos.deepseek_v3_b1.weights.sram_slots import SramCompressedExpertSlots, prepare_compressed_sram_slots
+from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import (
+    SramExpertCoreGrids,
+    SramHotExpertConfig,
+    _predict_expert_per_core_bytes,
+    build_sram_hot_expert_config,
+    compute_expert_l1_bytes,
+    reduce_per_device_max,
+)
+
+TILE_W = 32
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_state_dict(layer_idx: int, expert_indices: list[int], K: int = 256, N: int = 256):
+    """Synthetic state dict with expert weights in HuggingFace layout (out_features, in_features)."""
+    sd = {}
+    for e in expert_indices:
+        torch.manual_seed(e * 1000 + layer_idx)
+        sd[f"model.layers.{layer_idx}.mlp.experts.{e}.gate_proj.weight"] = torch.randn(N, K)
+        sd[f"model.layers.{layer_idx}.mlp.experts.{e}.up_proj.weight"] = torch.randn(N, K)
+        sd[f"model.layers.{layer_idx}.mlp.experts.{e}.down_proj.weight"] = torch.randn(K, N)
+    return sd
+
+
+def _build_sram_core_grid(device, num_cores: int) -> ttnn.CoreRangeSet:
+    """Pick *num_cores* compute cores from the device, skipping known DRAM workers."""
+    grid = device.compute_with_storage_grid_size()
+    dram_workers = {(0, 0), (0, 3), (0, 7), (0, 9), (7, 1), (7, 4), (7, 6), (7, 9)}
+    cores = []
+    for y in range(grid.y):
+        for x in range(grid.x):
+            if (x, y) in dram_workers:
+                continue
+            cores.append(ttnn.CoreCoord(x, y))
+            if len(cores) == num_cores:
+                break
+        if len(cores) == num_cores:
+            break
+    assert len(cores) >= num_cores, f"Need {num_cores} non-DRAM cores, got {len(cores)}"
+    return ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+
+
+def _make_assigner(formats=None):
+    if formats is None:
+        formats = ["bfp8", "bfp4"]
+    return CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=formats)
+
+
+def _make_mixed_assignment_provider(state_dict: dict, layer_idx: int, K: int, N: int, formats=None):
+    """Build an ``assignment_provider`` that mirrors the old ``_make_assigner``
+    mixed-precision (PCC threshold) coverage through the new API.
+
+    For each (eid, proj_idx) it pre-runs ``CompressedTensorAssigner`` on the
+    state-dict weight and caches the resulting tile-format codes.  Returns a
+    closure ``(eid, proj_idx) -> np.ndarray`` for ``prepare_compressed_sram_slots``.
+    """
+    assigner = _make_assigner(formats=formats)
+
+    def _qdq(x, fmt_str):
+        return quantize_dequantize_bfp(x, {"bfp8": 7, "bfp4": 3, "bfp2": 1, "bfp0": 0}[fmt_str])
+
+    proj_keys = ("gate_proj", "up_proj", "down_proj")
+    cache: dict[tuple[int, int], np.ndarray] = {}
+    for proj_idx, proj_name in enumerate(proj_keys):
+        suffix = f"mlp.experts."
+        for key, w in state_dict.items():
+            if f".layers.{layer_idx}.{suffix}" not in key or not key.endswith(f".{proj_name}.weight"):
+                continue
+            eid = int(key.split(".experts.")[1].split(".")[0])
+            # HF layout is (out_features, in_features); compute layout is (K, N).
+            cache[(eid, proj_idx)] = assigner.assign(w.T.contiguous(), _qdq).assignment
+
+    def _provider(expert_idx: int, proj_idx: int) -> np.ndarray:
+        return cache[(expert_idx, proj_idx)]
+
+    return _provider
+
+
+def _l1_top_addr(device) -> int:
+    """Absolute top of the worker-L1 allocator region for ``device``."""
+    base = ttnn.get_allocator_base_address(device, ttnn.BufferType.L1)
+    mv = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    return base + mv.total_bytes_per_bank
+
+
+def _no_trim_budget(device) -> dict:
+    """Budget args that accept every expert the allocator can fit.
+
+    ``boundary_addr`` is pinned to the allocator's own base so the trim
+    check (``curr_addr - delta >= boundary_addr``) is trivially satisfied
+    for any allocation the allocator itself could succeed on.  Use this
+    in tests that exercise the allocation path without enforcing a
+    byte-cap.
+    """
+    base = ttnn.get_allocator_base_address(device, ttnn.BufferType.L1)
+    mv = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    return {
+        "boundary_addr": base,
+        "initial_lowest_addr": {},
+        "l1_top_addr": base + mv.total_bytes_per_bank,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Dataclass / host-only tests
+# ---------------------------------------------------------------------------
+
+
+def test_sram_slot_structure():
+    """SramCompressedExpertSlots fields and is_dram_flags helper."""
+    slots = SramCompressedExpertSlots(
+        num_slots=3,
+        slot_experts=[10, 42, 100],
+        gate_proj=[None, None, None],  # type: ignore
+        up_proj=[None, None, None],  # type: ignore
+        down_proj=[None, None, None],  # type: ignore
+    )
+    assert slots.num_slots == 3
+    assert slots.slot_experts == [10, 42, 100]
+
+    flags = slots.is_dram_flags(256)
+    assert len(flags) == 256
+    assert flags[10] == 0
+    assert flags[42] == 0
+    assert flags[100] == 0
+    assert flags[0] == 1
+    assert flags[255] == 1
+    assert sum(f == 0 for f in flags) == 3
+
+
+# ---------------------------------------------------------------------------
+# On-device slot preparation
+# ---------------------------------------------------------------------------
+
+K = 256
+N = 256
+NUM_CORES = N // TILE_W  # 8 — each core holds (K, 32) shard
+
+
+def test_build_sram_routed_proj_ct(device):
+    """build_sram_routed_proj_ct creates a per-core L1 CT with valid addresses
+    (mixed-precision assigner-derived assignment, single-device TP=1 degenerate case)."""
+    from models.demos.deepseek_v3_b1.weights.sram_slots import build_sram_routed_proj_ct
+
+    core_grid = _build_sram_core_grid(device, NUM_CORES)
+    assigner = _make_assigner()
+
+    def _qdq(x, fmt_str):
+        return quantize_dequantize_bfp(x, {"bfp8": 7, "bfp4": 3, "bfp2": 1, "bfp0": 0}[fmt_str])
+
+    torch.manual_seed(42)
+    weight = torch.randn(K, N).float()
+    assignment = assigner.assign(weight, _qdq).assignment
+
+    ct = build_sram_routed_proj_ct(
+        mesh_device=device,
+        full_torch_weight_per_device=[weight],
+        core_grid=core_grid,
+        num_tiles_k=K // TILE_W,
+        n_parallel=NUM_CORES,
+        per_core_N=(N // TILE_W) // NUM_CORES,
+        is_cb_backing_expert=True,
+        bspm_assignment_per_device=[assignment],
+    )
+    assert isinstance(ct, CompressedTensor)
+
+    cores = ttnn.corerange_to_cores(core_grid)
+    seen_addrs = set()
+    for c in cores:
+        addr = ct.get_data_l1_address_per_core(c)
+        assert addr > 0, f"core ({c.x},{c.y}) has invalid L1 address"
+        seen_addrs.add(addr)
+    logger.info(f"L1 CT allocated on {len(cores)} cores, {len(seen_addrs)} unique addresses")
+
+
+def test_prepare_compressed_sram_slots(device):
+    """Full prepare_compressed_sram_slots pipeline on a single device."""
+    layer_idx = 3
+    expert_indices = [0, 5, 10]
+
+    sd = _make_state_dict(layer_idx, expert_indices, K=K, N=N)
+    core_grid = _build_sram_core_grid(device, NUM_CORES)
+    assigner = _make_assigner()
+
+    slots = prepare_compressed_sram_slots(
+        device=device,
+        state_dict=sd,
+        layer_idx=layer_idx,
+        initial_expert_indices=expert_indices,
+        core_grids=SramExpertCoreGrids.uniform(core_grid),
+        assignment_provider=_make_mixed_assignment_provider(sd, layer_idx, K, N),
+        move_to_device=True,
+        **_no_trim_budget(device),
+    )
+
+    assert slots.num_slots == 3
+    assert slots.slot_experts == [0, 5, 10]
+    assert len(slots.gate_proj) == 3
+    assert len(slots.up_proj) == 3
+    assert len(slots.down_proj) == 3
+
+    cores = ttnn.corerange_to_cores(core_grid)
+    for proj_name, cts in [("gate", slots.gate_proj), ("up", slots.up_proj), ("down", slots.down_proj)]:
+        for slot_idx, ct in enumerate(cts):
+            assert isinstance(ct, CompressedTensor), f"{proj_name}[{slot_idx}] is not CompressedTensor"
+            for c in cores:
+                addr = ct.get_data_l1_address_per_core(c)
+                assert addr > 0, f"{proj_name}[{slot_idx}] core ({c.x},{c.y}) invalid L1 addr"
+        logger.info(f"  {proj_name}: {len(cts)} slots, all cores have valid L1 addresses")
+
+
+# ---------------------------------------------------------------------------
+# ExpertKernel metadata integration
+# ---------------------------------------------------------------------------
+
+
+def test_sram_slot_fmt_tensors(device):
+    """Slots produce valid fmt metadata tensors for ExpertKernel."""
+    layer_idx = 3
+    expert_indices = [0, 5]
+
+    sd = _make_state_dict(layer_idx, expert_indices, K=K, N=N)
+    core_grid = _build_sram_core_grid(device, NUM_CORES)
+    assigner = _make_assigner()
+
+    slots = prepare_compressed_sram_slots(
+        device=device,
+        state_dict=sd,
+        layer_idx=layer_idx,
+        initial_expert_indices=expert_indices,
+        core_grids=SramExpertCoreGrids.uniform(core_grid),
+        assignment_provider=_make_mixed_assignment_provider(sd, layer_idx, K, N),
+        move_to_device=True,
+        **_no_trim_budget(device),
+    )
+
+    num_tiles_k = K // TILE_W
+    per_core_n_tiles = N // NUM_CORES // TILE_W
+    fmt_tensor, base_tensor, fmt_l1_addrs, base_l1_addrs = create_expert_fmt_tensors(
+        slots.gate_proj, device, core_grid, num_tiles_k, per_core_n_tiles
+    )
+
+    assert ttnn.is_tensor_storage_on_device(fmt_tensor), "fmt tensor not on device"
+    assert ttnn.is_tensor_storage_on_device(base_tensor), "base_addr tensor not on device"
+    assert len(fmt_l1_addrs) == NUM_CORES, f"Expected {NUM_CORES} fmt L1 addrs, got {len(fmt_l1_addrs)}"
+    assert len(base_l1_addrs) == NUM_CORES, f"Expected {NUM_CORES} base L1 addrs, got {len(base_l1_addrs)}"
+    assert all(a > 0 for a in fmt_l1_addrs), "fmt L1 addrs must be non-zero"
+    assert all(a > 0 for a in base_l1_addrs), "base L1 addrs must be non-zero"
+    logger.info(f"fmt/base mesh tensors created with {NUM_CORES} per-core L1 addrs each")
+
+
+def test_sram_slot_selection_meta(device):
+    """Slots produce valid expert selection metadata for ExpertKernel routing."""
+    expert_indices = [2, 7]
+    num_total = 16
+
+    slots = SramCompressedExpertSlots(
+        num_slots=2,
+        slot_experts=expert_indices,
+        gate_proj=[None, None],  # type: ignore
+        up_proj=[None, None],  # type: ignore
+        down_proj=[None, None],  # type: ignore
+    )
+    flags = slots.is_dram_flags(num_total)
+    assert flags[2] == 0
+    assert flags[7] == 0
+    assert all(flags[i] == 1 for i in range(num_total) if i not in {2, 7})
+
+    encoded = encode_expert_indices([2, 7, 0, 15], flags)
+    # SRAM experts encode the compact slot index (not the global expert id) in
+    # bits 0-14, with bit 15 set: expert 2 → slot 0, expert 7 → slot 1.
+    assert encoded[0] == 0x8000 | 0  # SRAM expert 2 → slot 0
+    assert encoded[1] == 0x8000 | 1  # SRAM expert 7 → slot 1
+    assert encoded[2] == 0  # DRAM expert 0
+    assert encoded[3] == 15  # DRAM expert 15
+
+
+# ---------------------------------------------------------------------------
+# Per-layer SramHotExpertConfig
+# ---------------------------------------------------------------------------
+
+
+def test_sram_hot_expert_config_per_layer(device):
+    """SramHotExpertConfig routes different experts to different layers."""
+    config: SramHotExpertConfig = {
+        3: [0, 5],
+        7: [10, 20, 30],
+    }
+
+    core_grid = _build_sram_core_grid(device, NUM_CORES)
+    assigner = _make_assigner()
+
+    uniform_grids = SramExpertCoreGrids.uniform(core_grid)
+
+    # Layer 3: 2 slots
+    sd3 = _make_state_dict(3, config[3], K=K, N=N)
+    slots3 = prepare_compressed_sram_slots(
+        device=device,
+        state_dict=sd3,
+        layer_idx=3,
+        initial_expert_indices=config[3],
+        core_grids=uniform_grids,
+        assignment_provider=_make_mixed_assignment_provider(sd3, 3, K, N),
+        move_to_device=True,
+        **_no_trim_budget(device),
+    )
+    assert slots3.num_slots == 2
+    assert slots3.slot_experts == [0, 5]
+
+    # Layer 7: 3 slots
+    sd7 = _make_state_dict(7, config[7], K=K, N=N)
+    slots7 = prepare_compressed_sram_slots(
+        device=device,
+        state_dict=sd7,
+        layer_idx=7,
+        initial_expert_indices=config[7],
+        core_grids=uniform_grids,
+        assignment_provider=_make_mixed_assignment_provider(sd7, 7, K, N),
+        move_to_device=True,
+        **_no_trim_budget(device),
+    )
+    assert slots7.num_slots == 3
+    assert slots7.slot_experts == [10, 20, 30]
+
+    # Layer 5: not in config → no slots
+    assert config.get(5) is None
+
+    # Routing flags are independent per layer
+    flags3 = slots3.is_dram_flags(256)
+    flags7 = slots7.is_dram_flags(256)
+    assert flags3[0] == 0 and flags3[5] == 0 and flags3[10] == 1
+    assert flags7[10] == 0 and flags7[20] == 0 and flags7[30] == 0 and flags7[0] == 1
+    logger.info("Per-layer config: layer 3 has 2 slots, layer 7 has 3 slots, layer 5 has none")
+
+
+# ---------------------------------------------------------------------------
+# Address-based trim path inside prepare_compressed_sram_slots
+# ---------------------------------------------------------------------------
+
+
+def _predict_one_expert_max_bytes(layer_idx, expert_idx, K, N, assigner, core_grids):
+    """Host-side max-per-core L1 byte prediction for one expert (no device).
+
+    Calls the same predictor used by the trim loop
+    (:func:`_predict_expert_per_core_bytes`) so cap-vs-predictor asymmetry
+    can't sneak past the test.  Returns the max per-core byte total.
+    """
+    sd = _make_state_dict(layer_idx, [expert_idx], K=K, N=N)
+    gate_full = sd[f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.gate_proj.weight"].T.contiguous()
+    up_full = sd[f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.up_proj.weight"].T.contiguous()
+    down_full = sd[f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.down_proj.weight"].T.contiguous()
+    num_cores = core_grids.gate.num_cores()
+    per_device_per_core = _predict_expert_per_core_bytes(
+        expert_idx,
+        gate_full,
+        up_full,
+        down_full,
+        core_grids,
+        (num_cores, num_cores, num_cores),  # uniform grid → all WIDTH_SHARDED (k_par=1)
+        assigner=assigner,
+        assignment_provider=None,
+    )
+    per_core = reduce_per_device_max(per_device_per_core)
+    return max(per_core.values()) if per_core else 0
+
+
+def test_prepare_compressed_sram_slots_trim_stops_under_cap(device):
+    """boundary_addr trim path stops allocating before crossing the L1 floor.
+
+    Sizes the cap as ``1.5 * predicted_one_expert_max`` -- enough headroom
+    for one expert (with slack for inter-expert assignment noise), too
+    little for the third -- and converts it to an address boundary
+    ``boundary_addr = l1_top - cap_bytes``.  Asserts the trim loop returns
+    a *strict* prefix of the requested list and that every selected expert
+    landed on device with a real L1 address (post-allocation ground truth).
+    """
+    layer_idx = 11
+    K_local, N_local = 256, 256
+    num_cores = N_local // TILE_W
+
+    core_grid = _build_sram_core_grid(device, num_cores)
+    grids = SramExpertCoreGrids.uniform(core_grid)
+    assigner = _make_assigner()
+
+    one_expert_max = _predict_one_expert_max_bytes(layer_idx, 0, K_local, N_local, assigner, grids)
+    # Tight cap: enough headroom for one expert (with margin for assigner
+    # noise across experts), too small for two.
+    cap_bytes = int(one_expert_max * 1.5)
+
+    l1_top = _l1_top_addr(device)
+    boundary_addr = l1_top - cap_bytes
+
+    expert_indices = [0, 1, 2]
+    sd = _make_state_dict(layer_idx, expert_indices, K=K_local, N=N_local)
+
+    slots = prepare_compressed_sram_slots(
+        device=device,
+        state_dict=sd,
+        layer_idx=layer_idx,
+        initial_expert_indices=expert_indices,
+        core_grids=grids,
+        assignment_provider=_make_mixed_assignment_provider(sd, layer_idx, K_local, N_local),
+        move_to_device=True,
+        boundary_addr=boundary_addr,
+        initial_lowest_addr={},  # no baseline allocations; bootstrap from l1_top
+        l1_top_addr=l1_top,
+    )
+
+    assert (
+        0 < slots.num_slots < len(expert_indices)
+    ), f"expected partial selection under cap={cap_bytes}, got {slots.num_slots}"
+    assert slots.slot_experts == expert_indices[: slots.num_slots]
+
+    # Sanity: every selected expert really landed on device (queryable address).
+    for cts, grid in (
+        (slots.gate_proj, grids.gate),
+        (slots.up_proj, grids.up),
+        (slots.down_proj, grids.down),
+    ):
+        for ct in cts:
+            for c_obj in ttnn.corerange_to_cores(grid):
+                addr = ct.get_data_l1_address_per_core(c_obj)
+                assert addr > 0, f"expected non-zero L1 address for core {(c_obj.x, c_obj.y)}, got {addr}"
+                assert (
+                    addr >= boundary_addr
+                ), f"core {(c_obj.x, c_obj.y)}: address {addr} crossed boundary {boundary_addr}"
+    logger.info(
+        "trim under cap={} (boundary={}, l1_top={}, one_expert_max={}): selected={}",
+        cap_bytes,
+        boundary_addr,
+        l1_top,
+        one_expert_max,
+        slots.slot_experts,
+    )
+
+
+def test_prepare_compressed_sram_slots_trim_fits_all_under_large_cap(device):
+    """A generous cap admits every requested expert (sanity for the predicate)."""
+    layer_idx = 12
+    K_local, N_local = 256, 256
+    num_cores = N_local // TILE_W
+    expert_indices = [0, 1, 2]
+
+    sd = _make_state_dict(layer_idx, expert_indices, K=K_local, N=N_local)
+    core_grid = _build_sram_core_grid(device, num_cores)
+    grids = SramExpertCoreGrids.uniform(core_grid)
+
+    l1_top = _l1_top_addr(device)
+    cap_bytes = 64 * 1024 * 1024  # 64 MiB: dwarfs any expert footprint
+    boundary_addr = max(0, l1_top - cap_bytes)
+
+    slots = prepare_compressed_sram_slots(
+        device=device,
+        state_dict=sd,
+        layer_idx=layer_idx,
+        initial_expert_indices=expert_indices,
+        core_grids=grids,
+        assignment_provider=_make_mixed_assignment_provider(sd, layer_idx, K_local, N_local),
+        move_to_device=True,
+        boundary_addr=boundary_addr,
+        initial_lowest_addr={},
+        l1_top_addr=l1_top,
+    )
+
+    assert slots.num_slots == len(expert_indices)
+    assert slots.slot_experts == expert_indices
+
+
+# ---------------------------------------------------------------------------
+# compute_expert_l1_bytes tests
+# ---------------------------------------------------------------------------
+
+
+def test_compute_expert_l1_bytes():
+    """compute_expert_l1_bytes returns the max per-core sum across projections.
+
+    Uses a mixed-precision assignment from CompressedTensorAssigner to verify
+    the tighter computation (sum-per-core, then max) is <= the conservative
+    estimate (sum of independent per-projection maxes).
+    """
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
+    core_grids = SramExpertCoreGrids.uniform(core_grid)
+    num_cores = 8
+    assigner = _make_assigner(formats=["bfp8", "bfp4", "bfp2"])
+
+    def _quantize_fn(x, fmt_str):
+        mant_map = {"bfp8": 7, "bfp4": 3, "bfp2": 1, "bfp0": 0}
+        return quantize_dequantize_bfp(x, mant_map[fmt_str])
+
+    torch.manual_seed(123)
+    weights = [torch.randn(K, N), torch.randn(K, N), torch.randn(K, N)]
+    assignments = []
+    shapes = []
+    for w in weights:
+        result = assigner.assign(w, _quantize_fn)
+        assignments.append(result.assignment)
+        shapes.append(tuple(w.shape))
+
+    n_par_triple = (num_cores, num_cores, num_cores)  # uniform grid → all WIDTH_SHARDED
+    computed = compute_expert_l1_bytes(assignments, shapes, core_grids, n_par_triple)
+    assert computed > 0, "L1 bytes must be positive"
+
+    # Conservative estimate: sum of independent per-projection maxes
+    from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import compute_shard_page_mapping
+    from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import bfp_tile_packed_size
+
+    _MANT_BITS = {0: 7, 1: 3, 2: 1, 3: 0}
+    tile_byte_lut = np.array(
+        [bfp_tile_packed_size(_MANT_BITS[c], TILE_W) for c in range(4)],
+        dtype=np.int64,
+    )
+
+    conservative = 0
+    for assignment, (Kd, Nd) in zip(assignments, shapes):
+        per_core_Nd = Nd // num_cores
+        shard_spec = ttnn.ShardSpec(core_grid, [Kd, per_core_Nd], ttnn.ShardOrientation.ROW_MAJOR)
+        mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+        shard_mapping = compute_shard_page_mapping([Kd, Nd], mem_config, TILE_W)
+        flat = assignment.ravel()
+        proj_max = 0
+        for _core, page_indices in shard_mapping:
+            shard_bytes = int(tile_byte_lut[flat[list(page_indices)]].sum())
+            proj_max = max(proj_max, shard_bytes)
+        conservative += proj_max
+
+    assert computed <= conservative, f"Tightened {computed} must be <= conservative {conservative}"
+
+    # Determinism
+    computed2 = compute_expert_l1_bytes(assignments, shapes, core_grids, n_par_triple)
+    assert computed == computed2, "compute_expert_l1_bytes must be deterministic"
+
+    logger.info(f"compute_expert_l1_bytes: {computed} bytes (conservative: {conservative})")
+
+
+def test_compute_expert_l1_bytes_uniform_assignment():
+    """All-bfp8 assignment yields uniform shard sizes across cores."""
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
+    core_grids = SramExpertCoreGrids.uniform(core_grid)
+    tiles_h = K // TILE_W
+    tiles_w = N // TILE_W
+    uniform_bfp8 = np.zeros((tiles_h, tiles_w), dtype=np.int32)
+
+    assignments = [uniform_bfp8, uniform_bfp8, uniform_bfp8]
+    shapes = [(K, N), (K, N), (K, N)]
+    num_cores = core_grid.num_cores()
+
+    computed = compute_expert_l1_bytes(assignments, shapes, core_grids, (num_cores, num_cores, num_cores))
+
+    from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import bfp_tile_packed_size
+
+    expected_per_tile = bfp_tile_packed_size(7, TILE_W)
+    tiles_per_shard = tiles_h * (tiles_w // 8)
+    expected = 3 * tiles_per_shard * expected_per_tile
+
+    assert computed == expected, f"Uniform bfp8: expected {expected}, got {computed}"
+    logger.info(f"Uniform bfp8: {computed} bytes")
+
+
+# ---------------------------------------------------------------------------
+# build_sram_hot_expert_config tests
+# ---------------------------------------------------------------------------
+
+
+def test_build_sram_hot_expert_config_ranks_by_frequency():
+    """build_sram_hot_expert_config sorts candidates by descending frequency
+    and drops zero-frequency experts.
+    """
+    layer_idx = 3
+    freqs = [0] * 256
+    # Intentionally out-of-order: expert 5 most frequent, then 2, then 0.
+    freqs[0] = 10
+    freqs[2] = 30
+    freqs[5] = 50
+    # Zero-frequency experts must be excluded regardless of index.
+    freqs[7] = 0
+
+    config = build_sram_hot_expert_config([layer_idx], {layer_idx: freqs})
+
+    assert config[layer_idx] == [5, 2, 0]
+
+
+def test_build_sram_hot_expert_config_skips_layer_without_frequencies():
+    """Layers missing from routing_frequencies are dropped from the config."""
+    config = build_sram_hot_expert_config([3, 5], {3: [0] * 256})
+    assert 3 not in config  # all-zero freqs -> no candidates
+    assert 5 not in config  # no frequencies for layer 5
+
+
+def test_build_sram_hot_expert_config_multi_layer():
+    """Multi-layer config produces independent rankings per layer."""
+    layers = [3, 5]
+    experts_per_layer = {3: [0, 1, 2], 5: [4, 5]}
+    routing_frequencies = {}
+    for li in layers:
+        freqs = [0] * 256
+        for i, e in enumerate(experts_per_layer[li]):
+            freqs[e] = 100 - i * 10
+        routing_frequencies[li] = freqs
+
+    config = build_sram_hot_expert_config(layers, routing_frequencies)
+
+    assert 3 in config and 5 in config
+    assert config[3] == experts_per_layer[3]
+    assert config[5] == experts_per_layer[5]
+    logger.info(f"Multi-layer config: {config}")
+
+
+# ---------------------------------------------------------------------------
+# BSPM real-assignment tests
+#
+# All tests in this section require BSPM_RESULTS_DIR to point to a BitSculpt
+# results directory containing:
+#   deepseek-r1-0528/layer_4/precision_eval/precision_map_B_3.5.bspm
+#
+# The layer-4 Variant-B 3.5 b/e assignment has 0 bfp8 tiles — the exact
+# condition that exercises the BSPM path through build_sram_routed_proj_ct
+# and prepare_compressed_sram_slots.
+# ---------------------------------------------------------------------------
+
+# DeepSeek gate/up and down projection shapes (K, N) in compute layout.
+# HF state dict stores weights as (out_features, in_features); .T gives (K, N).
+_BSPM_LAYER_IDX = 4
+_GATE_UP_SHAPE = (7168, 2048)  # K=7168, N=2048
+_DOWN_SHAPE = (2048, 7168)  # K=2048, N=7168
+_PROJ_SHAPES = [_GATE_UP_SHAPE, _GATE_UP_SHAPE, _DOWN_SHAPE]  # indexed by proj_idx
+
+# Projection index constants matching BSPM file convention.
+_PROJ_GATE = 0
+_PROJ_DOWN = 2
+
+# Core counts: N must be divisible by num_cores and N/num_cores must be
+# tile-aligned (multiple of 32).
+# gate/up: N=2048, 16 cores → 128 cols/core → 4 tile-cols (valid)
+# down:    N=7168, 28 cores → 256 cols/core → 8 tile-cols (valid)
+_GATE_UP_NUM_CORES = 16
+_DOWN_NUM_CORES = 28
+
+
+def _get_bspm_path() -> Path:
+    """Return path to layer-4 BSPM file, or pytest.skip if unavailable."""
+    bspm_dir = os.environ.get("BSPM_RESULTS_DIR")
+    if not bspm_dir:
+        pytest.skip("BSPM_RESULTS_DIR not set")
+    bspm_path = Path(bspm_dir) / "deepseek-r1-0528" / "layer_4" / "precision_eval" / "precision_map_B_3.5.bspm"
+    if not bspm_path.exists():
+        pytest.skip(f"BSPM file not found: {bspm_path}")
+    return bspm_path
+
+
+def _make_bspm_assignment_provider(bspm_path: Path):
+    """Return a provider that loads the BSPM file once and caches codes for all calls."""
+    from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import make_bspm_assignment_provider
+
+    return make_bspm_assignment_provider(bspm_path, _PROJ_SHAPES)
+
+
+def _make_bspm_state_dict(layer_idx: int, expert_indices: list[int]) -> dict:
+    """Random weights at actual DeepSeek projection shapes (HF layout: out × in)."""
+    sd = {}
+    K_gate, N_gate = _GATE_UP_SHAPE
+    K_down, N_down = _DOWN_SHAPE
+    for e in expert_indices:
+        torch.manual_seed(e * 1000 + layer_idx)
+        sd[f"model.layers.{layer_idx}.mlp.experts.{e}.gate_proj.weight"] = torch.randn(N_gate, K_gate)
+        sd[f"model.layers.{layer_idx}.mlp.experts.{e}.up_proj.weight"] = torch.randn(N_gate, K_gate)
+        sd[f"model.layers.{layer_idx}.mlp.experts.{e}.down_proj.weight"] = torch.randn(N_down, K_down)
+    return sd
+
+
+def _make_bspm_core_grids(device) -> SramExpertCoreGrids:
+    """Production-matching core grids for the BSPM shapes."""
+    gate_grid = _build_sram_core_grid(device, _GATE_UP_NUM_CORES)
+    down_grid = _build_sram_core_grid(device, _DOWN_NUM_CORES)
+    return SramExpertCoreGrids(gate=gate_grid, up=gate_grid, down=down_grid)
+
+
+def test_build_sram_routed_proj_ct_bspm(device):
+    """build_sram_routed_proj_ct with a real BSPM gate_proj assignment (0 bfp8 tiles).
+
+    Layer-4 Variant-B 3.5 b/e BSPM assignment for expert 0.  Verifies the CT
+    is allocated in L1 with 0 bfp8 tiles and valid per-core addresses.
+    Requires BSPM_RESULTS_DIR.
+    """
+    from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_expert
+    from models.demos.deepseek_v3_b1.weights.sram_slots import build_sram_routed_proj_ct
+
+    bspm_path = _get_bspm_path()
+    K, N = _GATE_UP_SHAPE
+    core_grid = _build_sram_core_grid(device, _GATE_UP_NUM_CORES)
+    assignment = load_bspm_for_expert(
+        str(bspm_path), expert_idx=0, proj_idx=_PROJ_GATE, tile_rows=K // TILE_W, tile_cols=N // TILE_W
+    )
+
+    torch.manual_seed(0)
+    weight = torch.randn(K, N).float()
+
+    ct = build_sram_routed_proj_ct(
+        mesh_device=device,
+        full_torch_weight_per_device=[weight],
+        core_grid=core_grid,
+        num_tiles_k=K // TILE_W,
+        n_parallel=_GATE_UP_NUM_CORES,
+        per_core_N=(N // TILE_W) // _GATE_UP_NUM_CORES,
+        is_cb_backing_expert=True,
+        bspm_assignment_per_device=[assignment],
+    )
+    assert isinstance(ct, CompressedTensor)
+    assert (
+        ct.tile_counts.get("bfp8", 0) == 0
+    ), f"Real BSPM 3.5 b/e should have 0 bfp8 tiles, got tile_counts={ct.tile_counts}"
+    assert ct.tile_counts.get("bfp4", 0) > 0, f"Expected bfp4 tiles, got {ct.tile_counts}"
+
+    cores = ttnn.corerange_to_cores(core_grid)
+    for c in cores:
+        addr = ct.get_data_l1_address_per_core(c)
+        assert addr > 0, f"core ({c.x},{c.y}) has invalid L1 address"
+    logger.info(f"BSPM gate_proj L1 CT tile_counts: {ct.tile_counts} on {len(cores)} cores")
+
+
+def test_build_sram_routed_proj_ct_bspm_down_proj(device):
+    """build_sram_routed_proj_ct with real BSPM down_proj assignment (K=2048, N=7168).
+
+    28 cores: N=7168/28=256 cols/core → 8 tile-cols (tile-aligned).
+    Requires BSPM_RESULTS_DIR.
+    """
+    from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_expert
+    from models.demos.deepseek_v3_b1.weights.sram_slots import build_sram_routed_proj_ct
+
+    bspm_path = _get_bspm_path()
+    K, N = _DOWN_SHAPE
+    core_grid = _build_sram_core_grid(device, _DOWN_NUM_CORES)
+    assignment = load_bspm_for_expert(
+        str(bspm_path), expert_idx=0, proj_idx=_PROJ_DOWN, tile_rows=K // TILE_W, tile_cols=N // TILE_W
+    )
+
+    torch.manual_seed(1)
+    weight = torch.randn(K, N).float()
+
+    ct = build_sram_routed_proj_ct(
+        mesh_device=device,
+        full_torch_weight_per_device=[weight],
+        core_grid=core_grid,
+        num_tiles_k=K // TILE_W,
+        n_parallel=_DOWN_NUM_CORES,
+        per_core_N=(N // TILE_W) // _DOWN_NUM_CORES,
+        is_cb_backing_expert=True,
+        bspm_assignment_per_device=[assignment],
+    )
+    assert isinstance(ct, CompressedTensor)
+    assert ct.tile_counts.get("bfp8", 0) == 0, f"Real BSPM 3.5 b/e should have 0 bfp8 tiles, got {ct.tile_counts}"
+    assert ct.tile_counts.get("bfp4", 0) > 0, f"Expected bfp4 tiles, got {ct.tile_counts}"
+
+    cores = ttnn.corerange_to_cores(core_grid)
+    for c in cores:
+        addr = ct.get_data_l1_address_per_core(c)
+        assert addr > 0, f"core ({c.x},{c.y}) has invalid L1 address"
+    logger.info(f"BSPM down_proj L1 CT tile_counts: {ct.tile_counts} on {len(cores)} cores")
+
+
+def test_prepare_compressed_sram_slots_bspm(device):
+    """prepare_compressed_sram_slots with real BSPM assignments for all three projections.
+
+    Uses the assignment_provider path: real {bfp4, bfp2, zero} assignments from the
+    layer-4 Variant-B 3.5 b/e BSPM file.  Uses expert_idx=5 (non-zero) to verify
+    that per-expert BSPM loading is not accidentally hardcoded to expert 0.
+    Validates that all slots allocate to L1 with 0 bfp8 tiles across gate, up, and
+    down projections.
+    Requires BSPM_RESULTS_DIR.
+    """
+    bspm_path = _get_bspm_path()
+    expert_idx = 5
+
+    sd = _make_bspm_state_dict(_BSPM_LAYER_IDX, [expert_idx])
+    core_grids = _make_bspm_core_grids(device)
+    assignment_provider = _make_bspm_assignment_provider(bspm_path)
+
+    slots = prepare_compressed_sram_slots(
+        device=device,
+        state_dict=sd,
+        layer_idx=_BSPM_LAYER_IDX,
+        initial_expert_indices=[expert_idx],
+        core_grids=core_grids,
+        assignment_provider=assignment_provider,
+        move_to_device=True,
+        **_no_trim_budget(device),
+    )
+
+    assert slots.num_slots == 1
+    assert slots.slot_experts == [expert_idx]
+
+    proj_grids = {
+        "gate": (slots.gate_proj, core_grids.gate),
+        "up": (slots.up_proj, core_grids.up),
+        "down": (slots.down_proj, core_grids.down),
+    }
+    for proj_name, (cts, grid) in proj_grids.items():
+        ct = cts[0]
+        assert isinstance(ct, CompressedTensor), f"{proj_name}: expected CompressedTensor"
+        assert ct.tile_counts.get("bfp8", 0) == 0, f"{proj_name}: expected 0 bfp8 tiles, got {ct.tile_counts}"
+        assert ct.tile_counts.get("bfp4", 0) > 0, f"{proj_name}: expected bfp4 tiles"
+        cores = ttnn.corerange_to_cores(grid)
+        for c in cores:
+            addr = ct.get_data_l1_address_per_core(c)
+            assert addr > 0, f"{proj_name} core ({c.x},{c.y}): invalid L1 address"
+        logger.info(f"  BSPM {proj_name}: {ct.tile_counts}")
+
+
+def test_sram_slot_fmt_tensors_bspm(device):
+    """create_expert_fmt_tensors produces valid metadata tensors from BSPM-sourced slots.
+
+    Mirrors test_sram_slot_fmt_tensors but uses the assignment_provider path with
+    production shapes (gate_proj 7168×2048, 16 cores) and 1 expert.  One expert
+    fills ~91% of the L1 bank (1327 KB / 1462 KB); a second would cause OOM.
+    Verifies that fmt tensors are on-device and have the correct per-core structure
+    when the underlying CTs come from real {bfp4, bfp2, zero} BSPM assignments.
+    Requires BSPM_RESULTS_DIR.
+    """
+    bspm_path = _get_bspm_path()
+    expert_indices = [0]
+
+    sd = _make_bspm_state_dict(_BSPM_LAYER_IDX, expert_indices)
+    core_grids = _make_bspm_core_grids(device)
+    assignment_provider = _make_bspm_assignment_provider(bspm_path)
+
+    slots = prepare_compressed_sram_slots(
+        device=device,
+        state_dict=sd,
+        layer_idx=_BSPM_LAYER_IDX,
+        initial_expert_indices=expert_indices,
+        core_grids=core_grids,
+        assignment_provider=assignment_provider,
+        move_to_device=True,
+        **_no_trim_budget(device),
+    )
+
+    K_gate, N_gate = _GATE_UP_SHAPE
+    num_tiles_k = K_gate // TILE_W
+    per_core_n_tiles = N_gate // _GATE_UP_NUM_CORES // TILE_W
+    fmt_tensors, base_addr_tensors = create_expert_fmt_tensors(
+        slots.gate_proj, device, core_grids.gate, num_tiles_k, per_core_n_tiles
+    )
+
+    assert len(fmt_tensors) > 0
+    assert len(base_addr_tensors) == len(fmt_tensors)
+    for coord, core_tensors in fmt_tensors.items():
+        assert (
+            len(core_tensors) == _GATE_UP_NUM_CORES
+        ), f"Expected {_GATE_UP_NUM_CORES} core entries, got {len(core_tensors)}"
+        for idx, t in core_tensors.items():
+            assert ttnn.is_tensor_storage_on_device(t), f"fmt tensor core {idx} not on device"
+        for idx, t in base_addr_tensors[coord].items():
+            assert ttnn.is_tensor_storage_on_device(t), f"base_addr tensor core {idx} not on device"
+    logger.info(
+        f"BSPM fmt_tensors: {len(fmt_tensors)} device coords, "
+        f"{_GATE_UP_NUM_CORES} cores each, num_tiles_k={num_tiles_k}, per_core_n_tiles={per_core_n_tiles}"
+    )
+
+
+def test_compute_expert_l1_bytes_bspm():
+    """compute_expert_l1_bytes with real BSPM assignments at production shapes.
+
+    Loads all three projection assignments from the layer-4 3.5 b/e BSPM file
+    and verifies the L1 footprint is positive and strictly smaller than all-bfp8
+    (since bfp4 tiles are 576 bytes vs bfp8's 1088 bytes).
+    Does not require a device — pure host-side computation.
+    Requires BSPM_RESULTS_DIR.
+    """
+    from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_expert
+    from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import bfp_tile_packed_size
+
+    bspm_path = _get_bspm_path()
+
+    assignments = []
+    shapes = []
+    for proj_idx, (K, N) in enumerate(_PROJ_SHAPES):
+        asgn = load_bspm_for_expert(
+            str(bspm_path), expert_idx=0, proj_idx=proj_idx, tile_rows=K // TILE_W, tile_cols=N // TILE_W
+        )
+        assignments.append(asgn)
+        shapes.append((K, N))
+
+    # Use simple rectangular grids — compute_expert_l1_bytes is device-agnostic.
+    # gate/up: 16 cores along a row; down: 28 cores = 13-core row + 15-core row.
+    gate_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(15, 0))])
+    down_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 0)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(14, 1)),
+        ]
+    )
+    core_grids = SramExpertCoreGrids(gate=gate_grid, up=gate_grid, down=down_grid)
+    n_par_triple = (gate_grid.num_cores(), gate_grid.num_cores(), down_grid.num_cores())
+
+    computed = compute_expert_l1_bytes(assignments, shapes, core_grids, n_par_triple)
+    assert computed > 0, "L1 bytes must be positive for a non-empty BSPM assignment"
+
+    # All-bfp8 upper bound: every tile at bfp8 cost.
+    bfp8_bytes = bfp_tile_packed_size(7, TILE_W)
+    bfp4_bytes = bfp_tile_packed_size(3, TILE_W)
+    all_bfp8_cost = sum((K // TILE_W) * (N // TILE_W) * bfp8_bytes for K, N in shapes)
+    assert (
+        computed < all_bfp8_cost
+    ), f"BSPM (bfp4-dominant) L1 cost {computed} should be < all-bfp8 cost {all_bfp8_cost}"
+
+    # Sanity: bfp4 lower bound — all tiles at bfp4.
+    all_bfp4_cost = sum((K // TILE_W) * (N // TILE_W) * bfp4_bytes for K, N in shapes)
+    assert computed <= all_bfp4_cost, f"BSPM cost {computed} must be <= all-bfp4 {all_bfp4_cost} (no bfp8 tiles)"
+
+    logger.info(
+        f"BSPM expert L1 cost: {computed:,} bytes " f"(all-bfp8: {all_bfp8_cost:,}, all-bfp4: {all_bfp4_cost:,})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Disk-cache round-trip for prepare_compressed_sram_slots
+#
+# Mirrors the BSPM round-trip in test_prepare_weights.py but for the SRAM
+# hot-expert post-pack byte cache (Option H): cold miss writes one
+# shards.bin + metadata.json per (expert, projection); a warm second pass
+# rebuilds the slots from disk without touching the BFP packer or growing
+# the on-disk artifact set.
+# ---------------------------------------------------------------------------
+
+
+def _sram_cache_context() -> CacheContext:
+    """CacheContext for the single-device SRAM round-trip (mesh_shape=(1,1))."""
+    return CacheContext(
+        schema_version=1,
+        hf_model_id="deepseek-v3-test",
+        hf_revision="rev-sram-roundtrip",
+        mesh_shape=(1, 1),
+    )
+
+
+@requires_hybrid_allocator
+def test_prepare_compressed_sram_slots_cache_roundtrip(device, tmp_path):
+    """TensorCache round-trip for prepare_compressed_sram_slots through the
+    new build_sram_routed_proj_ct path.
+
+    Cold miss persists shards.bin + metadata.json per (expert, projection);
+    warm hit returns the same slots without writing new files; reconstructed
+    CompressedTensors round-trip byte-for-byte on assignment.
+    """
+    layer_idx = 7
+    expert_indices = [0, 5, 10]
+    sd = _make_state_dict(layer_idx, expert_indices, K=K, N=N)
+    core_grid = _build_sram_core_grid(device, NUM_CORES)
+    cache_config = CacheConfig(cache=TensorCache(tmp_path), context=_sram_cache_context())
+
+    # --- Cold miss ----------------------------------------------------------
+    slots_miss = prepare_compressed_sram_slots(
+        device=device,
+        state_dict=sd,
+        layer_idx=layer_idx,
+        initial_expert_indices=expert_indices,
+        core_grids=SramExpertCoreGrids.uniform(core_grid),
+        assignment_provider=_make_mixed_assignment_provider(sd, layer_idx, K, N),
+        move_to_device=True,
+        cache_config=cache_config,
+        **_no_trim_budget(device),
+    )
+    assert slots_miss.num_slots == len(expert_indices)
+    assert slots_miss.slot_experts == expert_indices
+
+    objects_dir = tmp_path / "objects"
+    shards_after_miss = sorted(objects_dir.rglob("shards.bin"))
+    metas_after_miss = sorted(objects_dir.rglob("metadata.json"))
+    expected_artifacts = len(expert_indices) * 3  # gate, up, down per expert
+    assert len(shards_after_miss) == expected_artifacts, (
+        f"Expected {expected_artifacts} shards.bin (one per expert/projection) "
+        f"after cold miss, found {len(shards_after_miss)}"
+    )
+    assert len(metas_after_miss) == expected_artifacts
+    for path in shards_after_miss:
+        assert path.stat().st_size > 0, f"empty shards.bin at {path}"
+
+    # --- Warm hit -----------------------------------------------------------
+    slots_hit = prepare_compressed_sram_slots(
+        device=device,
+        state_dict=sd,
+        layer_idx=layer_idx,
+        initial_expert_indices=expert_indices,
+        core_grids=SramExpertCoreGrids.uniform(core_grid),
+        assignment_provider=_make_mixed_assignment_provider(sd, layer_idx, K, N),
+        move_to_device=True,
+        cache_config=cache_config,
+        **_no_trim_budget(device),
+    )
+    assert slots_hit.num_slots == slots_miss.num_slots
+    assert slots_hit.slot_experts == slots_miss.slot_experts
+
+    shards_after_hit = sorted(objects_dir.rglob("shards.bin"))
+    metas_after_hit = sorted(objects_dir.rglob("metadata.json"))
+    assert shards_after_hit == shards_after_miss, "warm hit must not write new shards.bin files"
+    assert metas_after_hit == metas_after_miss, "warm hit must not write new metadata.json files"
+
+    # --- Per-projection assignment must round-trip byte-for-byte ------------
+    for proj_name, miss_cts, hit_cts in [
+        ("gate", slots_miss.gate_proj, slots_hit.gate_proj),
+        ("up", slots_miss.up_proj, slots_hit.up_proj),
+        ("down", slots_miss.down_proj, slots_hit.down_proj),
+    ]:
+        assert len(miss_cts) == len(hit_cts) == len(expert_indices)
+        for slot_idx, (ct_miss, ct_hit) in enumerate(zip(miss_cts, hit_cts)):
+            assert isinstance(ct_miss, CompressedTensor)
+            assert isinstance(ct_hit, CompressedTensor)
+            assert (
+                ct_miss.shape == ct_hit.shape
+            ), f"{proj_name}[slot={slot_idx}] shape mismatch miss={ct_miss.shape} hit={ct_hit.shape}"
+            assert np.array_equal(
+                ct_miss._assignment_flat, ct_hit._assignment_flat
+            ), f"{proj_name}[slot={slot_idx}] assignment_flat differs between cold pack and warm load"

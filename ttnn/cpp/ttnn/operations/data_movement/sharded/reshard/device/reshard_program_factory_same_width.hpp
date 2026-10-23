@@ -1,0 +1,20 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "ttnn/operations/data_movement/sharded/reshard/device/reshard_device_operation_types.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
+
+namespace ttnn::prim {
+
+// HEIGHT_SHARDED -> HEIGHT_SHARDED reshard
+template <bool local_is_output>
+struct ReshardSameWidthFactory {
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const ReshardParams& operation_attributes, const ReshardInputs& tensor_args, Tensor& output_tensor);
+};
+
+}  // namespace ttnn::prim

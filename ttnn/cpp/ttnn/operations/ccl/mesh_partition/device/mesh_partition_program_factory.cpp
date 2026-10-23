@@ -1,0 +1,167 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "mesh_partition_device_operation.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tuple>
+#include <vector>
+#include "ttnn/distributed/types.hpp"
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_metal2_names.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include <tt-metalium/host_api.hpp>
+
+namespace ttnn::operations::ccl {
+namespace detail {
+uint32_t get_cluster_axis_index(
+    const ttnn::MeshDeviceView& mesh_view,
+    const ttnn::MeshCoordinate& mesh_coordinate,
+    const MeshPartitionDeviceOperation::operation_attributes_t& operation_attributes) {
+    return operation_attributes.cluster_axis.has_value()
+               ? ((operation_attributes.cluster_axis.value() == 0) ? mesh_coordinate[0] : mesh_coordinate[1])
+               : common::get_linearized_index(mesh_coordinate, mesh_view);
+}
+}  // namespace detail
+
+namespace {
+
+using SliceOp = ttnn::prim::SliceDeviceOperation;
+
+// Helper function to compute slice parameters for a given mesh coordinate
+auto compute_slice_parameters(
+    const MeshPartitionDeviceOperation::operation_attributes_t& operation_attributes,
+    const MeshPartitionDeviceOperation::tensor_args_t& tensor_args,
+    const ttnn::MeshCoordinate& mesh_coordinate) {
+    const auto& input_tensor = tensor_args.input_tensor;
+
+    const uint32_t cluster_size = detail::get_cluster_axis_size(input_tensor, operation_attributes.cluster_axis);
+    uint32_t cluster_index =
+        detail::get_cluster_axis_index(input_tensor.device()->get_view(), mesh_coordinate, operation_attributes);
+
+    TT_FATAL(
+        cluster_index < cluster_size,
+        "cluster_index ({}) must be less than cluster_size ({})",
+        cluster_index,
+        cluster_size);
+
+    auto input_shape = input_tensor.padded_shape();
+    uint32_t dim = operation_attributes.dim;
+    uint32_t rank = input_shape.size();
+    auto partitioned_dim_size = input_shape[dim] / cluster_size;
+    uint64_t begin_pos = static_cast<uint64_t>(cluster_index) * partitioned_dim_size;
+
+    TT_FATAL(
+        begin_pos <= std::numeric_limits<uint32_t>::max() - partitioned_dim_size,
+        "Integer overflow: cluster_index ({}) * partitioned_dim_size ({}) = {} exceeds uint32_t max",
+        cluster_index,
+        partitioned_dim_size,
+        begin_pos);
+
+    auto begins = ttnn::Shape(std::vector<uint32_t>(rank, 0));
+    auto ends = input_shape;
+    auto strides = ttnn::Shape(std::vector<uint32_t>(rank, 1));
+
+    begins[dim] = static_cast<uint32_t>(begin_pos);
+    ends[dim] = begins[dim] + partitioned_dim_size;
+
+    TT_FATAL(
+        ends[dim] <= input_shape[dim],
+        "Slice bounds error: ends[{}] ({}) exceeds input_shape[{}] ({})",
+        dim,
+        ends[dim],
+        dim,
+        input_shape[dim]);
+
+    log_debug(
+        tt::LogOp,
+        "Slice at ({}, {}) will have begins {}, ends {}, step {}",
+        mesh_coordinate[0],
+        mesh_coordinate[1],
+        begins,
+        ends,
+        strides);
+
+    auto slice_arg_func =
+        [](auto input, auto slice_start, auto slice_end, auto step, auto output_mem_config, auto use_tensor_args) {
+            return std::make_tuple(
+                SliceOp::operation_attributes_t{
+                    .slice_start = std::move(slice_start),
+                    .slice_end = std::move(slice_end),
+                    .step = std::move(step),
+                    .output_mem_config = std::move(output_mem_config),
+                    .use_tensor_args = use_tensor_args,
+                    .slice_dim = std::nullopt,
+                    .num_devices = std::nullopt,
+                    .sub_core_grids = std::nullopt},
+                SliceOp::tensor_args_t{
+                    .input = std::move(input),
+                    .start_tensor = std::nullopt,
+                    .end_tensor = std::nullopt,
+                    .preallocated_output = std::nullopt});
+        };
+    return slice_arg_func(
+        tensor_args.input_tensor,
+        begins,
+        ends,
+        strides,
+        operation_attributes.output_mem_config,
+        false  // use_tensor_args
+    );
+}
+
+}  // anonymous namespace
+
+ttnn::device_operation::CachedProgram<MeshPartitionDeviceOperation::MeshPartition::shared_variables_t>
+MeshPartitionDeviceOperation::MeshPartition::create_at(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinate& mesh_coordinate,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto [slice_attrs, slice_tensor_args] =
+        compute_slice_parameters(operation_attributes, tensor_args, mesh_coordinate);
+
+    SliceOp::validate_on_program_cache_miss(slice_attrs, slice_tensor_args);
+    auto program_factory = SliceOp::select_program_factory(slice_attrs, slice_tensor_args);
+
+    // Slice's factories are on Metal 2.0, so they hand back a ProgramSpec plus its run args rather
+    // than a Program. MeshPartition builds one Program per mesh coordinate itself, so it performs
+    // here the two steps TTNN's Metal 2.0 adapter would otherwise perform for a single-program op.
+    Program program = std::visit(
+        [&](auto&& factory) -> Program {
+            using Factory = std::decay_t<decltype(factory)>;
+            auto artifacts = Factory::create_program_artifacts(slice_attrs, slice_tensor_args, tensor_return_value);
+            Program p =
+                tt::tt_metal::experimental::MakeProgramFromSpec(*tensor_args.input_tensor.device(), artifacts.spec);
+            tt::tt_metal::experimental::SetProgramRunArgs(p, artifacts.run_params);
+            return p;
+        },
+        program_factory);
+
+    return {std::move(program), shared_variables_t{}};
+}
+
+void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const operation_attributes_t& /*operation_attributes*/,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    using namespace ttnn::prim::slice_metal2;
+    // Partition attributes, tensor specs and coordinates are in the cache key. Each coordinate
+    // owns its program, so its slice geometry and work split stay fixed across calls. Metal 2.0
+    // updates both tensor accessor bindings and any borrowed sharded DFBs through this API.
+    const tt::tt_metal::experimental::
+        Table<tt::tt_metal::experimental::TensorParamName, tt::tt_metal::experimental::TensorArgument>
+            bindings{{INPUT, tensor_args.input_tensor.mesh_tensor()}, {OUTPUT, tensor_return_value.mesh_tensor()}};
+    // All coordinate programs declare the same tensor specs. Validate fresh buffers once per call.
+    bool validated = false;
+    for (auto& [range, program] : cached_workload.workload.get_programs()) {
+        tt::tt_metal::experimental::UpdateTensorArgs(program, bindings, /*skip_validation=*/validated);
+        validated = true;
+    }
+}
+
+}  // namespace ttnn::operations::ccl

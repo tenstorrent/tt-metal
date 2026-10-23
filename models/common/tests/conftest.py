@@ -1,0 +1,392 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+
+import contextlib
+import fcntl
+import os
+import time
+
+import pytest
+
+import ttnn
+
+# ==============================================================================
+# Device Lock - Coordinates exclusive access to TT devices across processes
+# ==============================================================================
+
+_TT_DEVICE_LOCK_PATH = os.environ.get("TT_DEVICE_LOCK_PATH", "/tmp/tt_device.lock")
+_TT_DEVICE_LOCK_TIMEOUT = float(os.environ.get("TT_DEVICE_LOCK_TIMEOUT", "60"))  # 1 min default
+
+
+class DeviceLockTimeout(Exception):
+    """Raised when acquiring the device lock times out."""
+
+
+# todo)) the UMD already provides a lock mechanism -- use it instead of this?
+@contextlib.contextmanager
+def tt_device_lock(lock_path: str = _TT_DEVICE_LOCK_PATH, timeout: float = _TT_DEVICE_LOCK_TIMEOUT):
+    """
+    Context manager for exclusive access to TT devices.
+
+    Uses flock for cross-process coordination. Blocks until lock is acquired
+    or timeout is reached.
+
+    Usage:
+        with tt_device_lock():
+            mesh = ttnn.open_mesh_device(...)
+            # ... do work ...
+            ttnn.close_mesh_device(mesh)
+
+    Debug stuck locks with: lsof /tmp/tt_device.lock
+
+    Environment variables:
+        TT_DEVICE_LOCK_PATH: Override lock file path (default: /tmp/tt_device.lock)
+        TT_DEVICE_LOCK_TIMEOUT: Override timeout in seconds (default: 300)
+    """
+    lock_dir = os.path.dirname(lock_path)
+    if lock_dir and not os.path.exists(lock_dir):
+        os.makedirs(lock_dir, exist_ok=True)
+
+    lock_file = open(lock_path, "a+")  # open the file in append mode to avoid truncation race condition among processes
+    start_time = time.monotonic()
+    lock_acquired = False
+
+    try:
+        # Poll for lock with timeout
+        logged_waiting = False
+        while True:
+            try:
+                fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                lock_acquired = True
+                break
+            except BlockingIOError:
+                pass  # Lock held by another process
+
+            if not logged_waiting:
+                print(f"[tt_device_lock] Waiting for device lock (held by another process)...")
+                print(f"[tt_device_lock] Debug with: lsof {lock_path}")
+                logged_waiting = True
+
+            if time.monotonic() - start_time >= timeout:
+                lock_file.close()
+                raise DeviceLockTimeout(
+                    f"Timed out after {timeout}s waiting for device lock. " f"Check: lsof {lock_path}"
+                )
+
+            time.sleep(1)  # sleep for 1 second to avoid busy-waiting
+
+        if logged_waiting:
+            print(f"[tt_device_lock] Lock acquired after {time.monotonic() - start_time:.1f}s")
+
+        # Write PID for debugging
+        lock_file.truncate(0)  # clear the file
+        lock_file.write(f"{os.getpid()}\n")
+        lock_file.flush()
+
+        yield
+
+    finally:
+        if lock_acquired:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+        lock_file.close()
+
+
+def pytest_collection_modifyitems(config, items):
+    """Deselect tests where ttnn_mesh_device fixture doesn't match mesh_shape param.
+
+    This enables tests to use cross-product parametrization (all meshes × all cases)
+    while only running the valid combinations, without noisy skip messages.
+    """
+    selected = []
+    deselected = []
+
+    for item in items:
+        if not hasattr(item, "callspec"):
+            selected.append(item)
+            continue
+
+        params = item.callspec.params
+        fixture_mesh = params.get("ttnn_mesh_device")
+        required_mesh = params.get("mesh_shape")
+
+        # Keep test if no mesh_shape param or if meshes match
+        if required_mesh is None or fixture_mesh == required_mesh:
+            selected.append(item)
+        else:
+            deselected.append(item)
+
+    items[:] = selected
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+
+
+# UMD PCIe hang / board-off-bus. Matched on the invariant tail of:
+#   Read 0xffffffff over PCIe ID 13: the board should be reset.
+# Same class as sweeps_runner._DEVICE_FATAL_SIGNATURES — do not skip these as
+# "device unavailable" or coverage fail-under will fire after host-only tests.
+_DEVICE_FATAL_SIGNATURES = (
+    "the board should be reset",
+    "0xffffffff",
+    "pciehang",
+)
+
+
+def _is_device_fatal_error(exc: BaseException) -> bool:
+    """Return True if ``exc`` indicates a hung board that needs a reset."""
+    msg = str(exc).lower()
+    name = type(exc).__name__.lower()
+    return any(sig in msg or sig in name for sig in _DEVICE_FATAL_SIGNATURES)
+
+
+@pytest.fixture(scope="module")
+def ttnn_mesh_device(request):
+    """Create and yield a mesh device for a given mesh shape, cleanup on teardown."""
+    if not hasattr(request, "param"):
+        pytest.skip(f"{__file__}: mesh_device fixture called without parametrization")
+
+    mesh_device_name = os.environ.get("MESH_DEVICE", "").strip().upper()
+    blackhole_selected = mesh_device_name in {"P150", "P300", "P150X4"}
+    if ttnn.device.is_blackhole() and not blackhole_selected:
+        pytest.skip(f"{__file__}: select Blackhole explicitly with MESH_DEVICE=P150, P300, or P150x4")
+    if blackhole_selected and not ttnn.device.is_blackhole():
+        pytest.skip(f"{__file__}: MESH_DEVICE={mesh_device_name} requires a Blackhole device")
+
+    # request.param is either a Sequence of ints or a dict with fabric_config and etc.
+    params = getattr(request, "param", tuple())
+    if isinstance(params, tuple):
+        mesh_shape = params
+        updated_params = dict()
+    else:
+        try:
+            updated_params = params.copy()
+            mesh_shape = updated_params.pop("mesh_shape")
+        except Exception as e:
+            pytest.skip(f"{__file__}: mesh_shape is required: {e}")
+
+    # Pre-check: if no devices at all, skip without invoking C++ open.
+    # Transient driver/UMD issues are "device unavailable"; a hung PCIe bus is not.
+    try:
+        num_pcie = ttnn.get_num_pcie_devices()
+    except Exception as e:
+        if _is_device_fatal_error(e):
+            pytest.fail(f"{__file__}: Device hung / needs reset, not a test skip: {e}")
+        pytest.skip(f"{__file__}: Unable to query TT devices on this system: {e}")
+
+    if isinstance(num_pcie, int) and num_pcie == 0:
+        pytest.skip(f"{__file__}: No TT devices detected on this system")
+
+    # Pre-check: skip shapes that cannot fit into the SystemMesh to avoid native exceptions
+    sys_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()  # type: ignore[attr-defined]
+    sys_shape = tuple(sys_desc.shape())
+    req_shape = tuple(mesh_shape)
+    if blackhole_selected and req_shape == (1, 4) and not _is_physical_p150x4_cluster(ttnn.cluster.get_cluster_type()):
+        pytest.skip(
+            "Exact P150x4 hardware coverage requires a physical P150_X4 or P300_X2 cluster; "
+            "other submeshes are not SKU-equivalent"
+        )
+    if blackhole_selected and mesh_device_name == "P300" and req_shape == (1, 2):
+        cluster_type = ttnn.cluster.get_cluster_type()
+        if cluster_type not in (ttnn.cluster.ClusterType.P150_X2, ttnn.cluster.ClusterType.P300_X2):
+            pytest.skip(
+                "P300 or P300-equivalent development coverage requires a directly connected physical "
+                "two-chip Blackhole cluster; "
+                f"got {cluster_type}"
+            )
+    allowed = _allowed_req_shapes_for_system(sys_shape, blackhole_selected=blackhole_selected)
+    if req_shape not in allowed:
+        pytest.skip(
+            f"{__file__}: Requested mesh {req_shape} unsupported on system {sys_shape}. "
+            f"Allowed for this system: {allowed}"
+        )
+
+    parent_shape = _pick_parent_shape_for_submesh(sys_shape, req_shape)
+
+    # config fabric config
+    fabric_config = updated_params.pop("fabric_config", None)
+    if parent_shape == (1, 1):
+        # Single device does not need fabric config.
+        pass
+    else:
+        # Select the default fabric topology for the logical mesh requested by the test.
+        # A submesh still requires opening the full system parent, but its workload topology
+        # determines whether that parent must provide Ring or Linear routes.
+        # Select the default fabric topology for the logical mesh requested by the test.
+        # A submesh still requires opening the full system parent, but its workload topology
+        # determines whether that parent must provide Ring or Linear routes.
+        if fabric_config is None:
+            fabric_config = _default_fabric_config(req_shape)
+            fabric_config = _default_fabric_config(req_shape)
+        # set all other input arguments to default values by top-level conftest.py
+        ttnn.set_fabric_config(
+            fabric_config, ttnn.FabricReliabilityMode.STRICT_INIT, None, ttnn.FabricTensixConfig.DISABLED
+        )
+
+    # config dispatch core to default values by conftest.py
+    updated_params["dispatch_core_config"] = ttnn.DispatchCoreConfig(type=None, axis=None, fabric_tensix_config=None)
+
+    # If a test requests a submesh of a larger system mesh (e.g. request 2x4 on a 8x4 system),
+    # fabric cannot be initialized on only the subset of devices. In that case, open the full
+    # system mesh first, then return the "first" submesh. We intentionally rely on the default
+    # offset behavior here (i.e. no explicit offset selection).
+    parent_device = None
+    submesh_device = None
+
+    # Acquire exclusive lock to prevent concurrent device access across processes
+    with tt_device_lock():
+        try:
+            if req_shape != parent_shape:
+                parent_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(parent_shape), **updated_params)
+                submesh_device = parent_device.create_submesh(ttnn.MeshShape(req_shape))
+                yield submesh_device
+            else:
+                parent_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(parent_shape), **updated_params)
+                yield parent_device
+        except Exception as e:
+            # Focused BH qualification nodes are required gates. Exceptions raised by the test body
+            # cross the fixture's ``yield`` and must remain failures rather than becoming skips.
+            # A hung PCIe bus is likewise not a skip: later coverage fail-under would hide it.
+            # Retain the legacy skip behavior for other non-opted-in WH errors.
+            if blackhole_selected or _is_device_fatal_error(e):
+                raise
+            pytest.skip(f"{__file__}: Mesh device unavailable or unsupported for this configuration: {e}")
+        finally:
+            if submesh_device is not None:
+                ttnn.close_mesh_device(submesh_device)
+            if parent_device is not None:
+                ttnn.close_mesh_device(parent_device)
+            if fabric_config:
+                ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+            del parent_device
+
+
+@pytest.fixture(scope="session")
+def require_blackhole_mesh_device():
+    """Skip a Blackhole-only test unless the requested SKU is explicit."""
+    mesh_device_name = os.environ.get("MESH_DEVICE", "").strip().upper()
+    if mesh_device_name not in {"P150", "P150X4"}:
+        pytest.skip("Blackhole-only test requires MESH_DEVICE=P150 or P150x4")
+    return mesh_device_name
+
+
+def _default_fabric_config(mesh_shape: tuple[int, int]) -> ttnn.FabricConfig | None:
+    """Select the generic fabric topology for the requested logical mesh."""
+    if mesh_shape == (1, 1):
+        return None
+    num_devices = mesh_shape[0] * mesh_shape[1]
+    if mesh_shape[0] == 1 and num_devices >= 8:
+        return ttnn.FabricConfig.FABRIC_1D_RING
+    return ttnn.FabricConfig.FABRIC_1D
+
+
+def _is_physical_p150x4_cluster(cluster_type) -> bool:
+    """Accept the two physical four-die BH systems that expose logical P150x4."""
+
+    return cluster_type in (ttnn.cluster.ClusterType.P150_X4, ttnn.cluster.ClusterType.P300_X2)
+
+
+def _allowed_req_shapes_for_system(
+    sys_shape: tuple[int, int], *, blackhole_selected: bool = False
+) -> set[tuple[int, int]]:
+    # todo)) Different cluster has potentially different physical interconnects (in terms of number of links, topology, etc.).
+    #        Thus, a tuple of ints may not be enough to fingerprint the parent/system mesh device. We need to use a more sophisticated fingerprinting mechanism so we can base the allowed list of (sub)mesh shapes on the parent/system mesh device.
+    # [INFO] The most robust way to identify the underlying system is to use ttnn.cluster.get_cluster_type(), which returns a ClusterType enum that precisely identifies your hardware configuration. cluster.cpp:16-37
+
+    _CANDIDATE_REQ_SHAPES = {
+        (1, 1): ((1, 1),),
+        (1, 2): ((1, 2), (1, 1)),
+        # A 2-chip N300 does not always enumerate as (1, 2): auto-discovery on some hosts (e.g. the
+        # wh_n300 CI runners) reports the same two chips transposed, as (2, 1). Both are the same
+        # hardware, so a (2, 1) system must serve the (1, 2) request every N300 demo makes — a request
+        # that uses all devices is opened in the requested *view* by _pick_parent_shape_for_submesh.
+        # Without this entry the lookup below misses, `allowed` comes back empty, and EVERY test on
+        # such a host skips.
+        (2, 1): ((1, 2), (2, 1), (1, 1)),
+        # Blackhole P150x4 may enumerate as a line or square. Focused tests use
+        # the same logical 1x4 view as the 1D modules.
+        (1, 4): ((1, 4), (1, 2), (1, 1)),
+        (4, 1): ((1, 4), (4, 1), (1, 2), (1, 1)),
+        (2, 2): ((2, 2), (1, 4), (1, 2), (1, 1)),
+        (2, 4): ((2, 4), (1, 8), (1, 4), (1, 2), (1, 1)),
+        (8, 4): ((8, 4), (4, 8), (1, 8), (1, 4), (1, 2), (1, 1)),
+        # [INFO] add more system shapes here
+    }
+
+    allowed: set[tuple[int, int]] = set()
+
+    if sys_shape in _CANDIDATE_REQ_SHAPES:
+        for mesh_shape in _CANDIDATE_REQ_SHAPES[sys_shape]:
+            allowed.add(mesh_shape)
+
+    # A physical 2x2 Blackhole quietbox is exposed to the in-scope 1D models
+    # as the canonical P150x4 view. Preserve generic/non-BH square requests;
+    # only the opted-in BH path rejects model-visible (2,2).
+    if blackhole_selected and sys_shape == (2, 2):
+        allowed.discard((2, 2))
+
+    return allowed
+
+
+def _pick_parent_shape_for_submesh(system_shape: tuple[int, int], requested_shape: tuple[int, int]) -> tuple[int, int]:
+    # For multi-device workloads we always open the full system mesh (fabric cannot be launched on a subset),
+    # but we may choose the *orientation* of the full mesh such that the requested submesh fits with the
+    # default offset (i.e. "first submesh").
+    if requested_shape == (1, 1):
+        return (1, 1)
+
+    # If the request uses all devices, treat it as a "full-mesh view" shape and open the parent mesh in that view.
+    # This enables shapes like (1,32) on a system whose SystemMeshDescriptor reports (8,4).
+    system_num_devices = system_shape[0] * system_shape[1]
+    requested_num_devices = requested_shape[0] * requested_shape[1]
+    if requested_num_devices == system_num_devices:
+        return requested_shape
+
+    if requested_shape[0] <= system_shape[0] and requested_shape[1] <= system_shape[1]:
+        return system_shape
+
+    rotated = (system_shape[1], system_shape[0])
+    if requested_shape[0] <= rotated[0] and requested_shape[1] <= rotated[1]:
+        return rotated
+
+    # No orientation can fit this request without an explicit offset / mapping.
+    pytest.skip(
+        f"{__file__}: Requested submesh {requested_shape} does not fit within system mesh {system_shape} "
+        f"(or its rotated view {rotated}) with default offset."
+    )
+
+
+def _host_is_galaxy_cluster() -> bool | None:
+    """Whether this host is a Galaxy, or None when the cluster type cannot be determined.
+
+    ttnn.cluster.get_cluster_type() returns a ClusterType that fingerprints the hardware
+    directly, which _allowed_req_shapes_for_system documents as the robust alternative to
+    inferring the system from a mesh-shape tuple. Note that a hand-wired 32-chip rig
+    reports CUSTOM rather than GALAXY, so it is not matched here.
+    """
+    try:
+        galaxy_cluster_types = {
+            ttnn.cluster.ClusterType.GALAXY,
+            ttnn.cluster.ClusterType.TG,
+            ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+        }
+        return ttnn.cluster.get_cluster_type() in galaxy_cluster_types
+    except Exception:
+        return None
+
+
+@pytest.fixture(scope="module")
+def skip_on_galaxy_system():
+    """Skip a module whose meshes are 1D-only when the host system is a Galaxy.
+
+    The 1D module suites request shapes like (1, 8), which _allowed_req_shapes_for_system
+    permits on a Galaxy (8, 4) as well as on a T3K (2, 4). They are targeted at the T3K,
+    so on a Galaxy they would consume scarce hardware to re-run LLMBox coverage. Gate is
+    opt-in per module rather than applied in _allowed_req_shapes_for_system, because
+    test_auto_compose.py deliberately exercises 1D shapes on a Galaxy.
+
+    Queried at fixture setup rather than collection time: probing the device while
+    collecting has deadlocked nested-pytest runs before. An indeterminate cluster type
+    does not skip; the mesh fixture makes the call instead.
+    """
+    if _host_is_galaxy_cluster():
+        pytest.skip("1D module suites are T3K-targeted; host cluster type is a Galaxy")

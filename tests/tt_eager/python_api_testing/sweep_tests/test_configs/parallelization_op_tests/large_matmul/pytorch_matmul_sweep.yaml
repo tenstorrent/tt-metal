@@ -1,0 +1,23 @@
+---
+test-list:
+  matmul:
+    shape:
+      start-shape:
+        - [1, 1, 32, 6144]
+        - [1, 1, 32, 32]
+      end-shape:
+        - [1, 1, 5120, 6144]
+        - [1, 1, 32, 6144]
+      interval: 32
+      num-shapes: 2
+      method: matmul
+      bcast-batch: True
+      split: [1, 20]
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: large_matmul_sweep.csv

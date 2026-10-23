@@ -1,0 +1,12 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+#include "ttnn/types.hpp"
+
+namespace ttnn {
+
+Tensor stack(const std::vector<Tensor>& input_tensors, int dim);
+
+}  // namespace ttnn

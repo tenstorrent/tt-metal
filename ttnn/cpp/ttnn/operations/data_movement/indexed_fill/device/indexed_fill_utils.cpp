@@ -1,0 +1,334 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_utils.hpp"
+
+#include <algorithm>
+
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
+
+#include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+
+namespace ttnn::operations::data_movement::indexed_fill {
+
+namespace {
+
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec) {
+    return tensor_spec.memory_config().shard_spec();
+}
+
+}  // namespace
+
+bool is_uneven(const tt::tt_metal::TensorSpec& t) {
+    if (!t.memory_config().is_sharded()) {
+        return false;
+    }
+    // A sharded MemoryConfig without an explicit shard_spec cannot be uneven by definition
+    // (no shard dimensions to compare). Return false so path-selection predicates treat it
+    // as "not uneven" and continue to their own shard_spec guards.
+    const auto& shard_spec_opt = get_shard_spec(t);
+    if (!shard_spec_opt.has_value()) {
+        return false;
+    }
+    const auto& shard = shard_spec_opt->shape;
+    const auto& shape = t.padded_shape();
+    const auto rank = shape.rank();
+    if (rank < 2) {
+        return false;
+    }
+    uint64_t volume_except_last = 1;
+    for (int i = 0; i < static_cast<int>(rank) - 1; ++i) {
+        volume_except_last *= shape[i];
+    }
+    return (volume_except_last % shard[0]) != 0 || (shape[-1] % shard[1]) != 0;
+}
+
+bool is_native_indexed_fill_sharding(
+    const tt::tt_metal::TensorSpec& input_a_spec,
+    const tt::tt_metal::TensorSpec& /*input_b_spec*/,
+    const tt::tt_metal::TensorSpec& batch_id_spec,
+    const tt::tt_metal::MemoryConfig& output_memory_config) {
+    using tt::tt_metal::BufferType;
+    using tt::tt_metal::TensorMemoryLayout;
+
+    if (!input_a_spec.memory_config().is_sharded() || !output_memory_config.is_sharded()) {
+        return false;
+    }
+    if (input_a_spec.memory_config().buffer_type() != BufferType::L1 ||
+        output_memory_config.buffer_type() != BufferType::L1) {
+        return false;
+    }
+
+    if (batch_id_spec.memory_config().buffer_type() != BufferType::L1) {
+        return false;
+    }
+
+    if (input_a_spec.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+        return false;
+    }
+    if (output_memory_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+        return false;
+    }
+
+    if (is_uneven(input_a_spec)) {
+        return false;
+    }
+
+    if (!input_a_spec.memory_config().shard_spec().has_value() || !output_memory_config.shard_spec().has_value()) {
+        return false;
+    }
+
+    const auto& in_shard = *input_a_spec.memory_config().shard_spec();
+    const auto& out_shard = *output_memory_config.shard_spec();
+    if (in_shard.grid != out_shard.grid) {
+        return false;
+    }
+    if (in_shard.shape != out_shard.shape) {
+        return false;
+    }
+
+    // The native path always enumerates workers row-major and assigns `my_batch_id = i`
+    // directly to the i-th worker, but the actual buffer/shard-to-core mapping follows the
+    // shard's orientation. A COL_MAJOR grid would therefore write each logical batch to the
+    // wrong output core on a multi-row grid; fall back to the generic path in that case.
+    if (in_shard.orientation != tt::tt_metal::ShardOrientation::ROW_MAJOR ||
+        out_shard.orientation != tt::tt_metal::ShardOrientation::ROW_MAJOR) {
+        return false;
+    }
+
+    // One batch per core: shard grid must cover exactly B = padded_shape()[0] cores,
+    // and each shard must hold exactly H*W rows (= one whole batch slab).
+    const auto& padded = input_a_spec.padded_shape();
+    if (padded.rank() < 4) {
+        return false;
+    }
+    const uint32_t B = padded[0];
+    const uint32_t batch_height_rows = padded[1] * padded[2];
+    if (in_shard.grid.num_cores() != B) {
+        return false;
+    }
+    if (in_shard.shape[0] != batch_height_rows) {
+        return false;
+    }
+    if (in_shard.shape[1] != padded[-1]) {
+        return false;
+    }
+
+    return true;
+}
+
+bool is_shard_local_indexed_fill(
+    const tt::tt_metal::TensorSpec& input_a_spec,
+    const tt::tt_metal::TensorSpec& input_b_spec,
+    const tt::tt_metal::MemoryConfig& output_memory_config) {
+    using tt::tt_metal::BufferType;
+    using tt::tt_metal::TensorMemoryLayout;
+
+    const auto& a_mem = input_a_spec.memory_config();
+    if (!a_mem.is_sharded() || a_mem.buffer_type() != BufferType::L1) {
+        return false;
+    }
+    // Only WIDTH_SHARDED and BLOCK_SHARDED (HEIGHT_SHARDED is handled by the native path or the
+    // generic HEIGHT path with the worker-grid fix).
+    const auto layout = a_mem.memory_layout();
+    if (layout != TensorMemoryLayout::WIDTH_SHARDED && layout != TensorMemoryLayout::BLOCK_SHARDED) {
+        return false;
+    }
+
+    // Uneven sharding: the shard-local kernel computes shard_ppb = H_N (ROW_MAJOR) or
+    // (H_N/TH)*(shard_w/TW) (TILE).  If the shard shape doesn't evenly divide the tensor
+    // dimensions, the last core's page count would be different and the arithmetic is wrong.
+    if (is_uneven(input_a_spec)) {
+        return false;
+    }
+
+    if (!output_memory_config.is_sharded() || output_memory_config.buffer_type() != BufferType::L1) {
+        return false;
+    }
+    if (output_memory_config.memory_layout() != layout) {
+        return false;
+    }
+    if (!a_mem.shard_spec().has_value() || !output_memory_config.shard_spec().has_value()) {
+        return false;
+    }
+    const auto& a_shard = *a_mem.shard_spec();
+    const auto& out_shard = *output_memory_config.shard_spec();
+    if (a_shard.grid != out_shard.grid || a_shard.shape != out_shard.shape) {
+        return false;
+    }
+
+    // The shard-local kernel derives each core's shard/column index from its row-major
+    // position `i` in create_program_artifacts()'s core list (corerange_to_cores(..., row_wise
+    // = true)), which only matches the tensor's actual shard-to-core assignment when the shard
+    // is ROW_MAJOR-oriented. A COL_MAJOR shard would read/write the wrong shard on multi-row /
+    // multi-column grids, so fall back to the generic path in that case instead.
+    if (a_shard.orientation != tt::tt_metal::ShardOrientation::ROW_MAJOR ||
+        out_shard.orientation != tt::tt_metal::ShardOrientation::ROW_MAJOR) {
+        return false;
+    }
+
+    if (layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        // The factory's shard_row = i / shard_n_x and cx = i % shard_n_x only match
+        // corerange_to_cores(row_wise = true) when the shard grid is a full rectangle.
+        // (WIDTH_SHARDED needs no such check: cx = i holds for any grid shape.)
+        if (a_shard.grid.num_cores() != a_shard.grid.bounding_box().size()) {
+            return false;
+        }
+
+        // The kernel gives each shard row B / n_y batches, so an indivisible B has no valid
+        // per-core batch count.
+        const auto& padded = input_a_spec.padded_shape();
+        if (padded.rank() < 1) {
+            return false;
+        }
+        const uint32_t B = padded[0];
+        const uint32_t n_y = a_shard.grid.bounding_box().grid_size().y;
+        if (n_y == 0 || B % n_y != 0) {
+            return false;
+        }
+    }
+
+    // input_b: must be interleaved OR the same WIDTH_SHARDED layout (same grid, same shard
+    // width). Direct L1 arithmetic works for WIDTH_SHARDED because every core has all `b`
+    // input_b batches locally, so `replace_src` (a global index in [0, b)) always resolves
+    // to the correct L1 offset on the current core.
+    //
+    // BLOCK_SHARDED input_b is intentionally rejected: in that layout each core holds only
+    // b/n_y of the `b` input_b batches, so a global `replace_src` index may refer to a batch
+    // on a DIFFERENT shard-row core, making direct L1 arithmetic incorrect. Support for that
+    // combination (which requires a remote NOC read or TensorAccessor re-indexing) is deferred.
+    const auto& b_mem = input_b_spec.memory_config();
+    if (b_mem.is_sharded()) {
+        if (layout != TensorMemoryLayout::WIDTH_SHARDED) {
+            return false;
+        }
+        if (b_mem.buffer_type() != BufferType::L1) {
+            return false;
+        }
+        if (b_mem.memory_layout() != TensorMemoryLayout::WIDTH_SHARDED) {
+            return false;
+        }
+        if (!b_mem.shard_spec().has_value()) {
+            return false;
+        }
+        if (b_mem.shard_spec()->grid != a_shard.grid) {
+            return false;
+        }
+        if (b_mem.shard_spec()->shape[1] != a_shard.shape[1]) {
+            return false;
+        }
+        if (b_mem.shard_spec()->orientation != tt::tt_metal::ShardOrientation::ROW_MAJOR) {
+            return false;
+        }
+    }
+    // INTERLEAVED input_b (L1 or DRAM) is always acceptable.
+
+    return true;
+}
+
+CoreRangeSet get_indexed_fill_worker_grid(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const Tensor& batch_id,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
+    auto* device = input_tensor_a.device();
+
+    // 1. Explicit output shard grid takes precedence — use exactly those cores.
+    if (memory_config.has_value() && memory_config->is_sharded() && memory_config->shard_spec().has_value()) {
+        return memory_config->shard_spec()->grid;
+    }
+
+    // 2. Any sharded input_a drives the worker grid. We use the shard grid directly (not the
+    //    full sub-device worker set). Guard against tensors that are sharded via nd_shard_spec
+    //    only (shard_spec() returns nullopt in that case) and fall through to the default.
+    if (input_tensor_a.is_sharded() && input_tensor_a.shard_spec().has_value()) {
+        return input_tensor_a.shard_spec()->grid;
+    }
+    if (input_tensor_b.is_sharded() && input_tensor_b.shard_spec().has_value()) {
+        return input_tensor_b.shard_spec()->grid;
+    }
+    if (batch_id.is_sharded() && batch_id.shard_spec().has_value()) {
+        return batch_id.shard_spec()->grid;
+    }
+
+    // 3. Default: all worker cores of the first sub-device.
+    return device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().front());
+}
+
+tt::tt_metal::ShardSpec adjust_to_shape(
+    const tt::tt_metal::ShardSpec& shard_spec,
+    const ttnn::Shape& from_shape,
+    const ttnn::Shape& to_shape,
+    bool is_tile) {
+    auto ret = shard_spec;
+    uint32_t from_volume_except_width = 1;
+    uint32_t to_volume_except_width = 1;
+    const auto from_rank = static_cast<int>(from_shape.rank());
+    const auto to_rank = static_cast<int>(to_shape.rank());
+    for (int i = 0; i < from_rank - 1; ++i) {
+        from_volume_except_width *= from_shape[i];
+    }
+    for (int i = 0; i < to_rank - 1; ++i) {
+        to_volume_except_width *= to_shape[i];
+    }
+    uint32_t from_width = from_shape[-1];
+    uint32_t to_width = to_shape[-1];
+    TT_FATAL(from_volume_except_width > 0, "Invalid from_shape: volume is zero");
+    TT_FATAL(from_width > 0, "Invalid from_shape: width dimension is zero");
+    const uint32_t min_h = is_tile ? tt::constants::TILE_HEIGHT : 1u;
+    const uint32_t min_w = is_tile ? tt::constants::TILE_WIDTH : 1u;
+    ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, min_h);
+    ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, min_w);
+    return ret;
+}
+
+tt::tt_metal::ShardSpec generate_output_shard_spec(
+    const Tensor& input_tensor,
+    const ttnn::Shape& padded_out_shape,
+    tt::tt_metal::TensorMemoryLayout memory_layout,
+    bool is_tile) {
+    // IndexedFill: forced ROW_MAJOR — no input-orientation inheritance path (unlike Transpose/Repeat/Fold).
+    return common::synthesize_output_shard_spec(
+        input_tensor.device()->compute_with_storage_grid_size(),
+        padded_out_shape,
+        memory_layout,
+        {.is_tile = is_tile,
+         .orientation_hint = tt::tt_metal::ShardOrientation::ROW_MAJOR,
+         .caller_tag = "IndexedFill"});
+}
+
+tt::tt_metal::MemoryConfig resolve_output_memory_config(
+    const Tensor& input_tensor_a,
+    const ttnn::Shape& padded_out_shape,
+    const tt::tt_metal::MemoryConfig& output_mem_config) {
+    // indexed_fill preserves the output shape, so an ND-sharded output config already
+    // carries the authoritative shard distribution. Re-deriving a legacy shard_spec here
+    // is unnecessary and would rewrite an ND-origin config onto the legacy shard-spec path.
+    if (output_mem_config.created_with_nd_shard_spec() && output_mem_config.nd_shard_spec().has_value()) {
+        return output_mem_config;
+    }
+
+    if (!output_mem_config.is_sharded() || output_mem_config.shard_spec().has_value()) {
+        return output_mem_config;
+    }
+
+    tt::tt_metal::ShardSpec derived_spec =
+        (input_tensor_a.is_sharded() && input_tensor_a.memory_config().shard_spec().has_value())
+            ? adjust_to_shape(
+                  *input_tensor_a.memory_config().shard_spec(),
+                  input_tensor_a.padded_shape(),
+                  padded_out_shape,
+                  input_tensor_a.layout() == tt::tt_metal::Layout::TILE)
+            : generate_output_shard_spec(
+                  input_tensor_a,
+                  padded_out_shape,
+                  output_mem_config.memory_layout(),
+                  input_tensor_a.layout() == tt::tt_metal::Layout::TILE);
+
+    return tt::tt_metal::MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), derived_spec);
+}
+
+}  // namespace ttnn::operations::data_movement::indexed_fill

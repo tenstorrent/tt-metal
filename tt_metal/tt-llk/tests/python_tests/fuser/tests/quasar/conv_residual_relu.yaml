@@ -1,0 +1,50 @@
+# ResNet basic block: conv + residual add + ReLU.
+# The skip connection is added after the convolution, followed by ReLU activation.
+
+operands:
+  - name: "activations"
+    dims: [128, 256]
+    format: "Float16_b"
+  - name: "weights"
+    dims: [256, 128]
+    format: "Float16_b"
+  - name: "skip_input"
+    dims: [128, 128]
+    format: "Float16_b"
+  - name: "conv_result"
+    dims: [128, 128]
+    format: "Float16_b"
+  - name: "output"
+    dims: [128, 128]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        block_size: [64, 64]
+        in0: "activations"
+        in1: "weights"
+        operation: "Matmul"
+        unpacker: "MatmulUnpacker"
+        math_fidelity: "HiFi2"
+    pack:
+      - output: "conv_result"
+        block_size: [64, 64]
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        block_size: [64, 64]
+        in0: "conv_result"
+        in1: "skip_input"
+        operation: "Elwadd"
+        unpacker: "UnpackerAB"
+        math_fidelity: "LoFi"
+      - type: "UnarySfpu"
+        block_size: [64, 64]
+        operation: "Relu"
+        iterations: 32
+    pack:
+      - output: "output"
+        block_size: [64, 64]
+        packer: "Packer"

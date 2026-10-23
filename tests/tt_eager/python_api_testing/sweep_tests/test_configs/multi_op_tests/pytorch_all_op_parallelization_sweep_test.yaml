@@ -1,0 +1,528 @@
+---
+test-list:
+  # SANITY
+  datacopy:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 32, 32]
+      interval: 32
+      num-shapes: 1
+      num-samples: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_equal
+    output-file: all_op_parallelization_sweep.csv
+  # ELTWISE UNARY
+  eltwise-exp:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32]] # Single core
+        - [[1, 1, 320, 384]] # Multi core
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: -5
+        high: 5
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  eltwise-recip:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32]] # Single core
+        - [[1, 1, 320, 384]] # Multi core
+      num-shapes: 1
+    datagen:
+      function: gen_rand_symmetric
+      args:
+        low: 1
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  eltwise-sqrt:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32]] # Single core
+        - [[1, 1, 320, 384]] # Multi core
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: 0
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  eltwise-gelu:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32]] # Single core
+        - [[1, 1, 320, 384]] # Multi core
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  eltwise-relu:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32]] # Single core
+        - [[1, 1, 320, 384]] # Multi core
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  eltwise-sigmoid:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32]] # Single core
+        - [[1, 1, 320, 384]] # Multi core
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  eltwise-log:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32]] # Single core
+        - [[1, 1, 320, 384]] # Multi core
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: 1
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  eltwise-log2:
+    shape:
+      shape-list:
+        - [ [ 1, 1, 32, 32 ] ] # Single core
+        - [ [ 1, 1, 320, 384 ] ] # Multi core
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: 1
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  eltwise-log10:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32]] # Single core
+        - [[1, 1, 320, 384]] # Multi core
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: 1
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  eltwise-tanh:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32]] # Single core
+        - [[1, 1, 320, 384]] # Multi core
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  # ELTWISE BINARY
+  eltwise-add:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32], [1, 1, 32, 32]] # Single core
+        - [[1, 1, 320, 384], [1, 1, 320, 384]] # Multi core
+      num-shapes: 2
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  eltwise-sub:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32], [1, 1, 32, 32]] # Single core
+        - [[1, 1, 320, 384], [1, 1, 320, 384]] # Multi core
+      num-shapes: 2
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  eltwise-mul:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32], [1, 1, 32, 32]] # Single core
+        - [[1, 1, 320, 384], [1, 1, 320, 384]] # Multi core
+      num-shapes: 2
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  # MATMUL
+  matmul:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32], [1, 1, 32, 32]] # Single core (won't be hit after padding is added for multicast)
+        - [[1, 2, 320, 1024], [1, 1, 1024, 384]] # Multi core (2% math util)
+        - [[1, 2, 512, 1024], [1, 1, 1024, 512]] # Multi core reuse (25% math util)
+        - [[1, 2, 5120, 1024], [1, 1, 1024, 6144]] # Multi core reuse multicast in0/in1 (25% math util)
+        - [[1, 2, 512, 1024], [1, 1, 1024, 6144]] # Multi core reuse multicast in0 (25% math util)
+        - [[1, 2, 5120, 1024], [1, 1, 1024, 512]] # Multi core reuse multicast in1 (25% math util)
+        - [[1, 2, 480, 1024], [1, 1, 1024, 480]] # Multi core reuse with padding (?% math util)
+        - [[1, 2, 5088, 1024], [1, 1, 1024, 6112]] # Multi core reuse multicast in0/in1 with padding (?% math util)
+        - [[1, 2, 480, 1024], [1, 1, 1024, 6112]] # Multi core reuse multicast in0 with padding (?% math util)
+        - [[1, 2, 5088, 1024], [1, 1, 1024, 480]] # Multi core reuse multicast in1 with padding (?% math util)
+      num-shapes: 2
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  bmm:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32], [1, 1, 32, 32]] # Single core (won't be hit after padding is added for multicast)
+        - [[1, 2, 320, 1024], [1, 2, 1024, 384]] # Multi core (2% math util)
+        - [[1, 2, 512, 1024], [1, 2, 1024, 512]] # Multi core reuse (25% math util)
+        - [[1, 2, 5120, 1024], [1, 2, 1024, 6144]] # Multi core reuse multicast (25% math util)
+        - [[1, 2, 512, 1024], [1, 2, 1024, 6144]] # Multi core reuse multicast in0 (25% math util)
+        - [[1, 2, 5120, 1024], [1, 2, 1024, 512]] # Multi core reuse multicast in1 (25% math util)
+        - [[1, 2, 480, 1024], [1, 2, 1024, 480]] # Multi core reuse with padding (?% math util)
+        - [[1, 2, 5088, 1024], [1, 2, 1024, 6112]] # Multi core reuse multicast in0/in1 with padding (?% math util)
+        - [[1, 2, 480, 1024], [1, 2, 1024, 6112]] # Multi core reuse multicast in0 with padding (?% math util)
+        - [[1, 2, 5088, 1024], [1, 2, 1024, 480]] # Multi core reuse multicast in1 with padding (?% math util)
+      num-shapes: 2
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  # BROADCAST
+  bcast-add-h:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32], [1, 1, 1, 32]] # Single core
+        - [[1, 1, 3840, 32], [1, 1, 1, 32]] # Multi core h
+      num-shapes: 2
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  bcast-add-w:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32], [1, 1, 32, 1]] # Single core
+        - [[1, 1, 32, 3840], [1, 1, 32, 1]] # Multi core w
+      num-shapes: 2
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  bcast-add-hw:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32], [1, 1, 1, 1]] # Single core
+        - [[1, 1, 320, 384], [1, 1, 1, 1]] # Multi core hw
+      num-shapes: 2
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  bcast-sub-h:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32], [1, 1, 1, 32]] # Single core
+        - [[1, 1, 3840, 32], [1, 1, 1, 32]] # Multi core h
+      num-shapes: 2
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  bcast-sub-w:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32], [1, 1, 32, 1]] # Single core
+        - [[1, 1, 32, 3840], [1, 1, 32, 1]] # Multi core w
+      num-shapes: 2
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  bcast-sub-hw:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32], [1, 1, 1, 1]] # Single core
+        - [[1, 1, 320, 384], [1, 1, 1, 1]] # Multi core hw
+      num-shapes: 2
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  bcast-mul-h:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32], [1, 1, 1, 32]] # Single core
+        - [[1, 1, 3840, 32], [1, 1, 1, 32]] # Multi core h
+      num-shapes: 2
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  bcast-mul-w:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32], [1, 1, 32, 1]] # Single core
+        - [[1, 1, 32, 3840], [1, 1, 32, 1]] # Multi core w
+      num-shapes: 2
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  bcast-mul-hw:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32], [1, 1, 1, 1]] # Single core
+        - [[1, 1, 320, 384], [1, 1, 1, 1]] # Multi core hw
+      num-shapes: 2
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: all_op_parallelization_sweep.csv
+  # REDUCE
+  reduce-max-h:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32]] # Single core
+        - [[1, 1, 32, 3840]] # Multi core h
+      num-shapes: 1
+    datagen:
+      function: gen_rand_along_dim
+      args:
+        low: -100
+        high: 100
+        dim: -2
+    comparison:
+      function: comp_equal
+    output-file: all_op_parallelization_sweep.csv
+  reduce-max-w:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32]] # Single core
+        - [[1, 1, 3840, 32]] # Multi core w
+      num-shapes: 1
+    datagen:
+      function: gen_rand_along_dim
+      args:
+        low: -100
+        high: 100
+        dim: -1
+    comparison:
+      function: comp_equal
+    output-file: all_op_parallelization_sweep.csv
+  reduce-max-hw:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32]] # Single core
+        - [[1, 1, 512, 512]] # Multi core hw (== multi core w + multi core h)
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_equal
+    output-file: all_op_parallelization_sweep.csv
+  reduce-sum-h:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32]] # Single core
+        - [[1, 1, 32, 3840]] # Multi core h
+      num-shapes: 1
+    datagen:
+      function: gen_checkerboard
+      args:
+        low: 0
+        high: 100
+    comparison:
+      function: comp_allclose
+      args:
+        rtol: 0
+        atol: 0.1
+    output-file: all_op_parallelization_sweep.csv
+  reduce-sum-w:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32]] # Single core
+        - [[1, 1, 3840, 32]] # Multi core w
+      num-shapes: 1
+    datagen:
+      function: gen_checkerboard
+      args:
+        low: 0
+        high: 100
+    comparison:
+      function: comp_allclose
+      args:
+        rtol: 0
+        atol: 0.1
+    output-file: all_op_parallelization_sweep.csv
+  reduce-sum-hw:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32]] # Single core
+        - [[1, 1, 512, 512]] # Multi core hw (== multi core w + multi core h)
+      num-shapes: 1
+    datagen:
+      function: gen_checkerboard
+      args:
+        low: 0
+        high: 100
+    comparison:
+      function: comp_allclose
+      args:
+        rtol: 0
+        atol: 0.1
+    output-file: all_op_parallelization_sweep.csv
+  # TRANSPOSE
+  transpose-wh:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32]] # Single core
+        - [[3, 1, 320, 384]] # Multi core
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_equal
+    output-file: all_op_parallelization_sweep.csv
+  transpose-hc:
+    shape:
+      shape-list:
+        - [[1, 32, 32, 32]] # Multi core (There is no single core case and this is the smallest input)
+        - [[3, 320, 384, 32]] # Multi core
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_equal
+    output-file: all_op_parallelization_sweep.csv
+  transpose-cn:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32]] # Single core
+        - [[32, 32, 96, 96]] # Single core
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_equal
+    output-file: all_op_parallelization_sweep.csv
+  permute:
+    shape:
+      shape-list:
+        - [[1, 1, 32, 32]] # Single core
+        - [[32, 32, 96, 96]] # Single core
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    args-gen: gen_permute_args
+    comparison:
+      function: comp_equal
+    output-file: all_op_parallelization_sweep.csv

@@ -1,0 +1,157 @@
+name: "zzz Basic tests"
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      package-artifact-name:
+        required: true
+        type: string
+      prebuilt-image:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Image with the packages already installed. When set it replaces
+          docker-image and the download and install steps are skipped. Empty
+          means the artifact path, which is what forks always get.
+      enabled-skus:
+        required: true
+        type: string
+        description: "Comma-separated SKUs to run (must match tests yaml and sku_config.yaml)."
+      product:
+        required: true
+        type: string # tt-metalium or tt-nn
+      enable-watcher:
+        description: "Enable watcher"
+        default: false
+        type: boolean
+jobs:
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ${{ inputs.product == 'tt-metalium' && './tests/pipeline_reorg/runtime_validation_basic_tests.yaml' || './tests/pipeline_reorg/ttnn_validation_basic_tests.yaml' }}
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+
+      - name: Install dependencies
+        run: pip3 install PyYAML
+
+
+      - name: Build test matrix based on enabled SKUs
+        id: build-matrix
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: "${{ env.TESTS_YAML_PATH }}"
+          enabled-skus: "${{ inputs.enabled-skus }}"
+          sku-config: ./.github/sku_config.yaml
+          event: ${{ github.event_name }}
+
+  basic:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    timeout-minutes: 45
+    runs-on: ${{ matrix.test-group.runs_on }}
+    container:
+      # A prebuilt image already carries the packages and needs no Harbor prefix.
+      image: ${{ inputs.prebuilt-image || inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        ASAN_OPTIONS: "color=always"
+        TSAN_OPTIONS: "color=always"
+        UBSAN_OPTIONS: "color=always:print_stacktrace=1:halt_on_error=1"
+      volumes:
+        - /work
+        - ${{ (!contains(join(matrix.test-group.runs_on, ','), 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
+      options: --device /dev/tenstorrent
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: Checkout actions
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: .github/actions/download-artifact-with-retry
+          sparse-checkout-cone-mode: false
+
+      - uses: ./.github/actions/download-artifact-with-retry
+        if: ${{ inputs.prebuilt-image == '' }}
+        timeout-minutes: 15
+        with:
+          name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
+          path: /work/pkgs/
+
+      - name: Install packages
+        if: ${{ inputs.prebuilt-image == '' }}
+        timeout-minutes: 10
+        run: |
+          # Ideally only ${{ inputs.product }}-validation, but APT doesn't resolve dependencies from files on disk without being told about them.
+          # tt-metalium-jit is optional: TT_USE_SYSTEM_SFPI builds don't produce it, since the
+          # dev/ci-test containers this workflow runs in already have /opt/tenstorrent/sfpi for
+          # the JIT-build runtime fallback (see tt_metal/jit_build/build.cpp).
+          shopt -s nullglob
+          pkgs=(./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-validation_*.deb ./pkgs/${{ inputs.product }}_*.deb ./pkgs/${{ inputs.product }}-validation_*.deb)
+          apt install -y "${pkgs[@]}"
+
+      - name: Set up env vars for watcher
+        if: ${{ inputs.enable-watcher == true }}
+        run: |
+          echo "Enabling TT Metal Watcher"
+          echo "TT_METAL_WATCHER=2" >> $GITHUB_ENV
+          echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
+          echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
+          echo "TT_METAL_WATCHER_DISABLE_ETH=1" >> $GITHUB_ENV
+
+      - name: Run a test
+        id: test
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          GTEST_COLOR: yes
+          GTEST_OUTPUT: xml:/work/test-reports/
+          TT_METAL_HOME: /usr/libexec/tt-metalium # TODO: Need to get away from env vars!
+          TT_METAL_WATCHER: 5
+          TT_METAL_WATCHER_TEST_MODE: 1
+          LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
+          TT_LOGGER_LEVEL: warn
+        run: ${{ matrix.test-group.cmd }}
+
+      - name: Test Report
+        # Because of https://github.com/tenstorrent/tt-metal/issues/19413, only run for our repo
+        # for now. No forks!
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
+        # annotate_only keeps this from creating a check run, which is what used to 404 the
+        # merge gate: the queue's temporary commit could be discarded between the create and
+        # the update. Annotations attach to this job, so there is no separate SHA to go stale.
+        continue-on-error: true
+        uses: mikepenz/action-junit-report@3585e9575db828022551b4231f165eb59a0e74e3 # v5.6.2
+        with:
+          report_paths: /work/test-reports/*.xml
+          check_name: ${{ inputs.product }} ${{ matrix.test-group.sku }} basic tests (${{ github.workflow }}, attempt ${{ github.run_attempt }})
+          annotate_only: true
+          detailed_summary: true
+          include_passed: false
+          fail_on_failure: false
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        with:
+          path: /work/test-reports/
+          prefix: "test_reports_"

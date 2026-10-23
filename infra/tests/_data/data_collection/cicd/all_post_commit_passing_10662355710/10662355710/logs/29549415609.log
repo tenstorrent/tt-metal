@@ -1,0 +1,200 @@
+﻿2024-09-02T07:01:58.9436134Z Current runner version: '2.319.1'
+2024-09-02T07:01:58.9442770Z Runner name: 'tt-metal-ci-bm-f14cs01-02'
+2024-09-02T07:01:58.9443768Z Runner group name: 'Default'
+2024-09-02T07:01:58.9444780Z Machine name: 'f14cs01'
+2024-09-02T07:01:58.9463542Z Testing runner upgrade compatibility
+2024-09-02T07:01:59.0308274Z ##[group]GITHUB_TOKEN Permissions
+2024-09-02T07:01:59.0313183Z Actions: read
+2024-09-02T07:01:59.0314327Z Contents: read
+2024-09-02T07:01:59.0315406Z Metadata: read
+2024-09-02T07:01:59.0316475Z Pages: write
+2024-09-02T07:01:59.0317578Z ##[endgroup]
+2024-09-02T07:01:59.0324820Z Secret source: Actions
+2024-09-02T07:01:59.0326569Z Prepare workflow directory
+2024-09-02T07:01:59.1634930Z Prepare all required actions
+2024-09-02T07:01:59.1908915Z Getting action download info
+2024-09-02T07:01:59.3672762Z Download action repository 'tenstorrent-metal/metal-workflows@v2.0.0' (SHA:22c747950076e4c9627125e14734e287c08287a7)
+2024-09-02T07:01:59.8340739Z Getting action download info
+2024-09-02T07:02:00.0283914Z Download action repository 'actions/checkout@v4' (SHA:692973e3d937129bcbf40652eb9f2f61becf3332)
+2024-09-02T07:02:00.5861680Z Uses: tenstorrent/tt-metal/.github/workflows/build.yaml@refs/heads/main (a9bcd03b1775ab989aebab822ec2e4f821abac41)
+2024-09-02T07:02:00.5864147Z Complete job name: build / RelWithDebInfo clang++-17 wormhole_b0 ubuntu-20.04
+2024-09-02T07:02:00.7237208Z ##[group]Run tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+2024-09-02T07:02:00.7238105Z with:
+2024-09-02T07:02:00.7238748Z   token: ***
+2024-09-02T07:02:00.7239188Z   fetch-depth: 1
+2024-09-02T07:02:00.7239592Z env:
+2024-09-02T07:02:00.7239934Z   ARCH_NAME: wormhole_b0
+2024-09-02T07:02:00.7240368Z   VERBOSE: 1
+2024-09-02T07:02:00.7240758Z ##[endgroup]
+2024-09-02T07:02:00.7501865Z ##[group]Run actions/checkout@v4
+2024-09-02T07:02:00.7502362Z with:
+2024-09-02T07:02:00.7503069Z   token: ***
+2024-09-02T07:02:00.7503455Z   fetch-depth: 1
+2024-09-02T07:02:00.7503838Z   lfs: true
+2024-09-02T07:02:00.7504237Z   submodules: recursive
+2024-09-02T07:02:00.7504711Z   clean: true
+2024-09-02T07:02:00.7505105Z   repository: tenstorrent/tt-metal
+2024-09-02T07:02:00.7505596Z   ssh-strict: true
+2024-09-02T07:02:00.7506163Z   ssh-user: git
+2024-09-02T07:02:00.7506572Z   persist-credentials: true
+2024-09-02T07:02:00.7507021Z   sparse-checkout-cone-mode: true
+2024-09-02T07:02:00.7507716Z   fetch-tags: false
+2024-09-02T07:02:00.7508136Z   show-progress: true
+2024-09-02T07:02:00.7508543Z   set-safe-directory: true
+2024-09-02T07:02:00.7508974Z env:
+2024-09-02T07:02:00.7509344Z   ARCH_NAME: wormhole_b0
+2024-09-02T07:02:00.7509850Z   VERBOSE: 1
+2024-09-02T07:02:00.7510182Z ##[endgroup]
+2024-09-02T07:02:00.8863917Z Syncing repository: tenstorrent/tt-metal
+2024-09-02T07:02:00.8865693Z ##[group]Getting Git version info
+2024-09-02T07:02:00.8866676Z Working directory is '/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal'
+2024-09-02T07:02:00.8867693Z [command]/usr/bin/git version
+2024-09-02T07:02:00.8868191Z git version 2.25.1
+2024-09-02T07:02:00.8869415Z [command]/usr/bin/git lfs version
+2024-09-02T07:02:00.8938089Z git-lfs/2.9.2 (GitHub; linux amd64; go 1.13.5)
+2024-09-02T07:02:00.8956376Z ##[endgroup]
+2024-09-02T07:02:00.8982298Z Temporarily overriding HOME='/home/ubuntu/actions-runner-2/_work/_temp/74a5633b-cab4-4d1f-8903-d0b20fc9adbd' before making global git config changes
+2024-09-02T07:02:00.8983766Z Adding repository directory to the temporary git global config as a safe directory
+2024-09-02T07:02:00.8992665Z [command]/usr/bin/git config --global --add safe.directory /home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal
+2024-09-02T07:02:00.9050113Z [command]/usr/bin/git config --local --get remote.origin.url
+2024-09-02T07:02:00.9080302Z https://github.com/tenstorrent/tt-metal
+2024-09-02T07:02:00.9109283Z ##[group]Removing previously created refs, to avoid conflicts
+2024-09-02T07:02:00.9116461Z [command]/usr/bin/git rev-parse --symbolic-full-name --verify --quiet HEAD
+2024-09-02T07:02:00.9142934Z refs/heads/Aswinmcw/full_opt_tensor
+2024-09-02T07:02:00.9161411Z [command]/usr/bin/git checkout --detach
+2024-09-02T07:02:01.0162473Z HEAD is now at 489887e5 #12065: Add optional tensor and queue id for full op
+2024-09-02T07:02:01.0787812Z [command]/usr/bin/git branch --delete --force Aswinmcw/full_opt_tensor
+2024-09-02T07:02:01.0831482Z Deleted branch Aswinmcw/full_opt_tensor (was 489887e5).
+2024-09-02T07:02:01.0930142Z ##[endgroup]
+2024-09-02T07:02:01.0934599Z [command]/usr/bin/git submodule status
+2024-09-02T07:02:01.1407119Z  7b11d073376b905b46edaa757f0bfde5c38a9636 models/demos/t3000/llama2_70b/reference/llama (heads/main)
+2024-09-02T07:02:01.1497489Z  2ba5a2973915aa1c5afbf6f1524e87e0c43bc058 tt_metal/third_party/lfs (heads/main)
+2024-09-02T07:02:01.1597914Z  b8f28551cc3a98ea9fbfc15c05b513c8f2d23e84 tt_metal/third_party/pybind11 (b8f2855)
+2024-09-02T07:02:01.1696587Z  3008daa0abc9f37fe757aa8ac7fee26f410947bb tt_metal/third_party/sfpi (remotes/origin/HEAD)
+2024-09-02T07:02:01.1798026Z  7d9e85b6b2e9bf501021f857f2f3cbe43bc37c85 tt_metal/third_party/taskflow (7d9e85b)
+2024-09-02T07:02:01.1894768Z  71d4c8d378b52af7da7012b9b595a61e9304f0bb tt_metal/third_party/tracy (71d4c8d)
+2024-09-02T07:02:01.1990756Z  b3d5095528537db52e069b0daa54aaee2e609437 tt_metal/third_party/tt_llk_blackhole (heads/main)
+2024-09-02T07:02:01.2086555Z  c31765c694399ef82ae634019881fe8c431223de tt_metal/third_party/tt_llk_grayskull (heads/main)
+2024-09-02T07:02:01.2181642Z  035329c69a984c48c562054dc1618b19ea47e543 tt_metal/third_party/tt_llk_wormhole_b0 (heads/main)
+2024-09-02T07:02:01.2305767Z  9d60964a8fe304dca5f6444d3b70b3b5c1a75967 tt_metal/third_party/umd (9d60964)
+2024-09-02T07:02:01.2321767Z ##[group]Cleaning the repository
+2024-09-02T07:02:01.2329142Z [command]/usr/bin/git clean -ffdx
+2024-09-02T07:02:02.3114147Z Removing .cpmcache/
+2024-09-02T07:02:02.3115495Z Removing build/
+2024-09-02T07:02:02.3116408Z Removing runtime/
+2024-09-02T07:02:02.3131730Z [command]/usr/bin/git reset --hard HEAD
+2024-09-02T07:02:02.3464243Z HEAD is now at 489887e5 #12065: Add optional tensor and queue id for full op
+2024-09-02T07:02:02.3475631Z ##[endgroup]
+2024-09-02T07:02:02.3477840Z ##[group]Disabling automatic garbage collection
+2024-09-02T07:02:02.3486491Z [command]/usr/bin/git config --local gc.auto 0
+2024-09-02T07:02:02.3527390Z ##[endgroup]
+2024-09-02T07:02:02.3528713Z ##[group]Setting up auth
+2024-09-02T07:02:02.3541052Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2024-09-02T07:02:02.3588892Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2024-09-02T07:02:02.3956756Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-02T07:02:02.4018336Z Entering 'tt_metal/third_party/lfs'
+2024-09-02T07:02:02.4077515Z Entering 'tt_metal/third_party/pybind11'
+2024-09-02T07:02:02.4138300Z Entering 'tt_metal/third_party/sfpi'
+2024-09-02T07:02:02.4213799Z Entering 'tt_metal/third_party/taskflow'
+2024-09-02T07:02:02.4287214Z Entering 'tt_metal/third_party/tracy'
+2024-09-02T07:02:02.4349517Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-02T07:12:50.4410194Z [1010/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/tt_eager/CMakeFiles/test_fold_op.dir/ops/test_fold_op.cpp.o  -o test/tt_eager/ops/test_fold_op  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  tt_metal/libtt_metal.so  -lz  -latomic  -lhwloc  -lnuma  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lpthread  -ldl  -lrt  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.4577012Z [1011/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/tt_eager/CMakeFiles/test_ccl_tensor_slicers.dir/ops/ccl/test_ccl_tensor_slicers.cpp.o  -o test/tt_eager/ops/ccl/test_ccl_tensor_slicers  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  tt_metal/libtt_metal.so  -lz  -latomic  -lhwloc  -lnuma  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lpthread  -ldl  -lrt  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.4592200Z [1012/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/tt_eager/CMakeFiles/test_copy_and_move.dir/tensors/test_copy_and_move.cpp.o  -o test/tt_eager/tensors/test_copy_and_move  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  tt_metal/libtt_metal.so  -lz  -latomic  -lhwloc  -lnuma  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lpthread  -ldl  -lrt  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.4714939Z [1013/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/tt_eager/CMakeFiles/test_tilize_op_channels_last.dir/ops/test_tilize_op_channels_last.cpp.o  -o test/tt_eager/ops/test_tilize_op_channels_last  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  tt_metal/libtt_metal.so  -lz  -latomic  -lhwloc  -lnuma  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lpthread  -ldl  -lrt  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.4760517Z [1014/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/tt_eager/CMakeFiles/test_bcast_op.dir/ops/test_bcast_op.cpp.o  -o test/tt_eager/ops/test_bcast_op  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  tt_metal/libtt_metal.so  -lz  -latomic  -lhwloc  -lnuma  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lpthread  -ldl  -lrt  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.4777413Z [1015/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/tt_eager/CMakeFiles/test_transpose_wh_single_core.dir/ops/test_transpose_wh_single_core.cpp.o  -o test/tt_eager/ops/test_transpose_wh_single_core  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  tt_metal/libtt_metal.so  -lz  -latomic  -lhwloc  -lnuma  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lpthread  -ldl  -lrt  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.4796960Z [1016/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/tt_eager/CMakeFiles/test_async_tensor_apis.dir/tensors/test_async_tensor_apis.cpp.o  -o test/tt_eager/tensors/test_async_tensor_apis  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  tt_metal/libtt_metal.so  -lz  -latomic  -lhwloc  -lnuma  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lpthread  -ldl  -lrt  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.4824231Z [1017/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/tt_eager/CMakeFiles/test_layernorm_op.dir/ops/test_layernorm_op.cpp.o  -o test/tt_eager/ops/test_layernorm_op  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  tt_metal/libtt_metal.so  -lz  -latomic  -lhwloc  -lnuma  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lpthread  -ldl  -lrt  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.4905475Z [1018/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/tt_eager/CMakeFiles/test_sliding_window_ops.dir/ops/test_sliding_window_ops.cpp.o  -o test/tt_eager/ops/test_sliding_window_ops  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  tt_metal/libtt_metal.so  -lz  -latomic  -lhwloc  -lnuma  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lpthread  -ldl  -lrt  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.4990632Z [1019/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/tt_eager/CMakeFiles/test_transpose_op.dir/ops/test_transpose_op.cpp.o  -o test/tt_eager/ops/test_transpose_op  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  tt_metal/libtt_metal.so  -lz  -latomic  -lhwloc  -lnuma  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lpthread  -ldl  -lrt  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.5018656Z [1020/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/ttnn/unit_tests/gtests/CMakeFiles/unit_tests_ttnn_ccl.dir/ccl/test_erisc_data_mover_with_workers.cpp.o  -o test/ttnn/unit_tests_ttnn_ccl  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  tt_metal/libtt_metal.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lrt  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  -ldl  -lz  -lpthread  -latomic  -lhwloc  -lnuma  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.5134739Z [1021/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/tt_eager/CMakeFiles/test_transpose_wh_multi_core.dir/ops/test_transpose_wh_multi_core.cpp.o  -o test/tt_eager/ops/test_transpose_wh_multi_core  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  tt_metal/libtt_metal.so  -lz  -latomic  -lhwloc  -lnuma  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lpthread  -ldl  -lrt  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.5151177Z [1022/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/ttnn/unit_tests/gtests/CMakeFiles/test_multi_device.dir/test_multi_device.cpp.o  -o test/ttnn/test_multi_device  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  tt_metal/libtt_metal.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lrt  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  -ldl  -lz  -lpthread  -latomic  -lhwloc  -lnuma  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.5173299Z [1023/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/tt_eager/CMakeFiles/test_softmax_op.dir/ops/test_softmax_op.cpp.o  -o test/tt_eager/ops/test_softmax_op  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  tt_metal/libtt_metal.so  -lz  -latomic  -lhwloc  -lnuma  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lpthread  -ldl  -lrt  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.5196032Z [1024/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/tt_eager/CMakeFiles/test_tilize_op.dir/ops/test_tilize_op.cpp.o  -o test/tt_eager/ops/test_tilize_op  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  tt_metal/libtt_metal.so  -lz  -latomic  -lhwloc  -lnuma  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lpthread  -ldl  -lrt  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.5304069Z [1025/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/ttnn/unit_tests/gtests/CMakeFiles/galaxy_unit_tests_ttnn.dir/test_ccl_on_tg.cpp.o  -o test/ttnn/galaxy_unit_tests_ttnn  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  tt_metal/libtt_metal.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lrt  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  -ldl  -lz  -lpthread  -latomic  -lhwloc  -lnuma  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.5335717Z [1026/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/tt_eager/CMakeFiles/test_bert.dir/integration_tests/test_bert.cpp.o  -o test/tt_eager/integration_tests/test_bert  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  tt_metal/libtt_metal.so  -lz  -latomic  -lhwloc  -lnuma  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lpthread  -ldl  -lrt  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.5396510Z [1027/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/tt_eager/CMakeFiles/test_raw_host_memory_pointer.dir/tensors/test_raw_host_memory_pointer.cpp.o  -o test/tt_eager/tensors/test_raw_host_memory_pointer  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  tt_metal/libtt_metal.so  -lz  -latomic  -lhwloc  -lnuma  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lpthread  -ldl  -lrt  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.5412577Z [1028/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/tt_eager/CMakeFiles/test_tilize_zero_padding_channels_last.dir/ops/test_tilize_zero_padding_channels_last.cpp.o  -o test/tt_eager/ops/test_tilize_zero_padding_channels_last  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  tt_metal/libtt_metal.so  -lz  -latomic  -lhwloc  -lnuma  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lpthread  -ldl  -lrt  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.5431010Z [1029/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/tt_eager/CMakeFiles/test_eltwise_unary_op.dir/ops/test_eltwise_unary_op.cpp.o  -o test/tt_eager/ops/test_eltwise_unary_op  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  tt_metal/libtt_metal.so  -lz  -latomic  -lhwloc  -lnuma  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lpthread  -ldl  -lrt  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.5580249Z [1030/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/tt_eager/CMakeFiles/test_average_pool.dir/ops/test_average_pool.cpp.o  -o test/tt_eager/ops/test_average_pool  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  tt_metal/libtt_metal.so  -lz  -latomic  -lhwloc  -lnuma  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lpthread  -ldl  -lrt  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.5603551Z [1031/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/tt_eager/CMakeFiles/test_bmm_op.dir/ops/test_bmm_op.cpp.o  -o test/tt_eager/ops/test_bmm_op  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  tt_metal/libtt_metal.so  -lz  -latomic  -lhwloc  -lnuma  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lpthread  -ldl  -lrt  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.5634518Z [1032/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/tt_eager/CMakeFiles/test_ccl_helpers.dir/ops/ccl/test_ccl_helpers.cpp.o  -o test/tt_eager/ops/ccl/test_ccl_helpers  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  tt_metal/libtt_metal.so  -lz  -latomic  -lhwloc  -lnuma  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lpthread  -ldl  -lrt  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.5748581Z [1033/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/tt_eager/CMakeFiles/test_eltwise_binary_op.dir/ops/test_eltwise_binary_op.cpp.o  -o test/tt_eager/ops/test_eltwise_binary_op  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  tt_metal/libtt_metal.so  -lz  -latomic  -lhwloc  -lnuma  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lpthread  -ldl  -lrt  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.6593390Z [1034/1034] : && /usr/bin/clang++-17  -O3 -g -DDEBUG=DEBUG   tests/ttnn/unit_tests/gtests/CMakeFiles/unit_tests_ttnn.dir/test_add.cpp.o tests/ttnn/unit_tests/gtests/CMakeFiles/unit_tests_ttnn.dir/test_graph_add.cpp.o tests/ttnn/unit_tests/gtests/CMakeFiles/unit_tests_ttnn.dir/test_repeat_interleave.cpp.o tests/ttnn/unit_tests/gtests/CMakeFiles/unit_tests_ttnn.dir/test_async_runtime.cpp.o tests/ttnn/unit_tests/gtests/CMakeFiles/unit_tests_ttnn.dir/test_multiprod_queue.cpp.o tests/ttnn/unit_tests/gtests/CMakeFiles/unit_tests_ttnn.dir/test_multi_cq_multi_dev.cpp.o tests/ttnn/unit_tests/gtests/CMakeFiles/unit_tests_ttnn.dir/test_reflect.cpp.o tests/ttnn/unit_tests/gtests/CMakeFiles/unit_tests_ttnn.dir/test_to_and_from_json.cpp.o  -o test/ttnn/unit_tests_ttnn  -Wl,-rpath,/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/ttnn:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/tt_metal:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/lib:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/nanomsg-build:/home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal/build/_deps/libuv-build  ttnn/_ttnn.so  tt_metal/libtt_metal.so  lib/libgtest_main.so.1.13.0  lib/libgtest.so.1.13.0  -lpthread  lib/libdevice.so  _deps/yaml-cpp-build/libyaml-cpp.a  _deps/nanomsg-build/libnng.so.1.8.0  _deps/libuv-build/libuv.so.1.0.0  -lrt  -lc++  /usr/lib/x86_64-linux-gnu/libc++abi.so  -ldl  -lz  -lpthread  -latomic  -lhwloc  -lnuma  /usr/lib/x86_64-linux-gnu/libpython3.8.so && :
+2024-09-02T07:12:50.6688194Z ##[group]Run df -h      
+2024-09-02T07:12:50.6689106Z [36;1mdf -h      [0m
+2024-09-02T07:12:50.6726232Z shell: /usr/bin/bash -e {0}
+2024-09-02T07:12:50.6727101Z env:
+2024-09-02T07:12:50.6727933Z   ARCH_NAME: wormhole_b0
+2024-09-02T07:12:50.6728828Z   VERBOSE: 1
+2024-09-02T07:12:50.6729933Z   TT_METAL_HOME: /home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal
+2024-09-02T07:12:50.6731381Z ##[endgroup]
+2024-09-02T07:12:50.6808950Z Filesystem                         Size  Used Avail Use% Mounted on
+2024-09-02T07:12:50.6810354Z udev                               248G     0  248G   0% /dev
+2024-09-02T07:12:50.6812189Z tmpfs                               51G   24M   51G   1% /run
+2024-09-02T07:12:50.6814139Z /dev/mapper/ubuntu--vg-ubuntu--lv  488G  436G   31G  94% /
+2024-09-02T07:12:50.6815755Z tmpfs                              252G     0  252G   0% /dev/shm
+2024-09-02T07:12:50.6817254Z tmpfs                              5.0M     0  5.0M   0% /run/lock
+2024-09-02T07:12:50.6818974Z tmpfs                              252G     0  252G   0% /sys/fs/cgroup
+2024-09-02T07:12:50.6820544Z /dev/nvme0n1p2                     1.5G  317M  1.1G  23% /boot
+2024-09-02T07:12:50.6822081Z /dev/nvme0n1p1                     1.1G  6.1M  1.1G   1% /boot/efi
+2024-09-02T07:12:50.6823596Z /dev/loop0                          64M   64M     0 100% /snap/core20/2264
+2024-09-02T07:12:50.6825074Z /dev/loop2                          39M   39M     0 100% /snap/snapd/21759
+2024-09-02T07:12:50.6826664Z /dev/loop1                          64M   64M     0 100% /snap/core20/2318
+2024-09-02T07:12:50.6828115Z /dev/loop3                          39M   39M     0 100% /snap/snapd/21465
+2024-09-02T07:12:50.6829559Z /dev/loop4                          92M   92M     0 100% /snap/lxd/24061
+2024-09-02T07:12:50.6831021Z /dev/loop5                          92M   92M     0 100% /snap/lxd/29619
+2024-09-02T07:12:50.6832423Z /dev/loop6                         2.0G   73M  2.0G   4% /opt/weka/logs
+2024-09-02T07:12:50.6834635Z tmpfs                              252G   12K  252G   1% /opt/weka/data/agent/tmpfss/cleanup
+2024-09-02T07:12:50.6836794Z tmpfs                              252G  602M  252G   1% /opt/weka/data/agent/tmpfss/client-persistent-tmpfs
+2024-09-02T07:12:50.6838834Z tmpfs                              252G  4.0K  252G   1% /opt/weka/data/agent/tmpfss/cleanup_before_stop_and_delete
+2024-09-02T07:12:50.6840587Z MLPerf                              25T   14T   12T  55% /mnt/MLPerf
+2024-09-02T07:12:50.7113168Z Post job cleanup.
+2024-09-02T07:12:50.7171975Z Post job cleanup.
+2024-09-02T07:12:50.8212700Z [command]/usr/bin/git version
+2024-09-02T07:12:50.8272188Z git version 2.25.1
+2024-09-02T07:12:50.8357482Z Temporarily overriding HOME='/home/ubuntu/actions-runner-2/_work/_temp/ace45a6b-b44c-4a1c-b768-2b3a7ce26383' before making global git config changes
+2024-09-02T07:12:50.8358852Z Adding repository directory to the temporary git global config as a safe directory
+2024-09-02T07:12:50.8367595Z [command]/usr/bin/git config --global --add safe.directory /home/ubuntu/actions-runner-2/_work/tt-metal/tt-metal
+2024-09-02T07:12:50.8421098Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2024-09-02T07:12:50.8486435Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2024-09-02T07:12:50.8890607Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-02T07:12:50.8956586Z Entering 'tt_metal/third_party/lfs'
+2024-09-02T07:12:50.9019188Z Entering 'tt_metal/third_party/pybind11'
+2024-09-02T07:12:50.9086239Z Entering 'tt_metal/third_party/sfpi'
+2024-09-02T07:12:50.9158204Z Entering 'tt_metal/third_party/taskflow'
+2024-09-02T07:12:50.9230644Z Entering 'tt_metal/third_party/tracy'
+2024-09-02T07:12:50.9298200Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-02T07:12:50.9363387Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-02T07:12:50.9421023Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-02T07:12:50.9481565Z Entering 'tt_metal/third_party/umd'
+2024-09-02T07:12:50.9540765Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-02T07:12:50.9636470Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2024-09-02T07:12:50.9661984Z http.https://github.com/.extraheader
+2024-09-02T07:12:50.9680637Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2024-09-02T07:12:50.9729975Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2024-09-02T07:12:51.0056171Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-02T07:12:51.0090524Z http.https://github.com/.extraheader
+2024-09-02T07:12:51.0137448Z Entering 'tt_metal/third_party/lfs'
+2024-09-02T07:12:51.0172317Z http.https://github.com/.extraheader
+2024-09-02T07:12:51.0217026Z Entering 'tt_metal/third_party/pybind11'
+2024-09-02T07:12:51.0251722Z http.https://github.com/.extraheader
+2024-09-02T07:12:51.0297937Z Entering 'tt_metal/third_party/sfpi'
+2024-09-02T07:12:51.0334280Z http.https://github.com/.extraheader
+2024-09-02T07:12:51.0380800Z Entering 'tt_metal/third_party/taskflow'
+2024-09-02T07:12:51.0414735Z http.https://github.com/.extraheader
+2024-09-02T07:12:51.0466221Z Entering 'tt_metal/third_party/tracy'
+2024-09-02T07:12:51.0499469Z http.https://github.com/.extraheader
+2024-09-02T07:12:51.0546357Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-02T07:12:51.0580966Z http.https://github.com/.extraheader
+2024-09-02T07:12:51.0626938Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-02T07:12:51.0659954Z http.https://github.com/.extraheader
+2024-09-02T07:12:51.0703179Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-02T07:12:51.0737165Z http.https://github.com/.extraheader
+2024-09-02T07:12:51.0780456Z Entering 'tt_metal/third_party/umd'
+2024-09-02T07:12:51.0815457Z http.https://github.com/.extraheader
+2024-09-02T07:12:51.0858950Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-02T07:12:51.0892178Z http.https://github.com/.extraheader
+2024-09-02T07:12:51.1295364Z Cleaning up orphan processes

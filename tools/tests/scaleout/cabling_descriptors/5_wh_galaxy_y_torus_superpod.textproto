@@ -1,0 +1,75 @@
+graph_templates {
+  key: "5_wh_galaxy_y_torus_superpod"
+  value {
+    children {
+      name: "node1"
+      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
+    }
+    children {
+      name: "node2"
+      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
+    }
+    children {
+      name: "node3"
+      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
+    }
+    children {
+      name: "node4"
+      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
+    }
+    children {
+      name: "node5"
+      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
+    }
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+        connections { port_a { path: ["node3"] tray_id: 4 port_id: 3 } port_b { path: ["node2"] tray_id: 4 port_id: 3 } }
+        connections { port_a { path: ["node3"] tray_id: 4 port_id: 4 } port_b { path: ["node1"] tray_id: 4 port_id: 4 } }
+        connections { port_a { path: ["node3"] tray_id: 4 port_id: 6 } port_b { path: ["node5"] tray_id: 4 port_id: 6 } }
+        connections { port_a { path: ["node3"] tray_id: 2 port_id: 6 } port_b { path: ["node4"] tray_id: 2 port_id: 3 } }
+        connections { port_a { path: ["node2"] tray_id: 4 port_id: 4 } port_b { path: ["node1"] tray_id: 4 port_id: 3 } }
+        connections { port_a { path: ["node2"] tray_id: 4 port_id: 6 } port_b { path: ["node5"] tray_id: 4 port_id: 5 } }
+        connections { port_a { path: ["node2"] tray_id: 2 port_id: 6 } port_b { path: ["node4"] tray_id: 2 port_id: 4 } }
+        connections { port_a { path: ["node2"] tray_id: 3 port_id: 6 } port_b { path: ["node3"] tray_id: 1 port_id: 6 } }
+        connections { port_a { path: ["node1"] tray_id: 4 port_id: 6 } port_b { path: ["node5"] tray_id: 4 port_id: 4 } }
+        connections { port_a { path: ["node1"] tray_id: 2 port_id: 6 } port_b { path: ["node4"] tray_id: 2 port_id: 5 } }
+        connections { port_a { path: ["node1"] tray_id: 3 port_id: 6 } port_b { path: ["node3"] tray_id: 3 port_id: 6 } }
+        connections { port_a { path: ["node1"] tray_id: 1 port_id: 6 } port_b { path: ["node2"] tray_id: 1 port_id: 3 } }
+        connections { port_a { path: ["node5"] tray_id: 2 port_id: 6 } port_b { path: ["node4"] tray_id: 4 port_id: 6 } }
+        connections { port_a { path: ["node5"] tray_id: 3 port_id: 6 } port_b { path: ["node3"] tray_id: 3 port_id: 4 } }
+        connections { port_a { path: ["node5"] tray_id: 1 port_id: 6 } port_b { path: ["node2"] tray_id: 1 port_id: 5 } }
+        connections { port_a { path: ["node5"] tray_id: 1 port_id: 5 } port_b { path: ["node1"] tray_id: 1 port_id: 4 } }
+        connections { port_a { path: ["node4"] tray_id: 3 port_id: 6 } port_b { path: ["node3"] tray_id: 3 port_id: 3 } }
+        connections { port_a { path: ["node4"] tray_id: 1 port_id: 6 } port_b { path: ["node2"] tray_id: 1 port_id: 6 } }
+        connections { port_a { path: ["node4"] tray_id: 1 port_id: 5 } port_b { path: ["node1"] tray_id: 1 port_id: 5 } }
+        connections { port_a { path: ["node4"] tray_id: 1 port_id: 3 } port_b { path: ["node5"] tray_id: 1 port_id: 3 } }
+      }
+    }
+  }
+}
+
+# Root instance with concrete host mappings
+root_instance {
+  template_name: "5_wh_galaxy_y_torus_superpod"
+  child_mappings {
+    key: "node1"
+    value { host_id: 0 }
+  }
+  child_mappings {
+    key: "node2"
+    value { host_id: 1 }
+  }
+  child_mappings {
+    key: "node3"
+    value { host_id: 2 }
+  }
+  child_mappings {
+    key: "node4"
+    value { host_id: 3 }
+  }
+  child_mappings {
+    key: "node5"
+    value { host_id: 4 }
+  }
+}

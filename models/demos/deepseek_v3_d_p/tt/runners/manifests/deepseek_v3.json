@@ -1,0 +1,5 @@
+{
+  "env": {
+    "PREFILL_MODEL": "deepseek_v3_d_p"
+  }
+}

@@ -1,0 +1,1757 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Sweep block sizes for minimal_matmul and all_gather_minimal_matmul_async
+using device profiler for accurate kernel timing.
+
+Architecture:
+  - Worker test (test_mm_sweep_worker): for a (device_config, shape) pair,
+    opens the mesh once and sweeps every (M_block, K_block, N_block, sb_h, sb_w)
+    candidate. Uses TT_METAL_PROFILER_MID_RUN_DUMP=1 + periodic
+    ttnn.ReadDeviceProfiler calls to flush the profiler buffer between combos
+    without losing data.
+  - Orchestrator test (test_mm_sweep): thin wrapper that invokes the worker
+    via run_device_profiler and parses one ops log into the results CSV.
+
+Usage:
+    # Orchestrator: sweep one shape
+    pytest models/tt_dit/utils/sweep_mm_block_sizes.py::test_mm_sweep \\
+        -k "9472_3456_5120_11x10_mm_plain-bh_4x8_sp1_tp0" -x -s
+
+    # Worker: run directly (useful for debugging, no profiling)
+    pytest models/tt_dit/utils/sweep_mm_block_sizes.py::test_mm_sweep_worker \\
+        -k "9472_3456_5120_11x10_mm_plain-bh_4x8_sp1_tp0" -x -s
+
+    # Standalone script
+    python models/tt_dit/utils/sweep_mm_block_sizes.py \\
+        --device-config bh_4x8_sp1_tp0 --shape 9472,3456,5120
+"""
+
+import argparse
+import csv
+import json
+import os
+import sys
+
+import pytest
+import torch
+from loguru import logger
+from tqdm import tqdm
+from tracy import signpost
+
+import ttnn
+from models.common.utility_functions import is_blackhole
+
+# ============================================================================
+# DEVICE CONFIGURATIONS
+# ============================================================================
+# To add a new config: add an entry here with the required fields.
+# The worker and orchestrator will pick it up automatically.
+
+DEVICE_CONFIGS = {
+    "bh_4x8_sp1_tp0": {
+        "mesh_shape": (4, 8),
+        "fabric_config": "FABRIC_1D_RING",
+        "fabric_router_config_payload": 8192,  # use default (4352) to match model
+        "topology": "Ring",
+        "num_links": 2,
+        "num_workers_per_link": 6,
+        "sp_axis": 1,
+        "tp_axis": 0,
+        "cluster_axis": 0,
+    },
+    "bh_4x8_sp0_tp1": {
+        "mesh_shape": (4, 8),
+        "fabric_config": "FABRIC_1D_RING",
+        "fabric_router_config_payload": 8192,  # use default (4352) to match model
+        "topology": "Ring",
+        "num_links": 2,
+        "num_workers_per_link": 6,
+        "sp_axis": 0,
+        "tp_axis": 1,
+        "cluster_axis": 1,
+    },
+    # WH Galaxy 4x8, 4-device cluster along axis 0 (rows). Matches wh4x8links4_*
+    # configs in tests/.../test_all_gather_minimal_matmul_async.py.
+    "wh_4x8_ring": {
+        "mesh_shape": (4, 8),
+        "fabric_config": "FABRIC_1D_RING",
+        "fabric_router_config_payload": 4096,
+        "topology": "Ring",
+        "num_links": 4,
+        "num_workers_per_link": 2,
+        "sp_axis": 1,
+        "tp_axis": 0,
+        "cluster_axis": 0,
+    },
+    "wh_4x8_linear": {
+        "mesh_shape": (4, 8),
+        "fabric_config": "FABRIC_1D",
+        "fabric_router_config_payload": 4096,
+        "topology": "Linear",
+        "num_links": 4,
+        "num_workers_per_link": 2,
+        "sp_axis": 1,
+        "tp_axis": 0,
+        "cluster_axis": 0,
+    },
+}
+
+DEFAULT_DEVICE_CONFIG = "bh_4x8_sp1_tp0"
+
+
+def resolve_config(name):
+    """Resolve a device config name to its dict, with ttnn enums."""
+    cfg = DEVICE_CONFIGS[name]
+    return {
+        "mesh_shape": cfg["mesh_shape"],
+        "fabric_config": getattr(ttnn.FabricConfig, cfg["fabric_config"]),
+        "fabric_router_config_payload": cfg["fabric_router_config_payload"],
+        "topology": getattr(ttnn.Topology, cfg["topology"]),
+        "num_links": cfg["num_links"],
+        "num_workers_per_link": cfg["num_workers_per_link"],
+        "sp_axis": cfg["sp_axis"],
+        "tp_axis": cfg["tp_axis"],
+        "cluster_axis": cfg["cluster_axis"],
+    }
+
+
+# ============================================================================
+# SHAPE TABLE
+# ============================================================================
+
+# (M, K, N, core_grid_x, core_grid_y, is_agmm, use_case)
+# M, K, N are the matmul dimensions as seen by the kernel (per-device).
+# Core grid matches what the model passes to get_matmul_config at runtime.
+# For is_agmm=False: calls ttnn.experimental.minimal_matmul
+# For is_agmm=True: calls ttnn.experimental.all_gather_minimal_matmul_async
+#
+# use_case controls per-shape configuration to match model behavior:
+#   "plain"     - no fused activation or addcmul
+#   "ff2"       - RowParallelLinear (no fused activation, label only)
+#   "qkv"       - attention QKV projection (chunks=3, math_approx_mode=True)
+#   "to_out"    - attention to_out projection (addcmul fused, math_approx_mode=True)
+#   "ff1_gelu"  - FFN first linear (fused GELU activation)
+#   "cross_attn_kv" - cross-attention to_kv (minimal_matmul_split, chunks=2, math_approx_mode=True)
+# Example shapes from Wan2.2 configs in matmul.py — one per use case.
+# Add model-specific shapes via register_matmul_configs() and extend this list as needed.
+SHAPES = [
+    # plain: basic matmul, no fused activation or addcmul (Wan2.2 720p DiT, 11x10 grid)
+    (9472, 3456, 5120, 11, 10, False, "plain"),
+    # ff2: RowParallelLinear — same kernel path as plain (Wan2.2 480p DiT, 11x10 grid)
+    (2368, 3456, 5120, 11, 10, False, "ff2"),
+    # qkv: attention QKV projection, chunks=3, approx math (Wan2.2 720p AGMM, 12x9 grid)
+    (9472, 5120, 3840, 12, 9, True, "qkv"),
+    # to_out: attention output with fused addcmul, approx math (Wan2.2 720p AGMM, 12x9 grid)
+    (9472, 5120, 1280, 12, 9, True, "to_out"),
+    # ff1_gelu: FFN first linear with fused GELU activation (Wan2.2 720p AGMM, 12x9 grid)
+    (9472, 5120, 3456, 12, 9, True, "ff1_gelu"),
+    # cross_attn_kv: cross-attention KV via minimal_matmul_split, chunks=2 (11x10 grid)
+    (128, 5120, 2560, 11, 10, False, "cross_attn_kv"),
+    # WH AGMM Wan2.2 shapes (8x8 grid), K-fractured across 4 devices.
+    # All have bias (always allocated/passed by _build_op_runner).
+    # N=3456 has fused GELU (exact, non-approx) to match the test config.
+    (3072, 5120, 3840, 8, 8, True, "plain"),
+    (3072, 5120, 1280, 8, 8, True, "plain"),
+    (3072, 5120, 3456, 8, 8, True, "plain_gelu"),
+    # MiniMax-H3 AGMM shapes, BH Galaxy TP=4 / SP=8, 12x9 grid (the model reserves one core column
+    # for CCL). M is the per-device packed sequence length at 768P; 4736 is the 5s case (with the perf
+    # gate's 39-token prompt -- these were 4768/9216/13632 from an audio-undercounting harness until
+    # 2026-09-17; same M_per_core, so prior measurements stand) and is used
+    # for all three because the model keys its block sizes on (K, N) only -- M changes with the
+    # requested duration while K and N are fixed by the architecture and the TP factor.
+    #   to_qkv  K_tiles_per_device = 42
+    #   to_out  K_tiles_per_device = 56
+    #   ff1     K_tiles_per_device = 42, fused SwiGLU
+    (4736, 5376, 5376, 12, 9, True, "qkv"),
+    (4736, 7168, 1344, 12, 9, True, "plain"),
+    (4736, 5376, 7168, 12, 9, True, "ff1_swiglu"),
+    # MiniMax-H3 fused MM+RS+addcmul (ff2). K = 14336 / tp = 3584 is already per-device. The core grid
+    # is the *matmul* grid; the reduce-scatter takes the rows above it, so one entry per candidate grid.
+    (4736, 3584, 5376, 12, 7, False, "mmrs"),
+    (4736, 3584, 5376, 12, 8, False, "mmrs"),
+    (4736, 3584, 5376, 12, 9, False, "mmrs"),
+    # -----------------------------------------------------------------------
+    # MiniMax-H3 on WH Galaxy (device config wh_4x8_ring), TP=4 / SP=8.
+    #
+    # The Wormhole compute grid is 8x9 = 72 cores against Blackhole's 12x10, so none of the H3
+    # blockings above apply here: the AGMM worker grid is 8x8 (force_transpose=True reserves the
+    # last row for the in0 mux -- `agmm_worker_grid`) rather than 12x9, and `grid_89_configs` holds
+    # no H3 entry at all. M = 4736 is the 5 s @ 768P per-device packed length, the same anchor the
+    # Blackhole rows use; (K, N) are fixed by the architecture and TP=4, which is the reason the model
+    # keys `AGMM_BLOCK_SIZES` on (K, N) alone -- an assumption the duration entries below disprove
+    # on this grid.
+    # -----------------------------------------------------------------------
+    (4736, 5376, 5376, 8, 8, True, "qkv"),
+    (4736, 7168, 1344, 8, 8, True, "plain"),
+    (4736, 5376, 7168, 8, 8, True, "ff1_swiglu"),
+    # The 10 s and 15 s per-device lengths for the same three shapes. `AGMM_BLOCK_SIZES` is keyed on
+    # (K, N) alone on the argument that the block shape does not want to change with M -- but that was
+    # established on Blackhole's 120-core grid, and it does NOT hold here: ff2 at M=4768 picks
+    # (6, 8, 12), which at M=9216 ranks 71st and is 14.6% off that length's best -- worse even than
+    # the untuned (8, 8, 8) default. Landing an M=4768 blocking through a (K, N)-keyed table would
+    # therefore speed up 5 s and regress 10 s. Sweep each duration before keying anything.
+    (9184, 5376, 5376, 8, 8, True, "qkv"),
+    (13664, 5376, 5376, 8, 8, True, "qkv"),
+    (9184, 7168, 1344, 8, 8, True, "plain"),
+    (13664, 7168, 1344, 8, 8, True, "plain"),
+    (9184, 5376, 7168, 8, 8, True, "ff1_swiglu"),
+    (13664, 5376, 7168, 8, 8, True, "ff1_swiglu"),
+    # ff2 unfused on the FULL 8x9 grid. This is the path Wormhole takes today: `has_mmrs_config`
+    # now declines to fuse, so ff2 runs RowParallelLinear.forward -> get_matmul_config(4736, 3584,
+    # 5376, CoreCoord(8, 9)), misses every table and lands on the hardcoded (8, 8, 8) at subblock
+    # (2, 2). Fifty of these per denoise step, on a default blocking.
+    (4736, 3584, 5376, 8, 9, False, "ff2"),
+    # The other two durations at the same (K, N). M=4768 measured (8, 8, 8) -> (6, 8, 12), saving 15.2%,
+    # but `get_matmul_config` keys on (M, K, N), so that entry would only serve 5 s. Swept rather than
+    # assumed: the "block shape does not want to change with M" argument behind the (K, N)-keyed
+    # `AGMM_BLOCK_SIZES` was made for Blackhole's 120-core grid, and 72 cores tile M differently
+    # (M_per_core goes 19 -> 36 -> 54 across these three).
+    (9184, 3584, 5376, 8, 9, False, "ff2"),
+    (13664, 3584, 5376, 8, 9, False, "ff2"),
+    # ff2 fused MM+RS on WH, worth re-testing now the silent fallback is gone. The matmul grid must
+    # leave the reduce-scatter enough rows: at num_links=4 the runner's own `rs_zone_capacity //
+    # (2 * num_links) - 1` gives 1 worker/link at 8x7, 2 at 8x6 and 3 at 8x5. Measured: 3134.7 us at
+    # 8x7, 3610.2 at 8x6, 3996.7 at 8x5 -- monotonically worse as the RS zone grows, since every core
+    # handed to the reduce-scatter costs the matmul more than it returns. All are far off the 2373.0 us
+    # unfused matmul, so keeping Wormhole off the fused path is right. (Not a like-for-like total: the
+    # unfused figure excludes the separate reduce-scatter and addcmul, leaving them a 762 us budget.)
+    (4736, 3584, 5376, 8, 7, False, "mmrs"),
+    (4736, 3584, 5376, 8, 6, False, "mmrs"),
+    (4736, 3584, 5376, 8, 5, False, "mmrs"),
+    # LTX / Wan2.2 MMRS ff2 shapes on BH 4x8 sp1tp0 (TP ring of 4 on axis 0), 12x8 matmul grid —
+    # resweep under the windowed L1 handoff (see the mmrs runner: combos with >= 2 M blocks per
+    # core run windowed, the rest via the DRAM handoff). LTX ff2: K = 16384/tp4, N = 4096;
+    # stage_1 M = 9728/sp8, stage_2 M = 38912/sp8. Wan2.2 ff2: K = 13824/tp4, N = 5120;
+    # 720p M = 9472 on a single galaxy and 9472/4 = 2368 on the quad-galaxy config.
+    (1216, 4096, 4096, 12, 8, False, "mmrs"),  # LTX stage_1 (no config entry yet: DRAM fallback today)
+    (4864, 4096, 4096, 12, 8, False, "mmrs"),  # LTX stage_2
+    (2368, 3456, 5120, 12, 8, False, "mmrs"),  # Wan2.2 720p, quad galaxy (M = 9472/4)
+    (9472, 3456, 5120, 12, 8, False, "mmrs"),  # Wan2.2 720p, single galaxy
+    # Aang MMRS ff2 shapes (same K/N family as Wan: K = 13824/tp4, N = 5120).
+    (2656, 3456, 5120, 12, 8, False, "mmrs"),  # Aang a2v
+    (11520, 3456, 5120, 12, 8, False, "mmrs"),  # Aang SR (super-resolution)
+    (1664, 3456, 5120, 12, 8, False, "mmrs"),  # Aang a2v @1080p
+    (7200, 3456, 5120, 12, 8, False, "mmrs"),  # Aang SR @1080p
+    # 12x8 won that grid sweep (1.313 ms vs 1.373 at 12x7 and 1.487 at 12x9); the longer durations
+    # (M = 9216 / 13632) reuse its blocking rather than being swept -- warmup compiles one program per
+    # combo and compile time grows with M, so M=9216 alone is ~75 min against ~9 min here, for a block
+    # shape that has little reason to change with M. To check that assumption, add
+    #   (9184, 3584, 5376,12, 8, False, "mmrs"),
+    # -----------------------------------------------------------------------
+    # Flux2 BH 4×8 — TP8_SP4 (bh_4x8_sp0_tp1): K_per_device = 6144/8 = 768,
+    # SP=4 halves M relative to global token count. Core grid 12×9 (AGMM).
+    # Top-3 agmm ops by device time from matmulshapes_new.md, Section 1.
+    # FFN in-proj (ff_spatial, x_c_mlp): activation_fn="swiglu" → swiglu is
+    # applied post-matmul via _apply_activation_fn, NOT fused → use_case="plain".
+    # Attention QKV (to_qkv): chunks=3, math_approx_mode=True → use_case="qkv".
+    # -----------------------------------------------------------------------
+    # 1024 tokens
+    (1024, 768, 4608, 12, 9, True, "plain"),  # DBL_ff_spatial_mm_in_proj (swiglu post-matmul, not fused)
+    (1152, 768, 4608, 12, 9, True, "plain"),  # SNG_x_c_mlp
+    (128, 768, 4608, 12, 9, True, "plain"),  # DBL_ff_ctx_spatial_mm_in_proj
+    # Flux2 MMRS @1024px (bh_4x8_sp0_tp1), 12x8 matmul grid: RowParallel ff2 / proj_out, K already
+    # per-device. Swept under the windowed L1 handoff — the runner windows combos whose M block
+    # leaves >= 2 blocks per core and runs the rest via the DRAM handoff, mirroring the model.
+    # (128, 2304, 6144) is deliberately absent: Mt=4 rows over 8 grid rows is one partial block per
+    # core at every blocking, so it always takes the DRAM handoff and its existing entry stands.
+    (1152, 3072, 6144, 12, 8, False, "mmrs"),  # SNG proj_out @1024px
+    (1024, 2304, 6144, 12, 8, False, "mmrs"),  # DBL ff2 @1024px
+    # 2048 tokens
+    (4096, 768, 4608, 12, 9, True, "plain"),  # DBL_ff_spatial_mm_in_proj
+    (4224, 768, 4608, 12, 9, True, "plain"),  # SNG_x_c_mlp
+    (4096, 768, 2304, 12, 9, True, "qkv"),  # SNG_attn_to_qkv (chunks=3, math_approx_mode=True)
+    # 4096 tokens
+    (16384, 768, 4608, 12, 9, True, "plain"),  # DBL_ff_spatial_mm_in_proj
+    (16512, 768, 4608, 12, 9, True, "plain"),  # SNG_x_c_mlp
+    (16384, 768, 2304, 12, 9, True, "qkv"),  # DBL_attn_to_qkv
+    # -----------------------------------------------------------------------
+    # Flux2 BH 4×8 — TP8_SP4 (bh_4x8_sp0_tp1): K_global sweep entries.
+    # K=6144 (global) compensates for the double cluster_size division in
+    # get_per_core_dims, giving correct K_per_device=24 tiles for block gen.
+    # Ordered by max device time descending (matmul_agmm_new.md Section 3).
+    # -----------------------------------------------------------------------
+    (16384, 6144, 4608, 12, 9, True, "plain"),  # #1  DBL_ff_spatial_mm_in_proj
+    (16512, 6144, 4608, 12, 9, True, "plain"),  # #2  SNG_x_c_mlp
+    (16384, 6144, 2304, 12, 9, True, "qkv"),  # #3  DBL_attn_to_qkv
+    (16384, 6144, 768, 12, 9, True, "to_out"),  # #4  DBL_attn_out_mm_spatial
+    (4096, 6144, 4608, 12, 9, True, "plain"),  # #5  DBL_ff_spatial_mm_in_proj
+    (4224, 6144, 4608, 12, 9, True, "plain"),  # #6  SNG_x_c_mlp
+    (4096, 6144, 2304, 12, 9, True, "qkv"),  # #7  SNG_attn_to_qkv
+    (4096, 6144, 768, 12, 9, True, "to_out"),  # #8  DBL_attn_out_mm_spatial
+    (1024, 6144, 4608, 12, 9, True, "plain"),  # #9  DBL_ff_spatial_mm_in_proj
+    (1152, 6144, 4608, 12, 9, True, "plain"),  # #10 SNG_x_c_mlp
+    (
+        128,
+        6144,
+        4608,
+        12,
+        9,
+        True,
+        "plain",
+    ),  # #11 DBL_ff_ctx_spatial_mm_in_proj (⚠️ high variance, compare vs worst=406µs)
+    (1024, 6144, 2304, 12, 9, True, "qkv"),  # #12 SNG_attn_to_qkv
+    (1152, 6144, 2304, 12, 9, True, "qkv"),  # #12b SNG_attn_to_qkv (1152 tokens)
+    (1024, 6144, 768, 12, 9, True, "to_out"),  # #13 DBL_attn_out_mm_spatial
+    (128, 6144, 2304, 12, 9, True, "qkv"),  # #14 DBL_attn_add_qkv_proj (⚠️ worst=249µs)
+    (128, 6144, 768, 12, 9, True, "to_out"),  # #15 DBL_attn_out_mm_prompt (⚠️ worst=162µs)
+    # -----------------------------------------------------------------------
+    # Flux2 BH 4×8 — TP4_SP8 (bh_4x8_sp1_tp0): K_global sweep entries.
+    # K=6144 (global) gives K_per_device=48 tiles (6144/32/4). Ordered by
+    # max device time descending (matmul_agmm_new.md Section 3, shapes 16-30).
+    # -----------------------------------------------------------------------
+    (8192, 6144, 9216, 12, 9, True, "plain"),  # #16
+    (8256, 6144, 9216, 12, 9, True, "plain"),  # #17
+    (8192, 6144, 4608, 12, 9, True, "qkv"),  # #18
+    (8192, 6144, 1536, 12, 9, True, "to_out"),  # #19
+    (2048, 6144, 9216, 12, 9, True, "plain"),  # #20
+    (2112, 6144, 9216, 12, 9, True, "plain"),  # #21
+    (2048, 6144, 4608, 12, 9, True, "qkv"),  # #22
+    (576, 6144, 9216, 12, 9, True, "plain"),  # #23
+    (512, 6144, 9216, 12, 9, True, "plain"),  # #24
+    (64, 6144, 9216, 12, 9, True, "plain"),  # #25
+    (512, 6144, 4608, 12, 9, True, "qkv"),  # #26
+    (64, 6144, 4608, 12, 9, True, "qkv"),  # #27
+    (2048, 6144, 1536, 12, 9, True, "to_out"),  # #28
+    (512, 6144, 1536, 12, 9, True, "to_out"),  # #29
+    (64, 6144, 1536, 12, 9, True, "to_out"),  # #30
+    # -----------------------------------------------------------------------
+    # Concat-shapes grid sweep (bh_4x8_sp0_tp1): plain N=4608 shapes from
+    # 1024_TP8_X_both_06_21_26.csv trace.  K_global=768×TP8=6144.
+    # 12×9 baseline already above; only 12×5–12×8 variants added here.
+    # Ordered: highest trace device time first.
+    # -----------------------------------------------------------------------
+    # (1152, 6144, 4608) — 491 µs  SNG_x_c_mlp
+    (1152, 6144, 4608, 12, 8, True, "plain"),
+    (1152, 6144, 4608, 12, 7, True, "plain"),
+    (1152, 6144, 4608, 12, 6, True, "plain"),
+    (1152, 6144, 4608, 12, 5, True, "plain"),
+    # (1024, 6144, 4608) — 458 µs  DBL_ff_spatial_mm_in_proj
+    (1024, 6144, 4608, 12, 8, True, "plain"),
+    (1024, 6144, 4608, 12, 7, True, "plain"),
+    (1024, 6144, 4608, 12, 6, True, "plain"),
+    (1024, 6144, 4608, 12, 5, True, "plain"),
+    # (128, 6144, 4608) — 390 µs  DBL_ff_ctx_spatial_mm_in_proj
+    (128, 6144, 4608, 12, 8, True, "plain"),
+    (128, 6144, 4608, 12, 7, True, "plain"),
+    (128, 6144, 4608, 12, 6, True, "plain"),
+    (128, 6144, 4608, 12, 5, True, "plain"),
+    # -----------------------------------------------------------------------
+    # Core-grid sweep: 12×5 – 12×8 variants for all non-plain AGMM shapes.
+    # Used to find the optimal cgy for qkv and to_out ops.  Baseline 12×9
+    # entries live above; results land in sweep_agmm_global_k.csv alongside
+    # the 12×9 entries (same device_config, different core_grid column).
+    # -----------------------------------------------------------------------
+    # TP8_SP4 (bh_4x8_sp0_tp1) — qkv (N=2304) grid variants
+    (16384, 6144, 2304, 12, 8, True, "qkv"),
+    (16384, 6144, 2304, 12, 7, True, "qkv"),
+    (16384, 6144, 2304, 12, 6, True, "qkv"),
+    (16384, 6144, 2304, 12, 5, True, "qkv"),
+    (4096, 6144, 2304, 12, 8, True, "qkv"),
+    (4096, 6144, 2304, 12, 7, True, "qkv"),
+    (4096, 6144, 2304, 12, 6, True, "qkv"),
+    (4096, 6144, 2304, 12, 5, True, "qkv"),
+    (1024, 6144, 2304, 12, 8, True, "qkv"),
+    (1024, 6144, 2304, 12, 7, True, "qkv"),
+    (1024, 6144, 2304, 12, 6, True, "qkv"),
+    (1024, 6144, 2304, 12, 5, True, "qkv"),
+    (1152, 6144, 2304, 12, 8, True, "qkv"),
+    (1152, 6144, 2304, 12, 7, True, "qkv"),
+    (1152, 6144, 2304, 12, 6, True, "qkv"),
+    (1152, 6144, 2304, 12, 5, True, "qkv"),
+    (128, 6144, 2304, 12, 8, True, "qkv"),
+    (128, 6144, 2304, 12, 7, True, "qkv"),
+    (128, 6144, 2304, 12, 6, True, "qkv"),
+    (128, 6144, 2304, 12, 5, True, "qkv"),
+    # TP8_SP4 (bh_4x8_sp0_tp1) — to_out (N=768) grid variants
+    (16384, 6144, 768, 12, 8, True, "to_out"),
+    (16384, 6144, 768, 12, 7, True, "to_out"),
+    (16384, 6144, 768, 12, 6, True, "to_out"),
+    (16384, 6144, 768, 12, 5, True, "to_out"),
+    (4096, 6144, 768, 12, 8, True, "to_out"),
+    (4096, 6144, 768, 12, 7, True, "to_out"),
+    (4096, 6144, 768, 12, 6, True, "to_out"),
+    (4096, 6144, 768, 12, 5, True, "to_out"),
+    (1024, 6144, 768, 12, 8, True, "to_out"),
+    (1024, 6144, 768, 12, 7, True, "to_out"),
+    (1024, 6144, 768, 12, 6, True, "to_out"),
+    (1024, 6144, 768, 12, 5, True, "to_out"),
+    (128, 6144, 768, 12, 8, True, "to_out"),
+    (128, 6144, 768, 12, 7, True, "to_out"),
+    (128, 6144, 768, 12, 6, True, "to_out"),
+    (128, 6144, 768, 12, 5, True, "to_out"),
+    # TP4_SP8 (bh_4x8_sp1_tp0) — qkv (N=4608) grid variants
+    (8192, 6144, 4608, 12, 8, True, "qkv"),
+    (8192, 6144, 4608, 12, 7, True, "qkv"),
+    (8192, 6144, 4608, 12, 6, True, "qkv"),
+    (8192, 6144, 4608, 12, 5, True, "qkv"),
+    (2048, 6144, 4608, 12, 8, True, "qkv"),
+    (2048, 6144, 4608, 12, 7, True, "qkv"),
+    (2048, 6144, 4608, 12, 6, True, "qkv"),
+    (2048, 6144, 4608, 12, 5, True, "qkv"),
+    (512, 6144, 4608, 12, 8, True, "qkv"),
+    (512, 6144, 4608, 12, 7, True, "qkv"),
+    (512, 6144, 4608, 12, 6, True, "qkv"),
+    (512, 6144, 4608, 12, 5, True, "qkv"),
+    (64, 6144, 4608, 12, 8, True, "qkv"),
+    (64, 6144, 4608, 12, 7, True, "qkv"),
+    (64, 6144, 4608, 12, 6, True, "qkv"),
+    (64, 6144, 4608, 12, 5, True, "qkv"),
+    # TP4_SP8 (bh_4x8_sp1_tp0) — to_out (N=1536) grid variants
+    (8192, 6144, 1536, 12, 8, True, "to_out"),
+    (8192, 6144, 1536, 12, 7, True, "to_out"),
+    (8192, 6144, 1536, 12, 6, True, "to_out"),
+    (8192, 6144, 1536, 12, 5, True, "to_out"),
+    (2048, 6144, 1536, 12, 8, True, "to_out"),
+    (2048, 6144, 1536, 12, 7, True, "to_out"),
+    (2048, 6144, 1536, 12, 6, True, "to_out"),
+    (2048, 6144, 1536, 12, 5, True, "to_out"),
+    (512, 6144, 1536, 12, 8, True, "to_out"),
+    (512, 6144, 1536, 12, 7, True, "to_out"),
+    (512, 6144, 1536, 12, 6, True, "to_out"),
+    (512, 6144, 1536, 12, 5, True, "to_out"),
+    (64, 6144, 1536, 12, 8, True, "to_out"),
+    (64, 6144, 1536, 12, 7, True, "to_out"),
+    (64, 6144, 1536, 12, 6, True, "to_out"),
+    (64, 6144, 1536, 12, 5, True, "to_out"),
+    # -----------------------------------------------------------------------
+    # Flux2 BH 4×8 — MMRS→AGMM (bh_4x8_sp0_tp1): ops previously run as MMRS
+    # now running as AGMM. K_global = K_shard × TP8 = 3072 × 8 = 24576.
+    # N=768 = 6144/TP8 (output sharded by TP8). use_case="to_out" (addcmul fused).
+    # -----------------------------------------------------------------------
+    (1152, 24576, 768, 12, 9, True, "to_out"),  # SNG_proj_out (xc merged, 1024 tokens)
+    (1152, 24576, 768, 12, 8, True, "to_out"),  # SNG_proj_out 12×8 grid variant
+    (1024, 24576, 768, 12, 9, True, "to_out"),  # proj_out spatial-only (1024 tokens)
+    # -----------------------------------------------------------------------
+    # Flux2 BH 4×8 — TP4_SP8 (bh_4x8_sp1_tp0): K_per_device = 6144/4 = 1536,
+    # SP=8 halves M and doubles N relative to TP8_SP4. Core grid 12×9 (AGMM).
+    # Top-3 agmm ops by device time from matmulshapes_new.md, Section 2.
+    # -----------------------------------------------------------------------
+    # 1024 tokens
+    (576, 1536, 9216, 12, 9, True, "plain"),
+    (512, 1536, 9216, 12, 9, True, "plain"),
+    (64, 1536, 9216, 12, 9, True, "plain"),
+    # 2048 tokens
+    (2048, 1536, 9216, 12, 9, True, "plain"),
+    (2112, 1536, 9216, 12, 9, True, "plain"),
+    (2048, 1536, 4608, 12, 9, True, "plain"),
+    # 4096 tokens
+    (8192, 1536, 9216, 12, 9, True, "plain"),
+    (8256, 1536, 9216, 12, 9, True, "plain"),
+    (8192, 1536, 4608, 12, 9, True, "plain"),
+    # -----------------------------------------------------------------------
+    # Fused SwiGLU sweep — Flux2 1024-res TP8/SP4 (bh_4x8_sp0_tp1), 12×8 grid.
+    # proj_mlp (ff1) only: N=4608 = packed [gate|up], K=6144.
+    # N_block MUST be even (TT_FATAL for odd N under fuse_swiglu=True).
+    # Source: sweep_fused_gelu.md.  Ordered by prior plain trace time (highest first).
+    # -----------------------------------------------------------------------
+    (1152, 6144, 4608, 12, 8, True, "ff1_swiglu"),  # ff1 xc-merged
+    (1024, 6144, 4608, 12, 8, True, "ff1_swiglu"),  # ff1 spatial
+    (128, 6144, 4608, 12, 8, True, "ff1_swiglu"),  # ff1 prompt
+    # -----------------------------------------------------------------------
+    # Regular AGMM (all_gather_minimal_matmul_async) ff1_swiglu baseline
+    # for sagmm comparison. Same (M, K, N) as the sagmm rows below but run
+    # through the model's existing AGMM path with fuse_swiglu=True.
+    # 12x9 = CoreCoord(full_grid.x, full_grid.y - 1), the model's default grid.
+    # 12x8 entries are the same as the TP8/SP4 block above (lines 379-381).
+    # Device config: bh_4x8_sp0_tp1.
+    # -----------------------------------------------------------------------
+    (1152, 6144, 4608, 12, 9, True, "ff1_swiglu"),  # SNG proj_mlp / xc-merged
+    (1024, 6144, 4608, 12, 9, True, "ff1_swiglu"),  # DBL ff spatial
+    (128, 6144, 4608, 12, 9, True, "ff1_swiglu"),  # DBL ff_context (prompt)
+    (1152, 6144, 4608, 12, 7, True, "ff1_swiglu"),  # SNG proj_mlp / xc-merged  (12x7 grid)
+    (1024, 6144, 4608, 12, 7, True, "ff1_swiglu"),  # DBL ff spatial             (12x7 grid)
+    (128, 6144, 4608, 12, 7, True, "ff1_swiglu"),  # DBL ff_context (prompt)     (12x7 grid)
+    # -----------------------------------------------------------------------
+    # Fabric-bound strided AGMM (op_kind "sagmm") — the op that
+    # models/tt_dit/layers/linear.py routes to via fabric_agmm_configs.
+    #
+    # cgx/cgy is the MATMUL grid only; the strided all-gather workers occupy the
+    # rows at and above cgy (offset (0, cgy)), so on the 12x10 BH grid cgy=8
+    # leaves rows 8-9 for them. Unlike the "agmm" rows above, this factory only
+    # transposes when M > N, so here N parallelizes across cgx and M across cgy.
+    #
+    # N is the per-device WEIGHT width, matching what fabric_agmm_configs keys on
+    # (and what N_block_size counts). Every in-model (6144, 4608, chunks=1) call is
+    # a fused-SwiGLU FF layer, so the output is half this wide. The N=2304 traffic
+    # in flux2 is all chunks=3 and never reaches this op, so it is not swept here.
+    # M values are the flux2 1024-res per-device sequence lengths.
+    # -----------------------------------------------------------------------
+    (1152, 6144, 4608, 12, 8, True, "ff1_swiglu", "sagmm"),  # SNG proj_mlp / xc-merged
+    (1024, 6144, 4608, 12, 8, True, "ff1_swiglu", "sagmm"),  # DBL ff spatial
+    (128, 6144, 4608, 12, 8, True, "ff1_swiglu", "sagmm"),  # DBL ff_context (prompt)
+    (1152, 6144, 4608, 12, 7, True, "ff1_swiglu", "sagmm"),  # SNG proj_mlp / xc-merged
+    (1024, 6144, 4608, 12, 7, True, "ff1_swiglu", "sagmm"),  # DBL ff spatial
+    (128, 6144, 4608, 12, 7, True, "ff1_swiglu", "sagmm"),  # DBL ff_context (prompt)
+]
+
+
+def unpack_shape(shape):
+    """Unpack a SHAPES row, defaulting the optional 8th field.
+
+    Rows are 7-tuples historically; an 8th field names the op variant explicitly.
+    "mm"/"agmm" reproduce the old is_agmm behaviour, and "sagmm" selects
+    strided_all_gather_minimal_matmul_async (the fabric-bound AGMM), whose core-grid
+    and N semantics differ -- see get_per_core_dims and the SHAPES comment block.
+    """
+    M, K, N, cgx, cgy, is_agmm, use_case = shape[:7]
+    op_kind = shape[7] if len(shape) > 7 else ("agmm" if is_agmm else "mm")
+    return M, K, N, cgx, cgy, is_agmm, use_case, op_kind
+
+
+SHAPE_IDS = [
+    f"{M}_{K}_{N}_{cgx}x{cgy}_{op_kind}_{uc}"
+    for M, K, N, cgx, cgy, _agmm, uc, op_kind in (unpack_shape(s) for s in SHAPES)
+]
+
+# Per-use-case configuration overrides applied in the worker.
+USE_CASE_CONFIGS = {
+    "plain": {},
+    "ff2": {},
+    "qkv": {
+        "chunks": 3,
+        "math_approx_mode": True,
+    },
+    "to_out": {
+        "scalar": 1.0,
+        "use_addcmul": True,
+        "math_approx_mode": True,
+    },
+    "ff1_gelu": {
+        "fused_activation": (ttnn.UnaryOpType.GELU, True),
+    },
+    # Like "plain" but with exact (non-approx) GELU fused — matches the
+    # activation="gelu" config in test_all_gather_minimal_matmul_async.py.
+    "plain_gelu": {
+        "fused_activation": (ttnn.UnaryOpType.GELU, False),
+    },
+    "cross_attn_kv": {
+        "chunks": 2,
+        "math_approx_mode": True,
+        "use_matmul_split": True,
+    },
+    # Single-block to_qkv via minimal_matmul_split with chunks=3, approx math.
+    # Mirrors cross_attn_kv but splits into 3 Q/K/V chunks instead of 2.
+    "qkv_mm_split": {
+        "chunks": 3,
+        "math_approx_mode": True,
+        "use_matmul_split": True,
+    },
+    # Fused matmul + reduce-scatter + addcmul (RowParallelLinear.forward_fused_addcmul). The shape's
+    # core grid is the *matmul* grid; the reduce-scatter runs on the rows between it and the full
+    # device grid, so sweeping the grid means adding one SHAPES entry per candidate grid. K is already
+    # per-device here (row-parallel fractures the input), so it is not gathered.
+    "mmrs": {
+        "is_mmrs": True,
+        "use_addcmul": True,  # for the L1 estimate; the runner always passes addcmul tensors
+    },
+    # ff1 (proj_mlp) with fused SwiGLU — gate+up packed into N=4608 weight.
+    # fp32_dest_acc_en=True (always on); N_block MUST be even (gate/up tile-pairs interleave along N).
+    # No fused_activation (incompatible with fuse_swiglu per TT_FATAL).
+    "ff1_swiglu": {
+        "fuse_swiglu": True,
+    },
+}
+
+# Whether the sweep uses fp32 dest accumulator. With fp32 dest, the DEST tile
+# capacity is halved (4 tiles instead of 8), so only subblocks with h*w == 4
+# match peak compute throughput — and among those, 2x2 is strictly preferred
+# over 4x1 / 1x4 (better tile reuse in the math LLK). So when fp32 dest is on
+# the subblock sweep is skipped entirely and 2x2 is picked (when divisible).
+FP32_DEST_ACC_EN = True
+
+# Block-size candidate methodology:
+# - M/N block:  even sizes in [MN_BLOCK_MIN, MN_BLOCK_MAX]  union  divisors of
+#               per-core tile count in that same range. Floor at 2 (1 is usually
+#               dispatch-overhead-bound); cap at 16 because larger blocks reduce
+#               pipelining. Divisors are added to give a "1 block per core"
+#               option even when it's odd (e.g. 5, 15).
+# - K block:    divisors of K_per_device (AGMM) / K_tiles (non-AGMM) at >=
+#               K_BLOCK_MIN. K_block MUST divide K_per_device for AGMM (the ring
+#               all-gather delivers K_per_device tiles in K_block-sized chunks);
+#               non-divisor candidates would leave a partial chunk on the last
+#               ring iteration. No upper cap — large divisors don't add padding.
+MN_BLOCK_MIN, MN_BLOCK_MAX = 2, 16
+K_BLOCK_MIN = 2
+
+# L1 budget for pre-filtering block combos (KB).
+# BH L1 usable ~1464 KB; conservative threshold accounts for kernel/firmware overhead.
+# CB allocation: 2*M*K + 2*K*N + 2*M*N tiles (all double-buffered, bf16 = 2KB/tile)
+#              + M*N tiles intermediate (single-buffered, f32 = 4KB/tile)
+#              + N tiles bias (single-buffered, bf16 = 2KB/tile)
+# to_out adds: M*N tiles ternary_a (bf16) + N tiles ternary_c (bf16)
+#
+# Measured to hold on Wormhole too, despite its physically smaller L1 (1,499,136 B against
+# Blackhole's 1,572,864 B): combos estimated at up to ~1424 KB build and run on a WH Galaxy. An
+# earlier attempt to scale this down to 1328 for Wormhole was a mistake -- it excluded ff1's actual
+# optimum (10, 7, 10) at an estimated 1380 KB, and qkv's shipped (8, 7, 12) at 1352 KB, so the sweep
+# could not even measure the baseline it was supposed to beat.
+L1_BUDGET_KB = 1400
+
+# Fabric-bound strided AGMM ("sagmm") fabric parameters. Held fixed across the block
+# sweep so the measured differences are attributable to blocking alone; these match the
+# values fabric_agmm_configs ships and the device-validated LTX entries use.
+SAGMM_NUM_WORKERS_PER_LINK = 3
+SAGMM_NUM_BUFFERS_PER_CHANNEL = 8
+
+CSV_FILE = "sweep_results_mm.csv"
+CSV_COLUMNS = [
+    "device_config",
+    "op_type",
+    "use_case",
+    "M",
+    "K",
+    "N",
+    "core_grid",
+    "M_block",
+    "K_block",
+    "N_block",
+    "subblock_h",
+    "subblock_w",
+    "device_kernel_duration_ns",
+    "status",
+]
+
+
+# ============================================================================
+# UTILITY FUNCTIONS
+# ============================================================================
+
+
+def get_mn_block_candidates(per_core_tiles):
+    """Even sizes in [MN_BLOCK_MIN, MN_BLOCK_MAX] union divisors of per-core tiles in that range.
+
+    Sized to a single core's M or N work, so that "1 block per core" appears as a
+    candidate even when it's odd (e.g. 5, 15). Caps at MN_BLOCK_MAX because larger
+    blocks reduce pipelining; floors at MN_BLOCK_MIN because tiny blocks are
+    dispatch-bound.
+    """
+    evens = set(range(MN_BLOCK_MIN, MN_BLOCK_MAX + 1, 2))
+    divisors = set(d for d in range(MN_BLOCK_MIN, MN_BLOCK_MAX + 1) if per_core_tiles % d == 0)
+    return sorted(evens | divisors)
+
+
+def get_k_block_candidates(K_per_device):
+    """Divisors of K_per_device, capped at K_BLOCK_MIN floor.
+
+    HARD constraint for AGMM: K_block must evenly divide K_per_device. The ring
+    all-gather delivers K_per_device tiles per device per ring iteration, in
+    K_block-sized chunks — any K_block that doesn't divide K_per_device leaves
+    a partial chunk on the last iteration, which the algorithm doesn't support.
+
+    So candidates are restricted to divisors only. K_BLOCK_MIN excludes tiny sizes that are
+    dispatch-overhead-bound; there's no upper cap because dividing K cleanly
+    never adds padding even at larger block sizes.
+    """
+    return sorted(d for d in range(K_BLOCK_MIN, K_per_device + 1) if K_per_device % d == 0)
+
+
+def get_per_core_dims(shape, cluster_size):
+    """Compute (M_per_core, K_per_device, N_per_core) for a shape.
+
+    For "mm"/"agmm" this assumes force_transpose=True (the only mode those paths run):
+    in0 parallelizes M across grid_x cores, in1 parallelizes N across grid_y cores.
+
+    "sagmm" is the opposite. Its factory sets transpose_core_grid = (M > N), and every
+    shape swept here has M < N, so in0 (M) parallelizes across grid_y and in1 (N) across
+    grid_x. See minimal_matmul_fabric_bound_program_factory.cpp:238-271.
+    """
+    M, K, N, cgx, cgy, is_agmm, use_case, op_kind = unpack_shape(shape)
+    M_tiles, K_tiles, N_tiles = compute_tile_counts(M, K, N)
+
+    if op_kind == "sagmm":
+        assert M < N, f"sagmm sweep assumes no core-grid transpose, but M={M} >= N={N}"
+        if USE_CASE_CONFIGS.get(use_case, {}).get("fuse_swiglu", False):
+            # Cores are handed whole gate/up tile PAIRS, so padding happens on the output
+            # width and the per-core weight width is twice the per-core output width.
+            out_N_tiles = N_tiles // 2
+            N_per_core = 2 * (-(-out_N_tiles // cgx))
+        else:
+            N_per_core = -(-N_tiles // cgx)
+        # K_block must divide the pre-gather shard: the ring delivers K_per_device tiles
+        # per device in K_block-sized chunks, same rule as the agmm path.
+        return -(-M_tiles // cgy), K_tiles // cluster_size, N_per_core
+
+    M_per_core = -(-M_tiles // cgx)  # ceiling
+    N_per_core = -(-N_tiles // cgy)
+    K_per_device = K_tiles // cluster_size if is_agmm else K_tiles
+    return M_per_core, K_per_device, N_per_core
+
+
+def estimate_l1_kb(m_blk, k_blk, n_blk, use_case="plain", op_kind="mm"):
+    """Estimate L1 circular buffer footprint in KB for a given block config.
+
+    Based on minimal_matmul_program_factory.cpp CB allocation:
+      c_0 (in0):   2 * M * K tiles  (double-buffered, bf16 = 2 KB/tile)
+      c_1 (in1):   2 * K * N tiles  (double-buffered, bf16)
+      c_2 (out):   2 * M * N tiles  (double-buffered, bf16)
+      c_3 (interm): M * N tiles     (single-buffered, f32 = 4 KB/tile)
+      c_4 (bias):   N tiles         (single-buffered, bf16)
+    to_out adds:
+      c_5 (ternary_a): M * N tiles  (single-buffered, bf16)
+      c_6 (ternary_c): N tiles      (single-buffered, bf16)
+    """
+    bf16_kb = 2  # KB per bf16 tile (32x32x2 bytes)
+    f32_kb = 4  # KB per f32 tile (32x32x4 bytes)
+
+    kb = (
+        2 * m_blk * k_blk * bf16_kb  # c_0: in0
+        + 2 * k_blk * n_blk * bf16_kb  # c_1: in1
+        + 2 * m_blk * n_blk * bf16_kb  # c_2: out
+        + m_blk * n_blk * f32_kb  # c_3: intermediate (f32 accumulator)
+        + n_blk * bf16_kb  # c_4: bias
+    )
+
+    uc_cfg = USE_CASE_CONFIGS.get(use_case, {})
+    if uc_cfg.get("use_addcmul", False):
+        kb += m_blk * n_blk * bf16_kb  # c_5: ternary_a
+        kb += n_blk * bf16_kb  # c_6: ternary_c
+
+    if op_kind == "sagmm":
+        # c_7 (in1_scratch): one K_block x N_block, so the in1 injector can read the
+        # weight once and re-present it to compute across M blocks.
+        kb += k_blk * n_blk * bf16_kb
+
+    return kb
+
+
+def pick_subblock(m_block, n_block, max_dest_volume=4):
+    """Pick best valid (sb_h, sb_w) where sb_h|m_block, sb_w|n_block, sb_h*sb_w <= max_dest_volume.
+
+    For fp32 dest, (2, 2) is strictly preferred among same-product candidates
+    (better math LLK tile reuse than 4x1 / 1x4), so check it first.
+    """
+    if FP32_DEST_ACC_EN and m_block % 2 == 0 and n_block % 2 == 0 and 4 <= max_dest_volume:
+        return (2, 2)
+    best = (1, 1)
+    best_product = 1
+    for h in range(1, min(m_block, max_dest_volume) + 1):
+        if m_block % h != 0:
+            continue
+        for w in range(1, min(n_block, max_dest_volume) + 1):
+            if n_block % w != 0:
+                continue
+            if h * w <= max_dest_volume and h * w > best_product:
+                best = (h, w)
+                best_product = h * w
+    return best
+
+
+# Aliases used by test_sweep_mm.py
+def get_block_candidates(per_core_tiles):
+    return get_mn_block_candidates(per_core_tiles)
+
+
+def get_divisors(k_tiles):
+    return get_k_block_candidates(k_tiles)
+
+
+def generate_subblock_combos(m_block, n_block, max_dest_volume=4):
+    """Return list of valid (sb_h, sb_w) pairs for given block sizes."""
+    combos = []
+    for h in range(1, min(m_block, max_dest_volume) + 1):
+        if m_block % h != 0:
+            continue
+        for w in range(1, min(n_block, max_dest_volume) + 1):
+            if n_block % w != 0:
+                continue
+            if h * w <= max_dest_volume:
+                combos.append((h, w))
+    return combos
+
+
+def sagmm_combo_is_safe(M_per_core, N_per_core, m_block, n_block):
+    """Reject sagmm block combos that are known to deadlock on device.
+
+    With one M block per core the factory turns on split_output_write (the two-NoC output
+    write); pairing that with more than one N block per core hangs. Device-confirmed on the
+    LTX a2v shape, and the reason the fabric_agmm_configs entries all keep
+    N_blocks_per_core == 1. Excluded up front so a sweep cannot wedge the device.
+    """
+    m_blocks = -(-M_per_core // m_block)
+    n_blocks = -(-N_per_core // n_block)
+    return not (m_blocks == 1 and n_blocks > 1)
+
+
+def generate_kn_combos(K_per_device, N_per_core, m_block=1, use_case="plain", op_kind="mm"):
+    """Generate (K_block, N_block) combos filtered by L1 budget.
+
+    For fuse_swiglu use_cases, N_block MUST be even (TT_FATAL: gate/up tile-pairs
+    are interleaved along N, so a block must never split a pair). Odd N candidates
+    are skipped pre-sweep to avoid hard asserts that would abort the program.
+    """
+    k_candidates = get_k_block_candidates(K_per_device)
+    n_candidates = get_mn_block_candidates(N_per_core)
+    require_even_n = USE_CASE_CONFIGS.get(use_case, {}).get("fuse_swiglu", False)
+    combos = []
+    for k in k_candidates:
+        for n in n_candidates:
+            if require_even_n and n % 2 != 0:
+                continue
+            if estimate_l1_kb(m_block, k, n, use_case, op_kind) <= L1_BUDGET_KB:
+                combos.append((k, n))
+    return combos
+
+
+def compute_tile_counts(M, K, N):
+    """Compute tile counts for the matmul dimensions (all per-device)."""
+    M_tiles = max(1, -(-M // 32))  # ceiling division
+    K_tiles = K // 32
+    N_tiles = N // 32
+    return M_tiles, K_tiles, N_tiles
+
+
+def create_fabric_router_config(max_payload_size):
+    """Helper to create FabricRouterConfig with custom max payload size."""
+    config = ttnn._ttnn.fabric.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size
+    return config
+
+
+def open_mesh(cfg, trace_region_size=None):
+    """Open the parent mesh and create a cluster-axis submesh.
+
+    Returns (parent_mesh, cluster_submesh). The submesh is sized 1xN (or Nx1)
+    along cluster_axis so the op runs on a single ring rather than replicating
+    compute across the non-cluster axis. Workers should use the submesh; pass
+    the parent to close_mesh() for cleanup.
+    """
+    fabric_kwargs = [
+        cfg["fabric_config"],
+        ttnn.FabricReliabilityMode.STRICT_INIT,
+        None,
+        ttnn.FabricTensixConfig.DISABLED,
+        ttnn.FabricUDMMode.DISABLED,
+        ttnn.FabricManagerMode.DEFAULT,
+    ]
+    if cfg["fabric_router_config_payload"] is not None:
+        fabric_kwargs.append(create_fabric_router_config(cfg["fabric_router_config_payload"]))
+    ttnn.set_fabric_config(*fabric_kwargs)
+
+    rows, cols = cfg["mesh_shape"]
+    device_kwargs = {}
+    if trace_region_size is not None:
+        device_kwargs["trace_region_size"] = trace_region_size
+    parent_mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(rows, cols), **device_kwargs)
+
+    cluster_axis = cfg["cluster_axis"]
+    submesh_shape = [1, 1]
+    submesh_shape[cluster_axis] = cfg["mesh_shape"][cluster_axis]
+    cluster_submesh = parent_mesh.create_submesh(ttnn.MeshShape(tuple(submesh_shape)))
+
+    return parent_mesh, cluster_submesh
+
+
+def close_mesh(parent_mesh):
+    """Close submeshes then the parent mesh, and reset fabric."""
+    for submesh in parent_mesh.get_submeshes():
+        ttnn.close_mesh_device(submesh)
+    ttnn.close_mesh_device(parent_mesh)
+    ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
+def write_csv_header(csv_path):
+    """Write CSV header if file doesn't exist."""
+    if not os.path.exists(csv_path):
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(CSV_COLUMNS)
+
+
+def append_csv_row(csv_path, row):
+    """Append a single result row to CSV."""
+    with open(csv_path, "a", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(row)
+
+
+def parse_ops_log(subdir, expected_ops=None):
+    """Parse device profiler ops log between start/stop signposts.
+
+    Returns list of per-op mean device kernel durations (ns), one per op dispatch.
+    Groups by GLOBAL CALL COUNT to handle multi-device rows.
+    Uses mean to match tt-perf-report behavior for collective ops (AllGather*).
+
+    With trace mode, each device gets its own GLOBAL CALL COUNT, so grouping by
+    GLOBAL CALL COUNT produces N*num_devices entries instead of N. When
+    expected_ops is provided and len(results) is a multiple of it, results are
+    chunked into groups and averaged to collapse per-device rows.
+    """
+    import numpy as np
+    import pandas as pd
+    from tracy.process_model_log import get_latest_ops_log_filename
+
+    filename = get_latest_ops_log_filename(subdir)
+    df = pd.read_csv(filename)
+
+    # Filter between start/stop signposts
+    signpost_rows = df[df["OP TYPE"] == "signpost"]
+    start_markers = signpost_rows[signpost_rows["OP CODE"] == "start"]
+    stop_markers = signpost_rows[signpost_rows["OP CODE"] == "stop"]
+
+    if start_markers.empty or stop_markers.empty:
+        logger.warning(f"No start/stop signposts found in {filename}")
+        return []
+
+    start_idx = start_markers.index[0]
+    stop_idx = stop_markers.index[0]
+    df = df.iloc[start_idx + 1 : stop_idx]
+
+    # Filter to rows with valid device kernel duration
+    df = df[df["OP TYPE"] != "signpost"]
+    df = df[df["DEVICE KERNEL DURATION [ns]"] != "-"]
+    if df.empty:
+        return []
+
+    df["DEVICE KERNEL DURATION [ns]"] = df["DEVICE KERNEL DURATION [ns]"].astype(float)
+
+    # Group by GLOBAL CALL COUNT to collapse multi-device rows into one per op
+    if "GLOBAL CALL COUNT" in df.columns:
+        per_op = df.groupby("GLOBAL CALL COUNT", sort=False)["DEVICE KERNEL DURATION [ns]"].mean()
+        durations = per_op.values.tolist()
+    else:
+        durations = df["DEVICE KERNEL DURATION [ns]"].values.tolist()
+
+    # Trace mode: each device gets its own GLOBAL CALL COUNT, producing
+    # expected_ops * num_devices entries.  Collapse by chunking and averaging.
+    if expected_ops is not None and len(durations) > expected_ops and expected_ops > 0:
+        if len(durations) % expected_ops == 0:
+            chunk_size = len(durations) // expected_ops
+            durations = np.array(durations).reshape(expected_ops, chunk_size).mean(axis=1).tolist()
+
+    return durations
+
+
+# ============================================================================
+# SHARED WORKER HELPERS
+# ============================================================================
+
+
+def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_grid, op_kind="mm"):
+    """Allocate tensors + return a run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True) closure.
+
+    sagmm path: fabric-bound strided AGMM, mirroring ColParallelLinear._forward_fabric_agmm.
+    AGMM path: sharded input, dummy bias/addcmul (when use_addcmul), CCL semaphores,
+    persistent output buffer.
+    Non-AGMM path: replicated input/weight/bias; minimal_matmul or minimal_matmul_split
+    based on use_case.
+    """
+    compute_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=uc_cfg.get("math_approx_mode", False),
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    fused_activation = uc_cfg.get("fused_activation", None)
+    fuse_swiglu = uc_cfg.get("fuse_swiglu", False)
+    chunks = uc_cfg.get("chunks", 1)
+    scalar = uc_cfg.get("scalar", None)
+    mesh_shape = tuple(mesh_device.shape)
+
+    def _matmul_config(m_blk, k_blk, n_blk, sb_h, sb_w):
+        return ttnn.MinimalMatmulConfig(
+            M_block_size=m_blk,
+            K_block_size=k_blk,
+            N_block_size=n_blk,
+            subblock_h=sb_h,
+            subblock_w=sb_w,
+            compute_with_storage_grid_size=core_grid,
+        )
+
+    if uc_cfg.get("is_mmrs", False):
+        cluster_axis = cfg["cluster_axis"]
+        cluster_size = cfg["mesh_shape"][cluster_axis]
+        full_grid = mesh_device.compute_with_storage_grid_size()
+
+        # Mirrors FusedMMRSConfig.get_params: the RS zone is whatever rows the matmul leaves free.
+        rs_zone_capacity = (full_grid.y - core_grid.y) * full_grid.x
+        num_workers_per_link = rs_zone_capacity // (2 * cfg["num_links"]) - 1
+        if num_workers_per_link < 1:
+            msg = f"matmul grid {core_grid} leaves no room for the reduce-scatter on {full_grid}"
+            raise ValueError(msg)
+
+        tt_input = ttnn.from_torch(
+            torch.randn((1, 1, M, K), dtype=torch.float32), dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+        tt_weight = ttnn.from_torch(
+            torch.randn((K, N), dtype=torch.float32), dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+        tt_bias = ttnn.from_torch(
+            torch.randn((1, N), dtype=torch.float32), dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+        # The addcmul operands are already at the post-scatter width.
+        addcmul_shape = (1, 1, M, N // cluster_size)
+        tt_addcmul_a = ttnn.from_torch(
+            torch.randn(addcmul_shape, dtype=torch.float32), dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+        tt_addcmul_b = ttnn.from_torch(
+            torch.randn(addcmul_shape, dtype=torch.float32), dtype=dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+
+        ccl_cores = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))}
+        )
+        rs_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_cores, 0) for _ in range(3)]
+        barrier_semaphore = ttnn.create_global_semaphore(mesh_device, ccl_cores, 0)
+
+        # Caller-owned counter arrays for the windowed L1 handoff, shaped like CCLManager's
+        # (uint32, L1 HEIGHT_SHARDED over the full grid; a [num_cores, num_cores] square covers
+        # both the per-MM-core progress rows and the per-RS-reader credit rows).
+        counter_slots = full_grid.x * full_grid.y
+
+        def _counter_array():
+            return ttnn.allocate_tensor_on_device(
+                ttnn.Shape([counter_slots, counter_slots]),
+                ttnn.uint32,
+                ttnn.ROW_MAJOR_LAYOUT,
+                mesh_device,
+                ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(ccl_cores, [1, counter_slots], ttnn.ShardOrientation.ROW_MAJOR),
+                ),
+            )
+
+        mm_progress_counters = _counter_array()
+        mm_credit_counters = _counter_array()
+
+        # Windowed L1 handoff, mirroring FusedMMRSConfig.get_params + forward_fused_addcmul: a
+        # combo whose M block leaves >= 2 blocks per core hands the MM output to the RS through a
+        # 2-block rolling L1 window; the rest take the DRAM handoff (a 1-block window cannot
+        # rotate, and its block-quantized height can exceed full residency). The sweep therefore
+        # compares windowed small-M-block combos and DRAM large-M-block combos on equal footing —
+        # exactly the choice the model would make for each blocking. Note the L1 pre-filter does
+        # not model the resident window shard (window * M_block * Nt_per_core tiles), so windowed
+        # combos near the budget are rejected by the device and logged, not mispredicted here.
+        mt_per_core = -(-((M + 31) // 32) // core_grid.y)
+        l1_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+        dram_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+        def run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True):
+            blocks_per_core = -(-mt_per_core // m_blk)
+            window = 2 if blocks_per_core >= 2 else None
+            ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+                input_tensor=tt_input,
+                weight_tensor=tt_weight,
+                dim=3,
+                multi_device_global_semaphore=rs_semaphores,
+                reduce_scatter_core_grid_offset=ttnn.CoreCoord(0, core_grid.y),
+                num_links=cfg["num_links"],
+                config=_matmul_config(m_blk, k_blk, n_blk, sb_h, sb_w),
+                num_buffers_per_channel=None,
+                chunk_width_in_mm_blocks=1,
+                num_workers_per_link=num_workers_per_link,
+                bias=tt_bias,
+                memory_config_mm=l1_mem if window is not None else dram_mem,
+                rs_output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+                topology=cfg["topology"],
+                cluster_axis=cluster_axis,
+                compute_kernel_config=compute_config,
+                barrier_semaphore=barrier_semaphore,
+                fused_ternary_scalar=1.0,
+                addcmul_input_tensor1=tt_addcmul_a,
+                addcmul_input_tensor2=tt_addcmul_b,
+                mm_window_blocks=window,
+                mm_progress_counters=mm_progress_counters,
+                mm_credit_counters=mm_credit_counters if window is not None else None,
+            )
+            if sync:
+                ttnn.synchronize_device(mesh_device)
+
+        return run_op
+
+    if op_kind == "sagmm":
+        # Mirrors ColParallelLinear._forward_fabric_agmm: rank-4 unit-batch activation with
+        # K sharded across the cluster axis, replicated weight, matmul on `core_grid` and
+        # the strided-AG workers on the rows above it. M here is already per-device.
+        cluster_axis = cfg["cluster_axis"]
+        num_links = cfg["num_links"]
+        dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+        shard_dims = [None, None]
+        shard_dims[cluster_axis] = 3  # K is gathered along the cluster axis
+
+        tt_input = ttnn.from_torch(
+            torch.randn((1, 1, M, K), dtype=torch.float32),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            memory_config=dram,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
+        )
+        # N is the per-device WEIGHT width, so this is already the packed [gate|up] matrix
+        # under fused SwiGLU and needs no doubling here.
+        tt_weight = ttnn.from_torch(
+            torch.randn((1, 1, K, N), dtype=torch.float32),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            memory_config=dram,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        persistent_output_buffer = ttnn.from_torch(
+            torch.zeros((1, 1, M, K), dtype=torch.float32),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            memory_config=dram,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+        full_grid = mesh_device.compute_with_storage_grid_size()
+        ccl_cores = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))}
+        )
+        # 2 out-ready semaphores plus 2 directions x per-worker aggregator semaphores,
+        # in one flat list — same shape as CCLManager.get_strided_ag_mm_semaphore.
+        n_sems = 2 + 2 * num_links * SAGMM_NUM_WORKERS_PER_LINK
+        ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_cores, 0) for _ in range(n_sems)]
+        ag_core_grid_offset = (0, core_grid.y)
+
+        def run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True):
+            ttnn.experimental.strided_all_gather_minimal_matmul_async(
+                tt_input,
+                tt_weight,
+                persistent_output_buffer=persistent_output_buffer,
+                dim=3,
+                multi_device_global_semaphore=ccl_semaphore_handles,
+                strided_all_gather_core_grid_offset=ag_core_grid_offset,
+                num_links=num_links,
+                memory_config_ag=dram,
+                topology=cfg["topology"],
+                cluster_axis=cluster_axis,
+                bias=None,
+                fused_activation=fused_activation,
+                config=_matmul_config(m_blk, k_blk, n_blk, sb_h, sb_w),
+                memory_config_mm=dram,
+                compute_kernel_config=compute_config,
+                num_workers_per_link=SAGMM_NUM_WORKERS_PER_LINK,
+                num_buffers_per_channel=SAGMM_NUM_BUFFERS_PER_CHANNEL,
+                read_local_slice_from_input=True,
+                chunks=chunks,
+                fuse_swiglu=fuse_swiglu,
+            )
+            if sync:
+                ttnn.synchronize_device(mesh_device)
+
+        return run_op
+
+    if is_agmm:
+        sp_axis = cfg["sp_axis"]
+        tp_axis = cfg["tp_axis"]
+        sp_size = cfg["mesh_shape"][sp_axis]
+        full_M = M * sp_size
+
+        tt_input = ttnn.from_torch(
+            torch.randn((full_M, K), dtype=torch.float32),
+            dtype=dtype,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[sp_axis, tp_axis]),
+        )
+        tt_weight = ttnn.from_torch(
+            torch.randn((K, N), dtype=torch.float32),
+            dtype=dtype,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        tt_bias = ttnn.from_torch(
+            torch.randn((1, N), dtype=torch.float32),
+            dtype=dtype,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+        )
+
+        # CCL infrastructure (matches model's CCLManager)
+        full_grid = mesh_device.compute_with_storage_grid_size()
+        ccl_cores = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))}
+        )
+        ccl_semaphore_handles = [
+            ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
+            ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
+        ]
+        persistent_output_buffer = ttnn.from_torch(
+            torch.empty((M, K), dtype=torch.float32),
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            device=mesh_device,
+        )
+
+        addcmul_tensor1 = None
+        addcmul_tensor2 = None
+        if uc_cfg.get("use_addcmul", False):
+            # AGMM output shape is (full_M, N) replicated on every device; addcmul
+            # tensors must match that shape exactly (TT_FATAL checks ternary_a[-2]==M_full).
+            addcmul_tensor1 = ttnn.from_torch(
+                torch.randn((full_M, N), dtype=torch.float32),
+                dtype=dtype,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[None, None]),
+            )
+            addcmul_tensor2 = ttnn.from_torch(
+                torch.randn((full_M, N), dtype=torch.float32),
+                dtype=dtype,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[None, None]),
+            )
+
+        def run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True):
+            ttnn.experimental.all_gather_minimal_matmul_async(
+                tt_input,
+                tt_weight,
+                bias_tensor=tt_bias,
+                fused_activation=fused_activation,
+                compute_kernel_config=compute_config,
+                config=_matmul_config(m_blk, k_blk, n_blk, sb_h, sb_w),
+                persistent_output_buffer=persistent_output_buffer,
+                multi_device_global_semaphore=ccl_semaphore_handles,
+                num_links=cfg["num_links"],
+                topology=cfg["topology"],
+                cluster_axis=cfg["cluster_axis"],
+                barrier_semaphore=None,
+                force_transpose=True,
+                num_workers_per_link=cfg["num_workers_per_link"],
+                num_buffers_per_channel=24 if is_blackhole() else 48,
+                scalar=scalar,
+                addcmul_input_tensor1=addcmul_tensor1,
+                addcmul_input_tensor2=addcmul_tensor2,
+                chunks=chunks,
+                fuse_swiglu=fuse_swiglu,
+            )
+            if sync:
+                ttnn.synchronize_device(mesh_device)
+
+        return run_op
+
+    # Non-AGMM
+    use_matmul_split = uc_cfg.get("use_matmul_split", False)
+    tt_input = ttnn.from_torch(
+        torch.randn((M, K), dtype=torch.float32),
+        dtype=dtype,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    tt_weight = ttnn.from_torch(
+        torch.randn((K, N), dtype=torch.float32),
+        dtype=dtype,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    tt_bias = ttnn.from_torch(
+        torch.randn((1, N), dtype=torch.float32),
+        dtype=dtype,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    def run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True):
+        cfg_obj = _matmul_config(m_blk, k_blk, n_blk, sb_h, sb_w)
+        if use_matmul_split:
+            ttnn.experimental.minimal_matmul_split(
+                tt_input,
+                tt_weight,
+                chunks=chunks,
+                dim=-1,
+                bias_tensor=tt_bias,
+                fused_activation=fused_activation,
+                compute_kernel_config=compute_config,
+                config=cfg_obj,
+                fuse_swiglu=fuse_swiglu,
+            )
+        else:
+            ttnn.experimental.minimal_matmul(
+                input_tensor=tt_input,
+                weight_tensor=tt_weight,
+                bias_tensor=tt_bias,
+                config=cfg_obj,
+                fused_activation=fused_activation,
+                compute_kernel_config=compute_config,
+                fuse_swiglu=fuse_swiglu,
+            )
+        if sync:
+            ttnn.synchronize_device(mesh_device)
+
+    return run_op
+
+
+# Call ReadDeviceProfiler every N combos to avoid buffer overflow. Overridable so the flush cadence
+# can be isolated when diagnosing: on a Wormhole Galaxy the sweep reproducibly stops making progress
+# at the FIRST flush boundary (combo 10) for every shape tried, including pre-existing ones, which
+# points at this call rather than at any particular blocking. Set high to take the flush out of the
+# picture -- warmup data is not measured (the signposts wrap only the measure phase), so the warmup
+# flush exists purely to keep the buffer from overflowing.
+PROFILER_DUMP_EVERY = int(os.environ.get("MM_SWEEP_PROFILER_DUMP_EVERY", "10"))
+
+
+def _execute_sweep(mesh_device, run_op, combos):
+    """Warmup (compile + filter OOMs) + trace-based measurement, single mesh open.
+
+    combos: list of (m_blk, k_blk, n_blk, sb_h, sb_w) tuples.
+
+    Capture/execute/release one trace at a time so peak trace memory is bounded.
+    Periodically calls ttnn.ReadDeviceProfiler to flush the device profiler
+    buffer (requires TT_METAL_PROFILER_MID_RUN_DUMP=1 in the subprocess env);
+    without it the buffer overflows around ~50 AGMM ops and timing data is lost.
+
+    Returns (valid_combos, skipped_count).
+    """
+    # Warmup: compile programs, skip OOM silently (count and report at end).
+    valid_combos = []
+    skipped = 0
+    with tqdm(total=len(combos), desc="Warmup", unit="combo", file=sys.stdout, leave=False) as pbar:
+        for i, c in enumerate(combos):
+            try:
+                run_op(*c, sync=False)
+                valid_combos.append(c)
+            except Exception:
+                skipped += 1
+            pbar.update(1)
+            if (i + 1) % PROFILER_DUMP_EVERY == 0:
+                ttnn.synchronize_device(mesh_device)
+                ttnn.ReadDeviceProfiler(mesh_device)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.ReadDeviceProfiler(mesh_device)  # flush remaining warmup data
+
+    if not valid_combos:
+        return valid_combos, skipped
+
+    # Measured run: trace-capture + execute + release per combo. Trace execution
+    # synchronizes devices before dispatch, eliminating host dispatch skew that
+    # can stall fabric transfers. Single-trace-at-a-time keeps trace memory
+    # bounded regardless of combo count.
+    signpost("start")
+    with tqdm(total=len(valid_combos), desc="Measure", unit="combo", file=sys.stdout, leave=False) as pbar:
+        for i, c in enumerate(valid_combos):
+            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            run_op(*c, sync=False)
+            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+
+            ttnn.release_trace(mesh_device, trace_id)
+
+            pbar.update(1)
+            if (i + 1) % PROFILER_DUMP_EVERY == 0:
+                ttnn.ReadDeviceProfiler(mesh_device)
+    signpost("stop")
+    ttnn.ReadDeviceProfiler(mesh_device)  # final flush of measured data
+
+    return valid_combos, skipped
+
+
+# ============================================================================
+# WORKER TEST — profiled in subprocess by device profiler
+# ============================================================================
+
+
+def _quiet_loguru():
+    """Drop loguru's default INFO/WARNING sink — keep only ERROR+ on stderr."""
+    logger.remove()
+    logger.add(sys.stderr, level="ERROR")
+
+
+@pytest.mark.timeout(7200)  # 2h — one worker covers the full (M, K, N) grid
+@pytest.mark.parametrize("device_config", list(DEVICE_CONFIGS.keys()))
+@pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
+def test_mm_sweep_worker(device_config, shape):
+    """Run ALL (M_block, K_block, N_block) combos for a (device_config, shape).
+
+    Designed to be invoked via run_device_profiler with TT_METAL_PROFILER_MID_RUN_DUMP=1.
+    Opens the mesh device once, sweeps every candidate, and periodically flushes
+    the device profiler buffer to avoid overflow.
+
+    Reads optional MM_SWEEP_EXPLICIT_COMBOS env var (JSON list of [m, k, n, sb_h, sb_w])
+    to test a specific set of combos instead of the auto-generated grid.
+    Writes the list of combos that survived warmup to MM_SWEEP_VALID_COMBOS_FILE
+    if set, so the orchestrator can line CSV rows up with combos.
+    """
+    _quiet_loguru()
+
+    cfg = resolve_config(device_config)
+    M, K, N, cgx, cgy, is_agmm, use_case, op_kind = unpack_shape(shape)
+    uc_cfg = USE_CASE_CONFIGS[use_case]
+
+    cluster_size = cfg["mesh_shape"][cfg["cluster_axis"]]
+    M_per_core, K_per_device, N_per_core = get_per_core_dims(shape, cluster_size)
+
+    explicit_combos_str = os.environ.get("MM_SWEEP_EXPLICIT_COMBOS")
+    if explicit_combos_str:
+        # Each entry: [m_blk, k_blk, n_blk, sb_h, sb_w]
+        combos = [tuple(c) for c in json.loads(explicit_combos_str)]
+        m_cands = sorted({c[0] for c in combos})
+        k_cands = sorted({c[1] for c in combos})
+        n_cands = sorted({c[2] for c in combos})
+    else:
+        m_cands = get_mn_block_candidates(M_per_core)
+        k_cands = get_k_block_candidates(K_per_device)
+        n_cands = get_mn_block_candidates(N_per_core)
+        combos = []
+        for m_block in m_cands:
+            kn_combos = generate_kn_combos(
+                K_per_device, N_per_core, m_block=m_block, use_case=use_case, op_kind=op_kind
+            )
+            for k_blk, n_blk in kn_combos:
+                if op_kind == "sagmm" and not sagmm_combo_is_safe(M_per_core, N_per_core, m_block, n_blk):
+                    continue
+                sb_h, sb_w = pick_subblock(m_block, n_blk)
+                combos.append((m_block, k_blk, n_blk, sb_h, sb_w))
+
+    op_type = op_kind
+    shape_id = f"{M}_{K}_{N}_{cgx}x{cgy}_{op_type}_{use_case}"
+
+    # Header: clean, one-time print of candidate lists + post-L1 combo total
+    print(f"\n=== {shape_id} on {device_config} ===", flush=True)
+    print(f"  per_core: M={M_per_core}  K_per_device={K_per_device}  N={N_per_core}", flush=True)
+    print(f"  M_blocks ({len(m_cands)}): {m_cands}", flush=True)
+    print(f"  K_blocks ({len(k_cands)}): {k_cands}", flush=True)
+    print(f"  N_blocks ({len(n_cands)}): {n_cands}", flush=True)
+    src = " (explicit)" if explicit_combos_str else " (post-L1 filter)"
+    print(f"  combos to measure: {len(combos)}{src}", flush=True)
+
+    if not combos:
+        pytest.skip("No valid (M, K, N) combos after L1 filter")
+
+    parent_mesh, mesh_device = open_mesh(cfg, trace_region_size=4194304)  # 4MB trace region (one trace at a time)
+    try:
+        run_op = _build_op_runner(
+            cfg, mesh_device, M, K, N, ttnn.bfloat16, is_agmm, uc_cfg, ttnn.CoreCoord(cgx, cgy), op_kind=op_kind
+        )
+
+        valid_combos, skipped = _execute_sweep(mesh_device, run_op, combos)
+
+        if not valid_combos:
+            pytest.skip("All combos failed during warmup")
+
+        # Write valid combos (full tuples) so orchestrator can line up CSV rows
+        combos_file = os.environ.get("MM_SWEEP_VALID_COMBOS_FILE")
+        if combos_file:
+            with open(combos_file, "w") as f:
+                json.dump([list(c) for c in valid_combos], f)
+
+        print(f"  measured: {len(valid_combos)}  skipped (L1 OOM): {skipped}", flush=True)
+
+    finally:
+        close_mesh(parent_mesh)
+
+
+# ============================================================================
+# ORCHESTRATOR TEST — iterates M_blocks, invokes worker via device profiler
+# ============================================================================
+
+
+@pytest.mark.timeout(7200)  # 2 hours — one subprocess per shape
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance sweep - skip on CI")
+@pytest.mark.parametrize("device_config", list(DEVICE_CONFIGS.keys()))
+@pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
+def test_mm_sweep(device_config, shape):
+    """Orchestrate the block size sweep for one (device_config, shape).
+
+    Spawns test_mm_sweep_worker in ONE profiler subprocess that opens the mesh
+    device once and sweeps every (M, K, N) candidate. The worker uses
+    TT_METAL_PROFILER_MID_RUN_DUMP=1 + periodic ttnn.ReadDeviceProfiler calls
+    to flush the profiler buffer without losing data.
+
+    Reads optional MM_SWEEP_EXPLICIT_COMBOS='[[m, k, n, sb_h, sb_w], ...]' to
+    test a specific set; otherwise the worker auto-generates candidates from
+    get_mn_block_candidates / generate_kn_combos. The subblock for each combo
+    is pick_subblock(...) (and for fp32 dest that's always (2, 2) when valid).
+    """
+    from tracy.process_model_log import run_device_profiler
+
+    M, K, N, cgx, cgy, is_agmm, use_case, op_kind = unpack_shape(shape)
+    op_type = op_kind
+    shape_id = f"{M}_{K}_{N}_{cgx}x{cgy}_{op_type}_{use_case}"
+    core_grid_str = f"{cgx}x{cgy}"
+
+    subdir = f"mm_sweep_{device_config}_{shape_id}"
+    combos_file = f"valid_combos_{device_config}_{shape_id}.json"
+    os.environ["MM_SWEEP_VALID_COMBOS_FILE"] = combos_file
+    # Mid-run profiler dumps: required so the worker can flush the device
+    # profiler buffer between combos without losing data.
+    os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
+    # Quiet tt-metal C++ warnings during the sweep — only show errors. Worker
+    # also reconfigures loguru to ERROR-only.
+    saved_logger_level = os.environ.get("TT_LOGGER_LEVEL")
+    os.environ["TT_LOGGER_LEVEL"] = "Error"
+
+    # `-s` so the worker's print/tqdm output flows through to the user's terminal.
+    command = (
+        f"pytest models/tt_dit/utils/sweep_mm_block_sizes.py"
+        f"::test_mm_sweep_worker[{shape_id}-{device_config}] -x -s --timeout 90000"
+    )
+
+    write_csv_header(CSV_FILE)
+
+    try:
+        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+    finally:
+        os.environ.pop("MM_SWEEP_VALID_COMBOS_FILE", None)
+        os.environ.pop("TT_METAL_PROFILER_MID_RUN_DUMP", None)
+        os.environ.pop("MM_SWEEP_EXPLICIT_COMBOS", None)
+        if saved_logger_level is None:
+            os.environ.pop("TT_LOGGER_LEVEL", None)
+        else:
+            os.environ["TT_LOGGER_LEVEL"] = saved_logger_level
+
+    if not os.path.exists(combos_file):
+        print(f"  WARN: no valid_combos file at {combos_file}", flush=True)
+        return
+    with open(combos_file) as f:
+        valid_combos = [tuple(c) for c in json.load(f)]
+    os.remove(combos_file)
+
+    durations = parse_ops_log(subdir, expected_ops=len(valid_combos))
+    if len(durations) != len(valid_combos):
+        print(
+            f"  WARN: expected {len(valid_combos)} ops in profiler log, got {len(durations)}",
+            flush=True,
+        )
+
+    all_results = []
+    for i, (m_blk, k_blk, n_blk, sb_h, sb_w) in enumerate(valid_combos):
+        if i < len(durations):
+            duration_ns = durations[i]
+            status = "OK"
+            all_results.append(
+                {
+                    "M_block": m_blk,
+                    "K_block": k_blk,
+                    "N_block": n_blk,
+                    "subblock_h": sb_h,
+                    "subblock_w": sb_w,
+                    "duration_ns": duration_ns,
+                }
+            )
+        else:
+            duration_ns = -1
+            status = "MISSING"
+
+        append_csv_row(
+            CSV_FILE,
+            [
+                device_config,
+                op_type,
+                use_case,
+                M,
+                K,
+                N,
+                core_grid_str,
+                m_blk,
+                k_blk,
+                n_blk,
+                sb_h,
+                sb_w,
+                f"{duration_ns:.0f}",
+                status,
+            ],
+        )
+
+    if not all_results:
+        print(f"  WARN: no valid results", flush=True)
+        return
+
+    all_results.sort(key=lambda r: r["duration_ns"])
+    best = all_results[0]
+    print(
+        f"  BEST: M={best['M_block']} K={best['K_block']} N={best['N_block']} "
+        f"sb=({best['subblock_h']},{best['subblock_w']}) -> {best['duration_ns']:.0f} ns",
+        flush=True,
+    )
+    print("  Top 5:", flush=True)
+    for rank, r in enumerate(all_results[:5], 1):
+        print(
+            f"    #{rank}: M={r['M_block']} K={r['K_block']} N={r['N_block']} "
+            f"sb=({r['subblock_h']},{r['subblock_w']}) -> {r['duration_ns']:.0f} ns",
+            flush=True,
+        )
+
+
+# ============================================================================
+# STANDALONE ENTRY POINT
+# ============================================================================
+
+
+def main():
+    from tracy.process_model_log import run_device_profiler
+
+    parser = argparse.ArgumentParser(description="Sweep matmul block sizes with device profiler")
+    parser.add_argument(
+        "--device-config",
+        type=str,
+        default=DEFAULT_DEVICE_CONFIG,
+        choices=list(DEVICE_CONFIGS.keys()),
+        help=f"Device configuration (default: {DEFAULT_DEVICE_CONFIG})",
+    )
+    parser.add_argument(
+        "--shape",
+        type=str,
+        default=None,
+        help="Filter to a single shape as M,K,N (e.g. 6144,5120,3456)",
+    )
+    parser.add_argument("--csv", type=str, default=CSV_FILE)
+    parser.add_argument(
+        "--use-case",
+        type=str,
+        default=None,
+        choices=list(USE_CASE_CONFIGS.keys()),
+        help="Restrict sweep to a single use_case (e.g. ff1_swiglu)",
+    )
+    args = parser.parse_args()
+
+    device_config = args.device_config
+    cfg = resolve_config(device_config)
+
+    # Filter shapes by M,K,N then optionally by use_case
+    if args.shape:
+        m, k, n = [int(x) for x in args.shape.split(",")]
+        shapes = [s for s in SHAPES if s[0] == m and s[1] == k and s[2] == n]
+        if not shapes:
+            print(f"Shape {args.shape} not found in SHAPES table")
+            return
+    else:
+        shapes = SHAPES
+
+    if args.use_case:
+        shapes = [s for s in shapes if s[6] == args.use_case]
+        if not shapes:
+            print(f"No shapes match use_case={args.use_case!r}")
+            return
+
+    write_csv_header(args.csv)
+    all_best = {}
+
+    print(
+        f"Device config: {device_config} (mesh={cfg['mesh_shape']}, "
+        f"sp_axis={cfg['sp_axis']}, links={cfg['num_links']})"
+    )
+
+    # Mid-run profiler dumps so the worker can flush between combos.
+    os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
+
+    for shape in shapes:
+        M, K, N, cgx, cgy, is_agmm, use_case, op_kind = unpack_shape(shape)
+        op_type = op_kind
+        shape_id = f"{M}_{K}_{N}_{cgx}x{cgy}_{op_type}_{use_case}"
+        core_grid_str = f"{cgx}x{cgy}"
+
+        print(f"\n{'='*80}")
+        print(f"[{device_config}] {op_type} ({use_case}) Shape {M}_{K}_{N} grid={core_grid_str}")
+        print(f"{'='*80}")
+
+        subdir = f"mm_sweep_{device_config}_{shape_id}"
+        combos_file = f"valid_combos_{device_config}_{shape_id}.json"
+        os.environ["MM_SWEEP_VALID_COMBOS_FILE"] = combos_file
+        command = (
+            f"pytest models/tt_dit/utils/sweep_mm_block_sizes.py"
+            f"::test_mm_sweep_worker[{shape_id}-{device_config}] -x --timeout 90000"
+        )
+
+        try:
+            run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+        except Exception as e:
+            print(f"  Sweep FAILED: {str(e)[:200]}")
+            continue
+        finally:
+            os.environ.pop("MM_SWEEP_VALID_COMBOS_FILE", None)
+
+        if not os.path.exists(combos_file):
+            print(f"  No valid_combos file at {combos_file}")
+            continue
+        with open(combos_file) as f:
+            valid_combos = [tuple(c) for c in json.load(f)]
+        os.remove(combos_file)
+
+        durations = parse_ops_log(subdir, expected_ops=len(valid_combos))
+        if len(durations) != len(valid_combos):
+            print(f"  expected {len(valid_combos)} ops in profiler log, got {len(durations)}")
+
+        shape_results = []
+        for i, (m_blk, k_blk, n_blk, sb_h, sb_w) in enumerate(valid_combos):
+            if i < len(durations):
+                duration_ns = durations[i]
+                status = "OK"
+                shape_results.append(
+                    {
+                        "M_block": m_blk,
+                        "K_block": k_blk,
+                        "N_block": n_blk,
+                        "subblock_h": sb_h,
+                        "subblock_w": sb_w,
+                        "duration_ns": duration_ns,
+                    }
+                )
+            else:
+                duration_ns = -1
+                status = "MISSING"
+            append_csv_row(
+                args.csv,
+                [
+                    device_config,
+                    op_type,
+                    use_case,
+                    M,
+                    K,
+                    N,
+                    core_grid_str,
+                    m_blk,
+                    k_blk,
+                    n_blk,
+                    sb_h,
+                    sb_w,
+                    f"{duration_ns:.0f}",
+                    status,
+                ],
+            )
+
+        if shape_results:
+            shape_results.sort(key=lambda r: r["duration_ns"])
+            best = shape_results[0]
+            print(
+                f"  BEST: M={best['M_block']} K={best['K_block']} N={best['N_block']} "
+                f"sb=({best['subblock_h']},{best['subblock_w']}) -> {best['duration_ns']:.0f} ns"
+            )
+            print("  Top 5:")
+            for rank, r in enumerate(shape_results[:5], 1):
+                print(
+                    f"    #{rank}: M={r['M_block']} K={r['K_block']} N={r['N_block']} "
+                    f"sb=({r['subblock_h']},{r['subblock_w']}) -> {r['duration_ns']:.0f} ns"
+                )
+            all_best[(M, K, N, cgx, cgy, op_type, use_case)] = best
+
+    os.environ.pop("TT_METAL_PROFILER_MID_RUN_DUMP", None)
+
+    if all_best:
+        print(f"\n{'='*110}")
+        print(f"SWEEP SUMMARY [{device_config}] - Best configs per shape")
+        print(f"{'='*110}")
+        print(
+            f"{'type':>4} {'use_case':>10} {'M':>6} {'K':>6} {'N':>6} {'grid':>7} | "
+            f"{'M_blk':>5} {'K_blk':>5} {'N_blk':>5} {'sb_h':>4} {'sb_w':>4} | "
+            f"{'duration_ns':>12}"
+        )
+        print("-" * 110)
+        for (M, K, N, cgx, cgy, op_type, use_case), best in sorted(all_best.items()):
+            print(
+                f"{op_type:>4} {use_case:>10} {M:>6} {K:>6} {N:>6} {cgx}x{cgy:>2} | "
+                f"{best['M_block']:>5} {best['K_block']:>5} {best['N_block']:>5} "
+                f"{best['subblock_h']:>4} {best['subblock_w']:>4} | "
+                f"{best['duration_ns']:>12.0f}"
+            )
+        print(f"{'='*110}")
+        print(f"\nFull results written to: {args.csv}")
+
+
+if __name__ == "__main__":
+    main()

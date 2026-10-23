@@ -1,0 +1,274 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
+#include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
+#include "ring_attention_all_gather_metadata.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <tuple>
+///////////////////////////////////////////////////
+// COMPILE TIME ARGS
+///////////////////////////////////////////////////
+
+constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(0);
+constexpr uint32_t cb_output_id = get_compile_time_arg_val(1);
+constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(2);
+constexpr uint32_t output_page_size = get_compile_time_arg_val(3);
+constexpr uint32_t num_inputs = get_compile_time_arg_val(4);
+constexpr uint32_t unicast_route_arg0 = get_compile_time_arg_val(5);
+constexpr uint32_t unicast_route_arg1 = get_compile_time_arg_val(6);
+constexpr bool send_backward = get_compile_time_arg_val(7);
+constexpr uint32_t meta_cb_id = get_compile_time_arg_val(8);
+// A multicast exchange sends one line multicast per run of hops that ship the same source slab.
+// unicast_route_arg1 is then the distance to the exchange's nearest receiver.
+constexpr bool multicast = get_compile_time_arg_val(9) == 1;
+
+constexpr uint32_t page_size_base_idx = 10;
+
+namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
+
+void kernel_main() {
+    constexpr auto outputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
+    // See the halo reader: appended after the per-output accessors, with a valid fallback offset so the
+    // unconditionally-instantiated TensorAccessorArgs<> never names a non-accessor compile arg. Reader and
+    // writer use the same link ranges to keep cb_output page counts equal.
+    // The tuple itself has no offset accessor; the last element's next offset is where the
+    // accessors end.
+    constexpr uint32_t halo_meta_flag_idx = std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset();
+    constexpr bool has_halo_metadata = get_compile_time_arg_val(halo_meta_flag_idx) == 1;
+    constexpr uint32_t kv_meta_args_offset =
+        has_halo_metadata ? halo_meta_flag_idx + 1 : page_size_base_idx + num_inputs;
+    constexpr auto kv_meta_args = TensorAccessorArgs<kv_meta_args_offset>();
+
+    ///////////////////////////////////////////////////
+    // ARGS
+    ///////////////////////////////////////////////////
+    uint32_t arg_idx = 0;
+    const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
+    size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t worker_link = get_arg_val<uint32_t>(arg_idx++);
+
+    std::array<uint32_t, num_inputs> output_batch_head_stride_pages;
+    std::array<uint32_t, num_inputs> input_batch_head_count;
+    std::array<uint32_t, num_inputs> input_tile_id_start;
+    std::array<uint32_t, num_inputs> input_tile_id_end;
+    // First page this exchange writes in the receiver's compact buffer (chunked_sliding_halo_block_dest_row).
+    std::array<uint32_t, num_inputs> output_origin_page;
+
+    for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+        output_batch_head_stride_pages[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        input_batch_head_count[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        input_tile_id_start[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        input_tile_id_end[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        output_origin_page[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+    }
+
+    uint32_t mc_hop_count = 1;
+    std::array<uint32_t, ring_attention_all_gather::kMaxMulticastHaloHops> mc_origin_rows{};
+    if constexpr (multicast) {
+        mc_hop_count = get_arg_val<uint32_t>(arg_idx++);
+        ASSERT(mc_hop_count <= ring_attention_all_gather::kMaxMulticastHaloHops);
+        for (uint32_t i = 0; i < mc_hop_count; ++i) {
+            mc_origin_rows[i] = get_arg_val<uint32_t>(arg_idx++);
+        }
+    }
+
+    if constexpr (has_halo_metadata) {
+        const uint32_t kv_actual_isl_addr = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t q_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t halo_tile_rows = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t cache_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t halo_slot_count = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t source_device = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t ring_size_rt = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t num_links = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t hop = get_arg_val<uint32_t>(arg_idx++);
+        Noc meta_noc;
+        CircularBuffer cb_meta(meta_cb_id);
+        const uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
+            meta_noc, kv_meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());
+        const auto sources = ring_attention_all_gather::compute_halo_sources(
+            kv_actual_isl,
+            q_local_tile_rows,
+            ring_size_rt,
+            halo_tile_rows,
+            source_device,
+            cache_local_tile_rows,
+            halo_slot_count,
+            hop);
+        const uint32_t tail_tile_rows = ttnn::operations::transformer::sdpa::ring_joint::chunked_sliding_halo_hop_rows(
+            halo_tile_rows, q_local_tile_rows, hop);
+        for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+            const uint32_t input_Wt = get_arg_val<uint32_t>(arg_idx++);
+            const uint32_t pages = sources.count * tail_tile_rows * input_Wt;
+            ASSERT(pages <= output_batch_head_stride_pages[input_idx]);
+            const auto range = ring_attention_all_gather::compute_link_page_range(pages, num_links, worker_link);
+            input_tile_id_start[input_idx] = range.start;
+            input_tile_id_end[input_idx] = range.end;
+        }
+        if constexpr (multicast) {
+            ring_attention_all_gather::compute_multicast_origin_rows(
+                kv_actual_isl,
+                q_local_tile_rows,
+                ring_size_rt,
+                halo_tile_rows,
+                source_device,
+                cache_local_tile_rows,
+                halo_slot_count,
+                hop,
+                sources.first_start_tile,
+                mc_hop_count,
+                mc_origin_rows.data());
+        }
+    }
+
+    auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx);
+    arg_idx += num_inputs;
+    auto output_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
+    size_t fabric_args_idx = arg_idx;
+    auto fabric_connection = FabricConnectionManager::build_from_args(fabric_args_idx);
+
+    // Link hand-off for hops that time-share a fabric link (see RingAttentionNeighborHaloConfig):
+    // wait for the predecessor on this link to close its connection, and wake the successor after
+    // closing ours. Both flags are 0 when this hop owns its link.
+    uint32_t chain_arg_idx = fabric_args_idx;
+    const uint32_t chain_waits = get_arg_val<uint32_t>(chain_arg_idx++);
+    const uint32_t chain_signals = get_arg_val<uint32_t>(chain_arg_idx++);
+    const uint32_t chain_semaphore_id = get_arg_val<uint32_t>(chain_arg_idx++);
+    const uint32_t chain_successor_noc_x = get_arg_val<uint32_t>(chain_arg_idx++);
+    const uint32_t chain_successor_noc_y = get_arg_val<uint32_t>(chain_arg_idx++);
+    const uintptr_t chain_semaphore_addr = get_semaphore(chain_semaphore_id);
+
+    if (chain_waits) {
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chain_semaphore_addr), 1);
+    }
+
+    Noc noc_obj;
+    CircularBuffer cb_packet_header(reserved_packet_header_cb_id);
+    CircularBuffer cb_output(cb_output_id);
+
+    // packet header cb
+    cb_packet_header.reserve_back(1);
+    auto packet_header_buffer_addr = cb_packet_header.get_write_ptr();
+    cb_packet_header.push_back(1);
+
+    // pre-populate packet headers
+    constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info = {
+        .dst_mesh_id = static_cast<uint16_t>(unicast_route_arg0),
+        .dst_chip_id = static_cast<uint16_t>(unicast_route_arg1)};
+
+    volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr, unicast_route_info);
+
+    fabric_connection.open();
+
+    tt::tt_fabric::WorkerToFabricEdmSender& fabric_direction_connection =
+        send_backward ? fabric_connection.get_backward_connection() : fabric_connection.get_forward_connection();
+    const uint64_t out_ready_sem_noc_addr_in_pkt =
+        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
+
+    // Sends `count` (up to NOC_SCATTER_WRITE_MAX_CHUNKS) consecutive output pages from L1; `signal`
+    // fuses the ready-increment, which takes at most two pages.
+    static_assert(packet_size_in_pages <= NOC_SCATTER_WRITE_MAX_CHUNKS);
+    const auto send_pages = [&](uint32_t input_idx, uint32_t first_tile, uint32_t count, size_t l1_addr, bool signal) {
+        if (count == 0) {
+            return;
+        }
+        std::array<uint64_t, NOC_SCATTER_WRITE_MAX_CHUNKS> noc_addrs{};
+        for (uint32_t i = 0; i < count; ++i) {
+            noc_addrs[i] = output_addrgens[input_idx].get_noc_addr(first_tile + i);
+        }
+        const uint16_t page = static_cast<uint16_t>(output_page_size);
+        if (count == 1 && signal) {
+            pkt_hdr->to_noc_fused_unicast_write_atomic_inc(
+                tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                    noc_addrs[0], out_ready_sem_noc_addr_in_pkt, 1, true},
+                output_page_size);
+        } else if (count == 1) {
+            pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{noc_addrs[0]}, output_page_size);
+        } else if (signal) {
+            ASSERT(count == 2);
+            pkt_hdr->to_noc_fused_unicast_scatter_write_atomic_inc(
+                tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader{
+                    {noc_addrs[0], noc_addrs[1]}, out_ready_sem_noc_addr_in_pkt, {page}, 1, true},
+                output_page_size * 2);
+        } else {
+            std::array<uint16_t, NOC_SCATTER_WRITE_MAX_CHUNKS - 1> chunk_sizes;
+            chunk_sizes.fill(page);
+            pkt_hdr->to_noc_unicast_scatter_write(
+                tt::tt_fabric::NocUnicastScatterCommandHeader(
+                    noc_addrs.data(), chunk_sizes.data(), static_cast<uint8_t>(count)),
+                output_page_size * count);
+        }
+        perform_payload_send(fabric_direction_connection, l1_addr, output_page_size * count, pkt_hdr);
+        noc_async_writes_flushed();
+    };
+
+    for (uint32_t run_start = 0; run_start < mc_hop_count;) {
+        uint32_t run_end = run_start + 1;
+        if constexpr (multicast) {
+            run_end = ring_joint::chunked_sliding_halo_run_end(mc_origin_rows.data(), run_start, mc_hop_count);
+            ccl_routing_utils::line_multicast_route_info_t route{};
+            route.start_distance_in_hops = static_cast<uint16_t>(ring_joint::chunked_sliding_halo_run_distance(
+                unicast_route_arg1, mc_hop_count, run_start, run_end, send_backward));
+            route.range_hops = static_cast<uint16_t>(run_end - run_start);
+            ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr, route);
+        }
+        run_start = run_end;
+        for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+            for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
+                uint32_t tiles_read = input_tile_id_start[input_idx];
+                const uint32_t tiles_to_read = input_tile_id_end[input_idx];
+                const uint32_t output_batch_head_base = bh_idx * output_batch_head_stride_pages[input_idx];
+                while (tiles_read < tiles_to_read) {
+                    const uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
+                    cb_output.wait_front(packet_size_in_pages);
+                    const size_t l1_read_addr = cb_output.get_read_ptr();
+                    const uint32_t tile_id = output_batch_head_base + output_origin_page[input_idx] + tiles_read;
+                    const bool is_last_source_packet = input_idx + 1 == num_inputs &&
+                                                       bh_idx + 1 == input_batch_head_count[input_idx] &&
+                                                       tiles_read + num_pages_to_read >= tiles_to_read;
+                    const uint32_t signal_pages = is_last_source_packet ? std::min<uint32_t>(num_pages_to_read, 2) : 0;
+                    const uint32_t plain_pages = num_pages_to_read - signal_pages;
+                    send_pages(input_idx, tile_id, plain_pages, l1_read_addr, false);
+                    send_pages(
+                        input_idx,
+                        tile_id + plain_pages,
+                        signal_pages,
+                        l1_read_addr + plain_pages * output_page_size,
+                        true);
+                    tiles_read += num_pages_to_read;
+                    cb_output.pop_front(packet_size_in_pages);
+                }
+            }
+        }
+    }
+
+    noc_obj.async_write_barrier();
+    // Drain in-flight writes BEFORE closing the EDM connections.
+    noc_obj.async_atomic_barrier();
+    noc_obj.async_write_barrier();
+
+    fabric_connection.close();
+
+    // The EDM sender channel is free only once close() has persisted its producer cursor, so the
+    // hand-off has to follow the close, not the last payload send.
+    if (chain_signals) {
+        noc_semaphore_inc(get_noc_addr(chain_successor_noc_x, chain_successor_noc_y, chain_semaphore_addr), 1);
+        noc_obj.async_atomic_barrier();
+    }
+}

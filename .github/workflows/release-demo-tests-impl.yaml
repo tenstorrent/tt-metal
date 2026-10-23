@@ -1,0 +1,154 @@
+name: "[internal] Release demo tests impl"
+
+# Package-and-release entry for models e2e: download optional gist, filter to
+# release_ready, then pass the combined matrix to models-e2e-tests-impl.yaml
+# which splits single-host vs exabox multihost and runs the tests.
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      enabled-skus:
+        required: true
+        type: string
+      model:
+        required: false
+        type: string
+        default: "all"
+      mlperf-read-only:
+        required: false
+        type: boolean
+        default: true
+        description: "Set to false to allow write access to MLPerf mount"
+      tier:
+        required: false
+        type: string
+        default: "1"
+        description: "Model tier to filter tests (1, 2, or 3). Release defaults to tier 1."
+      tests-yaml-gist-url:
+        required: false
+        type: string
+        default: ""
+        description: "URL to gist containing models_e2e_tests.yaml (optional, falls back to local file if not provided). Security: Only GitHub gist/raw URLs allowed, validated before download."
+      summary-scope:
+        required: false
+        type: string
+        default: ""
+        description: "Discriminator for the AI summaries when the calling workflow is invoked more than once per run"
+    outputs:
+      matrix:
+        description: "Filtered matrix of single-host legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)."
+        value: ${{ jobs.release-demo-tests.outputs.matrix }}
+      matrix_multihost:
+        description: "Filtered matrix of exabox multihost legs that ran."
+        value: ${{ jobs.release-demo-tests.outputs.matrix_multihost }}
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.apply-filters.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/models_e2e_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Validate tests YAML URL (security check)
+        if: ${{ inputs.tests-yaml-gist-url != '' }}
+        run: |
+          URL="${{ inputs.tests-yaml-gist-url }}"
+
+          # Only allow GitHub gist URLs or raw.githubusercontent.com URLs
+          if [[ ! "$URL" =~ ^https://gist\.githubusercontent\.com/ ]] && \
+             [[ ! "$URL" =~ ^https://raw\.githubusercontent\.com/ ]]; then
+            echo "Error: tests-yaml-gist-url must be from gist.githubusercontent.com or raw.githubusercontent.com"
+            echo "Error: Provided URL: $URL"
+            exit 1
+          fi
+
+          echo "URL validation passed: $URL"
+      - name: Download tests YAML from gist (if provided)
+        if: ${{ inputs.tests-yaml-gist-url != '' }}
+        run: |
+          echo "Downloading tests YAML from gist: ${{ inputs.tests-yaml-gist-url }}"
+          curl -fsSL "${{ inputs.tests-yaml-gist-url }}" -o "${{ env.TESTS_YAML_PATH }}"
+          echo "Downloaded tests YAML:"
+          head -n 20 "${{ env.TESTS_YAML_PATH }}"
+      - name: Build unified test matrix based on enabled SKUs
+        id: build-matrix
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "${{ inputs.enabled-skus }}"
+          sku-config: ./.github/sku_config.yaml
+      - name: Apply tier, release_ready, and model filters
+        id: apply-filters
+        # Pass values via env rather than inline ${{ }} so arbitrary cmd content in the matrix
+        # (apostrophes, parentheses, etc.) cannot break the shell quoting of the assignment.
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          TIER: ${{ inputs.tier }}
+          MODEL: ${{ inputs.model }}
+        run: |
+          # Filter by tier
+          FILTERED=$(echo "$MATRIX" | jq -c --argjson tier "$TIER" '[.[] | select(.tier == $tier)]')
+          # Filter to tests explicitly marked release_ready (missing/false excluded)
+          FILTERED=$(echo "$FILTERED" | jq -c '[.[] | select(.release_ready == true)]')
+          # Filter by model (substring match, case-insensitive; comma-separated OR-list)
+          if [ "$MODEL" != "all" ]; then
+            FILTERED=$(echo "$FILTERED" | jq -c --arg m "$MODEL" '
+              ($m | ascii_downcase | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $toks
+              | [ .[] | select((.model | ascii_downcase) as $mm | any($toks[]; . as $t | $mm | contains($t))) ]')
+          fi
+          if [ "$FILTERED" = "[]" ]; then
+            echo "::warning::No tests found for tier=${TIER}, release_ready=true, model=${MODEL}. Pipeline will be skipped."
+            echo "matrix=[]" >> $GITHUB_OUTPUT
+          else
+            echo "matrix<<EOF" >> $GITHUB_OUTPUT
+            echo "$FILTERED" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
+  release-demo-tests:
+    needs: load-test-matrix
+    # id-token: write is required by the nested exabox multihost job (multihost-ci runner chart).
+    # Job-level permissions replace inherited defaults, so restate the reads the container legs need too.
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+    secrets: inherit
+    uses: ./.github/workflows/models-e2e-tests-impl.yaml
+    with:
+      docker-image: ${{ inputs.docker-image }}
+      build-artifact-name: ${{ inputs.build-artifact-name }}
+      wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      enabled-skus: ${{ inputs.enabled-skus }}
+      model: ${{ inputs.model }}
+      mlperf-read-only: ${{ inputs.mlperf-read-only }}
+      tier: ${{ inputs.tier }}
+      matrix: ${{ needs.load-test-matrix.outputs.matrix }}
+      # P&R installs the manylinux wheel; put its libs first so pytest does not
+      # mix them with the Ubuntu tarball. T1 inplace leaves this false.
+      prefer-wheel-libs: true
+      summary-scope: ${{ inputs.summary-scope }}

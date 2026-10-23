@@ -1,0 +1,596 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import pytest
+import ttnn
+from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
+from models.common.utility_functions import (
+    skip_for_wormhole_b0,
+    skip_for_n_dev,
+    skip_for_n_or_less_dev,
+)
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
+
+
+@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_n_dev(8)
+@pytest.mark.parametrize("num_links", [2], ids=["2_links"])
+@pytest.mark.parametrize(
+    "num_devices, rs_input_shape, dim, layout",
+    [
+        (4, [1, 1, 128, 256], 3, ttnn.TILE_LAYOUT),
+        (2, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
+    ],
+    ids=["4_device", "2_device"],
+)
+@pytest.mark.parametrize(
+    "rs_input_dtype",
+    [
+        ttnn.bfloat16,
+        # ttnn.uint32, #Bad PCC
+        ttnn.bfloat8_b,
+    ],
+    ids=[
+        "float_16",
+        # "uint_32", #Bad PCC
+        "bfloat_8",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_rs",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ),
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        ),
+    ],
+    ids=["dram_only", "l1_only"],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (True, 10),
+        (False, 10),
+    ],
+    ids=[
+        "trace",
+        "non-trace",
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params, rs_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+    ids=[
+        "fabric_linear",
+    ],
+)
+@pytest.mark.parametrize("chunks_per_sync", [2])
+@pytest.mark.parametrize("num_workers_per_link", [2])
+@pytest.mark.parametrize("num_buffers_per_channel", [8])
+def test_rs_row_2d(
+    bh_2d_mesh_device,
+    num_devices,
+    num_links,
+    rs_input_shape,
+    dim,
+    layout,
+    rs_input_dtype,
+    mem_config_input,
+    mem_config_rs,
+    enable_trace,
+    num_iters,
+    rs_topology,
+    chunks_per_sync,
+    num_workers_per_link,
+    num_buffers_per_channel,
+):
+    if bh_2d_mesh_device.shape[0] != 1 and bh_2d_mesh_device.shape[1] != 1:
+        pytest.skip("2D dynamic requires one dimension to be 1")
+    validate_test(num_devices, rs_topology, bh_2d_mesh_device.shape, 0)
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    cluster_axis = 0
+    run_reduce_scatter_impl(
+        submesh_device,
+        num_devices,
+        rs_input_shape,
+        dim,
+        num_links,
+        rs_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_rs,
+        rs_topology=rs_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        cluster_axis=cluster_axis,
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
+    )
+    ttnn.ReadDeviceProfiler(submesh_device)
+
+
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(1)
+@pytest.mark.parametrize("num_links", [2], ids=["2_links"])
+@pytest.mark.parametrize(
+    "num_devices, rs_input_shape, dim, layout",
+    [
+        (2, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "rs_input_dtype",
+    [
+        ttnn.bfloat16,
+        # ttnn.uint32, #Bad PCC
+        ttnn.bfloat8_b,
+    ],
+    ids=[
+        "float_16",
+        # "uint_32", #Bad PCC
+        "bfloat_8",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_rs",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ),
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        ),
+    ],
+    ids=["dram_only", "l1_only"],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (True, 10),
+        (False, 10),
+    ],
+    ids=[
+        "trace",
+        "non-trace",
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params, rs_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+)
+@pytest.mark.parametrize("chunks_per_sync", [2])
+@pytest.mark.parametrize("num_workers_per_link", [2])
+@pytest.mark.parametrize("num_buffers_per_channel", [8])
+def test_rs_row_2D_nightly_linear(
+    bh_1d_mesh_device,
+    num_devices,
+    num_links,
+    rs_input_shape,
+    dim,
+    layout,
+    rs_input_dtype,
+    mem_config_input,
+    mem_config_rs,
+    enable_trace,
+    num_iters,
+    rs_topology,
+    chunks_per_sync,
+    num_workers_per_link,
+    num_buffers_per_channel,
+):
+    validate_test(num_devices, rs_topology, bh_1d_mesh_device.shape, 0)
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    cluster_axis = 0
+    run_reduce_scatter_impl(
+        submesh_device,
+        num_devices,
+        rs_input_shape,
+        dim,
+        num_links,
+        rs_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_rs,
+        rs_topology=rs_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        cluster_axis=cluster_axis,
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
+    )
+    ttnn.ReadDeviceProfiler(submesh_device)
+
+
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(3)
+@pytest.mark.parametrize("num_links", [2], ids=["2_links"])
+@pytest.mark.parametrize(
+    "num_devices, rs_input_shape, dim, layout",
+    [
+        (4, [1, 1, 128, 256], 3, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "rs_input_dtype",
+    [
+        ttnn.bfloat16,
+        # ttnn.uint32, #Bad PCC
+        ttnn.bfloat8_b,
+    ],
+    ids=[
+        "float_16",
+        # "uint_32", #Bad PCC
+        "bfloat_8",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_rs",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ),
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        ),
+    ],
+    ids=["dram_only", "l1_only"],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (True, 10),
+        (False, 10),
+    ],
+    ids=[
+        "trace",
+        "non-trace",
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params, rs_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+)
+@pytest.mark.parametrize("chunks_per_sync", [2])
+@pytest.mark.parametrize("num_workers_per_link", [2])
+@pytest.mark.parametrize("num_buffers_per_channel", [8])
+def test_rs_row_4D_nightly_linear(
+    bh_1d_mesh_device,
+    num_devices,
+    num_links,
+    rs_input_shape,
+    dim,
+    layout,
+    rs_input_dtype,
+    mem_config_input,
+    mem_config_rs,
+    enable_trace,
+    num_iters,
+    rs_topology,
+    chunks_per_sync,
+    num_workers_per_link,
+    num_buffers_per_channel,
+):
+    validate_test(num_devices, rs_topology, bh_1d_mesh_device.shape, 0)
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    cluster_axis = 0
+    run_reduce_scatter_impl(
+        submesh_device,
+        num_devices,
+        rs_input_shape,
+        dim,
+        num_links,
+        rs_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_rs,
+        rs_topology=rs_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        cluster_axis=cluster_axis,
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
+    )
+    ttnn.ReadDeviceProfiler(submesh_device)
+
+
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(2)
+@pytest.mark.parametrize("num_links", [2], ids=["2_links"])
+@pytest.mark.parametrize(
+    "rs_input_shape, dim, layout",
+    [
+        ([1, 1, 128, 256], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 128, 512], 3, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "rs_input_dtype",
+    [
+        ttnn.bfloat16,
+        # ttnn.uint32, #Bad PCC
+        ttnn.bfloat8_b,
+    ],
+    ids=[
+        "float_16",
+        # "uint_32", #Bad PCC
+        "bfloat_8",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_rs",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ),
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        ),
+    ],
+    ids=["dram_only", "l1_only"],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (True, 10),
+        (False, 10),
+    ],
+    ids=[
+        "trace",
+        "non-trace",
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params, rs_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+)
+@pytest.mark.parametrize("chunks_per_sync", [2])
+@pytest.mark.parametrize("num_workers_per_link", [2])
+@pytest.mark.parametrize("num_buffers_per_channel", [8])
+def test_rs_row_nightly_ring(
+    bh_1d_mesh_device,
+    num_links,
+    rs_input_shape,
+    dim,
+    layout,
+    rs_input_dtype,
+    mem_config_input,
+    mem_config_rs,
+    enable_trace,
+    num_iters,
+    rs_topology,
+    chunks_per_sync,
+    num_workers_per_link,
+    num_buffers_per_channel,
+):
+    num_devices = bh_1d_mesh_device.shape[0]
+    validate_test(num_devices, rs_topology, bh_1d_mesh_device.shape, 0)
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    cluster_axis = 0
+    run_reduce_scatter_impl(
+        submesh_device,
+        num_devices,
+        rs_input_shape,
+        dim,
+        num_links,
+        rs_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_rs,
+        rs_topology=rs_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        cluster_axis=cluster_axis,
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
+    )
+    ttnn.ReadDeviceProfiler(submesh_device)
+
+
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(7)
+@pytest.mark.parametrize("num_links", [2], ids=["2_links"])
+@pytest.mark.parametrize(
+    "num_devices, rs_input_shape, dim, layout",
+    [
+        (2, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "rs_input_dtype",
+    [
+        ttnn.bfloat16,
+        # ttnn.uint32, #Bad PCC
+        ttnn.bfloat8_b,
+    ],
+    ids=[
+        "float_16",
+        # "uint_32", #Bad PCC
+        "bfloat_8",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_rs",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ),
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        ),
+    ],
+    ids=["dram_only", "l1_only"],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (True, 10),
+        (False, 10),
+    ],
+    ids=[
+        "trace",
+        "non-trace",
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params, rs_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+)
+@pytest.mark.parametrize("chunks_per_sync", [2])
+@pytest.mark.parametrize("num_workers_per_link", [2])
+@pytest.mark.parametrize("num_buffers_per_channel", [8])
+def test_rs_row_2D_nightly_linear(
+    bh_2d_mesh_device,
+    num_devices,
+    num_links,
+    rs_input_shape,
+    dim,
+    layout,
+    rs_input_dtype,
+    mem_config_input,
+    mem_config_rs,
+    enable_trace,
+    num_iters,
+    rs_topology,
+    chunks_per_sync,
+    num_workers_per_link,
+    num_buffers_per_channel,
+):
+    cluster_axis = 1
+    validate_test(num_devices, rs_topology, bh_2d_mesh_device.shape, cluster_axis)
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
+    run_reduce_scatter_impl(
+        submesh_device,
+        num_devices,
+        rs_input_shape,
+        dim,
+        num_links,
+        rs_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_rs,
+        rs_topology=rs_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        cluster_axis=cluster_axis,
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
+    )
+    ttnn.ReadDeviceProfiler(submesh_device)
+
+
+# The ring path (scatter dim != 0) supports two intermediate staging layouts, and the op picks between
+# them from the intermediate it is handed: a chunk-paged contiguous staging buffer, or an input-shaped
+# tiled one. With no persistent intermediate the op allocates the contiguous buffer itself. The kernels
+# select the matching addressing scheme through the `contiguous_interm` compile-time arg, so both
+# layouts need coverage to stay correct.
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(2)
+@pytest.mark.parametrize("num_links", [1], ids=["1_link"])
+@pytest.mark.parametrize(
+    "rs_input_shape, dim, layout",
+    [
+        ([1, 1, 128, 2048], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 512, 1024], 2, ttnn.TILE_LAYOUT),
+        ([2, 1, 256, 1024], 3, ttnn.TILE_LAYOUT),
+    ],
+    ids=["dim3", "dim2", "batch2_dim3"],
+)
+@pytest.mark.parametrize(
+    "rs_input_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+    ids=["float_16", "bfloat_8"],
+)
+@pytest.mark.parametrize(
+    "use_persistent_buffers, contiguous_staging",
+    [
+        (False, None),
+        (True, True),
+        (True, False),
+    ],
+    ids=["no_persistent_interm", "persistent_contiguous_interm", "persistent_tiled_interm"],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_rs",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ),
+    ],
+    ids=["dram_only"],
+)
+@pytest.mark.parametrize(
+    "device_params, rs_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+)
+def test_rs_row_nightly_ring_intermediate_staging(
+    bh_1d_mesh_device,
+    num_links,
+    rs_input_shape,
+    dim,
+    layout,
+    rs_input_dtype,
+    use_persistent_buffers,
+    contiguous_staging,
+    mem_config_input,
+    mem_config_rs,
+    rs_topology,
+):
+    num_devices = bh_1d_mesh_device.shape[0]
+    validate_test(num_devices, rs_topology, bh_1d_mesh_device.shape, 0)
+    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    cluster_axis = 0
+    run_reduce_scatter_impl(
+        submesh_device,
+        num_devices,
+        rs_input_shape,
+        dim,
+        num_links,
+        rs_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_rs,
+        rs_topology=rs_topology,
+        enable_trace=False,
+        num_iters=2,
+        cluster_axis=cluster_axis,
+        use_persistent_buffers=use_persistent_buffers,
+        contiguous_staging=contiguous_staging,
+    )
+    ttnn.ReadDeviceProfiler(submesh_device)

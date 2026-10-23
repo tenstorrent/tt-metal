@@ -1,0 +1,544 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "ternary.hpp"
+
+#include <utility>
+#include <variant>
+#include <cstdint>
+
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "device/ternary_device_operation.hpp"
+#include "device/ternary_op_utils.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include "ternary_composite_op.hpp"
+
+using namespace ttnn::operations::ternary;
+
+namespace ttnn::operations::ternary {
+
+namespace ternary_utils {
+
+inline bool have_same_shape(const Tensor& a, const Tensor& b) { return (a.logical_shape() == b.logical_shape()); }
+
+inline bool typecast_predicate(const Tensor& predicate, const Tensor& t_true, const Tensor& t_false) {
+    return !is_floating_point(predicate.dtype()) && is_floating_point(t_true.dtype()) &&
+           is_floating_point(t_false.dtype());
+}
+
+inline bool typecast_predicate(const Tensor& predicate, const Tensor& b) {
+    return !is_floating_point(predicate.dtype()) && is_floating_point(b.dtype());
+}
+
+// Helper function to determine output dtype
+inline std::optional<DataType> determine_output_dtype(
+    const std::optional<Tensor>& output, const std::optional<DataType>& default_dtype) {
+    return output.has_value() ? std::optional<DataType>(output->dtype()) : default_dtype;
+}
+
+// Helper function to determine memory config
+inline MemoryConfig determine_memory_config(
+    const std::optional<MemoryConfig>& memory_config, const MemoryConfig& default_config) {
+    return memory_config.value_or(default_config);
+}
+
+// Helper function to determine memory config for broadcast operations
+// This properly adjusts the shard spec when the output shape differs from the input tensor's shape
+inline MemoryConfig determine_memory_config_for_broadcast(
+    const std::optional<MemoryConfig>& memory_config, const Tensor& sharded_tensor, const ttnn::Shape& other_shape) {
+    if (memory_config.has_value()) {
+        return *memory_config;
+    }
+    // If the sharded tensor's memory config is sharded, adjust the shard spec for the broadcast output shape
+    if (sharded_tensor.memory_config().is_sharded()) {
+        return ttnn::operations::binary_ng::compute_mem_config_actual(sharded_tensor, other_shape);
+    }
+    return sharded_tensor.memory_config();
+}
+
+// Single entry point for the native ternary LLK path.  The ops on that path differ only in
+// the TernaryOpType they dispatch with and in which of the two trailing operands is a
+// scalar, so `where`, `mac` and anything ported later share this call instead of spelling
+// out prim::ternary once per variant.
+template <TernaryOpType op_type, typename ValueB, typename ValueC>
+Tensor invoke_ternary_llk(
+    const Tensor& input_tensor_a,
+    const ValueB& value_b,
+    const ValueC& value_c,
+    const std::optional<DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::prim::ternary(
+        op_type, input_tensor_a, value_b, value_c, output_dtype, memory_config, output, sub_core_grids);
+}
+
+}  // namespace ternary_utils
+
+namespace {
+
+// Functions will be enabled in future when porting more ops to the ternary infra
+// inline bool is_sharded(const Tensor& t) { return t.memory_config().is_sharded(); }
+// inline bool is_sharded(const std::optional<MemoryConfig>& mc) { return mc.has_value() && mc->is_sharded(); }
+// inline bool is_sharded(const std::optional<Tensor>& t) { return t.has_value() && t->memory_config().is_sharded(); }
+inline bool is_invalid_bcast(const ttnn::operations::ternary::TernaryBroadcastType& broadcast_type) {
+    return broadcast_type == ttnn::operations::ternary::TernaryBroadcastType::INVALID_BCAST;
+}
+
+inline bool is_integer_dtype(DataType dtype) {
+    return dtype == DataType::INT32 || dtype == DataType::UINT32 || dtype == DataType::UINT16 ||
+           dtype == DataType::UINT8;
+}
+
+// TTT: tensor, tensor, tensor
+Tensor invoke_impl(
+    const Tensor& predicate,
+    const Tensor& t_true,
+    const Tensor& t_false,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    Tensor condition = predicate;
+    auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
+        condition.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
+    bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_true, t_false);
+    if (typecast_needed) {
+        condition = ttnn::typecast(predicate, t_true.dtype(), std::nullopt, std::nullopt, sub_core_grids);
+    }
+
+    // A composite of gtz, lez, two multiplies and an add stood here for this
+    // case. It never returned: every shape that reaches it is one the multiply
+    // inside it rejects too, so all it did was report the rejection from an op
+    // the caller did not write. Say which shapes and which op instead.
+    TT_FATAL(
+        !is_invalid_bcast(broadcast_type),
+        "ttnn.where: shapes {}, {} and {} do not broadcast in a pattern the ternary kernel supports",
+        condition.logical_shape(),
+        t_true.logical_shape(),
+        t_false.logical_shape());
+
+    std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
+    log_debug(tt::LogOp, "Where LLK - TTT");
+    return ternary_utils::invoke_ternary_llk<TernaryOpType::WHERE>(
+        condition, t_true, t_false, output_dtype, memory_config, output, sub_core_grids);
+}
+
+// TTS: tensor, tensor, scalar
+Tensor invoke_impl(
+    const Tensor& predicate,
+    const Tensor& t_true,
+    float scalar_false,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    Tensor condition = predicate;
+    bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_true);
+    if (typecast_needed) {
+        condition = ttnn::typecast(predicate, t_true.dtype(), std::nullopt, std::nullopt, sub_core_grids);
+    }
+
+    return operations::binary::where_operation_with_scalar<operations::binary::BinaryOpType::WHERE_TTS>(
+        condition,
+        t_true,
+        scalar_false,
+        ternary_utils::determine_memory_config_for_broadcast(memory_config, t_true, condition.logical_shape()),
+        output,
+        sub_core_grids);
+}
+
+// TST: tensor, scalar, tensor
+Tensor invoke_impl(
+    const Tensor& predicate,
+    float scalar_true,
+    const Tensor& t_false,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    Tensor condition = predicate;
+    bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_false);
+    if (typecast_needed) {
+        condition = ttnn::typecast(predicate, t_false.dtype(), std::nullopt, std::nullopt, sub_core_grids);
+    }
+
+    return operations::binary::where_operation_with_scalar<operations::binary::BinaryOpType::WHERE_TST>(
+        condition,
+        t_false,
+        scalar_true,
+        ternary_utils::determine_memory_config_for_broadcast(memory_config, t_false, condition.logical_shape()),
+        output,
+        sub_core_grids);
+}
+
+// TSS: tensor, scalar, scalar
+Tensor invoke_impl(
+    const Tensor& condition,
+    float t_true,
+    float t_false,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    log_debug(tt::LogOp, "Where LLK - TSS");
+    return ttnn::where_tss(condition, t_true, t_false, memory_config, output, sub_core_grids);
+}
+
+// A native mac needs float operands the SFPU can consume and a broadcast the ternary
+// kernels can express.  Only the tensor operands take part in the check, so the caller
+// passes whichever of b and c are tensors.
+template <typename... Tensors>
+bool mac_needs_composite(const TernaryBroadcastType& broadcast_type, const Tensors&... tensors) {
+    bool is_any_input_block_format = (is_block_float(tensors.dtype()) || ...);
+    // The SFPU mac path multiplies and accumulates in the FP32 SFPU registers, so integer
+    // inputs would be reinterpreted as floats. Keep them on the composite path.
+    bool is_any_input_integer = (is_integer_dtype(tensors.dtype()) || ...);
+    bool is_subtile_bcast = (broadcast_type == TernaryBroadcastType::ROW_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::COL_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::SCALAR_BCAST);
+
+    return is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_any_input_integer;
+}
+
+// TTT, TTS and TST share this body: which of b and c is a scalar only changes the operands
+// that take part in the broadcast and dtype checks, because prim::ternary and the composite
+// _mac both already have an overload per scalar position.
+template <typename ValueB, typename ValueC>
+    requires(std::same_as<ValueB, Tensor> || std::same_as<ValueC, Tensor>)
+Tensor mac_impl(
+    const Tensor& input_tensor_a,
+    const ValueB& value_b,
+    const ValueC& value_c,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    constexpr bool b_is_tensor = std::same_as<ValueB, Tensor>;
+    constexpr bool c_is_tensor = std::same_as<ValueC, Tensor>;
+    constexpr auto variant = b_is_tensor && c_is_tensor ? "TTT" : (b_is_tensor ? "TTS" : "TST");
+
+    const auto broadcast_type = [&] {
+        if constexpr (b_is_tensor && c_is_tensor) {
+            return get_broadcast_type(input_tensor_a.logical_shape(), value_b.logical_shape(), value_c.logical_shape());
+        } else if constexpr (b_is_tensor) {
+            return get_broadcast_type(input_tensor_a.logical_shape(), value_b.logical_shape());
+        } else {
+            return get_broadcast_type(input_tensor_a.logical_shape(), value_c.logical_shape());
+        }
+    }();
+
+    const bool needs_composite = [&] {
+        if constexpr (b_is_tensor && c_is_tensor) {
+            return mac_needs_composite(broadcast_type, input_tensor_a, value_b, value_c);
+        } else if constexpr (b_is_tensor) {
+            return mac_needs_composite(broadcast_type, input_tensor_a, value_b);
+        } else {
+            return mac_needs_composite(broadcast_type, input_tensor_a, value_c);
+        }
+    }();
+
+    if (needs_composite) {
+        TT_FATAL(
+            !output.has_value(),
+            "ttnn::mac: output_tensor is not supported when the operation falls back to the composite path "
+            "(unsupported broadcast shape, block-float subtile broadcast, or integer input dtype). "
+            "Remove output_tensor or use shapes/dtypes that are supported by the native LLK path.");
+        TT_FATAL(
+            !sub_core_grids.has_value(),
+            "ttnn::mac: sub_core_grids is not supported when the operation falls back to the composite path. "
+            "Remove sub_core_grids or use shapes/dtypes that are supported by the native LLK path.");
+        log_debug(tt::LogOp, "Mac Fallback - {}", variant);
+        return _mac(input_tensor_a, value_b, value_c, memory_config);
+    }
+
+    log_debug(tt::LogOp, "Mac LLK - {}", variant);
+    return ternary_utils::invoke_ternary_llk<TernaryOpType::MAC>(
+        input_tensor_a,
+        value_b,
+        value_c,
+        ternary_utils::determine_output_dtype(output, input_tensor_a.dtype()),
+        ternary_utils::determine_memory_config(memory_config, input_tensor_a.memory_config()),
+        output,
+        sub_core_grids);
+}
+
+}  // namespace
+
+}  // namespace ttnn::operations::ternary
+
+namespace ttnn {
+
+Tensor where(
+    const Tensor& predicate,
+    const TensorScalarVariant& value_true,
+    const TensorScalarVariant& value_false,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return std::visit(
+        [&](const auto& true_val, const auto& false_val) {
+            return invoke_impl(predicate, true_val, false_val, memory_config, output, sub_core_grids);
+        },
+        value_true,
+        value_false);
+}
+
+template <typename T>
+    requires std::same_as<T, std::int32_t> || std::same_as<T, std::uint32_t>
+Tensor where(
+    const Tensor& predicate,
+    const T& value_true,
+    const T& value_false,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::where_tss(predicate, value_true, value_false, memory_config, output, sub_core_grids);
+}
+
+template Tensor where<std::int32_t>(
+    const Tensor&,
+    const std::int32_t&,
+    const std::int32_t&,
+    const std::optional<MemoryConfig>&,
+    const std::optional<Tensor>&,
+    const std::optional<CoreRangeSet>&);
+template Tensor where<std::uint32_t>(
+    const Tensor&,
+    const std::uint32_t&,
+    const std::uint32_t&,
+    const std::optional<MemoryConfig>&,
+    const std::optional<Tensor>&,
+    const std::optional<CoreRangeSet>&);
+
+Tensor addcmul(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const Tensor& input_c,
+    operations::ternary::ScalarVariant value,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output) {
+    log_debug(tt::LogOp, "Addcmul LLK - TTT");
+
+    bool is_supported_dtype =
+        (input_a.dtype() == DataType::BFLOAT16 || input_a.dtype() == DataType::FLOAT32 ||
+         input_a.dtype() == DataType::INT32 || input_a.dtype() == DataType::BFLOAT8_B ||
+         input_a.dtype() == DataType::UINT32);
+    TT_FATAL(
+        is_supported_dtype,
+        "Addcmul supports only BFLOAT16, BFLOAT8_B, FLOAT32, INT32, and UINT32 dtypes. Got {}",
+        input_a.dtype());
+    TT_FATAL(
+        input_b.dtype() == input_a.dtype() && input_c.dtype() == input_a.dtype(),
+        "Addcmul TTT requires all input tensors to have the same dtype. Got input_a={}, input_b={}, input_c={}",
+        input_a.dtype(),
+        input_b.dtype(),
+        input_c.dtype());
+
+    // Only TTT variant is supported for addcmul
+    auto broadcast_type = get_broadcast_type(input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
+
+    bool is_any_input_block_format =
+        is_block_float(input_a.dtype()) || is_block_float(input_b.dtype()) || is_block_float(input_c.dtype());
+    bool is_subtile_bcast = (broadcast_type == TernaryBroadcastType::ROW_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::COL_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::SCALAR_BCAST);
+
+    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast)) {
+        log_debug(tt::LogOp, "Addcmul Fallback - TTT");
+        // Fall back to composite implementation for unsupported cases
+        float value_f = std::visit([](auto&& v) { return static_cast<float>(v); }, value);
+        return _addcmul(input_a, input_b, input_c, value_f, memory_config, output);
+    }
+
+    // Use LLK implementation - pass value as scalar parameter
+    log_debug(tt::LogOp, "Addcmul LLK - TTT");
+    return ttnn::prim::ternary(
+        TernaryOpType::ADDCMUL,
+        input_a,
+        input_b,
+        input_c,
+        value,
+        ternary_utils::determine_output_dtype(output, input_a.dtype()),
+        memory_config,
+        output,
+        std::nullopt);
+}
+
+Tensor addcdiv(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const Tensor& input_c,
+    float value,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output) {
+    log_debug(tt::LogOp, "Addcdiv LLK - TTT");
+
+    // Only TTT variant is supported for addcdiv
+    auto broadcast_type = get_broadcast_type(input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
+
+    bool is_any_input_block_format =
+        is_block_float(input_a.dtype()) || is_block_float(input_b.dtype()) || is_block_float(input_c.dtype());
+    bool is_input_int32 = (input_a.dtype() == DataType::INT32) && (input_b.dtype() == DataType::INT32) &&
+                          (input_c.dtype() == DataType::INT32);
+
+    TT_FATAL(!is_input_int32, "Addcdiv TTT does not support INT32 inputs.");
+
+    if (is_invalid_bcast(broadcast_type) || is_any_input_block_format) {
+        log_debug(tt::LogOp, "Addcdiv Fallback - TTT");
+        // Fall back to composite implementation for unsupported cases
+        return _addcdiv(input_a, input_b, input_c, value, memory_config, output);
+    }
+
+    // Use LLK implementation - pass value as scalar parameter
+    log_debug(tt::LogOp, "Addcdiv LLK - TTT");
+    return ttnn::prim::ternary(
+        TernaryOpType::ADDCDIV,
+        input_a,
+        input_b,
+        input_c,
+        value,
+        ternary_utils::determine_output_dtype(output, input_a.dtype()),
+        memory_config,
+        output,
+        std::nullopt);
+}
+
+Tensor lerp(
+    const Tensor& input,
+    const Tensor& end,
+    float weight,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output) {
+    // The LERP kernel has no unsigned path: a UINT32 dispatch compiles but returns zeros.
+    TT_FATAL(
+        input.dtype() != DataType::UINT32 && end.dtype() != DataType::UINT32,
+        "lerp does not support UINT32 inputs. Got input={}, end={}",
+        input.dtype(),
+        end.dtype());
+    auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape());
+
+    bool is_any_input_block_format = is_block_float(input.dtype()) || is_block_float(end.dtype());
+    bool is_subtile_bcast = (broadcast_type == TernaryBroadcastType::ROW_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::COL_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::SCALAR_BCAST);
+    bool is_input_int32 = (input.dtype() == DataType::INT32) && (end.dtype() == DataType::INT32);
+
+    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_input_int32) {
+        log_debug(tt::LogOp, "Lerp Fallback - TTS (scalar weight)");
+        return _lerp_overload(input, end, weight, memory_config, output);
+    }
+
+    log_debug(tt::LogOp, "Lerp LLK - TTS (scalar weight)");
+    return ttnn::prim::ternary(
+        TernaryOpType::LERP,
+        input,
+        end,
+        weight,
+        ternary_utils::determine_output_dtype(output, input.dtype()),
+        ternary_utils::determine_memory_config(memory_config, input.memory_config()),
+        output,
+        std::nullopt);
+}
+
+Tensor lerp(
+    const Tensor& input,
+    const Tensor& end,
+    const Tensor& weight,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output) {
+    // The LERP kernel has no unsigned path: a UINT32 dispatch compiles but returns zeros.
+    TT_FATAL(
+        input.dtype() != DataType::UINT32 && end.dtype() != DataType::UINT32 && weight.dtype() != DataType::UINT32,
+        "lerp does not support UINT32 inputs. Got input={}, end={}, weight={}",
+        input.dtype(),
+        end.dtype(),
+        weight.dtype());
+    auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape(), weight.logical_shape());
+
+    bool is_any_input_block_format =
+        is_block_float(input.dtype()) || is_block_float(end.dtype()) || is_block_float(weight.dtype());
+    bool is_subtile_bcast = (broadcast_type == TernaryBroadcastType::ROW_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::COL_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::SCALAR_BCAST);
+    bool is_input_int32 =
+        (input.dtype() == DataType::INT32) && (end.dtype() == DataType::INT32) && (weight.dtype() == DataType::INT32);
+
+    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_input_int32) {
+        log_debug(tt::LogOp, "Lerp Fallback - TTT (tensor weight)");
+        return _lerp(input, end, weight, memory_config, output);
+    }
+
+    log_debug(tt::LogOp, "Lerp LLK - TTT (tensor weight)");
+    return ttnn::prim::ternary(
+        TernaryOpType::LERP,
+        input,
+        end,
+        weight,
+        ternary_utils::determine_output_dtype(output, input.dtype()),
+        ternary_utils::determine_memory_config(memory_config, input.memory_config()),
+        output,
+        std::nullopt);
+}
+
+Tensor snake_beta(
+    const Tensor& input_tensor,
+    const Tensor& alpha,
+    const Tensor& beta,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    auto lift_to_rank2 = [](const Tensor& t) { return t.logical_shape().rank() < 2 ? ttnn::unsqueeze(t, 0) : t; };
+    return ttnn::prim::ternary(
+        TernaryOpType::SNAKE_BETA,
+        input_tensor,
+        lift_to_rank2(alpha),
+        lift_to_rank2(beta),
+        ternary_utils::determine_output_dtype(optional_output_tensor, input_tensor.dtype()),
+        ternary_utils::determine_memory_config(memory_config, input_tensor.memory_config()),
+        optional_output_tensor,
+        std::nullopt);
+}
+
+Tensor mac(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const Tensor& input_tensor_c,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return mac_impl(input_tensor_a, input_tensor_b, input_tensor_c, memory_config, output, sub_core_grids);
+}
+
+// TTS: a * b + scalar — native LLK path via prim::ternary
+Tensor mac(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    float value,
+    const std::optional<MemoryConfig>& memory_config) {
+    return mac_impl(input_tensor_a, input_tensor_b, value, memory_config, std::nullopt, std::nullopt);
+}
+
+// TST: a * scalar + c — native LLK path via prim::ternary
+Tensor mac(
+    const Tensor& input_tensor_a,
+    float value,
+    const Tensor& input_tensor_c,
+    const std::optional<MemoryConfig>& memory_config) {
+    return mac_impl(input_tensor_a, value, input_tensor_c, memory_config, std::nullopt, std::nullopt);
+}
+
+// TSS: a * scalar1 + scalar2 — native unary SFPU kernel (single pass, no intermediate tensor)
+Tensor mac(const Tensor& input_tensor_a, float value1, float value2, const std::optional<MemoryConfig>& memory_config) {
+    // The unary mac_tss kernel packs both scalars as floats and computes in the FP32 SFPU
+    // registers, so integer inputs stay on the composite path (which preserves the integer
+    // output dtype the pre-LLK implementation produced).
+    if (is_integer_dtype(input_tensor_a.dtype())) {
+        log_debug(tt::LogOp, "Mac Fallback - TSS");
+        return _mac(input_tensor_a, value1, value2, memory_config);
+    }
+
+    log_debug(tt::LogOp, "Mac LLK - TSS");
+    return ttnn::mac_tss(input_tensor_a, value1, value2, memory_config);
+}
+
+}  // namespace ttnn

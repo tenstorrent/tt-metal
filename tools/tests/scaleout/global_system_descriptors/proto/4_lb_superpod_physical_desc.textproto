@@ -1,0 +1,2047 @@
+system_graph {
+  asic_connectivity_graph {
+    host_name: "metal-wh-12"
+    asic_topologies {
+      asic_id: 14521786539
+      topology {
+        asic_connections {
+          dst_asic_id: 10226819243
+          eth_connections {
+            dst_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 9
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 14521786438
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 14521786451
+      topology {
+        asic_connections {
+          dst_asic_id: 10226819155
+          eth_connections {
+            dst_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 9
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 14521786429
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 14521786438
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786539
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819142
+          eth_connections {
+            dst_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 9
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 10226819142
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786438
+          eth_connections {
+            src_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 9
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819243
+          eth_connections {
+            src_chan: 15
+            dst_chan: 15
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 14
+            dst_chan: 14
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819155
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+          eth_connections {
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819281
+          eth_connections {
+            src_chan: 7
+            dst_chan: 1
+          }
+          eth_connections {
+            src_chan: 6
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 10226819155
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786451
+          eth_connections {
+            src_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 9
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819142
+          eth_connections {
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819133
+          eth_connections {
+            src_chan: 15
+            dst_chan: 15
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 14
+            dst_chan: 14
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819216
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 14521786429
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786451
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819133
+          eth_connections {
+            dst_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 9
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 10226819243
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786539
+          eth_connections {
+            src_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 9
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819142
+          eth_connections {
+            src_chan: 15
+            dst_chan: 15
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 14
+            dst_chan: 14
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819133
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819236
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+          }
+          eth_connections {
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 10226819133
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786429
+          eth_connections {
+            src_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 9
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819155
+          eth_connections {
+            src_chan: 15
+            dst_chan: 15
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 14
+            dst_chan: 14
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819243
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+      }
+    }
+  }
+  asic_connectivity_graph {
+    host_name: "metal-wh-11"
+    asic_topologies {
+      asic_id: 14521786547
+      topology {
+        asic_connections {
+          dst_asic_id: 10226819251
+          eth_connections {
+            dst_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 9
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 14521786512
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 14521786525
+      topology {
+        asic_connections {
+          dst_asic_id: 10226819229
+          eth_connections {
+            dst_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 9
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 14521786425
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 14521786512
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786547
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819216
+          eth_connections {
+            dst_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 9
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 10226819251
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786547
+          eth_connections {
+            src_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 9
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819216
+          eth_connections {
+            src_chan: 15
+            dst_chan: 15
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 14
+            dst_chan: 14
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819129
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819275
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+          }
+          eth_connections {
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 10226819216
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786512
+          eth_connections {
+            src_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 9
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819251
+          eth_connections {
+            src_chan: 15
+            dst_chan: 15
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 14
+            dst_chan: 14
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819229
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+          eth_connections {
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819155
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 10226819229
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786525
+          eth_connections {
+            src_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 9
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819216
+          eth_connections {
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819129
+          eth_connections {
+            src_chan: 15
+            dst_chan: 15
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 14
+            dst_chan: 14
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819238
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 14521786425
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786525
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819129
+          eth_connections {
+            dst_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 9
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 10226819129
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786425
+          eth_connections {
+            src_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 9
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819229
+          eth_connections {
+            src_chan: 15
+            dst_chan: 15
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 14
+            dst_chan: 14
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819251
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+      }
+    }
+  }
+  asic_connectivity_graph {
+    host_name: "metal-wh-10"
+    asic_topologies {
+      asic_id: 14521786577
+      topology {
+        asic_connections {
+          dst_asic_id: 10226819281
+          eth_connections {
+            dst_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 9
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 14521786479
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 10226819238
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786534
+          eth_connections {
+            src_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 9
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819183
+          eth_connections {
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819080
+          eth_connections {
+            src_chan: 15
+            dst_chan: 15
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 14
+            dst_chan: 14
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819229
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 14521786534
+      topology {
+        asic_connections {
+          dst_asic_id: 10226819238
+          eth_connections {
+            dst_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 9
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 14521786376
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 14521786479
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786577
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819183
+          eth_connections {
+            dst_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 9
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 10226819183
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786479
+          eth_connections {
+            src_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 9
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819281
+          eth_connections {
+            src_chan: 15
+            dst_chan: 15
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 14
+            dst_chan: 14
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819238
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+          eth_connections {
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819075
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 14521786376
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786534
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819080
+          eth_connections {
+            dst_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 9
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 10226819281
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786577
+          eth_connections {
+            src_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 9
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819183
+          eth_connections {
+            src_chan: 15
+            dst_chan: 15
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 14
+            dst_chan: 14
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819080
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819142
+          eth_connections {
+            src_chan: 1
+            dst_chan: 7
+          }
+          eth_connections {
+            dst_chan: 6
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 10226819080
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786376
+          eth_connections {
+            src_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 9
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819238
+          eth_connections {
+            src_chan: 15
+            dst_chan: 15
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 14
+            dst_chan: 14
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819281
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+      }
+    }
+  }
+  asic_connectivity_graph {
+    host_name: "metal-wh-09"
+    asic_topologies {
+      asic_id: 10226819235
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786531
+          eth_connections {
+            src_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 9
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819236
+          eth_connections {
+            src_chan: 15
+            dst_chan: 15
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 14
+            dst_chan: 14
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819075
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+          eth_connections {
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 14521786371
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786571
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819075
+          eth_connections {
+            dst_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 9
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 10226819075
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786371
+          eth_connections {
+            src_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 9
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819275
+          eth_connections {
+            src_chan: 15
+            dst_chan: 15
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 14
+            dst_chan: 14
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819235
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+          eth_connections {
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819183
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 14521786531
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786532
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819235
+          eth_connections {
+            dst_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 9
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 10226819275
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786571
+          eth_connections {
+            src_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 9
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819236
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819075
+          eth_connections {
+            src_chan: 15
+            dst_chan: 15
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 14
+            dst_chan: 14
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819251
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+          }
+          eth_connections {
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 10226819236
+      topology {
+        asic_connections {
+          dst_asic_id: 14521786532
+          eth_connections {
+            src_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 9
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819275
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819235
+          eth_connections {
+            src_chan: 15
+            dst_chan: 15
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 14
+            dst_chan: 14
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 10226819243
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+          }
+          eth_connections {
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 14521786532
+      topology {
+        asic_connections {
+          dst_asic_id: 10226819236
+          eth_connections {
+            dst_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 9
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 14521786531
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 14521786571
+      topology {
+        asic_connections {
+          dst_asic_id: 10226819275
+          eth_connections {
+            dst_chan: 8
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 9
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 14521786371
+          eth_connections {
+            src_chan: 7
+            dst_chan: 7
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 6
+            dst_chan: 6
+            is_local: true
+          }
+        }
+      }
+    }
+  }
+  host_connectivity_graph {
+    src_host_name: "metal-wh-12"
+    host_connections {
+      dst_host_name: "metal-wh-11"
+      exit_node_connections {
+        src_exit_node: 10226819155
+        dst_exit_node: 10226819216
+        eth_conn {
+          src_chan: 7
+          dst_chan: 7
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 10226819155
+        dst_exit_node: 10226819216
+        eth_conn {
+          src_chan: 6
+          dst_chan: 6
+        }
+      }
+    }
+    host_connections {
+      dst_host_name: "metal-wh-10"
+      exit_node_connections {
+        src_exit_node: 10226819142
+        dst_exit_node: 10226819281
+        eth_conn {
+          src_chan: 7
+          dst_chan: 1
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 10226819142
+        dst_exit_node: 10226819281
+        eth_conn {
+          src_chan: 6
+        }
+      }
+    }
+    host_connections {
+      dst_host_name: "metal-wh-09"
+      exit_node_connections {
+        src_exit_node: 10226819243
+        dst_exit_node: 10226819236
+        eth_conn {
+          src_chan: 1
+          dst_chan: 1
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 10226819243
+        dst_exit_node: 10226819236
+        eth_conn {
+        }
+      }
+    }
+  }
+  host_connectivity_graph {
+    src_host_name: "metal-wh-11"
+    host_connections {
+      dst_host_name: "metal-wh-12"
+      exit_node_connections {
+        src_exit_node: 10226819216
+        dst_exit_node: 10226819155
+        eth_conn {
+          src_chan: 7
+          dst_chan: 7
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 10226819216
+        dst_exit_node: 10226819155
+        eth_conn {
+          src_chan: 6
+          dst_chan: 6
+        }
+      }
+    }
+    host_connections {
+      dst_host_name: "metal-wh-10"
+      exit_node_connections {
+        src_exit_node: 10226819229
+        dst_exit_node: 10226819238
+        eth_conn {
+          src_chan: 7
+          dst_chan: 7
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 10226819229
+        dst_exit_node: 10226819238
+        eth_conn {
+          src_chan: 6
+          dst_chan: 6
+        }
+      }
+    }
+    host_connections {
+      dst_host_name: "metal-wh-09"
+      exit_node_connections {
+        src_exit_node: 10226819251
+        dst_exit_node: 10226819275
+        eth_conn {
+          src_chan: 1
+          dst_chan: 1
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 10226819251
+        dst_exit_node: 10226819275
+        eth_conn {
+        }
+      }
+    }
+  }
+  host_connectivity_graph {
+    src_host_name: "metal-wh-10"
+    host_connections {
+      dst_host_name: "metal-wh-12"
+      exit_node_connections {
+        src_exit_node: 10226819281
+        dst_exit_node: 10226819142
+        eth_conn {
+          src_chan: 1
+          dst_chan: 7
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 10226819281
+        dst_exit_node: 10226819142
+        eth_conn {
+          dst_chan: 6
+        }
+      }
+    }
+    host_connections {
+      dst_host_name: "metal-wh-11"
+      exit_node_connections {
+        src_exit_node: 10226819238
+        dst_exit_node: 10226819229
+        eth_conn {
+          src_chan: 7
+          dst_chan: 7
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 10226819238
+        dst_exit_node: 10226819229
+        eth_conn {
+          src_chan: 6
+          dst_chan: 6
+        }
+      }
+    }
+    host_connections {
+      dst_host_name: "metal-wh-09"
+      exit_node_connections {
+        src_exit_node: 10226819183
+        dst_exit_node: 10226819075
+        eth_conn {
+          src_chan: 7
+          dst_chan: 7
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 10226819183
+        dst_exit_node: 10226819075
+        eth_conn {
+          src_chan: 6
+          dst_chan: 6
+        }
+      }
+    }
+  }
+  host_connectivity_graph {
+    src_host_name: "metal-wh-09"
+    host_connections {
+      dst_host_name: "metal-wh-12"
+      exit_node_connections {
+        src_exit_node: 10226819236
+        dst_exit_node: 10226819243
+        eth_conn {
+          src_chan: 1
+          dst_chan: 1
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 10226819236
+        dst_exit_node: 10226819243
+        eth_conn {
+        }
+      }
+    }
+    host_connections {
+      dst_host_name: "metal-wh-11"
+      exit_node_connections {
+        src_exit_node: 10226819275
+        dst_exit_node: 10226819251
+        eth_conn {
+          src_chan: 1
+          dst_chan: 1
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 10226819275
+        dst_exit_node: 10226819251
+        eth_conn {
+        }
+      }
+    }
+    host_connections {
+      dst_host_name: "metal-wh-10"
+      exit_node_connections {
+        src_exit_node: 10226819075
+        dst_exit_node: 10226819183
+        eth_conn {
+          src_chan: 7
+          dst_chan: 7
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 10226819075
+        dst_exit_node: 10226819183
+        eth_conn {
+          src_chan: 6
+          dst_chan: 6
+        }
+      }
+    }
+  }
+}
+asic_descriptors {
+  asic_id: 10226819142
+  asic_descriptor {
+    tray_id: 2
+    board_type: 4
+    unique_id: 10226819142
+    host_name: "metal-wh-12"
+  }
+}
+asic_descriptors {
+  asic_id: 14521786451
+  asic_descriptor {
+    tray_id: 3
+    asic_location: 1
+    board_type: 4
+    unique_id: 14521786451
+    host_name: "metal-wh-12"
+  }
+}
+asic_descriptors {
+  asic_id: 10226819129
+  asic_descriptor {
+    tray_id: 1
+    board_type: 4
+    unique_id: 10226819129
+    host_name: "metal-wh-11"
+  }
+}
+asic_descriptors {
+  asic_id: 10226819133
+  asic_descriptor {
+    tray_id: 4
+    board_type: 4
+    unique_id: 10226819133
+    host_name: "metal-wh-12"
+  }
+}
+asic_descriptors {
+  asic_id: 10226819251
+  asic_descriptor {
+    tray_id: 4
+    board_type: 4
+    unique_id: 10226819251
+    host_name: "metal-wh-11"
+  }
+}
+asic_descriptors {
+  asic_id: 14521786525
+  asic_descriptor {
+    tray_id: 2
+    asic_location: 1
+    board_type: 4
+    unique_id: 14521786525
+    host_name: "metal-wh-11"
+  }
+}
+asic_descriptors {
+  asic_id: 14521786425
+  asic_descriptor {
+    tray_id: 1
+    asic_location: 1
+    board_type: 4
+    unique_id: 14521786425
+    host_name: "metal-wh-11"
+  }
+}
+asic_descriptors {
+  asic_id: 10226819229
+  asic_descriptor {
+    tray_id: 2
+    board_type: 4
+    unique_id: 10226819229
+    host_name: "metal-wh-11"
+  }
+}
+asic_descriptors {
+  asic_id: 10226819243
+  asic_descriptor {
+    tray_id: 1
+    board_type: 4
+    unique_id: 10226819243
+    host_name: "metal-wh-12"
+  }
+}
+asic_descriptors {
+  asic_id: 14521786429
+  asic_descriptor {
+    tray_id: 4
+    asic_location: 1
+    board_type: 4
+    unique_id: 14521786429
+    host_name: "metal-wh-12"
+  }
+}
+asic_descriptors {
+  asic_id: 14521786547
+  asic_descriptor {
+    tray_id: 4
+    asic_location: 1
+    board_type: 4
+    unique_id: 14521786547
+    host_name: "metal-wh-11"
+  }
+}
+asic_descriptors {
+  asic_id: 10226819080
+  asic_descriptor {
+    tray_id: 1
+    board_type: 4
+    unique_id: 10226819080
+    host_name: "metal-wh-10"
+  }
+}
+asic_descriptors {
+  asic_id: 10226819281
+  asic_descriptor {
+    tray_id: 4
+    board_type: 4
+    unique_id: 10226819281
+    host_name: "metal-wh-10"
+  }
+}
+asic_descriptors {
+  asic_id: 14521786376
+  asic_descriptor {
+    tray_id: 1
+    asic_location: 1
+    board_type: 4
+    unique_id: 14521786376
+    host_name: "metal-wh-10"
+  }
+}
+asic_descriptors {
+  asic_id: 10226819238
+  asic_descriptor {
+    tray_id: 2
+    board_type: 4
+    unique_id: 10226819238
+    host_name: "metal-wh-10"
+  }
+}
+asic_descriptors {
+  asic_id: 10226819155
+  asic_descriptor {
+    tray_id: 3
+    board_type: 4
+    unique_id: 10226819155
+    host_name: "metal-wh-12"
+  }
+}
+asic_descriptors {
+  asic_id: 14521786577
+  asic_descriptor {
+    tray_id: 4
+    asic_location: 1
+    board_type: 4
+    unique_id: 14521786577
+    host_name: "metal-wh-10"
+  }
+}
+asic_descriptors {
+  asic_id: 10226819183
+  asic_descriptor {
+    tray_id: 3
+    board_type: 4
+    unique_id: 10226819183
+    host_name: "metal-wh-10"
+  }
+}
+asic_descriptors {
+  asic_id: 14521786479
+  asic_descriptor {
+    tray_id: 3
+    asic_location: 1
+    board_type: 4
+    unique_id: 14521786479
+    host_name: "metal-wh-10"
+  }
+}
+asic_descriptors {
+  asic_id: 14521786534
+  asic_descriptor {
+    tray_id: 2
+    asic_location: 1
+    board_type: 4
+    unique_id: 14521786534
+    host_name: "metal-wh-10"
+  }
+}
+asic_descriptors {
+  asic_id: 14521786438
+  asic_descriptor {
+    tray_id: 2
+    asic_location: 1
+    board_type: 4
+    unique_id: 14521786438
+    host_name: "metal-wh-12"
+  }
+}
+asic_descriptors {
+  asic_id: 10226819075
+  asic_descriptor {
+    tray_id: 3
+    board_type: 4
+    unique_id: 10226819075
+    host_name: "metal-wh-09"
+  }
+}
+asic_descriptors {
+  asic_id: 14521786539
+  asic_descriptor {
+    tray_id: 1
+    asic_location: 1
+    board_type: 4
+    unique_id: 14521786539
+    host_name: "metal-wh-12"
+  }
+}
+asic_descriptors {
+  asic_id: 10226819235
+  asic_descriptor {
+    tray_id: 2
+    board_type: 4
+    unique_id: 10226819235
+    host_name: "metal-wh-09"
+  }
+}
+asic_descriptors {
+  asic_id: 14521786371
+  asic_descriptor {
+    tray_id: 3
+    asic_location: 1
+    board_type: 4
+    unique_id: 14521786371
+    host_name: "metal-wh-09"
+  }
+}
+asic_descriptors {
+  asic_id: 10226819216
+  asic_descriptor {
+    tray_id: 3
+    board_type: 4
+    unique_id: 10226819216
+    host_name: "metal-wh-11"
+  }
+}
+asic_descriptors {
+  asic_id: 10226819275
+  asic_descriptor {
+    tray_id: 4
+    board_type: 4
+    unique_id: 10226819275
+    host_name: "metal-wh-09"
+  }
+}
+asic_descriptors {
+  asic_id: 14521786531
+  asic_descriptor {
+    tray_id: 2
+    asic_location: 1
+    board_type: 4
+    unique_id: 14521786531
+    host_name: "metal-wh-09"
+  }
+}
+asic_descriptors {
+  asic_id: 10226819236
+  asic_descriptor {
+    tray_id: 1
+    board_type: 4
+    unique_id: 10226819236
+    host_name: "metal-wh-09"
+  }
+}
+asic_descriptors {
+  asic_id: 14521786532
+  asic_descriptor {
+    tray_id: 1
+    asic_location: 1
+    board_type: 4
+    unique_id: 14521786532
+    host_name: "metal-wh-09"
+  }
+}
+asic_descriptors {
+  asic_id: 14521786512
+  asic_descriptor {
+    tray_id: 3
+    asic_location: 1
+    board_type: 4
+    unique_id: 14521786512
+    host_name: "metal-wh-11"
+  }
+}
+asic_descriptors {
+  asic_id: 14521786571
+  asic_descriptor {
+    tray_id: 4
+    asic_location: 1
+    board_type: 4
+    unique_id: 14521786571
+    host_name: "metal-wh-09"
+  }
+}
+host_to_mobo_name {
+  host_name: "metal-wh-12"
+  mobo_name: "X12DPG-QT6"
+}
+host_to_mobo_name {
+  host_name: "metal-wh-11"
+  mobo_name: "X12DPG-QT6"
+}
+host_to_mobo_name {
+  host_name: "metal-wh-10"
+  mobo_name: "X12DPG-QT6"
+}
+host_to_mobo_name {
+  host_name: "metal-wh-09"
+  mobo_name: "X12DPG-QT6"
+}
+host_to_rank {
+  host_name: "metal-wh-12"
+  rank: 3
+}
+host_to_rank {
+  host_name: "metal-wh-11"
+  rank: 2
+}
+host_to_rank {
+  host_name: "metal-wh-10"
+  rank: 1
+}
+host_to_rank {
+  host_name: "metal-wh-09"
+}
+exit_node_connection_table {
+  host_name: "metal-wh-12"
+  exit_connections {
+    src_exit_node: 10226819243
+    dst_exit_node: 10226819236
+    eth_conn {
+      src_chan: 1
+      dst_chan: 1
+    }
+  }
+  exit_connections {
+    src_exit_node: 10226819243
+    dst_exit_node: 10226819236
+    eth_conn {
+    }
+  }
+  exit_connections {
+    src_exit_node: 10226819155
+    dst_exit_node: 10226819216
+    eth_conn {
+      src_chan: 7
+      dst_chan: 7
+    }
+  }
+  exit_connections {
+    src_exit_node: 10226819155
+    dst_exit_node: 10226819216
+    eth_conn {
+      src_chan: 6
+      dst_chan: 6
+    }
+  }
+  exit_connections {
+    src_exit_node: 10226819142
+    dst_exit_node: 10226819281
+    eth_conn {
+      src_chan: 7
+      dst_chan: 1
+    }
+  }
+  exit_connections {
+    src_exit_node: 10226819142
+    dst_exit_node: 10226819281
+    eth_conn {
+      src_chan: 6
+    }
+  }
+}
+exit_node_connection_table {
+  host_name: "metal-wh-11"
+  exit_connections {
+    src_exit_node: 10226819251
+    dst_exit_node: 10226819275
+    eth_conn {
+      src_chan: 1
+      dst_chan: 1
+    }
+  }
+  exit_connections {
+    src_exit_node: 10226819251
+    dst_exit_node: 10226819275
+    eth_conn {
+    }
+  }
+  exit_connections {
+    src_exit_node: 10226819229
+    dst_exit_node: 10226819238
+    eth_conn {
+      src_chan: 7
+      dst_chan: 7
+    }
+  }
+  exit_connections {
+    src_exit_node: 10226819229
+    dst_exit_node: 10226819238
+    eth_conn {
+      src_chan: 6
+      dst_chan: 6
+    }
+  }
+  exit_connections {
+    src_exit_node: 10226819216
+    dst_exit_node: 10226819155
+    eth_conn {
+      src_chan: 7
+      dst_chan: 7
+    }
+  }
+  exit_connections {
+    src_exit_node: 10226819216
+    dst_exit_node: 10226819155
+    eth_conn {
+      src_chan: 6
+      dst_chan: 6
+    }
+  }
+}
+exit_node_connection_table {
+  host_name: "metal-wh-10"
+  exit_connections {
+    src_exit_node: 10226819281
+    dst_exit_node: 10226819142
+    eth_conn {
+      src_chan: 1
+      dst_chan: 7
+    }
+  }
+  exit_connections {
+    src_exit_node: 10226819281
+    dst_exit_node: 10226819142
+    eth_conn {
+      dst_chan: 6
+    }
+  }
+  exit_connections {
+    src_exit_node: 10226819238
+    dst_exit_node: 10226819229
+    eth_conn {
+      src_chan: 7
+      dst_chan: 7
+    }
+  }
+  exit_connections {
+    src_exit_node: 10226819238
+    dst_exit_node: 10226819229
+    eth_conn {
+      src_chan: 6
+      dst_chan: 6
+    }
+  }
+  exit_connections {
+    src_exit_node: 10226819183
+    dst_exit_node: 10226819075
+    eth_conn {
+      src_chan: 7
+      dst_chan: 7
+    }
+  }
+  exit_connections {
+    src_exit_node: 10226819183
+    dst_exit_node: 10226819075
+    eth_conn {
+      src_chan: 6
+      dst_chan: 6
+    }
+  }
+}
+exit_node_connection_table {
+  host_name: "metal-wh-09"
+  exit_connections {
+    src_exit_node: 10226819275
+    dst_exit_node: 10226819251
+    eth_conn {
+      src_chan: 1
+      dst_chan: 1
+    }
+  }
+  exit_connections {
+    src_exit_node: 10226819275
+    dst_exit_node: 10226819251
+    eth_conn {
+    }
+  }
+  exit_connections {
+    src_exit_node: 10226819236
+    dst_exit_node: 10226819243
+    eth_conn {
+      src_chan: 1
+      dst_chan: 1
+    }
+  }
+  exit_connections {
+    src_exit_node: 10226819236
+    dst_exit_node: 10226819243
+    eth_conn {
+    }
+  }
+  exit_connections {
+    src_exit_node: 10226819075
+    dst_exit_node: 10226819183
+    eth_conn {
+      src_chan: 7
+      dst_chan: 7
+    }
+  }
+  exit_connections {
+    src_exit_node: 10226819075
+    dst_exit_node: 10226819183
+    eth_conn {
+      src_chan: 6
+      dst_chan: 6
+    }
+  }
+}

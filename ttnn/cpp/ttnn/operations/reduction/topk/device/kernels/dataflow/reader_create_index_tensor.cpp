@@ -1,0 +1,71 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/cpp/ttnn/kernel_lib/index_tile_dataflow.hpp"
+
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
+
+#include <cstdint>
+
+void kernel_main() {
+    // Runtime arguments
+    const uint32_t id = get_arg(args::id);
+    const uint32_t work_per_core = get_arg(args::work_per_core);
+
+    // Compile time arguments
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t total_number_of_cores = get_arg(args::total_number_of_cores);
+    constexpr bool uint16_output = get_arg(args::uint16_output) == 1;
+
+#if not GENERATE_INDICES
+    // Precomputed indices tensor accessor
+    const auto indices_accessor = TensorAccessor(tensor::indices);
+#endif  // not GENERATE_INDICES
+
+    // Constants
+    constexpr uint32_t onetile = 1;
+
+    // Tensor accessor
+    const auto inout_tensor_accessor = TensorAccessor(tensor::input);
+
+    const Noc noc;
+    DataflowBuffer dfb_in0(dfb::input);
+    DataflowBuffer dfb_index(dfb::index);
+    const uint32_t tile_bytes_in0 = dfb_in0.get_entry_size();
+#if not GENERATE_INDICES
+    const uint32_t tile_bytes_index = dfb_index.get_entry_size();
+#endif
+
+    // Read data and generate indices
+    for (uint32_t core_loop = 0; core_loop < work_per_core; core_loop++) {
+        const uint32_t row = id + (core_loop * total_number_of_cores);
+        for (uint32_t w = 0; w < Wt; ++w) {
+            dfb_in0.reserve_back(onetile);
+            noc.async_read(
+                inout_tensor_accessor, dfb_in0, tile_bytes_in0, {.page_id = (row * Wt) + w}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+
+            dfb_in0.push_back(onetile);
+#if GENERATE_INDICES
+            if (uint16_output) {
+                dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index, w);
+            } else {
+                dataflow_kernel_lib::generate_index_tile<uint32_t>(dfb::index, w);
+            }
+#else
+            // Read precomputed indices to dataflow buffer
+            dfb_index.reserve_back(onetile);
+            noc.async_read(
+                indices_accessor, dfb_index, tile_bytes_index, {.page_id = row * Wt + w}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            dfb_index.push_back(onetile);
+#endif  // GENERATE_INDICES
+        }  // w loop
+    }  // core_loop loop
+}

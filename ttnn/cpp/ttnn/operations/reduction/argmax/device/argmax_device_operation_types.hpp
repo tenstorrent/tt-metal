@@ -1,0 +1,26 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "ttnn/tensor/tensor.hpp"
+
+#include <optional>
+
+namespace ttnn::prim {
+
+struct ArgmaxParams {
+    tt::tt_metal::DataType output_dtype{};
+    std::optional<int> dim;
+    bool keepdim{};
+    std::optional<CoreRangeSet> sub_core_grids;
+    tt::tt_metal::MemoryConfig output_mem_config;
+    std::optional<bool> enable_secondary_dm;
+};
+
+struct ArgmaxInputs {
+    Tensor input;
+    std::optional<Tensor> optional_output_tensor;
+};
+
+}  // namespace ttnn::prim

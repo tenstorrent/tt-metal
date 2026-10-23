@@ -1,0 +1,46 @@
+name: "(SC4) Health check & Fabric Test"
+
+on:
+  schedule:
+    - cron: "0 5 * * *" # Runs every day at 5:00 AM UTC
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+run-name: Fabric Test on a BH Quad
+
+# Parent workflow: build once, then run the pipeline_reorg matrix via
+# fabric-multihost-exabox-impl.yaml (same pattern as models-e2e-tests-impl →
+# models-e2e-tests-multihost-impl). Tests live in
+# tests/pipeline_reorg/fabric_multihost_exabox_tests.yaml.
+jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  build-artifact:
+    needs: check-harbor
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-wheel: true
+      platform: "Ubuntu 22.04"
+      skip-tt-train: false
+      ref: ${{ github.sha }}
+
+  fabric-sc4-tests:
+    name: "SC4 Fabric Tests"
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/fabric-multihost-exabox-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      sp-config: sc4

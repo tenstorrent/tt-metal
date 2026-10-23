@@ -1,0 +1,21 @@
+# Reduce build context - exclude large/unnecessary directories
+# Git history (largest impact)
+.git/
+
+# Source code (mounted at runtime)
+tt_llk_*/
+tests/
+
+# Build artifacts
+build/
+
+# Python cache
+__pycache__/
+.pytest_cache/
+
+# All CI scripts excluded by default
+.github/scripts/
+
+# Only keep what's needed for building the image
+!.github/scripts/install-*.sh
+!tests/requirements.txt

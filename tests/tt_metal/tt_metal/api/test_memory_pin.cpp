@@ -1,0 +1,205 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <gmock/gmock.h>
+
+#include <functional>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include <tt-metalium/memory_pin.hpp>
+#include "common/memory_pin_impl.hpp"
+
+namespace tt::tt_metal {
+namespace {
+
+TEST(MemoryPinTest, CPU_Lifecycle) {
+    int inc_count = 0;
+    int dec_count = 0;
+    {
+        MemoryPin pin([&]() { inc_count++; }, [&]() { dec_count++; });
+        EXPECT_EQ(inc_count, 1);
+        EXPECT_EQ(dec_count, 0);
+    }
+    EXPECT_EQ(inc_count, 1);
+    EXPECT_EQ(dec_count, 1);
+}
+
+TEST(MemoryPinTest, CPU_EmptyPin) {
+    {
+        MemoryPin pin;
+        EXPECT_EQ(pin, nullptr);
+    }
+
+    {
+        int inc_count = 0;
+        int dec_count = 0;
+        auto pin = MemoryPin([&]() { inc_count++; }, [&]() { dec_count++; });
+        EXPECT_NE(pin, nullptr);
+    }
+}
+
+TEST(MemoryPinTest, CPU_FromSharedPtr) {
+    auto ptr = std::make_shared<int>(42);
+    MemoryPin pin(ptr);
+
+    EXPECT_EQ(ptr.use_count(), 2);
+
+    {
+        auto pin2 = pin;
+        EXPECT_EQ(ptr.use_count(), 3);
+    }
+
+    EXPECT_EQ(ptr.use_count(), 2);
+}
+
+TEST(MemoryPinTest, CPU_FinalReleaseCallbackRunsBeforeLastDecrement) {
+    std::vector<std::string> events;
+    {
+        MemoryPin pin([]() {}, [&events]() { events.push_back("decrement"); });
+        pin.impl().add_final_release_callback([&events]() { events.push_back("final_release"); });
+
+        {
+            MemoryPin pin_copy(pin);
+        }
+        EXPECT_THAT(events, ::testing::ElementsAre("decrement"));
+    }
+
+    EXPECT_THAT(events, ::testing::ElementsAre("decrement", "final_release", "decrement"));
+}
+
+TEST(MemoryPinTest, CPU_CopyConstruction) {
+    int inc_count = 0;
+    int dec_count = 0;
+    MemoryPin pin1([&]() { inc_count++; }, [&]() { dec_count++; });
+    EXPECT_EQ(inc_count, 1);
+    EXPECT_EQ(dec_count, 0);
+    {
+        MemoryPin pin2(pin1);
+        EXPECT_EQ(inc_count, 2);
+        EXPECT_EQ(dec_count, 0);
+    }
+    EXPECT_EQ(inc_count, 2);
+    EXPECT_EQ(dec_count, 1);
+}
+
+TEST(MemoryPinTest, CPU_CopyAssignment) {
+    int inc_count1 = 0;
+    int dec_count1 = 0;
+    int inc_count2 = 0;
+    int dec_count2 = 0;
+
+    MemoryPin pin1([&]() { inc_count1++; }, [&]() { dec_count1++; });
+    EXPECT_EQ(inc_count1, 1);
+    EXPECT_EQ(dec_count1, 0);
+
+    {
+        MemoryPin pin2([&]() { inc_count2++; }, [&]() { dec_count2++; });
+        EXPECT_EQ(inc_count2, 1);
+        EXPECT_EQ(dec_count2, 0);
+
+        pin2 = pin1;
+        EXPECT_EQ(inc_count1, 2);
+        EXPECT_EQ(dec_count1, 0);
+        EXPECT_EQ(inc_count2, 1);
+        EXPECT_EQ(dec_count2, 1);
+    }
+    EXPECT_EQ(inc_count1, 2);
+    EXPECT_EQ(dec_count1, 1);
+    EXPECT_EQ(inc_count2, 1);
+    EXPECT_EQ(dec_count2, 1);
+}
+
+TEST(MemoryPinTest, CPU_CopyAssignmentToEmpty) {
+    int inc_count = 0;
+    int dec_count = 0;
+    MemoryPin pin1([&]() { inc_count++; }, [&]() { dec_count++; });
+    EXPECT_EQ(inc_count, 1);
+    EXPECT_EQ(dec_count, 0);
+
+    {
+        MemoryPin pin2;
+        pin2 = pin1;
+        EXPECT_EQ(inc_count, 2);
+        EXPECT_EQ(dec_count, 0);
+    }
+    EXPECT_EQ(inc_count, 2);
+    EXPECT_EQ(dec_count, 1);
+}
+
+TEST(MemoryPinTest, CPU_MoveConstruction) {
+    int inc_count = 0;
+    int dec_count = 0;
+    MemoryPin pin1([&]() { inc_count++; }, [&]() { dec_count++; });
+    EXPECT_EQ(inc_count, 1);
+    EXPECT_EQ(dec_count, 0);
+
+    {
+        MemoryPin pin2(std::move(pin1));
+        EXPECT_EQ(inc_count, 1);
+        EXPECT_EQ(dec_count, 0);
+        // NOLINTNEXTLINE(bugprone-use-after-move)
+        EXPECT_EQ(pin1, nullptr);
+    }
+    EXPECT_EQ(inc_count, 1);
+    EXPECT_EQ(dec_count, 1);
+}
+
+TEST(MemoryPinTest, CPU_MoveAssignment) {
+    int inc_count1 = 0;
+    int dec_count1 = 0;
+    int inc_count2 = 0;
+    int dec_count2 = 0;
+
+    MemoryPin pin1([&]() { inc_count1++; }, [&]() { dec_count1++; });
+    EXPECT_EQ(inc_count1, 1);
+    EXPECT_EQ(dec_count1, 0);
+
+    {
+        MemoryPin pin2([&]() { inc_count2++; }, [&]() { dec_count2++; });
+        EXPECT_EQ(inc_count2, 1);
+        EXPECT_EQ(dec_count2, 0);
+
+        pin2 = std::move(pin1);
+        EXPECT_EQ(inc_count1, 1);
+        EXPECT_EQ(dec_count1, 0);
+        EXPECT_EQ(inc_count2, 1);
+        EXPECT_EQ(dec_count2, 1);
+        // NOLINTNEXTLINE(bugprone-use-after-move)
+        EXPECT_EQ(pin1, nullptr);
+    }
+    EXPECT_EQ(inc_count1, 1);
+    EXPECT_EQ(dec_count1, 1);
+    EXPECT_EQ(inc_count2, 1);
+    EXPECT_EQ(dec_count2, 1);
+}
+
+TEST(MemoryPinTest, CPU_MoveAssignmentToEmpty) {
+    int inc_count = 0;
+    int dec_count = 0;
+    MemoryPin pin1([&]() { inc_count++; }, [&]() { dec_count++; });
+    EXPECT_EQ(inc_count, 1);
+    EXPECT_EQ(dec_count, 0);
+
+    {
+        MemoryPin pin2;
+        EXPECT_NE(pin1, nullptr);
+        EXPECT_EQ(pin2, nullptr);
+
+        pin2 = std::move(pin1);
+
+        EXPECT_EQ(inc_count, 1);
+        EXPECT_EQ(dec_count, 0);
+        // NOLINTNEXTLINE(bugprone-use-after-move)
+        EXPECT_EQ(pin1, nullptr);
+        EXPECT_NE(pin2, nullptr);
+    }
+    EXPECT_EQ(inc_count, 1);
+    EXPECT_EQ(dec_count, 1);
+}
+
+}  // namespace
+}  // namespace tt::tt_metal

@@ -1,0 +1,83 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <tt_stl/fmt.hpp>
+#include <tt_stl/assert.hpp>
+#include <core_coord.hpp>
+#include <sub_device.hpp>
+#include <tt_stl/span.hpp>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <utility>
+
+#include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
+#include "impl/sub_device/sub_device_impl.hpp"
+
+namespace tt::tt_metal {
+
+// SubDeviceImpl implementation
+
+SubDeviceImpl::SubDeviceImpl(const std::array<CoreRangeSet, NumHalProgrammableCoreTypes>& cores) : cores_(cores) {
+    this->validate();
+}
+
+SubDeviceImpl::SubDeviceImpl(ttsl::Span<const CoreRangeSet> cores) {
+    TT_FATAL(cores.size() <= this->cores_.size(), "Too many core types for SubDevice");
+    std::copy(cores.begin(), cores.end(), this->cores_.begin());
+    this->validate();
+}
+
+SubDeviceImpl::SubDeviceImpl(std::array<CoreRangeSet, NumHalProgrammableCoreTypes>&& cores) : cores_(std::move(cores)) {
+    this->validate();
+}
+
+void SubDeviceImpl::validate() const {
+    TT_FATAL(
+        this->cores_[static_cast<uint32_t>(HalProgrammableCoreType::IDLE_ETH)].empty(),
+        "CoreType IDLE_ETH is not allowed in SubDevice");
+}
+
+bool SubDeviceImpl::has_core_type(HalProgrammableCoreType core_type) const {
+    return !this->cores_[static_cast<uint32_t>(core_type)].empty();
+}
+
+uint32_t SubDeviceImpl::num_cores(HalProgrammableCoreType core_type) const {
+    return this->cores_[static_cast<uint32_t>(core_type)].num_cores();
+}
+
+const std::array<CoreRangeSet, NumHalProgrammableCoreTypes>& SubDeviceImpl::cores() const { return this->cores_; }
+
+const CoreRangeSet& SubDeviceImpl::cores(HalProgrammableCoreType core_type) const {
+    return this->cores_[static_cast<uint32_t>(core_type)];
+}
+
+// SubDevice implementation
+
+SubDevice::SubDevice(ttsl::Span<const CoreRangeSet> cores) : pimpl_(std::make_unique<SubDeviceImpl>(cores)) {}
+
+SubDevice::SubDevice(SubDeviceImpl&& impl) : pimpl_(std::make_unique<SubDeviceImpl>(std::move(impl))) {}
+
+SubDevice::SubDevice(const SubDevice& other) :
+    pimpl_(other.pimpl_ ? std::make_unique<SubDeviceImpl>(*other.pimpl_) : nullptr) {}
+
+SubDevice& SubDevice::operator=(const SubDevice& other) {
+    if (this != &other) {
+        pimpl_ = other.pimpl_ ? std::make_unique<SubDeviceImpl>(*other.pimpl_) : nullptr;
+    }
+    return *this;
+}
+
+SubDevice::SubDevice(SubDevice&& other) noexcept = default;
+
+SubDevice& SubDevice::operator=(SubDevice&& other) noexcept = default;
+
+SubDevice::~SubDevice() = default;
+
+SubDeviceImpl* SubDevice::impl() { return pimpl_.get(); }
+
+const SubDeviceImpl* SubDevice::impl() const { return pimpl_.get(); }
+
+}  // namespace tt::tt_metal

@@ -1,0 +1,246 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import math
+import torch
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+
+
+class LMHead(LightweightModule):
+    def __init__(
+        self,
+        args,
+        mesh_device,
+        dtype,
+        state_dict,
+        state_dict_prefix,
+        weight_cache_path,
+        max_columns_per_device=128256 // 4,  # larger values per device lead to OOM or hangs
+        tt_ccl=None,
+        prefetcher_setup=None,
+    ):
+        super().__init__()
+        self.args = args
+        self.mesh_device = mesh_device
+        self.dtype = dtype
+        self.vocab_size = args.vocab_size
+        self.padded_vocab_size = args.padded_vocab_size
+        self.num_devices = args.num_devices
+        self.tt_ccl = tt_ccl
+
+        size_per_device = self.padded_vocab_size // self.num_devices
+        num_splits = math.ceil(size_per_device / max_columns_per_device)
+
+        split_sizes = [min(size_per_device, max_columns_per_device)] * (num_splits - 1)
+        split_sizes.append(size_per_device - sum(split_sizes))  # remaining columns
+
+        # Split the output weights
+        torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"].permute(1, 0)
+
+        self.output_weights = []
+        self.output_weights_decode = []
+        self.output_weights_prefill = []
+        num_splits = 1
+        # Blackhole stores the decode ring weight DRAM-interleaved (see memory_config_decode
+        # below); encode the layout in the cache name so the tensor never collides with a
+        # previously cached width-sharded one.
+        _is_blackhole = getattr(args, "is_blackhole", False)
+        _decode_suffix = "_dram_interleaved" if _is_blackhole else "_dram_width_sharded"
+        cache_file_name_decode = (
+            None
+            if args.dummy_weights
+            else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_0{_decode_suffix}_decode"
+        )
+        cache_file_name_prefill = (
+            None
+            if args.dummy_weights
+            else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_0_dram_prefill"
+        )
+        # On Blackhole (no prefetcher) decode uses a per-device matmul on the unpadded
+        # column-fractured K (matching the attention QKV no-prefetch path), so it does not
+        # require the ring-padded weight.
+        self.no_prefetcher = not args.use_prefetcher
+        padded_lm_head = torch.zeros(1, 1, args.dim, self.padded_vocab_size)
+        padded_lm_head[:, :, :, : self.vocab_size] = torch_output_weights
+
+        if args.is_70b:
+            # The ring matmul's DRAM-width-sharded in1 reader assigns each ring core a DRAM bank by
+            # physical y-proximity plus a ring_idx%N offset — a mapping hand-co-designed with the WH
+            # bank layout and the LM_HEAD_OUTPUT_GRID core order. On Blackhole (8 banks, 24-ring,
+            # 16-core-derived shard widths) that co-design does not hold and every core reads the
+            # wrong weight slice, garbling all logits. Store the weight DRAM-interleaved instead:
+            # the interleaved reader addresses tiles globally from the ring index
+            # (correct-by-construction), and requires LM_HEAD_OUT_RING_MEMCFG to use the input-grid
+            # core order (see qwen_model_config).
+            memory_config_decode = (
+                ttnn.DRAM_MEMORY_CONFIG
+                if _is_blackhole
+                else args.create_dram_sharded_mem_config_lm_head(k=args.dim // 4, n=self.padded_vocab_size // 8)
+            )
+            memory_config_prefill = ttnn.DRAM_MEMORY_CONFIG
+        else:
+            memory_config = (
+                ttnn.DRAM_MEMORY_CONFIG
+                if args.dim == 2048
+                else args.create_dram_sharded_mem_config(k=args.dim // 4, n=self.padded_vocab_size // 8)
+            )
+
+        for i in range(num_splits):
+            index = i * self.padded_vocab_size // num_splits
+            self.output_weights_decode.append(  # (2k, 16k) 128* 1024
+                ttnn.as_tensor(
+                    padded_lm_head[..., index : index + self.padded_vocab_size // num_splits],
+                    device=mesh_device,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(3, 2), mesh_shape=args.cluster_shape),
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=dtype,
+                    memory_config=memory_config_decode,
+                    cache_file_name=cache_file_name_decode,
+                )
+            )
+            self.output_weights_prefill.append(  # (2k, 16k) 128* 1024
+                ttnn.as_tensor(
+                    padded_lm_head[..., index : index + self.padded_vocab_size // num_splits],
+                    device=mesh_device,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(3, 2), mesh_shape=args.cluster_shape),
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=dtype,
+                    memory_config=memory_config_prefill,
+                    cache_file_name=cache_file_name_prefill,
+                )
+            )
+
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+            dst_full_sync_en=True,
+        )
+
+        self.program_configs = [args.model_config["LM_HEAD_TG_RING_PROGCFG"]] * num_splits
+        self.output_memory_config = args.model_config["LM_HEAD_OUT_RING_MEMCFG"]
+        self.prefill_pc = args.model_config["LM_HEAD_PREFILL_PROGCFG"]
+
+    def forward_on_host(self, x: ttnn.Tensor):
+        x_torch = ttnn.to_torch(
+            x,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                self.mesh_device,
+                dims=(0, 3),
+                mesh_shape=(8, 4),
+            ),
+        )  # [8, 1, 32, 2048 * 4]
+        x_torch = x_torch[:1]
+
+        weight_torch = ttnn.to_torch(
+            self.output_weights[0],
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device=self.mesh_device, dims=(3, 2), mesh_shape=list(self.mesh_device.shape)
+            ),
+        )
+
+        output_torch = torch.matmul(x_torch.float(), weight_torch.float())
+
+        output = ttnn.as_tensor(
+            output_torch,
+            dtype=ttnn.bfloat8_b,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device=self.mesh_device, dims=(3, None), mesh_shape=list(self.mesh_device.shape)
+            ),
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        return [output]
+
+    def forward(self, x: ttnn.Tensor, worker_sub_device_id, mode):
+        outputs = []
+        num_links = 3
+        if mode == "decode" and self.no_prefetcher:
+            num_links = self.args.model_config["GALAXY_NUM_LINKS"]
+            # Blackhole no-prefetch: per-device matmul on the unpadded column-fractured K
+            # (the ring matmul is prefetcher-only). Each column produces a partial logits tensor;
+            # the cross-column reduction is done by line_all_reduce below.
+            x_in = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            for weight in self.output_weights_prefill:
+                output = ttnn.linear(
+                    x_in,
+                    weight,
+                    compute_kernel_config=self.compute_kernel_config,
+                    program_config=None,
+                    core_grid=None,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat8_b,
+                )
+                output = ttnn.to_memory_config(output, self.args.model_config["LM_HEAD_OUT_RING_RESHARD_MEMCFG"])
+                outputs.append(output)
+            if x_in is not x:
+                ttnn.deallocate(x_in)
+        elif mode == "decode":
+            num_links = self.args.model_config["GALAXY_NUM_LINKS"]
+            for weight, pc in zip(self.output_weights_decode, self.program_configs):
+                x = ttnn.to_memory_config(x, self.args.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"])
+                output = ttnn.linear(
+                    x,
+                    weight,
+                    compute_kernel_config=self.compute_kernel_config,
+                    program_config=pc,
+                    memory_config=self.output_memory_config,
+                    dtype=ttnn.bfloat8_b,
+                    sub_device_id=worker_sub_device_id,
+                )
+                output = ttnn.to_memory_config(output, self.args.model_config["LM_HEAD_OUT_RING_RESHARD_MEMCFG"])
+
+                outputs.append(output)
+        else:
+            for weight, pc in zip(self.output_weights_prefill, self.program_configs):
+                output = ttnn.linear(
+                    x,
+                    weight,
+                    compute_kernel_config=self.compute_kernel_config,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    program_config=self.prefill_pc,
+                    dtype=ttnn.bfloat8_b,
+                )
+                # Minimal matmul is not giving any performance improvement over linear
+                # output = ttnn.experimental.minimal_matmul(
+                #     input_tensor=x,
+                #     weight_tensor=weight,
+                #     config=self.prefill_pc,
+                #     dtype=ttnn.bfloat8_b,
+                #     compute_kernel_config=self.compute_kernel_config,
+                #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # )
+                x.deallocate(True)
+                outputs.append(output)
+
+        # Blackhole galaxy has only 2 fabric links (vs Wormhole's 4), which roughly doubles the
+        # all_reduce_async reduction scratch CB. For the wide lm_head logits that CB no longer fits
+        # beside the full-worker-grid resident decode buffers on any worker column, so the async
+        # all-reduce fails to allocate. Route Blackhole through the stable all_gather + local reduce
+        # (the same pattern prefill uses): it avoids the oversized reduction CB entirely.
+        lm_head_bh_gather_reduce = mode == "decode" and getattr(self.args, "is_blackhole", False)
+        outputs_reduced = []
+        for output in outputs:
+            if lm_head_bh_gather_reduce:
+                output_reduced = self.tt_ccl.line_all_reduce_gather_reduce(
+                    output,
+                    cluster_axis=1,
+                    num_links=num_links,
+                    memory_config=output.memory_config(),
+                )
+            else:
+                output_reduced = self.tt_ccl.line_all_reduce(
+                    output,
+                    cluster_axis=1,
+                    num_links=num_links,
+                    memory_config=output.memory_config(),
+                    lm_head=True,
+                    buffer_key="LM_HEAD",
+                )  # self.output_memory_config
+            outputs_reduced.append(ttnn.sharded_to_interleaved(output_reduced, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+        return outputs_reduced

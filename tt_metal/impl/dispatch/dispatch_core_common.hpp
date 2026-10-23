@@ -1,0 +1,65 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+#include <optional>
+
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>  // tt::ChipId
+#include <umd/device/types/core_coordinates.hpp>          // CoreType
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+
+namespace tt::tt_metal {
+
+class MetalEnvImpl;
+
+enum DispatchWorkerType : uint32_t {
+    PREFETCH = 0,
+    PREFETCH_HD = 1,
+    PREFETCH_H = 2,
+    PREFETCH_D = 3,
+    DISPATCH = 4,
+    DISPATCH_HD = 5,
+    DISPATCH_H = 6,
+    DISPATCH_D = 7,
+    DISPATCH_S = 8,
+    FABRIC_MUX = 17,         // Downstream from MMIO to remote mux. Tunnel index is required.
+    RETURN_FABRIC_MUX = 18,  // Upstream from remote to MMIO mux. Tunnel index will be determined from the device id.
+    COUNT,
+};
+
+struct CommandQueueDispatchLayout {
+    // Whether a CQ's FD kernels are on the same dispatch core
+    bool fd_kernels_on_same_core;
+    // Number of CQs assigned to each dispatch core
+    uint8_t num_cqs_per_core;
+};
+
+CoreType get_core_type_from_config(const DispatchCoreConfig& config);
+
+// Resolve effective dispatch core type (Quasar dispatch-engine vs interim Tensix; WH/BH from config).
+CoreType resolve_dispatch_core_type(
+    MetalEnvImpl& env, tt::ChipId device_id, const DispatchCoreConfig& dispatch_core_config);
+
+// Offline-safe resolution: WH/BH map DispatchCoreType to CoreType. Quasar DISPATCH vs WORKER
+// depends on the SoC descriptor and TT_METAL_TENSIX_DISPATCH_CORES, so this overload throws
+// rather than silently emitting WORKER.
+CoreType resolve_dispatch_core_type(tt::ARCH arch, DispatchCoreType dispatch_core_type);
+
+// Resolve the dispatch core axis from a DispatchCoreConfig without depending on MetalContext.
+// Uses the config's explicit axis if set; otherwise falls back to arch-based resolution.
+DispatchCoreAxis resolve_dispatch_core_axis(
+    const DispatchCoreConfig& config, tt::ARCH arch, tt_fabric::FabricTensixConfig fabric_tensix_config);
+
+// Resolve a complete dispatch core config from explicit platform properties and optional caller preferences.
+DispatchCoreConfig resolve_dispatch_core_config(
+    tt::ARCH arch,
+    tt_fabric::FabricTensixConfig fabric_tensix_config,
+    std::optional<DispatchCoreType> type = std::nullopt,
+    std::optional<DispatchCoreAxis> axis = std::nullopt);
+
+}  // namespace tt::tt_metal

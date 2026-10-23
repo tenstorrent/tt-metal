@@ -1,0 +1,187 @@
+name: "(Tier 1) Models End-To-End Tests"
+
+on:
+  schedule:
+    # Once a day at 02:00 UTC — all models, all SKUs
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Select model to test"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - llama3.1-8b
+          - llama3.1-8b-dp-galaxy
+          - llama3.3-70b-galaxy
+          - qwen3-32b-galaxy
+          - qwen3.6-27b
+          - qwen3.6-35b-a3b
+          - gpt-oss-120b
+          - whisper
+          - gemma-4-12b
+          - gemma-4-26b-a4b
+          - gemma-4-31b
+          - flux.1-schnell
+          - flux.1-dev
+          - flux.2-dev
+          - wan-2.2-t2v
+          - wan-2.2-i2v
+          - ltx-2.3-pro-t2v
+          - ltx-2.3-fast-t2v
+          - ltx-2.3-pro-i2v
+          - ltx-2.3-fast-i2v
+          - deepseek-v3-tg
+          - deepseek-v3-b1
+          - z-image-turbo
+          - resnet50
+      sku:
+        description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - "wh_n150 (N150)"
+          - "wh_n300 (N300)"
+          - "wh_llmbox (T3000)"
+          - "wh_llmbox_perf (T3000 perf)"
+          - "wh_galaxy (WH Galaxy)"
+          - "wh_galaxy_perf (WH Galaxy perf)"
+          - "bh_p150 (P150)"
+          - "bh_p300 (P300)"
+          - "bh_quietbox_2 (BH QB2)"
+          - "bh_galaxy (BH Galaxy)"
+          - "bh_sc1 (BH Single Galaxy)"
+          - "bh_sc4 (BH Supercluster 4)"
+          # Dispatch-only: excluded from scheduled ALL_SKUS so cron runs don't allocate
+          # scarce SC16 hardware. Enabled in package-and-release via release-build-test-publish.
+          - "bh_sc16 (BH Supercluster 16)"
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
+      mlperf-write-access:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable read-write access to /mnt/MLPerf (e.g. to regenerate tensor cache). Default is read-only."
+
+permissions:
+  packages: write
+  contents: write
+
+run-name: "(Tier 1) Models E2E${{ github.event_name == 'schedule' && ' [scheduled]' || '' }}"
+
+jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+  resolve-skus:
+    runs-on: ubuntu-slim
+    outputs:
+      enabled-skus: ${{ steps.resolve.outputs.enabled-skus }}
+      model: ${{ steps.resolve.outputs.model }}
+    steps:
+      - name: Resolve SKU and model selection
+        id: resolve
+        run: |
+          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p300,bh_quietbox_2,bh_galaxy,bh_sc1,bh_sc4"
+          EVENT="${{ github.event_name }}"
+          if [[ "$EVENT" == "workflow_dispatch" ]]; then
+            SKU_INPUT="${{ inputs.sku || 'all' }}"
+            if [[ "$SKU_INPUT" == "all" ]]; then
+              echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
+            else
+              SKU_NAME=$(echo "$SKU_INPUT" | sed 's/ (.*//')
+              echo "enabled-skus=$SKU_NAME" >> $GITHUB_OUTPUT
+            fi
+            echo "model=${{ inputs.model }}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          # Scheduled runs: all models, all SKUs
+          echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
+          echo "model=all" >> $GITHUB_OUTPUT
+  build-artifact:
+    needs: check-harbor
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-inplace-wheel: true
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+  # Bakes the source tree and this run's build output into one image the test legs
+  # run in, so they need no artifact download and no recursive checkout.
+  # PROFILE=full because the legs read /work/build and /work/runtime; the dev base
+  # is the same image docker-image resolves to, so the image path and the fallback
+  # path agree.
+  bake-env-dev-full:
+    needs: build-artifact
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      # Canonical, never a resolve-docker-pull-refs output: that one is
+      # Harbor-prefixed and the producer runs GitHub-hosted with no Harbor access.
+      base-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-env
+      image-name: prebuilt-tests-env-image
+      checkout-source: true
+      build-args: PROFILE=full
+      # No source-ref: this caller takes no ref, so the producer's default (its own
+      # commit) is already the commit build-artifact built.
+  models-e2e-tests:
+    needs: [check-harbor, build-artifact, resolve-skus, bake-env-dev-full]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.resolve-skus.result == 'success' }}
+    # bake-env-dev-full is in needs but deliberately absent from the if: above.
+    # A failed bake leaves the ref empty and the legs fall back to the artifact
+    # path, which a gate on the bake would turn into a skipped suite instead.
+    # id-token: write is required by the nested exabox multihost job (multihost-ci runner chart).
+    # Job-level permissions replace inherited defaults, so restate the reads the container legs need too.
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+    secrets: inherit
+    uses: ./.github/workflows/models-e2e-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
+      model: ${{ needs.resolve-skus.outputs.model }}
+      mlperf-read-only: ${{ inputs.mlperf-write-access != true }}
+      tier: "1"

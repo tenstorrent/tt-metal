@@ -1,0 +1,33 @@
+Tests:
+  - name: "LinearMulticast"
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+
+    defaults:
+      ftype: mcast
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all
+
+  - name: "PacketSizesMeshMulticast"
+    fabric_setup:
+      topology: Mesh
+      # more links caused rt args exceed 256
+      num_links: 1
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all

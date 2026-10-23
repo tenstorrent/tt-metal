@@ -1,0 +1,9 @@
+# Sub-context id -> Mesh Graph Descriptor (.textproto), for tt-run / generate_rank_bindings -M:
+#   models/demos/deepseek_v3_b1/scaleout_configs/disaggregated_prefill_4_decode_host_rank_bindings_mapping.yaml
+#
+# Paths are repo-root-relative (resolved via TT_METAL_HOME when the mapping file lives under the repo).
+# 0: DeepSeek Blitz decode superpod graph (prefill-scaleout)
+# 1: 32×4 quad Black Hole galaxy torus XY (decode host topology)
+subcontext_id_to_mesh_graph_descriptor:
+  1: tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto
+  0: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto

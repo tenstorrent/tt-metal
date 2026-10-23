@@ -1,0 +1,20 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+#include <ttnn/tensor/tensor.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt_stl/span.hpp>
+
+#include <cstdint>
+
+#include "ttnn/tensor/types.hpp"
+
+namespace ttnn::operations::experimental::quasar::detail {
+
+tt::tt_metal::Shape infer_dims_for_reshape(const ttnn::Tensor& tensor, ttsl::Span<const int32_t> shape);
+
+}  // namespace ttnn::operations::experimental::quasar::detail
+
+using PadValue = ttnn::PadValue;

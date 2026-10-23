@@ -1,0 +1,4 @@
+add_subdirectory(1_distributed_program_dispatch)
+add_subdirectory(2_distributed_buffer_rw)
+add_subdirectory(3_distributed_eltwise_add)
+add_subdirectory(4_distributed_trace_and_events)

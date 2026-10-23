@@ -1,0 +1,278 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <concepts>
+#include <optional>
+#include <random>
+#include <type_traits>
+#include <utility>
+#include <variant>
+
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/program_cache.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+
+#include <cstdint>
+
+#include "ttnn/distributed/types.hpp"
+
+namespace ttnn::device_operation {
+
+template <typename T>
+concept ProgramFactoryConcept = requires {
+    typename T::cached_program_t;
+
+    [](const auto& operation_attributes, const auto& tensor_args, auto& tensor_return_value) {
+        auto cached_program = T::create(operation_attributes, tensor_args, tensor_return_value);
+
+        T::override_runtime_arguments(cached_program, operation_attributes, tensor_args, tensor_return_value);
+    };
+};
+
+template <typename T>
+concept HasMeshWorkloadType = requires { typename T::cached_mesh_workload_t; };
+
+template <typename T>
+concept HasCreateMeshWorkload = requires {
+    // Path A: Factory provides create_mesh_workload directly
+    &T::create_mesh_workload;
+    &T::override_runtime_arguments;
+};
+
+template <typename T>
+concept HasCreateAt = requires {
+    // Path B: Factory provides create_at (per-coordinate)
+    &T::create_at;
+    &T::override_runtime_arguments;
+};
+
+template <typename T>
+concept MeshWorkloadFactoryConcept = HasMeshWorkloadType<T> && (HasCreateMeshWorkload<T> || HasCreateAt<T>);
+
+// Mesh-workload descriptor factory: builds the entire workload in one call
+// via `create_workload_descriptor`, returning a tt::tt_metal::WorkloadDescriptor
+// that pairs declarative per-coord ProgramDescriptors with workload-scoped
+// resources (semaphores, buffers).  Replaces the deprecated prepare_resources
+// hook.
+//
+// This concept is a shape check — it confirms `create_workload_descriptor` is a
+// member.  The strict signature check (4 args, last is `MeshCoordinateRangeSet`,
+// returns `tt::tt_metal::WorkloadDescriptor`) is enforced by
+// `has_workload_descriptor` in the adapter, which has access to the device
+// operation's typedefs.  A factory that satisfies this concept but provides a
+// mismatched `create_workload_descriptor` triggers a clear `static_assert` failure
+// in the adapter rather than a deep template error.
+template <typename T>
+concept WorkloadDescriptorConcept = requires { &T::create_workload_descriptor; };
+
+template <typename T>
+concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } || WorkloadDescriptorConcept<T>) &&
+                                          !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T>;
+
+// Metal 2.0 op-porting stepping-stone factory concept: factories that return
+// ProgramArtifacts (a ProgramSpec + ProgramRunArgs + any op-owned tensors) from
+// create_program_artifacts. The framework adapter maps that same ProgramSpec onto
+// tensor_coords via experimental::MakeMeshWorkloadFromSpecs on cache miss, and
+// patches every TensorArg (io and op-owned alike) via experimental::UpdateTensorArgs
+// on cache hit.
+//
+// NOTE: Each TensorArgument in ProgramRunArgs MUST reference a MeshTensor reachable from
+// the factory's `tensor_args` / `tensor_return_value` parameters, OR one of the
+// MeshTensors the factory places in `ProgramArtifacts::op_owned_tensors` — the adapter
+// matches by pointer identity. Referencing a copy or any other MeshTensor will TT_FATAL
+// at runtime.
+//
+// NOTE: This is a stepping-stone concept for incremental migration of operations to
+// Metal 2.0. It is not designed for production use — the cache-hit fast path re-patches
+// op-owned tensors redundantly rather than skipping them.
+//
+namespace detail {
+template <typename F>
+struct static_fn_return {};
+template <typename R, typename... A>
+struct static_fn_return<R (*)(A...)> {
+    using type = R;
+};
+// noexcept-qualified static override: its pointer type is a distinct type, so it needs its own
+// specialization or a noexcept override would be silently misclassified (base instead of custom).
+template <typename R, typename... A>
+struct static_fn_return<R (*)(A...) noexcept> {
+    using type = R;
+};
+
+// True iff T has a single static override_runtime_arguments returning ProgramRunArgs. Keyed on the
+// return type, not presence, so the legacy void-returning override_runtime_arguments (some matmul
+// factories) doesn't match. The requires-wrap makes any ill-formed step leave it unsatisfied.
+template <typename T>
+concept HasSpecRuntimeArgsOverride = requires {
+    requires std::same_as<
+        typename static_fn_return<decltype(&T::override_runtime_arguments)>::type,
+        tt::tt_metal::experimental::ProgramRunArgs>;
+};
+}  // namespace detail
+
+// A factory whose programs vary across the mesh: one call returns the workload-scoped resources
+// plus a ProgramSpec and ProgramRunArgs per coordinate range.
+//   static MeshWorkloadArtifacts create_mesh_workload_artifacts(
+//       const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&,
+//       const ttnn::MeshCoordinateRangeSet& tensor_coords);
+// Optionally, to refresh run args on a cache hit:
+//   static ProgramRunArgs override_runtime_arguments(
+//       const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&,
+//       const ttnn::MeshCoordinateRange& range);
+// One Program backs a whole range, so the override is called once per range and takes the range
+// rather than a coordinate: what it returns applies to every device the range covers.
+template <typename T>
+concept MeshWorkloadSpecFactoryConcept = requires {
+    &T::create_mesh_workload_artifacts;
+} && !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
+
+// Base spec factory: cache hit refreshes only tensor bindings. SPMD-shaped -- one ProgramSpec,
+// replicated across the mesh. A factory whose programs differ per device is a
+// MeshWorkloadSpecFactoryConcept instead.
+template <typename T>
+concept ProgramSpecFactoryConcept =
+    requires { &T::create_program_artifacts; } && !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> &&
+    !ProgramDescriptorFactoryConcept<T> && !MeshWorkloadSpecFactoryConcept<T> && !detail::HasSpecRuntimeArgsOverride<T>;
+
+// Spec factory that additionally re-applies per-dispatch runtime args on every cache hit: its
+// override_runtime_arguments returns a ProgramRunArgs applied via UpdateProgramRunArgs (the
+// spec-path analog of the ProgramDescriptor path's get_dynamic_runtime_args). Args it omits are
+// retained from the cache-miss SetProgramRunArgs, so they must be enqueue-loop invariant. Full
+// signature (only the return type is concept-enforced):
+//   static ProgramRunArgs override_runtime_arguments(
+//       const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&,
+//       const std::optional<ttnn::MeshCoordinate>& = std::nullopt);
+template <typename T>
+concept CustomProgramSpecFactoryConcept =
+    requires { &T::create_program_artifacts; } && detail::HasSpecRuntimeArgsOverride<T> && !ProgramFactoryConcept<T> &&
+    !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T> && !MeshWorkloadSpecFactoryConcept<T>;
+
+// Detect operations that put create_descriptor directly on the operation struct
+// (no program_factory_t wrapper needed for single-descriptor operations).
+template <typename T>
+concept HasDirectDescriptor = requires { &T::create_descriptor; } && !requires { typename T::program_factory_t; };
+
+template <typename device_operation_t>
+concept HasComputeOutputSpecs = requires(
+    device_operation_t op,
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    {
+        op.compute_output_specs(operation_attributes, tensor_args)
+    } -> std::same_as<typename device_operation_t::spec_return_value_t>;
+};
+
+// Detect if operation provides custom cache-hit validation.
+// If not provided, the framework defaults to calling validate_on_program_cache_miss.
+template <typename device_operation_t>
+concept HasValidateOnProgramCacheHit = requires(
+    const typename device_operation_t::operation_attributes_t& attrs,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    device_operation_t::validate_on_program_cache_hit(attrs, tensor_args);
+};
+
+// Detect if operation provides a custom select_program_factory.
+// If not provided and program_factory_t is a single-type variant, the framework returns it automatically.
+template <typename device_operation_t>
+concept HasSelectProgramFactory = requires(
+    const typename device_operation_t::operation_attributes_t& attrs,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    {
+        device_operation_t::select_program_factory(attrs, tensor_args)
+    } -> std::same_as<typename device_operation_t::program_factory_t>;
+};
+
+// Validate that all variant alternatives in a program_factory_t satisfy exactly one of
+// ProgramFactoryConcept, MeshWorkloadFactoryConcept, ProgramDescriptorFactoryConcept,
+// ProgramSpecFactoryConcept, CustomProgramSpecFactoryConcept, or MeshWorkloadSpecFactoryConcept.
+namespace detail {
+template <typename Variant, std::size_t... Is>
+consteval bool all_factories_valid(std::index_sequence<Is...>) {
+    return (
+        ((ProgramFactoryConcept<std::variant_alternative_t<Is, Variant>> +
+          MeshWorkloadFactoryConcept<std::variant_alternative_t<Is, Variant>> +
+          ProgramDescriptorFactoryConcept<std::variant_alternative_t<Is, Variant>> +
+          ProgramSpecFactoryConcept<std::variant_alternative_t<Is, Variant>> +
+          CustomProgramSpecFactoryConcept<std::variant_alternative_t<Is, Variant>> +
+          MeshWorkloadSpecFactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
+        ...);
+}
+}  // namespace detail
+
+template <typename Variant>
+concept AllFactoriesValid =
+    detail::all_factories_valid<Variant>(std::make_index_sequence<std::variant_size_v<Variant>>{});
+
+template <typename device_operation_t>
+concept HasProgramFactoryType = requires { typename device_operation_t::program_factory_t; };
+
+template <typename device_operation_t>
+concept DeviceOperationConcept =
+    requires {
+        [](const typename device_operation_t::operation_attributes_t& operation_attributes,
+           const typename device_operation_t::tensor_args_t& tensor_args) {
+            device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
+
+            using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
+            static_assert(std::same_as<
+                          decltype(device_operation_t::create_output_tensors(operation_attributes, tensor_args)),
+                          tensor_return_value_t>);
+        };
+    } && HasComputeOutputSpecs<device_operation_t> &&
+    (HasDirectDescriptor<device_operation_t> ||
+     (HasProgramFactoryType<device_operation_t> && AllFactoriesValid<typename device_operation_t::program_factory_t>));
+
+template <typename device_operation_t>
+concept DeviceOperationWithCustomProgramCacheConcept =
+    DeviceOperationConcept<device_operation_t> &&
+    requires(
+        const typename device_operation_t::operation_attributes_t& operation_attributes,
+        const typename device_operation_t::tensor_args_t& tensor_args) {
+        {
+            device_operation_t::compute_program_hash(operation_attributes, tensor_args)
+        } -> std::convertible_to<std::uint64_t>;
+    };
+
+template <typename device_operation_t>
+concept HasSkipLaunch = requires(
+    device_operation_t op,
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args,
+    const typename device_operation_t::tensor_return_value_t& tensor_return_value) {
+    {
+        device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)
+    } -> std::convertible_to<bool>;
+};
+
+// Opt-in marker for per-core L1 allocation.
+//
+// A per-core allocated buffer has an independent L1 address on every core, but ops address a
+// buffer by a single value -- Buffer::address() is the first core's address, and CB binding,
+// runtime-arg patching and the host write/read all resolve through it (#51354). An op that has
+// not been taught to resolve `get_per_core_address()` per core would therefore address every
+// core as though it shared the first core's allocation, which is silently wrong whenever those
+// addresses differ.
+//
+// launch() refuses per-core allocated tensors in tensor_args unless the op declares support:
+//
+//     struct MyDeviceOperation {
+//         static constexpr bool supports_per_core_allocation = true;
+//         ...
+//     };
+//
+// Declaring it is a promise that the op resolves per-core addresses at every point it binds the
+// buffer -- circular buffers, runtime args, and any borrowed-memory attachment.
+//
+// Satisfied only when the member is present *and* true, so an op can opt back out with
+// `= false` without removing the declaration.
+template <typename device_operation_t>
+concept SupportsPerCoreAllocation = requires {
+    { device_operation_t::supports_per_core_allocation } -> std::convertible_to<bool>;
+} && device_operation_t::supports_per_core_allocation;
+
+}  // namespace ttnn::device_operation

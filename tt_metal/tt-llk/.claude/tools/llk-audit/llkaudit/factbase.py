@@ -1,0 +1,244 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+"""
+FactBase — loads the C++ extractor's per-file JSON output, dedups, and offers
+query helpers the checkers reason over.
+
+Each header is re-parsed via many translation units (it is #included widely), so
+the same physical fact appears in multiple per-file objects; we dedup by
+identity. Ordering within a function is by file offset (the extractor emits a
+byte offset for every fact), which is deterministic.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from typing import Iterable
+
+# Open-ended function extent: when a function fact has no usable end and no next
+# sibling to bound it, treat it as reaching "the rest of the file". Large enough to
+# contain any real offset; a named constant so contains()/facts_in() reads clearly.
+OPEN_ENDED_EXTENT = 1_000_000_000
+
+
+@dataclass
+class Function:
+    name: str
+    file: str
+    begin_off: int
+    end_off: int
+    #: True if this function's extent was REPAIRED (its end_off collapsed to <= begin
+    #: at parse — a macro-wrapped body whose end location dropped — and was extended
+    #: by the repair loop). Its extent is a heuristic guess, so an attribution that
+    #: relies on it is UNCERTAIN (see FactBase.uncertain_attribution).
+    repaired: bool = False
+
+    def contains(self, file: str, off: int) -> bool:
+        return file == self.file and self.begin_off <= off <= self.end_off
+
+
+class FactBase:
+    def __init__(self, arch: str, facts: list[dict], parse_errors: int = 0):
+        self.arch = arch
+        # Drop facts missing a required key rather than crashing the whole run on
+        # a single malformed object (a partial parse must never abort recall). The
+        # dedup key was already tolerant; the constructor now matches it.
+        clean, dropped = [], 0
+        for f in facts:
+            if isinstance(f, dict) and {"family", "file", "off"} <= f.keys():
+                clean.append(f)
+            else:
+                dropped += 1
+        self.facts = clean
+        self.parse_errors = parse_errors + dropped
+        #: {NAME_ADDR32: int} resolved from cfg_defines.h; set by the CLI when a
+        #: metal root is available (used by cfg-word-overlap). Empty otherwise.
+        self.addr32: dict = {}
+        self._funcs = [
+            Function(
+                f.get("name", ""),
+                f["file"],
+                f["off"],
+                f.get("end_off", f["off"]),
+            )
+            for f in clean
+            if f["family"] == "function"
+        ]
+        # index functions by file for fast enclosing() lookup
+        self._funcs_by_file: dict[str, list[Function]] = {}
+        for fn in self._funcs:
+            self._funcs_by_file.setdefault(fn.file, []).append(fn)
+        # Repair any function whose end_off collapsed to <= begin_off (a partial
+        # parse that dropped the end location): extend it to the next function's
+        # start in the same file, so its body facts are not silently invisible to
+        # enclosing()/facts_in(). Last function in a file gets a large sentinel.
+        for fns in self._funcs_by_file.values():
+            ordered = sorted(fns, key=lambda x: x.begin_off)
+            for i, fn in enumerate(ordered):
+                if fn.end_off <= fn.begin_off:
+                    fn.repaired = True
+                    fn.end_off = (
+                        ordered[i + 1].begin_off - 1
+                        if i + 1 < len(ordered)
+                        else fn.begin_off + OPEN_ENDED_EXTENT
+                    )
+        #: Count of empty-`function` facts filled below from a function whose extent
+        #: was REPAIRED — an UNCERTAIN attribution. This is the residual the B fix
+        #: cannot fully resolve: when a fact's own function AND an enclosing one both
+        #: collapse (a "double collapse"), the C++ leaves function="" and the repaired
+        #: extents can't recover the true owner (the collapsed parent gets capped at
+        #: its first child, so a later body fact is attributed to an inner
+        #: collapsed-and-over-extended lambda). We can't RESOLVE it (the end locations
+        #: are gone), so we COUNT it — the kernel-tier path surfaces a nonzero count in
+        #: the audit JSON `degraded` so an ambiguous scope reads as a coverage hole,
+        #: never a silent all-clear. Naturally 0 on the multi-TU tt-llk run (the merge
+        #: fills empties from a resolved TU before this loop, so nothing is filled here).
+        self.uncertain_attribution = 0
+        # Fill an EMPTY `function` from the now-REPAIRED extents. The C++ side stamped
+        # `function` using the raw (pre-repair) ranges, so a macro-wrapped / partial-parse
+        # function whose end_off collapsed to its begin left its body facts with
+        # function="". The function-keyed grouping checkers (cb-sync, noc-sync,
+        # noc-atomic-exit, noc-read-barrier, noc-l1-invalidate, semaphore-handshake) read
+        # this field DIRECTLY, so a stale "" lumps distinct functions into one "?" bucket
+        # and can cancel a real imbalance (a false negative under partial parse). Recompute
+        # ONLY the empty case from enclosing().
+        #
+        # CRITICAL: do NOT overwrite a NON-empty C++ attribution. The repair loop above
+        # has no nesting model — it treats a file's functions as flat siblings, so a
+        # collapsed NESTED function (a lambda whose end_off dropped) that is last-by-begin
+        # gets an OPEN_ENDED extent that swallows the rest of its ENCLOSING function; then
+        # enclosing() (max begin_off) would re-stamp an enclosing-function fact onto that
+        # lambda. For a name-gated checker (noc-atomic-exit's is_kernel_entry, semaphore's
+        # ctor/wrapper skip) that clobber turns a real finding into a false-all-clear.
+        # Trusting the C++ innermost-lexical `function` whenever it is present avoids that;
+        # only the genuinely-unattributed ("") collapsed-body facts are filled here.
+        for f in clean:
+            if f["family"] == "function" or f.get("function"):
+                continue
+            owner = self.enclosing(f["file"], f["off"])
+            if owner is not None:
+                f["function"] = owner.name
+                if owner.repaired:
+                    self.uncertain_attribution += 1
+
+    # -- construction ---------------------------------------------------------
+    @staticmethod
+    def _dedup_key(f: dict) -> tuple:
+        return (
+            f.get("family"),
+            f.get("file"),
+            f.get("line"),
+            f.get("off"),
+            f.get("name", ""),
+            f.get("index_text", ""),
+            f.get("producer", ""),
+            f.get("text", ""),
+        )
+
+    @classmethod
+    def from_objects(cls, arch: str, objects: Iterable[dict]) -> "FactBase":
+        """Merge many per-file extractor objects into one deduped FactBase."""
+        seen: dict[tuple, dict] = {}
+        parse_errors = 0
+        for o in objects:
+            parse_errors += o.get("parse_errors", 0)
+            for f in o.get("facts", []):
+                k = cls._dedup_key(f)
+                prev = seen.get(k)
+                if prev is None:
+                    seen[k] = f
+                    continue
+                # Same call site parsed by >1 TU (the dedup key excludes recv_type /
+                # argc / recv / arg0). MERGE preferring NON-EMPTY fields so a TU where
+                # the object-API receiver type / argc RESOLVED is not lost to a
+                # dependent-parse TU where it didn't — first-win would silently keep
+                # the empty copy and disable cb_classify / noc_signal_is_atomic on it.
+                # Only fills a field that is empty on the kept fact (same site → same
+                # semantics); a set numeric 0 (e.g. off) is NOT "empty" so it stays.
+                for fk, fv in f.items():
+                    if fv not in (None, "", -1) and prev.get(fk) in (None, "", -1):
+                        prev[fk] = fv
+        return cls(arch, list(seen.values()), parse_errors)
+
+    @classmethod
+    def from_concatenated_json(cls, arch: str, text: str) -> "FactBase":
+        """Parse a stream of pretty/among-line-concatenated JSON objects. A single
+        malformed object (e.g. a diagnostic line leaked onto stdout), a stray
+        close-brace, leading non-JSON, or a truncated trailing object (extractor
+        killed mid-emit) is counted as a parse error and skipped — it must NOT throw
+        away every other object's facts, since the tool's contract is to always
+        produce a result. Anything OUTSIDE an object (depth 0, not in a string) is
+        skipped, so inter-object garbage and a lone `}` can never desync the scan."""
+        objs, buf, depth, in_str, esc = [], [], 0, False, False
+        stream_errors = 0
+        saw_garbage = False  # non-space text seen between objects (counted once/run)
+        for ch in text:
+            # At object depth 0 we are between objects: ignore everything until the
+            # next opening brace. This drops leading/stray text and prevents a lone
+            # `}` from driving depth negative and silently eating every later object.
+            if depth == 0 and not in_str and ch != "{":
+                saw_garbage = saw_garbage or not ch.isspace()
+                continue
+            if saw_garbage:  # one error per contiguous inter-object garbage run
+                stream_errors += 1
+                saw_garbage = False
+            buf.append(ch)
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        objs.append(json.loads("".join(buf)))
+                    except json.JSONDecodeError:
+                        stream_errors += 1
+                    buf = []
+        # A non-empty, non-whitespace remainder means the stream ended mid-object;
+        # trailing inter-object garbage (saw_garbage) is likewise a counted miss.
+        if depth != 0 or any(not c.isspace() for c in "".join(buf)) or saw_garbage:
+            stream_errors += 1
+        fb = cls.from_objects(arch, objs)
+        fb.parse_errors += stream_errors
+        return fb
+
+    # -- queries --------------------------------------------------------------
+    def family(self, fam: str) -> list[dict]:
+        return [f for f in self.facts if f["family"] == fam]
+
+    @property
+    def functions(self) -> list[Function]:
+        return self._funcs
+
+    def enclosing(self, file: str, off: int) -> Function | None:
+        best = None
+        for fn in self._funcs_by_file.get(file, []):
+            if fn.contains(file, off) and (
+                best is None or fn.begin_off > best.begin_off
+            ):
+                best = fn
+        return best
+
+    def facts_in(
+        self, fn: Function, families: tuple[str, ...] | None = None
+    ) -> list[dict]:
+        out = [
+            f
+            for f in self.facts
+            if f["family"] != "function"
+            and f["file"] == fn.file
+            and fn.begin_off <= f["off"] <= fn.end_off
+            and (families is None or f["family"] in families)
+        ]
+        out.sort(key=lambda f: f["off"])
+        return out

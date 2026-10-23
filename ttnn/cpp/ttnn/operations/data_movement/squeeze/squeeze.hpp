@@ -1,0 +1,17 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <tt_stl/small_vector.hpp>
+#include "ttnn/types.hpp"
+
+namespace ttnn {
+
+// Note: dim is passed by non-const reference because it's convenient to modify it for processing
+Tensor squeeze(const Tensor& input_tensor, const ttsl::SmallVector<int>& dim);
+Tensor squeeze(const Tensor& input_tensor, int dim);
+Tensor squeeze(const Tensor& input_tensor);
+
+}  // namespace ttnn

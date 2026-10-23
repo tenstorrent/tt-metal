@@ -1,0 +1,124 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <cstdint>
+#include "api/compute/transpose.h"
+#include "api/compute/ema.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+#include "../../../device/kernels/accumulation_common.hpp"
+
+/*
+ * -------------------------------------------------------------------------------------------------
+ * The following snippet implements EMA using SFPI. This snippet assumes the following:
+ * 1. Each tile has 1 sample (t dimension) each of 1024 elements (32x32) in the input
+ * 2. Each tile has 4 faces
+ * 3. The dst regs at prev_dst_index hold the previous output for each sample in the tile.
+ *
+ * With this, it does the following:
+ * 1. Compute EMA for each sample in the tile
+ * 2. Write the output to the output buffer
+ * 3. Store the output in the previous dst regs for the next tile
+ *
+ * @note: To use this SFPI based implementation, the input tensor shape and reader/writer
+ *        kernels should be configured such that consecutive samples for a channel are in
+ *        consecutive tiles. Thus, the input is of shape [1, T, B, C].
+ *
+ *        Since this is 25% slower than the SFPU based implementation for similar shapes,
+ *        we retain this snippet for reference, but do not use it below.
+ */
+
+/*
+#ifdef TRISC_MATH
+inline void ema_sfpi_tile(
+    uint32_t inp_dst_index,
+    uint32_t prv_dst_index,
+    uint32_t out_dst_index) {
+    constexpr uint32_t n_vector_in_tile = 32;
+
+    const uint32_t inp_base_idx = inp_dst_index * n_vector_in_tile;
+    const uint32_t prv_base_idx = prv_dst_index * n_vector_in_tile;
+    const uint32_t out_base_idx = out_dst_index * n_vector_in_tile;
+
+    constexpr size_t vectors_per_face = 8;
+    for (size_t i = 0; i < vectors_per_face; i++) {
+        vFloat inp = dst_reg[inp_base_idx + i];
+        vFloat prv = dst_reg[prv_base_idx + i];
+        vFloat result = first_sample ? inp * beta : inp * beta + prv * alpha;
+        dst_reg[out_base_idx + i] = result;
+        dst_reg[prv_base_idx + i] = result;
+    }
+}
+#endif
+
+inline void ema_sfpi_tile(
+    uint32_t inp_dst_index,
+    uint32_t prv_dst_index,
+    uint32_t out_dst_index,
+    float alpha,
+    float beta,
+    bool first_sample) {
+    MATH(_llk_math_eltwise_binary_sfpu_params_(
+        ema_sfpi_face, inp_dst_index, prv_dst_index, out_dst_index,
+        VectorMode::RC, alpha, beta, first_sample));
+}
+// ------------------------------------------------------------------------------------------------
+*/
+
+void kernel_main() {
+    // Compile time args
+    // -----------------
+    constexpr auto total_batches_per_core = get_arg(args::total_batches_per_core);
+    constexpr auto tiles_per_channel = get_arg(args::tiles_per_channel);
+    constexpr auto alpha_bits = get_arg(args::alpha_bits);
+    constexpr auto beta_bits = get_arg(args::beta_bits);
+
+    DataflowBuffer dfb_src(dfb::src);
+    DataflowBuffer dfb_dst(dfb::dst);
+    DataflowBuffer dfb_trp(dfb::trp);
+
+    // DST indices
+    // -----------
+    constexpr auto inp_dst_index = 0;
+    constexpr auto output_dst_index = inp_dst_index + 1;
+
+    //-------------------------------------------------------------------------
+    // Main loop - compute ema for each batch
+    compute_kernel_hw_startup(dfb::src, dfb::dst);
+    ema_init(alpha_bits, beta_bits);
+    transpose_init(dfb::src);
+
+    for (uint32_t batch_id = 0; batch_id < total_batches_per_core; ++batch_id) {
+        // For each batch, clear the previous output
+        ema_clear_previous_output();
+        for (uint32_t tile_id = 0; tile_id < tiles_per_channel; ++tile_id) {
+            // Read input, transpose and compute ema
+            dfb_src.wait_front(ONE_TILE);
+            tile_regs_acquire();
+            transpose_tile(dfb::src, 0, inp_dst_index);
+            ema_tile(inp_dst_index);
+            tile_regs_commit();
+            dfb_src.pop_front(ONE_TILE);
+
+            dfb_trp.reserve_back(ONE_TILE);
+            tile_regs_wait();
+            pack_tile(output_dst_index, dfb::trp);
+            tile_regs_release();
+            dfb_trp.push_back(ONE_TILE);
+
+            // Transpose back and write to output
+            dfb_trp.wait_front(ONE_TILE);
+            tile_regs_acquire();
+            transpose_tile(dfb::trp, 0, output_dst_index);
+            tile_regs_commit();
+            dfb_trp.pop_front(ONE_TILE);
+
+            dfb_dst.reserve_back(ONE_TILE);
+            tile_regs_wait();
+            pack_tile(output_dst_index, dfb::dst);
+            tile_regs_release();
+            dfb_dst.push_back(ONE_TILE);
+        }
+    }
+}

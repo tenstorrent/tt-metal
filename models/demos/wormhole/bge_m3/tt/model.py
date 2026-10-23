@@ -1,0 +1,485 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+from dataclasses import replace
+
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+from models.demos.wormhole.bge_m3.tt.embeddings import BgeM3Embedding, BgeM3EmbeddingsConfig
+from models.demos.wormhole.bge_m3.tt.encoder import BgeM3TransformerBlock
+from models.demos.wormhole.bge_m3.tt.grid import is_galaxy_grid
+from models.demos.wormhole.bge_m3.tt.norm import LayerNorm1D, LayerNorm1DConfig
+from models.demos.wormhole.bge_m3.tt.tiny_model import ColBERTLinear, SparseLinear, TinyLinearConfig
+from models.demos.wormhole.bge_m3.tt.weight_adapter import (
+    LayerNormWeights,
+    build_colbert_linear_weights,
+    build_embedding_weights,
+    build_sparse_linear_weights,
+)
+
+
+def _embedding_output_memcfg(args, mesh_device):
+    """L1 for the embedding lookups at B8/B16/B32 S512 on a grid narrower than 13
+    columns (Galaxy): the embedding LayerNorm then reads them from L1, not DRAM.
+    Other shapes keep DRAM.
+    """
+    if mesh_device is None or args.max_seq_len != 512 or args.max_batch_size not in (8, 16, 32):
+        return None
+    if getattr(args, "data_parallel", False) or not ttnn.device.is_blackhole(mesh_device):
+        return None
+    if not is_galaxy_grid(mesh_device):
+        return None
+    return ttnn.L1_MEMORY_CONFIG
+
+
+class BgeM3Model(LightweightModule):
+    """
+    End-to-end BGE-M3 encoder returning last hidden state [B, 1, S, D].
+    """
+
+    _ADDITIVE_MASKED_VALUE = -100000.0
+    _ADDITIVE_UNMASKED_VALUE = 0.0
+    _MASK_DTYPE = ttnn.bfloat16
+    _POOLING_MODES = (None, "cls", "mean", "colbert", "sparse")
+
+    def __init__(self, args, mesh_device, dtype, state_dict, optimizations=None, pooling=None):
+        super().__init__()
+        self.mesh_device = mesh_device
+        self.pad_token_id = int(args.pad_token_id)
+        if pooling not in self._POOLING_MODES:
+            raise ValueError(f"pooling must be one of {self._POOLING_MODES}, got {pooling!r}")
+        self.pooling = pooling
+        self._mask_dtype = _attention_mask_dtype(dtype, args.max_seq_len, args.max_batch_size)
+        # Data-parallel: the caller shards the batch across the mesh. Each chip
+        # runs the full forward on its shard and uses no collectives. ModelArgs
+        # resolves this, and it takes precedence over sequence-parallel.
+        self._data_parallel = args.data_parallel
+        self._trace_id = None
+        self._trace_device = None
+        self._trace_cq_id = 0
+        self._trace_output = None
+
+        embedding_weights = build_embedding_weights(state_dict, ttnn.bfloat16)
+        self.embeddings = BgeM3Embedding.from_config(
+            BgeM3EmbeddingsConfig(
+                word_embeddings_weight=embedding_weights.word_embeddings_weight,
+                position_embeddings_weight=embedding_weights.position_embeddings_weight,
+                token_type_embeddings_weight=embedding_weights.token_type_embeddings_weight,
+                vocab_size=args.vocab_size,
+                max_position_embeddings=args.max_context_len,
+                hidden_size=args.dim,
+                pad_token_id=args.pad_token_id,
+                mesh_device=mesh_device,
+                embedding_dtype=ttnn.bfloat16,
+                output_memcfg=_embedding_output_memcfg(args, mesh_device),
+            )
+        )
+        self.embedding_norm = _build_optional_layer_norm(
+            embedding_weights.layer_norm,
+            eps=args.norm_eps,
+            mesh_device=mesh_device,
+            max_seq_len=args.max_seq_len,
+            max_batch_size=args.max_batch_size,
+            optimizations=optimizations,
+        )
+        self.layers = [
+            BgeM3TransformerBlock(
+                args=args,
+                mesh_device=mesh_device,
+                dtype=dtype,
+                state_dict=state_dict,
+                layer_num=layer_num,
+                optimizations=optimizations,
+            )
+            for layer_num in range(args.n_layers)
+        ]
+
+        self.colbert_linear = None
+        if "colbert_linear.weight" in state_dict:
+            colbert_linear_weights = build_colbert_linear_weights(state_dict, dtype)
+            self.colbert_linear = ColBERTLinear.from_config(
+                TinyLinearConfig(
+                    weight=colbert_linear_weights.weight,
+                    bias=colbert_linear_weights.bias,
+                    mesh_device=mesh_device,
+                    dtype=dtype,
+                    max_seq_len=args.max_seq_len,
+                )
+            )
+
+        self.sparse_linear = None
+        if "sparse_linear.weight" in state_dict:
+            sparse_linear_weights = build_sparse_linear_weights(state_dict, dtype)
+            self.sparse_linear = SparseLinear.from_config(
+                TinyLinearConfig(
+                    weight=sparse_linear_weights.weight,
+                    bias=sparse_linear_weights.bias,
+                    mesh_device=mesh_device,
+                    dtype=dtype,
+                    max_seq_len=args.max_seq_len,
+                )
+            )
+
+    def create_position_ids_from_input_ids(
+        self,
+        input_ids: ttnn.Tensor,
+        padding_idx: int,
+        past_key_values_length: int = 0,
+    ) -> ttnn.Tensor:
+        """
+        HuggingFace RoBERTa-compatible, padding-aware position ID derivation.
+        """
+        self._require_rank2(input_ids, "input_ids")
+
+        mask = ttnn.ne(input_ids, padding_idx)
+        if mask.layout != ttnn.TILE_LAYOUT:
+            mask = ttnn.to_layout(mask, ttnn.TILE_LAYOUT)
+        mask = ttnn.typecast(mask, dtype=ttnn.int32)
+
+        incremental_indices = ttnn.cumsum(mask, dim=1, dtype=ttnn.int32)
+        if past_key_values_length:
+            incremental_indices = incremental_indices + int(past_key_values_length)
+        incremental_indices = incremental_indices * mask
+
+        position_ids = incremental_indices + int(padding_idx)
+        if position_ids.dtype != ttnn.uint32:
+            position_ids = ttnn.typecast(position_ids, dtype=ttnn.uint32)
+        if position_ids.layout != input_ids.layout:
+            position_ids = ttnn.to_layout(position_ids, input_ids.layout)
+        return position_ids
+
+    def _prepare_attention_mask(
+        self,
+        input_ids: ttnn.Tensor,
+        attention_mask: ttnn.Tensor | None,
+    ) -> ttnn.Tensor | None:
+        """Return an additive [B, 1, S, S] mask that holds 0.0 or -100000.0.
+
+        The method uses no host sync, so the path stays trace-safe.
+        """
+        self._require_rank2(input_ids, "input_ids")
+        seq_len = input_ids.shape[1]
+        pad_mask = None
+        additive_mask = None
+
+        if attention_mask is None:
+            pad_mask = ttnn.eq(input_ids, self.pad_token_id)
+        else:
+            rank = len(attention_mask.shape)
+            if rank == 2:
+                # HF convention: 1=keep, 0=pad.
+                pad_mask = ttnn.eq(attention_mask, 0)
+            elif rank == 4:
+                if (
+                    attention_mask.shape[1] != 1
+                    or attention_mask.shape[2] not in (1, seq_len)
+                    or attention_mask.shape[3] != seq_len
+                ):
+                    raise ValueError(
+                        f"attention_mask rank-4 shape must be [B, 1, 1, S] or [B, 1, S, S] with S={seq_len}, "
+                        f"got {attention_mask.shape}"
+                    )
+                additive_mask = attention_mask
+            else:
+                raise ValueError(f"attention_mask rank must be 2 or 4, got shape={attention_mask.shape}")
+
+        if pad_mask is not None:
+            if pad_mask.layout != ttnn.TILE_LAYOUT:
+                pad_mask = ttnn.to_layout(pad_mask, ttnn.TILE_LAYOUT)
+            additive_mask = self._build_additive_attention_mask(pad_mask)
+        elif additive_mask is not None:
+            if additive_mask.layout != ttnn.TILE_LAYOUT:
+                additive_mask = ttnn.to_layout(additive_mask, ttnn.TILE_LAYOUT)
+        else:
+            return None
+
+        if additive_mask.shape[2] == 1:
+            additive_mask = ttnn.expand(additive_mask, [-1, -1, seq_len, -1])
+
+        if additive_mask.dtype != self._mask_dtype:
+            additive_mask = ttnn.typecast(additive_mask, self._mask_dtype)
+
+        memory_config_fn = getattr(additive_mask, "memory_config", None)
+        if callable(memory_config_fn) and memory_config_fn() != ttnn.DRAM_MEMORY_CONFIG:
+            additive_mask = ttnn.to_memory_config(additive_mask, ttnn.DRAM_MEMORY_CONFIG)
+
+        return additive_mask
+
+    def _build_additive_attention_mask(self, pad_mask: ttnn.Tensor) -> ttnn.Tensor:
+        while len(pad_mask.shape) < 4:
+            pad_mask = ttnn.unsqueeze(pad_mask, dim=1)
+        return ttnn.where(
+            pad_mask,
+            self._ADDITIVE_MASKED_VALUE,
+            self._ADDITIVE_UNMASKED_VALUE,
+        )
+
+    def forward(
+        self,
+        input_ids: ttnn.Tensor,
+        attention_mask: ttnn.Tensor | None = None,
+        token_type_ids: ttnn.Tensor | None = None,
+        position_ids: ttnn.Tensor | None = None,
+        no_padding: bool = False,
+    ) -> ttnn.Tensor:
+        """Run the encoder.
+
+        no_padding: the caller states that input_ids holds no pad token. The
+        model then skips the dense [B, 1, S, S] mask, which SDPA reads again in
+        all 24 layers: 2.23 MB for each read at B8 and 4.46 MB at B16. B8 drops
+        from 17.388 ms to 14.782 ms and B16 from 37.683 ms to 32.725 ms.
+
+        The caller owns this statement. A padded row under no_padding returns a
+        wrong embedding, cos 0.4147 against the masked result, because the pad
+        columns then join the softmax. Leave it false unless every row is full.
+        A trace records one branch, so a caller that needs both must capture two
+        traces.
+        """
+        self._require_rank2(input_ids, "input_ids")
+
+        if token_type_ids is None and not getattr(self.embeddings, "_fold_token_type", False):
+            token_type_ids = ttnn.subtract(input_ids, input_ids)
+        elif token_type_ids is not None:
+            self._require_rank2(token_type_ids, "token_type_ids")
+
+        if position_ids is None:
+            position_ids = self.create_position_ids_from_input_ids(
+                input_ids=input_ids,
+                padding_idx=self.pad_token_id,
+                past_key_values_length=0,
+            )
+
+        # Data-parallel serving stays on the no-mask fast path unless the caller
+        # supplies a keep or additive mask (for example, fixed-shape MTEB batches).
+        if no_padding and attention_mask is None:
+            prepared_attention_mask = None
+        elif self._data_parallel and attention_mask is None:
+            prepared_attention_mask = None
+        elif self._data_parallel and len(attention_mask.shape) == 2 and attention_mask.shape[1] == 1:
+            # Compact per-request valid lengths for fixed-shape DP serving.
+            prepared_attention_mask = attention_mask
+        else:
+            prepared_attention_mask = self._prepare_attention_mask(input_ids=input_ids, attention_mask=attention_mask)
+
+        residual_sharded = None
+        if self.embedding_norm is not None:
+            # Fold the position-embedding add into the embedding LayerNorm as residual.
+            # Saves 1 BinaryNg add (~10 us) per forward.
+            main, position = self.embeddings(
+                input_ids=input_ids,
+                token_type_ids=token_type_ids,
+                position_ids=position_ids,
+                defer_position_add=True,
+            )
+            # B1/S512: also return sharded output to seed layer 0's residual,
+            # saving the first attention_norm residual I->S reshard (-1.1 us).
+            if self.embedding_norm.config.sharded_memcfg is not None:
+                hidden_states, residual_sharded = self.embedding_norm(
+                    main, residual_input_tensor=position, return_sharded=True
+                )
+            else:
+                hidden_states = self.embedding_norm(main, residual_input_tensor=position)
+            # Free the lookups now: on the L1 path (_embedding_output_memcfg) they would
+            # stay resident under every layer.
+            ttnn.deallocate(main)
+            ttnn.deallocate(position)
+        else:
+            hidden_states = self.embeddings(
+                input_ids=input_ids,
+                token_type_ids=token_type_ids,
+                position_ids=position_ids,
+            )
+
+        for layer in self.layers:
+            result = layer(
+                hidden_states=hidden_states,
+                attention_mask=prepared_attention_mask,
+                residual_sharded=residual_sharded,
+            )
+            if isinstance(result, tuple):
+                hidden_states, residual_sharded = result
+            else:
+                hidden_states = result
+                residual_sharded = None
+        if residual_sharded is not None:
+            ttnn.deallocate(residual_sharded)
+
+        if self.pooling is None:
+            return hidden_states
+        return self._apply_pooling(hidden_states, input_ids)
+
+    def _apply_pooling(self, hidden_states: ttnn.Tensor, input_ids: ttnn.Tensor) -> ttnn.Tensor:
+        """Apply the pooling head to the last hidden state [B, 1, S, D].
+
+        The modes return these shapes:
+          * "cls"     -> [B, 1, 1, D], the first token
+          * "mean"    -> [B, 1, 1, D], the mean over valid tokens
+          * "colbert" -> [B, 1, S, D], a per-token projection
+          * "sparse"  -> [B, 1, S, 1], per-token lexical weights
+
+        The model returns the raw head output. The caller does the remaining
+        steps, such as normalization and scoring. The method uses no host sync,
+        so the path stays trace-safe.
+        """
+        # Ensure rank-4 [B, 1, S, D].
+        while len(hidden_states.shape) < 4:
+            hidden_states = ttnn.unsqueeze(hidden_states, dim=1)
+        B, _, S, D = hidden_states.shape
+
+        if self.pooling == "cls":
+            if hidden_states.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+            return ttnn.slice(hidden_states, [0, 0, 0, 0], [B, 1, 1, D])
+
+        if self.pooling == "mean":
+            if hidden_states.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+            # Mask-weighted mean over valid tokens. The masked sum over S is a
+            # matmul: keep[B,1,1,S] @ hidden[B,1,S,D] -> [B,1,1,D] fuses the
+            # mask-multiply and the sequence reduction into a single op.
+            keep = ttnn.typecast(ttnn.ne(input_ids, self.pad_token_id), ttnn.bfloat16)
+            keep = ttnn.reshape(ttnn.to_layout(keep, ttnn.TILE_LAYOUT), [B, 1, 1, S])
+            summed = ttnn.matmul(keep, hidden_states)  # [B, 1, 1, D]
+            counts = ttnn.sum(keep, dim=-1, keepdim=True)  # [B, 1, 1, 1]
+            # Guard fully-padded rows (counts==0): clamp to >=1 so the divide
+            # yields 0 (summed is also 0 there) instead of inf/NaN. Matches the
+            # vLLM generator's counts.clamp(min=1).
+            counts = ttnn.clip(counts, 1.0, float(S))
+            return ttnn.divide(summed, counts)
+
+        if self.pooling == "colbert":
+            if self.colbert_linear is None:
+                raise RuntimeError("pooling='colbert' requires colbert_linear weights in the checkpoint")
+            cfg_mem = self.colbert_linear.config.memory_config
+            if hidden_states.memory_config() != cfg_mem:
+                hidden_states = ttnn.to_memory_config(hidden_states, cfg_mem)
+            return self.colbert_linear(hidden_states)
+
+        if self.pooling == "sparse":
+            if self.sparse_linear is None:
+                raise RuntimeError("pooling='sparse' requires sparse_linear weights in the checkpoint")
+            cfg_mem = self.sparse_linear.config.memory_config
+            if hidden_states.memory_config() != cfg_mem:
+                hidden_states = ttnn.to_memory_config(hidden_states, cfg_mem)
+            # Raw per-token sparse (lexical) weights [B, 1, S, 1] (relu inside
+            # sparse_linear). Caller does crop + vocab scatter + special-token
+            # masking to form the [B, vocab] sparse vector.
+            return self.sparse_linear(hidden_states)
+
+        raise ValueError(f"unknown pooling mode {self.pooling!r}")
+
+    def capture_trace(
+        self,
+        input_ids: ttnn.Tensor,
+        attention_mask: ttnn.Tensor | None = None,
+        token_type_ids: ttnn.Tensor | None = None,
+        position_ids: ttnn.Tensor | None = None,
+        *,
+        mesh_device=None,
+        cq_id: int = 0,
+        no_padding: bool = False,
+    ) -> ttnn.Tensor:
+        """
+        Capture a fixed-shape encoder forward trace owned by this model instance.
+
+        Inputs must be long-lived device tensors whose shapes/layouts match future replay calls.
+
+        no_padding carries the caller's no-pad-token statement into the captured
+        program. See forward(). Warm up with the same value before capturing:
+        the mask branch selects different programs, and trace capture cannot
+        load a program that the cache does not hold.
+        """
+        self.release_trace()
+
+        trace_device = mesh_device if mesh_device is not None else self.mesh_device
+        trace_id = ttnn.begin_trace_capture(trace_device, cq_id=cq_id)
+        trace_output = self.forward(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            no_padding=no_padding,
+        )
+        ttnn.end_trace_capture(trace_device, trace_id, cq_id=cq_id)
+        ttnn.synchronize_device(trace_device)
+
+        self._trace_id = trace_id
+        self._trace_device = trace_device
+        self._trace_cq_id = cq_id
+        self._trace_output = trace_output
+        return trace_output
+
+    def execute_trace(self, *, blocking: bool = False, synchronize: bool = True) -> ttnn.Tensor:
+        if self._trace_id is None or self._trace_device is None or self._trace_output is None:
+            raise RuntimeError("No BGE-M3 trace has been captured for this model instance")
+
+        ttnn.execute_trace(self._trace_device, self._trace_id, cq_id=self._trace_cq_id, blocking=blocking)
+        if synchronize:
+            ttnn.synchronize_device(self._trace_device)
+        return self._trace_output
+
+    def release_trace(self) -> None:
+        if self._trace_id is None:
+            return
+
+        ttnn.release_trace(self._trace_device, self._trace_id)
+        self._trace_id = None
+        self._trace_device = None
+        self._trace_cq_id = 0
+        self._trace_output = None
+
+    @staticmethod
+    def _require_rank2(tensor: ttnn.Tensor, name: str) -> None:
+        if len(tensor.shape) != 2:
+            raise ValueError(f"{name} must have rank 2 [B, S], got shape={tensor.shape}")
+
+
+def _build_optional_layer_norm(
+    layer_norm_weights: LayerNormWeights | None,
+    eps: float,
+    mesh_device,
+    max_seq_len: int | None = None,
+    max_batch_size: int | None = None,
+    optimizations=None,
+) -> LayerNorm1D | None:
+    if layer_norm_weights is None:
+        return None
+
+    config = LayerNorm1DConfig(
+        weight=layer_norm_weights.weight,
+        bias=layer_norm_weights.bias,
+        eps=eps,
+        mesh_device=mesh_device,
+        max_seq_len=max_seq_len,
+        max_batch_size=max_batch_size,
+    )
+    if optimizations is not None and optimizations.norm is not None:
+        norm_opts = optimizations.norm
+        config = replace(
+            config,
+            compute_kernel_config=norm_opts.compute_kernel_config,
+            output_memcfg=norm_opts.output_memcfg,
+            program_config=norm_opts.program_config,
+            sharded_memcfg=norm_opts.sharded_memcfg,
+        )
+    return LayerNorm1D.from_config(config)
+
+
+BGEModel = BgeM3Model
+
+
+def _attention_mask_dtype(
+    dtype: ttnn.DataType,
+    max_seq_len: int | None,
+    max_batch_size: int | None,
+) -> ttnn.DataType:
+    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    if max_seq_len == 512 and max_batch in (1, 8, 16, 32):
+        return dtype
+    # N300 B12/S8192: prepare the mask once in the SDPA score dtype (bf8) so the
+    # per-layer mask typecast in attention.py becomes a no-op. The mask is
+    # identical across all 24 layers — casting it 24x (bf16->bf8, ~13ms each =
+    # 7% of runtime) is pure waste.
+    if max_seq_len == 8192:
+        return dtype
+    return BgeM3Model._MASK_DTYPE

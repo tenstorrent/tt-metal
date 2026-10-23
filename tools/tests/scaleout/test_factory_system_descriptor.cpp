@@ -1,0 +1,641 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <gtest/gtest.h>
+#include <enchantum/enchantum.hpp>
+#include <algorithm>
+#include <fstream>
+#include <filesystem>
+#include <google/protobuf/text_format.h>
+#include <yaml-cpp/yaml.h>
+
+#include <cabling_generator/cabling_generator.hpp>
+#include <factory_system_descriptor/query.hpp>
+#include <factory_system_descriptor/utils.hpp>
+#include <node/node_types.hpp>
+
+// Include generated protobuf headers
+#include "protobuf/deployment.pb.h"
+#include "protobuf/cluster_config.pb.h"
+#include "protobuf/factory_system_descriptor.pb.h"
+
+namespace tt::scaleout_tools {
+
+// Helper function to create a modified GSD with some connections removed
+// Returns path to the modified GSD file
+// Removes connections until each ASIC pair has exactly min_connections_to_keep_per_pair remaining
+std::string create_gsd_with_missing_connections(
+    const std::string& original_gsd_path, const std::string& output_path, uint32_t min_connections_to_keep_per_pair) {
+    YAML::Node gsd = YAML::LoadFile(original_gsd_path);
+
+    auto make_asic_key = [](const YAML::Node& endpoint) {
+        return endpoint["host_name"].as<std::string>() + "_" + std::to_string(endpoint["tray_id"].as<uint32_t>()) +
+               "_" + std::to_string(endpoint["asic_location"].as<uint32_t>());
+    };
+
+    auto make_pair_key = [](const std::string& a, const std::string& b) {
+        return (a < b) ? (a + "|" + b) : (b + "|" + a);
+    };
+
+    // Delete connections in GSD, keeping only min_connections_to_keep_per_pair per ASIC pair
+    auto delete_connections_in_gsd = [&](const std::string& connection_type) {
+        if (!gsd[connection_type] || gsd[connection_type].IsNull() || gsd[connection_type].size() == 0) {
+            return;
+        }
+
+        YAML::Node original_connections = gsd[connection_type];
+        YAML::Node modified_connections;
+
+        // Track connections per ASIC pair
+        std::map<std::string, uint32_t> asic_pair_counts;
+        std::map<std::string, uint32_t> asic_pair_kept;
+
+        // First pass: count connections per ASIC pair
+        for (const auto& conn : original_connections) {
+            std::string key_a = make_asic_key(conn[0]);
+            std::string key_b = make_asic_key(conn[1]);
+            std::string pair_key = make_pair_key(key_a, key_b);
+            asic_pair_counts[pair_key]++;
+            asic_pair_kept[pair_key] = 0;
+        }
+
+        // Second pass: keep only min_connections_to_keep_per_pair connections per ASIC pair
+        for (const auto& conn : original_connections) {
+            std::string key_a = make_asic_key(conn[0]);
+            std::string key_b = make_asic_key(conn[1]);
+            std::string pair_key = make_pair_key(key_a, key_b);
+
+            uint32_t kept_for_pair = asic_pair_kept[pair_key];
+            uint32_t total_for_pair = asic_pair_counts[pair_key];
+
+            // Keep connection if we haven't reached the minimum yet
+            // If total is less than min, keep all connections (kept_for_pair < total_for_pair)
+            // Otherwise, keep up to min_connections_to_keep_per_pair
+            uint32_t target_to_keep = std::min(min_connections_to_keep_per_pair, total_for_pair);
+            if (kept_for_pair < target_to_keep) {
+                modified_connections.push_back(conn);
+                asic_pair_kept[pair_key]++;
+            }
+            // Otherwise, skip this connection (it will be removed)
+        }
+
+        gsd[connection_type] = modified_connections;
+    };
+
+    // Delete connections in both local and global eth connections
+    delete_connections_in_gsd("local_eth_connections");
+    delete_connections_in_gsd("global_eth_connections");
+
+    // Write modified GSD to output file
+    std::filesystem::create_directories(std::filesystem::path(output_path).parent_path());
+    std::ofstream out_file(output_path);
+    out_file << gsd;
+    out_file.close();
+
+    return output_path;
+}
+
+static const std::string root_output_dir = "generated/tests/";
+
+// Helper function to create deployment descriptor protobuf object
+void create_deployment_descriptor(
+    const std::string& node_type_string, tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment) {
+    deployment.set_rack_capacity(1);
+
+    auto* host = deployment.add_hosts();
+    host->set_hall("0");
+    host->set_aisle("0");
+    host->set_rack(0);
+    host->set_shelf_u(0);
+    host->set_node_type(node_type_string);
+    host->set_host("host");
+}
+
+// Helper function to create cluster config protobuf object for a single node
+void create_cluster_config(
+    const std::string& node_type_string, tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster) {
+    // Create graph template
+    auto& graph_template = cluster.mutable_graph_templates()->operator[]("single_" + node_type_string);
+    auto* child = graph_template.add_children();
+    child->set_name("node1");
+    auto* node_ref = child->mutable_node_ref();
+    node_ref->set_node_descriptor(node_type_string);
+
+    // Create root instance
+    auto* root_instance = cluster.mutable_root_instance();
+    root_instance->set_template_name("single_" + node_type_string);
+    auto& child_mapping = root_instance->mutable_child_mappings()->operator[]("node1");
+    child_mapping.set_host_id(0);
+}
+
+// Helper function to serialize protobuf object to a temporary file
+template <typename ProtoType>
+std::string serialize_proto_to_temp_file(const ProtoType& proto, const std::string& filename) {
+    std::string temp_path = root_output_dir + filename;
+    std::filesystem::create_directories(std::filesystem::path(temp_path).parent_path());
+    std::ofstream output_file(temp_path);
+    if (!output_file.is_open()) {
+        throw std::runtime_error("Failed to open output file: " + temp_path);
+    }
+
+    std::string output_string;
+    google::protobuf::TextFormat::Printer printer;
+    printer.SetUseShortRepeatedPrimitives(true);
+    printer.SetUseUtf8StringEscaping(true);
+    printer.SetSingleLineMode(false);
+    printer.SetPrintMessageFieldsInIndexOrder(true);
+
+    if (!printer.PrintToString(proto, &output_string)) {
+        throw std::runtime_error("Failed to write textproto to file: " + temp_path);
+    }
+
+    output_file << output_string;
+    output_file.close();
+    return temp_path;
+}
+
+TEST(Cluster, TestFactorySystemDescriptorSingleNodeTypes) {
+    for (auto node_type : enchantum::values_generator<NodeType>) {
+        auto node_type_string = std::string(enchantum::to_string(node_type));
+
+        // Create protobuf objects
+        tt::scaleout_tools::deployment::proto::DeploymentDescriptor deployment;
+        tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor cluster;
+
+        create_deployment_descriptor(node_type_string, deployment);
+        create_cluster_config(node_type_string, cluster);
+
+        // Serialize to temporary files
+        std::string deployment_file =
+            serialize_proto_to_temp_file(deployment, node_type_string + "_deployment.textproto");
+        std::string cluster_file = serialize_proto_to_temp_file(cluster, node_type_string + "_cluster.textproto");
+
+        std::string fsd_file = root_output_dir + "fsd/factory_system_descriptor_" + node_type_string + ".textproto";
+
+        // Create the cabling generator with temporary file paths
+        CablingGenerator cabling_generator(cluster_file, deployment_file);
+
+        // Generate the FSD
+        cabling_generator.emit_factory_system_descriptor(fsd_file);
+    }
+}
+
+TEST(Cluster, TestFactorySystemDescriptor16LB) {
+    // Create the cabling generator with file paths
+    CablingGenerator cabling_generator(
+        "tools/tests/scaleout/cabling_descriptors/16_n300_lb_cluster.textproto",
+        "tools/tests/scaleout/deployment_descriptors/16_lb_deployment.textproto");
+
+    const std::string fsd_file = root_output_dir + "fsd/factory_system_descriptor_16_n300_lb.textproto";
+    cabling_generator.emit_factory_system_descriptor(fsd_file);
+    cabling_generator.emit_cabling_guide_csv(root_output_dir + "fsd/cabling_guide_16_n300_lb.csv");
+
+    // Validate the FSD against the discovered GSD using the common utility function
+    validate_fsd_against_gsd(fsd_file, "tools/tests/scaleout/global_system_descriptors/16_lb_physical_desc.yaml");
+}
+
+TEST(Cluster, TestFactorySystemDescriptor5LB) {
+    // Create the cabling generator with file paths
+    CablingGenerator cabling_generator(
+        "tools/tests/scaleout/cabling_descriptors/5_n300_lb_superpod.textproto",
+        "tools/tests/scaleout/deployment_descriptors/5_lb_deployment.textproto");
+
+    const std::string fsd_file = root_output_dir + "fsd/factory_system_descriptor_5_n300_lb.textproto";
+    cabling_generator.emit_factory_system_descriptor(fsd_file);
+    cabling_generator.emit_cabling_guide_csv(root_output_dir + "fsd/cabling_guide_5_n300_lb.csv");
+
+    // Validate the FSD against the discovered GSD using the common utility function
+    validate_fsd_against_gsd(fsd_file, "tools/tests/scaleout/global_system_descriptors/5_lb_physical_desc.yaml");
+}
+
+TEST(Cluster, TestFactorySystemDescriptor5WHGalaxyYTorus) {
+    // Create the cabling generator with file paths
+    CablingGenerator cabling_generator(
+        "tools/tests/scaleout/cabling_descriptors/5_wh_galaxy_y_torus_superpod.textproto",
+        "tools/tests/scaleout/deployment_descriptors/5_wh_galaxy_y_torus_deployment.textproto");
+
+    const std::string fsd_file = root_output_dir + "fsd/factory_system_descriptor_5_wh_galaxy_y_torus.textproto";
+    cabling_generator.emit_factory_system_descriptor(fsd_file);
+
+    cabling_generator.emit_cabling_guide_csv(root_output_dir + "fsd/cabling_guide_5_wh_galaxy_y_torus.csv");
+
+    // Validate the FSD against the discovered GSD using the common utility function
+    EXPECT_THROW(
+        {
+            try {
+                validate_fsd_against_gsd(
+                    fsd_file,
+                    "tools/tests/scaleout/global_system_descriptors/"
+                    "5_wh_galaxy_y_torus_physical_desc.yaml");
+            } catch (const std::runtime_error& e) {
+                std::cout << e.what() << std::endl;
+                throw;
+            }
+        },
+        std::runtime_error);
+}
+
+TEST(Cluster, TestGenerateClusterDescriptorFromFSD) {
+    // Generate BH_GALAXY FSD first
+    const std::string node_type_string = "BH_GALAXY";
+
+    // Create protobuf objects
+    tt::scaleout_tools::deployment::proto::DeploymentDescriptor deployment;
+    tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor cluster;
+
+    create_deployment_descriptor(node_type_string, deployment);
+    create_cluster_config(node_type_string, cluster);
+
+    std::string deployment_file = serialize_proto_to_temp_file(deployment, node_type_string + "_deployment.textproto");
+    std::string cluster_file = serialize_proto_to_temp_file(cluster, node_type_string + "_cluster.textproto");
+
+    std::string fsd_file = root_output_dir + "fsd/factory_system_descriptor_" + node_type_string + ".textproto";
+
+    CablingGenerator cabling_generator(cluster_file, deployment_file);
+
+    cabling_generator.emit_factory_system_descriptor(fsd_file);
+
+    std::string output_dir = root_output_dir + "cluster_descs/";
+    std::string base_filename = "cluster_descriptor_" + node_type_string;
+    std::string result_file = generate_cluster_descriptor_from_fsd(fsd_file, output_dir, base_filename);
+
+    EXPECT_TRUE(std::filesystem::exists(result_file));
+    EXPECT_GT(std::filesystem::file_size(result_file), 0);
+
+    std::cout << "Generated cluster descriptor written to: " << result_file << std::endl;
+}
+
+TEST(Cluster, TestGenerateMultiHostClusterDescriptorFromFSD) {
+    const std::string cluster_file =
+        "tools/tests/scaleout/cabling_descriptors/8x16_wh_galaxy_xy_torus_superpod.textproto";
+    const std::string deployment_file =
+        "tools/tests/scaleout/deployment_descriptors/8x16_wh_galaxy_xy_torus_deployment.textproto";
+    const std::string fsd_file = root_output_dir + "fsd/factory_system_descriptor_8x16_wh_galaxy_xy_torus.textproto";
+
+    CablingGenerator cabling_generator(cluster_file, deployment_file);
+
+    cabling_generator.emit_factory_system_descriptor(fsd_file);
+
+    std::string output_dir = root_output_dir + "cluster_descs/";
+    std::string base_filename = "cluster_descriptor_8x16_wh_galaxy_xy_torus";
+    std::string result_file = generate_cluster_descriptor_from_fsd(fsd_file, output_dir, base_filename);
+
+    EXPECT_TRUE(std::filesystem::exists(result_file));
+    EXPECT_GT(std::filesystem::file_size(result_file), 0);
+}
+
+TEST(Cluster, TestMinConnectionsPassesWithMatchingConnections) {
+    // When FSD and GSD connections match perfectly, validation passes.
+    // The min_connections parameter doesn't affect the result when there are no mismatches.
+    CablingGenerator cabling_generator(
+        "tools/tests/scaleout/cabling_descriptors/16_n300_lb_cluster.textproto",
+        "tools/tests/scaleout/deployment_descriptors/16_lb_deployment.textproto");
+
+    const std::string fsd_file = root_output_dir + "fsd/factory_system_descriptor_16_n300_lb_min_conn_test.textproto";
+    cabling_generator.emit_factory_system_descriptor(fsd_file);
+
+    // With matching connections, validation should pass regardless of min_connections value
+    auto missing_connections = validate_fsd_against_gsd(
+        fsd_file,
+        "tools/tests/scaleout/global_system_descriptors/16_lb_physical_desc.yaml",
+        true,   // strict_validation
+        true,   // assert_on_connection_mismatch
+        false,  // log_output
+        1);     // min_connections - specified but not used since no mismatches
+
+    EXPECT_TRUE(missing_connections.empty());
+
+    // Clean up temporary file
+    std::filesystem::remove(fsd_file);
+}
+
+TEST(Cluster, TestMinConnectionsRelaxedModePassesWithPartialMismatches) {
+    // Create a GSD with some connections removed (but at least 1 per ASIC pair remains)
+    // Relaxed mode with min_connections=1 should pass because each ASIC pair still has >= 1 connection
+    CablingGenerator cabling_generator(
+        "tools/tests/scaleout/cabling_descriptors/16_n300_lb_cluster.textproto",
+        "tools/tests/scaleout/deployment_descriptors/16_lb_deployment.textproto");
+
+    const std::string fsd_file = root_output_dir + "fsd/factory_system_descriptor_16_n300_lb_relaxed_test.textproto";
+    cabling_generator.emit_factory_system_descriptor(fsd_file);
+
+    // Create modified GSD with some connections removed (keep at least 1 per pair)
+    const std::string modified_gsd = create_gsd_with_missing_connections(
+        "tools/tests/scaleout/global_system_descriptors/16_lb_physical_desc.yaml",
+        root_output_dir + "gsd/16_lb_physical_desc_partial_missing.yaml",
+        1);  // min_connections_to_keep_per_pair
+
+    // With min_connections=1, relaxed mode should pass because each ASIC pair has at least 1 connection
+    auto missing_connections = validate_fsd_against_gsd(
+        fsd_file,
+        modified_gsd,
+        true,   // strict_validation
+        true,   // assert_on_connection_mismatch
+        false,  // log_output
+        1);     // min_connections - each ASIC pair must have at least 1 connection
+
+    // Relaxed mode satisfied: returns empty set (treated as success)
+    EXPECT_TRUE(missing_connections.empty());
+
+    // Clean up temporary files
+    std::filesystem::remove(modified_gsd);
+    std::filesystem::remove(fsd_file);
+}
+
+TEST(Cluster, TestMinConnectionsRelaxedModeFailsWhenAsicPairHasInsufficientConnections) {
+    // Create a GSD with connections removed such that some ASIC pairs have fewer than min_connections
+    CablingGenerator cabling_generator(
+        "tools/tests/scaleout/cabling_descriptors/16_n300_lb_cluster.textproto",
+        "tools/tests/scaleout/deployment_descriptors/16_lb_deployment.textproto");
+
+    const std::string fsd_file =
+        root_output_dir + "fsd/factory_system_descriptor_16_n300_lb_insufficient_test.textproto";
+    cabling_generator.emit_factory_system_descriptor(fsd_file);
+
+    // Create modified GSD with connections removed (keep at least 1 per pair)
+    const std::string modified_gsd = create_gsd_with_missing_connections(
+        "tools/tests/scaleout/global_system_descriptors/16_lb_physical_desc.yaml",
+        root_output_dir + "gsd/16_lb_physical_desc_insufficient.yaml",
+        1);  // min_connections_to_keep_per_pair
+
+    // With min_connections=4, relaxed mode should fail because ASIC pairs only have ~1-2 connections left
+    EXPECT_THROW(
+        {
+            validate_fsd_against_gsd(
+                fsd_file,
+                modified_gsd,
+                true,   // strict_validation
+                true,   // assert_on_connection_mismatch
+                false,  // log_output
+                4);     // min_connections - requires 4 per pair, but we only have 1-2
+        },
+        std::runtime_error);
+
+    // Clean up temporary files
+    std::filesystem::remove(modified_gsd);
+    std::filesystem::remove(fsd_file);
+}
+
+TEST(Cluster, TestMinConnectionsStrictModeFailsWithMismatches) {
+    // Create a GSD with some connections removed
+    // Strict mode (no min_connections) should fail on any mismatch
+    CablingGenerator cabling_generator(
+        "tools/tests/scaleout/cabling_descriptors/16_n300_lb_cluster.textproto",
+        "tools/tests/scaleout/deployment_descriptors/16_lb_deployment.textproto");
+
+    const std::string fsd_file =
+        root_output_dir + "fsd/factory_system_descriptor_16_n300_lb_strict_fail_test.textproto";
+    cabling_generator.emit_factory_system_descriptor(fsd_file);
+
+    // Create modified GSD with some connections removed (keep at least 1 per pair)
+    const std::string modified_gsd = create_gsd_with_missing_connections(
+        "tools/tests/scaleout/global_system_descriptors/16_lb_physical_desc.yaml",
+        root_output_dir + "gsd/16_lb_physical_desc_strict_fail.yaml",
+        1);  // min_connections_to_keep_per_pair
+
+    // Without min_connections, strict validation should fail on any mismatch
+    EXPECT_THROW(
+        {
+            validate_fsd_against_gsd(
+                fsd_file,
+                modified_gsd,
+                true,           // strict_validation
+                true,           // assert_on_connection_mismatch
+                false,          // log_output
+                std::nullopt);  // min_connections - not specified, use strict mode
+        },
+        std::runtime_error);
+
+    // Clean up temporary files
+    std::filesystem::remove(modified_gsd);
+    std::filesystem::remove(fsd_file);
+}
+
+TEST(CablingGenerator, PruneDeadChannelsRemovesContainingCable) {
+    CablingGenerator gen(
+        "tools/tests/scaleout/cabling_descriptors/16_n300_lb_cluster.textproto",
+        "tools/tests/scaleout/deployment_descriptors/16_lb_deployment.textproto");
+
+    const size_t before = gen.get_chip_connections().size();
+    ASSERT_GT(before, 0u);
+
+    // Take a real channel endpoint from the first connection (host_id -> hostname via deployment).
+    const auto& ep = gen.get_chip_connections().front().first;
+    PhysicalChannelEndpoint dead{gen.get_deployment_hosts().at(*ep.host_id).hostname, ep.tray_id, ep.asic_channel};
+
+    auto cables = gen.find_cables_containing_channels({dead});
+    EXPECT_EQ(cables.size(), 1u);  // dead channel maps to exactly one cable
+
+    auto pruned = gen.prune_dead_channels({dead});
+    EXPECT_EQ(pruned, cables);                             // prune reports the same cable
+    EXPECT_LT(gen.get_chip_connections().size(), before);  // its channels are gone from the FSD
+}
+
+TEST(CablingGenerator, PruneDeadChannelsIgnoresUnknownChannel) {
+    CablingGenerator gen(
+        "tools/tests/scaleout/cabling_descriptors/16_n300_lb_cluster.textproto",
+        "tools/tests/scaleout/deployment_descriptors/16_lb_deployment.textproto");
+
+    const size_t before = gen.get_chip_connections().size();
+    PhysicalChannelEndpoint bogus{"nonexistent-host", TrayId(1), AsicChannel{0, ChanId(0)}};
+
+    EXPECT_TRUE(gen.prune_dead_channels({bogus}).empty());  // no cable matched
+    EXPECT_EQ(gen.get_chip_connections().size(), before);   // FSD unchanged
+}
+
+namespace {
+
+// Build an FSD with the given (hostname, instance_path) hosts, indexed by host_id in order.
+fsd::proto::FactorySystemDescriptor make_fsd_with_paths(
+    const std::vector<std::pair<std::string, std::vector<std::string>>>& hosts) {
+    fsd::proto::FactorySystemDescriptor fsd;
+    for (const auto& [hostname, path] : hosts) {
+        auto* host = fsd.add_hosts();
+        host->set_hostname(hostname);
+        for (const auto& segment : path) {
+            host->add_instance_path(segment);
+        }
+    }
+    return fsd;
+}
+
+// Add an eth connection between two hosts (only host_id matters for hierarchy queries).
+void add_connection(fsd::proto::FactorySystemDescriptor& fsd, uint32_t host_id_a, uint32_t host_id_b) {
+    auto* connection = fsd.mutable_eth_connections()->add_connection();
+    connection->mutable_endpoint_a()->set_host_id(host_id_a);
+    connection->mutable_endpoint_b()->set_host_id(host_id_b);
+}
+
+}  // namespace
+
+TEST(FsdQuery, LongestCommonPrefixByHostId) {
+    auto fsd = make_fsd_with_paths({
+        {"node0", {"sp_0", "node_0", "h_0"}},
+        {"node1", {"sp_0", "node_0", "h_1"}},
+        {"node2", {"sp_0", "node_1", "h_0"}},
+        {"node3", {"sp_1", "node_0", "h_0"}},
+    });
+    FsdQuery query(fsd);
+
+    EXPECT_EQ(query.longest_common_prefix(0u, 1u), (std::vector<std::string>{"sp_0", "node_0"}));
+    EXPECT_EQ(query.longest_common_prefix(0u, 2u), (std::vector<std::string>{"sp_0"}));
+    EXPECT_EQ(query.longest_common_prefix(0u, 3u), (std::vector<std::string>{}));
+    // Same host is a prefix of itself.
+    EXPECT_EQ(query.longest_common_prefix(2u, 2u), (std::vector<std::string>{"sp_0", "node_1", "h_0"}));
+    // Order does not matter.
+    EXPECT_EQ(query.longest_common_prefix(1u, 0u), query.longest_common_prefix(0u, 1u));
+}
+
+TEST(FsdQuery, LongestCommonPrefixByHostname) {
+    auto fsd = make_fsd_with_paths({
+        {"node0", {"sp_0", "node_0"}},
+        {"node1", {"sp_0", "node_1"}},
+    });
+    FsdQuery query(fsd);
+
+    EXPECT_EQ(query.longest_common_prefix("node0", "node1"), (std::vector<std::string>{"sp_0"}));
+    EXPECT_EQ(query.longest_common_prefix("node0", "node0"), (std::vector<std::string>{"sp_0", "node_0"}));
+}
+
+TEST(FsdQuery, HandlesEmptyAndUnequalLengthPaths) {
+    auto fsd = make_fsd_with_paths({
+        {"node0", {}},
+        {"node1", {"sp_0"}},
+        {"node2", {"sp_0", "node_0", "h_0"}},
+    });
+    FsdQuery query(fsd);
+
+    // Empty path shares nothing with anyone.
+    EXPECT_EQ(query.longest_common_prefix(0u, 1u), (std::vector<std::string>{}));
+    // Shorter path is a full prefix of the longer one.
+    EXPECT_EQ(query.longest_common_prefix(1u, 2u), (std::vector<std::string>{"sp_0"}));
+}
+
+TEST(FsdQuery, ThrowsOnUnknownHostIdOrHostname) {
+    auto fsd = make_fsd_with_paths({{"node0", {"sp_0"}}});
+    FsdQuery query(fsd);
+
+    EXPECT_THROW(query.longest_common_prefix(0u, 5u), std::out_of_range);
+    EXPECT_THROW(query.longest_common_prefix("node0", "missing"), std::runtime_error);
+}
+
+TEST(FsdQuery, ThrowsOnDuplicateHostname) {
+    auto fsd = make_fsd_with_paths({{"dup", {"sp_0"}}, {"dup", {"sp_1"}}});
+    EXPECT_THROW(FsdQuery{fsd}, std::runtime_error);
+}
+
+TEST(FsdQuery, HierarchyPartition) {
+    auto fsd = make_fsd_with_paths({
+        {"h0", {"root", "sp_0", "node_0"}},
+        {"h1", {"root", "sp_0", "node_1"}},
+        {"h2", {"root", "sp_1", "node_0"}},
+        {"h3", {"root", "sp_1", "node_1"}},
+    });
+    FsdQuery query(fsd);
+
+    // depth 2 -> partition by (root, sp_x): two subgroups.
+    auto p2 = query.hierarchy_partition(2u);
+    ASSERT_EQ(p2.size(), 2u);
+    EXPECT_EQ(p2[0], (std::vector<uint32_t>{0u, 1u}));  // sp_0
+    EXPECT_EQ(p2[1], (std::vector<uint32_t>{2u, 3u}));  // sp_1
+
+    // depth 3 -> each host is its own subgroup.
+    EXPECT_EQ(query.hierarchy_partition(3u).size(), 4u);
+
+    // depth 1 -> all share "root" -> a single subgroup with every host.
+    auto p1 = query.hierarchy_partition(1u);
+    ASSERT_EQ(p1.size(), 1u);
+    EXPECT_EQ(p1[0], (std::vector<uint32_t>{0u, 1u, 2u, 3u}));
+}
+
+TEST(FsdQuery, HierarchyPartitionHandlesShortPaths) {
+    auto fsd = make_fsd_with_paths({
+        {"h0", {"root", "sp_0"}},
+        {"h1", {"root", "sp_0", "node_1"}},
+        {"h2", {"root"}},
+    });
+    FsdQuery query(fsd);
+
+    // depth 3: h0 (len 2) and h2 (len 1) group by their full path; h1 by its full 3 segments.
+    auto p = query.hierarchy_partition(3u);
+    EXPECT_EQ(p.size(), 3u);
+}
+
+// A graph_instance may reference multiple leaf node_descriptors, so several hosts can sit under the same
+// hierarchy node, sharing the instance_path prefix and differing only in the final (leaf) segment. They
+// must land in the same subgroup at the node-level depth (no one-node-per-leaf-level assumption).
+TEST(FsdQuery, HierarchyPartitionGroupsMultipleLeavesUnderOneNode) {
+    auto fsd = make_fsd_with_paths({
+        {"h0", {"sp_0", "node_0", "node_0"}},  // two leaf nodes under sp_0/node_0
+        {"h1", {"sp_0", "node_0", "node_1"}},
+        {"h2", {"sp_0", "node_1", "node_0"}},
+    });
+    FsdQuery query(fsd);
+
+    // depth 2 = the node level: h0 and h1 (both under sp_0/node_0) share a subgroup; h2 is separate.
+    auto p2 = query.hierarchy_partition(2u);
+    ASSERT_EQ(p2.size(), 2u);
+    EXPECT_EQ(p2[0], (std::vector<uint32_t>{0u, 1u}));  // sp_0/node_0 leaves grouped together
+    EXPECT_EQ(p2[1], (std::vector<uint32_t>{2u}));      // sp_0/node_1
+
+    // An intra-node link (h0<->h1) has LCP depth 2, i.e. the same depth at which they co-locate.
+    add_connection(fsd, 0, 1);
+    FsdQuery query_with_conn(fsd);
+    EXPECT_EQ(query_with_conn.hierarchy_depth(0u, 1u), 2u);
+}
+
+TEST(FsdQuery, GetInstancePath) {
+    auto fsd = make_fsd_with_paths({
+        {"node0", {"root", "sp_0", "node_0"}},
+        {"node1", {}},
+    });
+    FsdQuery query(fsd);
+
+    EXPECT_EQ(query.get_instance_path(0u), (std::vector<std::string>{"root", "sp_0", "node_0"}));
+    EXPECT_EQ(query.get_instance_path("node0"), (std::vector<std::string>{"root", "sp_0", "node_0"}));
+    EXPECT_TRUE(query.get_instance_path(1u).empty());
+    EXPECT_THROW(query.get_instance_path(5u), std::out_of_range);
+    EXPECT_THROW(query.get_instance_path("missing"), std::runtime_error);
+}
+
+TEST(FsdQuery, HierarchyDepthIsCommonPrefixLength) {
+    auto fsd = make_fsd_with_paths({
+        {"node0", {"root", "sp_0", "node_0"}},
+        {"node1", {"root", "sp_0", "node_1"}},
+        {"node2", {"root", "sp_1"}},
+    });
+    FsdQuery query(fsd);
+
+    EXPECT_EQ(query.hierarchy_depth(0u, 1u), 2u);  // share root, sp_0
+    EXPECT_EQ(query.hierarchy_depth(0u, 2u), 1u);  // share root only
+    EXPECT_EQ(query.hierarchy_depth("node0", "node1"), 2u);
+    EXPECT_EQ(query.hierarchy_depth(0u, 0u), 3u);  // full path with itself
+}
+
+TEST(FsdQuery, MaxDepthAndTiersFromConnections) {
+    auto fsd = make_fsd_with_paths({
+        {"node0", {"root", "sp_0", "node_0"}},
+        {"node1", {"root", "sp_0", "node_1"}},
+        {"node2", {"root", "sp_1", "node_0"}},
+    });
+    add_connection(fsd, 0, 1);  // depth 2 (root, sp_0)
+    add_connection(fsd, 0, 2);  // depth 1 (root)
+    add_connection(fsd, 1, 2);  // depth 1 (root)
+    FsdQuery query(fsd);
+
+    EXPECT_EQ(query.max_hierarchy_depth(), 2u);
+    // Distinct tiers, deepest-first; front() is the max depth.
+    EXPECT_EQ(query.hierarchy_tiers_deepest_first(), (std::vector<uint32_t>{2u, 1u}));
+    EXPECT_EQ(query.hierarchy_tiers_deepest_first().front(), query.max_hierarchy_depth());
+}
+
+TEST(FsdQuery, NoConnectionsMeansZeroMaxDepth) {
+    auto fsd = make_fsd_with_paths({{"node0", {"root", "sp_0"}}});
+    FsdQuery query(fsd);
+
+    EXPECT_EQ(query.max_hierarchy_depth(), 0u);
+    EXPECT_TRUE(query.hierarchy_tiers_deepest_first().empty());
+}
+
+}  // namespace tt::scaleout_tools

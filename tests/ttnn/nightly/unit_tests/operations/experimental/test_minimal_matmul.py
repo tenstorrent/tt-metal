@@ -1,0 +1,1083 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import pytest
+import torch
+import ttnn
+from loguru import logger
+
+from models.common.utility_functions import comp_pcc
+from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
+
+from tracy.process_model_log import (
+    get_latest_ops_log_filename,
+    run_device_profiler,
+)
+
+
+def assert_quality(torch_output, tt_output):
+    pcc_passed, pcc_val = comp_pcc(torch_output, tt_output)
+    relative_rmse_val = torch.nn.functional.mse_loss(torch_output, tt_output).sqrt().item() / torch_output.std().item()
+    logger.info(f"PCC: {pcc_val:.7f}, Relative RMSE: {relative_rmse_val:.4f}")
+    return {
+        "pcc": pcc_val,
+        "relative_rmse": relative_rmse_val,
+    }
+
+
+def run_test_linear_impl(
+    device,
+    torch_input,
+    weight_input,
+    bias_input,
+    tt_input,
+    tt_weight,
+    tt_bias,
+    M_block_size,
+    K_block_size,
+    N_block_size,
+    subblock_h,
+    subblock_w,
+    activation=None,
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    fp32_acc=True,
+    core_grid=None,
+):
+    core_grid = core_grid or device.compute_with_storage_grid_size()
+
+    activation_fn = None
+    if activation == "gelu":
+        activation_fn = (ttnn.UnaryOpType.GELU, False)
+    else:
+        assert activation is None, f"Unsupported activation: {activation}"
+
+    with torch.no_grad():
+        torch_output = torch_input @ weight_input
+        if bias_input is not None:
+            torch_output = torch_output + bias_input
+
+        if activation == "gelu":
+            torch_output = torch.nn.functional.gelu(torch_output)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_acc,
+        packer_l1_acc=True,
+    )
+
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=M_block_size,
+        K_block_size=K_block_size,
+        N_block_size=N_block_size,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        compute_with_storage_grid_size=core_grid,
+    )
+    tt_output = ttnn.experimental.minimal_matmul(
+        tt_input,
+        tt_weight,
+        bias_tensor=tt_bias,
+        fused_activation=activation_fn,
+        compute_kernel_config=compute_config,
+        config=matmul_config,
+    )
+    tt_output = ttnn.to_torch(tt_output)
+    check_result = assert_quality(torch_output, tt_output)
+    return check_result
+
+
+def run_test_linear(
+    device,
+    M,
+    K,
+    N,
+    M_block_size,
+    K_block_size,
+    N_block_size,
+    subblock_h,
+    subblock_w,
+    use_bias=False,
+    activation=None,
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    fp32_acc=True,
+    dtype=ttnn.bfloat16,
+    weight_dtype=None,
+    bias_dtype=None,
+    core_grid=None,
+):
+    logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
+    torch_dtype = torch.float32
+
+    torch_input = torch.randn((M, K), dtype=torch_dtype)
+    weight_input = torch.randn((K, N), dtype=torch_dtype)
+    bias_input = None
+    if use_bias:
+        bias_input = torch.randn((1, N), dtype=torch_dtype)
+
+    # Prepare TT tensors
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_input, dtype=weight_dtype or dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_bias = None
+    if use_bias:
+        tt_bias = ttnn.from_torch(bias_input, dtype=bias_dtype or dtype, device=device, layout=ttnn.TILE_LAYOUT)
+
+    return run_test_linear_impl(
+        device=device,
+        torch_input=torch_input,
+        weight_input=weight_input,
+        bias_input=bias_input,
+        tt_input=tt_input,
+        tt_weight=tt_weight,
+        tt_bias=tt_bias,
+        M_block_size=M_block_size,
+        K_block_size=K_block_size,
+        N_block_size=N_block_size,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        activation=activation,
+        math_fidelity=math_fidelity,
+        fp32_acc=fp32_acc,
+        core_grid=core_grid,
+    )
+
+
+@pytest.mark.parametrize(
+    "M, K, N",
+    [(4096, 4096, 4096)],
+)
+@pytest.mark.parametrize(
+    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [(8, 8, 8, 2, 2)],
+)
+def test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w):
+    check_result = run_test_linear(
+        device,
+        M,
+        K,
+        N,
+        M_block_size,
+        K_block_size,
+        N_block_size,
+        subblock_h,
+        subblock_w,
+    )
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
+# Correctness guard for the granular output-writer path (write_block_sync_granular): each row's
+# write-source reads out of the cb_out slot must be flushed before cb_pop_front releases it back to
+# the compute producer, otherwise the producer can repack the freed slot while the writes are still
+# reading it (WAR on the output CB) and corrupt the output. This shape drives the output-writer core
+# through the granular-write path and turns an ordering regression there into a PCC failure; the WAR
+# is timing-masked, so this is a value-correctness guard, not a deterministic reproducer.
+@pytest.mark.parametrize(
+    "M, K, N",
+    [(4096, 512, 2048)],
+)
+@pytest.mark.parametrize(
+    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [(8, 8, 8, 2, 2)],
+)
+def test_linear_granular_write_ordering(
+    device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w
+):
+    check_result = run_test_linear(
+        device,
+        M,
+        K,
+        N,
+        M_block_size,
+        K_block_size,
+        N_block_size,
+        subblock_h,
+        subblock_w,
+    )
+
+    assert check_result["pcc"] > 0.999_500, f'Expected PCC > 0.999500, got {check_result["pcc"]}'
+    assert check_result["relative_rmse"] < 0.02, f'Expected relative RMSE < 0.02, got {check_result["relative_rmse"]}'
+
+
+@pytest.mark.parametrize(
+    "M, Ka, Kb, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [
+        # Realistic FLUX.2 proj_out shape (per device): in0 = [attn 768 | mlp 2304] -> 96 K-tiles.
+        # k_split (Ka/32 = 24) aligns to K_block (8) -> no K-block straddles the seam.
+        (1152, 768, 2304, 768, 8, 8, 8, 2, 2),
+        # Seam falls INSIDE a K-block: k_split=3 tiles, K_block=4 -> block [0,4) is part x_a (0..2),
+        # part x_b (3). Exercises the per-tile source switch across the boundary.
+        (256, 96, 160, 128, 4, 4, 4, 2, 2),
+        # M < N -> transpose_core_grid=False, so in0 is the output-writer + mcaster AND the two-source
+        # reader in the same kernel (the config MMRS uses). M=256, Ka=768(24t), Kb=2304(72t), N=768.
+        (256, 768, 2304, 768, 8, 8, 8, 2, 2),
+    ],
+    ids=["proj_out_aligned", "seam_in_block", "transpose_false_in0_writer"],
+)
+def test_linear_fused_concat(device, M, Ka, Kb, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w):
+    """Fused concatenation of in0 over K: minimal_matmul([x_a, x_b], weight) (a 2-element input list)
+    must equal matmul(concat([x_a, x_b], -1), weight) without materializing the concat. The split point
+    is x_a's K width; weight is [Ka+Kb, N] in matching K order."""
+    torch_dtype = torch.float32
+    torch.manual_seed(0)
+    x_a = torch.randn((M, Ka), dtype=torch_dtype)
+    x_b = torch.randn((M, Kb), dtype=torch_dtype)
+    weight = torch.randn((Ka + Kb, N), dtype=torch_dtype)
+
+    with torch.no_grad():
+        torch_output = torch.cat([x_a, x_b], dim=-1) @ weight
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=M_block_size,
+        K_block_size=K_block_size,
+        N_block_size=N_block_size,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+    )
+
+    tt_x_a = ttnn.from_torch(x_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_x_b = ttnn.from_torch(x_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    tt_output = ttnn.experimental.minimal_matmul(
+        [tt_x_a, tt_x_b],  # 2-element list -> virtual concat of in0 over K (concat-free)
+        tt_weight,
+        compute_kernel_config=compute_config,
+        config=matmul_config,
+    )
+    tt_output_torch = ttnn.to_torch(tt_output)
+
+    result = assert_quality(torch_output, tt_output_torch)
+    assert result["pcc"] > 0.999_000
+    assert result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize(
+    "M, Ka, Kb, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [
+        # Ka=94 (Ka%32=30 != 0, padded to 96=3t), Kb=20 (Kb%32=20 != 0, padded to 32=1t).
+        # Total K_padded=128=4t. Weight is per-segment tile-padded (device_count=1).
+        (256, 94, 20, 128, 4, 4, 4, 2, 2),
+        # Ka=752 (Ka%32=16 != 0, padded to 768=24t), Kb=100 (Kb%32=4 != 0, padded to 128=4t).
+        # K_tiles=28, K_block_size=4 (divides 28).
+        (256, 752, 100, 128, 4, 4, 4, 2, 2),
+    ],
+    ids=["small_non_aligned", "large_non_aligned"],
+)
+def test_linear_fused_concat_non_aligned(
+    device, M, Ka, Kb, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w
+):
+    """Fused concat with non-tile-aligned segment K (Ka % 32 != 0 and/or Kb % 32 != 0).
+
+    The weight is built via prepare_weight_for_concatenated_input (device_count=1) which inserts
+    zero-padding rows at each segment's tile boundary.  The golden is exact matmul of the
+    concatenated logical activations against the original (un-padded) weight; the padding rows
+    must contribute zero to the contraction to match.
+    """
+    from models.tt_dit.utils.tensor import prepare_weight_for_concatenated_input
+
+    torch_dtype = torch.float32
+    torch.manual_seed(42)
+    x_a = torch.randn((M, Ka), dtype=torch_dtype)
+    x_b = torch.randn((M, Kb), dtype=torch_dtype)
+    # Reference weight in [K, N] form (un-padded); golden uses the logical entries only.
+    weight_ref = torch.randn((Ka + Kb, N), dtype=torch_dtype)
+
+    with torch.no_grad():
+        torch_output = torch.cat([x_a, x_b], dim=-1) @ weight_ref
+
+    # Build per-segment tile-padded weight: transpose to [N, K], prep, transpose back to [K_padded, N].
+    weight_padded = prepare_weight_for_concatenated_input(weight_ref.T, [Ka, Kb], device_count=1).T
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=M_block_size,
+        K_block_size=K_block_size,
+        N_block_size=N_block_size,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+    )
+
+    tt_x_a = ttnn.from_torch(x_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_x_b = ttnn.from_torch(x_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_padded, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    tt_output = ttnn.experimental.minimal_matmul(
+        [tt_x_a, tt_x_b],
+        tt_weight,
+        compute_kernel_config=compute_config,
+        config=matmul_config,
+    )
+    tt_output_torch = ttnn.to_torch(tt_output)
+
+    result = assert_quality(torch_output, tt_output_torch)
+    assert result["pcc"] > 0.999_000
+    assert result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize(
+    "M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [(512, 512, 512, 1, 1, 1, 1, 1)],
+)
+@pytest.mark.parametrize("use_bias", [True, False], ids=["with_bias", "without_bias"])
+@pytest.mark.parametrize(
+    "math_fidelity",
+    [ttnn.MathFidelity.LoFi, ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi4],
+    ids=["LoFi", "HiFi2", "HiFi4"],
+)
+@pytest.mark.parametrize("fp32_acc", [True, False], ids=["fp32_acc", "fp16_acc"])
+@pytest.mark.parametrize(
+    "dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.float32],
+    ids=["bf16", "bf8b", "bf4b", "fp32"],
+)
+def test_linear_dtype_compute_config(
+    device,
+    M,
+    K,
+    N,
+    M_block_size,
+    K_block_size,
+    N_block_size,
+    subblock_h,
+    subblock_w,
+    use_bias,
+    math_fidelity,
+    fp32_acc,
+    dtype,
+):
+    check_result = run_test_linear(
+        device,
+        M,
+        K,
+        N,
+        M_block_size,
+        K_block_size,
+        N_block_size,
+        subblock_h,
+        subblock_w,
+        use_bias=use_bias,
+        math_fidelity=math_fidelity,
+        fp32_acc=fp32_acc,
+        dtype=dtype,
+    )
+
+    PCC_THRESHOLD = 0.999_500
+    RMSE_THRESHOLD = 0.02
+    if dtype in [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32] and math_fidelity == ttnn.MathFidelity.LoFi:
+        RMSE_THRESHOLD = 0.04
+    if dtype == ttnn.bfloat4_b:
+        PCC_THRESHOLD = 0.97
+        RMSE_THRESHOLD = 0.26
+    assert check_result["pcc"] > PCC_THRESHOLD
+    assert check_result["relative_rmse"] < RMSE_THRESHOLD
+
+
+@pytest.mark.parametrize("M", [32, 96, 320, 4096])
+@pytest.mark.parametrize("K", [32, 96, 320, 4096])
+@pytest.mark.parametrize("N", [32, 96, 320, 4096])
+@pytest.mark.parametrize(
+    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [(8, 8, 8, 2, 2)],
+)
+def test_linear_block_padding(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w):
+    check_result = run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w)
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize("M,K,N", [(255, 255, 255)])
+@pytest.mark.parametrize(
+    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [(1, 1, 1, 1, 1)],
+)
+def test_linear_tile_padding(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w):
+    check_result = run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w)
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize("act_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32], ids=["bf16", "bf8b", "fp32"])
+@pytest.mark.parametrize("weight_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32], ids=["bf16", "bf8b", "fp32"])
+@pytest.mark.parametrize("bias_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32], ids=["bf16", "bf8b", "fp32"])
+def test_linear_dtypes(device, act_dtype, weight_dtype, bias_dtype):
+    M, K, N = 256, 256, 256
+    M_block_size, K_block_size, N_block_size, subblock_h, subblock_w = 1, 1, 1, 1, 1
+    check_result = run_test_linear(
+        device,
+        M,
+        K,
+        N,
+        M_block_size,
+        K_block_size,
+        N_block_size,
+        subblock_h,
+        subblock_w,
+        dtype=act_dtype,
+        weight_dtype=weight_dtype,
+        bias_dtype=bias_dtype,
+    )
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize(
+    "core_grid",
+    [ttnn.CoreCoord(2, 2), ttnn.CoreCoord(4, 4), ttnn.CoreCoord(2, 4), ttnn.CoreCoord(4, 2)],
+    ids=["core_grid_2x2", "core_grid_4x4", "core_grid_2x4", "core_grid_4x2"],
+)
+def test_linear_core_grid(device, core_grid):
+    M, K, N = 256, 256, 256
+    M_block_size, K_block_size, N_block_size, subblock_h, subblock_w = 1, 1, 1, 1, 1
+    check_result = run_test_linear(
+        device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w, core_grid=core_grid
+    )
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize(
+    "M, K, N",
+    [(4096, 4096, 4096)],
+)
+@pytest.mark.parametrize("B", [2, 3])
+@pytest.mark.parametrize("T", [4, 5])
+@pytest.mark.parametrize(
+    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [(8, 8, 8, 2, 2)],
+)
+def test_linear_batch_broadcast(
+    device, B, T, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w
+):
+    torch_input = torch.randn((B, T, M, K), dtype=torch.float32)
+    weight_input = torch.randn((K, N), dtype=torch.float32)
+    bias_input = torch.randn((1, N), dtype=torch.float32)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_bias = ttnn.from_torch(bias_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    check_result = run_test_linear_impl(
+        device=device,
+        torch_input=torch_input,
+        weight_input=weight_input,
+        bias_input=bias_input,
+        tt_input=tt_input,
+        tt_weight=tt_weight,
+        tt_bias=tt_bias,
+        M_block_size=M_block_size,
+        K_block_size=K_block_size,
+        N_block_size=N_block_size,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+    )
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize(
+    "M, K, N",
+    [
+        (9472, 5120, 1280),
+        (9472, 5120, 3456),
+        (9472, 3456, 5120),
+    ],
+)
+@pytest.mark.parametrize(
+    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [(8, 8, 8, 2, 2)],
+)
+def test_linear_padded_wan_shapes(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w):
+    check_result = run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w)
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize("use_bias", [False, True], ids=["no_bias", "bias"])
+@pytest.mark.parametrize("gate_is_first", [False, True], ids=["up_gate", "gate_up"])
+def test_linear_swiglu(device, gate_is_first, use_bias):
+    """fuse_swiglu=True: silu(gate)*up with both [up|gate] and [gate|up] weight layouts."""
+    M, K, out_N = 256, 256, 256  # weight is [K, 2*out_N]; output is [M, out_N]
+    two_N = 2 * out_N
+    torch_dtype = torch.float32
+
+    torch_input = torch.randn((M, K), dtype=torch_dtype)
+    weight_input = torch.randn((K, two_N), dtype=torch_dtype)
+    bias_input = torch.randn((1, two_N), dtype=torch_dtype) if use_bias else None
+
+    with torch.no_grad():
+        full = torch_input @ weight_input
+        if bias_input is not None:
+            full = full + bias_input
+        if gate_is_first:
+            gate, up = torch.chunk(full, 2, dim=-1)
+        else:
+            up, gate = torch.chunk(full, 2, dim=-1)
+        golden = torch.nn.functional.silu(gate) * up
+
+    weight_il = prepare_for_fused_swiglu(weight_input, ndev=1, gate_is_first=gate_is_first)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_il, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_bias = None
+    if use_bias:
+        bias_il = prepare_for_fused_swiglu(bias_input, ndev=1, gate_is_first=gate_is_first)
+        tt_bias = ttnn.from_torch(bias_il, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=8,
+        K_block_size=8,
+        N_block_size=8,
+        subblock_h=2,
+        subblock_w=2,
+        compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
+    )
+
+    tt_output = ttnn.experimental.minimal_matmul(
+        tt_input,
+        tt_weight,
+        bias_tensor=tt_bias,
+        compute_kernel_config=compute_config,
+        config=matmul_config,
+        fuse_swiglu=True,
+    )
+
+    tt_output = ttnn.to_torch(tt_output)
+    result = assert_quality(golden, tt_output)
+    logger.info(f"gate_is_first={gate_is_first}, use_bias={use_bias}: PCC={result['pcc']:.7f}")
+    assert result["pcc"] > 0.9999, f"PCC {result['pcc']:.7f}"
+
+
+def _cache_hit_config(device, block_size=1, subblock=1, core_grid=None):
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=block_size,
+        K_block_size=block_size,
+        N_block_size=block_size,
+        subblock_h=subblock,
+        subblock_w=subblock,
+        compute_with_storage_grid_size=core_grid or device.compute_with_storage_grid_size(),
+    )
+    return compute_config, matmul_config
+
+
+def _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, label):
+    """Run `dispatch` twice on freshly allocated buffers of one hashed configuration.
+
+    `make_inputs()` yields one (tt_args, torch_args) set; `dispatch` returns torch outputs, `golden` the expected.
+    Set A stays alive while B is allocated, so B gets fresh addresses: a slot the override forgets still reads A.
+
+    A third dispatch back on set A catches the mirror-image bug, where a slot is patched once and
+    then frozen at the second dispatch's address.
+    """
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    tt_a, torch_a = make_inputs()
+    out_a = dispatch(tt_a)
+    entries = device.num_program_cache_entries()
+    assert entries == 1, f"{label}: expected 1 cache entry after the first dispatch, got {entries}"
+    for i, (got, want) in enumerate(zip(out_a, golden(torch_a))):
+        result = assert_quality(want, got)
+        assert result["pcc"] > 0.999, f"{label}: cache-miss output[{i}] PCC {result['pcc']:.7f}"
+
+    # tt_a stays referenced, so set B cannot be handed set A's addresses.
+    tt_b, torch_b = make_inputs()
+    out_b = dispatch(tt_b)
+    assert device.num_program_cache_entries() == 1, (
+        f"{label}: the second dispatch has the same hashed configuration and must reuse the cached "
+        "program. A new entry means something address- or allocation-dependent leaked into "
+        "compute_program_hash."
+    )
+    for i, (got, want) in enumerate(zip(out_b, golden(torch_b))):
+        result = assert_quality(want, got)
+        assert result["pcc"] > 0.999, (
+            f"{label}: cache-hit output[{i}] PCC {result['pcc']:.7f} -- the cache hit did not "
+            "re-patch every buffer address, so a kernel read or wrote the first dispatch's buffers."
+        )
+
+    out_a_again = dispatch(tt_a)
+    assert device.num_program_cache_entries() == 1, f"{label}: third dispatch must also be a cache hit"
+    for i, (got, want) in enumerate(zip(out_a_again, golden(torch_a))):
+        result = assert_quality(want, got)
+        assert result["pcc"] > 0.999, (
+            f"{label}: re-dispatch on the first input set gave PCC {result['pcc']:.7f} -- addresses "
+            "are patched once and then frozen instead of on every dispatch."
+        )
+
+    device.disable_and_clear_program_cache()
+
+
+def test_program_cache_hit_bias(device):
+    """in0 / in1 / bias / output addresses must all be re-patched on a cache hit."""
+    M, K, N = 256, 256, 256
+    compute_config, matmul_config = _cache_hit_config(device)
+
+    def make_inputs():
+        torch_input = torch.randn((M, K), dtype=torch.float32)
+        weight_input = torch.randn((K, N), dtype=torch.float32)
+        bias_input = torch.randn((1, N), dtype=torch.float32)
+        return (
+            (
+                ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(bias_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+            ),
+            (torch_input, weight_input, bias_input),
+        )
+
+    def dispatch(tt_args):
+        tt_input, tt_weight, tt_bias = tt_args
+        return [
+            ttnn.to_torch(
+                ttnn.experimental.minimal_matmul(
+                    tt_input,
+                    tt_weight,
+                    bias_tensor=tt_bias,
+                    compute_kernel_config=compute_config,
+                    config=matmul_config,
+                )
+            )
+        ]
+
+    def golden(torch_args):
+        torch_input, weight_input, bias_input = torch_args
+        with torch.no_grad():
+            return [torch_input @ weight_input + bias_input]
+
+    _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, "bias")
+
+
+def test_program_cache_hit_fused_concat(device):
+    """The two-source in0 path additionally carries the optional input's address (kIn0SecondSourceIdx)."""
+    # Same shape/blocking as the seam_in_block case of test_linear_fused_concat.
+    M, Ka, Kb, N = 256, 96, 160, 128
+    compute_config, matmul_config = _cache_hit_config(device, block_size=4, subblock=2)
+
+    def make_inputs():
+        x_a = torch.randn((M, Ka), dtype=torch.float32)
+        x_b = torch.randn((M, Kb), dtype=torch.float32)
+        weight = torch.randn((Ka + Kb, N), dtype=torch.float32)
+        return (
+            (
+                ttnn.from_torch(x_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(x_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(weight, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+            ),
+            (x_a, x_b, weight),
+        )
+
+    def dispatch(tt_args):
+        tt_x_a, tt_x_b, tt_weight = tt_args
+        return [
+            ttnn.to_torch(
+                ttnn.experimental.minimal_matmul(
+                    [tt_x_a, tt_x_b],
+                    tt_weight,
+                    compute_kernel_config=compute_config,
+                    config=matmul_config,
+                )
+            )
+        ]
+
+    def golden(torch_args):
+        x_a, x_b, weight = torch_args
+        with torch.no_grad():
+            return [torch.cat([x_a, x_b], dim=-1) @ weight]
+
+    _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, "fused_concat")
+
+
+@pytest.mark.parametrize("chunks", [2, 4])
+def test_program_cache_hit_split_outputs(device, chunks):
+    """Split outputs put N output addresses at the tail of every in0/in1 arg list."""
+    M, K, N = 256, 256, 512
+    compute_config, matmul_config = _cache_hit_config(device)
+
+    def make_inputs():
+        torch_input = torch.randn((M, K), dtype=torch.float32)
+        weight_input = torch.randn((K, N), dtype=torch.float32)
+        return (
+            (
+                ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+            ),
+            (torch_input, weight_input),
+        )
+
+    def dispatch(tt_args):
+        tt_input, tt_weight = tt_args
+        tt_chunks = ttnn.experimental.minimal_matmul_split(
+            tt_input,
+            tt_weight,
+            chunks=chunks,
+            dim=-1,
+            compute_kernel_config=compute_config,
+            config=matmul_config,
+        )
+        assert len(tt_chunks) == chunks
+        return [ttnn.to_torch(c) for c in tt_chunks]
+
+    def golden(torch_args):
+        torch_input, weight_input = torch_args
+        with torch.no_grad():
+            return list(torch.chunk(torch_input @ weight_input, chunks, dim=-1))
+
+    _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, f"split_{chunks}")
+
+
+def test_program_cache_hit_fused_ternary(device):
+    """The fused-addcmul path adds ternary_a / ternary_b addresses ahead of the output tail."""
+    # Same shape/blocking as test_dit_minimal_matmul_addcmul_fused_basic.
+    M, K, N = 256, 512, 1024
+    scalar = 1.0
+    compute_config, matmul_config = _cache_hit_config(device, block_size=8, subblock=2)
+
+    def make_inputs():
+        torch_input = torch.randn((M, K), dtype=torch.float32)
+        weight_input = torch.randn((K, N), dtype=torch.float32)
+        addcmul_a = torch.randn((M, N), dtype=torch.float32)
+        addcmul_b = torch.randn((1, N), dtype=torch.float32)
+        return (
+            (
+                ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(addcmul_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(addcmul_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+            ),
+            (torch_input, weight_input, addcmul_a, addcmul_b),
+        )
+
+    def dispatch(tt_args):
+        tt_input, tt_weight, tt_addcmul_a, tt_addcmul_b = tt_args
+        return [
+            ttnn.to_torch(
+                ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+                    tt_input,
+                    tt_weight,
+                    scalar,
+                    tt_addcmul_a,
+                    tt_addcmul_b,
+                    compute_kernel_config=compute_config,
+                    config=matmul_config,
+                )
+            )
+        ]
+
+    def golden(torch_args):
+        torch_input, weight_input, addcmul_a, addcmul_b = torch_args
+        with torch.no_grad():
+            return [torch.addcmul(addcmul_a, torch_input @ weight_input, addcmul_b, value=scalar)]
+
+    _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, "fused_ternary")
+
+
+def test_run_performance(device):
+    core_grid = ttnn.CoreCoord(8, 8)
+    M, K, N = 4096, 4096, 4096
+    M_block_size, K_block_size, N_block_size, subblock_h, subblock_w = 8, 8, 8, 2, 2
+    check_result = run_test_linear(
+        device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w, core_grid=core_grid
+    )
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
+def test_performance():
+    float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
+    cols = ["ATTRIBUTES"]
+    command = (
+        f"pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_minimal_matmul.py::test_run_performance"
+    )
+
+    run_device_profiler(command, "ttnn_minimal_matmul_performance", device_analysis_types=["device_kernel_duration"])
+    r = post_process_ops_log(
+        "ttnn_minimal_matmul_performance",
+        float_columns=float_cols,
+        columns=cols,
+        op_name="",
+        sum_vals=False,
+        has_signposts=False,
+    )
+    core_count = int(r["CORE COUNT"][0])
+    duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].min())
+    expected_ns = perf_model(4096, 4096, 4096, core_count, 2)
+
+    util = expected_ns / duration_ns
+    logger.info(f"Utilization: {util*100:.1f}%")
+
+    if ttnn.device.is_blackhole():
+        expected_util = 0.895
+    else:
+        expected_util = 0.582
+
+    tolerance = 0.02
+    assert (
+        util > expected_util - tolerance
+    ), f"Utilization {util:.1f}% is less than expected {expected_util:.1f}% by more than {tolerance:.1f}%"
+    assert (
+        util < expected_util + tolerance
+    ), f"Utilization {util:.1f}% is greater than expected {expected_util:.1f}% by more than {tolerance:.1f}%"
+
+
+TABLE_CONFIGS = [
+    (512, 512, 512),
+    (512, 1024, 1024),
+    (512, 1024, 2048),
+    (1024, 1024, 1024),
+    (1024, 1024, 2048),
+    (1024, 2048, 2048),
+    (2048, 2048, 2048),
+    (2048, 2048, 3072),
+    (2048, 3072, 3072),
+    (3072, 3072, 3072),
+    (3072, 3072, 4096),
+    (3072, 4096, 4096),
+    (4096, 4096, 4096),
+    (8192, 8192, 8192),
+    (16384, 16384, 16384),
+]
+
+
+@pytest.mark.skip()
+@pytest.mark.parametrize(
+    "M, K, N",
+    TABLE_CONFIGS,
+)
+@pytest.mark.parametrize("fp32_acc", [True, False], ids=["fp32_acc", "bf16_acc"])
+@pytest.mark.parametrize(
+    "math_fidelity",
+    [ttnn.MathFidelity.LoFi, ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi4],
+    ids=["LoFi", "HiFi2", "HiFi4"],
+)
+@pytest.mark.parametrize(
+    "dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["dtype_bf16", "dtype_bf8b", "dtype_bf4b"]
+)
+def test_perf_table_sweep(device, M, K, N, fp32_acc, math_fidelity, dtype):
+    logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
+    torch_execution_dtype = torch.float32
+    torch_dtype = torch.bfloat16
+
+    torch_input = torch.randn((M, K), dtype=torch_dtype).to(torch_execution_dtype)
+    weight_input = torch.randn((K, N), dtype=torch_dtype).to(torch_execution_dtype)
+
+    # Prepare TT tensors
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_input, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
+
+    with torch.no_grad():
+        torch_output = torch_input @ weight_input
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_acc,
+        packer_l1_acc=True,
+    )
+
+    core_grid = device.compute_with_storage_grid_size()
+    subblocks = [(2, 2)] if fp32_acc else [(2, 4), (4, 2)]
+
+    m_block_sizes = [2, 4, 8, 16]
+    n_block_sizes = [2, 4, 8, 16]
+    k_block_sizes = [2, 4, 8, 16]
+
+    from itertools import product
+
+    for M_block_size, K_block_size, N_block_size, (subblock_h, subblock_w) in product(
+        m_block_sizes, k_block_sizes, n_block_sizes, subblocks
+    ):
+        if (M_block_size < subblock_h) or (N_block_size < subblock_w):
+            continue
+        if (M_block_size % subblock_h) != 0 or (N_block_size % subblock_w) != 0:
+            continue
+        logger.info(
+            f"Running minimal_matmul with M_block_size={M_block_size}, K_block_size={K_block_size}, N_block_size={N_block_size}, subblock_h={subblock_h}, subblock_w={subblock_w}"
+        )
+
+        matmul_config = ttnn.MinimalMatmulConfig(
+            M_block_size=M_block_size,
+            K_block_size=K_block_size,
+            N_block_size=N_block_size,
+            subblock_h=subblock_h,
+            subblock_w=subblock_w,
+            compute_with_storage_grid_size=core_grid,
+        )
+        try:
+            tt_output = ttnn.experimental.minimal_matmul(
+                input_tensor=tt_input,
+                weight_tensor=tt_weight,
+                bias_tensor=None,
+                compute_kernel_config=compute_config,
+                config=matmul_config,
+            )
+            tt_output = ttnn.to_torch(tt_output)
+            check_result = assert_quality(torch_output, tt_output)
+        except Exception as e:
+            if isinstance(e, KeyboardInterrupt):
+                raise
+            logger.error(
+                f"Error running minimal_matmul with M_block_size={M_block_size}, K_block_size={K_block_size}, N_block_size={N_block_size}, subblock_h={subblock_h}, subblock_w={subblock_w}"
+            )
+
+
+def perf_model(M, K, N, core_count, fidelity_div):
+    mm_flops = 2 * M * K * N
+    core_flop_per_cycle = 2 * 8 * 16 * 16
+    core_flop_per_cycle_with_fidelity = core_flop_per_cycle / fidelity_div
+    chip_flop_per_cycle = core_flop_per_cycle_with_fidelity * core_count
+    ideal_cycles = mm_flops / chip_flop_per_cycle
+    ideal_ns = ideal_cycles
+    if ttnn.device.is_blackhole():
+        ideal_ns = ideal_ns / 1.3
+    return ideal_ns
+
+
+def post_process_ops_log(
+    output_logs_subdir, float_columns=None, columns=None, sum_vals=True, op_name="", has_signposts=False
+):
+    filename = get_latest_ops_log_filename(output_logs_subdir)
+    import pandas as pd
+
+    df = pd.read_csv(filename)
+
+    if has_signposts:
+        # there are explicit start and stop points in the model we want to measure between
+        markers = df[df["OP TYPE"] == "signpost"]["OP CODE"]
+        start = markers[markers == "start"].index[0]
+        stop = markers[markers == "stop"].index[0]
+        df = df.iloc[start + 1 : stop]
+    if op_name != "":
+        df = df[df["OP CODE"] == op_name]
+
+    results = {}
+    if float_columns:
+        assert (
+            type(float_columns) == list
+        ), f"Bad columns name type, requested columns should be of type list but {type(float_columns)} was provided"
+        for col in float_columns:
+            df_filtered = df[df[col] != "-"]
+            if sum_vals:
+                results[col] = df_filtered[col].astype(float).sum()
+            else:
+                results[col] = df_filtered[col].astype(float).to_numpy()
+    if columns:
+        assert (
+            type(columns) == list
+        ), f"Bad columns name type, requested columns should be of type list but {type(columns)} was provided"
+        for col in columns:
+            df_filtered = df[df[col] != "-"]
+            results[col] = df_filtered[col]
+    else:
+        results = df
+    return results
+
+
+@pytest.mark.skip()
+@pytest.mark.parametrize(
+    "fidelity, dtype, fp32_acc",
+    [
+        ("HiFi2", "dtype_bf16", "fp32_acc"),
+        ("HiFi2", "dtype_bf16", "bf16_acc"),
+        ("HiFi4", "dtype_bf16", "bf16_acc"),
+        ("HiFi2", "dtype_bf8b", "bf16_acc"),
+        ("LoFi", "dtype_bf8b", "bf16_acc"),
+        ("LoFi", "dtype_bf4b", "bf16_acc"),
+    ],
+    ids=[
+        "HiFi2_bf16_fp32_acc",
+        "HiFi2_bf16_bf16_acc",
+        "HiFi4_bf16_bf16_acc",
+        "HiFi2_bf8b_bf16_acc",
+        "LoFi_bf8b_bf16_acc",
+        "LoFi_bf4b_bf16_acc",
+    ],
+)
+def test_create_perf_table(fidelity, dtype, fp32_acc):
+    fidelity_div = {
+        "HiFi2": 2,
+        "HiFi4": 4,
+        "LoFi": 1,
+    }[fidelity]
+    perf_results = []
+    expected_results = []
+    attrs_results = []
+    subdir = "ttnn_linear_performance"
+    for M, K, N in TABLE_CONFIGS:
+        float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
+        cols = ["ATTRIBUTES"]
+        command = f"pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_minimal_matmul.py::test_perf_table_sweep[{dtype}-{fidelity}-{fp32_acc}-M={M}-K={K}-N={N}]"
+
+        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+        r = post_process_ops_log(
+            subdir, float_columns=float_cols, columns=cols, op_name="", sum_vals=False, has_signposts=False
+        )
+
+        core_count = int(r["CORE COUNT"][0])
+        duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].min())
+        duration_arg_min = int(r["DEVICE KERNEL DURATION [ns]"].argmin())
+        attrs = r["ATTRIBUTES"][duration_arg_min].split("'config': ")[1].split("'fused_")[0]
+
+        expected_ns = perf_model(M, K, N, core_count, fidelity_div)
+
+        perf_results.append(duration_ns)
+        expected_results.append(expected_ns)
+        attrs_results.append(attrs)
+
+    # Pretty summary table
+    config_details = f"DTYPE: {dtype}, FP32 ACC: {fp32_acc}, FIDELITY: {fidelity}"
+    header = "| M, K, N | math util (%) | measured perf (ms) | attributes |"
+    sep = "|---|---:|---:|---:|"
+    print(config_details)
+    print(header)
+    print(sep)
+    for idx in range(len(TABLE_CONFIGS)):
+        M, K, N = TABLE_CONFIGS[idx]
+        measured_ns = perf_results[idx]
+        ideal_ns = expected_results[idx]
+        attrs = attrs_results[idx]
+
+        if measured_ns is None or ideal_ns is None or measured_ns == 0:
+            measured_ms_str = "-"
+            util_str = "-"
+            attrs_str = "-"
+        else:
+            measured_ms = measured_ns / 1e6
+            # Assume 1 cycle ≈ 1 ns for ideal estimate already returned from perf_model
+            math_util = (ideal_ns / measured_ns) * 100.0
+            attrs_str = attrs
+
+            measured_ms_str = f"{measured_ms:.3f}"
+            util_str = f"{math_util:.1f}"
+
+        print(f"| ({M}, {K}, {N}) | {util_str} | {measured_ms_str} | {attrs_str} |")

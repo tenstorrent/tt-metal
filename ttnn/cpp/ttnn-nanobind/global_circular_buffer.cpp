@@ -1,0 +1,59 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "global_circular_buffer.hpp"
+
+#include <cstdint>
+#include <utility>
+#include <vector>
+
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/pair.h>
+#include <nanobind/stl/vector.h>
+
+#include <tt-metalium/experimental/global_circular_buffer.hpp>
+#include "ttnn/global_circular_buffer.hpp"
+namespace ttnn::global_circular_buffer {
+
+void py_module_types(nb::module_& mod) {
+    nb::class_<GlobalCircularBuffer>(mod, "global_circular_buffer")
+        .def("size", &GlobalCircularBuffer::size)
+        // Copies: a reference_internal CoreRangeSet would keep the whole GCB, and with it the
+        // ring's L1, allocated for as long as Python holds the core set.
+        .def("sender_cores", &GlobalCircularBuffer::sender_cores, nb::rv_policy::copy)
+        .def("receiver_cores", &GlobalCircularBuffer::receiver_cores, nb::rv_policy::copy)
+        .def("buffer_address", &GlobalCircularBuffer::buffer_address)
+        .def("config_address", &GlobalCircularBuffer::config_address)
+        .def("sender_core_type", [](const GlobalCircularBuffer& gcb) {
+            return tt::tt_metal::experimental::sender_core_type(gcb) ==
+                           tt::tt_metal::experimental::SenderCoreType::Worker
+                       ? "worker"
+                       : "dram";
+        });
+}
+
+void py_module(nb::module_& mod) {
+    mod.def(
+        "create_global_circular_buffer",
+        &ttnn::global_circular_buffer::create_global_circular_buffer,
+        nb::keep_alive<0, 1>(),
+        nb::arg("mesh_device"),
+        nb::arg("sender_receiver_core_mapping"),
+        nb::arg("size"),
+        nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
+        R"doc(
+            Create a GlobalCircularBuffer Object on a device.
+
+            Args:
+                mesh_device (MeshDevice): The mesh device on which to create the global circular buffer.
+                sender_receiver_core_mapping (List[Tuple[CoreCoord, CoreRangeSet]]): The mapping of remote sender to remote receiver cores for the circular buffer.
+                size (int): Size of the global circular buffer per core in bytes.
+                buffer_type (BufferType): The type of buffer to use for the global circular buffer.
+            )doc");
+
+    // DRAM-sender GCB factories live under ttnn.experimental.* — see
+    // ttnn/cpp/ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher_nanobind.cpp.
+}
+
+}  // namespace ttnn::global_circular_buffer

@@ -1,0 +1,178 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "binary_ng_device_operation.hpp"
+#include "ttnn/operations/experimental/quasar/binary_ng/types.hpp"
+#include "ttnn/tensor/types.hpp"
+
+#include <optional>
+#include <string>
+
+namespace ttnn::operations::experimental::quasar::binary_ng {
+
+enum class KernelName {
+    ReaderNoBcast,
+    WriterScalar,
+    ComputeNoBcast,
+    ComputeBcast,
+    ComputeScalar,
+    ReaderNoBcastNg,
+    WriterNoBcastNg,
+    ReaderRowBcastNg,
+    ReaderColBcastNg,
+    ReaderRowBColABcastNg,
+    ReaderScalarBcastNg,
+    ReaderRmNoBcastNg,
+    ReaderRmRowBcastNg,
+    ReaderRmColBcastNg,
+    ReaderRmRowBColABcastNg,
+    ReaderRmScalarBcastNg,
+    ReaderRmScalarOpNg,
+    WriterRmNoBcastNg,
+    ComputeRowBcastNg,
+    ComputeColBcastNg,
+    ComputeScalarBcastNg,
+    ComputeRowColBcastNg,
+};
+
+struct BinaryNgKernelConfig {
+    BinaryNgKernelConfig(SubtileBroadcastType subtile_broadcast_type);
+
+    std::string bcast_input_str() const;
+
+    KernelName reader_kernel;
+    KernelName compute_kernel;
+    KernelName writer_kernel;
+    std::optional<uint32_t> bcast_input;
+};
+
+std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_where_op);
+
+struct OpConfig {
+    enum class FpuBinaryOp { ADD, SUB, MUL };
+    enum class SfpuBinaryOp {
+        ADD,
+        SUB,
+        MUL,
+        DIV,
+        DIV_FLOOR,
+        DIV_TRUNC,
+        REMAINDER,
+        FMOD,
+        POWER,
+        RSUB,
+        GCD,
+        LCM,
+        LEFT_SHIFT,
+        RIGHT_SHIFT,
+        LOGICAL_RIGHT_SHIFT,
+        BITWISE_AND,
+        BITWISE_OR,
+        BITWISE_XOR,
+        QUANT,
+        REQUANT,
+        DEQUANT,
+        MAXIMUM,
+        MINIMUM,
+        XLOGY,
+        ATAN2,
+        LT,
+        GT,
+        GE,
+        LE,
+        HYPOT,
+        WHERE,
+        EQ,
+        NE,
+        ISCLOSE,
+    };
+
+    template <class EnumT>
+    OpConfig(
+        BinaryOpType binary_op_type,
+        std::in_place_type_t<EnumT>,
+        std::optional<DataType> dtype = std::nullopt,
+        const std::optional<binary::BinaryOpParams>& op_params = std::nullopt);
+
+    std::map<std::string, std::string> as_defines(DataType dtype) const;
+
+    std::optional<unary::UnaryOpType> process_lhs;
+    std::optional<unary::UnaryOpType> process_rhs;
+    // Carries a parameter: a bare UnaryOpType reaches get_op_init_and_func_default, which emits the
+    // paramless form and so inherits the compute API's default template argument.
+    std::optional<unary::EltwiseUnaryWithParam> postprocess;
+    std::variant<FpuBinaryOp, SfpuBinaryOp> binary_op;
+    bool is_sfpu_op() const;
+};
+
+void add_activation_defines(
+    std::map<std::string, std::string>& defines,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
+    std::string_view operand,
+    std::optional<DataType> dtype = std::nullopt);
+
+uint32_t pack_scalar_runtime_arg(unary::ScalarVariant scalar, DataType dtype, bool is_quant_op);
+
+std::map<std::string, std::string> make_dataflow_defines(
+    DataType dtype, std::optional<DataType> b_dtype = std::nullopt);
+
+struct AllShardSpecs {
+    tt::tt_metal::ShardSpec a_shard_spec;
+    tt::tt_metal::ShardSpec b_shard_spec;
+    tt::tt_metal::ShardSpec c_shard_spec;
+};
+
+tt::tt_metal::ShardSpec adjust_to_shape(
+    const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);
+
+struct AllShardVolumes {
+    std::optional<std::uint32_t> a_shard_volume;
+    std::optional<std::uint32_t> b_shard_volume;
+    std::optional<std::uint32_t> c_shard_volume;
+};
+
+std::optional<AllShardVolumes> get_shard_volumes(
+    const tt::tt_metal::TensorSpec& a,
+    const std::optional<tt::tt_metal::TensorSpec>& b,
+    const tt::tt_metal::TensorSpec& c);
+
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec);
+
+bool is_uneven(const tt::tt_metal::TensorSpec& t);
+
+bool is_native_L1_sharding(
+    const tt::tt_metal::TensorSpec& a, const std::optional<tt::tt_metal::TensorSpec>& b, const MemoryConfig& c);
+
+ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::Shape& shape_b);
+
+MemoryConfig compute_mem_config_actual(const ttnn::Tensor& input_tensor_a, const ttnn::Shape& shape_b);
+
+// Env-driven tuning for ProgramFactoryQuasarNative, read once per process. R/C/W set KernelSpec
+// num_threads. They no longer restrict which shapes are admitted: each kernel derives its own share
+// from thread_id and num_threads, so any tile count works and a thread may draw zero tiles. The only
+// R/C/W admission rule left is the per-DFB STRIDED ratio, max(p,c) % min(p,c) == 0.
+struct NativeTuning {
+    bool implicit_sync = false;       // NOT consumed, and native_tuning() throws if set: enabling it
+                                      // needs the guarantee that no thread draws zero tiles, which
+                                      // uneven tile counts removed
+    uint32_t entries_per_thread = 2;  // per-thread ring depth; num_entries = this x max(producers, consumers)
+    uint32_t tiles_per_cycle = 0;     // EXPERIMENTAL override for num_tiles_per_cycle (COMPUTE side);
+                                      // 0 = use the derived value. Needs entries_per_thread >= 2x this,
+                                      // or wait_front never completes and the op hangs
+    uint32_t dm_batch = 1;            // EXPERIMENTAL tiles per barrier in the reader/writer. Same
+                                      // capacity rule. Independent of tiles_per_cycle: a ring lets
+                                      // producer and consumer transact at different granularities
+    uint32_t reader_threads = 1;      // R
+    uint32_t compute_threads = 1;     // C -- must be 1, 2 or 4
+    uint32_t writer_threads = 1;      // W
+    bool enabled = false;             // TTNN_QSR_NATIVE; 0 and unset both mean OFF
+};
+
+// Parsed once into a function-local static. Knobs are TTNN_QSR_{NATIVE, IMPLICIT_SYNC,
+// ENTRIES_PER_THREAD, READER_THREADS, COMPUTE_THREADS, WRITER_THREADS}. Topology invariants are
+// asserted only when `enabled`, so a bad knob cannot take down the fallback reference arm.
+const NativeTuning& native_tuning();
+}  // namespace ttnn::operations::experimental::quasar::binary_ng

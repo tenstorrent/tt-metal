@@ -1,0 +1,368 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <tt-metalium/allocator.hpp>
+#include <cstdlib>
+#include <unordered_map>
+#include <memory>
+#include <optional>
+#include <vector>
+
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include "gmock/gmock.h"
+#include "hostdevcommon/common_values.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/mesh_config.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/program_cache.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "impl/context/metal_context.hpp"
+#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/device.hpp>
+#include <distributed/mesh_device_impl.hpp>
+#include <distributed/mesh_device_view_impl.hpp>
+
+namespace tt::tt_metal::distributed {
+namespace {
+
+using ::testing::HasSubstr;
+using ::testing::IsEmpty;
+using ::testing::SizeIs;
+using ::testing::ThrowsMessage;
+
+// Builds the expected bank id -> worker core map from a per-bank list (indexed by DRAM bank id).
+std::unordered_map<uint32_t, CoreCoord> to_bank_map(const std::vector<CoreCoord>& per_bank) {
+    std::unordered_map<uint32_t, CoreCoord> assignment;
+    for (uint32_t bank_id = 0; bank_id < per_bank.size(); ++bank_id) {
+        assignment.emplace(bank_id, per_bank[bank_id]);
+    }
+    return assignment;
+}
+
+TEST(MeshDeviceInitTest, Init1x1Mesh) {
+    MeshDeviceConfig config(MeshShape(1, 1));
+
+    EXPECT_NO_THROW({
+        auto mesh = tt::tt_metal::distributed::MeshDevice::create(
+            config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
+        mesh->close();
+    });
+}
+
+// A 2x2 shape over one device makes MeshDeviceView throw; that must surface as an exception rather
+// than a segfault in ~MeshDevice, and must leave the devices reusable. Issue #51236.
+TEST(MeshDeviceInitTest, CreateWithMismatchedShapeThrowsWithoutCrashing) {
+    MeshDeviceConfig mismatched_config(MeshShape(2, 2), /*offset=*/std::nullopt, /*physical_device_ids=*/{0});
+
+    EXPECT_THAT(
+        [&] {
+            MeshDevice::create(
+                mismatched_config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
+        },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Shape and values size mismatch")));
+
+    EXPECT_NO_THROW({
+        auto mesh = MeshDevice::create(
+            MeshDeviceConfig(MeshShape(1, 1)),
+            DEFAULT_L1_SMALL_SIZE,
+            DEFAULT_TRACE_REGION_SIZE,
+            1,
+            DispatchCoreType::WORKER);
+        mesh->close();
+    });
+}
+
+std::shared_ptr<MeshDevice> create_unit_mesh_for_close_tests() {
+    return MeshDevice::create(
+        MeshDeviceConfig(MeshShape(1, 1)),
+        DEFAULT_L1_SMALL_SIZE,
+        DEFAULT_TRACE_REGION_SIZE,
+        1,
+        DispatchCoreType::WORKER);
+}
+
+// Compile a dummy CB program so ProgramImpl holds persistent-L1 seals and a kernel-binary
+// MeshBuffer, then stash the MeshWorkload in the device program cache. Mirrors the TTNN
+// cached-op lifetime that hangs on hybrid multihost if close_impl destroys the cache.
+void compile_and_cache_dummy_workload(MeshDevice& mesh, const program_cache::detail::ProgramCacheKey& key) {
+    mesh.enable_program_cache();
+
+    Program program;
+    const CoreRangeSet cores(CoreRange({0, 0}, {0, 0}));
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+        cores,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    const CircularBufferConfig cb_config =
+        CircularBufferConfig(2048, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, 2048);
+    CreateCircularBuffer(program, cores, cb_config);
+
+    MeshWorkload workload;
+    workload.add_program(MeshCoordinateRange(mesh.shape()), std::move(program));
+    EnqueueMeshWorkload(mesh.mesh_command_queue(), workload, false);
+    Finish(mesh.mesh_command_queue());
+
+    program_cache::detail::CachedMeshWorkload<int> cached(std::move(workload), /*shared_variables=*/0);
+    mesh.get_program_cache().insert(key, program_cache::detail::CachedProgramFactory(std::move(cached), 0));
+}
+
+TEST(MeshDeviceInitTest, CloseDoesNotClearProgramCache) {
+    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
+        GTEST_SKIP() << "Requires fast dispatch to enqueue a MeshWorkload";
+    }
+
+    auto mesh = create_unit_mesh_for_close_tests();
+    compile_and_cache_dummy_workload(
+        *mesh, program_cache::detail::ProgramCacheKey{.hash = 0xC105E, .canonical = "close-does-not-clear-cache"});
+
+    const auto entries_before_close = mesh->num_program_cache_entries();
+    ASSERT_GT(entries_before_close, 0u);
+
+    // close() must leave cached programs in place: destroying them here hangs hybrid
+    // multihost teardown (RELEASE-13). Seal lifetime is handled by PersistentL1Arena.
+    mesh->close();
+    EXPECT_EQ(mesh->num_program_cache_entries(), entries_before_close);
+}
+
+TEST(MeshDeviceInitTest, DestroyAfterCloseDoesNotTerminateOnPersistentL1Seals) {
+    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
+        GTEST_SKIP() << "Requires fast dispatch to enqueue a MeshWorkload";
+    }
+
+    auto mesh = create_unit_mesh_for_close_tests();
+    compile_and_cache_dummy_workload(
+        *mesh,
+        program_cache::detail::ProgramCacheKey{.hash = 0x5EA1, .canonical = "destroy-after-close-persistent-l1-seals"});
+
+    ASSERT_GT(mesh->num_program_cache_entries(), 0u);
+    mesh->close();
+
+    // Tracker/arena are already gone; dropping the MeshDevice destroys the cache and
+    // ~Seal must no-op instead of TT_FATAL from a noexcept ProgramImpl destructor.
+    EXPECT_NO_THROW(mesh.reset());
+}
+
+using MeshDevice2x4Test = MeshDevice2x4Fixture;
+using MeshDeviceTest = GenericMeshDeviceFixture;
+
+TEST_F(MeshDevice2x4Test, SystemMeshTearDownWithoutClose) {
+    auto& sys = MetalContext::instance().get_system_mesh();
+
+    const auto system_shape = sys.shape();
+    ASSERT_EQ(system_shape.dims(), 2);
+    EXPECT_GE(system_shape.mesh_size(), mesh_device_->shape().mesh_size());
+}
+
+TEST_F(MeshDevice2x4Test, MemoryAllocationStatistics) {
+    auto stats = mesh_device_->allocator()->get_statistics(tt::tt_metal::BufferType::DRAM);
+    for (auto* device : mesh_device_->get_devices()) {
+        auto device_stats = device->allocator()->get_statistics(tt::tt_metal::BufferType::DRAM);
+        EXPECT_EQ(stats.total_allocatable_size_bytes, device_stats.total_allocatable_size_bytes);
+    }
+}
+
+TEST_F(MeshDevice2x4Test, ViewIs2D) {
+    std::vector<IDevice*> devices;
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        devices.push_back(mesh_device_->get_view().impl().get_device(coord));
+        fabric_node_ids.push_back(mesh_device_->get_view().get_fabric_node_id(coord));
+    }
+
+    MeshDeviceView view_1d(MeshShape(8), devices, fabric_node_ids);
+    EXPECT_FALSE(view_1d.is_mesh_2d());
+
+    MeshDeviceView view_2d(MeshShape(2, 4), devices, fabric_node_ids);
+    EXPECT_TRUE(view_2d.is_mesh_2d());
+
+    MeshDeviceView view_3d(MeshShape(2, 2, 2), devices, fabric_node_ids);
+    EXPECT_FALSE(view_3d.is_mesh_2d());
+}
+
+TEST_F(MeshDevice2x4Test, CreateSubmeshInvalidConfig) {
+    EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
+
+    EXPECT_ANY_THROW(mesh_device_->create_submesh(MeshShape{1, 3}, MeshCoordinate{1}));
+    EXPECT_ANY_THROW(mesh_device_->create_submesh(MeshShape{0, 3}, MeshCoordinate{0, 0}));
+    EXPECT_ANY_THROW(mesh_device_->create_submesh(MeshShape{2, 4}, MeshCoordinate{1, 1}));
+    EXPECT_ANY_THROW(mesh_device_->create_submesh(MeshShape{2, 4, 1}, MeshCoordinate{0, 0}));
+}
+
+TEST_F(MeshDevice2x4Test, CreateSubmesh) {
+    EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
+    EXPECT_THAT(mesh_device_->get_devices(), SizeIs(8));
+    EXPECT_TRUE(mesh_device_->is_parent_mesh());
+    EXPECT_THAT(mesh_device_->get_submeshes(), IsEmpty());
+
+    auto submesh = mesh_device_->create_submesh(MeshShape{1, 2}, MeshCoordinate{1, 1});
+    EXPECT_THAT(mesh_device_->get_submeshes(), SizeIs(1));
+    EXPECT_EQ(submesh->shape(), MeshShape(1, 2));
+    EXPECT_THAT(submesh->get_devices(), SizeIs(2));
+    EXPECT_FALSE(submesh->is_parent_mesh());
+    EXPECT_THAT(submesh->get_submeshes(), IsEmpty());
+
+    // Verify coordinates are correct.
+    EXPECT_EQ(
+        mesh_device_->impl().get_device(MeshCoordinate{1, 1})->id(),
+        submesh->impl().get_device(MeshCoordinate{0, 0})->id());
+    EXPECT_EQ(
+        mesh_device_->impl().get_device(MeshCoordinate{1, 2})->id(),
+        submesh->impl().get_device(MeshCoordinate{0, 1})->id());
+    EXPECT_EQ(submesh->impl().get_device(MeshCoordinate{1, 1}), nullptr);
+}
+
+TEST_F(MeshDevice2x4Test, CreateSubmeshesNonDivisibleSubshape) {
+    EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
+    EXPECT_ANY_THROW(mesh_device_->create_submeshes(MeshShape{1, 3}));
+}
+
+TEST_F(MeshDevice2x4Test, CreateSubmeshes) {
+    EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
+
+    auto submeshes = mesh_device_->create_submeshes(MeshShape{1, 2});
+    EXPECT_THAT(submeshes, SizeIs(4));
+    for (const auto& submesh : submeshes) {
+        EXPECT_EQ(submesh->shape(), MeshShape(1, 2));
+        EXPECT_THAT(submesh->get_devices(), SizeIs(2));
+    }
+
+    EXPECT_EQ(mesh_device_->get_submeshes(), submeshes);
+}
+
+TEST(GetOptimalDramBankToLogicalWorkerAssignmentAPI, UnitMeshes) {
+    auto device_ids_set = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
+    std::vector<int> device_ids(device_ids_set.begin(), device_ids_set.end());
+    auto devs = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(device_ids);
+    const MeshCoordinate coord(0, 0);
+    for (auto& [_, dev] : devs) {
+        for (auto noc : {NOC::NOC_0, NOC::NOC_1}) {
+            std::unordered_map<uint32_t, CoreCoord> per_device;
+            EXPECT_NO_THROW(per_device = dev->get_optimal_dram_bank_to_logical_worker_assignment(noc, coord));
+            // On a 1x1 mesh the single local device is the queried device, so the per-coordinate overload
+            // must match querying that device directly (bank id -> the same per-bank worker core).
+            const auto expected =
+                dev->impl().get_device(coord)->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+            EXPECT_EQ(per_device, to_bank_map(expected));
+        }
+    }
+}
+
+TEST_F(MeshDevice2x4Test, GetOptimalDramBankToLogicalWorkerAssignmentPerDevice) {
+    for (auto noc : {NOC::NOC_0, NOC::NOC_1}) {
+        for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+            std::unordered_map<uint32_t, CoreCoord> per_device;
+            EXPECT_NO_THROW(per_device = mesh_device_->get_optimal_dram_bank_to_logical_worker_assignment(noc, coord));
+            // The per-coordinate result must match querying that specific device directly.
+            auto* device = mesh_device_->impl().get_device(coord);
+            ASSERT_NE(device, nullptr);
+            EXPECT_EQ(per_device, to_bank_map(device->get_optimal_dram_bank_to_logical_worker_assignment(noc)));
+        }
+    }
+}
+
+TEST_F(MeshDevice2x4Test, WorkerCoreFromLogicalCoreUsesSelectedDevice) {
+    const CoreCoord logical_core{0, 0};
+    auto& metal_context = tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id());
+    const auto& control_plane = metal_context.get_control_plane();
+
+    for (const auto& mesh_coordinate : MeshCoordinateRange(mesh_device_->shape())) {
+        // Derive the expected coordinate from the chip's SoC descriptor rather than from the device
+        // object the implementation itself uses, so the two cannot agree by construction.
+        const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(
+            mesh_device_->impl().get_fabric_node_id(mesh_coordinate));
+        EXPECT_EQ(
+            tt::tt_metal::experimental::Device::worker_core_from_logical_core(
+                *mesh_device_, mesh_coordinate, logical_core),
+            metal_context.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                physical_chip_id, logical_core, CoreType::WORKER));
+    }
+
+    EXPECT_ANY_THROW(tt::tt_metal::experimental::Device::worker_core_from_logical_core(
+        *mesh_device_, MeshCoordinate{mesh_device_->shape()[0], 0}, logical_core));
+}
+
+TEST(GetWorkerNocHopDistanceAPI, UnitMeshes) {
+    auto device_ids_set = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
+    std::vector<int> device_ids(device_ids_set.begin(), device_ids_set.end());
+    auto devs = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(device_ids);
+    auto harvest_axis = tt::tt_metal::MetalContext::instance().hal().get_tensix_harvest_axis();
+    for (auto& [device_id, dev] : devs) {
+        bool unharvested = tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id) == 0;
+        if (unharvested || harvest_axis == HalTensixHarvestAxis::COL) {  // Only Y hop distance is consistent
+            auto noc_0_hop_distance = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                dev.get(), CoreCoord(0, 0), CoreCoord(0, 1), NOC::NOC_0);
+            auto noc_1_hop_distance = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                dev.get(), CoreCoord(0, 0), CoreCoord(0, 1), NOC::NOC_1);
+            EXPECT_EQ(noc_0_hop_distance, 1);
+            EXPECT_EQ(noc_1_hop_distance, dev->grid_size().y - 1);
+            noc_0_hop_distance = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                dev.get(), CoreCoord(0, 1), CoreCoord(0, 0), NOC::NOC_0);
+            noc_1_hop_distance = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                dev.get(), CoreCoord(0, 1), CoreCoord(0, 0), NOC::NOC_1);
+            EXPECT_EQ(noc_0_hop_distance, dev->grid_size().y - 1);
+            EXPECT_EQ(noc_1_hop_distance, 1);
+        } else if (unharvested || harvest_axis == HalTensixHarvestAxis::ROW) {  // Only X hop distance is consistent
+            auto noc_0_hop_distance = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                dev.get(), CoreCoord(0, 0), CoreCoord(1, 0), NOC::NOC_0);
+            auto noc_1_hop_distance = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                dev.get(), CoreCoord(0, 0), CoreCoord(1, 0), NOC::NOC_1);
+            EXPECT_EQ(noc_0_hop_distance, 1);
+            EXPECT_EQ(noc_1_hop_distance, dev->grid_size().x - 1);
+            noc_0_hop_distance = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                dev.get(), CoreCoord(1, 0), CoreCoord(0, 0), NOC::NOC_0);
+            noc_1_hop_distance = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                dev.get(), CoreCoord(1, 0), CoreCoord(0, 0), NOC::NOC_1);
+            EXPECT_EQ(noc_0_hop_distance, dev->grid_size().x - 1);
+            EXPECT_EQ(noc_1_hop_distance, 1);
+        }
+    }
+}
+
+TEST(ThrowOnMultipleMeshDeviceInitialization, UnitMeshes) {
+    auto device_ids_set = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
+    std::vector<int> device_ids(device_ids_set.begin(), device_ids_set.end());
+    auto unit_meshes = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(device_ids);
+    for (auto& [_, unit_mesh] : unit_meshes) {
+        EXPECT_EQ(unit_mesh->is_initialized(), true);
+        EXPECT_ANY_THROW(unit_mesh->initialize(
+            /*num_hw_cqs=*/1,
+            /*l1_small_size=*/DEFAULT_L1_SMALL_SIZE,
+            /*trace_region_size=*/DEFAULT_TRACE_REGION_SIZE,
+            /*worker_l1_size=*/DEFAULT_WORKER_L1_SIZE,
+            /*l1_bank_remap=*/{},
+            /*minimal=*/false)
+        );
+    }
+}
+
+TEST_F(MeshDeviceTest, CheckFabricNodeIds) {
+    // Check that the fabric node IDs are correctly assigned to the devices in the mesh. Only works for 2D meshes
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    EXPECT_EQ(mesh_device_->shape().dims(), 2);
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        tt_fabric::FabricNodeId fabric_node_id = mesh_device_->get_fabric_node_id(coord);
+        EXPECT_EQ(
+            control_plane.get_fabric_node_id_from_physical_chip_id(mesh_device_->impl().get_device(coord)->id()),
+            fabric_node_id);
+    }
+}
+
+}  // namespace
+}  // namespace tt::tt_metal::distributed

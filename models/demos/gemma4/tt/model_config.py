@@ -1,0 +1,452 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Gemma4 ModelArgs: HF config parsing, weight loading, and model configuration.
+
+Supports all Gemma4 variants:
+- E2B/E4B: Dense models (no MoE, per-layer input embeddings)
+- A4B/26B: MoE models (128 experts, top-8 routing)
+- 31B: Similar to A4B with different dimensions
+
+Config is automatically loaded from the model checkpoint's config.json
+via HF AutoConfig. Specify model path via HF_MODEL env var.
+"""
+
+import errno
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+import torch
+from loguru import logger
+from tqdm import tqdm
+from transformers import AutoConfig, AutoModelForCausalLM
+
+import ttnn
+
+_RO_ERRNOS = (errno.EROFS, errno.EACCES, errno.EPERM)
+
+
+def _weight_cache_dir_populated(path: Path) -> bool:
+    """True if ``path`` already holds cached tensorbins (non-empty tree)."""
+    try:
+        return path.is_dir() and any(path.iterdir())
+    except OSError:
+        return False
+
+
+def _writable_cache_mirror(preferred: Path) -> Path:
+    """Writable mirror for a preferred cache dir on RO mounts (CI MLPerf :ro)."""
+    root = Path(os.environ.get("TT_METAL_HOME") or os.environ.get("HOME") or "/tmp")
+    suffix = Path(*preferred.parts[-2:]) if len(preferred.parts) >= 2 else Path(preferred.name)
+    return root / "generated" / "gemma4_tt_cache" / suffix
+
+
+def _ensure_cache_dir(path: Path) -> Path:
+    """Return ``path``, creating it when possible.
+
+    CI mounts ``/mnt/MLPerf/huggingface`` read-only (``MLPERF_READ_ONLY``).
+    ``Path.mkdir`` then raises ``OSError: [Errno 30] Read-only file system``
+    when the cache subdir is missing. Reuse an existing dir; otherwise mirror
+    under ``$TT_METAL_HOME/generated/gemma4_tt_cache/...`` so cold builds can
+    still write.
+    """
+    if path.is_dir():
+        return path
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    except OSError as e:
+        if e.errno not in _RO_ERRNOS:
+            raise
+        if path.is_dir():
+            return path
+        alt = _writable_cache_mirror(path)
+        logger.warning(
+            "Gemma4 weight cache: {} is not writable ({}); using {}.",
+            path,
+            e,
+            alt,
+        )
+        alt.mkdir(parents=True, exist_ok=True)
+        return alt
+
+
+def _resolve_mesh_qualified_weight_cache(model_cache_path: Path, dtype_str: str, shape) -> Path:
+    """Mesh-qualified cache dir, with warm legacy fallback for CI.
+
+    Multi-device layouts must not share a single ``tensor_cache_{dtype}`` across
+    different mesh geometries (``as_tensor`` reloads tensorbins as-is). Prefer
+    ``tensor_cache_{dtype}_mesh{RxC}``.
+
+    When that directory is empty but the legacy (unqualified) cache is already
+    populated — typical on CI MLPerf after this path change — reuse legacy so
+    e2e does not cold-rebuild a full 31B under a 10–25 min SKU step timeout.
+    Force the mesh path (and a rebuild) with ``GEMMA4_WEIGHT_CACHE_MESH_ONLY=1``.
+    """
+    legacy = model_cache_path / f"tensor_cache_{dtype_str}"
+    mesh = model_cache_path / (f"tensor_cache_{dtype_str}_mesh" + "x".join(str(d) for d in shape))
+    mesh_only = os.environ.get("GEMMA4_WEIGHT_CACHE_MESH_ONLY", "0").lower() in ("1", "true", "yes")
+    if not mesh_only and _weight_cache_dir_populated(legacy) and not _weight_cache_dir_populated(mesh):
+        logger.warning(
+            "Gemma4 weight cache: mesh-qualified dir {} is empty; reusing legacy {}. "
+            "Set GEMMA4_WEIGHT_CACHE_MESH_ONLY=1 to rebuild into the mesh path "
+            "(required if legacy was built for a different MeshShape).",
+            mesh,
+            legacy,
+        )
+        return legacy
+    # Prefer an already-populated mesh dir without mkdir (RO-safe).
+    if _weight_cache_dir_populated(mesh):
+        return mesh
+    return _ensure_cache_dir(mesh)
+
+
+@dataclass
+class Gemma4ModelArgs:
+    """Gemma4 model arguments parsed from HuggingFace config.
+
+    All fields have safe defaults but should be populated via from_hf_config()
+    for any real model.
+    """
+
+    # Core dimensions
+    hidden_size: int = 2816
+    num_hidden_layers: int = 30
+    num_attention_heads: int = 16
+    num_key_value_heads: int = 8
+    head_dim: int = 256
+    # Global attention overrides (None = same as sliding)
+    num_global_key_value_heads: int = 2
+    global_head_dim: int = 512
+    attention_k_eq_v: bool = True
+    # Sliding window
+    sliding_window: int = 1024
+    # RoPE
+    rope_theta: float = 10000.0
+    global_rope_theta: float = 1000000.0
+    partial_rotary_factor: float = 0.25
+    # Shared MLP
+    intermediate_size: int = 2112
+    hidden_activation: str = "gelu_pytorch_tanh"
+    # MoE (disabled by default for dense models)
+    enable_moe_block: bool = True
+    moe_intermediate_size: int = 704
+    num_experts: int = 128
+    top_k_experts: int = 8
+    # Per-layer input embeddings (E2B/E4B feature)
+    hidden_size_per_layer_input: int = 0
+    vocab_size_per_layer_input: int = 262144
+    # KV sharing
+    num_kv_shared_layers: int = 0
+    use_double_wide_mlp: bool = False
+    # General
+    vocab_size: int = 262144
+    rms_norm_eps: float = 1e-6
+    final_logit_softcapping: float = 30.0
+    tie_word_embeddings: bool = True
+    attention_bias: bool = False
+    # Layer pattern
+    layer_types: tuple = None
+    model_cache_path: Path | None = None
+    # Batched prefill escape hatch, honoured by every gemma4 batching gate and
+    # by tt_transformers' shared one. Arch-gated in __post_init__ below.
+    disable_batched_prefill: bool = False
+
+    def __post_init__(self):
+        self._apply_wormhole_batched_prefill_guard()
+        if self.layer_types is None:
+            pattern = ["sliding_attention"] * 5 + ["full_attention"]
+            self.layer_types = tuple(pattern * (self.num_hidden_layers // 6 + 1))
+            self.layer_types = self.layer_types[: self.num_hidden_layers]
+
+    def _apply_wormhole_batched_prefill_guard(self):
+        """Keep Wormhole on the sequential per-user prefill path.
+
+        Multi-user batched prefill buys nothing on WH and collapses once each
+        user carries >=512 tokens. Measured on T3K 12B at concurrency 32
+        (osl 128, n 32, two reps per cell, aggregate tok/s; run-to-run spread
+        is <1%, so the 512 gap is ~400x the noise floor)::
+
+            isl 128   batched 332.7 / 331.5   sequential 330.0 / 332.6   1.00x
+            isl 256   batched 202.5 / 205.0   sequential 205.8 / 206.6   1.01x
+            isl 512   batched  51.1           sequential 198.5 / 198.6   3.89x
+
+        The same boundary is where WH wedges the device outright: batched, the
+        second consecutive isl-512 run died mid-bench (0 of 4096 tokens, metal
+        "device timeout ... unrecoverable"), while sequential completed both
+        reps. Sequential degrades smoothly (331 -> 206 -> 199) instead of
+        falling off a cliff.
+
+        This mirrors the existing per-(model, device) opt-outs: tt_transformers
+        disables batched prefill for Qwen3-32B/P150x4 and Llama-3.1-8B on
+        Blackhole (``model_config.py``), and gpt-oss disables it outright. Like
+        those, it is a workaround for the prefill path rather than a fix.
+
+        Blackhole is untouched -- it keeps batched prefill at every length,
+        which is where its own batched-prefill win was measured.
+        """
+        if self.disable_batched_prefill:
+            return  # explicitly set by the caller; never override
+        if os.environ.get("G4_FORCE_BATCH_PREFILL", "0") == "1":
+            # Dev hatch (see generator_vllm will_batch): let the batched path
+            # engage on Wormhole too, so the debt-#1 fix can be cross-verified.
+            return
+        try:
+            from models.common.utility_functions import is_blackhole
+
+            self.disable_batched_prefill = not is_blackhole()
+        except Exception:
+            # Arch undeterminable (host-only unit tests): keep the shared default.
+            pass
+
+    @classmethod
+    def from_hf_config(cls, hf_config):
+        """Create Gemma4ModelArgs from a HuggingFace AutoConfig.
+
+        Handles all Gemma4 variants (E2B, E4B, A4B, 31B).
+        """
+        tc = getattr(hf_config, "text_config", hf_config)
+        layer_types = tuple(tc.layer_types) if hasattr(tc, "layer_types") and tc.layer_types else None
+
+        rope_params = getattr(tc, "rope_parameters", {}) or {}
+        sliding_rope = rope_params.get("sliding_attention", {})
+        full_rope = rope_params.get("full_attention", {})
+
+        # num_global_key_value_heads: None means use same as sliding
+        num_global_kv = getattr(tc, "num_global_key_value_heads", None)
+        if num_global_kv is None:
+            num_global_kv = getattr(tc, "num_key_value_heads", 8)
+
+        return cls(
+            hidden_size=tc.hidden_size,
+            num_hidden_layers=tc.num_hidden_layers,
+            num_attention_heads=tc.num_attention_heads,
+            num_key_value_heads=getattr(tc, "num_key_value_heads", 8),
+            head_dim=getattr(tc, "head_dim", 256),
+            num_global_key_value_heads=num_global_kv,
+            global_head_dim=getattr(tc, "global_head_dim", 512),
+            attention_k_eq_v=getattr(tc, "attention_k_eq_v", False),
+            sliding_window=getattr(tc, "sliding_window", 1024),
+            rope_theta=sliding_rope.get("rope_theta", getattr(tc, "rope_theta", 10000.0)),
+            global_rope_theta=full_rope.get("rope_theta", 1000000.0),
+            partial_rotary_factor=full_rope.get("partial_rotary_factor", 0.25),
+            intermediate_size=tc.intermediate_size,
+            hidden_activation=getattr(tc, "hidden_activation", "gelu_pytorch_tanh"),
+            enable_moe_block=getattr(tc, "enable_moe_block", False),
+            moe_intermediate_size=getattr(tc, "moe_intermediate_size", None) or 0,
+            num_experts=getattr(tc, "num_experts", None) or 0,
+            top_k_experts=getattr(tc, "top_k_experts", None) or 0,
+            hidden_size_per_layer_input=getattr(tc, "hidden_size_per_layer_input", 0) or 0,
+            vocab_size_per_layer_input=getattr(tc, "vocab_size_per_layer_input", 262144),
+            num_kv_shared_layers=getattr(tc, "num_kv_shared_layers", 0),
+            use_double_wide_mlp=getattr(tc, "use_double_wide_mlp", False),
+            vocab_size=tc.vocab_size,
+            rms_norm_eps=getattr(tc, "rms_norm_eps", 1e-6),
+            final_logit_softcapping=getattr(tc, "final_logit_softcapping", None) or 0.0,
+            tie_word_embeddings=getattr(tc, "tie_word_embeddings", True),
+            attention_bias=getattr(tc, "attention_bias", False),
+            layer_types=layer_types,
+        )
+
+    @staticmethod
+    def load_state_dict(weights_path, dummy_weights=False):
+        """Load model state dict from safetensors (fast) or HF checkpoint."""
+        if dummy_weights:
+            return {}
+
+        from pathlib import Path
+
+        safetensor_files = sorted(Path(weights_path).glob("*.safetensors"))
+        if safetensor_files:
+            from safetensors.torch import load_file
+
+            logger.info(f"Loading {len(safetensor_files)} safetensor files from {weights_path}")
+            state_dict = {}
+            for f in tqdm(safetensor_files, desc="Loading safetensors"):
+                shard = load_file(str(f))
+                state_dict.update(shard)
+
+            for k, v in state_dict.items():
+                if v.dtype == torch.float32:
+                    state_dict[k] = v.to(torch.bfloat16)
+
+            logger.info(f"Loaded {len(state_dict)} tensors")
+            return state_dict
+
+        logger.info(f"No safetensors found, loading via AutoModelForCausalLM from {weights_path}")
+        model = AutoModelForCausalLM.from_pretrained(weights_path, torch_dtype="auto")
+        state_dict = model.state_dict()
+        del model
+
+        if any(v.dtype == torch.float32 for v in state_dict.values()):
+            state_dict = {
+                k: v.to(torch.bfloat16) if v.dtype == torch.float32 else v
+                for k, v in tqdm(state_dict.items(), desc="Converting to bfloat16")
+            }
+
+        return state_dict
+
+    @staticmethod
+    def load_hf_config(model_path):
+        """Load HuggingFace config."""
+        return AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+
+    # ── Generator compatibility properties ─────────────────────────────────
+    # The tt_transformers Generator expects these attribute names.
+
+    @property
+    def dim(self):
+        return self.hidden_size
+
+    @property
+    def n_layers(self):
+        return self.num_hidden_layers
+
+    @property
+    def max_batch_size(self):
+        return getattr(self, "_max_batch_size", 1)
+
+    @max_batch_size.setter
+    def max_batch_size(self, value):
+        self._max_batch_size = value
+
+    @property
+    def max_seq_len(self):
+        return getattr(self, "_max_seq_len", 131072)
+
+    @max_seq_len.setter
+    def max_seq_len(self, value):
+        self._max_seq_len = value
+
+    def get_warmup_prefill_supported_seq_lens(self):
+        """Sequence lengths to compile (and, for trace buckets, pre-capture)
+        during prefill warmup.
+
+        Includes every trace-prefill bucket so warmup pre-captures each one;
+        otherwise the first real prompt of a bucket pays the one-time
+        trace-capture cost (compile + capture passes) inside its TTFT instead of
+        a cheap replay. The small base lengths give compile coverage when tracing
+        is disabled (bounded sliding / per-layer-input models, where
+        ``trace_prefill_supported_seq_lens`` is empty).
+        """
+        trace_lens = list(getattr(self, "trace_prefill_supported_seq_lens", []) or [])
+        seq_lens = sorted({32, 128, 512, *trace_lens})
+        return [s for s in seq_lens if s <= self.max_seq_len]
+
+    @staticmethod
+    def resolve_model_cache_path(model_path):
+        """Resolve the cache root for model artifacts."""
+        cache_dir = os.getenv("TT_CACHE_PATH")
+        if cache_dir:
+            cache_dir = Path(cache_dir)
+        elif Path(model_path).is_dir():
+            # Local checkpoint: cache next to the weights.
+            cache_dir = Path(model_path)
+        else:
+            # Otherwise model_path is an HF id like "google/gemma-4-E2B-it".
+            # Caching under Path(model_path) would create that as a relative dir
+            # in cwd, which then makes transformers' AutoConfig.from_pretrained
+            # treat the id as a local path (os.path.isdir returns True) and fail
+            # to find config.json. Fall back to an HF_HOME-based cache instead.
+            hf_home = os.getenv("HF_HOME") or os.path.expanduser("~/.cache/huggingface")
+            sanitized = str(model_path).replace("/", "--")
+            cache_dir = Path(hf_home) / "tt_cache" / sanitized
+        return _ensure_cache_dir(cache_dir)
+
+    def weight_cache_path(self, dtype, mesh_shape=None):
+        """Return weight cache path for the model.
+
+        Multi-device layouts are qualified by mesh geometry. ``ttnn.as_tensor``
+        reloads tensorbins as-is and ignores ``mesh_mapper``, so a TP=4 cache
+        built on ``MeshShape([2,4])`` must not be reused on ``[1,4]`` (QB2).
+        See ``_resolve_mesh_qualified_weight_cache`` for CI legacy fallback.
+        """
+        if self.model_cache_path is None:
+            raise ValueError("model_cache_path must be initialized before requesting a weight cache path")
+        dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
+        shape = mesh_shape if mesh_shape is not None else getattr(self, "cluster_shape", None)
+        if shape is not None and shape[0] * shape[1] > 1:
+            return _resolve_mesh_qualified_weight_cache(self.model_cache_path, dtype_str, shape)
+        cache_path = self.model_cache_path / f"tensor_cache_{dtype_str}"
+        return _ensure_cache_dir(cache_path)
+
+
+@dataclass
+class Gemma4AssistantArgs:
+    """Model args for a Gemma4 ``it-assistant`` MTP/EAGLE drafter.
+
+    The drafter is a tiny Gemma4 text model (``text_args``, e.g. hidden 1024 / 4
+    layers) whose every layer is KV-shared: it computes only Q and cross-attends
+    into the *target* model's last full-attention and last sliding-attention
+    layer KV caches (``backbone_hidden_size`` = the target's hidden size). It also
+    has ``pre_projection`` (2*backbone -> hidden), ``post_projection`` (hidden ->
+    backbone) and an ``lm_head`` tied to the target vocab.
+
+    Covers both ``gemma4_assistant`` (31B target, backbone 5376) and
+    ``gemma4_unified_assistant`` (12B target, backbone 3840): same drafter shape,
+    different head counts / backbone, which are read straight off the HF config.
+    """
+
+    text_args: "Gemma4ModelArgs"
+    backbone_hidden_size: int
+    use_ordered_embeddings: bool = False
+    num_centroids: int = 2048
+    centroid_intermediate_top_k: int = 32
+    model_cache_path: Path | None = None
+
+    @classmethod
+    def from_hf_config(cls, hf_config):
+        """Build assistant args from a ``Gemma4AssistantConfig`` HF AutoConfig."""
+        tc = hf_config.text_config
+        text_args = Gemma4ModelArgs.from_hf_config(tc)
+        # RoPE cache creation (create_rope_caches) needs the real HF text config.
+        text_args._hf_text_config = tc
+        return cls(
+            text_args=text_args,
+            backbone_hidden_size=int(hf_config.backbone_hidden_size),
+            use_ordered_embeddings=bool(getattr(hf_config, "use_ordered_embeddings", False)),
+            num_centroids=int(getattr(hf_config, "num_centroids", 2048)),
+            centroid_intermediate_top_k=int(getattr(hf_config, "centroid_intermediate_top_k", 32)),
+        )
+
+    @staticmethod
+    def load_hf_config(model_path):
+        return AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+
+    @staticmethod
+    def load_state_dict(weights_path, dummy_weights=False):
+        # The assistant checkpoint stores plain HF weights (pre_projection,
+        # post_projection, lm_head, model.layers.*, model.norm) — same on-disk
+        # format the target uses, so reuse the target's loader verbatim.
+        return Gemma4ModelArgs.load_state_dict(weights_path, dummy_weights=dummy_weights)
+
+    @staticmethod
+    def resolve_model_cache_path(model_path):
+        return Gemma4ModelArgs.resolve_model_cache_path(model_path)
+
+    def weight_cache_path(self, dtype, mesh_shape=None):
+        if self.model_cache_path is None:
+            raise ValueError("model_cache_path must be initialized before requesting a weight cache path")
+        dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
+        shape = mesh_shape if mesh_shape is not None else getattr(self, "cluster_shape", None)
+        # Assistant caches use a distinct prefix; mirror target mesh qualification.
+        if shape is not None and shape[0] * shape[1] > 1:
+            legacy = self.model_cache_path / f"assistant_tensor_cache_{dtype_str}"
+            mesh = self.model_cache_path / (
+                f"assistant_tensor_cache_{dtype_str}_mesh" + "x".join(str(d) for d in shape)
+            )
+            mesh_only = os.environ.get("GEMMA4_WEIGHT_CACHE_MESH_ONLY", "0").lower() in ("1", "true", "yes")
+            if not mesh_only and _weight_cache_dir_populated(legacy) and not _weight_cache_dir_populated(mesh):
+                logger.warning(
+                    "Gemma4 assistant weight cache: reusing legacy {} (mesh path {} empty).",
+                    legacy,
+                    mesh,
+                )
+                return legacy
+            if _weight_cache_dir_populated(mesh):
+                return mesh
+            return _ensure_cache_dir(mesh)
+        cache_path = self.model_cache_path / f"assistant_tensor_cache_{dtype_str}"
+        return _ensure_cache_dir(cache_path)

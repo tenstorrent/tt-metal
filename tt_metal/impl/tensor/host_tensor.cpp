@@ -1,0 +1,113 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
+
+#include "host_tensor_impl.hpp"
+#include "spec/layout/tensor_layout_impl.hpp"
+#include "tensor_impl.hpp"
+
+namespace tt::tt_metal {
+
+
+HostTensor::HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology) :
+    impl_(std::make_unique<HostTensorImpl>(std::move(buffer), std::move(spec), std::move(topology))) {}
+
+HostTensor HostTensor::from_buffer(HostBuffer buffer, TensorSpec spec) {
+    auto distributed_buffer = DistributedHostBuffer::create(
+        distributed::MeshShape(1, 1),
+        distributed::MeshShape(1, 1),
+        distributed::MeshCoordinate(0, 0),
+        /*context=*/nullptr);
+    distributed_buffer.emplace_shard(distributed::MeshCoordinate(0, 0), [&buffer]() { return std::move(buffer); });
+    return HostTensor(std::move(distributed_buffer), std::move(spec), TensorTopology{});
+}
+
+HostTensor HostTensor::allocate_for_overwrite(TensorSpec spec) {
+    // Sequence allocate before moving spec: argument evaluation order is unspecified.
+    auto buffer = tensor_impl::allocate_host_buffer(spec);
+    return from_buffer(std::move(buffer), std::move(spec));
+}
+
+HostTensor::HostTensor(const HostTensor& other) :
+    impl_(other.impl_ ? std::make_unique<HostTensorImpl>(*other.impl_) : nullptr) {}
+
+HostTensor& HostTensor::operator=(const HostTensor& other) {
+    if (this == &other) {
+        return *this;
+    }
+    impl_ = other.impl_ ? std::make_unique<HostTensorImpl>(*other.impl_) : nullptr;
+    return *this;
+}
+
+HostTensor::HostTensor(HostTensor&& other) noexcept : impl_(std::move(other.impl_)) {}
+
+HostTensor& HostTensor::operator=(HostTensor&& other) noexcept {
+    impl_ = std::move(other.impl_);
+    return *this;
+}
+
+HostTensor::~HostTensor() = default;
+
+HostTensorImpl& HostTensor::impl() {
+    TT_FATAL(impl_ != nullptr, "HostTensor is in a moved-from state.");
+    return *impl_;
+}
+
+const HostTensorImpl& HostTensor::impl() const {
+    TT_FATAL(impl_ != nullptr, "HostTensor is in a moved-from state.");
+    return *impl_;
+}
+
+const TensorSpec& HostTensor::tensor_spec() const { return impl().spec(); }
+
+bool HostTensor::is_valueless_after_move() const { return impl_ == nullptr; }
+
+const DistributedHostBuffer& HostTensor::buffer() const { return impl().buffer(); }
+
+DataType HostTensor::dtype() const { return tensor_spec().tensor_layout().get_data_type(); }
+
+Layout HostTensor::layout() const { return tensor_spec().tensor_layout().get_layout(); }
+
+const Shape& HostTensor::logical_shape() const { return tensor_spec().logical_shape(); }
+
+const Shape& HostTensor::padded_shape() const { return tensor_spec().padded_shape(); }
+
+HostTensor::volume_type HostTensor::logical_volume() const { return logical_shape().volume(); }
+
+HostTensor::volume_type HostTensor::physical_volume() const { return padded_shape().volume(); }
+
+const MemoryConfig& HostTensor::memory_config() const { return tensor_spec().memory_config(); }
+
+bool HostTensor::is_sharded() const { return tensor_spec().memory_config().is_sharded(); }
+
+const std::optional<ShardSpec>& HostTensor::legacy_shard_spec() const { return memory_config().shard_spec(); }
+
+const std::optional<NdShardSpec>& HostTensor::nd_shard_spec() const { return memory_config().nd_shard_spec(); }
+
+std::size_t HostTensor::element_size() const {
+    switch (dtype()) {
+        case DataType::BFLOAT16: return sizeof(bfloat16);
+        case DataType::FLOAT32: return sizeof(float);
+        case DataType::INT32: return sizeof(int32_t);
+        case DataType::UINT32: return sizeof(uint32_t);
+        case DataType::UINT16: return sizeof(uint16_t);
+        case DataType::UINT8: return sizeof(uint8_t);
+        case DataType::INT8: return sizeof(int8_t);
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B: return sizeof(std::byte);
+        default: TT_THROW("Unsupported data type");
+    }
+}
+
+Strides HostTensor::strides() const { return tensor_spec().tensor_layout().impl().compute_strides(logical_shape()); }
+
+HostTensor HostTensor::transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const {
+    auto transformed_buffer =
+        buffer().transform(callable, DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+    return HostTensor(std::move(transformed_buffer), tensor_spec(), impl().topology());
+}
+
+}  // namespace tt::tt_metal

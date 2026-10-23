@@ -1,0 +1,11 @@
+# YUNet PyTorch reference (downloaded via setup.sh)
+YUNet/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Demo outputs
+*_detected*.jpg
+demo_output*.jpg

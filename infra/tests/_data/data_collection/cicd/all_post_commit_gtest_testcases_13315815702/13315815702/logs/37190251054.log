@@ -1,0 +1,690 @@
+﻿2025-02-13T20:06:43.9939058Z Current runner version: '2.322.0'
+2025-02-13T20:06:43.9946463Z Runner name: 'tt-metal-ci-vm-4'
+2025-02-13T20:06:43.9947292Z Runner group name: 'Default'
+2025-02-13T20:06:43.9948417Z Machine name: '3b996119-328e-4871-b980-bb63dcfbb963'
+2025-02-13T20:06:43.9951789Z ##[group]GITHUB_TOKEN Permissions
+2025-02-13T20:06:43.9953996Z Actions: read
+2025-02-13T20:06:43.9954633Z Contents: write
+2025-02-13T20:06:43.9955191Z Metadata: read
+2025-02-13T20:06:43.9955753Z Packages: write
+2025-02-13T20:06:43.9956428Z Pages: write
+2025-02-13T20:06:43.9956998Z PullRequests: write
+2025-02-13T20:06:43.9957548Z ##[endgroup]
+2025-02-13T20:06:43.9960674Z Secret source: Actions
+2025-02-13T20:06:43.9961452Z Prepare workflow directory
+2025-02-13T20:06:44.0478922Z Prepare all required actions
+2025-02-13T20:06:44.0521801Z Getting action download info
+2025-02-13T20:06:44.2424400Z Download action repository 'tenstorrent/tt-metal@main' (SHA:ac426de3d4a9c274964843fdae6aa83ea3960a30)
+2025-02-13T20:06:49.9329826Z Download action repository 'actions/download-artifact@v4' (SHA:fa0a91b85d4f404e444e00e005971372dc801d16)
+2025-02-13T20:06:50.6590455Z Getting action download info
+2025-02-13T20:06:50.8135276Z Download action repository 'actions/checkout@v4' (SHA:11bd71901bbe5b1630ceea73d27597364c9af683)
+2025-02-13T20:06:51.3972999Z Uses: tenstorrent/tt-metal/.github/workflows/ttnn-post-commit.yaml@refs/heads/sagarwal/multi_page_buffer (ac8ce51fedfe3a43fc1ee309ca81e8c67b736d70)
+2025-02-13T20:06:51.3975742Z ##[group] Inputs
+2025-02-13T20:06:51.3976133Z   build-type: Release
+2025-02-13T20:06:51.3976889Z   with-retries: false
+2025-02-13T20:06:51.3977163Z   arch: grayskull
+2025-02-13T20:06:51.3977461Z   runner-label: E150
+2025-02-13T20:06:51.3978274Z   timeout: 45
+2025-02-13T20:06:51.3978625Z   num-groups: 12
+2025-02-13T20:06:51.3978933Z ##[endgroup]
+2025-02-13T20:06:51.3979379Z Complete job name: ttnn-unit-tests (grayskull, E150) / ttnn group 1 grayskull E150
+2025-02-13T20:06:51.4512432Z A job started hook has been configured by the self-hosted runner administrator
+2025-02-13T20:06:51.4644929Z ##[group]Run '/opt/tt_metal_infra/scripts/ci/grayskull/reset.sh'
+2025-02-13T20:06:51.4660040Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-02-13T20:06:51.4660751Z ##[endgroup]
+2025-02-13T20:06:51.4817916Z ++ date
+2025-02-13T20:06:51.4818690Z + echo Current date / time is Thu Feb 13 20:06:51 UTC 2025
+2025-02-13T20:06:51.4819187Z + set_e_was_enabled=false
+2025-02-13T20:06:51.4819732Z + [[ ehxB == *e* ]]
+2025-02-13T20:06:51.4820127Z + set_e_was_enabled=true
+2025-02-13T20:06:51.4820522Z + set +e
+2025-02-13T20:06:51.4820912Z + docker image prune
+2025-02-13T20:06:51.4821426Z Current date / time is Thu Feb 13 20:06:51 UTC 2025
+2025-02-13T20:06:51.4972870Z WARNING! This will remove all dangling images.
+2025-02-13T20:06:51.4997750Z ++ df
+2025-02-13T20:06:51.5001159Z ++ awk '{print $5}'
+2025-02-13T20:06:51.5001985Z ++ sed s/%//
+2025-02-13T20:06:51.5002542Z +++ findmnt -n -o SOURCE /
+2025-02-13T20:06:51.5022449Z ++ grep -w '^/dev/vda1'
+2025-02-13T20:06:51.5048046Z + disk_usage_before=60
+2025-02-13T20:06:51.5064415Z Are you sure you want to continue? [y/N] ::notice title=disk-usage-before-startup::Disk usage is 60 %
+2025-02-13T20:06:51.5065702Z + echo '::notice title=disk-usage-before-startup::Disk usage is 60 %'
+2025-02-13T20:06:51.5066166Z + '[' 60 -ge 90 ']'
+2025-02-13T20:06:51.5066470Z ++ df
+2025-02-13T20:06:51.5066951Z ++ awk '{print $5}'
+2025-02-13T20:06:51.5067270Z ++ sed s/%//
+2025-02-13T20:06:51.5068359Z +++ findmnt -n -o SOURCE /
+2025-02-13T20:06:51.5086044Z ++ grep -w '^/dev/vda1'
+2025-02-13T20:06:51.5104683Z + disk_usage_after=60
+2025-02-13T20:06:51.5129074Z ##[notice]Disk usage is 60 %
+2025-02-13T20:06:51.5136880Z + echo '::notice title=disk-usage-after-startup::Disk usage is 60 %'
+2025-02-13T20:06:51.5137397Z + '[' 60 -ge 90 ']'
+2025-02-13T20:06:51.5137742Z ++ lsmod
+2025-02-13T20:06:51.5144021Z + lsmod_output='Module                  Size  Used by
+2025-02-13T20:06:51.5145068Z wekafsio            70086656  1
+2025-02-13T20:06:51.5145530Z wekafsgw               40960  4 wekafsio
+2025-02-13T20:06:51.5146654Z veth                   28672  0
+2025-02-13T20:06:51.5147166Z uio_pci_generic        16384  0
+2025-02-13T20:06:51.5147683Z igb_uio                20480  0
+2025-02-13T20:06:51.5148198Z uio                    20480  2 igb_uio,uio_pci_generic
+2025-02-13T20:06:51.5148784Z xt_conntrack           16384  1
+2025-02-13T20:06:51.5149248Z xt_MASQUERADE          20480  1
+2025-02-13T20:06:51.5149725Z nf_conntrack_netlink    45056  0
+2025-02-13T20:06:51.5150246Z nfnetlink              16384  2 nf_conntrack_netlink
+2025-02-13T20:06:51.5150830Z xfrm_user              36864  1
+2025-02-13T20:06:51.5151161Z xfrm_algo              16384  1 xfrm_user
+2025-02-13T20:06:51.5151494Z iptable_nat            16384  1
+2025-02-13T20:06:51.5151845Z nf_nat                 45056  2 iptable_nat,xt_MASQUERADE
+2025-02-13T20:06:51.5152363Z nf_conntrack          139264  4 xt_conntrack,nf_nat,nf_conntrack_netlink,xt_MASQUERADE
+2025-02-13T20:06:51.5152871Z nf_defrag_ipv6         24576  1 nf_conntrack
+2025-02-13T20:06:51.5153279Z nf_defrag_ipv4         16384  1 nf_conntrack
+2025-02-13T20:06:51.5153630Z xt_addrtype            16384  2
+2025-02-13T20:06:51.5153929Z iptable_filter         16384  1
+2025-02-13T20:06:51.5154226Z bpfilter               32768  0
+2025-02-13T20:06:51.5154851Z br_netfilter           28672  0
+2025-02-13T20:06:51.5155304Z bridge                176128  1 br_netfilter
+2025-02-13T20:06:51.5155717Z stp                    16384  1 bridge
+2025-02-13T20:06:51.5156164Z llc                    16384  2 bridge,stp
+2025-02-13T20:06:51.5156501Z aufs                  262144  0
+2025-02-13T20:06:51.5156797Z xfs                  1286144  2
+2025-02-13T20:06:51.5157095Z overlay               118784  0
+2025-02-13T20:06:51.5157389Z rdma_ucm               28672  0
+2025-02-13T20:06:51.5157709Z rdma_cm               110592  1 rdma_ucm
+2025-02-13T20:06:51.5158056Z iw_cm                  49152  1 rdma_cm
+2025-02-13T20:06:51.5158638Z ib_ipoib              131072  0
+2025-02-13T20:06:51.5158973Z ib_cm                 114688  2 rdma_cm,ib_ipoib
+2025-02-13T20:06:51.5159368Z ib_umad                28672  8
+2025-02-13T20:06:51.5159669Z nls_iso8859_1          16384  1
+2025-02-13T20:06:51.5160013Z dm_multipath           32768  0
+2025-02-13T20:06:51.5160338Z scsi_dh_rdac           16384  0
+2025-02-13T20:06:51.5160637Z scsi_dh_emc            16384  0
+2025-02-13T20:06:51.5160925Z scsi_dh_alua           20480  0
+2025-02-13T20:06:51.5161212Z mlx5_ib               397312  0
+2025-02-13T20:06:51.5161524Z ib_uverbs             139264  18 rdma_ucm,mlx5_ib
+2025-02-13T20:06:51.5161869Z input_leds             16384  0
+2025-02-13T20:06:51.5162161Z serio_raw              20480  0
+2025-02-13T20:06:51.5162451Z kvm_amd                98304  0
+2025-02-13T20:06:51.5162744Z ccp                    90112  1 kvm_amd
+2025-02-13T20:06:51.5163060Z joydev                 24576  0
+2025-02-13T20:06:51.5163357Z kvm                   667648  1 kvm_amd
+2025-02-13T20:06:51.5163864Z ib_core               348160  8 rdma_cm,ib_ipoib,iw_cm,ib_umad,rdma_ucm,ib_uverbs,mlx5_ib,ib_cm
+2025-02-13T20:06:51.5164326Z tenstorrent            32768  0
+2025-02-13T20:06:51.5164655Z sch_fq_codel           20480  45
+2025-02-13T20:06:51.5165037Z binfmt_misc            24576  1
+2025-02-13T20:06:51.5165631Z msr                    16384  0
+2025-02-13T20:06:51.5166051Z efi_pstore             16384  0
+2025-02-13T20:06:51.5166512Z virtio_rng             16384  0
+2025-02-13T20:06:51.5166979Z ip_tables              32768  2 iptable_filter,iptable_nat
+2025-02-13T20:06:51.5167725Z x_tables               40960  5 xt_conntrack,iptable_filter,xt_addrtype,ip_tables,xt_MASQUERADE
+2025-02-13T20:06:51.5168222Z autofs4                45056  2
+2025-02-13T20:06:51.5168510Z btrfs                1269760  0
+2025-02-13T20:06:51.5168820Z zstd_compress         167936  1 btrfs
+2025-02-13T20:06:51.5169156Z raid10                 61440  0
+2025-02-13T20:06:51.5169455Z raid456               155648  0
+2025-02-13T20:06:51.5169830Z async_raid6_recov      24576  1 raid456
+2025-02-13T20:06:51.5170285Z async_memcpy           20480  2 raid456,async_raid6_recov
+2025-02-13T20:06:51.5171011Z async_pq               24576  2 raid456,async_raid6_recov
+2025-02-13T20:06:51.5171496Z async_xor              20480  3 async_pq,raid456,async_raid6_recov
+2025-02-13T20:06:51.5172031Z async_tx               20480  5 async_pq,async_memcpy,async_xor,raid456,async_raid6_recov
+2025-02-13T20:06:51.5172667Z xor                    24576  2 async_xor,btrfs
+2025-02-13T20:06:51.5173101Z raid6_pq              114688  4 async_pq,btrfs,raid456,async_raid6_recov
+2025-02-13T20:06:51.5173594Z libcrc32c              16384  5 nf_conntrack,nf_nat,btrfs,xfs,raid456
+2025-02-13T20:06:51.5173998Z raid1                  45056  0
+2025-02-13T20:06:51.5174344Z raid0                  24576  0
+2025-02-13T20:06:51.5174665Z multipath              20480  0
+2025-02-13T20:06:51.5174956Z linear                 20480  0
+2025-02-13T20:06:51.5175262Z hid_generic            16384  0
+2025-02-13T20:06:51.5175557Z crct10dif_pclmul       16384  1
+2025-02-13T20:06:51.5176103Z crc32_pclmul           16384  0
+2025-02-13T20:06:51.5176410Z usbhid                 57344  0
+2025-02-13T20:06:51.5176745Z cirrus                 16384  0
+2025-02-13T20:06:51.5177064Z ghash_clmulni_intel    16384  0
+2025-02-13T20:06:51.5177439Z hid                   131072  2 usbhid,hid_generic
+2025-02-13T20:06:51.5177803Z aesni_intel           372736  0
+2025-02-13T20:06:51.5178178Z mlx5_core            1626112  1 mlx5_ib
+2025-02-13T20:06:51.5178578Z crypto_simd            16384  1 aesni_intel
+2025-02-13T20:06:51.5178994Z drm_kms_helper        184320  3 cirrus
+2025-02-13T20:06:51.5179377Z syscopyarea            16384  1 drm_kms_helper
+2025-02-13T20:06:51.5179803Z sysfillrect            16384  1 drm_kms_helper
+2025-02-13T20:06:51.5180236Z sysimgblt              16384  1 drm_kms_helper
+2025-02-13T20:06:51.5180624Z fb_sys_fops            16384  1 drm_kms_helper
+2025-02-13T20:06:51.5181154Z pci_hyperv_intf        16384  1 mlx5_core
+2025-02-13T20:06:51.5181568Z mlxdevm               172032  1 mlx5_core
+2025-02-13T20:06:51.5182006Z cryptd                 24576  2 crypto_simd,ghash_clmulni_intel
+2025-02-13T20:06:51.5182453Z auxiliary              16384  2 mlx5_ib,mlx5_core
+2025-02-13T20:06:51.5182840Z glue_helper            16384  1 aesni_intel
+2025-02-13T20:06:51.5183842Z mlx_compat             65536  12 rdma_cm,ib_ipoib,mlxdevm,iw_cm,auxiliary,ib_umad,ib_core,rdma_ucm,ib_uverbs,mlx5_ib,ib_cm,mlx5_core
+2025-02-13T20:06:51.5184484Z virtio_blk             20480  3
+2025-02-13T20:06:51.5184787Z tls                    73728  1 mlx5_core
+2025-02-13T20:06:51.5185114Z ahci                   40960  0
+2025-02-13T20:06:51.5185434Z drm                   495616  3 drm_kms_helper,cirrus
+2025-02-13T20:06:51.5185792Z psmouse               155648  0
+2025-02-13T20:06:51.5186109Z libahci                36864  1 ahci
+2025-02-13T20:06:51.5186450Z mlxfw                  32768  1 mlx5_core
+2025-02-13T20:06:51.5186840Z psample                20480  1 mlx5_core'
+2025-02-13T20:06:51.5187201Z + grep -q tenstorrent
+2025-02-13T20:06:51.5197777Z + echo Module Size Used by wekafsio 70086656 1 wekafsgw 40960 4 wekafsio veth 28672 0 uio_pci_generic 16384 0 igb_uio 20480 0 uio 20480 2 igb_uio,uio_pci_generic xt_conntrack 16384 1 xt_MASQUERADE 20480 1 nf_conntrack_netlink 45056 0 nfnetlink 16384 2 nf_conntrack_netlink xfrm_user 36864 1 xfrm_algo 16384 1 xfrm_user iptable_nat 16384 1 nf_nat 45056 2 iptable_nat,xt_MASQUERADE nf_conntrack 139264 4 xt_conntrack,nf_nat,nf_conntrack_netlink,xt_MASQUERADE nf_defrag_ipv6 24576 1 nf_conntrack nf_defrag_ipv4 16384 1 nf_conntrack xt_addrtype 16384 2 iptable_filter 16384 1 bpfilter 32768 0 br_netfilter 28672 0 bridge 176128 1 br_netfilter stp 16384 1 bridge llc 16384 2 bridge,stp aufs 262144 0 xfs 1286144 2 overlay 118784 0 rdma_ucm 28672 0 rdma_cm 110592 1 rdma_ucm iw_cm 49152 1 rdma_cm ib_ipoib 131072 0 ib_cm 114688 2 rdma_cm,ib_ipoib ib_umad 28672 8 nls_iso8859_1 16384 1 dm_multipath 32768 0 scsi_dh_rdac 16384 0 scsi_dh_emc 16384 0 scsi_dh_alua 20480 0 mlx5_ib 397312 0 ib_uverbs 139264 18 rdma_ucm,mlx5_ib input_leds 16384 0 serio_raw 20480 0 kvm_amd 98304 0 ccp 90112 1 kvm_amd joydev 24576 0 kvm 667648 1 kvm_amd ib_core 348160 8 rdma_cm,ib_ipoib,iw_cm,ib_umad,rdma_ucm,ib_uverbs,mlx5_ib,ib_cm tenstorrent 32768 0 sch_fq_codel 20480 45 binfmt_misc 24576 1 msr 16384 0 efi_pstore 16384 0 virtio_rng 16384 0 ip_tables 32768 2 iptable_filter,iptable_nat x_tables 40960 5 xt_conntrack,iptable_filter,xt_addrtype,ip_tables,xt_MASQUERADE autofs4 45056 2 btrfs 1269760 0 zstd_compress 167936 1 btrfs raid10 61440 0 raid456 155648 0 async_raid6_recov 24576 1 raid456 async_memcpy 20480 2 raid456,async_raid6_recov async_pq 24576 2 raid456,async_raid6_recov async_xor 20480 3 async_pq,raid456,async_raid6_recov async_tx 20480 5 async_pq,async_memcpy,async_xor,raid456,async_raid6_recov xor 24576 2 async_xor,btrfs raid6_pq 114688 4 async_pq,btrfs,raid456,async_raid6_recov libcrc32c 16384 5 nf_conntrack,nf_nat,btrfs,xfs,raid456 raid1 45056 0 raid0 24576 0 multipath 20480 0 linear 20480 0 hid_generic 16384 0 crct10dif_pclmul 16384 1 crc32_pclmul 16384 0 usbhid 57344 0 cirrus 16384 0 ghash_clmulni_intel 16384 0 hid 131072 2 usbhid,hid_generic aesni_intel 372736 0 mlx5_core 1626112 1 mlx5_ib crypto_simd 16384 1 aesni_intel drm_kms_helper 184320 3 cirrus syscopyarea 16384 1 drm_kms_helper sysfillrect 16384 1 drm_kms_helper sysimgblt 16384 1 drm_kms_helper fb_sys_fops 16384 1 drm_kms_helper pci_hyperv_intf 16384 1 mlx5_core mlxdevm 172032 1 mlx5_core cryptd 24576 2 crypto_simd,ghash_clmulni_intel auxiliary 16384 2 mlx5_ib,mlx5_core glue_helper 16384 1 aesni_intel mlx_compat 65536 12 rdma_cm,ib_ipoib,mlxdevm,iw_cm,auxiliary,ib_umad,ib_core,rdma_ucm,ib_uverbs,mlx5_ib,ib_cm,mlx5_core virtio_blk 20480 3 tls 73728 1 mlx5_core ahci 40960 0 drm 495616 3 drm_kms_helper,cirrus psmouse 155648 0 libahci 36864 1 ahci mlxfw 32768 1 mlx5_core psample 20480 1 mlx5_core
+2025-02-13T20:06:51.5207605Z + [[ 0 -ne 0 ]]
+2025-02-13T20:06:51.5207871Z ++ lsof -w /dev/tenstorrent/0
+2025-02-13T20:06:51.6508683Z + lsof_output=
+2025-02-13T20:06:51.6509511Z + '[' -n '' ']'
+2025-02-13T20:06:51.6511277Z ##[notice]Touching and printing out SMI info
+2025-02-13T20:06:51.6512406Z + i=0
+2025-02-13T20:06:51.6512672Z + iter_limit=10
+2025-02-13T20:06:51.6513228Z + echo '::notice title=printing-smi-info-startup::Touching and printing out SMI info'
+2025-02-13T20:06:51.6513795Z + sleep 20
+2025-02-13T20:07:11.6522967Z + sudo touch /opt/tt_metal_infra/smi.log
+2025-02-13T20:07:11.6785253Z + sudo chown ubuntu /opt/tt_metal_infra/smi.log
+2025-02-13T20:07:11.7011495Z + tt-smi-metal -s -f /opt/tt_metal_infra/smi.log
+2025-02-13T20:07:12.0504887Z
+2025-02-13T20:07:12.0529598Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:07:12.0530296Z [1A[J
+2025-02-13T20:07:12.0530636Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:07:12.0530861Z
+2025-02-13T20:07:12.0531040Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:07:12.0531246Z
+2025-02-13T20:07:12.0531431Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:07:12.0532122Z
+2025-02-13T20:07:12.0534815Z  [95m[][94m ETH: [93m|[0m
+2025-02-13T20:07:12.0593599Z Gathering Information ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
+2025-02-13T20:07:12.0665878Z [95m Saved tt-smi log to: /opt/tt_metal_infra/smi.log [0m
+2025-02-13T20:07:12.1045527Z + cat /opt/tt_metal_infra/smi.log
+2025-02-13T20:07:12.1054135Z {
+2025-02-13T20:07:12.1055780Z + echo '::notice title=attempting-reset-startup::Attempting to reset card(s). Sleeping first'
+2025-02-13T20:07:12.1056556Z     "time": "2025-02-13T20:07:12.053106",
+2025-02-13T20:07:12.1056952Z     "host_info": {
+2025-02-13T20:07:12.1057260Z         "OS": "Linux",
+2025-02-13T20:07:12.1057587Z         "Distro": "Ubuntu 20.04.3 LTS",
+2025-02-13T20:07:12.1057972Z         "Kernel": "5.4.0-205-generic",
+2025-02-13T20:07:12.1058397Z         "Hostname": "3b996119-328e-4871-b980-bb63dcfbb963",
+2025-02-13T20:07:12.1058811Z         "Platform": "x86_64",
+2025-02-13T20:07:12.1059187Z         "Python": "3.8.10",
+2025-02-13T20:07:12.1059653Z         "Memory": "47.14 GB",
+2025-02-13T20:07:12.1060078Z         "Driver": "TTKMD 1.26"
+2025-02-13T20:07:12.1061255Z     },
+2025-02-13T20:07:12.1061675Z     "device_info": [
+2025-02-13T20:07:12.1062529Z + sleep 30
+2025-02-13T20:07:12.1062809Z         {
+2025-02-13T20:07:12.1063061Z             "smbus_telem": {
+2025-02-13T20:07:12.1063353Z                 "BOARD_ID": "0x10000331152302e",
+2025-02-13T20:07:12.1063802Z                 "SMBUS_TX_ENUM_VERSION": "0xba5e0001",
+2025-02-13T20:07:12.1064151Z                 "SMBUS_TX_DEVICE_ID": "0xfaca1e52",
+2025-02-13T20:07:12.1064489Z                 "SMBUS_TX_ASIC_RO": null,
+2025-02-13T20:07:12.1064817Z                 "SMBUS_TX_ASIC_IDD": null,
+2025-02-13T20:07:12.1065396Z                 "SMBUS_TX_BOARD_ID_HIGH": "0x1000033",
+2025-02-13T20:07:12.1065759Z                 "SMBUS_TX_BOARD_ID_LOW": "0x1152302e",
+2025-02-13T20:07:12.1066109Z                 "SMBUS_TX_ARC0_FW_VERSION": "0x1070000",
+2025-02-13T20:07:12.1066479Z                 "SMBUS_TX_ARC1_FW_VERSION": "0x1070000",
+2025-02-13T20:07:12.1066824Z                 "SMBUS_TX_ARC2_FW_VERSION": null,
+2025-02-13T20:07:12.1067171Z                 "SMBUS_TX_ARC3_FW_VERSION": "0x1070000",
+2025-02-13T20:07:12.1067529Z                 "SMBUS_TX_SPIBOOTROM_FW_VERSION": null,
+2025-02-13T20:07:12.1067875Z                 "SMBUS_TX_ETH_FW_VERSION": null,
+2025-02-13T20:07:12.1068216Z                 "SMBUS_TX_M3_BL_FW_VERSION": null,
+2025-02-13T20:07:12.1068559Z                 "SMBUS_TX_M3_APP_FW_VERSION": null,
+2025-02-13T20:07:12.1068967Z                 "SMBUS_TX_DDR_SPEED": "0xe74",
+2025-02-13T20:07:12.1069305Z                 "SMBUS_TX_DDR_STATUS": "0x111111",
+2025-02-13T20:07:12.1069634Z                 "SMBUS_TX_ETH_STATUS0": null,
+2025-02-13T20:07:12.1069952Z                 "SMBUS_TX_ETH_STATUS1": null,
+2025-02-13T20:07:12.1070284Z                 "SMBUS_TX_PCIE_STATUS": "0x11040040",
+2025-02-13T20:07:12.1070616Z                 "SMBUS_TX_FAULTS": null,
+2025-02-13T20:07:12.1071161Z                 "SMBUS_TX_ARC0_HEALTH": "0xf2e2dcf",
+2025-02-13T20:07:12.1071507Z                 "SMBUS_TX_ARC1_HEALTH": null,
+2025-02-13T20:07:12.1071832Z                 "SMBUS_TX_ARC2_HEALTH": null,
+2025-02-13T20:07:12.1072148Z                 "SMBUS_TX_ARC3_HEALTH": null,
+2025-02-13T20:07:12.1072464Z                 "SMBUS_TX_FAN_SPEED": "0xff",
+2025-02-13T20:07:12.1072781Z                 "SMBUS_TX_AICLK": "0x4b200fa",
+2025-02-13T20:07:12.1073097Z                 "SMBUS_TX_AXICLK": "0x384",
+2025-02-13T20:07:12.1073416Z                 "SMBUS_TX_ARCCLK": "0x21c",
+2025-02-13T20:07:12.1073729Z                 "SMBUS_TX_THROTTLER": null,
+2025-02-13T20:07:12.1074046Z                 "SMBUS_TX_VCORE": "0x2e4",
+2025-02-13T20:07:12.1074381Z                 "SMBUS_TX_ASIC_TEMPERATURE": "0x2cf0204",
+2025-02-13T20:07:12.1074731Z                 "SMBUS_TX_VREG_TEMPERATURE": null,
+2025-02-13T20:07:12.1075071Z                 "SMBUS_TX_BOARD_TEMPERATURE": null,
+2025-02-13T20:07:12.1075402Z                 "SMBUS_TX_TDP": "0xaa0016",
+2025-02-13T20:07:12.1075717Z                 "SMBUS_TX_TDC": "0x12c001c",
+2025-02-13T20:07:12.1076242Z                 "SMBUS_TX_VDD_LIMITS": "0x3a202e4",
+2025-02-13T20:07:12.1076586Z                 "SMBUS_TX_THM_LIMITS": "0x53004b",
+2025-02-13T20:07:12.1076917Z                 "SMBUS_TX_WH_FW_DATE": "0x3b171127",
+2025-02-13T20:07:12.1077251Z                 "SMBUS_TX_ASIC_TMON0": "0x22220721",
+2025-02-13T20:07:12.1077584Z                 "SMBUS_TX_ASIC_TMON1": "0x2121",
+2025-02-13T20:07:12.1077917Z                 "SMBUS_TX_MVDDQ_POWER": null,
+2025-02-13T20:07:12.1078253Z                 "SMBUS_TX_GDDR_TRAIN_TEMP0": null,
+2025-02-13T20:07:12.1078673Z                 "SMBUS_TX_GDDR_TRAIN_TEMP1": null,
+2025-02-13T20:07:12.1079014Z                 "SMBUS_TX_BOOT_DATE": "0x520c0b18",
+2025-02-13T20:07:12.1079340Z                 "SMBUS_TX_RT_SECONDS": null,
+2025-02-13T20:07:12.1079670Z                 "SMBUS_TX_AUX_STATUS": null,
+2025-02-13T20:07:12.1080086Z                 "SMBUS_TX_ETH_DEBUG_STATUS0": null,
+2025-02-13T20:07:12.1080440Z                 "SMBUS_TX_ETH_DEBUG_STATUS1": null,
+2025-02-13T20:07:12.1080799Z                 "SMBUS_TX_TT_FLASH_VERSION": "0x50040000"
+2025-02-13T20:07:12.1081226Z             },
+2025-02-13T20:07:12.1081460Z             "board_info": {
+2025-02-13T20:07:12.1081736Z                 "bus_id": "0000:07:00.0",
+2025-02-13T20:07:12.1082032Z                 "board_type": "e150",
+2025-02-13T20:07:12.1082337Z                 "board_id": "010000331152302e",
+2025-02-13T20:07:12.1082656Z                 "coords": "N/A",
+2025-02-13T20:07:12.1083166Z                 "dram_status": true,
+2025-02-13T20:07:12.1083485Z                 "dram_speed": "3700",
+2025-02-13T20:07:12.1083925Z                 "pcie_speed": 4,
+2025-02-13T20:07:12.1084212Z                 "pcie_width": 16
+2025-02-13T20:07:12.1084484Z             },
+2025-02-13T20:07:12.1084715Z             "telemetry": {
+2025-02-13T20:07:12.1084989Z                 "voltage": "0.74",
+2025-02-13T20:07:12.1085278Z                 "current": " 28.0",
+2025-02-13T20:07:12.1085578Z                 "power": " 22.0",
+2025-02-13T20:07:12.1085862Z                 "aiclk": " 250",
+2025-02-13T20:07:12.1086157Z                 "asic_temperature": "32.2"
+2025-02-13T20:07:12.1086462Z             },
+2025-02-13T20:07:12.1086700Z             "firmwares": {
+2025-02-13T20:07:12.1086955Z                 "arc_fw": "1.7.0.0",
+2025-02-13T20:07:12.1087254Z                 "arc_fw_date": "2023-11-23",
+2025-02-13T20:07:12.1087562Z                 "eth_fw": "N/A",
+2025-02-13T20:07:12.1087840Z                 "m3_bl_fw": "N/A",
+2025-02-13T20:07:12.1088133Z                 "m3_app_fw": "N/A",
+2025-02-13T20:07:12.1088435Z                 "tt_flash_version": "80.4.0.0"
+2025-02-13T20:07:12.1088740Z             },
+2025-02-13T20:07:12.1088969Z             "limits": {
+2025-02-13T20:07:12.1089216Z                 "vdd_min": "0.74",
+2025-02-13T20:07:12.1089499Z                 "vdd_max": "0.93",
+2025-02-13T20:07:12.1089782Z                 "tdp_limit": "170",
+2025-02-13T20:07:12.1090173Z                 "tdc_limit": "300",
+2025-02-13T20:07:12.1090472Z                 "asic_fmax": "1202",
+2025-02-13T20:07:12.1090779Z                 "therm_trip_l1_limit": "83",
+2025-02-13T20:07:12.1091094Z                 "thm_limit": "75",
+2025-02-13T20:07:12.1091394Z                 "bus_peak_limit": null
+2025-02-13T20:07:12.1091673Z             }
+2025-02-13T20:07:12.1091889Z         }
+2025-02-13T20:07:12.1092102Z     ]
+2025-02-13T20:07:12.1092704Z }::notice title=attempting-reset-startup::Attempting to reset card(s). Sleeping first
+2025-02-13T20:07:42.1070218Z + '[' 0 -lt 10 ']'
+2025-02-13T20:07:42.1070759Z + (( i++ ))
+2025-02-13T20:07:42.1072898Z ++ tt-smi-metal -r 0
+2025-02-13T20:07:42.5190532Z + reset_output='[94m Starting tensix reset on GS board at pci index 0 [0m
+2025-02-13T20:07:42.5191289Z [93m Lowering clks to safe value... [0m
+2025-02-13T20:07:42.5191776Z [93m Beginning reset sequence... [0m
+2025-02-13T20:07:42.5192248Z [93m Finishing reset sequence... [0m
+2025-02-13T20:07:42.5192808Z [93m Returning clks to original values... [0m
+2025-02-13T20:07:42.5193420Z [92m Finished tensix reset on GS board at pci index 0
+2025-02-13T20:07:42.5194119Z  [0m
+2025-02-13T20:07:42.5194576Z [95m Re-initializing boards after reset.... [0m
+2025-02-13T20:07:42.5194911Z
+2025-02-13T20:07:42.5195187Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:07:42.5195599Z [1A[J
+2025-02-13T20:07:42.5196019Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:07:42.5196302Z
+2025-02-13T20:07:42.5196488Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:07:42.5196736Z
+2025-02-13T20:07:42.5196913Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:07:42.5197154Z
+2025-02-13T20:07:42.5197324Z  [95m[][94m ETH: [93m|[0m'
+2025-02-13T20:07:42.5197685Z + [[ 0 -ne 0 ]]
+2025-02-13T20:07:42.5198155Z + [[ [94m Starting tensix reset on GS board at pci index 0 [0m
+2025-02-13T20:07:42.5198682Z [93m Lowering clks to safe value... [0m
+2025-02-13T20:07:42.5199150Z [93m Beginning reset sequence... [0m
+2025-02-13T20:07:42.5199582Z [93m Finishing reset sequence... [0m
+2025-02-13T20:07:42.5200075Z [93m Returning clks to original values... [0m
+2025-02-13T20:07:42.5201329Z [92m Finished tensix reset on GS board at pci index 0
+2025-02-13T20:07:42.5201780Z  [0m
+2025-02-13T20:07:42.5202333Z [95m Re-initializing boards after reset.... [0m
+2025-02-13T20:07:42.5202722Z
+2025-02-13T20:07:42.5202908Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:07:42.5203301Z [1A[J
+2025-02-13T20:07:42.5203651Z [95m Detected Chips: [93m1[0m
+2025-02-13T20:07:42.5203860Z
+2025-02-13T20:07:42.5204082Z [94m Detecting ARC: [93m|[0m
+2025-02-13T20:07:42.5204286Z
+2025-02-13T20:07:42.5204500Z [94m Detecting DRAM: [93m|[0m
+2025-02-13T20:07:42.5204713Z
+2025-02-13T20:07:42.5205009Z  [95m[][94m ETH: [93m|[0m == *\N\o\ \c\h\i\p\s\ \d\e\t\e\c\t\e\d* ]]
+2025-02-13T20:07:42.5205449Z + break
+2025-02-13T20:07:42.5205741Z + '[' 1 -eq 10 ']'
+2025-02-13T20:07:42.5206446Z + echo '::notice title=reset-successful-startup::tt-smi reset was successful'
+2025-02-13T20:07:42.5207051Z + check_hugepages_service_status=0
+2025-02-13T20:07:42.5207508Z + sudo systemctl status tenstorrent-hugepages.service
+2025-02-13T20:07:42.5209472Z ##[notice]tt-smi reset was successful
+2025-02-13T20:07:42.5476131Z Unit tenstorrent-hugepages.service could not be found.
+2025-02-13T20:07:42.5483862Z + check_hugepages_service_status=4
+2025-02-13T20:07:42.5484332Z + '[' 4 -eq 4 ']'
+2025-02-13T20:07:42.5485152Z + echo '::warning title=hugepages-service-not-found-startup::Hugepages service not found. Using old rc.local method'
+2025-02-13T20:07:42.5485860Z + sudo /etc/rc.local
+2025-02-13T20:07:42.5488441Z ##[warning]Hugepages service not found. Using old rc.local method
+2025-02-13T20:08:12.5927706Z ++ date +%s
+2025-02-13T20:08:12.5933031Z + hugepages_check_start=1739477292
+2025-02-13T20:08:12.5933635Z + hugepages_check_timeout=60
+2025-02-13T20:08:12.5936229Z ++ cat /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages
+2025-02-13T20:08:12.5944834Z + [[ 1 -eq 0 ]]
+2025-02-13T20:08:12.5947550Z ##[notice]Hugepages is now setup.
+2025-02-13T20:08:12.5950041Z Printing out cpu information...
+2025-02-13T20:08:12.5950702Z + echo '::notice title=hugepages-setup-success-startup::Hugepages is now setup.'
+2025-02-13T20:08:12.5951346Z + echo 'Printing out cpu information...'
+2025-02-13T20:08:12.5951771Z + lscpu
+2025-02-13T20:08:12.5973057Z Architecture:                       x86_64
+2025-02-13T20:08:12.5973514Z CPU op-mode(s):                     32-bit, 64-bit
+2025-02-13T20:08:12.5973974Z Byte Order:                         Little Endian
+2025-02-13T20:08:12.5974474Z Address sizes:                      40 bits physical, 48 bits virtual
+2025-02-13T20:08:12.5974956Z CPU(s):                             14
+2025-02-13T20:08:12.5975364Z On-line CPU(s) list:                0-13
+2025-02-13T20:08:12.5977022Z Thread(s) per core:                 1
+2025-02-13T20:08:12.5977874Z Core(s) per socket:                 1
+2025-02-13T20:08:12.5978395Z Socket(s):                          14
+2025-02-13T20:08:12.5978858Z NUMA node(s):                       2
+2025-02-13T20:08:12.5979365Z Vendor ID:                          AuthenticAMD
+2025-02-13T20:08:12.5979830Z CPU family:                         23
+2025-02-13T20:08:12.5980230Z Model:                              49
+2025-02-13T20:08:12.5980696Z Model name:                         AMD EPYC-Rome Processor
+2025-02-13T20:08:12.5981152Z Stepping:                           0
+2025-02-13T20:08:12.5981552Z CPU MHz:                            3000.000
+2025-02-13T20:08:12.5981976Z BogoMIPS:                           6000.00
+2025-02-13T20:08:12.5982370Z Virtualization:                     AMD-V
+2025-02-13T20:08:12.5982798Z Hypervisor vendor:                  KVM
+2025-02-13T20:08:12.5983212Z Virtualization type:                full
+2025-02-13T20:08:12.5983631Z L1d cache:                          448 KiB
+2025-02-13T20:08:12.5984033Z L1i cache:                          448 KiB
+2025-02-13T20:08:12.5984461Z L2 cache:                           7 MiB
+2025-02-13T20:08:12.5984933Z L3 cache:                           224 MiB
+2025-02-13T20:08:12.5985325Z NUMA node0 CPU(s):                  0-6
+2025-02-13T20:08:12.5985684Z NUMA node1 CPU(s):                  7-13
+2025-02-13T20:08:12.5986416Z Vulnerability Gather data sampling: Not affected
+2025-02-13T20:08:12.5986881Z Vulnerability Itlb multihit:        Not affected
+2025-02-13T20:08:12.5987328Z Vulnerability L1tf:                 Not affected
+2025-02-13T20:08:12.5987772Z Vulnerability Mds:                  Not affected
+2025-02-13T20:08:12.5988228Z Vulnerability Meltdown:             Not affected
+2025-02-13T20:08:12.5988682Z Vulnerability Mmio stale data:      Not affected
+2025-02-13T20:08:12.5989120Z Vulnerability Retbleed:             Vulnerable
+2025-02-13T20:08:12.5991748Z Vulnerability Spec store bypass:    Mitigation; Speculative Store Bypass disabled via prctl and seccomp
+2025-02-13T20:08:12.5992541Z Vulnerability Spectre v1:           Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+2025-02-13T20:08:12.5993578Z Vulnerability Spectre v2:           Mitigation; Retpolines; IBPB conditional; STIBP disabled; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected
+2025-02-13T20:08:12.5994337Z Vulnerability Srbds:                Not affected
+2025-02-13T20:08:12.5994733Z Vulnerability Tsx async abort:      Not affected
+2025-02-13T20:08:12.5997044Z Flags:                              fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm svm cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext perfctr_core ssbd ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 clzero xsaveerptr wbnoinvd arat npt nrip_save umip rdpid
+2025-02-13T20:08:12.6224654Z ##[group]Run tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+2025-02-13T20:08:12.6225153Z with:
+2025-02-13T20:08:12.6225573Z   token: ***
+2025-02-13T20:08:12.6225802Z   fetch-depth: 1
+2025-02-13T20:08:12.6226070Z env:
+2025-02-13T20:08:12.6226277Z   LOGURU_LEVEL: INFO
+2025-02-13T20:08:12.6226508Z ##[endgroup]
+2025-02-13T20:08:12.6307520Z ##[group]Run set -x
+2025-02-13T20:08:12.6307792Z [36;1mset -x[0m
+2025-02-13T20:08:12.6308031Z [36;1mls -al[0m
+2025-02-13T20:08:12.6308325Z [36;1mif [ -f "semicolon_delimited_script" ]; then[0m
+2025-02-13T20:08:12.6308699Z [36;1m  file semicolon_delimited_script[0m
+2025-02-13T20:08:12.6309038Z [36;1m  head semicolon_delimited_script[0m
+2025-02-13T20:08:12.6309334Z [36;1mfi[0m
+2025-02-13T20:08:12.6309565Z [36;1msudo rm -rf deleteme[0m
+2025-02-13T20:08:12.6309854Z [36;1msudo rm -rf docker-job[0m
+2025-02-13T20:08:12.6310150Z [36;1mif [ -d ".git" ]; then[0m
+2025-02-13T20:08:12.6310461Z [36;1m  echo 'Cleaning repo'[0m
+2025-02-13T20:08:12.6310748Z [36;1m  git clean -xffd[0m
+2025-02-13T20:08:12.6311032Z [36;1m  echo 'Done git clean -xffd'[0m
+2025-02-13T20:08:12.6311383Z [36;1m  echo 'Attempting to delete any lock files'[0m
+2025-02-13T20:08:12.6311766Z [36;1m  find .git -type f -iname '*.lock' -delete[0m
+2025-02-13T20:08:12.6312135Z [36;1m  echo 'Done deleting lock files'[0m
+2025-02-13T20:08:12.6312475Z [36;1m  echo 'De-init-ing submodules'[0m
+2025-02-13T20:08:12.6312892Z [36;1m  git submodule deinit -f --all[0m
+2025-02-13T20:08:12.6313256Z [36;1m  echo 'Done de-initing submodules'[0m
+2025-02-13T20:08:12.6313580Z [36;1mfi[0m
+2025-02-13T20:08:12.6327040Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-02-13T20:08:12.6327430Z env:
+2025-02-13T20:08:12.6327663Z   LOGURU_LEVEL: INFO
+2025-02-13T20:08:12.6327910Z ##[endgroup]
+2025-02-13T20:08:12.6363828Z + ls -al
+2025-02-13T20:08:12.6382006Z total 359940
+2025-02-13T20:08:12.6382470Z drwxr-xr-x 16 ubuntu ubuntu      4096 Feb 13 20:06 .
+2025-02-13T20:08:12.6383029Z + '[' -f semicolon_delimited_script ']'
+2025-02-13T20:08:12.6383433Z + sudo rm -rf deleteme
+2025-02-13T20:08:12.6383850Z drwxr-xr-x  3 ubuntu ubuntu      4096 Apr 15  2024 ..
+2025-02-13T20:08:12.6384359Z -rw-r--r--  1 ubuntu ubuntu      3966 Jan 28 07:20 .clang-format
+2025-02-13T20:08:12.6385056Z -rw-r--r--  1 ubuntu ubuntu      6268 Jan 28 07:20 .clang-format-ignore
+2025-02-13T20:08:12.6385551Z -rw-r--r--  1 ubuntu ubuntu      6374 Jan 28 07:20 .clang-tidy
+2025-02-13T20:08:12.6385970Z -rw-r--r--  1 ubuntu ubuntu        43 Jan 28 07:20 .clangd
+2025-02-13T20:08:12.6386382Z -rw-r--r--  1 ubuntu ubuntu       222 Jan 28 07:20 .gersemirc
+2025-02-13T20:08:12.6386813Z drwxr-xr-x  9 ubuntu ubuntu      4096 Feb 13 20:06 .git
+2025-02-13T20:08:12.6387273Z -rw-r--r--  1 ubuntu ubuntu       239 Jan 28 07:20 .git-blame-ignore-revs
+2025-02-13T20:08:12.6387840Z -rw-r--r--  1 ubuntu ubuntu        35 Jan 28 07:20 .gitattributes
+2025-02-13T20:08:12.6388307Z drwxr-xr-x  6 ubuntu ubuntu      4096 Feb 13 08:54 .github
+2025-02-13T20:08:12.6388769Z -rw-r--r--  1 ubuntu ubuntu      1730 Jan 28 07:20 .gitignore
+2025-02-13T20:08:12.6389201Z -rw-r--r--  1 ubuntu ubuntu       991 Feb  2 10:06 .gitmodules
+2025-02-13T20:08:12.6389691Z -rw-r--r--  1 ubuntu ubuntu       932 Jan 28 07:20 .pre-commit-config.yaml
+2025-02-13T20:08:12.6390219Z -rw-r--r--  1 ubuntu ubuntu  15813574 Feb 13 08:54 .test_durations
+2025-02-13T20:08:12.6390721Z drwxr-xr-x  4 ubuntu ubuntu      4096 Feb 13 20:06 .ttnn_runtime_artifacts
+2025-02-13T20:08:12.6391211Z -rw-r--r--  1 ubuntu ubuntu       213 Jan 28 07:20 .yamllint
+2025-02-13T20:08:12.6391664Z -rw-r--r--  1 ubuntu ubuntu     11086 Feb 13 08:54 CMakeLists.txt
+2025-02-13T20:08:12.6392145Z -rw-r--r--  1 ubuntu ubuntu      2231 Feb  2 10:06 CMakePresets.json
+2025-02-13T20:08:12.6392599Z -rw-r--r--  1 ubuntu ubuntu     11478 Feb 13 08:54 CODEOWNERS
+2025-02-13T20:08:12.6393143Z -rw-r--r--  1 ubuntu ubuntu      5253 Jan 28 07:20 CODE_OF_CONDUCT.md
+2025-02-13T20:08:12.6393788Z -rw-r--r--  1 ubuntu ubuntu     36527 Jan 28 07:20 CONTRIBUTING.md
+2025-02-13T20:08:12.6394257Z -rw-r--r--  1 ubuntu ubuntu    126373 Jan 28 07:20 Doxyfile
+2025-02-13T20:08:12.6394706Z -rw-r--r--  1 ubuntu ubuntu      6046 Feb  2 10:06 INSTALLING.md
+2025-02-13T20:08:12.6395155Z -rw-r--r--  1 ubuntu ubuntu     11825 Jan 28 07:20 LICENSE
+2025-02-13T20:08:12.6395594Z -rw-r--r--  1 ubuntu ubuntu      1562 Jan 28 07:20 MANIFEST.in
+2025-02-13T20:08:12.6396356Z -rw-r--r--  1 ubuntu ubuntu     18372 Feb 13 08:54 METALIUM_GUIDE.md
+2025-02-13T20:08:12.6397482Z -rw-r--r--  1 ubuntu ubuntu     15526 Feb 13 08:54 README.md
+2025-02-13T20:08:12.6398626Z -rwxr-xr-x  1 ubuntu ubuntu     11097 Feb 13 08:54 build_metal.sh
+2025-02-13T20:08:12.6399770Z -rw-r--r--  1 ubuntu ubuntu      1438 Jan 28 07:20 check_copyright_config.yaml
+2025-02-13T20:08:12.6400809Z -rw-r--r--  1 ubuntu ubuntu      1821 Jan 28 07:20 cloc.sh
+2025-02-13T20:08:12.6401798Z drwxr-xr-x  4 ubuntu ubuntu      4096 Feb 13 08:54 cmake
+2025-02-13T20:08:12.6402839Z -rw-r--r--  1 ubuntu ubuntu     23178 Feb 13 08:54 conftest.py
+2025-02-13T20:08:12.6403866Z drwxr-xr-x  2 ubuntu ubuntu      4096 Jan 28 07:20 contributing
+2025-02-13T20:08:12.6405017Z -rwxr-xr-x  1 ubuntu ubuntu      1420 Jan 28 07:20 create_venv.sh
+2025-02-13T20:08:12.6406172Z drwxr-xr-x  2 ubuntu ubuntu      4096 Feb 13 08:54 dependencies
+2025-02-13T20:08:12.6407178Z drwxr-xr-x  2 ubuntu ubuntu      4096 Feb 13 08:54 dockerfile
+2025-02-13T20:08:12.6408167Z drwxr-xr-x  3 ubuntu ubuntu      4096 Feb  7 17:42 docs
+2025-02-13T20:08:12.6409222Z drwxr-xr-x  4 ubuntu ubuntu      4096 Feb  5 15:56 infra
+2025-02-13T20:08:12.6410248Z -rwxr-xr-x  1 ubuntu ubuntu      6885 Feb 13 08:54 install_dependencies.sh
+2025-02-13T20:08:12.6411289Z -rw-r--r--  1 ubuntu ubuntu      1042 Jan 28 07:20 pyproject.toml
+2025-02-13T20:08:12.6412286Z -rw-r--r--  1 ubuntu ubuntu      1200 Jan 28 07:20 pytest.ini
+2025-02-13T20:08:12.6413572Z drwxr-xr-x  4 ubuntu ubuntu      4096 Feb 13 08:54 scripts
+2025-02-13T20:08:12.6414549Z -rw-r--r--  1 ubuntu ubuntu      7551 Feb  5 15:56 setup.py
+2025-02-13T20:08:12.6415551Z drwxr-xr-x 24 ubuntu ubuntu      4096 Jan 28 07:20 tech_reports
+2025-02-13T20:08:12.6416582Z drwxr-xr-x 11 ubuntu ubuntu      4096 Feb 13 08:54 tests
+2025-02-13T20:08:12.6417769Z drwxr-xr-x 11 ubuntu ubuntu      4096 Feb 13 08:54 tt-train
+2025-02-13T20:08:12.6419272Z drwxr-xr-x  5 ubuntu ubuntu      4096 Feb 13 20:02 tt_fabric
+2025-02-13T20:08:12.6420503Z -rw-r--r--  1 ubuntu ubuntu 138013606 Feb 13 20:02 ttnn-0.56.0rc29.dev11+any-cp38-cp38-linux_x86_64.whl
+2025-02-13T20:08:12.6421709Z -rw-r--r--  1 ubuntu ubuntu 214282272 Feb 13 20:03 ttnn-0.56.0rc29.dev11+any.tar.gz
+2025-02-13T20:08:12.6756401Z + sudo rm -rf docker-job
+2025-02-13T20:08:12.7006618Z + '[' -d .git ']'
+2025-02-13T20:08:12.7007386Z + echo 'Cleaning repo'
+2025-02-13T20:08:12.7007731Z + git clean -xffd
+2025-02-13T20:08:12.7008020Z Cleaning repo
+2025-02-13T20:08:14.8382641Z Removing .ttnn_runtime_artifacts/
+2025-02-13T20:08:14.8383210Z Removing tests/end_to_end_tests/.pytest_cache/
+2025-02-13T20:08:14.8383810Z Removing tests/end_to_end_tests/.ttnn_runtime_artifacts/
+2025-02-13T20:08:14.8384245Z Removing tests/end_to_end_tests/__pycache__/
+2025-02-13T20:08:14.8384594Z Removing tests/end_to_end_tests/env/
+2025-02-13T20:08:14.8385014Z Removing ttnn-0.56.0rc29.dev11+any-cp38-cp38-linux_x86_64.whl
+2025-02-13T20:08:14.8385521Z Removing ttnn-0.56.0rc29.dev11+any.tar.gz
+2025-02-13T20:08:14.8413511Z + echo 'Done git clean -xffd'
+2025-02-13T20:08:14.8413802Z Done git clean -xffd
+2025-02-13T20:08:14.8414109Z + echo 'Attempting to delete any lock files'
+2025-02-13T20:08:14.8414453Z + find .git -type f -iname '*.lock' -delete
+2025-02-13T20:08:14.8414788Z Attempting to delete any lock files
+2025-02-13T20:08:14.8620457Z + echo 'Done deleting lock files'
+2025-02-13T20:08:14.8621148Z Done deleting lock files
+2025-02-13T20:08:14.8621604Z + echo 'De-init-ing submodules'
+2025-02-13T20:08:14.8622037Z + git submodule deinit -f --all
+2025-02-13T20:08:14.8622414Z De-init-ing submodules
+2025-02-13T20:08:14.8876944Z could not create empty submodule directory models/demos/t3000/llama2_70b/reference/llamaSubmodule 'models/demos/t3000/llama2_70b/reference/llama' (https://github.com/tenstorrent-metal/llama.git) unregistered for path 'models/demos/t3000/llama2_70b/reference/llama'
+2025-02-13T20:08:14.8878783Z Cleared directory 'tt-train/3rd_party/wandb-cpp'
+2025-02-13T20:08:14.8890240Z Submodule '3rd_party/wandb-cpp' (https://github.com/yhisaki/wandb-cpp) unregistered for path 'tt-train/3rd_party/wandb-cpp'
+2025-02-13T20:08:14.8904786Z could not create empty submodule directory tt_metal/third_party/tracySubmodule 'tt_metal/third_party/tracy' (https://github.com/tenstorrent-metal/tracy.git) unregistered for path 'tt_metal/third_party/tracy'
+2025-02-13T20:08:14.8919094Z could not create empty submodule directory tt_metal/third_party/tt_llk_blackholeSubmodule 'tt_metal/third_party/tt_llk_blackhole' (https://github.com/tenstorrent/tt-llk-bh.git) unregistered for path 'tt_metal/third_party/tt_llk_blackhole'
+2025-02-13T20:08:14.8931805Z could not create empty submodule directory tt_metal/third_party/tt_llk_grayskullSubmodule 'tt_metal/third_party/tt_llk_grayskull' (https://github.com/tenstorrent/tt-llk-gs.git) unregistered for path 'tt_metal/third_party/tt_llk_grayskull'
+2025-02-13T20:08:14.8953630Z could not create empty submodule directory tt_metal/third_party/tt_llk_wormhole_b0Submodule 'tt_metal/third_party/tt_llk_wormhole_b0' (https://github.com/tenstorrent/tt-llk-wh-b0.git) unregistered for path 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-02-13T20:08:14.8968470Z could not create empty submodule directory tt_metal/third_party/umdSubmodule 'tt_metal/third_party/umd' (https://github.com/tenstorrent/tt-umd.git) unregistered for path 'tt_metal/third_party/umd'
+2025-02-13T20:08:14.8977038Z + echo 'Done de-initing submodules'
+2025-02-13T20:08:14.8977495Z Done de-initing submodules
+2025-02-13T20:08:14.9078884Z ##[group]Run actions/checkout@v4
+2025-02-13T20:08:14.9079292Z with:
+2025-02-13T20:08:14.9080019Z   token: ***
+2025-02-13T20:08:14.9080405Z   fetch-depth: 1
+2025-02-13T20:08:14.9080719Z   lfs: false
+2025-02-13T20:08:14.9081017Z   submodules: recursive
+2025-02-13T20:08:14.9081337Z   clean: true
+2025-02-13T20:08:14.9081618Z   repository: tenstorrent/tt-metal
+2025-02-13T20:08:14.9082348Z   ssh-strict: true
+2025-02-13T20:08:14.9082657Z   ssh-user: git
+2025-02-13T20:08:14.9082973Z   persist-credentials: true
+2025-02-13T20:08:14.9083348Z   sparse-checkout-cone-mode: true
+2025-02-13T20:08:14.9083718Z   fetch-tags: false
+2025-02-13T20:08:14.9084022Z   show-progress: true
+2025-02-13T20:08:14.9084337Z   set-safe-directory: true
+2025-02-13T20:08:14.9084647Z env:
+2025-02-13T20:08:14.9084932Z   LOGURU_LEVEL: INFO
+2025-02-13T20:08:14.9085248Z ##[endgroup]
+2025-02-13T20:08:15.0188998Z Syncing repository: tenstorrent/tt-metal
+2025-02-13T20:08:15.0190755Z ##[group]Getting Git version info
+2025-02-13T20:08:15.0191365Z Working directory is '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal'
+2025-02-13T20:08:15.0192083Z [command]/usr/bin/git version
+2025-02-13T20:08:15.0192424Z git version 2.25.1
+2025-02-13T20:08:15.0194735Z ##[endgroup]
+2025-02-13T20:08:15.0198678Z Copying '/home/ubuntu/.gitconfig' to '/home/ubuntu/actions-runner/_work/_temp/34b257f9-c1d1-427f-a115-9614afa862b6/.gitconfig'
+2025-02-13T20:08:15.0202362Z Temporarily overriding HOME='/home/ubuntu/actions-runner/_work/_temp/34b257f9-c1d1-427f-a115-9614afa862b6' before making global git config changes
+2025-02-13T20:08:15.0203362Z Adding repository directory to the temporary git global config as a safe directory
+2025-02-13T20:08:15.0207205Z [command]/usr/bin/git config --global --add safe.directory /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2025-02-13T20:08:15.0246872Z [command]/usr/bin/git config --local --get remote.origin.url
+2025-02-13T20:08:15.0272037Z https://github.com/tenstorrent/tt-metal
+2025-02-13T20:08:15.0288939Z ##[group]Removing previously created refs, to avoid conflicts
+2025-02-13T20:08:15.0291866Z [command]/usr/bin/git rev-parse --symbolic-full-name --verify --quiet HEAD
+2025-02-13T20:08:15.0312179Z refs/heads/sagarwal/multi_page_buffer
+2025-02-13T20:08:15.0319230Z [command]/usr/bin/git checkout --detach
+2025-02-13T20:13:45.7280857Z FAILED tests/ttnn/unit_tests/test_to_layout.py::test_to_layout_wide_tensor[to_layout=Layout.ROW_MAJOR-from_layout=Layout.TILE-on_device=True-shape=(1, 1, 32, 131072)]
+2025-02-13T20:13:45.7281011Z !!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+2025-02-13T20:13:45.7281269Z = 1 failed, 628 passed, 1237 skipped, 60602 deselected, 637 warnings in 267.74s (0:04:27) =
+2025-02-13T20:13:48.2361669Z [38;2;000;128;000m                 Always[0m | [1m[38;2;255;165;000mWARNING [0m | Attempting to push work to Device 0 which is not initialized. Ignoring...
+2025-02-13T20:13:49.9802749Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Closing user mode device drivers
+2025-02-13T20:13:50.6787954Z Prepare all required actions
+2025-02-13T20:13:50.6788454Z Getting action download info
+2025-02-13T20:13:50.9646782Z Download action repository 'slackapi/slack-github-action@v1.26.0' (SHA:70cd7be8e40a46e8b0eced40b0de447bdb42f68e)
+2025-02-13T20:13:51.5017192Z ##[group]Run ./.github/actions/slack-report
+2025-02-13T20:13:51.5017611Z with:
+2025-02-13T20:13:51.5018348Z   slack_webhook_url: ***
+2025-02-13T20:13:51.5018696Z   owner: U06CXU895AP
+2025-02-13T20:13:51.5019003Z env:
+2025-02-13T20:13:51.5019282Z   LOGURU_LEVEL: INFO
+2025-02-13T20:13:51.5019808Z   BUILD_TAG: 3a3dbaa78a8197befe10ef2aca8c49f9e5b087c6
+2025-02-13T20:13:51.5020607Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:3a3dbaa78a8197befe10ef2aca8c49f9e5b087c6
+2025-02-13T20:13:51.5021366Z   RUNNER_UID: 1000
+2025-02-13T20:13:51.5021726Z   RUNNER_GID: 1000
+2025-02-13T20:13:51.5022033Z ##[endgroup]
+2025-02-13T20:13:51.5080093Z Prepare all required actions
+2025-02-13T20:13:51.5080855Z Getting action download info
+2025-02-13T20:13:51.6670633Z Download action repository 'actions/upload-artifact@v4' (SHA:65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08)
+2025-02-13T20:13:52.4061967Z ##[group]Run ./.github/actions/upload-artifact-with-job-uuid
+2025-02-13T20:13:52.4062422Z with:
+2025-02-13T20:13:52.4062770Z   path: generated/test_reports/
+
+2025-02-13T20:13:52.4063233Z   prefix: test_reports_
+2025-02-13T20:13:52.4063570Z env:
+2025-02-13T20:13:52.4063890Z   LOGURU_LEVEL: INFO
+2025-02-13T20:13:52.4064241Z   BUILD_TAG: 3a3dbaa78a8197befe10ef2aca8c49f9e5b087c6
+2025-02-13T20:13:52.4065048Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:3a3dbaa78a8197befe10ef2aca8c49f9e5b087c6
+2025-02-13T20:13:52.4065776Z   RUNNER_UID: 1000
+2025-02-13T20:13:52.4066110Z   RUNNER_GID: 1000
+2025-02-13T20:13:52.4066434Z ##[endgroup]
+2025-02-13T20:13:52.4140669Z ##[group]Run uuid=$(uuidgen)
+2025-02-13T20:13:52.4141262Z [36;1muuid=$(uuidgen)[0m
+2025-02-13T20:13:52.4141680Z [36;1martifact_name="test_reports_$uuid"[0m
+2025-02-13T20:13:52.4142279Z [36;1mecho "[UPLOAD-ARTIFACT-UUID] $artifact_name"[0m
+2025-02-13T20:13:52.4142780Z [36;1mecho "artifact-name=$artifact_name" >> "$GITHUB_OUTPUT"[0m
+2025-02-13T20:13:52.4162505Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-02-13T20:13:52.4162980Z env:
+2025-02-13T20:13:52.4163323Z   LOGURU_LEVEL: INFO
+2025-02-13T20:13:52.4163717Z   BUILD_TAG: 3a3dbaa78a8197befe10ef2aca8c49f9e5b087c6
+2025-02-13T20:13:52.4164554Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:3a3dbaa78a8197befe10ef2aca8c49f9e5b087c6
+2025-02-13T20:13:52.4165363Z   RUNNER_UID: 1000
+2025-02-13T20:13:52.4165766Z   RUNNER_GID: 1000
+2025-02-13T20:13:52.4166181Z ##[endgroup]
+2025-02-13T20:13:52.4215775Z [UPLOAD-ARTIFACT-UUID] test_reports_36168e86-3fe3-4807-94c7-1f22471b0c56
+2025-02-13T20:13:52.4305300Z ##[group]Run actions/upload-artifact@v4
+2025-02-13T20:13:52.4305777Z with:
+2025-02-13T20:13:52.4306168Z   name: test_reports_36168e86-3fe3-4807-94c7-1f22471b0c56
+2025-02-13T20:13:52.4306649Z   path: generated/test_reports/
+
+2025-02-13T20:13:52.4307062Z   if-no-files-found: warn
+2025-02-13T20:13:52.4307435Z   compression-level: 6
+2025-02-13T20:13:52.4307779Z   overwrite: false
+2025-02-13T20:13:52.4308075Z   include-hidden-files: false
+2025-02-13T20:13:52.4308426Z env:
+2025-02-13T20:13:52.4308723Z   LOGURU_LEVEL: INFO
+2025-02-13T20:13:52.4309151Z   BUILD_TAG: 3a3dbaa78a8197befe10ef2aca8c49f9e5b087c6
+2025-02-13T20:13:52.4309942Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:3a3dbaa78a8197befe10ef2aca8c49f9e5b087c6
+2025-02-13T20:13:52.4310674Z   RUNNER_UID: 1000
+2025-02-13T20:13:52.4310999Z   RUNNER_GID: 1000
+2025-02-13T20:13:52.4311311Z ##[endgroup]
+2025-02-13T20:13:52.6589096Z With the provided path, there will be 1 file uploaded
+2025-02-13T20:13:52.6594696Z Artifact name is valid!
+2025-02-13T20:13:52.6596333Z Root directory input is valid!
+2025-02-13T20:13:52.8619294Z Beginning upload of artifact content to blob storage
+2025-02-13T20:13:53.1968720Z Uploaded bytes 53753
+2025-02-13T20:13:53.2564320Z Finished uploading artifact content to blob storage!
+2025-02-13T20:13:53.2568243Z SHA256 hash of uploaded artifact zip is 147b6c23147b7b96f86996e4301fc68550c8c4caf316bc389bfbb09dfa6a81e8
+2025-02-13T20:13:53.2570779Z Finalizing artifact upload
+2025-02-13T20:13:53.3644936Z Artifact test_reports_36168e86-3fe3-4807-94c7-1f22471b0c56.zip successfully finalized. Artifact ID 2588499743
+2025-02-13T20:13:53.3646153Z Artifact test_reports_36168e86-3fe3-4807-94c7-1f22471b0c56 has been successfully uploaded! Final size is 53753 bytes. Artifact ID is 2588499743
+2025-02-13T20:13:53.3652984Z Artifact download URL: https://github.com/tenstorrent/tt-metal/actions/runs/13315815702/artifacts/2588499743
+2025-02-13T20:13:53.3843083Z Post job cleanup.
+2025-02-13T20:13:53.3918539Z Post job cleanup.
+2025-02-13T20:13:53.4647879Z [command]/usr/bin/git version
+2025-02-13T20:13:53.4684195Z git version 2.25.1
+2025-02-13T20:13:53.4732996Z Copying '/home/ubuntu/.gitconfig' to '/home/ubuntu/actions-runner/_work/_temp/8186620d-6097-4768-bd9e-4577219272c4/.gitconfig'
+2025-02-13T20:13:53.4745168Z Temporarily overriding HOME='/home/ubuntu/actions-runner/_work/_temp/8186620d-6097-4768-bd9e-4577219272c4' before making global git config changes
+2025-02-13T20:13:53.4747823Z Adding repository directory to the temporary git global config as a safe directory
+2025-02-13T20:13:53.4753683Z [command]/usr/bin/git config --global --add safe.directory /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2025-02-13T20:13:53.4783931Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2025-02-13T20:13:53.4806825Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2025-02-13T20:13:53.5069267Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2025-02-13T20:13:53.5109318Z Entering 'tt-train/3rd_party/wandb-cpp'
+2025-02-13T20:13:53.5148679Z Entering 'tt_metal/third_party/tracy'
+2025-02-13T20:13:53.5194577Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2025-02-13T20:13:53.5249103Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2025-02-13T20:13:53.5288109Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-02-13T20:13:53.5326843Z Entering 'tt_metal/third_party/umd'
+2025-02-13T20:13:53.5376088Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2025-02-13T20:13:53.5389606Z http.https://github.com/.extraheader
+2025-02-13T20:13:53.5399307Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2025-02-13T20:13:53.5419228Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2025-02-13T20:13:53.5620648Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2025-02-13T20:13:53.5660238Z Entering 'tt-train/3rd_party/wandb-cpp'
+2025-02-13T20:13:53.5699241Z Entering 'tt_metal/third_party/tracy'
+2025-02-13T20:13:53.5737861Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2025-02-13T20:13:53.5777059Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2025-02-13T20:13:53.5815839Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-02-13T20:13:53.5861700Z Entering 'tt_metal/third_party/umd'
+2025-02-13T20:13:53.6002745Z Post job cleanup.
+2025-02-13T20:13:53.9238258Z [command]/usr/bin/docker logout https://ghcr.io
+2025-02-13T20:13:53.9443448Z Removing login credentials for ghcr.io
+2025-02-13T20:13:53.9497010Z ##[group]Post cache
+2025-02-13T20:13:53.9497597Z State not set
+2025-02-13T20:13:53.9499157Z ##[endgroup]
+2025-02-13T20:13:53.9730290Z Post job cleanup.
+2025-02-13T20:13:53.9791304Z Post job cleanup.
+2025-02-13T20:13:54.0877791Z [command]/usr/bin/git version
+2025-02-13T20:13:54.0914693Z git version 2.25.1
+2025-02-13T20:13:54.0954349Z Copying '/home/ubuntu/.gitconfig' to '/home/ubuntu/actions-runner/_work/_temp/554da43a-162d-4688-aa02-dec2208f93f9/.gitconfig'
+2025-02-13T20:13:54.0965730Z Temporarily overriding HOME='/home/ubuntu/actions-runner/_work/_temp/554da43a-162d-4688-aa02-dec2208f93f9' before making global git config changes
+2025-02-13T20:13:54.0967145Z Adding repository directory to the temporary git global config as a safe directory
+2025-02-13T20:13:54.0971518Z [command]/usr/bin/git config --global --add safe.directory /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2025-02-13T20:13:54.1002174Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2025-02-13T20:13:54.1039243Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2025-02-13T20:13:54.1296699Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2025-02-13T20:13:54.1338690Z Entering 'tt-train/3rd_party/wandb-cpp'
+2025-02-13T20:13:54.1378392Z Entering 'tt_metal/third_party/tracy'
+2025-02-13T20:13:54.1416476Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2025-02-13T20:13:54.1459190Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2025-02-13T20:13:54.1500239Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-02-13T20:13:54.1537107Z Entering 'tt_metal/third_party/umd'
+2025-02-13T20:13:54.1590063Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2025-02-13T20:13:54.1621765Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2025-02-13T20:13:54.1852831Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2025-02-13T20:13:54.1898592Z Entering 'tt-train/3rd_party/wandb-cpp'
+2025-02-13T20:13:54.1946170Z Entering 'tt_metal/third_party/tracy'
+2025-02-13T20:13:54.1991871Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2025-02-13T20:13:54.2036453Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2025-02-13T20:13:54.2080815Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-02-13T20:13:54.2124248Z Entering 'tt_metal/third_party/umd'
+2025-02-13T20:13:54.2281262Z A job completed hook has been configured by the self-hosted runner administrator
+2025-02-13T20:13:54.2305857Z ##[group]Run '/opt/tt_metal_infra/scripts/ci/grayskull/cleanup.sh'
+2025-02-13T20:13:54.2316327Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-02-13T20:13:54.2316749Z ##[endgroup]
+2025-02-13T20:13:54.2369342Z Current date / time is Thu Feb 13 20:13:54 UTC 2025
+2025-02-13T20:13:54.4164967Z Cleaning up orphan processes

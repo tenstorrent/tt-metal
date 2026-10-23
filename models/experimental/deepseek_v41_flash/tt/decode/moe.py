@@ -1,0 +1,206 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+"""DeepSeek-V4.1-Flash decode MoE, on top of the V4-Flash block.
+
+V4.1 keeps V4's MoE -- a ``sqrtsoftplus`` router whose bias picks the experts but not their
+weights, the routed experts in one ``fused_experts`` op that takes the top-k itself, and a
+shared expert added on top -- with these differences:
+
+* ``D = 5120``, ``I = 2304`` and 384 routed experts (V4: 4096, 2048, 256).
+* No hash-routed layers: every layer uses the learned router.
+* The shared expert takes the routed experts' ``swiglu_limit`` clamp.
+* The router bias is ~10 to ~57 depending on the layer, and the op ranks on a bf16 row.
+"""
+
+import dataclasses
+from types import SimpleNamespace
+
+import torch
+import ttnn
+
+from models.experimental.deepseek_v4_flash.tt.decode.moe import (
+    _FUSED_DOWN_CORES_PER_EXPERT,
+    _FUSED_TILE,
+    DeepSeekV4MLP,
+    DeepSeekV4PreloadedExperts,
+    DeepSeekV4SparseMoeBlock,
+    DeepSeekV4TopKRouter,
+    _fused_hidden,
+)
+from models.experimental.deepseek_v4_flash.tt.system_config import active_system_config
+from models.experimental.deepseek_v4_flash.tt.weight_cache import _as_cache, _load_weight, _materialize, _memo
+
+from .decode_prefetch import prefetch_rings
+
+DECODE_LAYOUTS = {
+    # One 32-expert tile per core; 12x1 sits inside the 12x8 fused-experts replica.
+    "router_gate": {"K": 5120, "N": 384, "n_blocks": 12},
+    # 64 columns per core; 12x3 sits inside the same replica.
+    "shared_gate_proj": {"K": 5120, "N": 2304, "n_blocks": 36},
+    "shared_up_proj": {"K": 5120, "N": 2304, "n_blocks": 36},
+    "shared_down_proj": {"K": 2304, "N": 5120},
+}
+# The 6-expert path of ``fused_experts`` splits a rank's ``I`` tile-evenly over each expert's 16
+# gate_up cores (12x8 grid) or 18 (12x9).
+_GATE_UP_CORE_COUNTS = (_FUSED_DOWN_CORES_PER_EXPERT, _FUSED_DOWN_CORES_PER_EXPERT + 2)
+
+
+class DeepSeekV41TopKRouter(DeepSeekV4TopKRouter):
+    """V4's router with ``gate_temp`` folded into the gate weight and the bias shifted by its max.
+
+    The op ranks on ``scores + bias`` in bf16, whose step at V4.1's bias (up to ~57) is as large
+    as the gaps between the scores, so it would mostly pick different experts than the fp32
+    reference. A constant shift does not change the ranking, and after it the bias is in
+    ``[-0.5, 0]``, where bf16 steps are ~100x finer. The gate weight is bfloat8_b, whatever
+    ``weight_dtype`` the block uses for the shared expert: it has no prefetcher ring (12 cores do not
+    split over 8 DRAM banks), so each call copies it DRAM -> L1, and the bf16 copy (320 KB a core) does
+    not fit beside an Engram stage's resident L1.
+    """
+
+    decode_layouts = DECODE_LAYOUTS
+    prefetch_rings = staticmethod(prefetch_rings)
+
+    def __init__(self, config, weights: dict, device, cache=None, weight_dtype=None, **kwargs):
+        gate = _memo(weights["gate.weight"])
+        bias = _memo(weights["gate.e_score_correction_bias"])
+        temp = getattr(config, "gate_temp", 1.0)
+        shifted = {
+            "gate.weight": lambda: gate() / temp,
+            "gate.e_score_correction_bias": lambda: bias() - bias().max(),
+        }
+        super().__init__(config, shifted, device, cache=cache, weight_dtype=ttnn.bfloat8_b, **kwargs)
+        # Image tokens rank with ``bias_vl`` (the reference ``Gate``'s ``image_mask``). Row 0 of the table is the text
+        # bias, row 1 ``bias_vl``, each shifted by its own max; ``ranking_bias`` gathers a row per token, so a text
+        # token ranks on the very bf16 values ``e_score_correction_bias`` holds.
+        self.bias_table = None
+        if "gate.bias_vl" in weights:
+            bias_vl = _memo(weights["gate.bias_vl"])
+            cache = _as_cache(cache)
+            table = _materialize(
+                lambda: torch.stack([bias() - bias().max(), bias_vl() - bias_vl().max()]),
+                cache.file("gate.bias_table"),
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
+            )
+            self.bias_table = _load_weight(
+                table, device, cache_file_name=cache.file("gate.bias_table"), layout=ttnn.ROW_MAJOR_LAYOUT
+            )
+
+    def ranking_bias(self, image_mask=None, layout=ttnn.ROW_MAJOR_LAYOUT) -> ttnn.Tensor:
+        """V4's bias, or with ``image_mask`` (``[1, T]`` uint32 ROW_MAJOR, 1 for an image token) each token's own row
+        of :attr:`bias_table` as ``[1, 1, T, E]`` in ``layout``."""
+        if image_mask is None:
+            return super().ranking_bias()
+        if self.bias_table is None:
+            raise ValueError("the checkpoint has no gate.bias_vl for image tokens")
+        t = image_mask.shape[-1]
+        rows = ttnn.embedding(image_mask, self.bias_table, layout=layout)  # [1, T, E]
+        return ttnn.reshape(rows, [1, 1, t, self.num_experts])
+
+
+class DeepSeekV41MLP(DeepSeekV4MLP):
+    """V4's shared expert at V4.1's shapes, clamped like the routed experts."""
+
+    decode_layouts = DECODE_LAYOUTS
+    prefetch_rings = staticmethod(prefetch_rings)
+    clamp_swiglu = True
+
+
+def fused_experts_config(config, system_config=None, tp_size: int = 1):
+    """``(config, system_config)`` as V4's experts take them at V4.1's shapes: ``I`` zero-padded
+    to the smallest size whose per-rank tiles split evenly over 16 or 18 gate_up cores (no padding
+    at V4.1's ``I = 2304`` for TP 1, 2 or 4), and the hidden row cut over ``D / 64`` cores (see
+    :class:`DeepSeekV41PreloadedExperts`)."""
+    step = _FUSED_TILE * tp_size
+    padded = -(-config.moe_intermediate_size // step) * step
+    while all((padded // step) % cores for cores in _GATE_UP_CORE_COUNTS):
+        padded += step
+    sys_cfg = system_config or active_system_config()
+    sys_cfg = dataclasses.replace(
+        sys_cfg, moe=dataclasses.replace(sys_cfg.moe, fused_num_cores=config.hidden_size // _fused_hidden(1))
+    )
+    return SimpleNamespace(**{**vars(config), "moe_intermediate_size": padded}), sys_cfg
+
+
+def padded_expert_provider(provider, intermediate: int, padded: int):
+    """``provider`` with each expert's ``I`` zero-padded from ``intermediate`` to ``padded``:
+    zero rows after both gate and up, zero columns after down."""
+    pad = padded - intermediate
+
+    def padded_provider(e: int):
+        gate_up, down = provider(e)
+        zeros = gate_up.new_zeros(pad, gate_up.shape[1])
+        gate, up = gate_up.split(intermediate)
+        return torch.cat([gate, zeros, up, zeros]), torch.nn.functional.pad(down, (0, pad))
+
+    return padded_provider
+
+
+class DeepSeekV41PreloadedExperts(DeepSeekV4PreloadedExperts):
+    """V4's resident ``fused_experts`` experts at V4.1's shapes.
+
+    The op cuts the hidden row into 64-column DRAM shards, 80 at ``D = 5120`` (V4: 64). Its
+    6-expert path splits a rank's ``I`` over 18 gate_up cores per expert (a 12x9 grid) when 16 do
+    not divide it, and runs down on 16 of them. ``I = 2304`` is 72 tiles, 36 per rank at TP2 and
+    18 at TP4, so it needs no padding; :func:`fused_experts_config` zero-pads any ``I`` that fits
+    neither (zero gate/up rows give ``silu(0) * 0 = 0`` and zero down columns add nothing).
+
+    ``tp_size > 1`` gives each rank of the 1xTP ``device`` an ``I / TP`` slice, as V4 does.
+
+    ``provider(e) -> (gate_up [2I, D], down [D, I])`` is V4's contract, unpadded (see
+    :func:`~...config.expert_provider`).
+    """
+
+    def __init__(self, config, provider, device, dtype=None, cache=None, system_config=None, tp_size: int = 1):
+        fused_config, sys_cfg = fused_experts_config(config, system_config, tp_size)
+        super().__init__(
+            fused_config,
+            padded_expert_provider(provider, config.moe_intermediate_size, fused_config.moe_intermediate_size),
+            device,
+            dtype=dtype,
+            cache=cache,
+            system_config=sys_cfg,
+            tp_size=tp_size,
+        )
+
+
+class DeepSeekV41SparseMoeBlock(DeepSeekV4SparseMoeBlock):
+    """V4's MoE block with the V4.1 router and shared expert, decoded through ``matmul_decode``.
+
+    ``weights`` comes from :func:`~...config.moe_weights` and ``experts`` is a
+    :class:`DeepSeekV41PreloadedExperts` built at the same ``tp_size``. ``weight_dtype`` is the
+    shared expert's: bfloat8_b by default, since at bfloat4_b its error is larger than the routed
+    experts'. Under TP the router is replicated, the shared expert's ``I`` is split like the
+    routed experts' (576 per rank at TP4), and the summed partials are all-reduced, as in V4.
+    """
+
+    router_cls = DeepSeekV41TopKRouter
+    shared_expert_cls = DeepSeekV41MLP
+
+    def __init__(
+        self,
+        config,
+        weights: dict,
+        device,
+        experts,
+        cache=None,
+        weight_dtype=ttnn.bfloat8_b,
+        tp_size=1,
+        use_prefetcher: bool = False,
+        prefetch_buffers=None,
+    ):
+        if experts.tp_size != tp_size:
+            raise ValueError(f"the experts were built for TP{experts.tp_size}, not TP{tp_size}")
+        super().__init__(
+            config,
+            weights,
+            device,
+            experts,
+            cache=cache,
+            weight_dtype=weight_dtype,
+            tp_size=tp_size,
+            matmul_decode=True,
+            use_prefetcher=use_prefetcher,
+            prefetch_buffers=prefetch_buffers,
+        )

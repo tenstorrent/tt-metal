@@ -1,0 +1,44 @@
+# Prefetcher configuration for Wormhole and Blackhole devices
+# Legend:
+# - dram_banks: DRAM banks are ordered in column major order by Y coordinates
+# - legal_receiver_cores: The number of receiver cores that are supported/tested for the prefetcher
+# - bank_ordered_y_coords: The Y coordinates of the prefetcher senders ordered in increasing Bank ID
+# - sender_cols: The X coordinates of the prefetcher senders
+# - sender_rows: The Y coordinates of the prefetcher senders
+# - receiver_cols: The range of X coordinates of the prefetcher receivers
+
+blackhole:
+  dram_banks: [1, 3, 2, 0, 5, 7, 6, 4]
+  legal_receiver_cores: [1, 2, 3, 8, 10]
+  bank_ordered_y_coords:
+    left: [9, 1, 7, 3]
+    right: [0, 2, 6, 4]
+  sender_cols:
+    left: 0
+    right: 7
+  sender_rows:
+    left:
+      active: [0, 3, 7, 9]
+      inactive: [1, 2, 4, 5, 6, 8]
+    right:
+      active: [1, 4, 6, 9]
+      inactive: [0, 2, 3, 5, 7, 8]
+  receiver_cols:
+    left: [1, 7]
+    right: [8, 11]
+
+wormhole:
+  dram_banks: [1, 2, 3, 0, 4, 6, 9, 10, 11, 8, 7, 5]
+  sender_cols:
+    left: 0
+    right: 4
+  sender_rows:
+    left:
+      active: [0, 4, 5, 9]
+      inactive: [1, 2, 3, 6, 7, 8]
+    right:
+      active: [0, 1, 2, 4, 5, 6, 7, 9]
+      inactive: [3, 8]
+  receiver_cols:
+    left: [1, 4]
+    right: [5, 7]

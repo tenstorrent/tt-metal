@@ -1,0 +1,2 @@
+put -r generated/merge_queue/*.json
+ls -hal

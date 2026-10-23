@@ -1,0 +1,69 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <cstdint>
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/fill.hpp"  // FillScalar
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/extended.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/special.hpp"   // Where, LgammaStirling, LgammaAdjusted
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/trig.hpp"      // Sin
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/rounding.hpp"  // Floor, Frac
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"      // Abs
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"      // Log
+
+namespace ckl = compute_kernel_lib;
+
+void kernel_main() {
+    uint32_t num_tiles = get_arg_val<uint32_t>(0);
+
+    constexpr auto dfb_input_id = tt::CBIndex::c_0;
+    constexpr auto dfb_output_id = tt::CBIndex::c_2;
+    constexpr float M_PI = 3.14159265358979323846f;
+
+    compute_kernel_hw_startup(dfb_input_id, dfb_output_id);
+
+    ckl::eltwise_chain(
+        ckl::IterationShape::tiles(num_tiles),
+        // x -> D0 (owns the wait), x -> D1.
+        ckl::CopyTile<
+            ckl::input(dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D0>{},
+        ckl::CopyTile<
+            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D1>{},
+        // D0 = stirling(x)
+        ckl::LgammaStirling<ckl::Dst::D0>{},
+        // D2 = M_PI ; D1 = sin(frac(x) * M_PI)
+        ckl::FillScalar<ckl::Dst::D2>{M_PI},
+        ckl::Frac<ckl::Dst::D1>{},
+        ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},
+        ckl::Sin<ckl::Dst::D1>{},
+        // reload x -> D2, D3 ; D3 = floor(x) ; D2 = (x == floor(x))
+        ckl::CopyTile<
+            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D2>{},
+        ckl::CopyTile<
+            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D3>{},
+        ckl::Floor<ckl::Dst::D3>{},
+        ckl::EqBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2>{},
+        // D3 = 0 ; D1 = where(cond=D2, a=0, b=sin) -> 0 at integers else sin
+        ckl::FillScalar<ckl::Dst::D3>{0.0f},
+        ckl::Where<DataFormat::Float16_b, ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D1, ckl::Dst::D1>{},
+        // D1 = log|D1|
+        ckl::Abs<ckl::Dst::D1>{},
+        ckl::Log<ckl::Approx::Exact, ckl::Dst::D1>{},
+        // reload x -> D2 (owns the pop) ; D0 = adjusted(stirling=D0, logsin=D1, x=D2)
+        ckl::CopyTile<
+            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D2>{},
+        ckl::LgammaAdjusted<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
+        ckl::PackTile<ckl::output(
+            dfb_output_id,
+            ckl::ReservePolicy::PerTile,
+            ckl::PushPolicy::PerTile,
+            ckl::DataFormatReconfig::Disabled)>{});
+}

@@ -1,0 +1,247 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/operations/data_movement/repeat/device/repeat_utils.hpp"
+
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
+
+#include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
+
+namespace ttnn::operations::data_movement::repeat {
+
+using namespace tt::tt_metal;
+
+namespace {
+
+// True if padded shape doesn't divide evenly into shard (or no spec).
+bool is_unevenly_sharded(const tt::tt_metal::TensorSpec& t) {
+    const auto& shard_spec = t.memory_config().shard_spec();
+    if (!shard_spec.has_value()) {
+        return true;
+    }
+    const auto& shape = t.padded_shape();
+    const auto rank = shape.rank();
+    if (rank < 2) {
+        return true;
+    }
+    const auto& shard = shard_spec->shape;
+    uint64_t volume_except_last = 1;
+    for (int i = 0; i < static_cast<int>(rank) - 1; ++i) {
+        volume_except_last *= static_cast<uint64_t>(shape[i]);
+    }
+    return (volume_except_last % shard[0]) != 0 || (shape[-1] % shard[1]) != 0;
+}
+
+// L1-sharded only; DRAM-sharded uses composite.
+bool side_native(const MemoryConfig& mc, Layout /*layout*/) {
+    if (!mc.is_sharded()) {
+        return false;
+    }
+    if (mc.buffer_type() == BufferType::DRAM) {
+        return false;
+    }
+    return true;
+}
+
+// Product of dims after repeat axis but before W; equals row-stride between successive k-values.
+uint64_t trailing_row_volume(const ttnn::Shape& shape, int32_t repeat_dim) {
+    const auto rank = static_cast<int32_t>(shape.rank());
+    if (repeat_dim < 0 || repeat_dim >= rank - 1) {
+        return 1;
+    }
+    uint64_t v = 1;
+    for (int32_t i = repeat_dim + 1; i < rank - 1; ++i) {
+        v *= static_cast<uint64_t>(shape[i]);
+    }
+    return v;
+}
+
+}  // namespace
+
+bool is_replication_locally_contained(
+    const ShardSpec& input_shard_spec,
+    const ttnn::Shape& input_padded_shape,
+    int32_t repeat_dim,
+    uint32_t num_repeats) {
+    const auto rank = static_cast<int32_t>(input_padded_shape.rank());
+    if (rank < 2) {
+        return false;
+    }
+    // Last-dim: replicas stay on same core along W.
+    if (repeat_dim == rank - 1) {
+        return true;
+    }
+    if (num_repeats <= 1) {
+        return true;
+    }
+    // Higher-dim: per-core rows must hold whole replica groups (shape[repeat_dim] * trailing rows).
+    const uint64_t per_core_rows = input_shard_spec.shape[0];
+    if (per_core_rows == 0) {
+        return false;
+    }
+    const uint64_t trv = trailing_row_volume(input_padded_shape, repeat_dim);
+    const uint64_t group_size = trv * static_cast<uint64_t>(input_padded_shape[repeat_dim]);
+    return group_size != 0 && (per_core_rows % group_size) == 0;
+}
+
+bool is_native_repeat_sharding(
+    const tt::tt_metal::TensorSpec& input_spec,
+    const std::optional<MemoryConfig>& output_memory_config,
+    int32_t repeat_dim,
+    uint32_t num_repeats) {
+    if (!side_native(input_spec.memory_config(), input_spec.layout())) {
+        return false;
+    }
+    if (is_unevenly_sharded(input_spec)) {
+        return false;
+    }
+    // TILE input: reject non-tile-aligned H/W (native tile path requires alignment).
+    if (input_spec.layout() == tt::tt_metal::Layout::TILE) {
+        const auto& lshape = input_spec.logical_shape();
+        if (lshape.rank() < 2 || (lshape[-1] % tt::constants::TILE_WIDTH) != 0 ||
+            (lshape[-2] % tt::constants::TILE_HEIGHT) != 0) {
+            return false;
+        }
+    }
+    // RM WIDTH/BLOCK last-dim: reject (ttnn::view breaks shard width).
+    if (input_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR && repeat_dim >= 0 &&
+        repeat_dim == static_cast<int32_t>(input_spec.logical_shape().rank()) - 1) {
+        const auto in_layout = input_spec.memory_config().memory_layout();
+        if (in_layout == TensorMemoryLayout::WIDTH_SHARDED || in_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            return false;
+        }
+    }
+    if (output_memory_config.has_value()) {
+        if (output_memory_config->is_sharded()) {
+            if (output_memory_config->buffer_type() == BufferType::DRAM) {
+                return false;
+            }
+            // Cross-layout sharded->sharded needs composite reshard.
+            if (input_spec.memory_config().memory_layout() != output_memory_config->memory_layout()) {
+                return false;
+            }
+            // Grids must match when both specs are set.
+            const auto& in_ss = input_spec.memory_config().shard_spec();
+            const auto& out_ss = output_memory_config->shard_spec();
+            if (in_ss.has_value() && out_ss.has_value() && in_ss->grid != out_ss->grid) {
+                return false;
+            }
+        }
+    }
+    // repeat_dim < 0: skip containment check until repeat axis is known.
+    if (repeat_dim < 0) {
+        return true;
+    }
+    const auto& in_ss = input_spec.memory_config().shard_spec();
+    if (!in_ss.has_value()) {
+        return false;
+    }
+    return is_replication_locally_contained(*in_ss, input_spec.padded_shape(), repeat_dim, num_repeats);
+}
+
+std::optional<ShardSpec> adjust_repeat_shard_spec_to_shape(
+    const ShardSpec& shard_spec,
+    const ttnn::Shape& from_shape,
+    const ttnn::Shape& to_shape,
+    int32_t repeat_dim,
+    uint32_t num_repeats) {
+    TT_FATAL(
+        from_shape.rank() == to_shape.rank(),
+        "adjust_repeat_shard_spec_to_shape: rank mismatch ({} vs {})",
+        from_shape.rank(),
+        to_shape.rank());
+    if (num_repeats == 0) {
+        return std::nullopt;
+    }
+    const auto rank = static_cast<int32_t>(from_shape.rank());
+    if (rank < 2 || repeat_dim < 0 || repeat_dim >= rank) {
+        return std::nullopt;
+    }
+
+    auto ret = shard_spec;
+    if (repeat_dim == rank - 1) {
+        // Last-dim: scale shard width by num_repeats.
+        if (to_shape[-1] % num_repeats != 0 || from_shape[-1] != to_shape[-1] / num_repeats) {
+            return std::nullopt;
+        }
+        const uint64_t scaled = static_cast<uint64_t>(shard_spec.shape[1]) * static_cast<uint64_t>(num_repeats);
+        ret.shape[1] = static_cast<uint32_t>(scaled);
+        return ret;
+    }
+
+    // Higher-dim: scale per-core row count by num_repeats; width unchanged.
+    if (from_shape[-1] != to_shape[-1]) {
+        return std::nullopt;
+    }
+    const uint64_t scaled_h = static_cast<uint64_t>(shard_spec.shape[0]) * static_cast<uint64_t>(num_repeats);
+    ret.shape[0] = static_cast<uint32_t>(scaled_h);
+    return ret;
+}
+
+std::optional<ShardSpec> generate_repeat_shard_spec(
+    const Tensor& input_tensor,
+    const ttnn::Shape& padded_out_shape,
+    TensorMemoryLayout memory_layout,
+    std::optional<ShardOrientation> orientation_hint) {
+    if (memory_layout != TensorMemoryLayout::HEIGHT_SHARDED && memory_layout != TensorMemoryLayout::WIDTH_SHARDED &&
+        memory_layout != TensorMemoryLayout::BLOCK_SHARDED) {
+        return std::nullopt;
+    }
+    auto* device = input_tensor.device();
+    auto compute_grid_size = device->compute_with_storage_grid_size();
+    if (compute_grid_size.x == 0 || compute_grid_size.y == 0) {
+        return std::nullopt;
+    }
+
+    uint64_t tensor_height = 1;
+    for (int32_t i = 0; i < static_cast<int32_t>(padded_out_shape.rank()) - 1; ++i) {
+        tensor_height *= static_cast<uint64_t>(padded_out_shape[i]);
+    }
+    const uint64_t tensor_width = padded_out_shape[-1];
+    if (tensor_height == 0 || tensor_width == 0) {
+        return std::nullopt;
+    }
+
+    const auto input_orientation = input_tensor.shard_spec().has_value()
+                                       ? std::optional{input_tensor.shard_spec()->orientation}
+                                       : std::nullopt;
+    auto spec = common::synthesize_output_shard_spec(
+        compute_grid_size,
+        tensor_height,
+        tensor_width,
+        memory_layout,
+        {.is_tile = (input_tensor.layout() == tt::tt_metal::Layout::TILE),
+         .orientation_hint = orientation_hint,
+         .input_orientation = input_orientation,
+         .caller_tag = "Repeat"});
+
+    // RM WIDTH_SHARDED: shrink num_cores to the largest tensor_width divisor with L1-aligned page (else nullopt).
+    auto adjusted = common::shrink_shard_for_rm_page_alignment(
+        spec, input_tensor.layout(), input_tensor.element_size(), tensor_width, compute_grid_size, memory_layout);
+    if (adjusted.has_value()) {
+        return adjusted;
+    }
+
+    // Strict shrink can't repair RM {BLOCK,HEIGHT}_SHARDED unaligned pages; retry with tile-inflated synth
+    // to match main's pre-#57644 behavior for the non-fixable case (else caller drops to interleaved).
+    auto tile_spec = common::synthesize_output_shard_spec(
+        compute_grid_size,
+        tensor_height,
+        tensor_width,
+        memory_layout,
+        {.is_tile = true,
+         .orientation_hint = orientation_hint,
+         .input_orientation = input_orientation,
+         .caller_tag = "Repeat (tile fallback)"});
+    const uint64_t l1_page_align = static_cast<uint64_t>(tt::tt_metal::hal::get_l1_alignment());
+    const uint64_t page_size_bytes =
+        static_cast<uint64_t>(tile_spec.shape[1]) * static_cast<uint64_t>(input_tensor.element_size());
+    if (page_size_bytes == 0 || (page_size_bytes % l1_page_align) != 0 || tensor_width % tile_spec.shape[1] != 0) {
+        return std::nullopt;
+    }
+    return tile_spec;
+}
+
+}  // namespace ttnn::operations::data_movement::repeat

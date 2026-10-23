@@ -1,0 +1,200 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <stdint.h>
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
+
+void kernel_main() {
+    Noc noc;
+
+    const auto cache_start_id = get_arg(args::cache_start_id);
+    auto cache_tile_offset_B = get_arg(args::cache_tile_offset_B);
+    const auto my_batch_idx = get_arg(args::my_batch_idx);
+    const bool send_signal = get_arg(args::send_signal) == 1;
+    const auto send_core_x = get_arg(args::send_core_x);
+    const auto send_core_y = get_arg(args::send_core_y);
+
+    constexpr auto cache_batch_num_tiles = get_arg(args::cache_batch_num_tiles);
+    constexpr auto Wt = get_arg(args::Wt);
+    constexpr auto Wbytes = get_arg(args::Wbytes);
+
+    // paged_cache args
+    constexpr auto num_heads = get_arg(args::num_heads);
+    constexpr auto block_size = get_arg(args::block_size);
+    constexpr auto block_size_t = get_arg(args::block_size_t);
+    constexpr auto max_blocks_per_seq = get_arg(args::max_blocks_per_seq);
+
+    constexpr auto St = get_arg(args::St);
+    // 0 = legacy unbounded behavior; nonzero = wrap update_idx mod this value before
+    // page_table lookup (bounded sliding-window cache support).
+    constexpr auto cache_position_modulo = get_arg(args::cache_position_modulo);
+    constexpr auto input_is_row_major = get_arg(args::input_is_row_major);
+
+    constexpr uint32_t head_offset_t = Wt * St;
+
+    constexpr uint32_t TILE_HEIGHT = 32;
+
+    const auto s0 = TensorAccessor(tensor::cache);
+
+    // `dfb::cache` is this kernel's name for the *output* buffer, which compute fills with the
+    // retilized block; the reader's same-named handle is the cache buffer it read from DRAM.
+    DataflowBuffer dfb_cache(dfb::cache);
+    DataflowBuffer dfb_untilized_cache(dfb::untilized_cache);
+    DataflowBuffer dfb_untilized_cache2(dfb::untilized_cache2);
+    DataflowBuffer dfb_untilized_input(dfb::untilized_input);
+#ifdef USE_INDEX_TENSOR
+    DataflowBuffer dfb_index(dfb::index);
+#endif
+#ifdef IS_PAGED_CACHE
+    DataflowBuffer dfb_page_table(dfb::page_table);
+#endif
+
+    const uint32_t cache_tile_bytes = dfb_cache.get_tile_size();
+
+    uint32_t cache_id = cache_start_id;
+    uint32_t update_idx = 0;
+
+    bool skip_update = false;
+
+#ifdef USE_INDEX_TENSOR
+    {
+        dfb_index.wait_front(1);
+        uint32_t index_rd_ptr = dfb_index.get_read_ptr();
+        volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_rd_ptr);
+        const uint32_t raw_update_idx = index_ptr[my_batch_idx];
+
+        if (raw_update_idx == (uint32_t)-1) {
+            // Passing update_idx = -1 tells us to skip update for this user
+            skip_update = true;
+        } else {
+            // Wrap into the bounded sliding-window cache when enabled, so positions past
+            // the physical capacity are addressed correctly (cache_position_modulo is a
+            // multiple of block_size, so this preserves the intra-block offset).
+            const uint32_t update_idx =
+                cache_position_modulo > 0 ? raw_update_idx % cache_position_modulo : raw_update_idx;
+#ifdef IS_PAGED_CACHE
+            {
+                dfb_page_table.wait_front(1);
+                uint32_t page_table_rd_ptr = dfb_page_table.get_read_ptr();
+                volatile tt_l1_ptr uint32_t* page_table_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_rd_ptr);
+
+                const uint32_t virtual_block_id = update_idx / block_size;
+                const uint32_t physical_block_id = page_table_ptr[virtual_block_id];
+                const uint32_t block_start_id = physical_block_id * num_heads * block_size_t * Wt;
+                const uint32_t block_row_tile = (update_idx % block_size) / TILE_HEIGHT;
+                const uint32_t block_offset = block_row_tile * Wt;
+                cache_id = block_start_id + block_offset;
+
+                // Page-table value consumed; pop to balance the wait above.
+                dfb_page_table.pop_front(1);
+            }
+#else
+            {
+                const uint32_t cache_batch_tile_offset = my_batch_idx * cache_batch_num_tiles;
+                const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
+                cache_id = cache_start_id;
+            }
+#endif
+            cache_tile_offset_B = update_idx % TILE_HEIGHT * Wbytes;
+        }
+        // The index value is consumed on both the skip and update paths; the reader pushes
+        // the index buffer unconditionally, so pop it here (outside the skip branch) to balance
+        // the wait.
+        dfb_index.pop_front(1);
+    }
+#endif
+
+    constexpr uint32_t input_cb_pages = input_is_row_major ? 1 : Wt;
+    dfb_untilized_input.wait_front(input_cb_pages);  // input tensor
+#ifndef ARCH_QUASAR
+    // Gen1 patches the new row into the untilized cache block with a NoC loopback read from our own
+    // L1; Quasar copies directly (see the ARCH_QUASAR branch below), so these are Gen1-only.
+    const uint8_t noc_id = noc.get_noc_id();
+    const uint32_t my_noc_x = my_x[noc_id];
+    const uint32_t my_noc_y = my_y[noc_id];
+    UnicastEndpoint local_src;
+#endif
+    uint32_t input_l1_read_addr = dfb_untilized_input.get_read_ptr();
+
+    for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
+        // Wait on compute to untilize a block. Update that block in SRAM.
+        dfb_untilized_cache.wait_front(Wt);
+        dfb_untilized_cache2.reserve_back(Wt);
+
+        uint32_t cache_l1_write_addr = dfb_untilized_cache.get_read_ptr() + cache_tile_offset_B;
+#ifdef ARCH_QUASAR
+        // Quasar: this is a local L1->L1 self-copy. A NoC loopback read on the emulator can spin on
+        // can_post or silently drop, and the DFB pointer getters return the uncached alias the NoC will
+        // not accept — so copy directly with the RISC through the uncached aliases (both rows are 16 B
+        // aligned, Wbytes is a multiple of 4). The trailing fence orders these stores ahead of the
+        // dfb_untilized_cache2 credit posted below, so compute cannot re-tilize a stale row.
+        {
+            volatile tt_l1_ptr uint32_t* src_row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(input_l1_read_addr);
+            volatile tt_l1_ptr uint32_t* dst_row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cache_l1_write_addr);
+            for (uint32_t w = 0; w < Wbytes / sizeof(uint32_t); ++w) {
+                dst_row[w] = src_row[w];
+            }
+            __asm__ __volatile__("fence" ::: "memory");
+        }
+#else
+        noc.async_read(
+            local_src,
+            CoreLocalMem<uint32_t>(cache_l1_write_addr),
+            Wbytes,
+            {.noc_x = my_noc_x, .noc_y = my_noc_y, .addr = input_l1_read_addr},
+            {});
+        noc.async_read_barrier();
+#endif
+        dfb_untilized_cache2.push_back(Wt);
+        dfb_untilized_cache.pop_front(Wt);  // NEW
+
+        // Wait on compute to tilize an updated block. Write that block to DRAM
+        dfb_cache.wait_front(Wt);
+        if (!skip_update) {
+#ifdef ARCH_QUASAR
+            // Quasar: DFB endpoint (cached address) + per-tile offset into the Wt-entry front, instead
+            // of walking the uncached get_read_ptr() alias (see the self-copy above).
+            for (uint32_t t = 0; t < Wt; ++t) {
+                noc.async_write(
+                    dfb_cache, s0, cache_tile_bytes, {.offset_bytes = t * cache_tile_bytes}, {.page_id = cache_id + t});
+            }
+#else
+            uint32_t out_l1_read_addr = dfb_cache.get_read_ptr();
+            for (uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(out_l1_read_addr), s0, cache_tile_bytes, {}, {.page_id = curr_cache_id});
+                out_l1_read_addr += cache_tile_bytes;
+            }
+#endif
+
+            noc.async_writes_flushed();
+        }
+        dfb_cache.pop_front(Wt);
+
+        if (!skip_update) {
+            // Delay syncing the writes to maximize perf.
+            noc.async_write_barrier();
+        }
+
+        // read from next head
+        input_l1_read_addr += Wbytes;
+        cache_id += head_offset_t;
+    }
+
+    dfb_untilized_input.pop_front(input_cb_pages);
+
+    if (send_signal) {
+        // send signal to receiver core that we are done using the input buffer
+        Semaphore(sem::in0_seq).up(noc, send_core_x, send_core_y, 1);
+        noc.async_atomic_barrier();
+    }
+}

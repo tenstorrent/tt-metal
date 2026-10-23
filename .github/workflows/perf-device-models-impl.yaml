@@ -1,0 +1,286 @@
+name: "[internal] Single-card Device perf regressions impl"
+
+on:
+  workflow_call:
+    inputs:
+      os:
+        required: false
+        type: string
+        default: "ubuntu-22.04"
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      architecture:
+        description: 'Architectures to test: ["blackhole"], ["wormhole_b0"], or both (default)'
+        required: false
+        type: string
+        default: '["blackhole", "wormhole_b0"]'
+      requested-models:
+        default: "all"
+        type: string
+
+jobs:
+  define-models:
+    runs-on: ubuntu-slim
+    outputs:
+      models-to-run: ${{ steps.compute-models.outputs.models-to-run }}
+    steps:
+      - name: Compute models to run
+        id: compute-models
+        run: |
+          set -euo pipefail
+
+          requested_models='${{ inputs.requested-models }}'
+          echo "[info] requested-models: $requested_models"
+
+          # Initialize models JSON with all false
+          models_json='{
+            "vit": false,
+            "panoptic-deeplab": false,
+            "ops-perf-tests": false
+          }'
+
+          if [[ "$requested_models" == "all" ]]; then
+            echo "[info] Running all models"
+            models_json=$(echo "$models_json" | jq 'with_entries(.value = true)')
+          else
+            echo "[info] Processing specific model requests"
+            models_json=$(echo "$requested_models" | jq --argjson models "$models_json" '
+              reduce .[] as $req ($models;
+                if has($req) then
+                  .[$req] = true
+                else
+                  .
+                end
+              )')
+          fi
+
+          echo "[info] Final models selection:"
+          echo "$models_json" | jq .
+
+          # Output the JSON (compact format for GitHub Actions)
+          echo "models-to-run=$(echo "$models_json" | jq -c .)" >> "$GITHUB_OUTPUT"
+
+  generate-matrix:
+    needs: define-models
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.generate-matrix.outputs.matrix }}
+    steps:
+      - name: Generate filtered matrix
+        id: generate-matrix
+        run: |
+          set -euo pipefail
+
+          models_json='${{ needs.define-models.outputs.models-to-run }}'
+          echo "[info] Models to run: $models_json"
+
+          # Parse and validate architecture input
+          arch='${{ inputs.architecture }}'
+          if [[ -z "$arch" ]]; then
+            arch='["blackhole", "wormhole_b0"]'
+          fi
+          echo "[info] Architecture input: $arch"
+
+          # Validate JSON format
+          if ! echo "$arch" | jq -e 'type == "array"' > /dev/null 2>&1; then
+            echo "❌ Error: Invalid JSON format for 'architecture' input. Expected a JSON array."
+            echo "   Received input: $arch"
+            echo "   Valid format: [\"blackhole\", \"wormhole_b0\"]"
+            exit 1
+          fi
+
+          # Validate each architecture name using jq for exact matching
+          valid_archs='["blackhole", "wormhole_b0"]'
+          invalid_archs=$(echo "$arch" | jq -r --argjson valid "$valid_archs" '.[] | select(. as $a | $valid | index($a) | not)')
+          if [[ -n "$invalid_archs" ]]; then
+            echo "❌ Error: Invalid architecture(s) found:"
+            echo "$invalid_archs" | while read -r invalid; do
+              echo "   - '$invalid'"
+            done
+            echo "   Valid values are: blackhole, wormhole_b0"
+            exit 1
+          fi
+
+          # Define which models belong to each matrix group
+          group_models='{
+            "N300 WH B0 Set 1": ["vit"],
+            "N300 WH B0 Set 2": ["ops-perf-tests"],
+            "P150 BH": ["vit", "panoptic-deeplab", "ops-perf-tests"]
+          }'
+
+          # Original matrix definition
+          original_matrix='[
+            {"name": "N300 WH B0 Set 1", "arch": "wormhole_b0", "runs-on": ["tt-ubuntu-2204-n300-stable"], "machine-type": "CIv2", "civ2-compatible": true, "timeout": 120, "job-set1": true},
+            {"name": "N300 WH B0 Set 2", "arch": "wormhole_b0", "runs-on": ["tt-ubuntu-2204-n300-stable"], "machine-type": "CIv2", "civ2-compatible": true, "timeout": 120, "job-set1": false},
+            {"name": "P150 BH", "arch": "blackhole", "runs-on": ["tt-ubuntu-2204-p150b-stable"], "machine-type": "CIv2", "civ2-compatible": true, "timeout": 120, "job-blackhole-set1": true}
+          ]'
+
+          # Filter matrix based on selected models
+          filtered_matrix=$(echo "$original_matrix" | jq --argjson models "$models_json" --argjson groups "$group_models" '[
+            .[] | select(
+              ($groups[.name] | map($models[.] // false) | any)
+            )
+          ]')
+
+          echo "[info] Filtered matrix:"
+          echo "$filtered_matrix" | jq .
+
+          # Filter matrix based on selected architectures
+          filtered_matrix=$(echo "$filtered_matrix" | jq -c --argjson archs "$arch" '[
+            .[] | select(.arch as $a | $archs | index($a))
+          ]')
+
+          echo "[info] Matrix after architecture filtering:"
+          echo "$filtered_matrix" | jq .
+
+          # Check if matrix is empty
+          matrix_length=$(echo "$filtered_matrix" | jq 'length')
+          echo "[info] Matrix length: $matrix_length"
+
+          if [ "$matrix_length" -eq 0 ]; then
+            echo "[warning] No matrix entries selected - using empty matrix"
+            filtered_matrix='[]'
+          fi
+
+          # Output the filtered matrix
+          echo "matrix={\"test-info\": $(echo "$filtered_matrix" | jq -c .)}" >> "$GITHUB_OUTPUT"
+
+  device-perf:
+    needs: [define-models, generate-matrix]
+    if: ${{ fromJSON(needs.generate-matrix.outputs.matrix).test-info != '[]' && fromJSON(needs.generate-matrix.outputs.matrix).test-info != null }}
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.generate-matrix.outputs.matrix) }}
+    name: "${{ matrix.test-info.name }} device perf"
+    runs-on: ${{ matrix.test-info.runs-on }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.test-info.arch }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: vit tests
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        with:
+          device_perf_model_name: "vit"
+          commands: |
+            pytest models/demos/vision/classification/vit/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests/ -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['vit'] }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+
+      - name: panoptic_deeplab tests (110 cores)
+        env:
+          TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "10,9"
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        with:
+          device_perf_model_name: "panoptic_deeplab_110_cores"
+          commands: |
+            pytest models/experimental/panoptic_deeplab/tests/test_device_perf_pdl.py::test_device_perf_pdl_110_cores -m models_device_performance_bare_metal --timeout=600
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['panoptic-deeplab'] }}
+
+      - name: ops perf tests
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        with:
+          device_perf_model_name: "ops-perf-tests"
+          commands: |
+            pytest tests/ttnn/perf_tests/operations/conv -m models_device_performance_bare_metal --timeout=300
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (!matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['ops-perf-tests'] }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+
+      - name: Merge test reports
+        id: generate-device-perf-report
+        if: ${{ !cancelled() }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        env:
+          TRACY_NO_INVARIANT_CHECK: 1
+        run: |
+          CLEAN_NAME=$(echo "${{ matrix.test-info.name }}" | tr ' ' '-')
+          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
+          cat Models_Device_Perf_$(date +%Y_%m_%d).csv > Models_Device_Perf_${{ matrix.test-info.test-type }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
+          cat Models_Device_Perf_${{ matrix.test-info.test-type }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
+          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME CHECK
+          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+
+      - name: Save environment data
+        id: save-environment-data
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -d "generated/benchmark_data" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          else
+            echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
+            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload benchmark data
+        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
+
+      - name: Check device perf report exists
+        id: check-device-perf-report
+        if: ${{ !cancelled() }}
+        run: |
+          test -f ${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
+
+      - name: Clean test name for artifact
+        run: |
+          CLEAN_NAME=$(echo "${{ matrix.test-info.name }}" | tr ' ' '-')
+          echo "ARTIFACT_NAME=device-perf-report-csv-${{ matrix.test-info.test-type }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}-${CLEAN_NAME}" >> "$GITHUB_ENV"
+
+      - name: Upload device perf report
+        timeout-minutes: 5
+        if: ${{ !cancelled() && steps.check-device-perf-report.conclusion == 'success' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: /work/${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

@@ -1,0 +1,868 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "program_command_sequence.hpp"
+
+#include "tt-metalium/buffer.hpp"
+#include "tt-metalium/circular_buffer.hpp"
+#include "tt-metalium/circular_buffer_constants.h"
+#include "tt-metalium/circular_buffer_config.hpp"
+#include <tt_stl/assert.hpp>
+#include "tt-metalium/core_coord.hpp"
+#include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
+#include "tt-metalium/kernel_types.hpp"  // KernelHandle
+#include "tt-metalium/program.hpp"       // KernelGroup
+#include "tt-metalium/mesh_workload.hpp"
+#include "hostdev/remote_dfb_constants.h"  // REMOTE_DFB_OFFSET_NONE
+#include "program_device_map.hpp"          // ProgramTransferInfo
+#include "impl/buffers/semaphore.hpp"
+#include "impl/allocator/persistent_l1_arena.hpp"
+#include "tt-metalium/sub_device_types.hpp"
+#include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
+#include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
+#include "tt-metalium/experimental/prefetcher_pipe.hpp"                          // PrefetcherPipeIdentity
+#include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
+#include <impl/context/context_types.hpp>
+
+#include <umd/device/types/core_coordinates.hpp>          // CoreType
+#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+
+#include <atomic>
+#include <bitset>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <vector>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <tt_stl/span.hpp>
+
+namespace tt::tt_metal {
+
+class CircularBufferConfig;
+class IDevice;
+class JitBuildOptions;
+
+class HWCommandQueue;
+class EnqueueProgramCommand;
+
+class Kernel;
+
+namespace distributed {
+class MeshDevice;
+class MeshWorkload;
+class MeshWorkloadImpl;
+}  // namespace distributed
+
+namespace experimental {
+class GlobalCircularBuffer;
+class CrossNodeDFB;
+class PrefetcherPipeImpl;
+}  // namespace experimental
+
+namespace program_dispatch {
+
+void assemble_device_commands(
+    ProgramCommandSequence& program_command_sequence,
+    detail::ProgramImpl& program,
+    distributed::MeshDevice* mesh_device,
+    SubDeviceId sub_device_id,
+    bool use_prefetcher_cache);
+}
+
+struct KernelGroup {
+    uint32_t programmable_core_type_index{};
+    ContextId context_id_{DEFAULT_CONTEXT_ID};
+    CoreRangeSet core_ranges;
+    // kernel_ids are ordered by processor index
+    std::vector<KernelHandle> kernel_ids;
+    // RTA/CRTA layout for each kernel
+    std::vector<uint32_t> rta_sizes;
+    std::vector<uint32_t> crta_offsets;
+    std::vector<uint32_t> crta_sizes;
+    uint32_t total_rta_size{};
+    // kernel_text_offsets is indexed by processor index within core.
+    std::vector<uint32_t> kernel_text_offsets;
+    dev_msgs::launch_msg_t launch_msg;
+    dev_msgs::go_msg_t go_msg;
+
+    KernelGroup(
+        const detail::ProgramImpl& program,
+        uint32_t programmable_core_type_index,
+        std::vector<KernelHandle> kernel_ids,
+        uint64_t local_cb_mask,
+        uint32_t min_remote_cb_start_index,
+        const CoreRangeSet& new_ranges,
+        const dev_msgs::Factory& dev_msgs_factory);
+
+    CoreType get_core_type() const;
+};
+
+// Contains the program's worker memory map
+struct ProgramConfig {
+    uint32_t rta_offset;
+    uint32_t sem_offset;
+    uint32_t sem_size;
+    uint32_t cb_offset;
+    uint32_t cb_size;
+    uint32_t dfb_offset;
+    uint32_t dfb_size;
+    uint32_t local_cb_size;
+    // CrossNodeDFB dense index byte offset from kernel_config_base, or
+    // REMOTE_DFB_OFFSET_NONE when no CrossNodeDFB participants are present.
+    // Dense region: word[0]=num_slots, then num_slots × fixed 3-word entries
+    // [absolute_config_buffer_addr, entry_size, relay_dfb_id]. Full per-core pages
+    // (fifo/NOC/credits) live in a dedicated program-owned L1 config Buffer rather than
+    // inflating every worker-config ringbuffer slot.
+    uint32_t cross_node_dfb_offset = REMOTE_DFB_OFFSET_NONE;
+    // PrefetcherPipe dense index byte offset from kernel_config_base, or
+    // REMOTE_DFB_OFFSET_NONE when no PrefetcherPipe attachments are present.
+    uint32_t prefetcher_pipe_offset = REMOTE_DFB_OFFSET_NONE;
+    uint32_t kernel_text_offset;  // offset of first kernel bin
+    uint32_t kernel_text_size;    // max size of all kernel bins across all kernel groups
+};
+
+// Represents the status of Program Kernel Binaries in Device DRAM with respect to the dispatcher
+enum class ProgramBinaryStatus : uint8_t {
+    NotSent = 0,    // Binaries have not been written
+    InFlight = 1,   // Fast Dispatch Commands to write the binaries to DRAM has been issued
+    Committed = 2,  // Binaries have been committed to DRAM
+};
+
+namespace detail {
+
+struct ProgramOffsetsState {
+    // Base offset for Program Configs across all core types, wrt kernel config slot start address
+    uint32_t config_base_offset = 0;
+    // Incremental offset. Will correspond to the size of the program config per core, once the
+    // program is finalized.
+    uint32_t offset = 0;
+    // Unique RTA offset.
+    uint32_t rta_offset = 0;
+    // Semaphore offsets and sizes.
+    uint32_t sem_offset = 0;
+    uint32_t sem_size = 0;
+    // CB offsets and sizes.
+    uint32_t cb_offset = 0;
+    uint32_t cb_size = 0;
+    uint32_t local_cb_size = 0;
+    uint32_t dfb_offset = 0;
+    uint32_t dfb_size = 0;
+    // CrossNodeDFB offset from config base, or REMOTE_DFB_OFFSET_NONE if none.
+    uint32_t cross_node_dfb_offset = REMOTE_DFB_OFFSET_NONE;
+    // PrefetcherPipe offset from config base, or REMOTE_DFB_OFFSET_NONE if none.
+    uint32_t prefetcher_pipe_offset = REMOTE_DFB_OFFSET_NONE;
+    // Kernel binary offsets and sizes.
+    uint32_t kernel_text_offset = 0;
+    uint32_t kernel_text_size = 0;
+};
+
+// Callable types for dependency injection
+using KernelsGetter = std::function<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>&(uint32_t index)>;
+using KernelGroupsGetter = std::function<std::vector<std::shared_ptr<KernelGroup>>&(uint32_t index)>;
+using SemaphoresGetter = std::function<const std::vector<Semaphore>&()>;
+
+// Internal class for holding a group of programs for parallel compilation.
+class ProgramCompileGroup {
+private:
+    std::mutex mutex_;
+    std::unordered_map<IDevice*, std::unique_ptr<Program>> program_device_map_;
+
+public:
+    ProgramCompileGroup() = default;
+
+    ~ProgramCompileGroup();
+
+    // Add a program to the compile group. Throws if the program already exists in the group.
+    void add_program(IDevice* device, std::unique_ptr<Program> program);
+
+    // Compiles all programs in the group
+    void compile_all(bool force_slow_dispatch);
+
+    // Finalize program offsets for all programs in the group
+    void finalize_offsets();
+
+    // Write runtime args for all programs in the group
+    void write_runtime_args(bool force_slow_dispatch);
+
+    // Remove and return a program from the compile group
+    std::unique_ptr<Program> remove_program(IDevice* device);
+
+    void clear();
+
+    bool contains(IDevice* device);
+};
+
+// The internal implementation of the Program class. Program is a view of this class that's usable by API clients.
+class ProgramImpl : public std::enable_shared_from_this<ProgramImpl> {
+public:
+    explicit ProgramImpl(ContextId context_id = DEFAULT_CONTEXT_ID);
+
+    ProgramImpl(const ProgramImpl& other) = delete;
+    ProgramImpl& operator=(const ProgramImpl& other) = delete;
+
+    ProgramImpl(ProgramImpl&& other) = default;
+    ProgramImpl& operator=(ProgramImpl&& other) = default;
+
+    ~ProgramImpl() noexcept;
+
+    // CB mask width derived from kernel_config_msg_t::local_cb_mask type
+    using LocalCBMaskType = typename dev_msgs::kernel_config_msg_t::
+        FieldTraits<false, dev_msgs::kernel_config_msg_t::Field::local_cb_mask>::element_type;
+    static constexpr size_t cb_mask_width_ = sizeof(LocalCBMaskType) * 8;
+
+    ContextId get_context_id() const { return context_id_; }
+
+    void set_runtime_id(ProgramId id);
+    ProgramId get_runtime_id() const;
+    ProgramId get_id() const;
+    std::size_t num_kernels() const;
+    std::span<const std::shared_ptr<CircularBufferImpl>> circular_buffers() const;
+    const std::vector<Semaphore>& semaphores() const;
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers()
+        const;
+    KernelGroup* kernels_on_core(const CoreCoord& core, uint32_t programmable_core_type_index);
+    std::vector<std::shared_ptr<KernelGroup>>& get_kernel_groups(uint32_t programmable_core_type_index);
+    std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& get_kernels(uint32_t programmable_core_type_index);
+    void add_buffer(std::shared_ptr<Buffer> buf);
+    void release_buffers();
+    std::vector<std::shared_ptr<CircularBufferImpl>> circular_buffers_on_core(const CoreCoord& core) const;
+    std::vector<std::shared_ptr<CircularBufferImpl>> circular_buffers_on_corerange(const CoreRange& cr) const;
+    std::vector<CoreRange> circular_buffers_unique_coreranges() const;
+    std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_on_core(
+        const CoreCoord& core) const;
+    std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>
+    dataflow_buffers_on_corerange(const CoreRange& cr) const;
+    std::vector<CoreRange> dataflow_buffers_unique_coreranges() const;
+    std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(
+        const CoreCoord& core, CoreType core_type) const;
+    void init_semaphores(
+        const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const;
+    std::vector<std::vector<CoreCoord>> logical_cores() const;
+    void compile(IDevice* device, bool force_slow_dispatch = false);
+    void compile_and_allocate(IDevice* device, bool force_slow_dispatch);
+    void invalidate_circular_buffer_allocation();
+    void invalidate_dataflow_buffer_allocation();
+    // Always used in conjunction with validate_circular_buffer_region and compile
+    void allocate_circular_buffers(const IDevice* device);
+    void allocate_dataflow_buffers(const IDevice* device);
+    // Metal 2.0 only: allocate Program-scope L1 for each kernel's scratchpads,
+    // and patch the base address into the CRTA buffer
+    void allocate_scratchpads(const IDevice* device);
+    DeviceAddr reserve_program_local_l1(const IDevice* device, const CoreRangeSet& cores);
+    bool is_finalized() const;
+    bool is_compiled() const { return !compiled_.empty(); }
+    void set_finalized();
+    void allocate_kernel_bin_buf_on_device(IDevice* device);
+    bool is_cached() const { return this->cached_device_hash_.has_value(); }
+    ProgramBinaryStatus get_program_binary_status(ChipId device_id) const {
+        if (auto it = this->binaries_on_device_.find(device_id); it != this->binaries_on_device_.end()) {
+            return it->second;
+        }
+        return ProgramBinaryStatus::NotSent;
+    }
+    void set_cached(uint64_t device_hash) { this->cached_device_hash_ = device_hash; }
+    void set_reload_table(uint32_t addr, const CoreRangeSet& cores) {
+        this->reload_table_addr_ = addr;
+        this->reload_core_ranges_ = cores;
+    }
+    // What a kernel group's launch message carries: the table address if the group reloads, else 0.
+    // Every core of a group shares that launch message, so the nominated cores must cover the whole
+    // group or none of it: a partially covered group would hand its other cores a table they were
+    // not built for, and they would run another core's binary.
+    uint32_t get_reload_table_addr(const CoreRangeSet& group_cores) const {
+        if (!this->reload_table_addr_.has_value() || !this->reload_core_ranges_.intersects(group_cores)) {
+            return 0;
+        }
+        TT_FATAL(
+            this->reload_core_ranges_.contains(group_cores),
+            "reload_core_ranges {} covers only part of a kernel group {}: a kernel group shares one launch "
+            "message, so every core of the group must reload or none of it",
+            this->reload_core_ranges_,
+            group_cores);
+        return *this->reload_table_addr_;
+    }
+    const std::optional<uint64_t>& get_cached() const { return this->cached_device_hash_; }
+    void set_program_binary_status(ChipId device_id, ProgramBinaryStatus status);
+    std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
+    ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
+    const ProgramConfig& get_program_config(uint32_t programmable_core_type_index) const;
+    const std::vector<SubDeviceId>& determine_sub_device_ids(const IDevice* device);
+
+    void generate_trace_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache);
+    std::unordered_map<uint64_t, ProgramCommandSequence>& get_trace_cached_program_command_sequences() noexcept;
+
+    // debug/test
+    uint32_t get_sem_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type);
+    uint32_t get_cb_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type);
+    uint32_t get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
+    uint32_t get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
+    void set_last_used_command_queue_for_testing(HWCommandQueue* queue);
+    HWCommandQueue* get_last_used_command_queue() const;
+
+    void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
+
+    // Runtime binary reload: see internal::ReloadTable (ProgramDescriptor::reload_table).
+    std::optional<uint32_t> reload_table_addr_;
+    CoreRangeSet reload_core_ranges_;
+
+    void populate_dispatch_data(IDevice* device);
+
+    void finalize_offsets(IDevice* device);
+
+    // Helper function to finalize program offsets with custom getters. Returns the maximum kernel binaries size among
+    // all the programs, to determine whether the mesh workload can fit in the prefetcher cache all of the programs in
+    // it.
+    // context_id is which context the program and device belong to
+    static uint32_t finalize_program_offsets(
+        ContextId context_id,
+        IDevice* device,
+        const KernelsGetter& kernels_getter,
+        const KernelGroupsGetter& kernel_groups_getter,
+        const SemaphoresGetter& semaphores_getter,
+        ttsl::Span<ProgramImpl*> programs);
+
+    std::vector<uint32_t>& get_program_config_sizes() noexcept { return program_config_sizes_; }
+
+    CBHandle add_circular_buffer(const CoreRangeSet& core_range_set, const CircularBufferConfig& config);
+    CBHandle add_circular_buffer(
+        const CoreRangeSet& core_range_set,
+        const CircularBufferConfig& config,
+        const experimental::GlobalCircularBuffer& global_circular_buffer);
+
+    uint32_t add_dataflow_buffer(
+        const CoreRangeSet& core_range_set, const experimental::dfb::DataflowBufferConfig& config);
+
+    uint32_t assign_dfb_device_slot(const experimental::dfb::detail::DataflowBufferImpl& dfb) const;
+
+    // Declare an alias relationship: secondary shares primary's L1 address.
+    void set_dfb_alias(uint32_t primary_id, uint32_t secondary_id);
+
+    // Per-core CrossNodeDFB participant record. Host storage is sparse: a core only lists
+    // slots it participates in. Device config is still dense by program-wide remote_dfb_id
+    struct CrossNodeDFBParticipant {
+        uint8_t remote_dfb_id;
+        // Absolute L1 address of this slot's page in its dedicated sharded config Buffer.
+        uint32_t config_page_addr;
+        uint32_t entry_size;
+        uint8_t relay_dfb_id;
+    };
+
+    // Per-core PrefetcherPipe slot record. A slot is reserved (geometry only) before the program
+    // compiles and bound to a live pipe object afterwards: `pipe` / `config_page_addr` stay
+    // null / 0 until commit_prefetcher_pipe_slot_bind runs for this core. Dispatch reads the record only when a
+    // program is enqueued, by which point every participant must be bound.
+    struct PrefetcherPipeParticipant {
+        uint8_t prefetcher_pipe_id;
+        uint32_t config_page_addr;
+        uint32_t entry_size;
+        uint8_t relay_dfb_id;
+        // Live pipe this core's slot is bound to (non-owning; the handle must outlive the program).
+        experimental::PrefetcherPipeImpl* pipe = nullptr;
+    };
+
+    // Program-wide PrefetcherPipe slot (dense [0, num) id space, one per kernel accessor, i.e. per
+    // (kernel, PrefetcherPipeBinding)). The slot is the attachment point between a compiled
+    // Program and a live pipe: it holds only the geometry the program was built against, so
+    // finalize / dispatch never need a live pipe; the per-core PrefetcherPipeParticipant records
+    // are its device-side entries, filled when a pipe binds.
+    struct PrefetcherPipeSlot {
+        CoreRangeSet cores;           // every core the slot is present on in this program
+        CoreRangeSet receiver_cores;  // subset of `cores` where this slot's kernel is a pipe receiver
+        uint32_t ring_size = 0;
+        uint32_t entry_size = 0;
+        // Receiver-side credit lanes P this program declares for the slot (the receiver kernel's
+        // num_threads, which a relay DFB's num_producers must equal). 1 on sender-only slots; the
+        // bound pipe's live value is what dispatch packs.
+        uint32_t num_credit_lanes = 1;
+        std::optional<uint32_t> relay_dfb_host_id;
+    };
+
+    // Read-only accessor for dispatch to iterate CrossNodeDFB participant records.
+    const std::unordered_map<CoreCoord, std::vector<CrossNodeDFBParticipant>>& get_per_core_cross_node_dfbs() const {
+        return per_core_cross_node_dfbs_;
+    }
+
+    // Program-wide slot count (dense [0, num) remote_dfb_id space).
+    uint8_t num_cross_node_dfb_slots() const { return next_cross_node_dfb_slot_; }
+
+    // Wire a CrossNodeDFB onto its all_cores and store it under the new slot id.
+    uint8_t add_cross_node_dfb(experimental::CrossNodeDFB gdfb);
+
+    const experimental::CrossNodeDFB& get_cross_node_dfb(uint8_t remote_dfb_id) const;
+    experimental::CrossNodeDFB& get_cross_node_dfb(uint8_t remote_dfb_id);
+
+    // Mark a normal local DFB as the typed relay for a CrossNodeDFB this core participates in.
+    // The local DFB borrows the CrossNode data buffer; its device_slot is emitted
+    // only on receiver cores and consumed by CrossNodeDFB::bind_relay().
+    void register_cross_node_relay_dfb(
+        const CoreRangeSet& receiver_cores, uint8_t remote_dfb_id, uint32_t relay_dfb_host_id);
+
+    // Retarget the data ring of an existing CrossNodeDFB slot to `buffer`.
+    void update_dynamic_cross_node_dfb_address(uint8_t remote_dfb_id, Buffer& buffer);
+
+    const std::unordered_map<CoreCoord, std::vector<PrefetcherPipeParticipant>>& get_per_core_prefetcher_pipes() const {
+        return per_core_prefetcher_pipes_;
+    }
+
+    uint8_t num_prefetcher_pipe_slots() const { return static_cast<uint8_t>(prefetcher_pipe_slots_.size()); }
+    const PrefetcherPipeSlot& get_prefetcher_pipe_slot(uint8_t prefetcher_pipe_id) const;
+
+    // Reserve a PrefetcherPipe slot from geometry alone (before compile). `receiver_cores` is the
+    // subset of `cores` on which this slot's kernel consumes; `num_credit_lanes` is the P those
+    // receivers run with (1 when `receiver_cores` is empty). Returns the dense slot id the kernel
+    // constructs its PrefetcherPipe with.
+    uint8_t reserve_prefetcher_pipe_slot(
+        const CoreRangeSet& cores,
+        const CoreRangeSet& receiver_cores,
+        uint32_t ring_size,
+        uint32_t entry_size,
+        uint32_t num_credit_lanes);
+
+    // Binding a live pipe to a reserved slot on `cores` (a subset of the slot's cores whose sender /
+    // receiver split matches the pipe's) is split in two so a batch of bindings can be checked in
+    // full before any of it lands (a rejected SetProgramRunArgs must leave the program untouched):
+    //   check_prefetcher_pipe_slot_bind validates the pipe against the slot geometry, the sticky
+    //     per-core binding, the credit-lane transition and the relay ring agreement. No mutation.
+    //     `preflight` accumulates what earlier checks in the same batch would commit (lanes armed
+    //     per pipe, ring address per relay slot) so two bindings in one batch are checked against
+    //     each other as well as against committed state.
+    //   commit_prefetcher_pipe_slot_bind arms the pipe's credit lanes when receivers are bound,
+    //     points the slot's relay DFB (if any) at the pipe ring, and fills the per-core records.
+    //     Only valid right after a successful check of the same batch.
+    // Rebinding the same pipe is a no-op; a different pipe on an already-bound core is rejected.
+    // Legal after compile.
+    struct PrefetcherPipeBindPreflight {
+        std::unordered_map<const experimental::PrefetcherPipeImpl*, uint32_t> armed_lanes;
+        std::unordered_map<uint8_t, DeviceAddr> relay_rings;
+        // (slot, core) -> pipe checked earlier in this batch; a second pipe on the same core is a
+        // collision (e.g. two pipes carved with the same sender node under one sender accessor).
+        std::map<std::pair<uint8_t, CoreCoord>, const experimental::PrefetcherPipeImpl*> claimed;
+    };
+    void check_prefetcher_pipe_slot_bind(
+        uint8_t prefetcher_pipe_id,
+        const CoreRangeSet& cores,
+        const experimental::PrefetcherPipeImpl& prefetcher_pipe,
+        PrefetcherPipeBindPreflight& preflight) const;
+    void commit_prefetcher_pipe_slot_bind(
+        uint8_t prefetcher_pipe_id, const CoreRangeSet& cores, experimental::PrefetcherPipeImpl& prefetcher_pipe);
+
+    // The slot whose relay DFB is `relay_dfb_host_id`, if that DFB relays a pipe.
+    std::optional<uint8_t> get_prefetcher_pipe_id_for_relay(uint32_t relay_dfb_host_id) const;
+
+    // Finalize-time check for `kernel_group`: on every receiver core of a PrefetcherPipe slot,
+    // some Quasar DM kernel must run exactly P = the slot's credit lanes threads (hart tid binds
+    // to lane tid on device, where the guard is a debug-only ASSERT). Works from slot geometry, so
+    // it holds before any pipe is bound.
+    void validate_prefetcher_pipe_consumer_threads(const KernelGroup& kernel_group) const;
+
+    // Mark a borrowed-memory local DFB as the typed relay of a PrefetcherPipe slot on that slot's
+    // receiver cores. Validated against the slot geometry (before compile, before any pipe is
+    // bound); the relay's num_producers becomes the slot's credit lanes. The DFB is pointed at the
+    // ring when a pipe binds (immediately for pipes already bound). Its device_slot is emitted only
+    // on receiver cores and consumed by PrefetcherPipe::bind_relay().
+    void register_prefetcher_pipe_relay_dfb(uint8_t prefetcher_pipe_id, uint32_t relay_dfb_host_id);
+
+    // Metal 2.0: a PrefetcherPipeParameter's placement in this program. One parameter may feed
+    // several slots (one per accessor group that names it), on the cores where that group's
+    // kernel runs and the parameter's pipe is present. The spec names no sender: on a sender-role
+    // slot `cores` is every node the sender kernel runs on (one per pipe in the accessor group),
+    // and the bind claims the one that is the supplied pipe's sender.
+    struct PrefetcherPipeParameterBinding {
+        // Mesh the program was built for; a bound pipe must live on it (its config pages and ring
+        // are L1 on that mesh).
+        distributed::MeshDevice* device = nullptr;
+        CoreRangeSet receivers;
+        uint32_t ring_size = 0;
+        struct SlotCores {
+            uint8_t prefetcher_pipe_id;
+            CoreRangeSet cores;
+            bool sender_role = false;
+        };
+        std::vector<SlotCores> slots;
+        // Pipe object bound by SetProgramRunArgs; sticky for the program's lifetime.
+        experimental::PrefetcherPipeImpl* bound_pipe = nullptr;
+        // identity() of bound_pipe. Same-pipe checks compare this, not the address: a destroyed
+        // pipe's address can be reused by a new pipe, but its identity never is.
+        experimental::PrefetcherPipeIdentity bound_pipe_identity{0};
+    };
+    void register_prefetcher_pipe_parameter(const std::string& name, PrefetcherPipeParameterBinding&& binding);
+    const PrefetcherPipeParameterBinding* get_prefetcher_pipe_parameter(const std::string& name) const;
+    std::vector<std::string> get_registered_prefetcher_pipe_parameter_names() const;
+    // Bind each named parameter to its pipe, on every slot the parameter feeds. All-or-nothing:
+    // every pair is validated (pipe geometry against the parameter, then every slot bind) before
+    // the first mutation, so a rejected batch leaves the program and the pipes as they were. A
+    // parameter already bound to the same pipe is a no-op; to a different pipe: rejected.
+    struct PrefetcherPipeParameterBind {
+        std::string name;
+        experimental::PrefetcherPipeImpl* pipe;
+    };
+    void bind_prefetcher_pipe_parameters(std::span<const PrefetcherPipeParameterBind> binds);
+    // The cores a parameter's slot placement binds for `prefetcher_pipe`: the placement's cores
+    // on a receiver-role slot; on a sender-role slot, the pipe's sender node, which must be one
+    // of them (throws otherwise, naming parameter `name`).
+    static CoreRangeSet prefetcher_pipe_slot_bind_cores(
+        const std::string& name,
+        const PrefetcherPipeParameterBinding::SlotCores& slot_cores,
+        const experimental::PrefetcherPipeImpl& prefetcher_pipe);
+
+    // Allocates TCs and remapper configs, cannot be done on creation because we need to determine if a set of DFBs on a
+    // core require remapper being enabled
+    void finalize_dataflow_buffer_configs();
+
+    std::shared_ptr<CircularBufferImpl> get_circular_buffer(CBHandle cb_id) const;
+
+    std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl> get_dataflow_buffer(
+        uint32_t dfb_id) const;
+
+    // A single DFB size override request, resolved to a DFB id. Overrides are applied as a batch
+    // so an alias group can be validated for agreement before any mutation.
+    struct DfbSizeOverride {
+        uint32_t dfb_id;
+        std::optional<uint32_t> entry_size;
+        std::optional<uint32_t> num_entries;
+    };
+
+    void apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& overrides);
+
+    // Ensures that statically allocated circular buffers do not grow into L1 buffer space
+    void validate_circular_buffer_region(const IDevice* device);
+    void validate_dataflow_buffer_region(const IDevice* device);
+    // Ensures that circular buffer core ranges are within the device compute grid
+    void validate_circular_buffer_core_ranges(const IDevice* device);
+
+    // Deallocate circular buffers and unregister from devices
+    void deallocate_circular_buffers();
+
+    // CB tracking for SHM memory reporting
+    // Merge exact core-range unions before expanding to individual cores.
+    void merge_cb_l1_regions_by_core_range(
+        std::map<CoreRange, std::vector<std::pair<uint64_t, uint64_t>>>& regions_per_range) const;
+    static std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> expand_cb_l1_regions_per_core(
+        const std::map<CoreRange, std::vector<std::pair<uint64_t, uint64_t>>>& regions_per_range);
+
+    KernelHandle add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& core_type);
+
+    // Allocate the next free semaphore ID on the given cores and insert the semaphore.
+    // Returns the allocated ID; TT_FATALs if no slot can be found.
+    uint32_t create_semaphore(const CoreRangeSet& crs, uint32_t initial_value, CoreType core_type);
+
+    // Insert a semaphore at the caller-specified ID. Used by:
+    //   - Construction paths where the ID is already decided upstream (ProgramDescriptor ctor path).
+    //   - create_semaphore above
+    // The ProgramDescriptor path is something of a hack; it will eventually be deprecated in favor of Metal 2.0.
+    void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
+
+    // Validates that a semaphore ID is within bounds and not already in use on overlapping cores
+    void validate_semaphore_id(const CoreRangeSet& crs, uint32_t semaphore_id, CoreType core_type) const;
+
+    bool runs_on_noc_unicast_only_cores();
+    bool runs_on_noc_multicast_only_cores();
+
+    std::unordered_map<uint64_t, ProgramCommandSequence>& get_cached_program_command_sequences() noexcept;
+
+    void generate_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache);
+
+    // Dispatches detail::collect_kernel_meta, device is nullable
+    std::vector<detail::KernelMeta> collect_kernel_meta(IDevice* device) const;
+
+    // Metal 2.0: Mark this Program as created from ProgramSpec
+    // This enables legality checks against illegal mixing of Metal 2.0 idioms with legacy Programs.
+    void mark_created_from_spec() { created_from_spec_ = true; }
+    bool created_from_spec() const { return created_from_spec_; }
+
+    // Metal 2.0: Add name -> handle mappings (temporary indirection)
+    bool has_metal2_registry() const { return metal2_registry_.has_value(); }
+    void register_kernel_spec_name(const std::string& name, KernelHandle handle);
+    void register_dfb_spec_name(const std::string& name, uint32_t dfb_id);
+    void register_semaphore_spec_name(const std::string& name, uint32_t sem_id);
+    void register_tensor_parameter(
+        const std::string& name, const TensorSpec& spec, const experimental::TensorSpecRelaxations& relaxations);
+
+    // Metal 2.0: Get handle from name (TT_FATAL if not found)
+    KernelHandle get_kernel_handle(const std::string& name) const;
+    uint32_t get_dfb_handle(const std::string& name) const;
+    uint32_t get_semaphore_handle(const std::string& name) const;
+    // Returns nullptr if name is not registered (caller validates).
+    const TensorSpec* get_tensor_parameter_layout(const std::string& name) const;
+    // Returns the relaxations the parameter was registered with (default-constructed / strict if the
+    // name is unknown; the caller validates known-ness separately).
+    experimental::TensorSpecRelaxations get_tensor_parameter_relaxations(const std::string& name) const;
+    std::vector<std::string> get_registered_tensor_parameter_names() const;
+
+    // Metal 2.0: register that DFB `dfb_id` borrows its backing L1 memory from the MeshTensor
+    // bound to `tensor_parameter_name`.
+    void register_dfb_borrowed_binding(uint32_t dfb_id, const std::string& tensor_parameter_name);
+    const std::vector<std::pair<uint32_t, std::string>>& get_dfb_borrowed_bindings() const;
+
+    // Metal 2.0: Get kernel by name (TT_FATAL if not found)
+    std::shared_ptr<Kernel> get_kernel_by_spec_name(const std::string& name) const {
+        return get_kernel(get_kernel_handle(name));
+    }
+
+    // Metal 2.0: Runtime argument schema for validation.
+    // Includes both the named args (declaration-order name lists) and the vararg counts.
+    struct KernelRTASchema {
+        // Named arg names, in declaration order. Used to serialize ProgramRunArgs values
+        // into the dispatch buffer and to validate that every declared name is supplied.
+        std::vector<std::string> runtime_arg_names;
+        std::vector<std::string> common_runtime_arg_names;
+
+        // Precomputed name -> slot-index maps mirroring the *_names vectors above (slot = the arg's
+        // position within its dispatch-buffer section). Built once at Program construction so the
+        // hot UpdateProgramRunArgs path does O(1) lookups instead of rebuilding a map per call —
+        // that path is not bypassable via skip_validation, so per-call construction would be pure
+        // host overhead on the inner re-enqueue loop.
+        std::unordered_map<std::string, size_t> runtime_arg_name_to_slot;
+        std::unordered_map<std::string, size_t> common_runtime_arg_name_to_slot;
+
+        // Vararg counts. RTA vararg count is per-node (stored post-expansion from the
+        // user-facing schema, which groups nodes that share a count); CRTA vararg is a single
+        // broadcast count.
+        std::unordered_map<CoreCoord, size_t> num_runtime_varargs_per_node;
+        size_t num_common_runtime_varargs = 0;
+    };
+
+    // Metal 2.0: Runtime argument schema registration and lookup
+    void register_kernel_rta_schema(const std::string& name, const KernelRTASchema& schema);
+    const KernelRTASchema* get_kernel_rta_schema(const std::string& name) const;
+
+    // Metal 2.0: Get all registered kernel names (for completeness validation)
+    std::vector<std::string> get_registered_kernel_names() const;
+
+    // Metal 2.0: Pre-size RTA/CRTA host buffers from the registered schema + CRTA layout so
+    // finalize_offsets can compute dispatch sizes before SetProgramRunArgs fills values.
+    void reserve_runtime_arg_buffers();
+
+    bool program_run_args_initialized() const { return program_run_args_initialized_; }
+    void mark_program_run_args_initialized() { program_run_args_initialized_ = true; }
+
+private:
+    HWCommandQueue* last_used_command_queue_for_testing = nullptr;
+
+    // Buffers temporarily owned by the program
+    std::vector<std::shared_ptr<Buffer>> owned_buffer_pool;
+
+    // The buffer that holds the kernel/binaries/etc for this program
+    std::unordered_map<ChipId, std::shared_ptr<Buffer>> kernels_buffer_;
+    ProgramTransferInfo program_transfer_info;
+
+    bool finalized_{false};
+    bool program_run_args_initialized_{false};
+    // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
+    // the same device
+    std::optional<uint64_t> cached_device_hash_;
+
+    // TODO: Should map based on the hash of the configured sub-devices
+    // This way we can cache it agnostic of the device
+    std::unordered_map<ChipId, std::unordered_map<SubDeviceManagerId, std::vector<SubDeviceId>>> sub_device_ids_;
+
+    struct CircularBufferAllocator {
+        CircularBufferAllocator(const CoreRange& core_range_) : core_range(core_range_) {}
+
+        // Circular buffers are created and allocated at core range granularity
+        CoreRange core_range;
+
+        // Holds vector of addresses where circular buffers are allocated [start, end)
+        // There are multiple ranges because per core L1 regions are not in lockstep but circular buffers spanning
+        // multiple cores must share the same address To enable this, circular buffer address is the maximum address
+        // amongst all of its target cores This vector is sorted from lower to higher address spaces
+        std::vector<std::pair<uint64_t, uint64_t>> l1_regions;
+
+        // Returns address for next circular buffer
+        // Circular buffers are placed sequentially on a core so the next available address gets appended to the
+        // last L1 region
+        uint64_t get_cb_region_end() const { return this->l1_regions.empty() ? 0 : this->l1_regions.back().second; }
+
+        // If address is the end of the last L1 region, the last region is extended by size bytes,
+        //  otherwise address must be higher than existing regions and a new L1 region [address, size) is added
+        void mark_address(uint64_t address, uint64_t size, uint64_t base_address);
+
+        // Reset when circular buffer allocation is invalidated
+        void reset_available_addresses() { this->l1_regions.clear(); }
+    };
+    ContextId context_id_{DEFAULT_CONTEXT_ID};
+    uint32_t programmable_core_count_;
+    uint32_t max_dfbs_;  // Architecture-specific max DFBs
+    uint64_t id;        // Need to make non-const due to move constructor
+    uint64_t runtime_id{0};
+    static std::atomic<uint64_t> program_counter;
+    // Programmable core type index -> KernelHandle -> Kernel
+    std::vector<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>> kernels_;
+    std::vector<CoreCoord> grid_extent_;
+
+    std::vector<std::shared_ptr<CircularBufferImpl>> circular_buffers_;
+    std::unordered_map<CBHandle, std::shared_ptr<CircularBufferImpl>> circular_buffer_by_id_;
+    // Tracks which circular buffer indices are being used
+    std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_cb_indices_;
+    std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_local_cb_indices_;
+    std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_remote_cb_indices_;
+    std::unordered_map<ChipId, ProgramBinaryStatus> binaries_on_device_;
+    // Used to generate circular buffer addresses. There is one CircularBufferAllocator per unique CoreRange
+    std::vector<CircularBufferAllocator> cb_allocators_;
+    // Tracks which devices this program has CBs allocated on (for CB memory reporting)
+    std::unordered_set<const IDevice*> cb_devices_;
+
+    std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_;
+    std::unordered_map<uint32_t, std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>
+        dataflow_buffer_by_id_;
+
+    // CrossNodeDFB participants: per-core list of (remote_dfb_id, config_page_addr, entry_size).
+    // 0-based ascending index space; separate from DFB index space.
+    std::unordered_map<CoreCoord, std::vector<CrossNodeDFBParticipant>> per_core_cross_node_dfbs_;
+    // Host objects owned by this program, keyed by remote_dfb_id.
+    std::unordered_map<uint8_t, experimental::CrossNodeDFB> cross_node_dfbs_;
+    // Optional typed relay: remote_dfb_id → local DFB host id (from CreateCrossNodeRelayDataflowBuffer).
+    std::unordered_map<uint8_t, uint32_t> cross_node_relay_host_ids_;
+    uint8_t next_cross_node_dfb_slot_ = 0;
+
+    std::unordered_map<CoreCoord, std::vector<PrefetcherPipeParticipant>> per_core_prefetcher_pipes_;
+    // Slot geometry, indexed by prefetcher_pipe_id.
+    std::vector<PrefetcherPipeSlot> prefetcher_pipe_slots_;
+    // Metal 2.0: PrefetcherPipeParameter name -> placement + bound pipe.
+    std::unordered_map<std::string, PrefetcherPipeParameterBinding> prefetcher_pipe_parameters_;
+    tt::tt_metal::experimental::dfb::detail::TileCounterAllocator tile_counter_allocator_;
+    tt::tt_metal::experimental::dfb::detail::RemapperIndexAllocator remapper_index_allocator_;
+    tt::tt_metal::experimental::dfb::detail::TxnIdAllocator txn_id_allocator_;
+    std::unordered_map<CoreCoord, uint8_t> per_core_num_dfbs_;
+    std::vector<CircularBufferAllocator> dfb_allocators_;
+    std::unordered_map<PersistentL1Arena*, std::unordered_map<CoreCoord, PersistentL1Arena::Seal>> persistent_l1_seals_;
+
+    // Initial Metal 2.0 implementation uses a name registry to map names to handles.
+    // This indirection is simple and non-invasive, but less efficient than a direct mapping.
+    struct Metal2NameRegistry {
+        std::unordered_map<std::string, KernelHandle> kernel_handles;
+        std::unordered_map<std::string, uint32_t> dfb_handles;
+        std::unordered_map<std::string, uint32_t> semaphore_handles;
+        std::unordered_map<std::string, KernelRTASchema> kernel_rta_schemas;
+        // TensorParameter name -> the parameter's declared layout + loosening opt-ins.
+        // Used by ValidateProgramRunArgs to check that the supplied MeshTensor's spec matches
+        // the parameter's declared layout (with relaxations applied per the opt-in flags), and as
+        // the per-parameter lookup for completeness checks.
+        struct RegisteredTensorParameter {
+            TensorSpec spec;
+            experimental::TensorSpecRelaxations relaxations;
+        };
+        std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
+
+        // Borrowed-memory DFB bindings: each entry is (dfb_id, tensor_parameter_name).
+        std::vector<std::pair<uint32_t, std::string>> dfb_borrowed_bindings;
+    };
+    std::optional<Metal2NameRegistry> metal2_registry_;  // Only populated for Metal 2.0 programs
+
+    // True only for Programs minted by BuildProgramFromSpec (the sole legitimate source of
+    // Metal 2.0 kernels). Metal 2.0 named bindings require the ProgramSpec path; add_kernel
+    // rejects an is_metal2_kernel() kernel added to any other Program (e.g. the
+    // ProgramDescriptor ctor path or a legacy CreateKernel program).
+    bool created_from_spec_ = false;
+
+    // Semaphores
+    std::vector<Semaphore> semaphores_;
+
+    std::unordered_set<uint64_t> compiled_;
+    bool local_circular_buffer_allocation_needed_{false};
+    bool local_dataflow_buffer_allocation_needed_{false};
+
+    // Guards compile_and_allocate, which runs on every enqueue of a program, not just the first.
+    // Once a program has been compiled and laid out for a device, every step inside it is a no-op
+    // until something invalidates the CB or DFB layout, so it can be skipped wholesale. The
+    // invalidate_*_allocation hooks and the CB/DFB creation paths set this back to true. Recorded
+    // per device, since the layout steps also register the program against the device.
+    bool compile_and_allocate_needed_{true};
+    const IDevice* compile_and_allocate_device_{nullptr};
+    // For lockstep allocation without service-core claims, a single live L1 frontier
+    // check covers every static CB and DFB region validated during layout.
+    bool simple_l1_validation_cached_{false};
+    SubDeviceManagerId simple_l1_validation_manager_id_;
+    uint64_t simple_l1_validation_region_end_{0};
+
+    // Scratchpads (Metal 2.0 only)
+    // Guards allocate_scratchpads to ensure that it runs once per allocation cycle.
+    // Scratchpad allocation occurs once on Program creation, and is re-run if the DFB layout
+    // is recomputed (due to a DFB size override at runtime).
+    bool scratchpads_allocated_{false};
+
+    static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
+    std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
+    std::vector<std::vector<uint8_t>> core_to_kernel_group_index_table_;
+
+    std::vector<ProgramConfig> program_configs_;
+    // Counts how much space is needed for each core + each launch buffer msg queue.
+    std::vector<uint32_t> program_config_sizes_;
+
+    uint32_t kernel_bins_sizeB = 0;
+
+    // The rta_updates from one cached command sequence may reference data in another cached command sequence.
+    std::unordered_map<uint64_t, ProgramCommandSequence> cached_program_command_sequences_;
+    std::unordered_map<uint64_t, ProgramCommandSequence> trace_cached_program_command_sequences_;
+
+    void finalize_single_dfb_config(
+        std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>& dfb,
+        const CoreCoord& core,
+        bool core_has_remapper);
+
+    CBHandle add_circular_buffer_(const std::shared_ptr<CircularBufferImpl>& circular_buffer);
+
+    void set_remote_circular_buffer_init(const std::shared_ptr<Kernel>& kernel) const;
+
+    // Set data format and tile metadata in `build_options` for every circular buffer
+    // intersecting `crs`.
+    void set_cb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
+
+    // Same as `set_cb_data_fmt_and_tile`, but for dataflow buffers.
+    void set_dfb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
+
+    void update_kernel_groups(uint32_t programmable_core_type_index);
+
+    uint32_t& get_program_config_size(uint32_t programmable_core_type_index);
+
+    void set_launch_msg_sem_offsets();
+
+    void set_program_offsets_and_sizes(uint32_t index, const ProgramOffsetsState& state);
+    void set_program_attrs_across_core_types(IDevice* device);
+
+    const ProgramTransferInfo& get_program_transfer_info() const noexcept;
+    std::shared_ptr<Buffer> get_kernels_buffer(IDevice* device) const noexcept;
+
+    friend void program_dispatch::assemble_device_commands(
+        ProgramCommandSequence& program_command_sequence,
+        ProgramImpl& program,
+        distributed::MeshDevice* mesh_device,
+        SubDeviceId sub_device_id,
+        bool use_prefetcher_cache);
+
+    friend HWCommandQueue;
+    friend EnqueueProgramCommand;
+    friend Program;
+    friend distributed::MeshWorkload;
+    friend distributed::MeshWorkloadImpl;
+};
+
+}  // namespace detail
+
+// Launch `program` on every device in `mesh_device` via EnqueueMeshWorkload, blocking until completion.
+//
+// Exception: a service workload (a program targeting claimed service cores) is routed by
+// EnqueueMeshWorkload to slow dispatch, which rings GO and returns without waiting - `blocking` is not
+// consulted on that path. Callers that launch onto claimed service cores must synchronize themselves.
+//
+// @return MeshWorkload that takes ownership of the program.
+distributed::MeshWorkload LaunchProgram(distributed::MeshDevice& mesh_device, Program&& program);
+
+// Launch `program` on every device in `mesh_device` via EnqueueMeshWorkload, without blocking.
+//
+// @return MeshWorkload that takes ownership of the program, and must be kept alive until Finish (or a blocking enqueue)
+// on the same command queue. The reason is that MeshWorkload owns kernel-binary DRAM that fast dispatch may
+// still prefetch after this function returns.
+[[nodiscard]] distributed::MeshWorkload LaunchProgramAsync(distributed::MeshDevice& mesh_device, Program&& program);
+
+}  // namespace tt::tt_metal

@@ -1,0 +1,60 @@
+name: "Check for BW/latency generated files"
+description: "Checks if BW/latency data was created from fabric test"
+inputs:
+  path:
+    description: "Path where data should be located"
+    required: false
+    default: "."
+  arch:
+    description: "Architecture name (e.g., wormhole_b0)"
+    required: false
+    default: "wormhole_b0"
+  check_bw:
+    description: "If action should check for BW results"
+    required: false
+    default: "false"
+  check_latency:
+    description: "If action should check for latency results"
+    required: false
+    default: "false"
+outputs:
+  has_benchmark_data:
+    description: "Whether benchmark data files were found"
+    value: ${{ steps.check-files.outputs.has_benchmark_data }}
+  has_latency_data:
+    description: "Whether latency data files were found"
+    value: ${{ steps.check-files.outputs.has_latency_data }}
+runs:
+  using: "composite"
+  steps:
+    - name: Check for files
+      id: check-files
+      shell: bash
+      run: |
+        # Change dir to path if its set
+        # Example: when running in containers the batchfile and data files are located under /work
+        cd ${{ inputs.path }}
+
+        if [ "${{ inputs.check_bw }}" == "true" ]; then
+          if [ -f "generated/fabric/bandwidth_summary_results_${{ inputs.arch }}_upload.csv" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            echo "Benchmark files found, will upload to database"
+          else
+            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+            echo "Benchmark files not found, database upload will be skipped"
+          fi
+        else
+          echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+        fi
+
+        if [ "${{ inputs.check_latency }}" == "true" ]; then
+          if [ -f "generated/fabric/latency_summary_results_${{ inputs.arch }}_upload.csv" ]; then
+            echo "has_latency_data=true" >> $GITHUB_OUTPUT
+            echo "Latency files found, will upload to database"
+          else
+            echo "has_latency_data=false" >> $GITHUB_OUTPUT
+            echo "Latency files not found, database upload will be skipped"
+          fi
+        else
+          echo "has_latency_data=false" >> $GITHUB_OUTPUT
+        fi

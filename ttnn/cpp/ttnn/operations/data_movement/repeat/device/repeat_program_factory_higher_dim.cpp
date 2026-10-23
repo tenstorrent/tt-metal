@@ -1,0 +1,213 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_higher_dim.hpp"
+
+#include <cstdint>
+#include <filesystem>
+
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_common.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace ttnn::prim {
+
+using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
+
+ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryHigherDim::create_program_artifacts(
+    const RepeatParams& operation_attributes, const RepeatInputs& tensor_args, Tensor& tensor_return_value) {
+    const auto& input = tensor_args.input;
+    const auto& output = tensor_return_value;
+    const uint32_t num_repeats = operation_attributes.m_num_repeats;
+    // get datum size
+    const uint32_t data_size = input.element_size();
+    MeshDevice* device = input.device();
+    // Multi device pre-computation
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    const uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    const uint32_t num_cores_total = num_cores_x * num_cores_y;
+    const CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+    const CoreRangeSet total_core_ranges{total_cores};
+
+    ttnn::Shape input_log_shape = ttnn::Shape(input.logical_shape().view());
+    ttnn::Shape output_log_shape = ttnn::Shape(output.logical_shape().view());
+
+    uint32_t page_size_bytes;
+    uint32_t number_of_higher_pages;
+    uint32_t number_of_lower_pages;
+    uint32_t number_of_rep_dim_pages;
+
+    if (operation_attributes.m_tile_page_size_bytes > 0) {
+        // Tile-native: host supplies tile-space page counts.
+        page_size_bytes = operation_attributes.m_tile_page_size_bytes;
+        number_of_higher_pages = operation_attributes.m_tile_higher_pages;
+        number_of_rep_dim_pages = operation_attributes.m_tile_rep_dim_pages;
+        number_of_lower_pages = operation_attributes.m_tile_lower_pages;
+    } else {
+        page_size_bytes = input_log_shape[3] * data_size;
+        TT_FATAL(
+            page_size_bytes == output_log_shape[3] * data_size,
+            "Data size of output does not match requirement for repeat higher dim");
+        // Per-core page count so read/write start on page boundaries.
+        number_of_higher_pages = input_log_shape[0];
+        number_of_rep_dim_pages = input_log_shape[1];
+        number_of_lower_pages = input_log_shape[2];
+    }
+    uint32_t read_start_page = 0;
+    Buffer* src_buffer = input.buffer();
+    Buffer* dst_buffer = output.buffer();
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    const uint32_t cb_size_bytes = (READ_ALIGNMENT * 2) + page_size_bytes;
+
+    // TILE/sharded -> tile; RM sharded -> rm_sharded; RM interleaved -> rm_interleaved.
+    const bool is_tile_native = operation_attributes.m_tile_page_size_bytes > 0;
+    const bool src_sharded = src_buffer->buffer_distribution_spec().has_value();
+    const bool dst_sharded = dst_buffer->buffer_distribution_spec().has_value();
+    const bool needs_alignment_cb = !is_tile_native && !src_sharded && !dst_sharded;
+
+    // Metal 2.0 named resource ids. Declared function-local so the unity build (both repeat factory
+    // .cpp files land in one translation unit) sees no duplicate anonymous-namespace symbols.
+    const KernelSpecName READER{"reader"};
+    const ScratchpadSpecName SRC0{"src0"};
+    const ScratchpadSpecName SRC1{"src1"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+
+    // One page each, staging a page for the read-repeat-write. Each is a reader-private scratchpad the
+    // reader fills and drains itself. (Formerly self-loop DFBs; a single DM kernel filled and drained
+    // each, so the FIFO synchronized nothing — a shape Quasar rejects.)
+    Group<ScratchpadSpec> scratchpads;
+    scratchpads.push_back(ScratchpadSpec{
+        .unique_id = SRC0,
+        .size_per_node = cb_size_bytes,  // entry_size * num_entries (1)
+    });
+    // Second buffer only for interleaved RM (write-alignment scratchpad).
+    if (needs_alignment_cb) {
+        scratchpads.push_back(ScratchpadSpec{
+            .unique_id = SRC1,
+            .size_per_node = cb_size_bytes,
+        });
+    }
+
+    // The reader privately fills and drains each scratchpad (one accessor name each).
+    Group<ScratchpadBinding> scratchpad_bindings = {
+        ScratchpadBinding{.scratchpad_spec_name = SRC0, .accessor_name = "in0"}};
+    if (needs_alignment_cb) {
+        scratchpad_bindings.push_back(ScratchpadBinding{.scratchpad_spec_name = SRC1, .accessor_name = "in1"});
+    }
+
+    std::filesystem::path kernel_source;
+    if (is_tile_native) {
+        kernel_source = "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/repeat_higher_dim_tile.cpp";
+    } else if (src_sharded || dst_sharded) {
+        kernel_source = "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/repeat_higher_dim_rm_sharded.cpp";
+    } else {
+        kernel_source =
+            "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/repeat_higher_dim_rm_interleaved.cpp";
+    }
+
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = kernel_source,
+        .scratchpad_bindings = scratchpad_bindings,
+        .tensor_bindings =
+            {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"},
+             TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
+        .compile_time_args =
+            {{"original_page_size_bytes", page_size_bytes},
+             {"LOWER_DIMS", number_of_lower_pages},
+             {"REP_DIM", number_of_rep_dim_pages}},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"higher_dim_start", "higher_dim_end", "lower_dim_start", "lower_dim_end", "repetitions", "nop"}},
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    };
+
+    KernelRunArgs reader_run_args{.kernel = READER};
+    uint32_t done = 0;
+    // Determine runtime arguments
+    const bool divide_on_higher = number_of_higher_pages > number_of_lower_pages;
+
+    const uint32_t responsibility_chunk =
+        (divide_on_higher ? number_of_higher_pages : number_of_lower_pages) / num_cores_total;
+    const uint32_t responsibility_mod =
+        (divide_on_higher ? number_of_higher_pages : number_of_lower_pages) % num_cores_total;
+    uint32_t core_count = 0;
+    for (uint32_t core_x = 0; core_x < num_cores_x; core_x++) {
+        for (uint32_t core_y = 0; core_y < num_cores_y; core_y++) {
+            const uint32_t responsibility =
+                core_count++ < responsibility_mod ? responsibility_chunk + 1 : responsibility_chunk;
+            const CoreCoord core = {core_x, core_y};
+            if (done == 1) {
+                // Idle core: zero args + early exit.
+                AddRuntimeArgsForNode(
+                    reader_run_args.runtime_arg_values,
+                    core,
+                    {{"higher_dim_start", uint32_t{0}},
+                     {"higher_dim_end", uint32_t{0}},
+                     {"lower_dim_start", uint32_t{0}},
+                     {"lower_dim_end", uint32_t{0}},
+                     {"repetitions", uint32_t{0}},
+                     {"nop", uint32_t{1}}});
+            } else if (divide_on_higher) {
+                const uint32_t start_of_read = read_start_page;
+                uint32_t end_of_read = read_start_page + responsibility;
+                end_of_read = end_of_read < number_of_higher_pages ? end_of_read : number_of_higher_pages;
+
+                AddRuntimeArgsForNode(
+                    reader_run_args.runtime_arg_values,
+                    core,
+                    {{"higher_dim_start", start_of_read},
+                     {"higher_dim_end", end_of_read},
+                     {"lower_dim_start", uint32_t{0}},
+                     {"lower_dim_end", number_of_lower_pages},
+                     {"repetitions", num_repeats},
+                     {"nop", uint32_t{0}}});
+                read_start_page = end_of_read;
+                done = (end_of_read == number_of_higher_pages) ? 1 : 0;
+            } else {
+                const uint32_t start_of_read = read_start_page;
+                uint32_t end_of_read = read_start_page + responsibility;
+                end_of_read = end_of_read < number_of_lower_pages ? end_of_read : number_of_lower_pages;
+
+                AddRuntimeArgsForNode(
+                    reader_run_args.runtime_arg_values,
+                    core,
+                    {{"higher_dim_start", uint32_t{0}},
+                     {"higher_dim_end", number_of_higher_pages},
+                     {"lower_dim_start", start_of_read},
+                     {"lower_dim_end", end_of_read},
+                     {"repetitions", num_repeats},
+                     {"nop", uint32_t{0}}});
+                read_start_page = end_of_read;
+                done = (end_of_read == number_of_lower_pages) ? 1 : 0;
+            }
+        }
+    }
+
+    ProgramSpec spec{
+        .name = "repeat_higher_dim",
+        .kernels = {reader},
+        .scratchpads = scratchpads,
+        .tensor_parameters =
+            {TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()},
+             TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()}},
+        .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER}, .target_nodes = total_core_ranges}},
+    };
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args)};
+    run_args.tensor_args = {{INPUT, input.mesh_tensor()}, {OUTPUT, output.mesh_tensor()}};
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+}  // namespace ttnn::prim

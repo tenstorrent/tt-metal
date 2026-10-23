@@ -1,0 +1,127 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+from typing import List
+
+from fuser.base_unpacker import Unpacker
+from fuser.block_data import BlockData
+from fuser.fpu_node import FpuNode
+from fuser.fuser_config import GlobalConfig
+from fuser.golden.unpack.matmul import unpack_matmul_golden
+from fuser.indexing import InvocationGranularity
+from fuser.l1_operation import L1Operation
+
+
+class MatmulUnpacker(Unpacker):
+    granularity = InvocationGranularity.BLOCK
+    per_block_init = True
+    reverse_operands = True
+
+    golden_fn = staticmethod(unpack_matmul_golden)
+
+    def get_headers(self) -> List[str]:
+        return [
+            "llk_unpack_AB_matmul.h",
+            "llk_unpack_common.h",
+        ]
+
+    def perf_set_valid(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        num_cols = compute_unit.src_a.tile_shape.total_col_dim()
+        kt_dim = compute_unit.src_a.dimensions[1] // num_cols
+        rt_dim = block.block_rows
+        ct_dim = block.block_cols
+        return f"_perf_unpack_matmul_mock(1, {rt_dim}, {kt_dim}, {ct_dim});\n"
+
+    def perf_clear_valid(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        num_cols = compute_unit.src_a.tile_shape.total_col_dim()
+        kt_dim = compute_unit.src_a.dimensions[1] // num_cols
+        rt_dim = block.block_rows
+        ct_dim = block.block_cols
+        return f"_perf_math_matmul_mock(1, {rt_dim}, {kt_dim}, {ct_dim});\n"
+
+    def init(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        operand_a, operand_b = self.physical_operands(compute_unit)
+        face_r_dim_a = operand_a.tile_shape.face_r_dim
+        face_r_dim_b = operand_b.tile_shape.face_r_dim
+        num_faces_a = operand_a.tile_shape.total_num_faces()
+        num_faces_b = operand_b.tile_shape.total_num_faces()
+        partial_face_a = str(operand_a.tile_shape.total_row_dim() < 32).lower()
+        partial_face_b = str(operand_b.tile_shape.total_row_dim() < 32).lower()
+        rt_dim = block.block_rows
+        ct_dim = block.block_cols
+        num_cols = compute_unit.src_a.tile_shape.total_col_dim()
+        kt_dim = compute_unit.src_a.dimensions[1] // num_cols
+        transpose = compute_unit.transpose_within_face.cpp_enum_value
+
+        return (
+            f"_llk_unpack_AB_matmul_init_<>({transpose}, {ct_dim}, {rt_dim}, {kt_dim}, "
+            f"{face_r_dim_a}, {face_r_dim_b}, {num_faces_a}, {num_faces_b}, "
+            f"{partial_face_a}, {partial_face_b});\n"
+        )
+
+    def unpack(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        rt_dim = block.block_rows
+        ct_dim = block.block_cols
+        num_cols = compute_unit.src_a.tile_shape.total_col_dim()
+        kt_dim = compute_unit.src_a.dimensions[1] // num_cols
+        unpack_tile_size_a = compute_unit.src_a.tile_size
+        unpack_tile_size_b = compute_unit.src_b.tile_size
+        full_ct_dim = (
+            compute_unit.src_b.dimensions[1]
+            // compute_unit.src_b.tile_shape.total_col_dim()
+        )
+        operand_a, operand_b = self.physical_operands(compute_unit)
+        src_a_partial_face = str(operand_a.tile_shape.total_row_dim() < 32).lower()
+        src_b_partial_face = str(operand_b.tile_shape.total_row_dim() < 32).lower()
+        buffer_a = compute_unit.src_a.cpp_name
+        buffer_b = compute_unit.src_b.cpp_name
+
+        return (
+            f"    {{\n"
+            f"        for (std::uint32_t kt = 0; kt < {kt_dim}; ++kt) {{\n"
+            f"            std::uint32_t srca_tile_idx = ({block.tile_id_src_a}) + kt;\n"
+            f"            std::uint32_t srcb_tile_idx = ({block.tile_id_src_b}) + kt * {full_ct_dim};\n"
+            f"            _llk_unpack_AB_matmul_<>(\n"
+            f"                L1_ADDRESS({buffer_a}[0]), L1_ADDRESS({buffer_b}[0]),\n"
+            f"                srca_tile_idx, srcb_tile_idx,\n"
+            f"                {unpack_tile_size_a}, {unpack_tile_size_b},\n"
+            f"                {src_a_partial_face}, {src_b_partial_face},\n"
+            f"                {ct_dim}, {rt_dim}, {kt_dim}\n"
+            f"            );\n"
+            f"        }}\n"
+            f"    }}\n"
+        )
+
+    def uninit(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        return f"_llk_unpack_AB_matmul_uninit_();\n"

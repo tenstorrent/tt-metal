@@ -1,0 +1,363 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Tests for orchestrator internals — diff filtering."""
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from bug_checker.github_client import PRInfo
+from bug_checker.llm import Finding
+from bug_checker.orchestrator import BugCheckFailed, _filter_diff_for_rule, run_bug_check
+from bug_checker.output import RERUN_FOOTER
+from bug_checker.rules import Rule
+
+
+def _rule(paths: list[str]) -> Rule:
+    return Rule(
+        id="test-rule",
+        file="test.md",
+        severity="warning",
+        suggest_fix=False,
+        model=None,
+        paths=paths,
+        labels=[],
+    )
+
+
+DIFF_TWO_FILES = """\
+diff --git a/foo/bar.cpp b/foo/bar.cpp
+index abc..def 100644
+--- a/foo/bar.cpp
++++ b/foo/bar.cpp
+@@ -1,3 +1,4 @@
++// added line
+ existing line
+diff --git a/baz/qux.cpp b/baz/qux.cpp
+index 111..222 100644
+--- a/baz/qux.cpp
++++ b/baz/qux.cpp
+@@ -5,2 +5,3 @@
++// another added line
+ other line
+"""
+
+
+def test_returns_full_diff_when_no_files_match_paths():
+    """When no changed files match the rule's path globs, the rule was selected
+    by label only — return the full diff so label-only rules still run."""
+    rule = _rule(["ttnn/cpp/**"])
+    result = _filter_diff_for_rule(DIFF_TWO_FILES, ["foo/bar.cpp", "baz/qux.cpp"], rule)
+    assert result == DIFF_TWO_FILES
+
+
+def test_returns_full_diff_when_changed_files_list_is_empty():
+    """Empty changed_files means no path match is possible — same label-only fallback."""
+    rule = _rule(["foo/**"])
+    result = _filter_diff_for_rule(DIFF_TWO_FILES, [], rule)
+    assert result == DIFF_TWO_FILES
+
+
+def test_keeps_only_matching_section():
+    rule = _rule(["foo/**"])
+    result = _filter_diff_for_rule(DIFF_TWO_FILES, ["foo/bar.cpp", "baz/qux.cpp"], rule)
+    assert "foo/bar.cpp" in result
+    assert "baz/qux.cpp" not in result
+
+
+def test_keeps_multiple_matching_sections():
+    rule = _rule(["foo/**", "baz/**"])
+    result = _filter_diff_for_rule(DIFF_TWO_FILES, ["foo/bar.cpp", "baz/qux.cpp"], rule)
+    assert "foo/bar.cpp" in result
+    assert "baz/qux.cpp" in result
+
+
+def test_full_section_content_is_preserved():
+    rule = _rule(["foo/**"])
+    result = _filter_diff_for_rule(DIFF_TWO_FILES, ["foo/bar.cpp"], rule)
+    assert "// added line" in result
+    assert "@@ -1,3 +1,4 @@" in result
+
+
+def test_last_section_is_flushed():
+    # The last file in the diff is the one that needs the explicit end-of-loop flush
+    rule = _rule(["baz/**"])
+    result = _filter_diff_for_rule(DIFF_TWO_FILES, ["foo/bar.cpp", "baz/qux.cpp"], rule)
+    assert "baz/qux.cpp" in result
+    assert "// another added line" in result
+
+
+def test_single_file_diff():
+    diff = (
+        "diff --git a/only/file.cpp b/only/file.cpp\n"
+        "index 000..111 100644\n"
+        "--- a/only/file.cpp\n"
+        "+++ b/only/file.cpp\n"
+        "@@ -1 +1,2 @@\n"
+        "+// new\n"
+        " old\n"
+    )
+    rule = _rule(["only/**"])
+    result = _filter_diff_for_rule(diff, ["only/file.cpp"], rule)
+    assert "only/file.cpp" in result
+    assert "// new" in result
+
+
+def test_empty_diff_returns_empty():
+    rule = _rule(["foo/**"])
+    assert _filter_diff_for_rule("", ["foo/bar.cpp"], rule) == ""
+
+
+@patch("bug_checker.orchestrator.post_pr_comment")
+@patch("bug_checker.orchestrator.LLMSession")
+@patch("bug_checker.orchestrator.select_rules")
+@patch("bug_checker.orchestrator.load_rules")
+def test_run_bug_check_fails_closed_when_llm_rule_errors(mock_load, mock_select, mock_llm_cls, mock_post):
+    rule = _rule(["foo/**"])
+    mock_load.return_value = [rule]
+    mock_select.return_value = [rule]
+
+    mock_session = MagicMock()
+    mock_session.analyze_rule.side_effect = RuntimeError("rate limited")
+    mock_llm_cls.side_effect = [MagicMock(), mock_session]
+
+    pr = PRInfo(
+        number=99,
+        title="Test PR",
+        base_sha="aaa",
+        head_sha="bbb",
+        diff=DIFF_TWO_FILES,
+        changed_files=["foo/bar.cpp", "baz/qux.cpp"],
+        labels=[],
+    )
+
+    with patch("bug_checker.orchestrator.print_failure") as mock_print_failure:
+        with pytest.raises(BugCheckFailed):  # allow-pytest.raises: not a device error
+            run_bug_check(pr, post_comments=True)
+
+    mock_print_failure.assert_called_once_with(
+        "Bug Checker failed because one or more LLM analyses did not complete",
+        ["test-rule"],
+    )
+
+    mock_post.assert_called_once()
+    body = mock_post.call_args[1]["body"]
+    assert "Bug Checker Failed" in body
+    assert "`test-rule`" in body
+    assert "exits non-zero" in body
+
+
+@patch("bug_checker.orchestrator.post_pr_comment")
+@patch("bug_checker.orchestrator.select_rules")
+@patch("bug_checker.orchestrator.load_rules")
+def test_run_bug_check_no_matched_rules_comment_has_rerun_footer(mock_load, mock_select, mock_post):
+    mock_load.return_value = [_rule(["foo/**"])]
+    mock_select.return_value = []
+
+    pr = PRInfo(
+        number=99,
+        title="Test PR",
+        base_sha="aaa",
+        head_sha="bbb",
+        diff="",
+        changed_files=["docs/readme.md"],
+        labels=[],
+    )
+
+    result = run_bug_check(pr, post_comments=True)
+    assert result == []
+    mock_post.assert_called_once()
+    body = mock_post.call_args[1]["body"]
+    assert "No rules matched the files in this PR" in body
+    assert body.endswith(RERUN_FOOTER)
+
+
+@patch("bug_checker.orchestrator.post_pr_comment")
+@patch("bug_checker.orchestrator.select_rules")
+@patch("bug_checker.orchestrator.load_rules")
+def test_run_bug_check_suppresses_no_rules_matched_comment_when_quiet(mock_load, mock_select, mock_post):
+    """suppress_empty_result=True means an automatic run with no matched rules
+    posts nothing at all — that comment has no actionable signal."""
+    mock_load.return_value = [_rule(["foo/**"])]
+    mock_select.return_value = []
+
+    pr = PRInfo(
+        number=99,
+        title="Test PR",
+        base_sha="aaa",
+        head_sha="bbb",
+        diff="",
+        changed_files=["docs/readme.md"],
+        labels=[],
+    )
+
+    result = run_bug_check(pr, post_comments=True, suppress_empty_result=True)
+    assert result == []
+    mock_post.assert_not_called()
+
+
+@patch("bug_checker.orchestrator.post_pr_comment")
+@patch("bug_checker.orchestrator.LLMSession")
+@patch("bug_checker.orchestrator.select_rules")
+@patch("bug_checker.orchestrator.load_rules")
+def test_run_bug_check_suppresses_summary_when_quiet_and_clean(mock_load, mock_select, mock_llm_cls, mock_post):
+    """suppress_empty_result=True with matched rules but zero findings, zero
+    failures, and zero truncated rules posts no summary comment either."""
+    rule = _rule(["foo/**"])
+    mock_load.return_value = [rule]
+    mock_select.return_value = [rule]
+
+    mock_session = MagicMock()
+    mock_session.analyze_rule.return_value = []
+    mock_llm_cls.side_effect = [MagicMock(), mock_session]
+
+    pr = PRInfo(
+        number=99,
+        title="Test PR",
+        base_sha="aaa",
+        head_sha="bbb",
+        diff=DIFF_TWO_FILES,
+        changed_files=["foo/bar.cpp"],
+        labels=[],
+    )
+
+    result = run_bug_check(pr, post_comments=True, suppress_empty_result=True)
+    assert result == []
+    mock_post.assert_not_called()
+
+
+@patch("bug_checker.orchestrator.post_pr_comment")
+@patch("bug_checker.orchestrator.LLMSession")
+@patch("bug_checker.orchestrator.select_rules")
+@patch("bug_checker.orchestrator.load_rules")
+def test_run_bug_check_still_posts_findings_when_quiet(mock_load, mock_select, mock_llm_cls, mock_post):
+    """suppress_empty_result=True must never hide real findings — only the
+    genuinely-empty case is silenced."""
+    rule = _rule(["foo/**"])
+    mock_load.return_value = [rule]
+    mock_select.return_value = [rule]
+
+    finding = Finding(
+        rule_id="test-rule",
+        file="foo/bar.cpp",
+        line=1,
+        message="Something is wrong here.",
+        severity="warning",
+    )
+    mock_session = MagicMock()
+    mock_session.analyze_rule.return_value = [finding]
+    mock_llm_cls.side_effect = [MagicMock(), mock_session]
+
+    pr = PRInfo(
+        number=99,
+        title="Test PR",
+        base_sha="aaa",
+        head_sha="bbb",
+        diff=DIFF_TWO_FILES,
+        changed_files=["foo/bar.cpp"],
+        labels=[],
+    )
+
+    result = run_bug_check(pr, post_comments=True, suppress_empty_result=True)
+    assert result == [finding]
+    # One inline comment (line 1 is in the diff) plus the summary comment.
+    assert mock_post.call_count == 2
+    summary_body = mock_post.call_args_list[-1][1]["body"]
+    assert "Bug Checker Results" in summary_body
+
+
+@patch("bug_checker.orchestrator.post_pr_comment")
+@patch("bug_checker.orchestrator.LLMSession")
+@patch("bug_checker.orchestrator.select_rules")
+@patch("bug_checker.orchestrator.load_rules")
+def test_run_bug_check_still_posts_failure_when_quiet(mock_load, mock_select, mock_llm_cls, mock_post):
+    """suppress_empty_result=True must never hide a failed analysis — silence is
+    only for the genuinely-clean case, never for a broken run."""
+    rule = _rule(["foo/**"])
+    mock_load.return_value = [rule]
+    mock_select.return_value = [rule]
+
+    mock_session = MagicMock()
+    mock_session.analyze_rule.side_effect = RuntimeError("rate limited")
+    mock_llm_cls.side_effect = [MagicMock(), mock_session]
+
+    pr = PRInfo(
+        number=99,
+        title="Test PR",
+        base_sha="aaa",
+        head_sha="bbb",
+        diff=DIFF_TWO_FILES,
+        changed_files=["foo/bar.cpp", "baz/qux.cpp"],
+        labels=[],
+    )
+
+    with patch("bug_checker.orchestrator.print_failure"):
+        with pytest.raises(BugCheckFailed):  # allow-pytest.raises: not a device error
+            run_bug_check(pr, post_comments=True, suppress_empty_result=True)
+
+    mock_post.assert_called_once()
+    body = mock_post.call_args[1]["body"]
+    assert "Bug Checker Failed" in body
+
+
+@patch("bug_checker.orchestrator.post_pr_comment")
+@patch("bug_checker.orchestrator.LLMSession")
+@patch("bug_checker.orchestrator.select_rules")
+@patch("bug_checker.orchestrator.load_rules")
+def test_run_bug_check_still_posts_truncated_warning_when_quiet(mock_load, mock_select, mock_llm_cls, mock_post):
+    """suppress_empty_result=True must never hide a truncated-diff warning —
+    only a genuinely clean run (no findings/failures/truncations) is silenced."""
+    rule = _rule(["foo/**"])
+    mock_load.return_value = [rule]
+    mock_select.return_value = [rule]
+    mock_llm_cls.return_value = MagicMock()
+
+    pr = PRInfo(
+        number=99,
+        title="Test PR",
+        base_sha="aaa",
+        head_sha="bbb",
+        diff="",
+        changed_files=["foo/bar.cpp"],
+        labels=[],
+        truncated_files=["foo/bar.cpp"],
+    )
+
+    result = run_bug_check(pr, post_comments=True, suppress_empty_result=True)
+    assert result == []
+    mock_post.assert_called_once()
+    body = mock_post.call_args[1]["body"]
+    assert "truncated" in body.lower()
+
+
+@patch("bug_checker.orchestrator.post_pr_comment")
+@patch("bug_checker.orchestrator.LLMSession")
+@patch("bug_checker.orchestrator.select_rules")
+@patch("bug_checker.orchestrator.load_rules")
+def test_run_bug_check_still_posts_llm_setup_failure_when_quiet(mock_load, mock_select, mock_llm_cls, mock_post):
+    """suppress_empty_result=True must never hide an LLM-setup (preflight)
+    failure — distinct code path from the per-rule failure covered above."""
+    rule = _rule(["foo/**"])
+    mock_load.return_value = [rule]
+    mock_select.return_value = [rule]
+    mock_llm_cls.side_effect = RuntimeError("bad config")
+
+    pr = PRInfo(
+        number=99,
+        title="Test PR",
+        base_sha="aaa",
+        head_sha="bbb",
+        diff=DIFF_TWO_FILES,
+        changed_files=["foo/bar.cpp"],
+        labels=[],
+    )
+
+    with patch("bug_checker.orchestrator.print_failure"):
+        with pytest.raises(BugCheckFailed):  # allow-pytest.raises: not a device error
+            run_bug_check(pr, post_comments=True, suppress_empty_result=True)
+
+    mock_post.assert_called_once()
+    body = mock_post.call_args[1]["body"]
+    assert "Bug Checker Failed" in body

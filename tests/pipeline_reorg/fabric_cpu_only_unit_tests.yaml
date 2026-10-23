@@ -1,0 +1,153 @@
+- id: fabric-cpu-unit-phys-ctrl-t3k-wh
+  name: fabric cpu unit tests (unit-phys-ctrl-t3k-wh)
+  cmd: |
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group unit
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group phys-grouping
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group control-plane
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group t3k
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group wh-galaxy
+  skus:
+    cpu_medium:
+      timeout: 8
+  team: scaleout
+  budget_type: unit
+  arch: wormhole_b0
+  owner_id: U08RRAU5E15 # Ridvan Song
+
+- id: fabric-cpu-bh-slices
+  name: fabric cpu unit tests (bh-slices)
+  cmd: |
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-6u
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-single-galaxy
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-dual-galaxy
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-misc
+  skus:
+    cpu_medium:
+      timeout: 8
+  team: scaleout
+  budget_type: unit
+  arch: wormhole_b0
+  owner_id: U08RRAU5E15 # Ridvan Song
+
+- id: fabric-cpu-bh-pod-pipeline-revab
+  name: fabric cpu unit tests (bh-pod-pipeline-revAB)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline --grep revAB --grep-exclude llama_8b
+  skus:
+    cpu_medium:
+      timeout: 8
+  team: scaleout
+  budget_type: unit
+  arch: wormhole_b0
+  owner_id: U08RRAU5E15 # Ridvan Song
+
+- id: fabric-cpu-bh-pod-pipeline-revc
+  name: fabric cpu unit tests (bh-pod-pipeline-revC)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline --grep revC --grep-exclude llama_8b
+  skus:
+    cpu_medium:
+      timeout: 8
+  team: scaleout
+  budget_type: unit
+  arch: wormhole_b0
+  owner_id: U08RRAU5E15 # Ridvan Song
+
+- id: fabric-cpu-bh-pod-pipeline-llama
+  name: fabric cpu unit tests (bh-pod-pipeline-llama)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline --grep llama_8b
+  skus:
+    cpu_medium:
+      timeout: 7
+  team: scaleout
+  budget_type: unit
+  arch: wormhole_b0
+  owner_id: U08RRAU5E15 # Ridvan Song
+
+- id: fabric-cpu-bh-sp4-glx
+  name: fabric cpu unit tests (bh-sp4-glx)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-sp4-glx
+  skus:
+    cpu_medium:
+      timeout: 36
+  team: scaleout
+  budget_type: unit
+  arch: wormhole_b0
+  owner_id: U08RRAU5E15 # Ridvan Song
+
+- id: fabric-cpu-bh-subtorus
+  name: fabric cpu unit tests (bh-subtorus)
+  cmd: |
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-subtorus
+    ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-subtorus-sc16
+  skus:
+    cpu_medium:
+      timeout: 14
+  team: scaleout
+  budget_type: unit
+  arch: wormhole_b0
+  owner_id: U08RRAU5E15 # Ridvan Song
+
+- id: fabric-cpu-bh-subtorus-sc20
+  name: fabric cpu unit tests (bh-subtorus-sc20)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-subtorus-sc20
+  skus:
+    cpu_medium:
+      timeout: 32
+  team: scaleout
+  budget_type: unit
+  arch: wormhole_b0
+  owner_id: U08RRAU5E15 # Ridvan Song
+
+- id: fabric-cpu-bh-blitz-decode
+  name: fabric cpu unit tests (bh-blitz-decode)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-blitz-decode
+  skus:
+    cpu_medium:
+      timeout: 37
+  team: scaleout
+  budget_type: unit
+  arch: wormhole_b0
+  owner_id: U08RRAU5E15 # Ridvan Song
+
+- id: fabric-cpu-pipeline-placement-sc20
+  name: fabric cpu pipeline placement (SC20)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group pipeline-placement --grep "TT_PIPELINE_TEST_STAGES=20"
+  skus:
+    cpu_medium:
+      timeout: 7
+  team: scaleout
+  budget_type: unit
+  arch: wormhole_b0
+  owner_id: U08RRAU5E15 # Ridvan Song
+
+- id: fabric-cpu-pipeline-placement-sc16-3bm
+  name: fabric cpu pipeline placement (SC16 3-BigMesh)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group pipeline-placement --grep "subtorus_sc16_4x32_3bigmesh"
+  skus:
+    cpu_medium:
+      timeout: 8
+  team: scaleout
+  budget_type: unit
+  arch: wormhole_b0
+  owner_id: U08RRAU5E15 # Ridvan Song
+
+- id: fabric-cpu-bh-ring-stress
+  name: fabric cpu unit tests (bh-ring-stress)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-ring-stress
+  skus:
+    cpu_medium:
+      timeout: 95
+  team: scaleout
+  budget_type: unit
+  arch: wormhole_b0
+  owner_id: U08RRAU5E15 # Ridvan Song
+
+- id: fabric-cpu-bh-heterogeneous
+  name: fabric cpu unit tests (bh-heterogeneous)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-heterogeneous
+  skus:
+    cpu_medium:
+      timeout: 7
+  team: scaleout
+  budget_type: unit
+  arch: wormhole_b0
+  owner_id: U08RRAU5E15 # Ridvan Song

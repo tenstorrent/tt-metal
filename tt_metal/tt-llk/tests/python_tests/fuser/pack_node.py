@@ -1,0 +1,86 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+from typing import TYPE_CHECKING, List
+
+if TYPE_CHECKING:
+    from .l1_operation import L1Operation
+    from .fuser_config import GlobalConfig
+
+from helpers.llk_params import L1Accumulation, PackerReluType, PerfRunType
+
+from .arch_common import pack_common
+from .base_packer import Packer
+from .block_data import BlockData
+from .indexing import KernelInvocation
+from .operand import Operand
+
+
+class PackNode:
+    """Wraps a packer with its output operand and pack settings.
+
+    Analogous to FpuNode on the math side. Each PackNode represents
+    one pack destination within an operation. Multiple PackNodes allow a
+    single math result to be packed to different output buffers with
+    independent relu or L1 accumulation configs.
+    """
+
+    block_tiles_x = None
+    block_tiles_y = None
+
+    def __init__(
+        self,
+        packer: Packer,
+        output: Operand,
+        pack_relu: PackerReluType = PackerReluType.NoRelu,
+        relu_threshold: float = 0.0,
+        pack_l1_accumulation: L1Accumulation = L1Accumulation.No,
+        index_spec=None,
+    ):
+        self.packer = packer
+        self.output = output
+        self.index_spec = index_spec
+        self.pack_relu = pack_relu
+        self.relu_threshold = relu_threshold
+        self.pack_l1_accumulation = pack_l1_accumulation
+
+    def init(
+        self,
+        operation: "L1Operation",
+        config: "GlobalConfig",
+        block: BlockData,
+    ) -> str:
+        code = self.packer.init(self, operation, config, block)
+        code += pack_common.relu_config(config, operation, self)
+        code += pack_common.l1_accumulation_config(config, operation, self)
+        return code
+
+    def pack_call(
+        self,
+        operation: "L1Operation",
+        config: "GlobalConfig",
+        block: BlockData,
+        call: KernelInvocation,
+    ) -> str:
+        if config.perf_run_type in (
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.MATH_ISOLATE,
+        ):
+            return ""
+        block.tile_id_dest = call.dest
+        block.tile_id_out = call.out
+        return self.packer.pack(self, operation, config, block)
+
+    def uninit(
+        self,
+        operation: "L1Operation",
+        config: "GlobalConfig",
+    ) -> str:
+        return self.packer.uninit(self, operation, config, None)
+
+    def get_headers(self) -> List[str]:
+        return self.packer.get_headers()
+
+    def __str__(self):
+        return f"PackNode({self.packer}, output={self.output})"

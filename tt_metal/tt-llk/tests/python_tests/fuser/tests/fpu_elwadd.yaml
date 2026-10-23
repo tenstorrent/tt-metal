@@ -1,0 +1,26 @@
+# Element-wise addition of two inputs (A + B).
+
+operands:
+  - name: "input_A"
+    dims: [256, 256]
+    format: "Float16_b"
+  - name: "input_B"
+    dims: [256, 256]
+    format: "Float16_b"
+  - name: "elwadd_out"
+    dims: [256, 256]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        block_size: [64, 128]
+        in0: "input_A"
+        in1: "input_B"
+        operation: "Elwadd"
+        unpacker: "UnpackerAB"
+        math_fidelity: "LoFi"
+    pack:
+      - output: "elwadd_out"
+        block_size: [64, 128]
+        packer: "Packer"

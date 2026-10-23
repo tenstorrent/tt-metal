@@ -1,0 +1,21 @@
+# This file defines the test matrix for the Galaxy integration tests pipeline.
+
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   model: Model identifier for filtering (workflow_dispatch model selection).
+#   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+- name: Galaxy unit/distributed integration tests
+  cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model unit
+  model: unit
+  skus:
+    wh_galaxy:
+      timeout: 50
+  owner_id: U07D5N7QL4U # Joseph Chu
+  team: ttnn
+  budget_type: integration

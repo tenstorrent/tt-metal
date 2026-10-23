@@ -1,0 +1,1578 @@
+compute_node_specs:
+  wh-glx-a04u02:
+    motherboard: S7T-MB
+    asic_info:
+      - tray_id: 1
+        board_type: UBB
+        asics:
+          - asic_location: 1
+            asic_id: 87029889494954290
+          - asic_location: 2
+            asic_id: 159087483532882226
+          - asic_location: 3
+            asic_id: 231145077570810162
+          - asic_location: 4
+            asic_id: 303202671608738098
+          - asic_location: 5
+            asic_id: 375260265646666034
+          - asic_location: 6
+            asic_id: 447317859684593970
+          - asic_location: 7
+            asic_id: 519375453722521906
+          - asic_location: 8
+            asic_id: 591433047760449842
+      - tray_id: 2
+        board_type: UBB
+        asics:
+          - asic_location: 1
+            asic_id: 87030958941810754
+          - asic_location: 2
+            asic_id: 159088552979738690
+          - asic_location: 3
+            asic_id: 231146147017666626
+          - asic_location: 4
+            asic_id: 303203741055594562
+          - asic_location: 5
+            asic_id: 375261335093522498
+          - asic_location: 6
+            asic_id: 447318929131450434
+          - asic_location: 7
+            asic_id: 519376523169378370
+          - asic_location: 8
+            asic_id: 591434117207306306
+      - tray_id: 3
+        board_type: UBB
+        asics:
+          - asic_location: 1
+            asic_id: 87029889494954073
+          - asic_location: 2
+            asic_id: 159087483532882009
+          - asic_location: 3
+            asic_id: 231145077570809945
+          - asic_location: 4
+            asic_id: 303202671608737881
+          - asic_location: 5
+            asic_id: 375260265646665817
+          - asic_location: 6
+            asic_id: 447317859684593753
+          - asic_location: 7
+            asic_id: 519375453722521689
+          - asic_location: 8
+            asic_id: 591433047760449625
+      - tray_id: 4
+        board_type: UBB
+        asics:
+          - asic_location: 1
+            asic_id: 87029889494954322
+          - asic_location: 2
+            asic_id: 159087483532882258
+          - asic_location: 3
+            asic_id: 231145077570810194
+          - asic_location: 4
+            asic_id: 303202671608738130
+          - asic_location: 5
+            asic_id: 375260265646666066
+          - asic_location: 6
+            asic_id: 447317859684594002
+          - asic_location: 7
+            asic_id: 519375453722521938
+          - asic_location: 8
+            asic_id: 591433047760449874
+  wh-glx-a03u14:
+    motherboard: S7T-MB
+    asic_info:
+      - tray_id: 1
+        board_type: UBB
+        asics:
+          - asic_location: 1
+            asic_id: 87030976121680176
+          - asic_location: 2
+            asic_id: 159088570159608112
+          - asic_location: 3
+            asic_id: 231146164197536048
+          - asic_location: 4
+            asic_id: 303203758235463984
+          - asic_location: 5
+            asic_id: 375261352273391920
+          - asic_location: 6
+            asic_id: 447318946311319856
+          - asic_location: 7
+            asic_id: 519376540349247792
+          - asic_location: 8
+            asic_id: 591434134387175728
+      - tray_id: 2
+        board_type: UBB
+        asics:
+          - asic_location: 1
+            asic_id: 87030976121680204
+          - asic_location: 2
+            asic_id: 159088570159608140
+          - asic_location: 3
+            asic_id: 231146164197536076
+          - asic_location: 4
+            asic_id: 303203758235464012
+          - asic_location: 5
+            asic_id: 375261352273391948
+          - asic_location: 6
+            asic_id: 447318946311319884
+          - asic_location: 7
+            asic_id: 519376540349247820
+          - asic_location: 8
+            asic_id: 591434134387175756
+      - tray_id: 3
+        board_type: UBB
+        asics:
+          - asic_location: 1
+            asic_id: 87030976121680178
+          - asic_location: 2
+            asic_id: 159088570159608114
+          - asic_location: 3
+            asic_id: 231146164197536050
+          - asic_location: 4
+            asic_id: 303203758235463986
+          - asic_location: 5
+            asic_id: 375261352273391922
+          - asic_location: 6
+            asic_id: 447318946311319858
+          - asic_location: 7
+            asic_id: 519376540349247794
+          - asic_location: 8
+            asic_id: 591434134387175730
+      - tray_id: 4
+        board_type: UBB
+        asics:
+          - asic_location: 1
+            asic_id: 87029889494954066
+          - asic_location: 2
+            asic_id: 159087483532882002
+          - asic_location: 3
+            asic_id: 231145077570809938
+          - asic_location: 4
+            asic_id: 303202671608737874
+          - asic_location: 5
+            asic_id: 375260265646665810
+          - asic_location: 6
+            asic_id: 447317859684593746
+          - asic_location: 7
+            asic_id: 519375453722521682
+          - asic_location: 8
+            asic_id: 591433047760449618
+  wh-glx-a04u08:
+    motherboard: S7T-MB
+    asic_info:
+      - tray_id: 1
+        board_type: UBB
+        asics:
+          - asic_location: 1
+            asic_id: 87030958941810760
+          - asic_location: 2
+            asic_id: 159088552979738696
+          - asic_location: 3
+            asic_id: 231146147017666632
+          - asic_location: 4
+            asic_id: 303203741055594568
+          - asic_location: 5
+            asic_id: 375261335093522504
+          - asic_location: 6
+            asic_id: 447318929131450440
+          - asic_location: 7
+            asic_id: 519376523169378376
+          - asic_location: 8
+            asic_id: 591434117207306312
+      - tray_id: 2
+        board_type: UBB
+        asics:
+          - asic_location: 1
+            asic_id: 87030954646843732
+          - asic_location: 2
+            asic_id: 159088548684771668
+          - asic_location: 3
+            asic_id: 231146142722699604
+          - asic_location: 4
+            asic_id: 303203736760627540
+          - asic_location: 5
+            asic_id: 375261330798555476
+          - asic_location: 6
+            asic_id: 447318924836483412
+          - asic_location: 7
+            asic_id: 519376518874411348
+          - asic_location: 8
+            asic_id: 591434112912339284
+      - tray_id: 3
+        board_type: UBB
+        asics:
+          - asic_location: 1
+            asic_id: 87030958941810998
+          - asic_location: 2
+            asic_id: 159088552979738934
+          - asic_location: 3
+            asic_id: 231146147017666870
+          - asic_location: 4
+            asic_id: 303203741055594806
+          - asic_location: 5
+            asic_id: 375261335093522742
+          - asic_location: 6
+            asic_id: 447318929131450678
+          - asic_location: 7
+            asic_id: 519376523169378614
+          - asic_location: 8
+            asic_id: 591434117207306550
+      - tray_id: 4
+        board_type: UBB
+        asics:
+          - asic_location: 1
+            asic_id: 87030958941811012
+          - asic_location: 2
+            asic_id: 159088552979738948
+          - asic_location: 3
+            asic_id: 231146147017666884
+          - asic_location: 4
+            asic_id: 303203741055594820
+          - asic_location: 5
+            asic_id: 375261335093522756
+          - asic_location: 6
+            asic_id: 447318929131450692
+          - asic_location: 7
+            asic_id: 519376523169378628
+          - asic_location: 8
+            asic_id: 591434117207306564
+  wh-glx-a03u08:
+    motherboard: S7T-MB
+    asic_info:
+      - tray_id: 1
+        board_type: UBB
+        asics:
+          - asic_location: 1
+            asic_id: 87030976121680210
+          - asic_location: 2
+            asic_id: 159088570159608146
+          - asic_location: 3
+            asic_id: 231146164197536082
+          - asic_location: 4
+            asic_id: 303203758235464018
+          - asic_location: 5
+            asic_id: 375261352273391954
+          - asic_location: 6
+            asic_id: 447318946311319890
+          - asic_location: 7
+            asic_id: 519376540349247826
+          - asic_location: 8
+            asic_id: 591434134387175762
+      - tray_id: 2
+        board_type: UBB
+        asics:
+          - asic_location: 1
+            asic_id: 87030976121680179
+          - asic_location: 2
+            asic_id: 159088570159608115
+          - asic_location: 3
+            asic_id: 231146164197536051
+          - asic_location: 4
+            asic_id: 303203758235463987
+          - asic_location: 5
+            asic_id: 375261352273391923
+          - asic_location: 6
+            asic_id: 447318946311319859
+          - asic_location: 7
+            asic_id: 519376540349247795
+          - asic_location: 8
+            asic_id: 591434134387175731
+      - tray_id: 3
+        board_type: UBB
+        asics:
+          - asic_location: 1
+            asic_id: 87030976121680211
+          - asic_location: 2
+            asic_id: 159088570159608147
+          - asic_location: 3
+            asic_id: 231146164197536083
+          - asic_location: 4
+            asic_id: 303203758235464019
+          - asic_location: 5
+            asic_id: 375261352273391955
+          - asic_location: 6
+            asic_id: 447318946311319891
+          - asic_location: 7
+            asic_id: 519376540349247827
+          - asic_location: 8
+            asic_id: 591434134387175763
+      - tray_id: 4
+        board_type: UBB
+        asics:
+          - asic_location: 1
+            asic_id: 87030976121680197
+          - asic_location: 2
+            asic_id: 159088570159608133
+          - asic_location: 3
+            asic_id: 231146164197536069
+          - asic_location: 4
+            asic_id: 303203758235464005
+          - asic_location: 5
+            asic_id: 375261352273391941
+          - asic_location: 6
+            asic_id: 447318946311319877
+          - asic_location: 7
+            asic_id: 519376540349247813
+          - asic_location: 8
+            asic_id: 591434134387175749
+  wh-glx-a03u02:
+    motherboard: S7T-MB
+    asic_info:
+      - tray_id: 1
+        board_type: UBB
+        asics:
+          - asic_location: 1
+            asic_id: 87030954646843458
+          - asic_location: 2
+            asic_id: 159088548684771394
+          - asic_location: 3
+            asic_id: 231146142722699330
+          - asic_location: 4
+            asic_id: 303203736760627266
+          - asic_location: 5
+            asic_id: 375261330798555202
+          - asic_location: 6
+            asic_id: 447318924836483138
+          - asic_location: 7
+            asic_id: 519376518874411074
+          - asic_location: 8
+            asic_id: 591434112912339010
+      - tray_id: 2
+        board_type: UBB
+        asics:
+          - asic_location: 1
+            asic_id: 87030958941810741
+          - asic_location: 2
+            asic_id: 159088552979738677
+          - asic_location: 3
+            asic_id: 231146147017666613
+          - asic_location: 4
+            asic_id: 303203741055594549
+          - asic_location: 5
+            asic_id: 375261335093522485
+          - asic_location: 6
+            asic_id: 447318929131450421
+          - asic_location: 7
+            asic_id: 519376523169378357
+          - asic_location: 8
+            asic_id: 591434117207306293
+      - tray_id: 3
+        board_type: UBB
+        asics:
+          - asic_location: 1
+            asic_id: 87030954646843467
+          - asic_location: 2
+            asic_id: 159088548684771403
+          - asic_location: 3
+            asic_id: 231146142722699339
+          - asic_location: 4
+            asic_id: 303203736760627275
+          - asic_location: 5
+            asic_id: 375261330798555211
+          - asic_location: 6
+            asic_id: 447318924836483147
+          - asic_location: 7
+            asic_id: 519376518874411083
+          - asic_location: 8
+            asic_id: 591434112912339019
+      - tray_id: 4
+        board_type: UBB
+        asics:
+          - asic_location: 1
+            asic_id: 87030958941810996
+          - asic_location: 2
+            asic_id: 159088552979738932
+          - asic_location: 3
+            asic_id: 231146147017666868
+          - asic_location: 4
+            asic_id: 303203741055594804
+          - asic_location: 5
+            asic_id: 375261335093522740
+          - asic_location: 6
+            asic_id: 447318929131450676
+          - asic_location: 7
+            asic_id: 519376523169378612
+          - asic_location: 8
+            asic_id: 591434117207306548
+local_eth_connections:
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 7, chan_id: 11}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 8, chan_id: 7}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 7, chan_id: 10}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 8, chan_id: 6}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 7, chan_id: 9}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 8, chan_id: 5}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 7, chan_id: 8}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 8, chan_id: 4}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 7, chan_id: 0}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 3, chan_id: 12}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 7, chan_id: 1}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 3, chan_id: 13}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 7, chan_id: 2}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 3, chan_id: 14}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 7, chan_id: 3}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 3, chan_id: 15}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 7, chan_id: 13}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 7, chan_id: 13}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 7, chan_id: 14}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 7, chan_id: 14}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 7, chan_id: 15}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 7, chan_id: 15}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 7, chan_id: 12}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 7, chan_id: 12}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 7, chan_id: 4}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 6, chan_id: 8}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 7, chan_id: 5}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 6, chan_id: 9}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 7, chan_id: 6}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 6, chan_id: 10}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 7, chan_id: 7}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 6, chan_id: 11}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 4, chan_id: 15}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 8, chan_id: 3}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 4, chan_id: 14}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 8, chan_id: 2}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 4, chan_id: 13}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 8, chan_id: 1}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 4, chan_id: 12}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 8, chan_id: 0}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 4, chan_id: 11}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 4, chan_id: 11}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 4, chan_id: 10}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 4, chan_id: 10}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 4, chan_id: 9}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 4, chan_id: 9}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 4, chan_id: 8}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 4, chan_id: 8}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 4, chan_id: 7}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 3, chan_id: 11}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 4, chan_id: 6}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 3, chan_id: 10}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 4, chan_id: 5}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 3, chan_id: 9}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 4, chan_id: 4}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 3, chan_id: 8}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 7, chan_id: 15}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 7, chan_id: 15}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 7, chan_id: 14}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 7, chan_id: 14}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 7, chan_id: 13}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 7, chan_id: 13}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 7, chan_id: 12}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 7, chan_id: 12}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 7, chan_id: 0}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 3, chan_id: 12}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 7, chan_id: 1}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 3, chan_id: 13}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 7, chan_id: 2}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 3, chan_id: 14}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 7, chan_id: 3}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 3, chan_id: 15}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 7, chan_id: 4}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 6, chan_id: 8}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 7, chan_id: 5}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 6, chan_id: 9}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 7, chan_id: 6}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 6, chan_id: 10}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 7, chan_id: 7}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 6, chan_id: 11}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 7, chan_id: 8}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 8, chan_id: 4}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 7, chan_id: 9}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 8, chan_id: 5}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 7, chan_id: 10}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 8, chan_id: 6}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 7, chan_id: 11}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 8, chan_id: 7}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 5, chan_id: 15}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 5, chan_id: 15}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 5, chan_id: 14}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 5, chan_id: 14}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 5, chan_id: 13}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 5, chan_id: 13}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 5, chan_id: 12}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 5, chan_id: 12}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 5, chan_id: 0}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 1, chan_id: 12}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 5, chan_id: 1}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 1, chan_id: 13}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 5, chan_id: 2}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 1, chan_id: 14}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 5, chan_id: 3}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 1, chan_id: 15}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 5, chan_id: 4}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 5, chan_id: 4}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 5, chan_id: 5}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 5, chan_id: 5}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 5, chan_id: 6}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 5, chan_id: 6}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 5, chan_id: 7}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 5, chan_id: 7}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 5, chan_id: 8}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 6, chan_id: 4}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 5, chan_id: 9}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 6, chan_id: 5}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 5, chan_id: 10}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 6, chan_id: 6}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 5, chan_id: 11}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 6, chan_id: 7}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 2, chan_id: 15}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 6, chan_id: 3}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 2, chan_id: 14}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 6, chan_id: 2}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 2, chan_id: 13}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 6, chan_id: 1}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 2, chan_id: 12}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 6, chan_id: 0}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 2, chan_id: 11}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 3, chan_id: 7}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 2, chan_id: 10}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 3, chan_id: 6}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 2, chan_id: 9}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 3, chan_id: 5}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 2, chan_id: 8}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 3, chan_id: 4}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 2, chan_id: 7}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 1, chan_id: 11}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 2, chan_id: 6}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 1, chan_id: 10}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 2, chan_id: 5}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 1, chan_id: 9}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 2, chan_id: 4}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 1, chan_id: 8}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 2, chan_id: 15}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 6, chan_id: 3}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 2, chan_id: 14}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 6, chan_id: 2}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 2, chan_id: 13}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 6, chan_id: 1}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 2, chan_id: 12}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 6, chan_id: 0}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 2, chan_id: 11}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 3, chan_id: 7}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 2, chan_id: 10}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 3, chan_id: 6}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 2, chan_id: 9}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 3, chan_id: 5}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 2, chan_id: 8}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 3, chan_id: 4}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 2, chan_id: 7}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 1, chan_id: 11}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 2, chan_id: 6}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 1, chan_id: 10}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 2, chan_id: 5}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 1, chan_id: 9}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 2, chan_id: 4}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 1, chan_id: 8}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 8, chan_id: 15}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 8, chan_id: 15}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 8, chan_id: 14}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 8, chan_id: 14}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 8, chan_id: 13}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 8, chan_id: 13}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 8, chan_id: 12}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 8, chan_id: 12}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 8, chan_id: 0}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 4, chan_id: 12}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 8, chan_id: 1}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 4, chan_id: 13}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 8, chan_id: 2}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 4, chan_id: 14}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 8, chan_id: 3}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 4, chan_id: 15}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 8, chan_id: 8}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 8, chan_id: 8}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 8, chan_id: 9}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 8, chan_id: 9}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 8, chan_id: 10}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 8, chan_id: 10}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 8, chan_id: 11}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 8, chan_id: 11}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 5, chan_id: 11}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 6, chan_id: 7}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 5, chan_id: 10}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 6, chan_id: 6}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 5, chan_id: 9}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 6, chan_id: 5}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 5, chan_id: 8}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 6, chan_id: 4}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 5, chan_id: 0}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 1, chan_id: 12}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 5, chan_id: 1}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 1, chan_id: 13}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 5, chan_id: 2}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 1, chan_id: 14}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 5, chan_id: 3}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 1, chan_id: 15}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 5, chan_id: 4}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 5, chan_id: 4}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 5, chan_id: 5}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 5, chan_id: 5}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 5, chan_id: 6}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 5, chan_id: 6}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 5, chan_id: 7}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 5, chan_id: 7}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 5, chan_id: 11}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 6, chan_id: 7}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 5, chan_id: 10}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 6, chan_id: 6}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 5, chan_id: 9}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 6, chan_id: 5}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 5, chan_id: 8}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 6, chan_id: 4}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 5, chan_id: 0}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 1, chan_id: 12}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 5, chan_id: 1}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 1, chan_id: 13}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 5, chan_id: 2}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 1, chan_id: 14}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 5, chan_id: 3}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 1, chan_id: 15}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 5, chan_id: 13}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 5, chan_id: 13}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 5, chan_id: 14}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 5, chan_id: 14}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 5, chan_id: 15}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 5, chan_id: 15}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 5, chan_id: 12}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 5, chan_id: 12}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 1, chan_id: 7}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 1, chan_id: 7}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 1, chan_id: 6}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 1, chan_id: 6}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 1, chan_id: 5}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 1, chan_id: 5}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 1, chan_id: 4}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 1, chan_id: 4}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 4, chan_id: 11}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 4, chan_id: 11}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 4, chan_id: 10}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 4, chan_id: 10}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 4, chan_id: 9}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 4, chan_id: 9}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 4, chan_id: 8}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 4, chan_id: 8}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 4, chan_id: 7}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 3, chan_id: 11}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 4, chan_id: 6}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 3, chan_id: 10}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 4, chan_id: 5}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 3, chan_id: 9}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 4, chan_id: 4}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 3, chan_id: 8}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 4, chan_id: 15}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 8, chan_id: 3}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 4, chan_id: 14}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 8, chan_id: 2}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 4, chan_id: 13}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 8, chan_id: 1}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 4, chan_id: 12}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 8, chan_id: 0}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 4, chan_id: 7}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 3, chan_id: 11}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 4, chan_id: 6}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 3, chan_id: 10}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 4, chan_id: 5}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 3, chan_id: 9}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 4, chan_id: 4}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 3, chan_id: 8}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 5, chan_id: 0}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 1, chan_id: 12}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 5, chan_id: 1}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 1, chan_id: 13}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 5, chan_id: 2}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 1, chan_id: 14}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 5, chan_id: 3}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 1, chan_id: 15}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 5, chan_id: 8}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 6, chan_id: 4}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 5, chan_id: 9}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 6, chan_id: 5}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 5, chan_id: 10}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 6, chan_id: 6}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 5, chan_id: 11}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 6, chan_id: 7}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 7, chan_id: 11}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 8, chan_id: 7}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 7, chan_id: 10}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 8, chan_id: 6}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 7, chan_id: 9}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 8, chan_id: 5}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 7, chan_id: 8}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 8, chan_id: 4}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 7, chan_id: 0}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 3, chan_id: 12}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 7, chan_id: 1}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 3, chan_id: 13}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 7, chan_id: 2}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 3, chan_id: 14}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 7, chan_id: 3}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 3, chan_id: 15}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 7, chan_id: 4}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 6, chan_id: 8}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 7, chan_id: 5}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 6, chan_id: 9}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 7, chan_id: 6}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 6, chan_id: 10}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 7, chan_id: 7}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 6, chan_id: 11}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 8, chan_id: 15}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 8, chan_id: 15}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 8, chan_id: 14}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 8, chan_id: 14}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 8, chan_id: 13}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 8, chan_id: 13}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 8, chan_id: 12}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 8, chan_id: 12}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 8, chan_id: 0}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 4, chan_id: 12}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 8, chan_id: 1}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 4, chan_id: 13}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 8, chan_id: 2}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 4, chan_id: 14}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 8, chan_id: 3}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 4, chan_id: 15}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 8, chan_id: 4}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 7, chan_id: 8}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 8, chan_id: 5}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 7, chan_id: 9}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 8, chan_id: 6}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 7, chan_id: 10}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 8, chan_id: 7}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 7, chan_id: 11}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 2, chan_id: 15}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 6, chan_id: 3}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 2, chan_id: 14}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 6, chan_id: 2}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 2, chan_id: 13}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 6, chan_id: 1}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 2, chan_id: 12}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 6, chan_id: 0}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 2, chan_id: 11}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 3, chan_id: 7}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 2, chan_id: 10}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 3, chan_id: 6}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 2, chan_id: 9}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 3, chan_id: 5}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 2, chan_id: 8}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 3, chan_id: 4}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 2, chan_id: 7}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 1, chan_id: 11}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 2, chan_id: 6}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 1, chan_id: 10}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 2, chan_id: 5}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 1, chan_id: 9}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 2, chan_id: 4}, {host_name: wh-glx-a04u02, tray_id: 1, asic_location: 1, chan_id: 8}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 3, chan_id: 15}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 7, chan_id: 3}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 3, chan_id: 14}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 7, chan_id: 2}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 3, chan_id: 13}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 7, chan_id: 1}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 3, chan_id: 12}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 7, chan_id: 0}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 3, chan_id: 11}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 4, chan_id: 7}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 3, chan_id: 10}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 4, chan_id: 6}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 3, chan_id: 9}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 4, chan_id: 5}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 3, chan_id: 8}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 4, chan_id: 4}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 3, chan_id: 7}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 2, chan_id: 11}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 3, chan_id: 6}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 2, chan_id: 10}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 3, chan_id: 5}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 2, chan_id: 9}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 3, chan_id: 4}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 2, chan_id: 8}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 8, chan_id: 11}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 8, chan_id: 11}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 8, chan_id: 10}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 8, chan_id: 10}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 8, chan_id: 9}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 8, chan_id: 9}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 8, chan_id: 8}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 8, chan_id: 8}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 2, chan_id: 15}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 6, chan_id: 3}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 2, chan_id: 14}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 6, chan_id: 2}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 2, chan_id: 13}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 6, chan_id: 1}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 2, chan_id: 12}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 6, chan_id: 0}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 2, chan_id: 7}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 1, chan_id: 11}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 2, chan_id: 6}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 1, chan_id: 10}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 2, chan_id: 5}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 1, chan_id: 9}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 2, chan_id: 4}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 1, chan_id: 8}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 1, chan_id: 7}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 1, chan_id: 7}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 1, chan_id: 6}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 1, chan_id: 6}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 1, chan_id: 5}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 1, chan_id: 5}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 1, chan_id: 4}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 1, chan_id: 4}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 6, chan_id: 15}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 6, chan_id: 15}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 6, chan_id: 14}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 6, chan_id: 14}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 6, chan_id: 13}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 6, chan_id: 13}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 6, chan_id: 12}, {host_name: wh-glx-a04u02, tray_id: 4, asic_location: 6, chan_id: 12}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 6, chan_id: 8}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 7, chan_id: 4}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 6, chan_id: 9}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 7, chan_id: 5}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 6, chan_id: 10}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 7, chan_id: 6}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 6, chan_id: 11}, {host_name: wh-glx-a04u02, tray_id: 3, asic_location: 7, chan_id: 7}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 6, chan_id: 15}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 6, chan_id: 15}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 6, chan_id: 14}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 6, chan_id: 14}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 6, chan_id: 13}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 6, chan_id: 13}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 6, chan_id: 12}, {host_name: wh-glx-a04u02, tray_id: 2, asic_location: 6, chan_id: 12}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 7, chan_id: 11}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 8, chan_id: 7}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 7, chan_id: 10}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 8, chan_id: 6}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 7, chan_id: 9}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 8, chan_id: 5}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 7, chan_id: 8}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 8, chan_id: 4}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 7, chan_id: 0}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 3, chan_id: 12}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 7, chan_id: 1}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 3, chan_id: 13}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 7, chan_id: 2}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 3, chan_id: 14}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 7, chan_id: 3}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 3, chan_id: 15}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 7, chan_id: 13}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 7, chan_id: 13}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 7, chan_id: 14}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 7, chan_id: 14}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 7, chan_id: 15}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 7, chan_id: 15}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 7, chan_id: 12}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 7, chan_id: 12}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 7, chan_id: 4}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 6, chan_id: 8}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 7, chan_id: 5}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 6, chan_id: 9}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 7, chan_id: 6}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 6, chan_id: 10}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 7, chan_id: 7}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 6, chan_id: 11}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 5, chan_id: 15}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 5, chan_id: 15}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 5, chan_id: 14}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 5, chan_id: 14}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 5, chan_id: 13}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 5, chan_id: 13}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 5, chan_id: 12}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 5, chan_id: 12}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 5, chan_id: 0}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 1, chan_id: 12}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 5, chan_id: 1}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 1, chan_id: 13}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 5, chan_id: 2}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 1, chan_id: 14}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 5, chan_id: 3}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 1, chan_id: 15}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 5, chan_id: 4}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 5, chan_id: 4}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 5, chan_id: 5}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 5, chan_id: 5}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 5, chan_id: 6}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 5, chan_id: 6}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 5, chan_id: 7}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 5, chan_id: 7}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 5, chan_id: 8}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 6, chan_id: 4}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 5, chan_id: 9}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 6, chan_id: 5}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 5, chan_id: 10}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 6, chan_id: 6}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 5, chan_id: 11}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 6, chan_id: 7}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 3, chan_id: 15}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 7, chan_id: 3}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 3, chan_id: 14}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 7, chan_id: 2}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 3, chan_id: 13}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 7, chan_id: 1}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 3, chan_id: 12}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 7, chan_id: 0}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 3, chan_id: 11}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 4, chan_id: 7}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 3, chan_id: 10}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 4, chan_id: 6}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 3, chan_id: 9}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 4, chan_id: 5}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 3, chan_id: 8}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 4, chan_id: 4}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 3, chan_id: 7}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 2, chan_id: 11}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 3, chan_id: 6}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 2, chan_id: 10}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 3, chan_id: 5}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 2, chan_id: 9}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 3, chan_id: 4}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 2, chan_id: 8}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 1, chan_id: 15}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 5, chan_id: 3}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 1, chan_id: 14}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 5, chan_id: 2}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 1, chan_id: 13}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 5, chan_id: 1}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 1, chan_id: 12}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 5, chan_id: 0}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 1, chan_id: 11}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 2, chan_id: 7}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 1, chan_id: 10}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 2, chan_id: 6}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 1, chan_id: 9}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 2, chan_id: 5}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 1, chan_id: 8}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 2, chan_id: 4}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 1, chan_id: 7}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 1, chan_id: 7}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 1, chan_id: 6}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 1, chan_id: 6}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 1, chan_id: 5}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 1, chan_id: 5}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 1, chan_id: 4}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 1, chan_id: 4}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 4, chan_id: 15}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 8, chan_id: 3}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 4, chan_id: 14}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 8, chan_id: 2}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 4, chan_id: 13}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 8, chan_id: 1}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 4, chan_id: 12}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 8, chan_id: 0}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 4, chan_id: 11}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 4, chan_id: 11}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 4, chan_id: 10}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 4, chan_id: 10}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 4, chan_id: 9}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 4, chan_id: 9}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 4, chan_id: 8}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 4, chan_id: 8}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 4, chan_id: 7}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 3, chan_id: 11}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 4, chan_id: 6}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 3, chan_id: 10}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 4, chan_id: 5}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 3, chan_id: 9}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 4, chan_id: 4}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 3, chan_id: 8}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 4, chan_id: 15}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 8, chan_id: 3}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 4, chan_id: 14}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 8, chan_id: 2}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 4, chan_id: 13}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 8, chan_id: 1}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 4, chan_id: 12}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 8, chan_id: 0}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 4, chan_id: 11}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 4, chan_id: 11}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 4, chan_id: 10}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 4, chan_id: 10}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 4, chan_id: 9}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 4, chan_id: 9}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 4, chan_id: 8}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 4, chan_id: 8}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 2, chan_id: 15}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 6, chan_id: 3}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 2, chan_id: 14}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 6, chan_id: 2}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 2, chan_id: 13}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 6, chan_id: 1}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 2, chan_id: 12}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 6, chan_id: 0}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 2, chan_id: 11}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 3, chan_id: 7}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 2, chan_id: 10}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 3, chan_id: 6}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 2, chan_id: 9}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 3, chan_id: 5}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 2, chan_id: 8}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 3, chan_id: 4}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 5, chan_id: 11}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 6, chan_id: 7}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 5, chan_id: 10}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 6, chan_id: 6}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 5, chan_id: 9}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 6, chan_id: 5}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 5, chan_id: 8}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 6, chan_id: 4}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 5, chan_id: 0}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 1, chan_id: 12}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 5, chan_id: 1}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 1, chan_id: 13}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 5, chan_id: 2}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 1, chan_id: 14}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 5, chan_id: 3}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 1, chan_id: 15}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 5, chan_id: 13}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 5, chan_id: 13}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 5, chan_id: 14}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 5, chan_id: 14}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 5, chan_id: 15}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 5, chan_id: 15}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 5, chan_id: 12}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 5, chan_id: 12}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 7, chan_id: 15}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 7, chan_id: 15}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 7, chan_id: 14}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 7, chan_id: 14}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 7, chan_id: 13}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 7, chan_id: 13}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 7, chan_id: 12}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 7, chan_id: 12}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 7, chan_id: 4}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 6, chan_id: 8}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 7, chan_id: 5}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 6, chan_id: 9}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 7, chan_id: 6}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 6, chan_id: 10}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 7, chan_id: 7}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 6, chan_id: 11}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 7, chan_id: 8}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 8, chan_id: 4}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 7, chan_id: 9}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 8, chan_id: 5}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 7, chan_id: 10}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 8, chan_id: 6}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 7, chan_id: 11}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 8, chan_id: 7}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 8, chan_id: 15}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 8, chan_id: 15}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 8, chan_id: 14}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 8, chan_id: 14}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 8, chan_id: 13}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 8, chan_id: 13}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 8, chan_id: 12}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 8, chan_id: 12}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 8, chan_id: 4}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 7, chan_id: 8}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 8, chan_id: 5}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 7, chan_id: 9}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 8, chan_id: 6}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 7, chan_id: 10}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 8, chan_id: 7}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 7, chan_id: 11}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 8, chan_id: 8}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 8, chan_id: 8}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 8, chan_id: 9}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 8, chan_id: 9}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 8, chan_id: 10}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 8, chan_id: 10}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 8, chan_id: 11}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 8, chan_id: 11}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 2, chan_id: 15}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 6, chan_id: 3}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 2, chan_id: 14}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 6, chan_id: 2}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 2, chan_id: 13}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 6, chan_id: 1}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 2, chan_id: 12}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 6, chan_id: 0}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 2, chan_id: 7}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 1, chan_id: 11}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 2, chan_id: 6}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 1, chan_id: 10}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 2, chan_id: 5}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 1, chan_id: 9}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 2, chan_id: 4}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 1, chan_id: 8}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 3, chan_id: 15}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 7, chan_id: 3}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 3, chan_id: 14}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 7, chan_id: 2}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 3, chan_id: 13}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 7, chan_id: 1}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 3, chan_id: 12}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 7, chan_id: 0}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 3, chan_id: 7}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 2, chan_id: 11}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 3, chan_id: 6}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 2, chan_id: 10}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 3, chan_id: 5}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 2, chan_id: 9}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 3, chan_id: 4}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 2, chan_id: 8}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 5, chan_id: 0}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 1, chan_id: 12}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 5, chan_id: 1}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 1, chan_id: 13}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 5, chan_id: 2}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 1, chan_id: 14}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 5, chan_id: 3}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 1, chan_id: 15}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 5, chan_id: 4}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 5, chan_id: 4}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 5, chan_id: 5}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 5, chan_id: 5}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 5, chan_id: 6}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 5, chan_id: 6}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 5, chan_id: 7}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 5, chan_id: 7}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 5, chan_id: 8}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 6, chan_id: 4}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 5, chan_id: 9}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 6, chan_id: 5}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 5, chan_id: 10}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 6, chan_id: 6}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 5, chan_id: 11}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 6, chan_id: 7}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 6, chan_id: 11}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 7, chan_id: 7}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 6, chan_id: 10}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 7, chan_id: 6}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 6, chan_id: 9}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 7, chan_id: 5}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 6, chan_id: 8}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 7, chan_id: 4}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 6, chan_id: 0}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 2, chan_id: 12}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 6, chan_id: 1}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 2, chan_id: 13}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 6, chan_id: 2}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 2, chan_id: 14}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 6, chan_id: 3}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 2, chan_id: 15}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 6, chan_id: 13}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 6, chan_id: 13}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 6, chan_id: 14}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 6, chan_id: 14}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 6, chan_id: 15}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 6, chan_id: 15}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 6, chan_id: 12}, {host_name: wh-glx-a03u14, tray_id: 1, asic_location: 6, chan_id: 12}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 8, chan_id: 15}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 8, chan_id: 15}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 8, chan_id: 14}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 8, chan_id: 14}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 8, chan_id: 13}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 8, chan_id: 13}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 8, chan_id: 12}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 8, chan_id: 12}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 8, chan_id: 0}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 4, chan_id: 12}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 8, chan_id: 1}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 4, chan_id: 13}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 8, chan_id: 2}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 4, chan_id: 14}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 8, chan_id: 3}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 4, chan_id: 15}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 8, chan_id: 4}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 7, chan_id: 8}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 8, chan_id: 5}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 7, chan_id: 9}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 8, chan_id: 6}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 7, chan_id: 10}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 8, chan_id: 7}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 7, chan_id: 11}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 2, chan_id: 7}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 1, chan_id: 11}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 2, chan_id: 6}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 1, chan_id: 10}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 2, chan_id: 5}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 1, chan_id: 9}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 2, chan_id: 4}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 1, chan_id: 8}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 5, chan_id: 11}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 6, chan_id: 7}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 5, chan_id: 10}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 6, chan_id: 6}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 5, chan_id: 9}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 6, chan_id: 5}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 5, chan_id: 8}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 6, chan_id: 4}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 3, chan_id: 15}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 7, chan_id: 3}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 3, chan_id: 14}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 7, chan_id: 2}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 3, chan_id: 13}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 7, chan_id: 1}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 3, chan_id: 12}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 7, chan_id: 0}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 3, chan_id: 11}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 4, chan_id: 7}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 3, chan_id: 10}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 4, chan_id: 6}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 3, chan_id: 9}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 4, chan_id: 5}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 3, chan_id: 8}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 4, chan_id: 4}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 3, chan_id: 7}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 2, chan_id: 11}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 3, chan_id: 6}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 2, chan_id: 10}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 3, chan_id: 5}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 2, chan_id: 9}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 3, chan_id: 4}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 2, chan_id: 8}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 8, chan_id: 8}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 8, chan_id: 8}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 8, chan_id: 9}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 8, chan_id: 9}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 8, chan_id: 10}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 8, chan_id: 10}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 8, chan_id: 11}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 8, chan_id: 11}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 6, chan_id: 13}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 6, chan_id: 13}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 6, chan_id: 14}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 6, chan_id: 14}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 6, chan_id: 15}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 6, chan_id: 15}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 6, chan_id: 12}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 6, chan_id: 12}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 1, chan_id: 7}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 1, chan_id: 7}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 1, chan_id: 6}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 1, chan_id: 6}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 1, chan_id: 5}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 1, chan_id: 5}]
+  - [{host_name: wh-glx-a03u14, tray_id: 2, asic_location: 1, chan_id: 4}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 1, chan_id: 4}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 7, chan_id: 4}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 6, chan_id: 8}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 7, chan_id: 5}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 6, chan_id: 9}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 7, chan_id: 6}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 6, chan_id: 10}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 7, chan_id: 7}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 6, chan_id: 11}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 3, chan_id: 11}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 4, chan_id: 7}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 3, chan_id: 10}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 4, chan_id: 6}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 3, chan_id: 9}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 4, chan_id: 5}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 3, chan_id: 8}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 4, chan_id: 4}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 1, chan_id: 11}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 2, chan_id: 7}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 1, chan_id: 10}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 2, chan_id: 6}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 1, chan_id: 9}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 2, chan_id: 5}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 1, chan_id: 8}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 2, chan_id: 4}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 8, chan_id: 0}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 4, chan_id: 12}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 8, chan_id: 1}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 4, chan_id: 13}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 8, chan_id: 2}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 4, chan_id: 14}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 8, chan_id: 3}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 4, chan_id: 15}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 6, chan_id: 0}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 2, chan_id: 12}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 6, chan_id: 1}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 2, chan_id: 13}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 6, chan_id: 2}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 2, chan_id: 14}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 6, chan_id: 3}, {host_name: wh-glx-a03u14, tray_id: 4, asic_location: 2, chan_id: 15}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 7, chan_id: 15}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 7, chan_id: 15}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 7, chan_id: 14}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 7, chan_id: 14}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 7, chan_id: 13}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 7, chan_id: 13}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 7, chan_id: 12}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 7, chan_id: 12}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 7, chan_id: 0}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 3, chan_id: 12}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 7, chan_id: 1}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 3, chan_id: 13}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 7, chan_id: 2}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 3, chan_id: 14}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 7, chan_id: 3}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 3, chan_id: 15}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 7, chan_id: 4}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 6, chan_id: 8}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 7, chan_id: 5}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 6, chan_id: 9}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 7, chan_id: 6}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 6, chan_id: 10}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 7, chan_id: 7}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 6, chan_id: 11}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 7, chan_id: 8}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 8, chan_id: 4}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 7, chan_id: 9}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 8, chan_id: 5}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 7, chan_id: 10}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 8, chan_id: 6}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 7, chan_id: 11}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 8, chan_id: 7}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 4, chan_id: 15}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 8, chan_id: 3}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 4, chan_id: 14}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 8, chan_id: 2}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 4, chan_id: 13}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 8, chan_id: 1}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 4, chan_id: 12}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 8, chan_id: 0}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 4, chan_id: 11}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 4, chan_id: 11}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 4, chan_id: 10}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 4, chan_id: 10}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 4, chan_id: 9}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 4, chan_id: 9}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 4, chan_id: 8}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 4, chan_id: 8}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 4, chan_id: 7}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 3, chan_id: 11}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 4, chan_id: 6}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 3, chan_id: 10}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 4, chan_id: 5}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 3, chan_id: 9}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 4, chan_id: 4}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 3, chan_id: 8}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 7, chan_id: 11}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 8, chan_id: 7}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 7, chan_id: 10}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 8, chan_id: 6}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 7, chan_id: 9}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 8, chan_id: 5}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 7, chan_id: 8}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 8, chan_id: 4}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 7, chan_id: 0}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 3, chan_id: 12}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 7, chan_id: 1}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 3, chan_id: 13}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 7, chan_id: 2}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 3, chan_id: 14}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 7, chan_id: 3}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 3, chan_id: 15}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 7, chan_id: 4}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 6, chan_id: 8}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 7, chan_id: 5}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 6, chan_id: 9}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 7, chan_id: 6}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 6, chan_id: 10}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 7, chan_id: 7}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 6, chan_id: 11}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 7, chan_id: 11}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 8, chan_id: 7}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 7, chan_id: 10}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 8, chan_id: 6}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 7, chan_id: 9}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 8, chan_id: 5}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 7, chan_id: 8}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 8, chan_id: 4}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 7, chan_id: 0}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 3, chan_id: 12}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 7, chan_id: 1}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 3, chan_id: 13}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 7, chan_id: 2}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 3, chan_id: 14}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 7, chan_id: 3}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 3, chan_id: 15}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 7, chan_id: 13}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 7, chan_id: 13}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 7, chan_id: 14}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 7, chan_id: 14}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 7, chan_id: 15}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 7, chan_id: 15}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 7, chan_id: 12}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 7, chan_id: 12}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 7, chan_id: 4}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 6, chan_id: 8}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 7, chan_id: 5}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 6, chan_id: 9}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 7, chan_id: 6}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 6, chan_id: 10}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 7, chan_id: 7}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 6, chan_id: 11}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 2, chan_id: 15}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 6, chan_id: 3}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 2, chan_id: 14}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 6, chan_id: 2}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 2, chan_id: 13}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 6, chan_id: 1}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 2, chan_id: 12}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 6, chan_id: 0}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 2, chan_id: 11}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 3, chan_id: 7}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 2, chan_id: 10}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 3, chan_id: 6}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 2, chan_id: 9}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 3, chan_id: 5}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 2, chan_id: 8}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 3, chan_id: 4}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 2, chan_id: 7}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 1, chan_id: 11}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 2, chan_id: 6}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 1, chan_id: 10}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 2, chan_id: 5}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 1, chan_id: 9}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 2, chan_id: 4}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 1, chan_id: 8}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 2, chan_id: 15}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 6, chan_id: 3}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 2, chan_id: 14}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 6, chan_id: 2}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 2, chan_id: 13}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 6, chan_id: 1}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 2, chan_id: 12}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 6, chan_id: 0}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 2, chan_id: 11}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 3, chan_id: 7}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 2, chan_id: 10}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 3, chan_id: 6}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 2, chan_id: 9}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 3, chan_id: 5}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 2, chan_id: 8}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 3, chan_id: 4}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 2, chan_id: 7}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 1, chan_id: 11}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 2, chan_id: 6}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 1, chan_id: 10}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 2, chan_id: 5}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 1, chan_id: 9}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 2, chan_id: 4}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 1, chan_id: 8}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 3, chan_id: 15}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 7, chan_id: 3}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 3, chan_id: 14}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 7, chan_id: 2}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 3, chan_id: 13}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 7, chan_id: 1}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 3, chan_id: 12}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 7, chan_id: 0}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 3, chan_id: 11}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 4, chan_id: 7}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 3, chan_id: 10}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 4, chan_id: 6}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 3, chan_id: 9}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 4, chan_id: 5}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 3, chan_id: 8}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 4, chan_id: 4}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 8, chan_id: 11}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 8, chan_id: 11}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 8, chan_id: 10}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 8, chan_id: 10}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 8, chan_id: 9}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 8, chan_id: 9}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 8, chan_id: 8}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 8, chan_id: 8}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 8, chan_id: 0}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 4, chan_id: 12}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 8, chan_id: 1}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 4, chan_id: 13}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 8, chan_id: 2}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 4, chan_id: 14}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 8, chan_id: 3}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 4, chan_id: 15}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 8, chan_id: 13}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 8, chan_id: 13}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 8, chan_id: 14}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 8, chan_id: 14}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 8, chan_id: 15}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 8, chan_id: 15}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 8, chan_id: 12}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 8, chan_id: 12}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 3, chan_id: 11}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 4, chan_id: 7}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 3, chan_id: 10}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 4, chan_id: 6}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 3, chan_id: 9}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 4, chan_id: 5}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 3, chan_id: 8}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 4, chan_id: 4}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 1, chan_id: 15}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 5, chan_id: 3}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 1, chan_id: 14}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 5, chan_id: 2}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 1, chan_id: 13}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 5, chan_id: 1}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 1, chan_id: 12}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 5, chan_id: 0}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 1, chan_id: 11}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 2, chan_id: 7}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 1, chan_id: 10}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 2, chan_id: 6}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 1, chan_id: 9}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 2, chan_id: 5}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 1, chan_id: 8}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 2, chan_id: 4}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 1, chan_id: 7}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 1, chan_id: 7}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 1, chan_id: 6}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 1, chan_id: 6}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 1, chan_id: 5}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 1, chan_id: 5}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 1, chan_id: 4}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 1, chan_id: 4}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 4, chan_id: 15}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 8, chan_id: 3}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 4, chan_id: 14}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 8, chan_id: 2}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 4, chan_id: 13}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 8, chan_id: 1}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 4, chan_id: 12}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 8, chan_id: 0}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 4, chan_id: 11}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 4, chan_id: 11}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 4, chan_id: 10}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 4, chan_id: 10}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 4, chan_id: 9}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 4, chan_id: 9}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 4, chan_id: 8}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 4, chan_id: 8}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 4, chan_id: 15}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 8, chan_id: 3}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 4, chan_id: 14}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 8, chan_id: 2}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 4, chan_id: 13}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 8, chan_id: 1}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 4, chan_id: 12}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 8, chan_id: 0}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 1, chan_id: 15}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 5, chan_id: 3}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 1, chan_id: 14}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 5, chan_id: 2}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 1, chan_id: 13}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 5, chan_id: 1}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 1, chan_id: 12}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 5, chan_id: 0}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 1, chan_id: 11}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 2, chan_id: 7}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 1, chan_id: 10}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 2, chan_id: 6}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 1, chan_id: 9}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 2, chan_id: 5}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 1, chan_id: 8}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 2, chan_id: 4}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 2, chan_id: 15}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 6, chan_id: 3}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 2, chan_id: 14}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 6, chan_id: 2}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 2, chan_id: 13}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 6, chan_id: 1}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 2, chan_id: 12}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 6, chan_id: 0}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 2, chan_id: 11}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 3, chan_id: 7}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 2, chan_id: 10}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 3, chan_id: 6}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 2, chan_id: 9}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 3, chan_id: 5}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 2, chan_id: 8}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 3, chan_id: 4}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 5, chan_id: 11}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 6, chan_id: 7}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 5, chan_id: 10}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 6, chan_id: 6}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 5, chan_id: 9}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 6, chan_id: 5}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 5, chan_id: 8}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 6, chan_id: 4}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 5, chan_id: 13}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 5, chan_id: 13}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 5, chan_id: 14}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 5, chan_id: 14}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 5, chan_id: 15}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 5, chan_id: 15}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 5, chan_id: 12}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 5, chan_id: 12}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 5, chan_id: 4}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 5, chan_id: 4}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 5, chan_id: 5}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 5, chan_id: 5}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 5, chan_id: 6}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 5, chan_id: 6}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 5, chan_id: 7}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 5, chan_id: 7}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 8, chan_id: 4}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 7, chan_id: 8}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 8, chan_id: 5}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 7, chan_id: 9}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 8, chan_id: 6}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 7, chan_id: 10}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 8, chan_id: 7}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 7, chan_id: 11}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 8, chan_id: 8}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 8, chan_id: 8}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 8, chan_id: 9}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 8, chan_id: 9}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 8, chan_id: 10}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 8, chan_id: 10}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 8, chan_id: 11}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 8, chan_id: 11}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 2, chan_id: 15}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 6, chan_id: 3}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 2, chan_id: 14}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 6, chan_id: 2}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 2, chan_id: 13}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 6, chan_id: 1}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 2, chan_id: 12}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 6, chan_id: 0}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 2, chan_id: 11}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 3, chan_id: 7}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 2, chan_id: 10}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 3, chan_id: 6}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 2, chan_id: 9}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 3, chan_id: 5}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 2, chan_id: 8}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 3, chan_id: 4}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 5, chan_id: 11}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 6, chan_id: 7}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 5, chan_id: 10}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 6, chan_id: 6}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 5, chan_id: 9}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 6, chan_id: 5}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 5, chan_id: 8}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 6, chan_id: 4}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 5, chan_id: 0}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 1, chan_id: 12}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 5, chan_id: 1}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 1, chan_id: 13}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 5, chan_id: 2}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 1, chan_id: 14}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 5, chan_id: 3}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 1, chan_id: 15}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 5, chan_id: 13}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 5, chan_id: 13}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 5, chan_id: 14}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 5, chan_id: 14}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 5, chan_id: 15}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 5, chan_id: 15}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 5, chan_id: 12}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 5, chan_id: 12}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 5, chan_id: 4}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 5, chan_id: 4}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 5, chan_id: 5}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 5, chan_id: 5}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 5, chan_id: 6}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 5, chan_id: 6}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 5, chan_id: 7}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 5, chan_id: 7}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 5, chan_id: 0}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 1, chan_id: 12}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 5, chan_id: 1}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 1, chan_id: 13}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 5, chan_id: 2}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 1, chan_id: 14}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 5, chan_id: 3}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 1, chan_id: 15}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 5, chan_id: 8}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 6, chan_id: 4}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 5, chan_id: 9}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 6, chan_id: 5}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 5, chan_id: 10}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 6, chan_id: 6}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 5, chan_id: 11}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 6, chan_id: 7}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 8, chan_id: 15}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 8, chan_id: 15}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 8, chan_id: 14}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 8, chan_id: 14}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 8, chan_id: 13}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 8, chan_id: 13}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 8, chan_id: 12}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 8, chan_id: 12}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 5, chan_id: 8}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 6, chan_id: 4}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 5, chan_id: 9}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 6, chan_id: 5}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 5, chan_id: 10}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 6, chan_id: 6}]
+  - [{host_name: wh-glx-a04u08, tray_id: 3, asic_location: 5, chan_id: 11}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 6, chan_id: 7}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 1, chan_id: 7}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 1, chan_id: 7}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 1, chan_id: 6}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 1, chan_id: 6}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 1, chan_id: 5}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 1, chan_id: 5}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 1, chan_id: 4}, {host_name: wh-glx-a04u08, tray_id: 4, asic_location: 1, chan_id: 4}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 6, chan_id: 15}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 6, chan_id: 15}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 6, chan_id: 14}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 6, chan_id: 14}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 6, chan_id: 13}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 6, chan_id: 13}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 6, chan_id: 12}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 6, chan_id: 12}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 6, chan_id: 8}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 7, chan_id: 4}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 6, chan_id: 9}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 7, chan_id: 5}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 6, chan_id: 10}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 7, chan_id: 6}]
+  - [{host_name: wh-glx-a04u08, tray_id: 2, asic_location: 6, chan_id: 11}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 7, chan_id: 7}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 3, chan_id: 11}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 4, chan_id: 7}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 3, chan_id: 10}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 4, chan_id: 6}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 3, chan_id: 9}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 4, chan_id: 5}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 3, chan_id: 8}, {host_name: wh-glx-a04u08, tray_id: 1, asic_location: 4, chan_id: 4}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 6, chan_id: 13}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 6, chan_id: 13}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 6, chan_id: 14}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 6, chan_id: 14}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 6, chan_id: 15}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 6, chan_id: 15}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 6, chan_id: 12}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 6, chan_id: 12}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 7, chan_id: 15}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 7, chan_id: 15}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 7, chan_id: 14}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 7, chan_id: 14}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 7, chan_id: 13}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 7, chan_id: 13}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 7, chan_id: 12}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 7, chan_id: 12}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 7, chan_id: 0}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 3, chan_id: 12}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 7, chan_id: 1}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 3, chan_id: 13}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 7, chan_id: 2}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 3, chan_id: 14}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 7, chan_id: 3}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 3, chan_id: 15}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 7, chan_id: 4}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 6, chan_id: 8}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 7, chan_id: 5}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 6, chan_id: 9}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 7, chan_id: 6}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 6, chan_id: 10}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 7, chan_id: 7}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 6, chan_id: 11}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 7, chan_id: 8}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 8, chan_id: 4}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 7, chan_id: 9}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 8, chan_id: 5}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 7, chan_id: 10}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 8, chan_id: 6}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 7, chan_id: 11}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 8, chan_id: 7}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 4, chan_id: 15}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 8, chan_id: 3}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 4, chan_id: 14}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 8, chan_id: 2}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 4, chan_id: 13}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 8, chan_id: 1}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 4, chan_id: 12}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 8, chan_id: 0}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 4, chan_id: 11}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 4, chan_id: 11}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 4, chan_id: 10}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 4, chan_id: 10}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 4, chan_id: 9}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 4, chan_id: 9}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 4, chan_id: 8}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 4, chan_id: 8}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 4, chan_id: 7}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 3, chan_id: 11}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 4, chan_id: 6}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 3, chan_id: 10}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 4, chan_id: 5}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 3, chan_id: 9}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 4, chan_id: 4}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 3, chan_id: 8}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 7, chan_id: 11}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 8, chan_id: 7}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 7, chan_id: 10}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 8, chan_id: 6}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 7, chan_id: 9}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 8, chan_id: 5}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 7, chan_id: 8}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 8, chan_id: 4}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 7, chan_id: 0}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 3, chan_id: 12}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 7, chan_id: 1}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 3, chan_id: 13}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 7, chan_id: 2}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 3, chan_id: 14}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 7, chan_id: 3}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 3, chan_id: 15}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 7, chan_id: 4}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 6, chan_id: 8}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 7, chan_id: 5}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 6, chan_id: 9}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 7, chan_id: 6}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 6, chan_id: 10}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 7, chan_id: 7}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 6, chan_id: 11}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 3, chan_id: 15}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 7, chan_id: 3}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 3, chan_id: 14}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 7, chan_id: 2}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 3, chan_id: 13}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 7, chan_id: 1}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 3, chan_id: 12}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 7, chan_id: 0}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 3, chan_id: 11}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 4, chan_id: 7}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 3, chan_id: 10}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 4, chan_id: 6}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 3, chan_id: 9}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 4, chan_id: 5}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 3, chan_id: 8}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 4, chan_id: 4}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 3, chan_id: 7}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 2, chan_id: 11}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 3, chan_id: 6}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 2, chan_id: 10}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 3, chan_id: 5}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 2, chan_id: 9}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 3, chan_id: 4}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 2, chan_id: 8}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 6, chan_id: 11}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 7, chan_id: 7}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 6, chan_id: 10}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 7, chan_id: 6}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 6, chan_id: 9}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 7, chan_id: 5}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 6, chan_id: 8}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 7, chan_id: 4}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 6, chan_id: 0}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 2, chan_id: 12}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 6, chan_id: 1}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 2, chan_id: 13}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 6, chan_id: 2}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 2, chan_id: 14}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 6, chan_id: 3}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 2, chan_id: 15}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 6, chan_id: 13}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 6, chan_id: 13}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 6, chan_id: 14}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 6, chan_id: 14}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 6, chan_id: 15}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 6, chan_id: 15}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 6, chan_id: 12}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 6, chan_id: 12}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 6, chan_id: 4}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 5, chan_id: 8}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 6, chan_id: 5}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 5, chan_id: 9}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 6, chan_id: 6}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 5, chan_id: 10}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 6, chan_id: 7}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 5, chan_id: 11}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 2, chan_id: 15}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 6, chan_id: 3}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 2, chan_id: 14}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 6, chan_id: 2}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 2, chan_id: 13}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 6, chan_id: 1}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 2, chan_id: 12}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 6, chan_id: 0}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 2, chan_id: 11}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 3, chan_id: 7}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 2, chan_id: 10}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 3, chan_id: 6}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 2, chan_id: 9}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 3, chan_id: 5}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 2, chan_id: 8}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 3, chan_id: 4}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 2, chan_id: 7}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 1, chan_id: 11}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 2, chan_id: 6}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 1, chan_id: 10}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 2, chan_id: 5}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 1, chan_id: 9}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 2, chan_id: 4}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 1, chan_id: 8}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 3, chan_id: 15}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 7, chan_id: 3}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 3, chan_id: 14}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 7, chan_id: 2}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 3, chan_id: 13}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 7, chan_id: 1}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 3, chan_id: 12}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 7, chan_id: 0}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 3, chan_id: 11}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 4, chan_id: 7}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 3, chan_id: 10}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 4, chan_id: 6}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 3, chan_id: 9}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 4, chan_id: 5}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 3, chan_id: 8}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 4, chan_id: 4}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 3, chan_id: 7}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 2, chan_id: 11}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 3, chan_id: 6}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 2, chan_id: 10}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 3, chan_id: 5}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 2, chan_id: 9}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 3, chan_id: 4}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 2, chan_id: 8}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 5, chan_id: 15}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 5, chan_id: 15}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 5, chan_id: 14}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 5, chan_id: 14}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 5, chan_id: 13}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 5, chan_id: 13}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 5, chan_id: 12}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 5, chan_id: 12}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 5, chan_id: 0}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 1, chan_id: 12}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 5, chan_id: 1}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 1, chan_id: 13}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 5, chan_id: 2}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 1, chan_id: 14}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 5, chan_id: 3}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 1, chan_id: 15}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 5, chan_id: 4}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 5, chan_id: 4}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 5, chan_id: 5}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 5, chan_id: 5}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 5, chan_id: 6}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 5, chan_id: 6}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 5, chan_id: 7}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 5, chan_id: 7}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 5, chan_id: 8}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 6, chan_id: 4}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 5, chan_id: 9}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 6, chan_id: 5}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 5, chan_id: 10}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 6, chan_id: 6}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 5, chan_id: 11}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 6, chan_id: 7}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 1, chan_id: 15}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 5, chan_id: 3}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 1, chan_id: 14}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 5, chan_id: 2}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 1, chan_id: 13}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 5, chan_id: 1}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 1, chan_id: 12}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 5, chan_id: 0}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 1, chan_id: 11}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 2, chan_id: 7}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 1, chan_id: 10}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 2, chan_id: 6}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 1, chan_id: 9}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 2, chan_id: 5}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 1, chan_id: 8}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 2, chan_id: 4}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 1, chan_id: 7}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 1, chan_id: 7}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 1, chan_id: 6}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 1, chan_id: 6}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 1, chan_id: 5}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 1, chan_id: 5}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 1, chan_id: 4}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 1, chan_id: 4}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 7, chan_id: 15}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 7, chan_id: 15}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 7, chan_id: 14}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 7, chan_id: 14}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 7, chan_id: 13}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 7, chan_id: 13}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 7, chan_id: 12}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 7, chan_id: 12}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 7, chan_id: 4}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 6, chan_id: 8}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 7, chan_id: 5}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 6, chan_id: 9}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 7, chan_id: 6}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 6, chan_id: 10}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 7, chan_id: 7}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 6, chan_id: 11}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 7, chan_id: 8}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 8, chan_id: 4}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 7, chan_id: 9}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 8, chan_id: 5}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 7, chan_id: 10}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 8, chan_id: 6}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 7, chan_id: 11}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 8, chan_id: 7}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 5, chan_id: 4}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 5, chan_id: 4}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 5, chan_id: 5}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 5, chan_id: 5}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 5, chan_id: 6}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 5, chan_id: 6}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 5, chan_id: 7}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 5, chan_id: 7}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 1, chan_id: 15}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 5, chan_id: 3}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 1, chan_id: 14}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 5, chan_id: 2}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 1, chan_id: 13}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 5, chan_id: 1}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 1, chan_id: 12}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 5, chan_id: 0}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 4, chan_id: 15}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 8, chan_id: 3}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 4, chan_id: 14}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 8, chan_id: 2}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 4, chan_id: 13}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 8, chan_id: 1}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 4, chan_id: 12}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 8, chan_id: 0}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 8, chan_id: 15}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 8, chan_id: 15}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 8, chan_id: 14}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 8, chan_id: 14}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 8, chan_id: 13}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 8, chan_id: 13}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 8, chan_id: 12}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 8, chan_id: 12}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 8, chan_id: 8}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 8, chan_id: 8}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 8, chan_id: 9}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 8, chan_id: 9}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 8, chan_id: 10}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 8, chan_id: 10}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 8, chan_id: 11}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 8, chan_id: 11}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 5, chan_id: 11}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 6, chan_id: 7}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 5, chan_id: 10}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 6, chan_id: 6}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 5, chan_id: 9}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 6, chan_id: 5}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 5, chan_id: 8}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 6, chan_id: 4}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 5, chan_id: 13}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 5, chan_id: 13}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 5, chan_id: 14}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 5, chan_id: 14}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 5, chan_id: 15}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 5, chan_id: 15}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 5, chan_id: 12}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 5, chan_id: 12}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 2, chan_id: 15}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 6, chan_id: 3}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 2, chan_id: 14}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 6, chan_id: 2}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 2, chan_id: 13}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 6, chan_id: 1}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 2, chan_id: 12}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 6, chan_id: 0}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 2, chan_id: 11}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 3, chan_id: 7}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 2, chan_id: 10}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 3, chan_id: 6}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 2, chan_id: 9}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 3, chan_id: 5}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 2, chan_id: 8}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 3, chan_id: 4}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 2, chan_id: 7}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 1, chan_id: 11}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 2, chan_id: 6}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 1, chan_id: 10}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 2, chan_id: 5}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 1, chan_id: 9}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 2, chan_id: 4}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 1, chan_id: 8}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 8, chan_id: 15}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 8, chan_id: 15}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 8, chan_id: 14}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 8, chan_id: 14}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 8, chan_id: 13}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 8, chan_id: 13}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 8, chan_id: 12}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 8, chan_id: 12}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 5, chan_id: 0}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 1, chan_id: 12}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 5, chan_id: 1}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 1, chan_id: 13}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 5, chan_id: 2}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 1, chan_id: 14}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 5, chan_id: 3}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 1, chan_id: 15}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 5, chan_id: 8}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 6, chan_id: 4}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 5, chan_id: 9}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 6, chan_id: 5}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 5, chan_id: 10}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 6, chan_id: 6}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 5, chan_id: 11}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 6, chan_id: 7}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 8, chan_id: 11}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 8, chan_id: 11}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 8, chan_id: 10}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 8, chan_id: 10}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 8, chan_id: 9}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 8, chan_id: 9}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 8, chan_id: 8}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 8, chan_id: 8}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 8, chan_id: 0}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 4, chan_id: 12}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 8, chan_id: 1}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 4, chan_id: 13}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 8, chan_id: 2}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 4, chan_id: 14}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 8, chan_id: 3}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 4, chan_id: 15}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 2, chan_id: 15}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 6, chan_id: 3}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 2, chan_id: 14}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 6, chan_id: 2}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 2, chan_id: 13}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 6, chan_id: 1}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 2, chan_id: 12}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 6, chan_id: 0}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 2, chan_id: 7}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 1, chan_id: 11}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 2, chan_id: 6}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 1, chan_id: 10}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 2, chan_id: 5}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 1, chan_id: 9}]
+  - [{host_name: wh-glx-a03u08, tray_id: 2, asic_location: 2, chan_id: 4}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 1, chan_id: 8}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 4, chan_id: 11}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 4, chan_id: 11}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 4, chan_id: 10}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 4, chan_id: 10}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 4, chan_id: 9}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 4, chan_id: 9}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 4, chan_id: 8}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 4, chan_id: 8}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 4, chan_id: 7}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 3, chan_id: 11}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 4, chan_id: 6}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 3, chan_id: 10}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 4, chan_id: 5}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 3, chan_id: 9}]
+  - [{host_name: wh-glx-a03u08, tray_id: 3, asic_location: 4, chan_id: 4}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 3, chan_id: 8}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 8, chan_id: 0}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 4, chan_id: 12}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 8, chan_id: 1}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 4, chan_id: 13}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 8, chan_id: 2}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 4, chan_id: 14}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 8, chan_id: 3}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 4, chan_id: 15}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 8, chan_id: 4}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 7, chan_id: 8}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 8, chan_id: 5}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 7, chan_id: 9}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 8, chan_id: 6}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 7, chan_id: 10}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 8, chan_id: 7}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 7, chan_id: 11}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 1, chan_id: 7}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 1, chan_id: 7}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 1, chan_id: 6}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 1, chan_id: 6}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 1, chan_id: 5}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 1, chan_id: 5}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 1, chan_id: 4}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 1, chan_id: 4}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 6, chan_id: 15}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 6, chan_id: 15}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 6, chan_id: 14}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 6, chan_id: 14}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 6, chan_id: 13}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 6, chan_id: 13}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 6, chan_id: 12}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 6, chan_id: 12}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 8, chan_id: 15}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 8, chan_id: 15}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 8, chan_id: 14}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 8, chan_id: 14}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 8, chan_id: 13}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 8, chan_id: 13}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 8, chan_id: 12}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 8, chan_id: 12}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 8, chan_id: 0}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 4, chan_id: 12}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 8, chan_id: 1}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 4, chan_id: 13}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 8, chan_id: 2}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 4, chan_id: 14}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 8, chan_id: 3}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 4, chan_id: 15}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 8, chan_id: 4}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 7, chan_id: 8}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 8, chan_id: 5}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 7, chan_id: 9}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 8, chan_id: 6}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 7, chan_id: 10}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 8, chan_id: 7}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 7, chan_id: 11}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 8, chan_id: 8}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 8, chan_id: 8}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 8, chan_id: 9}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 8, chan_id: 9}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 8, chan_id: 10}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 8, chan_id: 10}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 8, chan_id: 11}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 8, chan_id: 11}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 7, chan_id: 11}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 8, chan_id: 7}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 7, chan_id: 10}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 8, chan_id: 6}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 7, chan_id: 9}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 8, chan_id: 5}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 7, chan_id: 8}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 8, chan_id: 4}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 7, chan_id: 0}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 3, chan_id: 12}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 7, chan_id: 1}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 3, chan_id: 13}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 7, chan_id: 2}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 3, chan_id: 14}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 7, chan_id: 3}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 3, chan_id: 15}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 7, chan_id: 13}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 7, chan_id: 13}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 7, chan_id: 14}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 7, chan_id: 14}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 7, chan_id: 15}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 7, chan_id: 15}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 7, chan_id: 12}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 7, chan_id: 12}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 7, chan_id: 4}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 6, chan_id: 8}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 7, chan_id: 5}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 6, chan_id: 9}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 7, chan_id: 6}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 6, chan_id: 10}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 7, chan_id: 7}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 6, chan_id: 11}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 4, chan_id: 15}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 8, chan_id: 3}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 4, chan_id: 14}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 8, chan_id: 2}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 4, chan_id: 13}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 8, chan_id: 1}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 4, chan_id: 12}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 8, chan_id: 0}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 4, chan_id: 11}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 4, chan_id: 11}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 4, chan_id: 10}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 4, chan_id: 10}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 4, chan_id: 9}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 4, chan_id: 9}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 4, chan_id: 8}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 4, chan_id: 8}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 4, chan_id: 7}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 3, chan_id: 11}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 4, chan_id: 6}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 3, chan_id: 10}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 4, chan_id: 5}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 3, chan_id: 9}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 4, chan_id: 4}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 3, chan_id: 8}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 5, chan_id: 15}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 5, chan_id: 15}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 5, chan_id: 14}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 5, chan_id: 14}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 5, chan_id: 13}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 5, chan_id: 13}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 5, chan_id: 12}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 5, chan_id: 12}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 5, chan_id: 0}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 1, chan_id: 12}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 5, chan_id: 1}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 1, chan_id: 13}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 5, chan_id: 2}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 1, chan_id: 14}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 5, chan_id: 3}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 1, chan_id: 15}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 5, chan_id: 4}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 5, chan_id: 4}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 5, chan_id: 5}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 5, chan_id: 5}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 5, chan_id: 6}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 5, chan_id: 6}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 5, chan_id: 7}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 5, chan_id: 7}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 5, chan_id: 8}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 6, chan_id: 4}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 5, chan_id: 9}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 6, chan_id: 5}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 5, chan_id: 10}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 6, chan_id: 6}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 5, chan_id: 11}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 6, chan_id: 7}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 2, chan_id: 15}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 6, chan_id: 3}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 2, chan_id: 14}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 6, chan_id: 2}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 2, chan_id: 13}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 6, chan_id: 1}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 2, chan_id: 12}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 6, chan_id: 0}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 2, chan_id: 11}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 3, chan_id: 7}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 2, chan_id: 10}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 3, chan_id: 6}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 2, chan_id: 9}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 3, chan_id: 5}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 2, chan_id: 8}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 3, chan_id: 4}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 2, chan_id: 7}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 1, chan_id: 11}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 2, chan_id: 6}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 1, chan_id: 10}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 2, chan_id: 5}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 1, chan_id: 9}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 2, chan_id: 4}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 1, chan_id: 8}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 8, chan_id: 11}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 8, chan_id: 11}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 8, chan_id: 10}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 8, chan_id: 10}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 8, chan_id: 9}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 8, chan_id: 9}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 8, chan_id: 8}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 8, chan_id: 8}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 8, chan_id: 13}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 8, chan_id: 13}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 8, chan_id: 14}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 8, chan_id: 14}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 8, chan_id: 15}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 8, chan_id: 15}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 8, chan_id: 12}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 8, chan_id: 12}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 1, chan_id: 15}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 5, chan_id: 3}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 1, chan_id: 14}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 5, chan_id: 2}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 1, chan_id: 13}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 5, chan_id: 1}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 1, chan_id: 12}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 5, chan_id: 0}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 1, chan_id: 11}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 2, chan_id: 7}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 1, chan_id: 10}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 2, chan_id: 6}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 1, chan_id: 9}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 2, chan_id: 5}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 1, chan_id: 8}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 2, chan_id: 4}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 1, chan_id: 7}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 1, chan_id: 7}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 1, chan_id: 6}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 1, chan_id: 6}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 1, chan_id: 5}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 1, chan_id: 5}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 1, chan_id: 4}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 1, chan_id: 4}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 1, chan_id: 15}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 5, chan_id: 3}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 1, chan_id: 14}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 5, chan_id: 2}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 1, chan_id: 13}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 5, chan_id: 1}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 1, chan_id: 12}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 5, chan_id: 0}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 4, chan_id: 11}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 4, chan_id: 11}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 4, chan_id: 10}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 4, chan_id: 10}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 4, chan_id: 9}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 4, chan_id: 9}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 4, chan_id: 8}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 4, chan_id: 8}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 4, chan_id: 7}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 3, chan_id: 11}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 4, chan_id: 6}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 3, chan_id: 10}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 4, chan_id: 5}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 3, chan_id: 9}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 4, chan_id: 4}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 3, chan_id: 8}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 5, chan_id: 11}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 6, chan_id: 7}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 5, chan_id: 10}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 6, chan_id: 6}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 5, chan_id: 9}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 6, chan_id: 5}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 5, chan_id: 8}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 6, chan_id: 4}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 5, chan_id: 13}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 5, chan_id: 13}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 5, chan_id: 14}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 5, chan_id: 14}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 5, chan_id: 15}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 5, chan_id: 15}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 5, chan_id: 12}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 5, chan_id: 12}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 5, chan_id: 4}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 5, chan_id: 4}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 5, chan_id: 5}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 5, chan_id: 5}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 5, chan_id: 6}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 5, chan_id: 6}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 5, chan_id: 7}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 5, chan_id: 7}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 2, chan_id: 15}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 6, chan_id: 3}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 2, chan_id: 14}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 6, chan_id: 2}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 2, chan_id: 13}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 6, chan_id: 1}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 2, chan_id: 12}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 6, chan_id: 0}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 2, chan_id: 11}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 3, chan_id: 7}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 2, chan_id: 10}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 3, chan_id: 6}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 2, chan_id: 9}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 3, chan_id: 5}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 2, chan_id: 8}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 3, chan_id: 4}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 2, chan_id: 7}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 1, chan_id: 11}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 2, chan_id: 6}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 1, chan_id: 10}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 2, chan_id: 5}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 1, chan_id: 9}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 2, chan_id: 4}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 1, chan_id: 8}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 2, chan_id: 15}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 6, chan_id: 3}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 2, chan_id: 14}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 6, chan_id: 2}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 2, chan_id: 13}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 6, chan_id: 1}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 2, chan_id: 12}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 6, chan_id: 0}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 2, chan_id: 11}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 3, chan_id: 7}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 2, chan_id: 10}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 3, chan_id: 6}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 2, chan_id: 9}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 3, chan_id: 5}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 2, chan_id: 8}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 3, chan_id: 4}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 3, chan_id: 15}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 7, chan_id: 3}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 3, chan_id: 14}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 7, chan_id: 2}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 3, chan_id: 13}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 7, chan_id: 1}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 3, chan_id: 12}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 7, chan_id: 0}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 6, chan_id: 13}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 6, chan_id: 13}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 6, chan_id: 14}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 6, chan_id: 14}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 6, chan_id: 15}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 6, chan_id: 15}]
+  - [{host_name: wh-glx-a03u02, tray_id: 4, asic_location: 6, chan_id: 12}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 6, chan_id: 12}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 8, chan_id: 0}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 4, chan_id: 12}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 8, chan_id: 1}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 4, chan_id: 13}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 8, chan_id: 2}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 4, chan_id: 14}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 8, chan_id: 3}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 4, chan_id: 15}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 8, chan_id: 4}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 7, chan_id: 8}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 8, chan_id: 5}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 7, chan_id: 9}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 8, chan_id: 6}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 7, chan_id: 10}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 8, chan_id: 7}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 7, chan_id: 11}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 5, chan_id: 0}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 1, chan_id: 12}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 5, chan_id: 1}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 1, chan_id: 13}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 5, chan_id: 2}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 1, chan_id: 14}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 5, chan_id: 3}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 1, chan_id: 15}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 5, chan_id: 8}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 6, chan_id: 4}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 5, chan_id: 9}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 6, chan_id: 5}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 5, chan_id: 10}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 6, chan_id: 6}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 5, chan_id: 11}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 6, chan_id: 7}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 7, chan_id: 11}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 8, chan_id: 7}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 7, chan_id: 10}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 8, chan_id: 6}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 7, chan_id: 9}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 8, chan_id: 5}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 7, chan_id: 8}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 8, chan_id: 4}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 7, chan_id: 0}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 3, chan_id: 12}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 7, chan_id: 1}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 3, chan_id: 13}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 7, chan_id: 2}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 3, chan_id: 14}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 7, chan_id: 3}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 3, chan_id: 15}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 7, chan_id: 13}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 7, chan_id: 13}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 7, chan_id: 14}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 7, chan_id: 14}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 7, chan_id: 15}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 7, chan_id: 15}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 7, chan_id: 12}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 7, chan_id: 12}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 7, chan_id: 4}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 6, chan_id: 8}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 7, chan_id: 5}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 6, chan_id: 9}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 7, chan_id: 6}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 6, chan_id: 10}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 7, chan_id: 7}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 6, chan_id: 11}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 1, chan_id: 7}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 1, chan_id: 7}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 1, chan_id: 6}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 1, chan_id: 6}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 1, chan_id: 5}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 1, chan_id: 5}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 1, chan_id: 4}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 1, chan_id: 4}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 6, chan_id: 15}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 6, chan_id: 15}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 6, chan_id: 14}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 6, chan_id: 14}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 6, chan_id: 13}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 6, chan_id: 13}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 6, chan_id: 12}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 6, chan_id: 12}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 6, chan_id: 8}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 7, chan_id: 4}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 6, chan_id: 9}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 7, chan_id: 5}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 6, chan_id: 10}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 7, chan_id: 6}]
+  - [{host_name: wh-glx-a03u02, tray_id: 1, asic_location: 6, chan_id: 11}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 7, chan_id: 7}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 1, chan_id: 11}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 2, chan_id: 7}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 1, chan_id: 10}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 2, chan_id: 6}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 1, chan_id: 9}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 2, chan_id: 5}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 1, chan_id: 8}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 2, chan_id: 4}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 3, chan_id: 11}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 4, chan_id: 7}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 3, chan_id: 10}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 4, chan_id: 6}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 3, chan_id: 9}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 4, chan_id: 5}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 3, chan_id: 8}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 4, chan_id: 4}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 5, chan_id: 11}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 6, chan_id: 7}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 5, chan_id: 10}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 6, chan_id: 6}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 5, chan_id: 9}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 6, chan_id: 5}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 5, chan_id: 8}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 6, chan_id: 4}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 3, chan_id: 15}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 7, chan_id: 3}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 3, chan_id: 14}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 7, chan_id: 2}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 3, chan_id: 13}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 7, chan_id: 1}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 3, chan_id: 12}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 7, chan_id: 0}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 3, chan_id: 11}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 4, chan_id: 7}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 3, chan_id: 10}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 4, chan_id: 6}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 3, chan_id: 9}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 4, chan_id: 5}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 3, chan_id: 8}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 4, chan_id: 4}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 3, chan_id: 7}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 2, chan_id: 11}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 3, chan_id: 6}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 2, chan_id: 10}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 3, chan_id: 5}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 2, chan_id: 9}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 3, chan_id: 4}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 2, chan_id: 8}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 8, chan_id: 0}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 4, chan_id: 12}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 8, chan_id: 1}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 4, chan_id: 13}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 8, chan_id: 2}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 4, chan_id: 14}]
+  - [{host_name: wh-glx-a03u02, tray_id: 2, asic_location: 8, chan_id: 3}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 4, chan_id: 15}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 6, chan_id: 0}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 2, chan_id: 12}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 6, chan_id: 1}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 2, chan_id: 13}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 6, chan_id: 2}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 2, chan_id: 14}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 6, chan_id: 3}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 2, chan_id: 15}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 6, chan_id: 8}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 7, chan_id: 4}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 6, chan_id: 9}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 7, chan_id: 5}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 6, chan_id: 10}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 7, chan_id: 6}]
+  - [{host_name: wh-glx-a03u02, tray_id: 3, asic_location: 6, chan_id: 11}, {host_name: wh-glx-a03u02, tray_id: 3, asic_location: 7, chan_id: 7}]
+global_eth_connections:
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 4, chan_id: 3}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 4, chan_id: 3}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 4, chan_id: 2}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 4, chan_id: 2}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 4, chan_id: 1}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 4, chan_id: 1}]
+  - [{host_name: wh-glx-a04u02, tray_id: 4, asic_location: 4, chan_id: 0}, {host_name: wh-glx-a04u08, tray_id: 2, asic_location: 4, chan_id: 0}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 2, chan_id: 3}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 4, chan_id: 3}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 2, chan_id: 2}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 4, chan_id: 2}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 2, chan_id: 1}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 4, chan_id: 1}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 2, chan_id: 0}, {host_name: wh-glx-a03u08, tray_id: 2, asic_location: 4, chan_id: 0}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 1, chan_id: 3}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 4, chan_id: 3}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 1, chan_id: 2}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 4, chan_id: 2}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 1, chan_id: 1}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 4, chan_id: 1}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 1, chan_id: 0}, {host_name: wh-glx-a03u14, tray_id: 2, asic_location: 4, chan_id: 0}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 4, chan_id: 3}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 4, chan_id: 3}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 4, chan_id: 2}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 4, chan_id: 2}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 4, chan_id: 1}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 4, chan_id: 1}]
+  - [{host_name: wh-glx-a04u02, tray_id: 1, asic_location: 4, chan_id: 0}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 4, chan_id: 0}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 3, chan_id: 3}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 4, chan_id: 3}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 3, chan_id: 2}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 4, chan_id: 2}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 3, chan_id: 1}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 4, chan_id: 1}]
+  - [{host_name: wh-glx-a04u02, tray_id: 2, asic_location: 3, chan_id: 0}, {host_name: wh-glx-a03u02, tray_id: 2, asic_location: 4, chan_id: 0}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 4, chan_id: 3}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 1, chan_id: 3}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 4, chan_id: 2}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 1, chan_id: 2}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 4, chan_id: 1}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 1, chan_id: 1}]
+  - [{host_name: wh-glx-a04u02, tray_id: 3, asic_location: 4, chan_id: 0}, {host_name: wh-glx-a03u14, tray_id: 3, asic_location: 1, chan_id: 0}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 4, chan_id: 3}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 4, chan_id: 3}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 4, chan_id: 2}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 4, chan_id: 2}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 4, chan_id: 1}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 4, chan_id: 1}]
+  - [{host_name: wh-glx-a03u14, tray_id: 1, asic_location: 4, chan_id: 0}, {host_name: wh-glx-a03u08, tray_id: 3, asic_location: 4, chan_id: 0}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 2, chan_id: 3}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 4, chan_id: 3}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 2, chan_id: 2}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 4, chan_id: 2}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 2, chan_id: 1}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 4, chan_id: 1}]
+  - [{host_name: wh-glx-a03u14, tray_id: 3, asic_location: 2, chan_id: 0}, {host_name: wh-glx-a04u08, tray_id: 3, asic_location: 4, chan_id: 0}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 1, chan_id: 3}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 1, chan_id: 3}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 1, chan_id: 2}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 1, chan_id: 2}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 1, chan_id: 1}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 1, chan_id: 1}]
+  - [{host_name: wh-glx-a03u14, tray_id: 4, asic_location: 1, chan_id: 0}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 1, chan_id: 0}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 2, chan_id: 3}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 4, chan_id: 3}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 2, chan_id: 2}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 4, chan_id: 2}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 2, chan_id: 1}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 4, chan_id: 1}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 2, chan_id: 0}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 4, chan_id: 0}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 3, chan_id: 3}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 4, chan_id: 3}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 3, chan_id: 2}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 4, chan_id: 2}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 3, chan_id: 1}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 4, chan_id: 1}]
+  - [{host_name: wh-glx-a04u08, tray_id: 4, asic_location: 3, chan_id: 0}, {host_name: wh-glx-a03u08, tray_id: 4, asic_location: 4, chan_id: 0}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 3, chan_id: 3}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 2, chan_id: 3}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 3, chan_id: 2}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 2, chan_id: 2}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 3, chan_id: 1}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 2, chan_id: 1}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 3, chan_id: 0}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 2, chan_id: 0}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 4, chan_id: 3}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 3, chan_id: 3}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 4, chan_id: 2}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 3, chan_id: 2}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 4, chan_id: 1}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 3, chan_id: 1}]
+  - [{host_name: wh-glx-a04u08, tray_id: 1, asic_location: 4, chan_id: 0}, {host_name: wh-glx-a03u08, tray_id: 1, asic_location: 3, chan_id: 0}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 1, chan_id: 3}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 4, chan_id: 3}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 1, chan_id: 2}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 4, chan_id: 2}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 1, chan_id: 1}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 4, chan_id: 1}]
+  - [{host_name: wh-glx-a03u08, tray_id: 1, asic_location: 1, chan_id: 0}, {host_name: wh-glx-a03u02, tray_id: 1, asic_location: 4, chan_id: 0}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 2, chan_id: 3}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 1, chan_id: 3}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 2, chan_id: 2}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 1, chan_id: 2}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 2, chan_id: 1}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 1, chan_id: 1}]
+  - [{host_name: wh-glx-a03u08, tray_id: 4, asic_location: 2, chan_id: 0}, {host_name: wh-glx-a03u02, tray_id: 4, asic_location: 1, chan_id: 0}]
