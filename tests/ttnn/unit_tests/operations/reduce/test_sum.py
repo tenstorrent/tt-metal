@@ -249,3 +249,17 @@ def test_sum_full_tensor_bf16(device, dim):
     output_tensor = ttnn.sum(input_tensor, dim=dim)
 
     assert torch.equal(ttnn.to_torch(output_tensor).flatten(), torch_output.flatten())
+
+
+def test_sum_hw_bf16(device):
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar has no SFPU reduce. Tracked in https://github.com/tenstorrent/tt-metal/issues/54145")
+    torch_input = torch.full((1, 1, 32, 64), 1024.0, dtype=torch.bfloat16)
+    torch_input[0, 0, 16:] = -1024.0
+    torch_input[0, 0, 16:, 0] = -1020.0
+    torch_output = torch.sum(torch_input.double(), dim=[2, 3], keepdim=True).to(torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.sum(input_tensor, dim=[2, 3], keepdim=True)
+
+    assert torch.equal(ttnn.to_torch(output_tensor), torch_output)
