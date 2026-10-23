@@ -39,7 +39,7 @@ def test_sampling_outputs_allocated_once_and_reused_through_capture_and_reset(ma
     assert outputs[False].shape == (1, 1, 1, 32)
     assert len(outputs) == 1 + int(allow_argmax)
     if allow_argmax:
-        assert outputs[True].shape == (1, 1, 32)
+        assert outputs[True] is outputs[False]
     allocations = ttnn.allocate_tensor_on_device.call_count
     logits = SimpleNamespace(shape=(1, 1, 32, 128))
     for _ in range(2):
@@ -74,7 +74,7 @@ def test_sampling_trace_rejects_unpadded_or_wrong_rank_logits(make_sampler, shap
         sampler.precompile(SimpleNamespace(shape=shape))
     sampler._run_sampling.assert_not_called()
     ttnn.begin_trace_capture.assert_not_called()
-    assert ttnn.allocate_tensor_on_device.call_count == 2
+    assert ttnn.allocate_tensor_on_device.call_count == 1
 
 
 def test_explicit_output_remains_owned_by_caller(make_sampler):
@@ -85,4 +85,15 @@ def test_explicit_output_remains_owned_by_caller(make_sampler):
     sampler.precompile(logits, tt_out_tok=output)
     assert sampler._run_sampling.call_args.kwargs["tt_out_tok"] is output
     assert sampler.capture_trace(logits, tt_out_tok=output, skip_precompile=True)[0] is output
-    assert ttnn.allocate_tensor_on_device.call_count == 2
+    assert ttnn.allocate_tensor_on_device.call_count == 1
+
+
+def test_output_prepared_in_argmax_mode_is_valid_for_every_mode(make_sampler):
+    # Batched prefill resolves the output in the current mode, then binds it to every sampling config.
+    sampler = make_sampler(True)
+    logits = SimpleNamespace(shape=(1, 1, 32, 128))
+    sampler.tt_sampling.force_argmax_sampling = True
+    prepared = sampler._trace_token_output(logits, None)
+    sampler.tt_sampling.force_argmax_sampling = False
+    assert sampler._trace_token_output(logits, None) is prepared
+    assert prepared.shape == (1, 1, 1, 32)
