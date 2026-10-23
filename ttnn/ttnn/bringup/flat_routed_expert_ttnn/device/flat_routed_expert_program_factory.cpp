@@ -1270,6 +1270,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         }
         const KernelHandle kr_t =
             gu_t.empty() ? 0 : dm("se5_recv.cpp", gu_t, DataMovementProcessor::RISCV_0, recv_noc, recv_ct, recv_def);
+        if (cstr(pr.w_after_x)) {  // (probe MIMO_FL_W_AFTER_X: no weight slot granted before the first x block)
+            recv_def["SE_W_AFTER_X"] = "1";
+        }
         Defines recv_d_def = recv_def;
         if (p.dual) {  // both paths (the reader's credits / the local grant counter), chosen per call
             for (const auto& [k, v] : drisc_dual_def) {

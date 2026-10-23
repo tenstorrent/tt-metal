@@ -1053,3 +1053,10 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - Dispatch DRAM per chip (rows written at every hop and read back by the next hop's reader; CPU count over the trees,
   uniform routing, 160 tokens a chip): LoudBox ~19 MB (~37 us at 512 GB/s); Galaxy 8x4 35 MB GLM / 43 MB K3 (68 / 84 us)
   vs weights 127 / 520 MB.
+- At the Galaxy's per-chip load on the 2x4 (160 tokens; GLM 64 experts = 8 a chip - the fused router needs E % 32 = 0 -
+  K3 224 = 28 a chip), slowest chip: GLM separate 149 + 444 = 593 vs in-program 604 (ring 2), 604 vs 630 (ring 4);
+  K3 139 + 1290 = 1429 vs 1429 (ring 2), 1455 vs 1441 (ring 4). K3 zones: x-ready at 178-246 us from a chip's start
+  with the weights streaming, 127-215 with them held until the first x block (probe MIMO_FL_W_AFTER_X; whole program
+  1410): the weight stream's contention stretches the dispatch ~40-50 us; after x-ready the experts take ~1150 (separate
+  ~1290: the prefetch saves ~130 - eaten by the stretch). Next: an L1-relay dispatch (forwarded rows not round-tripped
+  through DRAM).

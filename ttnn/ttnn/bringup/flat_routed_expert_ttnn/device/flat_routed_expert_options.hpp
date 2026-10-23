@@ -166,6 +166,7 @@ struct FlatProbes {
     std::optional<std::string> waitz;               // MIMO_FL_WAITZ (debug output)
     std::optional<std::string> w_nofwd;             // MIMO_FL_W_NOFWD
     std::optional<std::string> w_noread;            // MIMO_FL_W_NOREAD
+    std::optional<std::string> w_after_x;           // MIMO_FL_W_AFTER_X (probe: weights only once x arrived)
     std::optional<std::string> x2;                  // MIMO_FL_X2
     std::optional<std::string> xdown;               // MIMO_FL_XDOWN
     std::optional<std::string> xfwd;                // MIMO_FL_XFWD

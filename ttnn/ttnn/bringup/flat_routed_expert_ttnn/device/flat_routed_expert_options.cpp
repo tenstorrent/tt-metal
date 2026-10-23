@@ -128,6 +128,7 @@ FlatProbes FlatProbes::from_env() {
     p.waitz = read("MIMO_FL_WAITZ");
     p.w_nofwd = read("MIMO_FL_W_NOFWD");
     p.w_noread = read("MIMO_FL_W_NOREAD");
+    p.w_after_x = read("MIMO_FL_W_AFTER_X");
     p.x2 = read("MIMO_FL_X2");
     p.xdown = read("MIMO_FL_XDOWN");
     p.xfwd = read("MIMO_FL_XFWD");

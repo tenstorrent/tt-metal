@@ -241,6 +241,11 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* xarr_sem = sem(xarr_sem_id);
     volatile tt_l1_ptr uint32_t* harr_sem[2] = {sem(harr_sem_id), sem(harr1_sem_id)};
 
+#ifdef SE_W_AFTER_X  // (probe MIMO_FL_W_AFTER_X: the weights start only once the first x block is in)
+    while (*xarr_sem == 0) {
+        invalidate_l1_cache();
+    }
+#endif
     if (!is_b) {
         grant(w_slots);  // every landing slot starts free
     }
