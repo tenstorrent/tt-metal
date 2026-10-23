@@ -334,6 +334,10 @@ _ISL_FUNCTIONAL_SWEEP = [251, 768, 3001]
 _ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 768, 1024, 2048, 4096, 5120]
 _ISL_EXHAUSTIVE_MODELS = ("kimi_k2_7", "glm_53")
 
+# Perf sweep: the exhaustive sweep plus 32/64/96 -- one to three tile-rows, below its first live
+# count -- so the perf gates also cover an expert that receives only a handful of tokens.
+_ISL_PERF_SWEEP = sorted([32, 64, 96] + _ISL_EXHAUSTIVE_SWEEP)
+
 
 def _isl_params(active_sweep, only_models=None):
     """Build the per-model (allocated_tokens, active_tokens, emb_dim, hidden_dim) parametrization over

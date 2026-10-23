@@ -5,9 +5,9 @@
 """Device perf gate for HybridRoutedExpertFfn: per-case device duration over the kimi/glm ISL
 sweep on the x_rm production path, measured with the real-time program profiler.
 
-The same cases as test_routed_expert_crossover_perf.py -- same models, same sweep, same weight
-placements, same margins -- so the union op's number sits next to the best-of-both number the two
-ops it replaces achieve on exactly the same case.
+The cases of test_routed_expert_crossover_perf.py -- same models, sweep, weight placements and
+margins -- plus 32/64/96, which the crossover does not run. On every shared case the union op's
+number sits next to the best-of-both number the two ops it replaces achieve on exactly that case.
 
 One expert over an _ISL_ALLOCATED_TOKENS region with `active_tokens` live rows, and the model's
 own threshold decides which half serves it. The other half still launches on every core and
@@ -31,7 +31,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill impo
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert import (
     _ISL_ALLOCATED_TOKENS,
     _ISL_EXHAUSTIVE_MODELS,
-    _ISL_EXHAUSTIVE_SWEEP,
+    _ISL_PERF_SWEEP,
     SINGLE_EXPERT_MODELS,
 )
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_hybrid_routed_expert import (
@@ -68,8 +68,13 @@ _KNEE_TOKENS = 512
 # case in test_routed_expert_crossover_perf.py -- by ~8-15 us across the sweep, and by 8.0 us at
 # active=0, where no expert does any work at all and the whole difference is the second pass plus
 # the grid barrier.
+# The 32/64/96 entries in this file's tables are the midpoint of three sweeps on a BH p150b
+# (2026-10-23), a later calibration than the rest of each table.
 _EXPECTED_NS: dict[tuple[str, int], int] = {
     ("kimi_k2_7", 0): 11_039,
+    ("kimi_k2_7", 32): 87_527,
+    ("kimi_k2_7", 64): 92_434,
+    ("kimi_k2_7", 96): 98_723,
     ("kimi_k2_7", 128): 104_367,
     ("kimi_k2_7", 256): 126_942,
     ("kimi_k2_7", 512): 171_510,
@@ -79,6 +84,9 @@ _EXPECTED_NS: dict[tuple[str, int], int] = {
     ("kimi_k2_7", 4096): 1_166_144,
     ("kimi_k2_7", 5120): 1_453_411,
     ("glm_53", 0): 11_034,
+    ("glm_53", 32): 78_205,
+    ("glm_53", 64): 81_621,
+    ("glm_53", 96): 90_144,
     ("glm_53", 128): 93_162,
     ("glm_53", 256): 120_377,
     ("glm_53", 512): 152_494,
@@ -94,6 +102,9 @@ _EXPECTED_NS: dict[tuple[str, int], int] = {
 # tile, which the op is only bound by at the low counts.
 _NDSHARD_EXPECTED_NS: dict[tuple[str, int], int] = {
     ("kimi_k2_7", 0): 11_123,
+    ("kimi_k2_7", 32): 77_394,
+    ("kimi_k2_7", 64): 78_780,
+    ("kimi_k2_7", 96): 83_641,
     ("kimi_k2_7", 128): 94_706,
     ("kimi_k2_7", 256): 120_486,
     ("kimi_k2_7", 512): 166_315,
@@ -103,6 +114,9 @@ _NDSHARD_EXPECTED_NS: dict[tuple[str, int], int] = {
     ("kimi_k2_7", 4096): 1_167_110,
     ("kimi_k2_7", 5120): 1_459_315,
     ("glm_53", 0): 11_103,
+    ("glm_53", 32): 66_749,
+    ("glm_53", 64): 70_551,
+    ("glm_53", 96): 76_234,
     ("glm_53", 128): 85_575,
     ("glm_53", 256): 104_698,
     ("glm_53", 512): 148_123,
@@ -141,7 +155,7 @@ def _perf_params():
         if name not in _ISL_EXHAUSTIVE_MODELS:
             continue
         threshold = _threshold_of(config)
-        for active in _ISL_EXHAUSTIVE_SWEEP:
+        for active in _ISL_PERF_SWEEP:
             params.append(
                 pytest.param(
                     name,
