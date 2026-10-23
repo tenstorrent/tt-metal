@@ -189,6 +189,12 @@ def _guarded_step_ops(token: int, residue: int) -> list[str]:
     return ["guard", *_step_ops(token, residue), f"full_gather:{residue}", "unguard"]
 
 
+def _greedy_token_ops(token: int, residue: int) -> list[str]:
+    """A plain greedy step: the tail's resolved token row is read, the full-vocabulary gather is not."""
+
+    return ["guard", *_step_ops(token, residue), "read_token_row", "unguard"]
+
+
 def _masked(row: torch.Tensor) -> torch.Tensor:
     logits = row.to(torch.float32)
     logits[TOKENIZER_SIZE:] = float("-inf")
@@ -323,7 +329,7 @@ def _chi_square_ok(counts: torch.Tensor, expected: torch.Tensor, draws: int) -> 
     return statistic, critical
 
 
-def test_device_sampling_greedy_returns_the_host_path_argmax_as_an_int32_token() -> None:
+def test_device_sampling_greedy_returns_the_device_token_without_the_full_logits() -> None:
     model, chain = _adapter()
     reference, reference_chain = _adapter()
     ids = [1, 2, 3, 4]
@@ -335,13 +341,77 @@ def test_device_sampling_greedy_returns_the_host_path_argmax_as_an_int32_token()
         out = _decode(
             model, token, len(ids) + step, sampling_params=_params(temperature=0.0), reset_sampling_state=step == 0
         )
-        logits = _decode(reference, token, len(ids) + step)
-        assert chain.log == _guarded_step_ops(token, (len(ids) + step) % RESIDUE_CLASSES) == reference_chain.log[-7:]
+        logits = _decode(reference, token, len(ids) + step)  # the logits path: the host argmax of the masked row
+        residue = (len(ids) + step) % RESIDUE_CLASSES
+        assert chain.log == _greedy_token_ops(token, residue)
+        assert reference_chain.log[-7:] == _guarded_step_ops(token, residue)
         assert out.shape == (1, 1) and out.dtype == torch.int32 and out.device.type == "cpu"
-        assert int(out) == int(logits.argmax()) == int(_masked(chain.logits()).argmax()) < TOKENIZER_SIZE
+        assert int(out) == chain.row == int(logits.argmax()) == int(_masked(chain.logits()).argmax()) < TOKENIZER_SIZE
         token = int(out)
+    assert chain.sampling.full_reads == 1 and reference_chain.sampling.full_reads == 1 + 4  # only the prefill's
     assert model.slot.committed == reference.slot.committed and model.slot.policy.greedy
     assert model.slot.generator is None  # no seed: the global RNG (unused by the greedy path)
+
+
+def test_greedy_prefill_returns_the_device_token_as_an_int32_row() -> None:
+    model, chain = _adapter()
+    reference, _ = _adapter()
+    ids = [1, 2, 3, 4]
+    token, rope_deltas = _prefill(model, ids, sampling_params=_params(temperature=0.0))
+    logits, _ = _prefill(reference, ids)
+    assert token.shape == (1, 1) and token.dtype == torch.int32 and token.device.type == "cpu"
+    assert int(token) == chain.row == int(logits.argmax()) < TOKENIZER_SIZE
+    assert rope_deltas.shape == (1,) and rope_deltas.dtype == torch.long and int(rope_deltas) == 0
+    assert chain.log[-7:] == _greedy_token_ops(ids[-1], (len(ids) - 1) % RESIDUE_CLASSES)
+    assert chain.sampling.full_reads == 0 and model.slot.committed == ids
+
+
+@pytest.mark.parametrize(
+    "params",
+    (
+        _params(),  # sampled: temperature 1.0
+        _params(temperature=0.0, repetition_penalty=1.2),
+        _params(temperature=0.0, presence_penalty=0.5),
+        _params(temperature=0.0, frequency_penalty=0.5),
+    ),
+)
+def test_a_non_greedy_prefill_contract_still_raises_before_any_chain_call(params, expect_error) -> None:
+    model, chain = _adapter()
+    with expect_error(ValueError, "decode_only"):
+        _prefill(model, [1, 2, 3, 4], sampling_params=params)
+    assert chain.log == [] and model.slot.failed is False
+
+
+def test_a_non_greedy_decode_samples_on_the_host_from_the_full_logits() -> None:
+    model, chain = _adapter()
+    ids = [1, 2, 3, 4]
+    _prefill(model, ids)
+    chain.log.clear()
+    reads = chain.sampling.full_reads
+    out = _decode(model, 5, len(ids), sampling_params=_params(temperature=0.7, top_k=8, top_p=0.9, seed=3))
+    assert chain.log == _guarded_step_ops(5, len(ids) % RESIDUE_CLASSES) and "read_token_row" not in chain.log
+    assert out.shape == (1, 1) and out.dtype == torch.int32 and 0 <= int(out) < TOKENIZER_SIZE
+    assert chain.sampling.full_reads == reads + 1
+    chain.log.clear()  # a penalized greedy row also stays on the host path
+    _decode(
+        model,
+        int(out),
+        len(ids) + 1,
+        sampling_params=_params(temperature=0.0, presence_penalty=0.5),
+        prompt_tokens=torch.tensor([ids], dtype=torch.int32),
+        output_tokens=torch.tensor([[5]], dtype=torch.int32),
+    )
+    assert "read_token_row" not in chain.log and chain.sampling.full_reads == reads + 2
+
+
+def test_a_padded_greedy_token_falls_back_to_the_masked_host_argmax(monkeypatch) -> None:
+    model, chain = _adapter()
+    ids = [1, 2, 3, 4]
+    _prefill(model, ids)
+    reads = chain.sampling.full_reads
+    monkeypatch.setattr(chain, "read_token_row", lambda: TOKENIZER_SIZE + 3)
+    out = _decode(model, 5, len(ids), sampling_params=_params(temperature=0.0))
+    assert int(out) == int(_masked(chain.logits()).argmax()) < TOKENIZER_SIZE and chain.sampling.full_reads == reads + 1
 
 
 def test_device_sampling_is_deterministic_per_seed_and_stays_inside_the_nucleus(monkeypatch) -> None:
@@ -453,7 +523,8 @@ def test_host_steps_and_device_steps_interleave_with_the_full_logits_path_unchan
         chain.log.clear()
         params = _params(temperature=0.0) if sampled else None
         out = _decode(model, token, len(ids) + step, sampling_params=params)
-        assert chain.log == _guarded_step_ops(token, (len(ids) + step) % RESIDUE_CLASSES)
+        residue = (len(ids) + step) % RESIDUE_CLASSES
+        assert chain.log == (_greedy_token_ops if sampled else _guarded_step_ops)(token, residue)
         if sampled:
             assert out.shape == (1, 1) and out.dtype == torch.int32
         else:

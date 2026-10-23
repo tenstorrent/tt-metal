@@ -14,7 +14,8 @@ configuration the adapter cannot serve is refused before the device is touched.
 
 Under the plugin's device-sampling contract (``--additional-config '{"tt": {"sample_on_device_mode": "decode_only"}}'``)
 a decode step arrives with ``sampling_params`` (the plugin's ``TTSamplingParams`` as per-row lists) and must return the
-token instead of the row.  The adapter reads the same full row and samples on the host with vLLM's sampler semantics
+token instead of the row.  A plain greedy row (temperature 0, no penalty, no logprobs) returns the device's greedy
+token from the token row, for decode and for prefill, without the full-logits gather.  Any other row: the adapter reads the full row and samples on the host with vLLM's sampler semantics
 (``vllm/v1/sample/sampler.py``: penalties, temperature, top-k, top-p, exponential-noise draw) computed over the row's
 top candidates wherever that is exact, and over the full row otherwise. vLLM's own ``Sampler`` sorts the full
 248,320-wide row. The reduced route preserves its distribution; the token stream for a given seed differs because
@@ -160,6 +161,17 @@ def penalty_history(prompt_tokens: Any, output_tokens: Any) -> tuple[torch.Tenso
         return row[(row >= 0) & (row < VOCAB_SIZE)]
 
     return ids(prompt_tokens), ids(output_tokens)
+
+
+def device_greedy_contract(sampling_params: Any) -> bool:
+    """True when the contract is plain greedy for the one row: temperature below the epsilon (the policy's own
+    ``greedy``), no penalty active (presence 0, frequency 0, repetition 1) and no logprobs (``from_contract`` refuses
+    those).  Such a row's token is the device's greedy resolve, so the full logits need not leave the device."""
+
+    if sampling_params is None:
+        return False
+    policy = Qwen38HostSamplingPolicy.from_contract(sampling_params)
+    return policy.greedy and not policy.penalized
 
 
 def apply_penalties(
@@ -330,6 +342,7 @@ class Qwen38ForCausalLM:
         self.context_limit = Qwen38ResidentContext(allocated_context).context_limit
         self.slot = Qwen38VLLMSlot()
         self.trace_mode_warned = False
+        self._warned_padded_greedy = False
 
     # -- vLLM's text-generation protocol: inspected by the registry, never called on the TT path ---------------------
 
@@ -522,9 +535,11 @@ class Qwen38ForCausalLM:
         sampling_params: Any = None,
         **kwargs: Any,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """The prompt into the reset state; returns the last position's logits and the zero mrope delta."""
+        """The prompt into the reset state; returns the last position's logits (or, for a plain greedy
+        ``sampling_params``, the device's greedy token as int32 ``[1, 1]``) and the zero mrope delta."""
 
-        if sampling_params is not None:
+        greedy_token = sampling_params is not None
+        if greedy_token and not device_greedy_contract(sampling_params):
             raise ValueError("prefill returns logits: sample_on_device_mode must be decode_only, not all")
         if tokens.shape[0] != 1:
             raise ValueError(f"one resident slot: tokens must be [1, P], got {tuple(tokens.shape)}")
@@ -567,11 +582,12 @@ class Qwen38ForCausalLM:
                         self._step(token_id)
             # The last prompt token is the first decode replay: teacher-forced under the guard, like every decode step.
             with self.chain.loop_guard():
-                logits = self._read_logits(self._step(ids[-1]))
+                residue = self._step(ids[-1])
+                out = self._greedy_token(residue) if greedy_token else self._read_logits(residue)
         except BaseException:
             self.slot.failed = True
             raise
-        return logits, torch.zeros(1, dtype=torch.long)
+        return out, torch.zeros(1, dtype=torch.long)
 
     def decode_forward(
         self,
@@ -594,8 +610,9 @@ class Qwen38ForCausalLM:
         **kwargs: Any,
     ) -> torch.Tensor:
         """One teacher-forced step with the token vLLM sampled; returns the next position's logits, or, when the
-        plugin sends ``sampling_params`` (its device-sampling contract), the next token as int32 ``[1, 1]``, drawn on
-        the host from the same row with vLLM's sampler semantics."""
+        plugin sends ``sampling_params`` (its device-sampling contract), the next token as int32 ``[1, 1]``: the device's greedy
+        token when the row is plain greedy (no penalty, no logprobs), else drawn on the host from the full row with
+        vLLM's sampler semantics."""
 
         if "reset_batch" in kwargs:
             raise TypeError("decode_input_update_contract 1: reset_batch is not accepted")
@@ -609,6 +626,7 @@ class Qwen38ForCausalLM:
         if not 0 <= token_id < TOKENIZER_SIZE:
             raise ValueError(f"decode token must be in [0, {TOKENIZER_SIZE}), got {token_id}")
         policy = history = None
+        greedy_token = device_greedy_contract(sampling_params)
         if sampling_params is not None:
             policy = Qwen38HostSamplingPolicy.from_contract(sampling_params)
             if policy.penalized:
@@ -621,7 +639,10 @@ class Qwen38ForCausalLM:
             self._adopt_policy(policy, reseed=reset_sampling_state)
         try:
             with self.chain.loop_guard():
-                logits = self._read_logits(self._step(token_id))
+                residue = self._step(token_id)
+                if greedy_token:
+                    return self._greedy_token(residue)
+                logits = self._read_logits(residue)
         except BaseException:
             self.slot.failed = True
             raise
@@ -738,6 +759,22 @@ class Qwen38ForCausalLM:
         self.chain.execute_tail(residue)
         self.slot.committed.append(token_id)
         return residue
+
+    def _greedy_token(self, residue: int) -> torch.Tensor:
+        """The device's greedy token (the tail's resolve into the token row) as int32 ``[1, 1]``.  The resolve does not
+        mask the LM-head padding rows; an id at or above the tokenizer size (a server ``error`` finish) falls back to
+        the full logits, whose padding is masked, for this step."""
+
+        token = int(self.chain.read_token_row())
+        if not 0 <= token < TOKENIZER_SIZE:
+            if not self._warned_padded_greedy:
+                self._warned_padded_greedy = True
+                logger.warning(
+                    f"device greedy token {token} is outside the tokenizer [0, {TOKENIZER_SIZE}): "
+                    "falling back to the host argmax over the masked full logits"
+                )
+            token = int(self._read_logits(residue).argmax())
+        return torch.tensor([[token]], dtype=torch.int32)
 
     def _read_logits(self, residue: int) -> torch.Tensor:
         """TAIL(residue)'s full-vocabulary gather (blocking), the padding rows masked, as ``[1, 1, VOCAB_SIZE]``."""
