@@ -32,6 +32,7 @@ from pathlib import Path
 import torch
 
 import ttnn
+from models.demos.gemma4.custom_ops.grid import compute_grid
 
 KERNEL_DIR = Path(__file__).resolve().parent / "kernels"
 TILE = 32
@@ -93,9 +94,9 @@ class ExpertGatherSmall:
         counts = ttnn.allocate_tensor_on_device(ttnn.Shape([1, E]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, device, dram)
         offsets = ttnn.allocate_tensor_on_device(ttnn.Shape([1, E]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, device, dram)
         w = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, T, M]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram)
-        grid = device.compute_with_storage_grid_size()
-        assert E_loc <= grid.x * grid.y, f"{E_loc} local experts exceed the {grid.x}x{grid.y} grid"
-        cores = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(E_loc)]
+        gx, gy = compute_grid(device)  # (x, y), capped by GEMMA4_TEST_GRID
+        assert E_loc <= gx * gy, f"{E_loc} local experts exceed the {gx}x{gy} grid"
+        cores = [ttnn.CoreCoord(i % gx, i // gx) for i in range(E_loc)]
         core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
         noc = [device.worker_core_from_logical_core(c) for c in cores]
         tile_bytes = TILE * TILE * 2

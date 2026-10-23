@@ -32,6 +32,7 @@ from pathlib import Path
 import torch
 
 import ttnn
+from models.demos.gemma4.custom_ops.grid import compute_grid
 
 KERNEL_DIR = Path(__file__).resolve().parent / "kernels"
 TILE = 32
@@ -77,23 +78,65 @@ class FusedNormDecode:
         return ttnn.repeat(gamma_row, ttnn.Shape([1, 1, TILE, 1]))
 
     @staticmethod
-    def num_cores(cols_t: int, nin: int = 1) -> int:
+    def num_cores(cols_t: int, nin: int = 1, grid_cores_: int = None) -> int:
         """Largest divisor of the column tiles up to the cap (``GEMMA4_FUSED_NORM_CORES``, default 22, at most 64)
-        whose per-core tile count fits one fp32 dest window (8 tiles, 4 per input with two inputs)."""
+        whose per-core tile count fits one fp32 dest window (8 tiles, 4 per input with two inputs); with
+        ``grid_cores_`` the count is also limited to the grid (one row tile)."""
+        return FusedNormDecode.plan(cols_t, nin, 1, grid_cores_ or FusedNormDecode.MAX_CORES)[0]
+
+    @staticmethod
+    def plan(cols_t: int, nin: int, rt_in: int, grid_cores_: int):
+        """The work split for ``rt_in`` row tiles on a grid of ``grid_cores_`` cores: ``(N, per, groups, passes)`` --
+        ``N`` cores per row tile (a divisor of ``cols_t`` with ``per = cols_t / N <= 8 / nin`` tiles each), ``groups``
+        row tiles per pass (``min(rt_in, grid_cores_ // N)``) and ``passes = ceil(rt_in / groups)`` launches of the
+        program. The split minimizes the passes, prefers a core count up to the cap (``GEMMA4_FUSED_NORM_CORES``,
+        default 22) and then the largest count; it is derived from the grid, never from a constant: 2816 wide at
+        128 rows = 11 cores x 4 row tiles in one pass on Wormhole's 8x8, 22 x 4 on Blackhole's 13x10. Raises
+        ValueError when no split fits (the callers fall back to the composite path)."""
         cap = min(FusedNormDecode.MAX_CORES, max(1, int(os.environ.get("GEMMA4_FUSED_NORM_CORES", "22"))))
         max_per = 8 // nin
-        for n in range(min(cap, cols_t), 0, -1):
-            if cols_t % n == 0 and cols_t // n <= max_per:
-                return n
-        for n in range(cap + 1, min(FusedNormDecode.MAX_CORES, cols_t) + 1):
-            if cols_t % n == 0 and cols_t // n <= max_per:
-                return n
-        raise ValueError(
-            f"no core count up to {FusedNormDecode.MAX_CORES} divides {cols_t} column tiles into <= {max_per}"
-        )
+        best = None
+        for n in range(1, min(FusedNormDecode.MAX_CORES, cols_t) + 1):
+            if cols_t % n or cols_t // n > max_per:
+                continue
+            groups = min(rt_in, grid_cores_ // n)
+            if groups < 1:
+                continue
+            passes = -(-rt_in // groups)
+            key = (passes, 0 if n <= cap else 1, -n)
+            if best is None or key < best[0]:
+                best = (key, (n, cols_t // n, groups, passes))
+        if best is None:
+            raise ValueError(
+                f"no core count up to {FusedNormDecode.MAX_CORES} divides {cols_t} column tiles into <= {max_per} on "
+                f"{grid_cores_} cores"
+            )
+        return best[1]
+
+    @staticmethod
+    def plan_ok(cols_t: int, nin: int, rt_in: int, grid_cores_: int) -> bool:
+        try:
+            FusedNormDecode.plan(cols_t, nin, rt_in, grid_cores_)
+            return True
+        except ValueError:
+            return False
 
     @classmethod
-    def op(cls, x: ttnn.Tensor, gammas, eps: float, x2=None, gamma2=None, residual=None, scalars=None):
+    def op(
+        cls,
+        x: ttnn.Tensor,
+        gammas,
+        eps: float,
+        x2=None,
+        gamma2=None,
+        residual=None,
+        scalars=None,
+        out_memory_configs=None,
+    ):
+        """``out_memory_configs``: per output, ``None`` (the input's memory config) or an L1 WIDTH_SHARDED config
+        of whole column tiles on one row tile (a DRAM-sharded decode matmul's activation layout,
+        ``DramShardedLinear.act_memory_config``): the writer's page accessor lands every column tile on its shard
+        core, so the consuming matmul skips its interleaved -> sharded copy."""
         assert (
             x.layout == ttnn.TILE_LAYOUT and x.dtype == ttnn.bfloat16 and not x.is_sharded()
         ), "x: bf16 TILE interleaved"
@@ -121,16 +164,28 @@ class FusedNormDecode:
                 assert g.layout == ttnn.TILE_LAYOUT and tuple(int(v) for v in g.shape) == (1, 1, TILE, W), g.shape
         gmask = sum(1 << i for i, g in enumerate(gamma_list) if g is not None)
         cols_t = W // TILE
-        N = cls.num_cores(cols_t, nin)
-        per = cols_t // N
-        RT = (N + TILE - 1) // TILE
         device = x.device()
+        gx, gy = compute_grid(device)  # (x, y), capped by GEMMA4_TEST_GRID
+        N, per, groups, passes = cls.plan(cols_t, nin, RT_IN, gx * gy)
+        RT = (N + TILE - 1) // TILE
+        out_mems = list(out_memory_configs) if out_memory_configs is not None else [None] * nout
+        assert len(out_mems) == nout
+        for om in out_mems:
+            if om is not None and om.is_sharded():
+                assert RT_IN == 1, "a sharded output needs one row tile"
+                assert (
+                    om.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+                    and int(om.shard_spec.shape[0]) == TILE
+                    and int(om.shard_spec.shape[1]) % TILE == 0
+                    and W % int(om.shard_spec.shape[1]) == 0
+                ), f"sharded output must hold whole column tiles of one row tile: {om}"
         outs = [
-            ttnn.allocate_tensor_on_device(x.shape, x.dtype, x.layout, device, x.memory_config()) for _ in range(nout)
+            ttnn.allocate_tensor_on_device(x.shape, x.dtype, x.layout, device, x.memory_config() if om is None else om)
+            for om in out_mems
         ]
-        grid = device.compute_with_storage_grid_size()
-        assert N * RT_IN <= grid.x * grid.y, f"{RT_IN} row tiles x {N} cores exceed the {grid.x}x{grid.y} grid"
-        cores = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(N * RT_IN)]  # group t = cores[t*N:(t+1)*N]
+        # one N-core exchange group per row tile of a pass; row tiles beyond the grid's groups run in further passes
+        # of the same program (the row-tile offset is a runtime arg)
+        cores = [ttnn.CoreCoord(i % gx, i // gx) for i in range(N * groups)]  # group g = cores[g*N:(g+1)*N]
         core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
         noc = [device.worker_core_from_logical_core(c) for c in cores]
         tile_bytes = TILE * TILE * 2
@@ -178,51 +233,54 @@ class FusedNormDecode:
         compute_ct = [cls.CB_X0, cls.CB_X1, cls.CB_G0, cls.CB_G1, cls.CB_G2, cls.CB_RES, cls.CB_SCALER, cls.CB_SQ,
                       cls.CB_PART, cls.CB_RECV, cls.CB_INV, cls.CB_OUT0, cls.CB_OUT1, cls.CB_OUT2] + common + [
                       _f32_bits(eps), _f32_bits(1.0 / W)] + [_f32_bits(s) for s in (scalars + [1.0, 1.0])[:3]]  # fmt: skip
-        reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        for t in range(RT_IN):
-            coords = []
-            for c in noc[t * N : (t + 1) * N]:  # the exchange stays within the row tile's group
-                coords += [c.x, c.y]
-            for i in range(N):
-                core = cores[t * N + i]
-                c0 = t * cols_t + i * per  # tile index in the [RT_IN, cols_t] tile grid of x / residual / outputs
-                reader_rt[core.x][core.y] = [
-                    x.buffer_address(), x1_t.buffer_address(), g_t[0].buffer_address(), g_t[1].buffer_address(),
-                    g_t[2].buffer_address(), res_t.buffer_address(), c0, i * per,
-                ]  # fmt: skip
-                writer_rt[core.x][core.y] = [
-                    out_t[0].buffer_address(), out_t[1].buffer_address(), out_t[2].buffer_address(), c0, i
-                ] + coords  # fmt: skip
-                compute_rt[core.x][core.y] = [0]
         compute_cfg = ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, dst_full_sync_en=True
         )
-        kernels = [
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "reader_fused_norm_decode.cpp"),
-                core_ranges=core_set,
-                compile_time_args=reader_ct,
-                runtime_args=reader_rt,
-                config=ttnn.ReaderConfigDescriptor(),
-            ),
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "writer_fused_norm_decode.cpp"),
-                core_ranges=core_set,
-                compile_time_args=writer_ct,
-                runtime_args=writer_rt,
-                config=ttnn.WriterConfigDescriptor(),
-            ),
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "compute_fused_norm_decode.cpp"),
-                core_ranges=core_set,
-                compile_time_args=compute_ct,
-                runtime_args=compute_rt,
-                config=compute_cfg,
-            ),
-        ]
         sems = [ttnn.SemaphoreDescriptor(cls.SEM, ttnn.CoreType.WORKER, core_set, 0)]
-        program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
         io = [x] + ([x2] if x2 is not None else []) + [g for g in gamma_list if g is not None]
         io += ([residual] if residual is not None else []) + outs
-        ttnn.generic_op(io, program)
+        for p in range(passes):
+            reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+            first, last = p * groups, min(RT_IN, (p + 1) * groups)
+            for g_idx, t in enumerate(range(first, last)):
+                coords = []
+                for c in noc[g_idx * N : (g_idx + 1) * N]:  # the exchange stays within the row tile's group
+                    coords += [c.x, c.y]
+                for i in range(N):
+                    core = cores[g_idx * N + i]
+                    c0 = t * cols_t + i * per  # tile index in the [RT_IN, cols_t] tile grid of x / residual / outputs
+                    reader_rt[core.x][core.y] = [
+                        x.buffer_address(), x1_t.buffer_address(), g_t[0].buffer_address(), g_t[1].buffer_address(),
+                        g_t[2].buffer_address(), res_t.buffer_address(), c0, i * per,
+                    ]  # fmt: skip
+                    writer_rt[core.x][core.y] = [
+                        out_t[0].buffer_address(), out_t[1].buffer_address(), out_t[2].buffer_address(), c0, i
+                    ] + coords  # fmt: skip
+                    compute_rt[core.x][core.y] = [0]
+            active = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores[: (last - first) * N]])
+            kernels = [
+                ttnn.KernelDescriptor(
+                    kernel_source=str(KERNEL_DIR / "reader_fused_norm_decode.cpp"),
+                    core_ranges=active,
+                    compile_time_args=reader_ct,
+                    runtime_args=reader_rt,
+                    config=ttnn.ReaderConfigDescriptor(),
+                ),
+                ttnn.KernelDescriptor(
+                    kernel_source=str(KERNEL_DIR / "writer_fused_norm_decode.cpp"),
+                    core_ranges=active,
+                    compile_time_args=writer_ct,
+                    runtime_args=writer_rt,
+                    config=ttnn.WriterConfigDescriptor(),
+                ),
+                ttnn.KernelDescriptor(
+                    kernel_source=str(KERNEL_DIR / "compute_fused_norm_decode.cpp"),
+                    core_ranges=active,
+                    compile_time_args=compute_ct,
+                    runtime_args=compute_rt,
+                    config=compute_cfg,
+                ),
+            ]
+            program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
+            ttnn.generic_op(io, program)
         return outs

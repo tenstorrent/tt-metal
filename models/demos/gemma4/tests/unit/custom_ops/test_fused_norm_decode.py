@@ -66,13 +66,21 @@ CASES = {
     "prefill_r128_two_inputs": (128, 2816, 1, [True], [1.0], False, True, "dram", 22),
     "prefill_r128_residual_scalar": (128, 2816, 1, [True], [0.7265625], True, False, "dram", 22),
     "prefill_r64_l1": (64, 2816, 1, [True], [1.0], False, False, "l1", 22),
+    # the Wormhole split forced on Blackhole (GEMMA4_TEST_GRID=8x8 on the "wh_" cases): 11 cores x 4 row tiles in
+    # one pass, the two-input form in two passes, 256 rows in two passes; and a many-pass case on the full grid
+    "wh_prefill_r128_residual": (128, 2816, 1, [True], [1.0], True, False, "dram", 22),
+    "wh_prefill_r128_two_inputs": (128, 2816, 1, [True], [1.0], False, True, "dram", 22),
+    "wh_prefill_r256_two_outputs": (256, 2816, 2, [True, True], [1.0, 1.0], False, False, "dram", 22),
+    "prefill_r1024_residual_scalar": (1024, 2816, 1, [True], [0.7265625], True, False, "dram", 22),
 }
 
 
 @pytest.mark.parametrize("case", list(CASES))
 @pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
-def test_fused_norm_decode(mesh_device, device_params, case):
+def test_fused_norm_decode(mesh_device, device_params, case, monkeypatch):
     R, W, n_out, has_gamma, scalars, with_res, two_in, mem, cores = CASES[case]
+    if case.startswith("wh_"):
+        monkeypatch.setenv("GEMMA4_TEST_GRID", "8x8")  # the Wormhole grid on this chip
     os.environ["GEMMA4_FUSED_NORM_CORES"] = str(cores)
     torch.manual_seed(0)
     x = (torch.randn(1, 1, R, W) * 4).to(torch.bfloat16)
@@ -87,7 +95,7 @@ def test_fused_norm_decode(mesh_device, device_params, case):
     tres = _dev(res, mesh_device, memcfg) if with_res else None
     tgs = [_gamma_full(g, mesh_device) if g is not None else None for g in gs]
     tg2 = _gamma_full(g2, mesh_device) if g2 is not None else None
-    N = FusedNormDecode.num_cores(W // 32, 2 if two_in else 1)
+    N = FusedNormDecode.plan(W // 32, 2 if two_in else 1, (R + 31) // 32, 64 if case.startswith("wh_") else 130)[0]
     outs = FusedNormDecode.op(tx, tgs, EPS, x2=tx2, gamma2=tg2, residual=tres, scalars=scalars)
     got = [ttnn.to_torch(o).float() for o in outs]
     assert len(got) == n_out

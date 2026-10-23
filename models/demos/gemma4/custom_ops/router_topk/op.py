@@ -35,6 +35,7 @@ from pathlib import Path
 import torch
 
 import ttnn
+from models.demos.gemma4.custom_ops.grid import compute_grid
 
 KERNEL_DIR = Path(__file__).resolve().parent / "kernels"
 TILE = 32
@@ -139,9 +140,9 @@ class RouterTopk:
         out = ttnn.allocate_tensor_on_device(
             logits.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
         )
-        grid = core_grid or device.compute_with_storage_grid_size()
-        n_cores = min(grid.x * grid.y, S)
-        cores = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(n_cores)]
+        gx, gy = (int(core_grid.x), int(core_grid.y)) if core_grid is not None else compute_grid(device)
+        n_cores = min(gx * gy, S)
+        cores = [ttnn.CoreCoord(i % gx, i // gx) for i in range(n_cores)]
         core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
         tile_bytes = TILE * TILE * 2
         cols_t = E // TILE
@@ -203,10 +204,10 @@ class RouterTopk:
             sp_out = ttnn.allocate_tensor_on_device(
                 ttnn.Shape([1, 1, 1, e_loc]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
             )
-        grid = device.compute_with_storage_grid_size()
+        gx, gy = compute_grid(device)  # (x, y), capped by GEMMA4_TEST_GRID
         n_cores = TILE  # one user row per core (rows >= B idle); core 0 is the leader
-        assert grid.x * grid.y >= n_cores
-        cores = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(n_cores)]
+        assert gx * gy >= n_cores
+        cores = [ttnn.CoreCoord(i % gx, i // gx) for i in range(n_cores)]
         core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
         leader = device.worker_core_from_logical_core(cores[0])
         tile_bytes = TILE * TILE * 2

@@ -26,6 +26,7 @@ from pathlib import Path
 import torch
 
 import ttnn
+from models.demos.gemma4.custom_ops.grid import compute_grid
 
 KERNEL_DIR = Path(__file__).resolve().parent / "kernels"
 TILE = 32
@@ -90,8 +91,8 @@ class QkvNormRopePrefill:
                     for r in range(rt):
                         row = (b * H + h) * rt + r  # tile row of the [B*H*S/32, D/32] tile grid
                         units.append((kind, row * cols_t, (row_tile_offset + r) * cols_t))
-        grid = core_grid or device.compute_with_storage_grid_size()
-        all_cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
+        gx, gy = (int(core_grid.x), int(core_grid.y)) if core_grid is not None else compute_grid(device)
+        all_cores = [ttnn.CoreCoord(x, y) for y in range(gy) for x in range(gx)]
         n_cores = min(len(all_cores), len(units))
         cores = all_cores[:n_cores]
         per_core = [units[i::n_cores] for i in range(n_cores)]

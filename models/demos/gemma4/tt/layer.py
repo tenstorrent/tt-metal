@@ -56,6 +56,7 @@ import torch
 
 import ttnn
 from models.demos.gemma4.custom_ops.fused_norm_decode import FusedNormDecode
+from models.demos.gemma4.custom_ops.grid import compute_grid, grid_cores
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
 from models.demos.gemma4.tt.decode_matmul import flag, is_decode_rows
 from models.demos.gemma4.tt.gemma4_attention_config import get_attention_program_config
@@ -309,13 +310,9 @@ class Gemma4DecoderLayer:
             return False
         if attn_output.is_sharded() or attn_output.layout != ttnn.TILE_LAYOUT:
             return False
-        rows_t = shape[2] // 32
-        grid = attn_output.device().compute_with_storage_grid_size()
-        n_cores = FusedNormDecode.num_cores(self.hidden_size // 32, 1)
-        return (
-            rows_t * n_cores <= grid.x * grid.y
-            and rows_t * FusedNormDecode.num_cores(self.hidden_size // 32, 2) <= grid.x * grid.y
-        )
+        rows_t, cols_t = shape[2] // 32, self.hidden_size // 32
+        n_grid = grid_cores(compute_grid(attn_output.device()))
+        return FusedNormDecode.plan_ok(cols_t, 1, rows_t, n_grid) and FusedNormDecode.plan_ok(cols_t, 2, rows_t, n_grid)
 
     def _forward_tail_fused_prefill(self, residual, attn_output):
         """The layer after attention on prefill rows: four fused norm programs (post_attention + residual;
