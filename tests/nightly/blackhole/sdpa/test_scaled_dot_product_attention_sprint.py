@@ -266,7 +266,7 @@ def compute_sdpa_utilization(seqlen, head_dim, num_heads, duration_ns, core_coun
 
 @pytest.fixture
 def sdpa_realtime_profiled_device(device):
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not ttnn.device.IsProgramRealtimeProfilerActive(device):
         pytest.fail("Real-time profiler must be active for SDPA perf checks")
     return device
 

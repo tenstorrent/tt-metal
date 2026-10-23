@@ -53,7 +53,7 @@ def profile_realtime_program(
                 }
             )
 
-    handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect_records)
+    handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(device, collect_records)
 
     try:
         result = run_fn()
@@ -74,7 +74,7 @@ def profile_realtime_program(
                 break
             time.sleep(0.01)
     finally:
-        ttnn.device.UnregisterProgramRealtimeProfilerCallback(handle)
+        ttnn.device.UnregisterProgramRealtimeProfilerCallback(device, handle)
 
     # Dropped records make the set partial: on a mesh, losing the slowest chip's record silently
     # under-reports a program's critical path, so a perf gate could read green off incomplete data.
@@ -93,14 +93,13 @@ def profile_realtime_program(
     return result, profile_records if collect_all else profile_records[0]
 
 
-def require_realtime_profiler(what: str) -> None:
-    """Fail (not skip) if the profiler is inactive — an unmeasured perf run must not report green.
-    Needs an open device: IsProgramRealtimeProfilerActive segfaults if called at collection time."""
+def require_realtime_profiler(device, what: str) -> None:
+    """Fail (not skip) if the profiler is inactive on ``device`` — an unmeasured perf run must not report green."""
     import pytest
 
     import ttnn
 
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
+    if not ttnn.device.IsProgramRealtimeProfilerActive(device):
         pytest.fail(f"Real-time profiler must be active for {what}")
 
 

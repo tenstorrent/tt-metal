@@ -204,7 +204,7 @@ def _run_reshard(mesh_device, case):
 @pytest.mark.timeout(0)
 def test_all_to_all_async_generic_production_perf_and_accuracy(mesh_device):
     """Verify both GLM reshards on the complete physical Ring and gate their traced device bandwidth."""
-    require_realtime_profiler("generic all-to-all production perf checks")
+    require_realtime_profiler(mesh_device, "generic all-to-all production perf checks")
     assert ttnn.get_num_devices() == math.prod(mesh_device.shape)
     assert ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_2D_TORUS_XY
     assert ttnn.get_tt_fabric_max_payload_size_bytes() == _MAX_PACKET_PAYLOAD_SIZE
