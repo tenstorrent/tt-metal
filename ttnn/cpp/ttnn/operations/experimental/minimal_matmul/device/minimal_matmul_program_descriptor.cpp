@@ -29,6 +29,7 @@
 #include <utility>
 #include <vector>
 
+#include "ttnn/operations/common/hash_without_rows.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
@@ -993,11 +994,12 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         max_defer_write_k_block = std::max(max_defer_write_k_block, defer_write_k_block_for(c));
     }
 
-    uint32_t ternary_b_broadcast = 0u;
-    if (use_fused_ternary) {
-        uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
-        ternary_b_broadcast = ternary_b_M_tiles == 1 ? 1u : 0u;
-    }
+    // A gate of one folded tile row is broadcast from tile row 0: the hash's b_broadcast bit, folded the same way.
+    const uint32_t ternary_b_broadcast =
+        use_fused_ternary &&
+                operations::common::folded_rows(fused_ternary_input_b.value()) == tt::constants::TILE_HEIGHT
+            ? 1u
+            : 0u;
 
     ProgramRunArgs run_args;
     const KernelRunArgs::CommonRuntimeArgValues length_word{{"M_tiles", M_tiles}};
