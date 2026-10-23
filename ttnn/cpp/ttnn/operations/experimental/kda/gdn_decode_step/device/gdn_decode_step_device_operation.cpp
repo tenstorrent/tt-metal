@@ -22,6 +22,13 @@ void check_tiled(const Tensor& t, std::string_view name, std::initializer_list<D
     using namespace kda_factory_detail;
     check_allocated_device_tensor(t, kOp, name);
     check_layout(t, Layout::TILE, kOp, name);
+    // The factory sizes DFB entries with tt::tile_size and the kernels index fixed 32x32 faces.
+    const auto tile = t.tensor_spec().tile();
+    TT_FATAL(
+        tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+        "{}: {} must use 32x32 tiles",
+        kOp,
+        name);
     check_interleaved(t, kOp, name);
     bool ok = false;
     for (auto d : dtypes) {
@@ -107,10 +114,16 @@ void GdnDecodeStepOperation::validate_on_program_cache_miss(const operation_attr
             2 * ((2 * Dk + Dv) / tt::constants::TILE_WIDTH) <= tt::constants::TILE_HEIGHT,
             "{}: packed head row needs <= 16 chunks (chunk c in row 2c)",
             kOp);
-        TT_FATAL(
-            in.beta.logical_volume() == Nv && in.g.logical_volume() == Nv,
-            "{}: dt_bias / neg_exp_A volume must be Nv",
-            kOp);
+        // The fused readers take head h from row 0, column h of tile 0: one logical row of Nv values.
+        for (const auto& [t, name] : std::array{std::pair{&in.beta, "dt_bias"}, std::pair{&in.g, "neg_exp_A"}}) {
+            const auto& s = t->logical_shape();
+            TT_FATAL(
+                s.rank() > 0 && s[-1] == Nv && t->logical_volume() == Nv,
+                "{}: {} must be one row of Nv values (got {})",
+                kOp,
+                name,
+                s);
+        }
     } else {
         TT_FATAL(
             qs.rank() == 3 && qs[0] == 1 && qs[1] == 1 && qs[2] == C,
@@ -135,7 +148,12 @@ void GdnDecodeStepOperation::validate_on_program_cache_miss(const operation_attr
         kOp,
         ss,
         rows);
-    TT_FATAL(in.weight.logical_volume() == Dv, "{}: weight volume must equal value_dim", kOp);
+    const auto& ws = in.weight.logical_shape();
+    TT_FATAL(
+        ws.rank() > 0 && ws[-1] == Dv && in.weight.logical_volume() == Dv,
+        "{}: weight must be one row of value_dim values (got {})",
+        kOp,
+        ws);
 }
 
 GdnDecodeStepOperation::spec_return_value_t GdnDecodeStepOperation::compute_output_specs(
