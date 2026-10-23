@@ -64,6 +64,7 @@ set(SOURCES
     ops/distributed/vocab_parallel_cross_entropy_loss_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
+    ops/program_cache_placement_test.cpp
     ops/cross_entropy_bw_op_test.cpp
     ops/rope_test.cpp
     ops/rmsnorm_op_test.cpp
