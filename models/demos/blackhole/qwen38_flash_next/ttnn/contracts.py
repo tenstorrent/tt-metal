@@ -60,6 +60,10 @@ def is_slab_rows(rows) -> bool:
     )
 
 
+class Qwen38SlabRefused(ValueError):
+    """A prefill slab this build does not serve; the caller serves without the slab."""
+
+
 def chunk_row_tiles(rows: int) -> int:
     """The row tiles of a chunk form (1 or 4) or of a slab (8 .. 128); rejects any other row count."""
 

@@ -75,9 +75,11 @@ bash "$MODEL/tools/run_qwen38_chat_server.sh" --profile tt-quietbox \
 ```
 
 The first command stages missing BF4 layers. The second writes acceptance tokens and runtime identity under
-`$CACHE_ROOT/runs/` and closes the mesh. Chunk mode admits 12 short records; add `--prefill-slab 2048` to include the
-13th, 2,228-token document record. MTP4 uses `--mtp 4` and its own source baseline. Remove `--acceptance-only` to
-serve; set `--host 127.0.0.1` for a local endpoint. The source server's `--serve-seconds` limit includes startup.
+`$CACHE_ROOT/runs/` and closes the mesh. Chunk mode admits 12 short records. `--prefill-slab 2048` adds the 13th,
+2,228-token document record on a tt-metal whose `moe_compute` takes the slab's 2,048 tokens in one call; the server
+refuses the flag at startup on one that does not, after tt-metal logs the op's refusal as a critical `TT_FATAL` line.
+MTP4 uses `--mtp 4` and its own source baseline. Remove `--acceptance-only` to serve; set `--host 127.0.0.1` for a
+local endpoint. The source server's `--serve-seconds` limit includes startup.
 
 The tiered component tests compare real checkpoint values with independent Torch references that are separately
 checked against Transformers. `tests/test_model_reuse_tp.py` records fixed 128/50 generations and A/B/A requests at

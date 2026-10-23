@@ -2664,6 +2664,9 @@ class Qwen38TTNNTextModel:
                 )
                 if is_slab_rows(rows) and gdn_body is None and layer.layer_type is Qwen38TTNNLayerType.GDN:
                     gdn_body = allocated[-1].attention
+            if is_slab_rows(rows):
+                # the slab's one moe_compute call, asked of the op before any slab work (every layer's call is alike)
+                self.layers[0].admit_slab_call(allocated[0])
             token_row = self.model_io.embedding.upload_token_rows(rows)
             if rows == CHUNK_ROWS:
                 accepted = ttnn.from_torch(

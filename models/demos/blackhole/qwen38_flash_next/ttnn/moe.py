@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from loguru import logger
 from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, effective_matmul_ring_size
 from ttnn.operations.ccl import MoEActivationFunction
 
@@ -39,6 +40,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     MAX_LANES,
     MESH_SHAPE,
     Qwen38MeshContract,
+    Qwen38SlabRefused,
     TensorPlacement,
     is_slab_rows,
     replicate_tensor_2d_mesh_mapper,
@@ -85,8 +87,8 @@ MOE_COMPUTE_HIDDEN_TILES = HIDDEN_SIZE // 32
 def moe_compute_output_height_shard_dim(rows: int, *, matmul_ring_size: int) -> int:
     """The smallest ``output_height_shard_dim`` under which ``moe_compute`` admits ``rows`` tokens (1 for every
     form up to 32 rows; the 128-row form needs 1 on an 8-bank part and 4 on a 7-bank part). A slab's rows only ever
-    go through one call on the local output path, which stages nothing in the combine cores' L1 and admits any
-    token count at 1."""
+    go through one call on the local output path at 1; whether the op takes that many tokens in one call is the op's
+    to say (``Qwen38TTNNMoE.admit_slab_call``)."""
 
     if is_slab_rows(rows):
         return 1
@@ -903,6 +905,95 @@ class Qwen38TTNNMoE:
         phase_observer("after-router-topk")
         return Qwen38TTNNRouting(scores_rm, indices_rm, tiles)
 
+    def _moe_compute(self, sparse_input, indices_l1, scores_l1, packed_w0_w1, packed_w2):
+        """This instance's moe_compute call on the local output path: returns the combine buffer it wrote (slot 5 of
+        the six outputs) and frees the other slots."""
+
+        outputs = ttnn.experimental.moe_compute(
+            sparse_input,
+            indices_l1,
+            scores_l1,
+            self.expert_mapping,
+            packed_w0_w1,
+            packed_w2,
+            layer_id=0,
+            output_height_shard_dim=self.output_height_shard_dim,
+            intermediate_size=INTERMEDIATE_SIZE,
+            has_bias=False,
+            cluster_axis=LOCAL_COMBINE_AXIS,
+            topology=None,
+            num_links=None,
+            mux_core_range_set=None,
+            output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            optional_output_tensor=self.local_combine_output,
+            optional_cross_device_semaphore=None,
+            activation_type=MoEActivationFunction.SILU,
+            compute_only=False,
+            num_shared_experts_per_device=0,
+        )
+        # Slot 5 matched by buffer: while a graph capture runs, ttnn gives an op's outputs new tensor ids.
+        if len(outputs) != 6 or not same_buffer(outputs[5], self.local_combine_output):
+            raise RuntimeError("local moe_compute did not return the persistent six-slot output")
+        # Slots 3/4 alias one L1 backing buffer; freeing slot 4 releases it.
+        _deallocate(outputs[0], outputs[1], outputs[2], outputs[4])
+        return outputs[5]
+
+    def admit_slab_call(self, packed_w0_w1, packed_w2) -> None:
+        """Whether moe_compute takes this slab's rows in one call, asked before any slab work: the slab's own call on
+        stand-in inputs of its shapes under a NO_DISPATCH graph capture (mocked buffers, nothing dispatched, no
+        program cached), so the op's validation decides, as ``ttnn::graph::query_op_constraints`` asks an op.  A
+        refusal raises ``Qwen38SlabRefused`` with the op's reason instead of failing in the slab's first forward.  The
+        capture is process-global: no other thread may run ttnn work meanwhile."""
+
+        if not self.slab:
+            raise ValueError(f"the one-call admission is a slab instance's, not a {self.rows}-row instance's")
+        if ttnn.graph.is_graph_capture_active():
+            raise RuntimeError(
+                "the slab call admission cannot run inside another graph capture: the outer capture's run mode, not "
+                "NO_DISPATCH, would decide whether moe_compute dispatches"
+            )
+        logger.info(
+            f"asking moe_compute whether it takes the {self.rows}-row slab in one call (tt-metal logs a refusal at "
+            "critical level before the model's error)"
+        )
+        mesh, routing_shape = self.mesh_device, ttnn.Shape(list(self.row_contract.moe_routing))
+        refusal = None
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+        try:
+            inputs = (
+                ttnn.allocate_tensor_on_device(
+                    ttnn.Shape(list(self.row_contract.moe_sparse_input)),
+                    ttnn.bfloat16,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                    mesh,
+                    ttnn.DRAM_MEMORY_CONFIG,
+                ),
+                ttnn.allocate_tensor_on_device(
+                    routing_shape, ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT, mesh, self.routing_l1_memory_config
+                ),
+                ttnn.allocate_tensor_on_device(
+                    routing_shape, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh, self.routing_l1_memory_config
+                ),
+            )
+            for tensor in inputs:
+                fused.program.stamp_topology(tensor, self.local_combine_output)  # replicated, as the slab's are
+            try:
+                self._moe_compute(*inputs, packed_w0_w1, packed_w2)
+            except RuntimeError as error:
+                if not str(error).startswith(("TT_FATAL @ ", "TT_THROW @ ")):
+                    raise  # not the op's refusal: the model's own checks and binding errors stay errors
+                refusal = error
+            _deallocate(*inputs)
+        finally:
+            ttnn.graph.end_graph_capture()
+        if refusal is not None:
+            text = str(refusal)
+            reason = text.partition("info:\n")[2].partition("\n")[0] or text.partition("\n")[0]  # a TT_FATAL's info
+            raise Qwen38SlabRefused(
+                f"the {self.rows}-row prefill slab is refused: moe_compute refuses its one {self.rows}-token call "
+                f"({reason}); serve without the slab"
+            ) from refusal
+
     def _routed_partial(
         self,
         full_hidden,
@@ -1001,43 +1092,17 @@ class Qwen38TTNNMoE:
                 raise RuntimeError("ttnn.fill did not update the persistent local-combine buffer in place")
 
         phase_observer("before-moe-compute-launch")
-        outputs = ttnn.experimental.moe_compute(
-            sparse_input,
-            indices_l1,
-            scores_l1,
-            self.expert_mapping,
-            packed_w0_w1,
-            packed_w2,
-            layer_id=0,
-            output_height_shard_dim=self.output_height_shard_dim,
-            intermediate_size=INTERMEDIATE_SIZE,
-            has_bias=False,
-            cluster_axis=LOCAL_COMBINE_AXIS,
-            topology=None,
-            num_links=None,
-            mux_core_range_set=None,
-            output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            optional_output_tensor=self.local_combine_output,
-            optional_cross_device_semaphore=None,
-            activation_type=MoEActivationFunction.SILU,
-            compute_only=False,
-            num_shared_experts_per_device=0,
-        )
+        combine = self._moe_compute(sparse_input, indices_l1, scores_l1, packed_w0_w1, packed_w2)
         phase_observer("after-moe-compute-launch")
-        if len(outputs) != 6 or outputs[5].tensor_id != self.local_combine_output.tensor_id:
-            raise RuntimeError("local moe_compute did not return the persistent six-slot output")
-        self.mesh_contract.validate_tensor(outputs[5], placement=TensorPlacement.LOCAL_PARTIAL)
-        if _shape(outputs[5]) != self.row_contract.local_combine:
-            raise RuntimeError(
-                f"local combine produced {_shape(outputs[5])}, expected {self.row_contract.local_combine}"
-            )
+        self.mesh_contract.validate_tensor(combine, placement=TensorPlacement.LOCAL_PARTIAL)
+        if _shape(combine) != self.row_contract.local_combine:
+            raise RuntimeError(f"local combine produced {_shape(combine)}, expected {self.row_contract.local_combine}")
 
-        # Slots 3/4 alias one L1 backing buffer; freeing slot 4 releases it.
-        _deallocate(outputs[0], outputs[1], outputs[2], outputs[4], sparse_input, indices_l1, scores_l1)
+        _deallocate(sparse_input, indices_l1, scores_l1)
         if self.slab:
-            return self._weighted_reduce_slab_blocks(outputs[5], full_hidden, routing, phase_observer)
+            return self._weighted_reduce_slab_blocks(combine, full_hidden, routing, phase_observer)
         phase_observer("before-selective-reduce")
-        local_stack = ttnn.unsqueeze(outputs[5], dim=1)
+        local_stack = ttnn.unsqueeze(combine, dim=1)
         if _shape(local_stack) != self.row_contract.fast_reduce_input:
             raise RuntimeError(
                 f"weighted-reduce input must be {self.row_contract.fast_reduce_input}, got {_shape(local_stack)}"
@@ -1047,7 +1112,7 @@ class Qwen38TTNNMoE:
             # the grid; the rank-4 form works one 4-tile-row batch at a time: 0.28 -> 0.14 ms) and viewed back
             # as the reduce's [10, 1, 128, 2560] (the same tile order; the view owns the buffer).
             combine_flat = ttnn.to_layout(
-                ttnn.reshape(outputs[5], (TOP_K * self.rows, HIDDEN_SIZE)),
+                ttnn.reshape(combine, (TOP_K * self.rows, HIDDEN_SIZE)),
                 ttnn.TILE_LAYOUT,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 pad_value=0.0,
@@ -1235,37 +1300,11 @@ class Qwen38TTNNMoE:
         self._check_routing_shards(indices_l1, scores_l1)
         phase_observer("after-routed-dispatch")
         phase_observer("before-moe-compute-launch")
-        outputs = ttnn.experimental.moe_compute(
-            sparse_input,
-            indices_l1,
-            scores_l1,
-            self.expert_mapping,
-            packed_w0_w1,
-            packed_w2,
-            layer_id=0,
-            output_height_shard_dim=self.output_height_shard_dim,
-            intermediate_size=INTERMEDIATE_SIZE,
-            has_bias=False,
-            cluster_axis=LOCAL_COMBINE_AXIS,
-            topology=None,
-            num_links=None,
-            mux_core_range_set=None,
-            output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            optional_output_tensor=self.local_combine_output,
-            optional_cross_device_semaphore=None,
-            activation_type=MoEActivationFunction.SILU,
-            compute_only=False,
-            num_shared_experts_per_device=0,
-        )
+        combine = self._moe_compute(sparse_input, indices_l1, scores_l1, packed_w0_w1, packed_w2)
         phase_observer("after-moe-compute-launch")
-        if len(outputs) != 6 or outputs[5].tensor_id != self.local_combine_output.tensor_id:
-            raise RuntimeError("local moe_compute did not return the persistent six-slot output")
-        self.mesh_contract.validate_tensor(outputs[5], placement=TensorPlacement.LOCAL_PARTIAL)
-        if _shape(outputs[5]) != self.row_contract.local_combine:
-            raise RuntimeError(
-                f"local combine produced {_shape(outputs[5])}, expected {self.row_contract.local_combine}"
-            )
-        _deallocate(outputs[0], outputs[1], outputs[2], outputs[4])
+        self.mesh_contract.validate_tensor(combine, placement=TensorPlacement.LOCAL_PARTIAL)
+        if _shape(combine) != self.row_contract.local_combine:
+            raise RuntimeError(f"local combine produced {_shape(combine)}, expected {self.row_contract.local_combine}")
         if sparse_rows is None or not same_buffer(sparse_input, sparse_rows):
             # own rows, or a reshape that copied; a VIEW of the caller's rows shares their buffer and the caller frees it
             _deallocate(sparse_input)
@@ -1277,7 +1316,7 @@ class Qwen38TTNNMoE:
         else:
             shared_partial, sigmoid = shared, None
         local_sum = fused.moe_post.moe_post(
-            outputs[5],
+            combine,
             routing.scores,
             routing.indices,
             self.expert_owner,
@@ -1501,36 +1540,13 @@ class Qwen38TTNNMoE:
             if zeroed.tensor_id != self.local_combine_output.tensor_id:
                 raise RuntimeError("ttnn.fill did not update the persistent local-combine buffer in place")
             phase_observer("before-moe-compute-launch")
-            outputs = ttnn.experimental.moe_compute(
-                sparse_input,
-                indices_l1,
-                scores_l1,
-                self.expert_mapping,
-                packed_w0_w1,
-                packed_w2,
-                layer_id=0,
-                output_height_shard_dim=self.output_height_shard_dim,
-                intermediate_size=INTERMEDIATE_SIZE,
-                has_bias=False,
-                cluster_axis=LOCAL_COMBINE_AXIS,
-                topology=None,
-                num_links=None,
-                mux_core_range_set=None,
-                output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                optional_output_tensor=self.local_combine_output,
-                optional_cross_device_semaphore=None,
-                activation_type=MoEActivationFunction.SILU,
-                compute_only=False,
-                num_shared_experts_per_device=0,
-            )
+            combine = self._moe_compute(sparse_input, indices_l1, scores_l1, packed_w0_w1, packed_w2)
             phase_observer("after-moe-compute-launch")
-            if len(outputs) != 6 or outputs[5].tensor_id != self.local_combine_output.tensor_id:
-                raise RuntimeError("local moe_compute did not return the persistent six-slot output")
-            if _shape(outputs[5]) != combine_shape:
-                raise RuntimeError(f"local combine produced {_shape(outputs[5])}, expected {combine_shape}")
-            _deallocate(outputs[0], outputs[1], outputs[2], outputs[4], sparse_input, indices_l1, scores_l1)
+            if _shape(combine) != combine_shape:
+                raise RuntimeError(f"local combine produced {_shape(combine)}, expected {combine_shape}")
+            _deallocate(sparse_input, indices_l1, scores_l1)
             local_stack_tiled = ttnn.to_layout(
-                ttnn.unsqueeze(outputs[5], dim=1), ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, pad_value=0.0
+                ttnn.unsqueeze(combine, dim=1), ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, pad_value=0.0
             )
             fast_outputs = ttnn.experimental.deepseek_moe_fast_reduce_nc_fused(
                 local_stack_tiled,

@@ -6,6 +6,8 @@ three independent tokens (the block is stateless), the top-10 expert set within 
 The routed experts are the BF4 cache's, so the PCC floor is below the BF16 blocks'.
 
 test_moe_component.py proves ``Qwen38MoE`` against the pinned Transformers module on the CPU; this is the device side.
+The slab call admission (``Qwen38TTNNMoE.admit_slab_call``) leaves the program cache and the allocators as it found
+them, admitted or refused.
 
 Run:  pytest models/demos/blackhole/qwen38_flash_next/tests/test_moe_tp.py -v -s
 Env:  MODEL_WEIGHTS_DIR, MESH_DEVICE="(1, 4)", QWEN38_CACHE_ROOT (skipped without it); QWEN38_BF4_CORPUS with
@@ -22,7 +24,8 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen38_flash_next.tests.tp_harness import DEVICE_PARAMS, HIDDEN_SIZE, pcc
 from models.demos.blackhole.qwen38_flash_next.tt.moe import Qwen38MoE, Qwen38MoEWeights
-from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import MESH_SHAPE
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import MESH_SHAPE, Qwen38SlabRefused
+from models.demos.blackhole.qwen38_flash_next.ttnn.moe import SUPPORTED_ROWS, Qwen38TTNNMoE
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("QWEN38_FUSED_DEVICE_TEST") != "1",
@@ -66,3 +69,42 @@ def test_moe_tp(tp_harness, pcc_thresholds):
             score = pcc(got, expected)
             logger.info(f"layer {LAYER_INDEX} row {row}: PCC {score:.6f}, experts {indices.tolist()}")
             assert score >= pcc_thresholds["test_moe_tp"], f"row {row}: PCC {score:.6f}"
+
+
+def _allocator_state(mesh) -> tuple:
+    views = [ttnn.get_memory_view(mesh, buffer_type) for buffer_type in (ttnn.BufferType.L1, ttnn.BufferType.DRAM)]
+    return mesh.num_program_cache_entries(), [
+        (view.total_bytes_allocated_per_bank, view.largest_contiguous_bytes_free_per_bank) for view in views
+    ]
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize("rows", [512, 2048])
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+def test_moe_slab_call_admission_allocates_and_caches_nothing(tp_harness, rows: int):
+    harness = tp_harness
+    builder, layer = harness.build_layer(LAYER_INDEX)
+    mlp = layer.mlp
+    slab = Qwen38TTNNMoE(
+        harness.mesh_device,
+        mlp.mesh_contract,
+        mlp.weights,
+        tt_ccl=mlp.tt_ccl,
+        collective_topology=mlp.collective_topology,
+        rows=rows,
+        admitted_rows=SUPPORTED_ROWS + (rows,),
+        prefill_dense=mlp.prefill_dense,
+    )
+    try:
+        with builder.expert_streamer.layer(LAYER_INDEX) as (packed_w0_w1, packed_w2):
+            before = _allocator_state(harness.mesh_device)
+            try:
+                slab.admit_slab_call(packed_w0_w1, packed_w2)
+            except Qwen38SlabRefused as refusal:
+                logger.debug(f"{rows} rows refused: {refusal}")
+            after = _allocator_state(harness.mesh_device)
+    finally:
+        slab.release_owned_buffers()
+    assert after == before, f"{rows} rows: (cache entries, [(allocated, largest free) L1, DRAM]) {before} -> {after}"

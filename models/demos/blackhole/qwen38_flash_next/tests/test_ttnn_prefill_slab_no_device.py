@@ -8,6 +8,7 @@ chunk-input emulation, the driver's plan (slabs, then 128-row chunks, then 32-ro
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import math
 from types import SimpleNamespace
@@ -185,6 +186,97 @@ def test_slab_reduce_never_frees_what_it_did_not_create(monkeypatch, rows: int) 
         assert result.freed.count("combine[0]") == 1 and f"combine[{rows - 512}]" in result.freed
         assert all(f"partial{i}" in result.freed for i in range(1, blocks + 1)) and result.partial.name == "concat"
         assert all(f"scores[{s}]" in result.freed and f"indices[{s}]" in result.freed for s in range(0, rows, 512))
+
+
+@pytest.mark.parametrize("case", ["admitted", "refused", "inside a capture", "model error"])
+def test_slab_call_admission_asks_the_op_without_dispatching(monkeypatch, expect_error, case: str) -> None:
+    """Before any slab work the slab's one moe_compute call is put to the op under a NO_DISPATCH graph capture: the
+    call's own arguments on stand-in inputs of the slab's shapes (stamped replicated, as the slab's are), the capture
+    ended either way, and nothing freed that the admission did not create. The op's combine output is the slab's
+    buffer under a new tensor id, as ttnn returns outputs during a capture. An op refusal is a Qwen38SlabRefused with
+    the op's reason, chained from the op's error; an error that is not the op's (no TT_FATAL / TT_THROW) stays that
+    error; inside another graph capture the admission does not run."""
+    capture, freed, calls, stamped = [], [], [], []
+    combine = _AliasingTensor((moe_module.TOP_K, SLAB, moe_module.HIDDEN_SIZE), "combine")
+    combine.tensor_id, combine.buffer_address = 0, lambda: 4096
+    captured_combine = _AliasingTensor(combine.shape, "combine, captured")
+    captured_combine.tensor_id, captured_combine.buffer_address = 1, combine.buffer_address
+    fatal = "Too many tokens in input, got: 2048 but expected max: 128"
+    op_error = RuntimeError(f"TT_FATAL @ moe_compute_device_operation.cpp:140: cond\ninfo:\n{fatal}\nbacktrace:\n ---")
+
+    def moe_compute(*args, **kwargs):
+        calls.append((args, kwargs))
+        if case == "refused":
+            raise op_error
+        if case == "model error":  # slot 5 is not the slab's combine buffer: the model's own check raises
+            return [_AliasingTensor((1,), f"out{index}") for index in range(6)]
+        return [_AliasingTensor((1,), f"out{index}") for index in range(5)] + [captured_combine]
+
+    fake_ttnn = SimpleNamespace(
+        Shape=tuple,
+        bfloat16="bf16",
+        uint16="u16",
+        ROW_MAJOR_LAYOUT="rm",
+        DRAM_MEMORY_CONFIG="dram",
+        graph=SimpleNamespace(
+            RunMode=SimpleNamespace(NO_DISPATCH="no-dispatch"),
+            is_graph_capture_active=lambda: case == "inside a capture",
+            begin_graph_capture=lambda mode: capture.append(mode),
+            end_graph_capture=lambda: capture.append("end"),
+        ),
+        allocate_tensor_on_device=lambda shape, dtype, layout, mesh, memory_config: _AliasingTensor(
+            shape, f"stand-in {dtype} {memory_config}", dtype, layout
+        ),
+        deallocate=freed.append,
+        experimental=SimpleNamespace(moe_compute=moe_compute),
+    )
+    monkeypatch.setattr(moe_module, "ttnn", fake_ttnn)
+    monkeypatch.setattr(moe_module.fused.program, "stamp_topology", lambda tensor, reference: stamped.append(reference))
+    module = object.__new__(moe_module.Qwen38TTNNMoE)
+    module.rows = SLAB
+    module.row_contract = moe_module.Qwen38TTNNMoERowContract(SLAB, moe_module.SUPPORTED_ROWS + (SLAB,))
+    module.mesh_device, module.expert_mapping, module.local_combine_output = "mesh", "mapping", combine
+    module.routing_l1_memory_config, module.output_height_shard_dim = "drain-shard", 1
+    if case == "inside a capture":
+        with expect_error(RuntimeError, "cannot run inside another graph capture"):
+            module.admit_slab_call("w0_w1", "w2")
+        assert capture == [] and calls == [], (capture, calls)
+        return
+    if case == "model error":
+        with expect_error(RuntimeError, "did not return the persistent six-slot output"):
+            module.admit_slab_call("w0_w1", "w2")
+        assert capture == ["no-dispatch", "end"] and len(calls) == 1, (capture, len(calls))
+        return
+    try:
+        module.admit_slab_call("w0_w1", "w2")
+    except contracts_module.Qwen38SlabRefused as error:
+        refusal = error
+    else:
+        refusal = None
+    assert capture == ["no-dispatch", "end"], capture
+    ((args, kwargs),) = calls
+    stand_ins = args[:3]
+    assert [(stand_in.shape, stand_in.dtype) for stand_in in stand_ins] == [
+        ((1, SLAB, moe_module.HIDDEN_SIZE), "bf16"),
+        ((1, SLAB, moe_module.TOP_K), "u16"),
+        ((1, SLAB, moe_module.TOP_K), "bf16"),
+    ], [stand_in.name for stand_in in stand_ins]
+    in_l1 = [stand_in.name.endswith("drain-shard") for stand_in in stand_ins]
+    assert in_l1 == [False, True, True], in_l1
+    assert args[3:] == ("mapping", "w0_w1", "w2") and stamped == [combine] * 3, (args[3:], stamped)
+    assert kwargs["optional_output_tensor"] is combine and kwargs["output_height_shard_dim"] == 1, kwargs
+    assert all(stand_in in freed for stand_in in stand_ins), [tensor.name for tensor in freed]
+    assert combine not in freed and captured_combine not in freed, [tensor.name for tensor in freed]
+    if case == "refused":
+        assert str(refusal) == (
+            f"the {SLAB}-row prefill slab is refused: moe_compute refuses its one {SLAB}-token call ({fatal}); "
+            "serve without the slab"
+        ), str(refusal)
+        assert refusal.__cause__ is op_error, refusal.__cause__
+    else:
+        assert refusal is None, refusal
+        others = [tensor.name for tensor in freed if tensor not in stand_ins]
+        assert others == ["out0", "out1", "out2", "out4"], others
 
 
 # --------------------------------------------------------------------------- the 2D-multicast matmul config
@@ -711,7 +803,8 @@ def test_slab_combine_buffer_admits_the_slab_rows(expect_error, monkeypatch) -> 
 def _fake_text_model_for_chunk_state(monkeypatch, fakes):
     """A stand-in for Qwen38TTNNTextModel with the collaborators allocate_chunk_state touches (two layers: a GDN and
     a QSA, the PLE checkpoint layer at index 1), so the REAL Qwen38TTNNTextModel.allocate_chunk_state runs its own
-    body, including the shared combine buffer allocation through moe.allocate_local_combine_output."""
+    body, including the shared combine buffer allocation through moe.allocate_local_combine_output; each layer
+    state's MoE records the slab call admissions it is asked for in ``admitted``."""
 
     releasable = lambda: SimpleNamespace(deallocate=lambda: None, release=lambda: None, active=True)
     monkeypatch.setattr(
@@ -726,20 +819,38 @@ def _fake_text_model_for_chunk_state(monkeypatch, fakes):
     monkeypatch.setattr(model_module, "ttnn", fakes.ttnn)
     monkeypatch.setattr(model_module, "replicate_tensor_2d_mesh_mapper", lambda device: "replicate", raising=False)
 
-    def make_layer(layer_type):
+    admitted = []
+
+    def make_layer(layer_type, index):
         attention = SimpleNamespace(
             allocate_rows_constants=lambda rows: releasable(), allocated_compressed_blocks=BLOCKS
         )
         ple = SimpleNamespace(prepare_rows_input=lambda tokens, rows_state, *, rows: releasable())
-        layer = SimpleNamespace(layer_type=layer_type, attention=attention, ple=ple)
+        streamer = SimpleNamespace(
+            layer=lambda layer_index, *, namespace: contextlib.nullcontext(
+                (f"w0_w1[{layer_index}]", f"w2[{layer_index}]")
+            )
+        )
+        layer = SimpleNamespace(
+            layer_type=layer_type,
+            attention=attention,
+            ple=ple,
+            layer_index=index,
+            namespace=SimpleNamespace(value="backbone"),
+            expert_streamer=streamer,
+        )
+        layer.admit_slab_call = lambda state: layer_module.Qwen38TTNNDecoderLayer.admit_slab_call(layer, state)
         layer.allocate_chunk_state = lambda rows_constants, *, base, local_combine_output, gdn_body: SimpleNamespace(
-            attention=SimpleNamespace(), ple=SimpleNamespace(), local_combine_output=local_combine_output
+            attention=SimpleNamespace(),
+            ple=SimpleNamespace(),
+            local_combine_output=local_combine_output,
+            moe=SimpleNamespace(admit_slab_call=lambda w0_w1, w2: admitted.append((index, w0_w1, w2))),
         )
         layer.release_chunk_state = lambda state: None
         return layer
 
     owner = object()
-    layers = [make_layer(layer_module.Qwen38TTNNLayerType.GDN), make_layer(layer_module.Qwen38TTNNLayerType.QSA)]
+    layers = [make_layer(layer_module.Qwen38TTNNLayerType.GDN, 0), make_layer(layer_module.Qwen38TTNNLayerType.QSA, 1)]
     assert layer_module.PLE_CHECKPOINT_LAYER == 1
     model = SimpleNamespace(
         layers=layers,
@@ -758,7 +869,7 @@ def _fake_text_model_for_chunk_state(monkeypatch, fakes):
         ),
     )
     base = SimpleNamespace(rows=CHUNK_ROWS, layers=(SimpleNamespace(), SimpleNamespace()))
-    return model, base
+    return model, base, admitted
 
 
 def test_slab_chunk_state_allocates_the_combine_buffer_the_slab_writes(monkeypatch) -> None:
@@ -766,7 +877,7 @@ def test_slab_chunk_state_allocates_the_combine_buffer_the_slab_writes(monkeypat
     the shared MoE combine buffer it allocates is sized by routed_tokens_per_call_for(rows), the whole slab (the one
     call's page), and the row contract admits it."""
     fakes = _moe_buffer_fakes(monkeypatch)
-    model, base = _fake_text_model_for_chunk_state(monkeypatch, fakes)
+    model, base, admitted = _fake_text_model_for_chunk_state(monkeypatch, fakes)
     generic_state = SimpleNamespace(position=SimpleNamespace(read=lambda: 0))
     state = model_module.Qwen38TTNNTextModel.allocate_chunk_state(model, generic_state, rows=SLAB, base=base)
     assert moe_module.routed_tokens_per_call_for(SLAB) == SLAB
@@ -774,6 +885,8 @@ def test_slab_chunk_state_allocates_the_combine_buffer_the_slab_writes(monkeypat
     assert all(layer_state.local_combine_output is state.local_combine_output for layer_state in state.layers)
     # the combine buffer's validation (the chunk's RoPE rows and feature rows validate their own 4-D shapes too)
     assert [shape[1] for shape, _ in fakes.validated if len(shape) == 3] == [SLAB]
+    # moe_compute is asked once whether it takes the slab's rows in one call: layer 0's instance, its own experts
+    assert admitted == [(0, "w0_w1[0]", "w2[0]")], admitted
 
 
 def test_a_slab_record_replays_only_on_a_server_with_a_prefill_slab() -> None:

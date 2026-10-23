@@ -1306,6 +1306,13 @@ class Qwen38TTNNDecoderLayer:
             _run_cleanup_actions("decoder-layer chunk state allocation", actions, primary=error)
             raise
 
+    def admit_slab_call(self, state: Qwen38TTNNDecoderLayerChunkState) -> None:
+        """Ask moe_compute whether it takes a slab state's rows in one call (``Qwen38TTNNMoE.admit_slab_call``), on
+        this layer's experts."""
+
+        with self.expert_streamer.layer(self.layer_index, namespace=self.namespace.value) as packed_experts:
+            state.moe.admit_slab_call(*packed_experts)
+
     def _release_chunk_attention_state(self, attention_state) -> None:
         if isinstance(self.attention, Qwen38TTNNGDN):
             attention_state.deallocate()
