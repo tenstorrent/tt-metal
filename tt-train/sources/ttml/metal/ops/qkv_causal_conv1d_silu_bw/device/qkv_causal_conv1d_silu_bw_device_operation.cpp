@@ -8,6 +8,8 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
 
+#include "metal/common/tensor_validation.hpp"
+
 using namespace tt::tt_metal;
 
 namespace ttml::metal::ops::qkv_causal_conv1d_silu_bw::device {
@@ -15,18 +17,6 @@ namespace ttml::metal::ops::qkv_causal_conv1d_silu_bw::device {
 namespace {
 
 constexpr std::string_view op_name = "qkv_causal_conv1d_silu_bw";
-
-void check_tensor(const Tensor& reference, const Tensor& tensor, Layout layout, std::string_view name) {
-    TT_FATAL(
-        tensor.storage_type() == ttnn::StorageType::DEVICE && tensor.buffer() != nullptr,
-        "{}: {} must be an allocated device tensor",
-        op_name,
-        name);
-    TT_FATAL(tensor.layout() == layout, "{}: {} must be {}", op_name, name, enchantum::to_string(layout));
-    TT_FATAL(tensor.dtype() == DataType::BFLOAT16, "{}: {} must be BFLOAT16", op_name, name);
-    TT_FATAL(!tensor.is_sharded(), "{}: {} must use interleaved memory", op_name, name);
-    TT_FATAL(tensor.device() == reference.device(), "{}: {} must be on the same device", op_name, name);
-}
 
 uint64_t channels(const QkvCausalConv1dSiluBackwardParams& attrs) {
     return static_cast<uint64_t>(attrs.q_width) + attrs.k_width + attrs.v_width;
@@ -62,17 +52,26 @@ void QkvCausalConv1dSiluBackwardOperation::validate_on_program_cache_miss(
         op_name);
     TT_FATAL(!attrs.output_mem_config.is_sharded(), "{}: output memory layout must be INTERLEAVED", op_name);
 
-    check_tensor(in.input, in.input, Layout::ROW_MAJOR, "input");
-    check_tensor(in.input, in.history, Layout::ROW_MAJOR, "history");
-    check_tensor(in.input, in.grad_q, Layout::TILE, "grad_q");
-    check_tensor(in.input, in.grad_k, Layout::TILE, "grad_k");
-    check_tensor(in.input, in.grad_v, Layout::TILE, "grad_v");
-    for (const auto* tap : std::array{&in.tap0, &in.tap1, &in.tap2, &in.tap3}) {
-        check_tensor(in.input, *tap, Layout::TILE, "tap");
+    check_device_tensor(in.input, op_name, "input", {.layout = Layout::ROW_MAJOR});
+    const auto check = [&](const Tensor& tensor, std::string_view name, Layout layout = Layout::TILE) {
+        check_device_tensor(tensor, op_name, name, {.layout = layout});
+        check_same_device(tensor, in.input, op_name, name, "input");
+    };
+    check(in.history, "history", Layout::ROW_MAJOR);
+    check(in.grad_q, "grad_q");
+    check(in.grad_k, "grad_k");
+    check(in.grad_v, "grad_v");
+    for (const auto& [tap, name] :
+         {std::pair{&in.tap0, "tap0"},
+          std::pair{&in.tap1, "tap1"},
+          std::pair{&in.tap2, "tap2"},
+          std::pair{&in.tap3, "tap3"}}) {
+        check(*tap, name);
         TT_FATAL(
             tap->logical_shape()[-1] == c && tap->logical_volume() == c,
-            "{}: each tap must have logical volume Q+K+V on its last dimension",
-            op_name);
+            "{}: {} must have logical volume Q+K+V on its last dimension",
+            op_name,
+            name);
     }
     TT_FATAL(
         in.input.logical_shape() == Shape({1, attrs.row_count, static_cast<uint32_t>(c)}),
