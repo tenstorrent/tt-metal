@@ -21,6 +21,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 // Slightly modified from compute_common.hpp
+// k_loop runs the inner dimension inside one matmul call.
+template <bool k_loop>
 void matmul_blocks(
     const uint32_t in0_cb,
     const uint32_t in1_cb,
@@ -59,11 +61,26 @@ void matmul_blocks(
             uint32_t in0_index = in0_index_offset;
             uint32_t in1_index = in1_index_offset;
 
-            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                matmul_block(
-                    in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
-                in0_index++;
-                in1_index += N;
+            if constexpr (k_loop) {
+                matmul_block_k(
+                    in0_cb,
+                    in1_cb,
+                    in0_index,
+                    in1_index,
+                    dst_index,
+                    transpose,
+                    subblock_w,
+                    subblock_h,
+                    in0_block_w,
+                    in0_block_w,
+                    N);
+            } else {
+                for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
+                    matmul_block(
+                        in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
+                    in0_index++;
+                    in1_index += N;
+                }
             }
             tile_regs_commit();
 
@@ -458,6 +475,13 @@ void kernel_main() {
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(23);
     constexpr uint32_t subblock_h = get_compile_time_arg_val(24);
     constexpr uint32_t subblock_w = get_compile_time_arg_val(25);
+    // The unpack call per inner step bounds these sub blocks; at LoFi the longer inner dimensions of 2x1, 1x2 and 2x2.
+    constexpr bool use_k_loop =
+        (subblock_h * subblock_w == 1 && in0_block_w >= 4 &&
+         (MATH_FIDELITY == MathFidelity::LoFi || MATH_FIDELITY == MathFidelity::HiFi2)) ||
+        (MATH_FIDELITY == MathFidelity::LoFi && ((subblock_h == 2 && subblock_w == 1 && in0_block_w >= 8) ||
+                                                 (subblock_h * subblock_w == 2 && in0_block_w >= 16) ||
+                                                 (subblock_h == 2 && subblock_w == 2 && in0_block_w >= 16)));
 
     constexpr uint32_t semaphore_id = get_compile_time_arg_val(26);
     // fp32-FORMAT partial CBs (multi-C_in-block with fp32 dest): format reconfigs required around
@@ -592,7 +616,7 @@ void kernel_main() {
                                         cb_x_lo_tiled_cb.pop_front(batch_tiles);
                                     } else {
                                         cb_vol2col_tiled_cb.wait_front(batch_tiles);
-                                        matmul_blocks(
+                                        matmul_blocks<use_k_loop>(
                                             cb_vol2col_tiled,
                                             cb_weight_tiled,
                                             cb_matmul_interm_tiled,
