@@ -1564,10 +1564,14 @@ class Model:
             apc is not None and async_win and apc.defer()
         )  # (deferred snapshots need the asynchronous windows: their reads are ordered by the queue, not by a host wait)
         t_apc_ovl = [0.0]  # seconds of snapshot completions run while the device replays a window
+        t_first = 0.0  # host seconds of window builds that were not overlapped with a replay
         t_pre = time.perf_counter() - t_start
         per_row = (
             bool(getattr(pm.dyn, "per_row", False)) and masked
         )  # per-row chunk starts (tt/prefill_single.py): users at different positions replay in ONE pass
+        prebuild_next = (
+            async_win and per_row and os.environ.get("DSV41_PF_PREBUILD", "1") == "1"
+        )  # (position-only tables of the next call's first window, see DynCtx.prebuild)
         if per_row:
             groups = [
                 sorted(items, key=lambda it: it[2] == 0)
@@ -1653,8 +1657,25 @@ class Model:
                     return part, active, lens, tok, slot_b, vw, hs, prepped, th_h, s0v
 
                 ahead = {}
+                if (
+                    pm.__dict__.get("build_prof") is not None
+                ):  # (DSV41_PF_PROFILE_BUILD diagnostics: the host work of every window build is profiled)
+                    _build_plain = _build
+
+                    def _build(k, _b=_build_plain, _p=pm.build_prof):  # noqa: F811
+                        _p.enable()
+                        try:
+                            return _b(k)
+                        finally:
+                            _p.disable()
+
                 for k_s0, k in enumerate(win_keys):
-                    bw = ahead.pop(k) if k in ahead else _build(k)
+                    if k in ahead:
+                        bw = ahead.pop(k)
+                    else:  # a window nothing built during the previous replay (the first of a call): its host work is not hidden
+                        t_b0 = time.perf_counter()
+                        bw = _build(k)
+                        t_first += time.perf_counter() - t_b0
                     if bw is None:
                         continue
                     part, active, lens, tok, slot_b, vw, hs, prepped, th_h, s0v = bw[:10]
@@ -1675,6 +1696,14 @@ class Model:
                             t_apc_ovl[0] += apc.finish_pending()
                         if os.environ.get("DSV41_PF_OVERLAP", "1") != "1":
                             return
+                        if k_s0 + 1 >= len(win_keys) and prebuild_next:
+                            # last window of the call: nothing to build ahead. The NEXT call (the same users continuing, if their chunk ended on a chunk boundary) starts its first window
+                            # with nothing to hide behind: build its position-only host tensors now (RoPE / mask tables) while this window replays
+                            nxt = [0] * (rows * Up)
+                            for it_ in wave:
+                                if it_[3] % C == 0 and it_[3] < self.max_ctx - 1:
+                                    nxt[slot_of[it_[0]]] = it_[3]
+                            pm.dyn.prebuild(nxt)
                         for kn in win_keys[k_s0 + 1 :]:
                             nbw = _build(kn)
                             if nbw is None:
@@ -1703,6 +1732,7 @@ class Model:
                         tok, hs, s0, C, active, vis=vw, prepped=prepped, overlap=_overlap, ops=rec_ops, sync=sync_k
                     )
                     n_replays, t_host, t_rep = n_replays + 1, t_host + th, t_rep + td
+                    t_ret = time.perf_counter()
                     done = [(it[0], s0_of(it, k) + C) for it in part if it[3] <= s0_of(it, k) + C]
                     te0 = time.perf_counter()
                     if lazy_kx:
@@ -1739,11 +1769,31 @@ class Model:
                                 else:
                                     apc.maybe_snapshot(b, s0_of(it, k) + C, t)
                                 t_apc += time.perf_counter() - t_apc0
+                    if pm.__dict__.get("winlog") is not None and pm.winlog["windows"]:
+                        pm.winlog["windows"][-1]["t_ret"] = t_ret  # (replay_window returned: post hooks included)
+                        pm.winlog["windows"][-1][
+                            "t_bk"
+                        ] = time.perf_counter()  # (export record, resume, snapshot starts done)
                     if not masked:  # unmasked trace: every user outside this replay had its carried state overwritten
                         for b in [b for b in resume if b not in {p[0] for p in part}]:
                             resume.pop(b)
+        t_loop_end = time.perf_counter()
         if apc is not None:
             t_apc += apc.finish_pending()  # (snapshots started in the last windows of the call)
+        t_apc_end = time.perf_counter()
+        wl_call = pm.__dict__.get("winlog")
+        if wl_call is not None:
+            pm.winlog_drain()
+            wl_call["calls"].append(
+                {
+                    "t_start": t_start,
+                    "t_pre_end": t_start + t_pre,
+                    "t_end": time.perf_counter(),
+                    "first_build_s": t_first,
+                    "t_loop_end": t_loop_end,
+                    "t_apc_end": t_apc_end,
+                }
+            )
         if pm.__dict__.get(
             "_ev_hist"
         ):  # (a trailing enqueued window: nothing reads its result, but the call must not return with the device still busy)
@@ -1763,6 +1813,10 @@ class Model:
             export_s=t_exp,
             apc_snapshot_s=t_apc,
             apc_overlapped_s=t_apc_ovl[0],
+            first_build_s=t_first,
+            dyn_pre_hits=getattr(pm.dyn, "pre_hits", 0),
+            dyn_pre_misses=getattr(pm.dyn, "pre_misses", 0),
+            dyn_prebuild_s=getattr(pm.dyn, "t_prebuild", 0.0),
         )
         return res
 

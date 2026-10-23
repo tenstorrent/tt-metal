@@ -1015,6 +1015,18 @@ class DSV41PrefillModel:
         self.timing["compile_and_capture"] = time.perf_counter() - t0
 
     def record_window(self, prepped, s0, C, active):
+        prof = self.__dict__.get(
+            "build_prof"
+        )  # DSV41_PF_PROFILE_BUILD=1 (diagnostics): cProfile of the host work of a window
+        if prof is not None:
+            prof.enable()
+            try:
+                return self._record_window(prepped, s0, C, active)
+            finally:
+                prof.disable()
+        return self._record_window(prepped, s0, C, active)
+
+    def _record_window(self, prepped, s0, C, active):
         """All the host work of the uploads of the window [s0, s0 + C) (input tensors, RoPE tables, masks, hand-off index tables: ``upload_inputs`` + ``begin_chunk``) with the device copies only RECORDED -> ops for
         ``replay_window(ops=...)``. Runs while the device replays the previous window (the demo's ``prep_rec``)."""
         self.active_mask = torch.as_tensor(active).bool()
@@ -1031,18 +1043,27 @@ class DSV41PrefillModel:
         one is awaited GIL-free before this window's copies are enqueued). The caller synchronises at the windows whose result it reads (``sync=True``: a user's last token, a snapshot boundary, the end of the call).
         """
         t0 = time.perf_counter()
+        wl = self.__dict__.get(
+            "winlog"
+        )  # DSV41_PF_WINLOG=1 (diagnostics): per-window host timestamps + the time the device finished it (a watcher thread awaits its event)
+        w = None if wl is None else {"s0": s0, "t_in": t0}
         hist = self.__dict__.setdefault("_ev_hist", [])
         if len(hist) >= 2:
             ttnn.event_synchronize(hist[-2])
         if ops is not None:  # recorded ahead (``record_window``): only the device copies are left
             replay(ops)
         else:
+            prof = self.__dict__.get("build_prof")
+            if prof is not None:
+                prof.enable()
             self.active_mask = torch.as_tensor(active).bool()
             act = self.active_mask.nonzero().reshape(-1)
             self.upload_inputs(
                 prepped if prepped is not None else self.prep_inputs(tokens, hashes, act, vis=vis), self._bufs[C]
             )
             self.begin_chunk(s0, C)
+            if prof is not None:
+                prof.disable()
         t1 = time.perf_counter()
         from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import check_trace_allocations
 
@@ -1050,6 +1071,10 @@ class DSV41PrefillModel:
         ttnn.execute_trace(self.md, self.dyn_trace, cq_id=0, blocking=False)
         hist.append(ttnn.record_event(self.md, 0))
         del hist[:-2]
+        if w is not None:
+            w["t_copied"], w["t_enq"] = t1, time.perf_counter()
+            wl["windows"].append(w)
+            wl["q"].put((w, hist[-1]))
         if (
             overlap is not None
         ):  # host work of the NEXT window (Engram hash + rows gather / dequant) runs while the device replays this one
@@ -1063,11 +1088,50 @@ class DSV41PrefillModel:
         ttnn.synchronize_device(self.md)
         hist.clear()
         t2 = time.perf_counter()
+        t_h0 = time.perf_counter()
+        if w is not None:
+            w["sync"] = True
         for hk in self.post_replay_hooks:
             hk(s0, C)
+        self.timing["post_hooks"] = self.timing.get("post_hooks", 0.0) + time.perf_counter() - t_h0
         self.timing["host_per_chunk"] = self.timing.get("host_per_chunk", 0.0) + t1 - t0
         self.timing["replay_per_chunk"] = self.timing.get("replay_per_chunk", 0.0) + t2 - t1
         return t1 - t0, t2 - t1
+
+    def winlog_start(self):
+        """Start the per-window timeline log (see ``replay_window``): a watcher thread stamps the completion time of every enqueued window."""
+        import queue
+        import threading
+
+        q = queue.Queue()
+        self.winlog = {"windows": [], "q": q, "calls": []}
+
+        def watch():
+            while True:
+                item = q.get()
+                if item is None:
+                    q.task_done()
+                    return
+                w, ev = item
+                ttnn.event_synchronize(ev)
+                w["t_done"] = time.perf_counter()
+                q.task_done()
+
+        self._wl_thread = threading.Thread(target=watch, daemon=True)
+        self._wl_thread.start()
+
+    def winlog_stop(self):
+        wl = self.__dict__.pop("winlog", None)
+        if wl is not None:
+            wl["q"].put(None)
+            self._wl_thread.join()
+        return wl
+
+    def winlog_drain(self):
+        """wait until every enqueued window has its completion stamp"""
+        wl = self.__dict__.get("winlog")
+        if wl is not None:
+            wl["q"].join()
 
     def run_traced_chunks(self, tokens, chunk, hashes=None, S_pad_max=None):
         """tokens [B, S] -> logits [B, vocab] of the last prompt token. One trace of the chunk forward (C = ``chunk`` tokens per user, multiple of

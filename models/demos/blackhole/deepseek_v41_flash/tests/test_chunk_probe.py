@@ -64,6 +64,10 @@ def test_chunk_probe(mesh_device):
         "PROBE_APC_GB"
     ):  # prefix snapshots as the server (DSV41_APC): the snapshot cost is part of the call timing
         m.enable_apc(int(float(os.environ["PROBE_APC_GB"]) * 2**30))
+    if os.environ.get("PROBE_PROF") == "1":
+        import cProfile
+
+        pm.build_prof = cProfile.Profile()
     rec = []
     orig_rw = pm.replay_window
 
@@ -152,6 +156,7 @@ def test_chunk_probe(mesh_device):
             int(x) for x in os.environ.get("PROBE_USERS", ",".join(str(b) for b in range(B))).split(",")
         ]  # users in the call (the others stay idle: a lone request of the server)
         items = [(b, toks[b], 0, E) for b in USERS]
+        dev_map = {}  # window start(s) -> device seconds of a window (per-window td of the synchronous run)
         cmp_snaps = {}
         cmp_ = (
             {}
@@ -169,6 +174,12 @@ def test_chunk_probe(mesh_device):
                 for b_ in range(B):
                     m.release_user(b_)
             rec.clear()
+            calls_t = []  # m.timing of every call of the rep
+            if os.environ.get("PROBE_WL") == "1":
+                pm.winlog_stop()
+                pm.winlog_start()
+            elif pm.__dict__.get("winlog") is not None:
+                pm.winlog_stop()
             c0 = ncap[0]
             t0 = time.perf_counter()
             n_pieces = int(
@@ -187,9 +198,11 @@ def test_chunk_probe(mesh_device):
                     want_logits=False,
                 )
                 st_ = c_
-                log(
-                    f"PROBE call [{st_ - 0}) timing: { {k: (round(v, 3) if isinstance(v, float) else v) for k, v in m.timing.items()} }"
-                )
+                calls_t.append(dict(m.timing))
+                if n_pieces <= 32:
+                    log(
+                        f"PROBE call [{st_ - 0}) timing: { {k: (round(v, 3) if isinstance(v, float) else v) for k, v in m.timing.items()} }"
+                    )
             items = [(b, toks[b], st_, E) for b in USERS]
             res = m.prefill_interleaved(
                 items,
@@ -198,6 +211,7 @@ def test_chunk_probe(mesh_device):
                 want_logits=(bool(os.environ.get("PROBE_SAVE")) or SAME) and os.environ.get("PROBE_NOLOGITS") != "1",
             )
             wall = time.perf_counter() - t0
+            calls_t.append(dict(m.timing))
             log(
                 f"PROBE last call timing: { {k: (round(v, 3) if isinstance(v, float) else v) for k, v in m.timing.items()} }"
             )
@@ -210,6 +224,82 @@ def test_chunk_probe(mesh_device):
                 + " ".join(f"s0={rec[i][0]}:{td[i] * 1e3:.0f}ms" for i in pos)
                 + f" first={[int(res[b][0]) for b in USERS]}"
             )
+            # ---- account of the time outside the device (PROBE_WL=1 adds the per-window timeline)
+            sync_run = os.environ.get("DSV41_PF_ASYNC_SERVER") == "0"
+            key_ = lambda s0_: tuple(s0_) if isinstance(s0_, (list, tuple)) else s0_  # noqa: E731
+            if sync_run:
+                for s0_, th_, td_ in rec:
+                    dev_map[key_(s0_)] = td_
+            tot = {}
+            for d_ in calls_t:
+                for k_, v_ in d_.items():
+                    if isinstance(v_, (int, float)):
+                        tot[k_] = tot.get(k_, 0.0) + v_
+            ncalls = len(calls_t)
+            dev_sum = sum(dev_map.get(key_(r_[0]), float("nan")) for r_ in rec)
+            log(
+                f"PROBE ACCOUNT rep {rep} async={not sync_run} pieces={n_pieces} calls={ncalls} replays={len(rec)} wall={wall:.2f}s device(sync-run per-window td)={dev_sum:.2f}s outside-device={wall - dev_sum:.2f}s ({(wall - dev_sum) / wall * 100:.1f}% of wall, {(wall - dev_sum) / ncalls * 1e3:.0f} ms/call)"
+            )
+            log(
+                "PROBE ACCOUNT components per prompt (s): "
+                + " ".join(
+                    f"{k_}={tot.get(k_, 0.0):.2f}"
+                    for k_ in (
+                        "pre_s",
+                        "first_build_s",
+                        "host_overlapped",
+                        "host_s",
+                        "hash_s",
+                        "host_rows_gather_dequant",
+                        "w_dynupd",
+                        "w_prehooks",
+                        "post_hooks",
+                        "apc_snapshot_s",
+                        "apc_overlapped_s",
+                        "dyn_prebuild_s",
+                        "export_s",
+                        "replay_s",
+                    )
+                )
+            )
+            wl_ = pm.__dict__.get("winlog")
+            if wl_ is not None:
+                pm.winlog_drain()
+                W_, A_, B_, C_, B0_, nB_ = wl_["windows"], 0.0, 0.0, 0.0, 0.0, 0
+                A_parts = [0.0, 0.0, 0.0]
+                gaps = []
+                Cp_ = [0.0, 0.0, 0.0]
+                Ck_ = [0.0, 0.0]
+                for c_ in wl_["calls"]:
+                    ws_ = [w_ for w_ in W_ if c_["t_start"] <= w_["t_in"] <= c_["t_end"]]
+                    if not ws_:
+                        continue
+                    A_ += ws_[0]["t_enq"] - c_["t_start"]
+                    A_parts[0] += c_["t_pre_end"] - c_["t_start"]
+                    A_parts[1] += c_["first_build_s"]
+                    A_parts[2] += ws_[0]["t_enq"] - c_["t_pre_end"] - c_["first_build_s"]
+                    B0_ += ws_[0]["t_done"] - ws_[0]["t_enq"] - dev_map.get(key_(ws_[0]["s0"]), 0.0)
+                    for a_, b_ in zip(ws_, ws_[1:]):
+                        g_ = b_["t_done"] - a_["t_done"] - dev_map.get(key_(b_["s0"]), 0.0)
+                        B_ += g_
+                        gaps.append(g_)
+                    C_ += c_["t_end"] - ws_[-1]["t_done"]
+                    Cp_[0] += (
+                        c_["t_loop_end"] - ws_[-1]["t_done"]
+                    )  # after the last replay: hooks, bookkeeping, snapshot starts
+                    Ck_[0] += (
+                        ws_[-1].get("t_ret", 0.0) - ws_[-1]["t_done"]
+                    )  # replay_window return (watcher latency, sync wait, post hooks)
+                    Ck_[1] += ws_[-1].get("t_bk", 0.0) - ws_[-1].get(
+                        "t_ret", 0.0
+                    )  # export record, resume, snapshot starts
+                    Cp_[1] += c_["t_apc_end"] - c_["t_loop_end"]  # snapshot completions not overlapped
+                    Cp_[2] += c_["t_end"] - c_["t_apc_end"]  # trailing sync / stamps
+                gs_ = sorted(gaps) or [0.0]
+                log(
+                    f"PROBE TIMELINE rep {rep}: start-of-call {A_:.2f}s (pre {A_parts[0]:.2f}, first window build {A_parts[1]:.2f}, first copies/record {A_parts[2]:.2f}) + first-window launch {B0_:.2f}s + gaps between windows {B_:.2f}s ({len(gaps)} gaps; median {gs_[len(gs_) // 2] * 1e3:.1f} ms, p90 {gs_[int(len(gs_) * 0.9)] * 1e3:.1f} ms, max {gs_[-1] * 1e3:.0f} ms) + end-of-call {C_:.2f}s (after last replay: hooks/bookkeeping/snapshot starts {Cp_[0]:.2f} [replay_window return {Ck_[0]:.2f} + bookkeeping/snapshot starts {Ck_[1]:.2f}], snapshot completion {Cp_[1]:.2f}, trailing {Cp_[2]:.2f}) = {A_ + B0_ + B_ + C_:.2f}s exposed; wall {wall:.2f}s - device {dev_sum:.2f}s = {wall - dev_sum:.2f}s"
+                )
+                torch.save(wl_["windows"], f"/tmp/ph_winlog_rep{rep}.pt")
             if os.environ.get("PROBE_CMP") == "1":
                 tok_ = torch.tensor([int(res[b][0]) for b in range(B)], dtype=torch.long)
                 lgs_ = []
@@ -363,4 +453,11 @@ def test_chunk_probe(mesh_device):
             ttnn.execute_trace(md, pm.dyn_trace, cq_id=0, blocking=False)
         ttnn.synchronize_device(md)
         log(f"PROBE RAW {n_raw} back-to-back replays: {(time.perf_counter() - t_) / n_raw * 1e3:.1f} ms each")
+    if pm.__dict__.get("build_prof") is not None:
+        import io
+        import pstats
+
+        buf_ = io.StringIO()
+        pstats.Stats(pm.build_prof, stream=buf_).strip_dirs().sort_stats("cumulative").print_stats(45)
+        log("PROBE BUILD PROFILE (host work of the window builds, cumulative):\n" + buf_.getvalue())
     log("PROBE DONE")

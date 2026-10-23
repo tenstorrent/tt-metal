@@ -159,9 +159,10 @@ class DynCtx:
             out[("off", r)] = [torch.full((1, 1, 1, 1), float(self.L[r] - (s0 + C) // r))]
         return out
 
-    def update(self, s0):
-        """Refresh every per-chunk tensor for the chunk of positions [s0, s0 + C) (host work + uploads, nothing is enqueued on the compute path). ``s0``: one start, or (per_row) one per mesh row."""
-        up = h2d
+    def _host_tensors(self, s0):
+        """[(host tensor, device buffer)] of every per-chunk tensor of the chunk starting at ``s0`` (one start, or per_row: one per mesh row): the values depend on the position ONLY (not on users, lengths
+        or page tables), so they can be built before the window is known (``prebuild``)."""
+        out = []
         if self.per_row:
             s0s = slot_s0(s0, self.rows)
             cache = {x: self._values(x) for x in set(s0s)}
@@ -174,14 +175,42 @@ class DynCtx:
             vals = self._values(int(s0[0]) if hasattr(s0, "__len__") else int(s0))
         for k in self.rope_src:
             for t, dev in zip(vals[("tab", k)], self.tabs[k]):
-                up(self._host(t, ttnn.bfloat16), dev)
+                out.append((self._host(t, ttnn.bfloat16), dev))
         for r, tabs in self.lat_tabs.items():
             for t, dev in zip(vals[("lat", r)], tabs):
-                up(self._host(t, ttnn.bfloat16), dev)
-        up(self._host(vals["win"][0], ttnn.bfloat16), self.win_mask)
+                out.append((self._host(t, ttnn.bfloat16), dev))
+        out.append((self._host(vals["win"][0], ttnn.bfloat16), self.win_mask))
         for r in self.ratios:
-            up(self._host(vals[("lim", r)][0], ttnn.float32), self.lim[r])
-            up(self._host(vals[("off", r)][0], ttnn.float32), self.off[r])
+            out.append((self._host(vals[("lim", r)][0], ttnn.float32), self.lim[r]))
+            out.append((self._host(vals[("off", r)][0], ttnn.float32), self.off[r]))
+        return out
+
+    @staticmethod
+    def _pre_key(s0):
+        return tuple(int(x) for x in s0) if hasattr(s0, "__len__") else (int(s0),)
+
+    def prebuild(self, s0):
+        """Build the host tensors of the chunk starting at ``s0`` NOW (while the device replays the last window of a call: the next call's first window is not hidden behind any replay) and keep them for
+        the next ``update`` with the same starts (one entry: a different next window drops it). A wrong guess costs host time that was free.
+        """
+        t0 = time.perf_counter()
+        self._pre = (self._pre_key(s0), self._host_tensors(s0))
+        self.t_prebuild = getattr(self, "t_prebuild", 0.0) + time.perf_counter() - t0
+
+    def update(self, s0):
+        """Refresh every per-chunk tensor for the chunk of positions [s0, s0 + C) (host work + uploads, nothing is enqueued on the compute path). ``s0``: one start, or (per_row) one per mesh row."""
+        pre = self.__dict__.pop("_pre", None)
+        if pre is not None and pre[0] == self._pre_key(s0):
+            for host, dev in pre[1]:
+                h2d(host, dev)
+            self.pre_hits = getattr(self, "pre_hits", 0) + 1
+            for hk in self.upd_hooks:
+                hk(self, s0)
+            return
+        if pre is not None:
+            self.pre_misses = getattr(self, "pre_misses", 0) + 1
+        for host, dev in self._host_tensors(s0):
+            h2d(host, dev)
         t0 = time.perf_counter()
         for hk in self.upd_hooks:
             hk(self, s0)
