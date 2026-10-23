@@ -54,7 +54,7 @@ def zero_pad_and_ack(
     unconditionally from a block that may or may not be running under a migration engine.
 
     Only call this on a layer that actually wrote KV. A Kimi-K3 KDA layer writes none, so its block
-    skips it — there is no pad window to clean and no slot to ack.
+    calls `send_layer_ack` instead.
 
     ``alias_layer_ids`` ack right after ``global_layer_idx``, in order: table rows published at this
     layer's addresses (decode MTP levels sharing one KV cache), so they are done when it is.
@@ -111,36 +111,62 @@ def zero_pad_and_ack(
                     tp_axis=tp_axis,
                 )
         _t_zero = time.perf_counter() if _ACK_TIMING else 0.0
-        if d2h_service is not None:
-            # Device-op ack, enqueued on the same CQ right after the zero: the record cannot reach the
-            # host before the zero has executed, so the ack implies zero-complete with no host sync —
-            # unlike the host-callback path below, which needs an explicit flush.
-            # Capture-safe only because metadata_msg is at a fixed address: the op registers it as a
-            # buffer binding, which trace replay does not re-patch. A traced caller must therefore
-            # pass a persistent record (TtPrefillRuntime._trace_metadata_msg), never the per-chunk
-            # socket tensor, whose address moves every chunk.
-            ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
-            # A record carries no layer id: the host numbers a rank's records by arrival, so each alias
-            # needs a record of its own.
-            for _ in alias_layer_ids:
-                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
-        else:
-            # Trace path: route the ack through the controller. At capture it splits the trace here (a host
-            # shm bump cannot live inside a trace); at replay the controller fires the ack between the two
-            # segments, after the first segment's writes flush (execute_trace blocking). Non-trace:
-            # synchronize then call directly. The controller takes precedence iff it carries an ack callback
-            # (runner trace path); the test path sets a controller WITHOUT an ack callback, so has_layer_ack()
-            # is False (and on_layer_complete is None there, so neither fires).
-            tc = trace_controller
-            if tc is not None and tc.has_layer_ack():
-                tc.layer_ack(global_layer_idx, *alias_layer_ids)
-            else:
-                ttnn.synchronize_device(mesh_device)
-                for layer_idx in (global_layer_idx, *alias_layer_ids):
-                    on_layer_complete(layer_idx)
+        send_layer_ack(
+            mesh_device=mesh_device,
+            global_layer_idx=global_layer_idx,
+            d2h_service=d2h_service,
+            metadata_msg=metadata_msg,
+            on_layer_complete=on_layer_complete,
+            trace_controller=trace_controller,
+            alias_layer_ids=alias_layer_ids,
+        )
         if _ACK_TIMING:
             _end = time.perf_counter()
             logger.info(
                 f"ACK_TIMING layer={global_layer_idx} zero_ms={(_t_zero - _t0) * 1000:.1f} "
                 f"ack_ms={(_end - _t_zero) * 1000:.1f} total_ms={(_end - _t0) * 1000:.1f}"
             )
+
+
+def send_layer_ack(
+    *,
+    mesh_device,
+    global_layer_idx: int,
+    d2h_service,
+    metadata_msg,
+    on_layer_complete,
+    trace_controller,
+    alias_layer_ids: tuple = (),
+) -> None:
+    """Tell migration this layer is done for the chunk, through whichever ack transport is wired.
+
+    A no-op when neither is. Used on its own by a layer that has no KV pad window to zero (a Kimi-K3
+    KDA layer, whose state is already exported by the time this runs).
+    """
+    if d2h_service is not None:
+        # Device-op ack, enqueued on the same CQ right after the zero: the record cannot reach the
+        # host before the zero has executed, so the ack implies zero-complete with no host sync —
+        # unlike the host-callback path below, which needs an explicit flush.
+        # Capture-safe only because metadata_msg is at a fixed address: the op registers it as a
+        # buffer binding, which trace replay does not re-patch. A traced caller must therefore
+        # pass a persistent record (TtPrefillRuntime._trace_metadata_msg), never the per-chunk
+        # socket tensor, whose address moves every chunk.
+        ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
+        # A record carries no layer id: the host numbers a rank's records by arrival, so each alias
+        # needs a record of its own.
+        for _ in alias_layer_ids:
+            ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
+    else:
+        # Trace path: route the ack through the controller. At capture it splits the trace here (a host
+        # shm bump cannot live inside a trace); at replay the controller fires the ack between the two
+        # segments, after the first segment's writes flush (execute_trace blocking). Non-trace:
+        # synchronize then call directly. The controller takes precedence iff it carries an ack callback
+        # (runner trace path); the test path sets a controller WITHOUT an ack callback, so has_layer_ack()
+        # is False (and on_layer_complete is None there, so neither fires).
+        tc = trace_controller
+        if tc is not None and tc.has_layer_ack():
+            tc.layer_ack(global_layer_idx, *alias_layer_ids)
+        else:
+            ttnn.synchronize_device(mesh_device)
+            for layer_idx in (global_layer_idx, *alias_layer_ids):
+                on_layer_complete(layer_idx)

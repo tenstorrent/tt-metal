@@ -140,6 +140,49 @@ class MATMUL_STREAM_NARROW(TemplateParameter):
 
 
 @dataclass
+class MATMUL_K_LOOP(TemplateParameter):
+    """Blackhole matmul unpack of the whole inner dimension in one _llk_unpack_AB_matmul_k_ call."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_K_LOOP"
+
+    @staticmethod
+    def for_block(
+        formats,
+        dest_acc,
+        math_fidelity,
+        ct_dim: int,
+        rt_dim: int,
+        kt_dim: int,
+        in0_r_dim: int = 32,
+        in0_c_dim: int = 32,
+        in1_r_dim: int = 32,
+        in1_c_dim: int = 32,
+    ) -> list:
+        """[MATMUL_K_LOOP()] for 32x32 tiles of one 16-bit, bfp8 or float32 format, where the unpack call per k step bounds the block: 1x1 at LoFi and HiFi2 from kt 4, 2x1 at LoFi from kt 8, 1x2 and 2x2 at LoFi from kt 16, else []."""
+        if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+            return []
+        if (in0_r_dim, in0_c_dim, in1_r_dim, in1_c_dim) != (32, 32, 32, 32):
+            return []
+        fmt = formats.input_format
+        if not (fmt == formats.input_format_B == formats.output_format):
+            return []
+        if (fmt, dest_acc) not in (
+            (DataFormat.Float16_b, DestAccumulation.No),
+            (DataFormat.Float16_b, DestAccumulation.Yes),
+            (DataFormat.Bfp8_b, DestAccumulation.No),
+            (DataFormat.Float32, DestAccumulation.Yes),
+        ):
+            return []
+        key = (rt_dim, ct_dim) == (1, 1) and kt_dim >= 4 and math_fidelity in (MathFidelity.LoFi, MathFidelity.HiFi2)
+        key = key or (
+            math_fidelity == MathFidelity.LoFi
+            and (((rt_dim, ct_dim) == (2, 1) and kt_dim >= 8) or ((rt_dim, ct_dim) in ((1, 2), (2, 2)) and kt_dim >= 16))
+        )
+        return [MATMUL_K_LOOP()] if key else []
+
+
+@dataclass
 class MATMUL_IN1_ALT(TemplateParameter):
     """Blackhole matmul with in1 32x16 tiles whose body alternates the DEST row groups (in1_order 1)."""
 
