@@ -8,6 +8,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "matmul_dataflow_common.hpp"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 
@@ -20,49 +21,48 @@ using ttnn::ccl::Topology;
 #endif
 
 void kernel_main() {
-    constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t padded_M_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t K_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t padded_K_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t N_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t padded_N_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(6);
-    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(7);
-    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(8);
-    constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(9);
-    constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(10);
-    constexpr uint32_t in1_tile_size = get_compile_time_arg_val(11);
-    constexpr uint32_t out_tile_size = get_compile_time_arg_val(12);
-    constexpr uint32_t in2_tile_size = get_compile_time_arg_val(13);
-    constexpr uint32_t is_output_writer = get_compile_time_arg_val(14);
-    constexpr uint32_t is_injector_core = get_compile_time_arg_val(15);
-    constexpr uint32_t num_devices = get_compile_time_arg_val(16);
-    constexpr uint32_t my_rank = get_compile_time_arg_val(17);
-    constexpr uint32_t N_chunks = get_compile_time_arg_val(18);
-    constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(19);
+    // The row count M_tiles is a common runtime arg; everything here is row-invariant.
+    constexpr uint32_t K_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t padded_K_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t N_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t padded_N_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(4);
+    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(5);
+    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(6);
+    constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(7);
+    constexpr uint32_t in1_tile_size = get_compile_time_arg_val(8);
+    constexpr uint32_t out_tile_size = get_compile_time_arg_val(9);
+    constexpr uint32_t in2_tile_size = get_compile_time_arg_val(10);
+    constexpr uint32_t is_output_writer = get_compile_time_arg_val(11);
+    constexpr uint32_t is_injector_core = get_compile_time_arg_val(12);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(13);
+    constexpr uint32_t my_rank = get_compile_time_arg_val(14);
+    constexpr uint32_t N_chunks = get_compile_time_arg_val(15);
+    constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(16);
     // Per-chunk tile widths + prefix-sum offsets (from CHUNK_TILE_WIDTHS/CHUNK_TILE_OFFSETS defines).
     constexpr uint32_t chunk_tile_widths[N_chunks] = {CHUNK_TILE_WIDTHS};
     constexpr uint32_t chunk_tile_offsets[N_chunks + 1] = {CHUNK_TILE_OFFSETS};
-    constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(20));
+    constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(17));
     constexpr bool is_linear = (topology == Topology::Linear);
-    constexpr uint32_t K_tiles_per_device = get_compile_time_arg_val(21);
-    constexpr uint32_t K_block_tail_tiles = get_compile_time_arg_val(22);
+    constexpr uint32_t K_tiles_per_device = get_compile_time_arg_val(18);
+    constexpr uint32_t K_block_tail_tiles = get_compile_time_arg_val(19);
+    constexpr uint32_t in0_parallel_axis_cores = get_compile_time_arg_val(20);
 
 #ifdef FSDP_FUSED
-    // FSDP CT args follow target's base args (topology=20, K_tiles_per_device=21, K_block_tail_tiles=22).
-    constexpr uint32_t fsdp_ring_size = get_compile_time_arg_val(23);
-    constexpr uint32_t fsdp_ring_index = get_compile_time_arg_val(24);
-    constexpr uint32_t fsdp_num_targets_forward = get_compile_time_arg_val(25);
-    constexpr uint32_t fsdp_num_targets_backward = get_compile_time_arg_val(26);
-    constexpr Topology fsdp_topology = static_cast<Topology>(get_compile_time_arg_val(27));
+    // FSDP CT args follow target's base args (K_block_tail_tiles=19, in0_parallel_axis_cores=20).
+    constexpr uint32_t fsdp_ring_size = get_compile_time_arg_val(21);
+    constexpr uint32_t fsdp_ring_index = get_compile_time_arg_val(22);
+    constexpr uint32_t fsdp_num_targets_forward = get_compile_time_arg_val(23);
+    constexpr uint32_t fsdp_num_targets_backward = get_compile_time_arg_val(24);
+    constexpr Topology fsdp_topology = static_cast<Topology>(get_compile_time_arg_val(25));
 
-    constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(28);
-    constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(29);
-    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(30);
-    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(31);
-    constexpr uint32_t num_mux_clients = get_compile_time_arg_val(32);
+    constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(26);
+    constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(27);
+    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(28);
+    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(29);
+    constexpr uint32_t num_mux_clients = get_compile_time_arg_val(30);
 
-    constexpr uint32_t fsdp_mux_arg_count = 33;
+    constexpr uint32_t fsdp_mux_arg_count = 31;
 
     constexpr ccl_routing_utils::line_unicast_route_info_t fsdp_unicast_route_info_forward =
         ccl_routing_utils::get_line_unicast_route_info_from_args<fsdp_mux_arg_count>();
@@ -72,13 +72,14 @@ void kernel_main() {
 
     constexpr uint32_t ct_arg_count = fsdp_mux_arg_count + 2 * ccl_routing_utils::num_line_unicast_args;
 #else
-    constexpr uint32_t ct_arg_count = 23;
+    constexpr uint32_t ct_arg_count = 21;
 #endif
 
     // Load common runtime args (same for all cores, updated in override_runtime_arguments)
     uint32_t cargidx = 0;
     const uint32_t in1_addr = get_common_arg_val<uint32_t>(cargidx++);
     const uint32_t in2_addr = get_common_arg_val<uint32_t>(cargidx++);
+    const uint32_t M_tiles = get_common_arg_val<uint32_t>(cargidx++);
 
 #ifdef FUSE_TERNARY
     const uint32_t ternary_a_addr = get_common_arg_val<uint32_t>(cargidx++);
@@ -110,8 +111,7 @@ void kernel_main() {
     Semaphore<> in1_sender_sem(in1_sender_semaphore_id);
     Semaphore<> in1_receiver_sem(in1_receiver_semaphore_id);
     Semaphore<> in1_valid_sem(in1_valid_semaphore_id);
-    const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_idx = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
@@ -181,6 +181,13 @@ void kernel_main() {
     const auto ternary_a_reader = TensorAccessor(ternary_a_args, ternary_a_addr);
     const auto ternary_b_reader = TensorAccessor(ternary_b_args, ternary_b_addr);
 #endif
+
+    // Same uniform M split as the in0 and compute kernels (see dm_in0_sender.cpp).
+    const uint32_t M_tiles_per_core = ttnn::runtime_length::tiles_per_core(M_tiles, in0_parallel_axis_cores);
+    const uint32_t M_blocks_per_core = ttnn::runtime_length::blocks_per_core(M_tiles_per_core, M_block_tiles);
+    const uint32_t padded_M_tiles = M_tiles_per_core * in0_parallel_axis_cores;
+    const uint32_t M_start_tile = in0_idx * M_tiles_per_core;
+    const uint32_t M_end_tile = M_start_tile + M_tiles_per_core;
 
     const TensorShape2D in1_shape(K_tiles, N_tiles, padded_K_tiles, padded_N_tiles);
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
