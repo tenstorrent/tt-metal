@@ -37,16 +37,27 @@ def _fab(**kw):
     indirect=True,
 )
 @pytest.mark.parametrize("ROWS", [640, 1024])  # (rows a mesh row: chunk 1280 / 2048 on the 2x4)
+@pytest.mark.parametrize("FID", ["hifi2", "lofi"])  # (the up projection's fidelity: MoEDtypes.tail_fidelity)
 @pytest.mark.parametrize("LG", [3], ids=lambda g: f"lg{g}")  # (the gather's landed-share groups: 1 2 3 11 even, traced)
 @pytest.mark.timeout(1800)
-def test_tail_engine(mesh_device, device_params, ROWS, LG):
+def test_tail_engine(mesh_device, device_params, ROWS, LG, FID):
     m = KIMI_K3
     H, Hr, Ho = m.emb_dim, m.latent_dim, m.emb_dim // C
     g_ = torch.Generator().manual_seed(0)
     w_up = torch.randn(H, Hr, generator=g_) * 0.02
     gn = 1.0 + torch.randn(Hr, generator=g_) * 0.1
     topo = ttnn.Topology.Ring if _FABRIC else ttnn.Topology.Linear  # (the TP ring of 4: its ring schedule)
-    eng = TailEngine(mesh_device, rows=ROWS, Hr=Hr, Ho=Ho, chunks=C, eps=m.norm_eps, topology=topo, land_group=LG)
+    eng = TailEngine(
+        mesh_device,
+        rows=ROWS,
+        Hr=Hr,
+        Ho=Ho,
+        chunks=C,
+        eps=m.norm_eps,
+        topology=topo,
+        land_group=LG,
+        fidelity={"hifi2": ttnn.MathFidelity.HiFi2, "lofi": ttnn.MathFidelity.LoFi}[FID],
+    )
     logger.info(
         f"tail_engine: {ROWS} rows, grid {eng.GX} x {eng.GY} (K halves of {eng.KH} tiles), column widths "
         f"{sorted(set(eng.pn))}, steps a pair {eng.nst} (own {eng.nown}), ring slots {eng.NSLOT}, arena "
@@ -97,7 +108,7 @@ def test_tail_engine(mesh_device, device_params, ROWS, LG):
         tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         eng.run(yt, w, st, out)
         ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
-        replay_device_times(mesh_device, tid, f"tail {ROWS} lg{LG}", batches=(20, 20))
+        replay_device_times(mesh_device, tid, f"tail {ROWS} lg{LG} {FID}", batches=(20, 20))
         ttnn.release_trace(mesh_device, tid)
         for t in (yt, st, out):
             ttnn.deallocate(t)

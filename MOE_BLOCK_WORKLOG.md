@@ -1438,3 +1438,19 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   the far half lands 51-61 us. Both neighbours' row r land on pair r together, ~5.5 us a row: pair 4's steps 1-3
   all start after ~50 us. Each step's MM is ~10 us and OUT ~3.5 us, serial: (1, 6) ends 112 us.
 - Next: spread the pairs' arrivals (bwd ports walk the rows in reverse), then step length.
+- Tail fidelity (MoEDtypes.tail_fidelity, typed; default HiFi2). LoFi tail-alone PCC 0.99981-0.99990 vs HiFi2
+  0.99990-0.99998. The K3 block (k3_g224, 1280) PCC 0.99611-0.99626 either way, routing identical. Traced time
+  within noise, so LoFi buys nothing while the steps wait on data.
+- Share chain: each column's share sets its own word (sa[s][c] = call count), via a set-multicast right behind the
+  data multicast. Same NoC and VC, so they arrive in order: no write barrier per share. The chain's next column
+  goes on that word. The NCRISC's write barriers pump while waiting, so a hop no longer waits behind an E-tile or OUT
+  barrier. Hop ~0.8-1.1 us (was 1-2). Traced 640 117-120, 1024 172-179: neutral.
+- Probes: no token at all (concurrent row multicasts) 164 / 234 us - the token stays. The matmul pushed share by
+  share, with the squares after it, 130 / 190: S then waits for the whole row's E tiles on the critical path
+  (patch kept in moe_block_runs/progressive_mm.patch).
+- Landed-vs-share marks: the own step's chain runs 0.8 us a hop with everything landed. Neighbour steps are bound
+  by the chain on one side (landing 0.4 us a column) and by landing on the other (1.2 us a column). Pair 4 (each
+  chunk's last row) gets its steps 1 and 2 at ~62 us, then 3 serial steps of MM 10 + S 1 + OUT 3.5-4 (OUT waits on
+  the partner's partials) end at ~113.
+- Profiler gotcha: zones hash name + file + line into 16 bits, and TL-S at chlkc_pack 166 collided with
+  PROFILER-DRAM-PUSH (TT_THROW at the read). moe_block_runs/zonehash.py finds such collisions.

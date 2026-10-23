@@ -120,6 +120,7 @@ class MoEDtypes:
         ttnn.MathFidelity.HiFi2
     )  # (HiFi3: rel L2 1.6 -> 1.3% with bf8 weights, +11-25% time)
     projection_weights: ttnn.DataType = ttnn.bfloat8_b  # latent down / up
+    tail_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2  # the fused tail's up projection (rms-normed z @ W')
     router_weights: ttnn.DataType = ttnn.bfloat16  # top-k selection in fp32
     dispatch_rows: WireFormat = field(default_factory=WireFormat)
     combine_rows: WireFormat = field(default_factory=WireFormat)
@@ -370,7 +371,7 @@ class MoEBlock(LightweightModule):
         self.tail = None
         if options.tail == "fused" or (options.tail == "auto" and tfits is True):
             # (before the tail's warm-up: its persistent words go with the tail's other one-time L1)
-            self.tail = FusedTail(mesh_device, g, model, weights, self._tp_topology())
+            self.tail = FusedTail(mesh_device, g, model, weights, self._tp_topology(), dtypes)
         if self.head_mode == "fused":
             self._warm_up_tail()
             hole = _l1_hole(mesh_device, FusedHead.HOLE)
@@ -870,7 +871,7 @@ class FusedTail:
             return "whole tiles of H / TP and of each latent K half"
         return True
 
-    def __init__(self, mesh, g: Geometry, model: MoEModel, w: MoEWeights, topology):
+    def __init__(self, mesh, g: Geometry, model: MoEModel, w: MoEWeights, topology, dtypes: MoEDtypes = MoEDtypes()):
         from models.demos.moe_block.tt.tail_engine import TailEngine
 
         H, Hr, tp = model.emb_dim, model.latent_dim, g.tp
@@ -883,6 +884,7 @@ class FusedTail:
             eps=model.norm_eps,
             topology=topology,
             num_links=g.links,
+            fidelity=dtypes.tail_fidelity,
         )
         up = w.latent["up"].float()  # [H, Hr]
         Ho = H // tp
