@@ -16,6 +16,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tests.chunk_params import with_sp4_depth
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_x_device_params
 
 # from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
@@ -46,9 +47,7 @@ from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 # Real traffic never approaches the worst case, so half-capacity is sufficient.
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
-    [
-        (PREFILL_CHUNK_TOKENS_PER_CHIP, 7168, 64, 2, 2),
-    ],
+    with_sp4_depth([(PREFILL_CHUNK_TOKENS_PER_CHIP, 7168, 64, 2, 2)]),
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, sp_axis",
