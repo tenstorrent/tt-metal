@@ -35,12 +35,12 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import KvCaches
-from models.demos.common.prefill.runners.kv_bank_alignment import check_kv_bank_aligned
+from models.demos.common.prefill.runners.kv_bank_alignment import (
+    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
+    check_kv_bank_aligned,
+)
 from models.demos.common.prefill.runners.migration import get_num_dram_banks
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
-
-# Must match the DRAM NdShard in allocate_kv_cache and the address-table bank walk.
-NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 
 
 def build_layer_map(layer_types) -> List[Tuple[bool, int, int]]:
