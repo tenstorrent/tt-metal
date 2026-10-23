@@ -134,7 +134,8 @@ std::optional<bool> logical_values_equal_in_place(
 }
 
 // The shard's logical values as bytes, in row-major order of the logical shape: the comparison for layouts the
-// in-place walk does not describe. Block floats are unpacked to float first, so the comparison is on values.
+// in-place walk does not describe. Block floats are unpacked to float first, so the comparison is on values. FP8_E4M3
+// has no host decoder, so its one-byte codes are read as UINT8 through the same layout and compared as codes.
 std::vector<std::byte> logical_bytes(const tt::tt_metal::HostBuffer& shard, const tt::tt_metal::TensorSpec& spec) {
     const tt::tt_metal::HostTensor host = tt::tt_metal::HostTensor::from_buffer(shard, spec);
     const auto as_bytes = [](const auto& values) {
@@ -154,6 +155,23 @@ std::vector<std::byte> logical_bytes(const tt::tt_metal::HostBuffer& shard, cons
         case tt::tt_metal::DataType::UINT16: return as_bytes(host.to_vector<uint16_t>());
         case tt::tt_metal::DataType::UINT8: return as_bytes(host.to_vector<uint8_t>());
         case tt::tt_metal::DataType::INT8: return as_bytes(host.to_vector<int8_t>());
+        case tt::tt_metal::DataType::FP8_E4M3: {
+            const auto bytes = shard.view_bytes();
+            std::vector<uint8_t> codes(bytes.size());
+            if (!codes.empty()) {
+                std::memcpy(codes.data(), bytes.data(), codes.size());
+            }
+            const tt::tt_metal::TensorSpec codes_spec(
+                spec.logical_shape(),
+                tt::tt_metal::TensorLayout(
+                    tt::tt_metal::DataType::UINT8,
+                    spec.page_config(),
+                    spec.memory_config(),
+                    spec.tensor_layout().get_alignment()));
+            return as_bytes(
+                tt::tt_metal::HostTensor::from_buffer(tt::tt_metal::HostBuffer(std::move(codes)), codes_spec)
+                    .to_vector<uint8_t>());
+        }
         default: TT_THROW("verify_shards_match_topology: unsupported data type {}", spec.data_type());
     }
 }

@@ -997,9 +997,10 @@ TEST(TensorSerializationFlatbufferGuardTest, PaddedReplicasAcrossLayoutsAccepted
 }
 
 // Padded replicas on the layouts the in-place walk does not describe (block floats, a transposed tile, a rank-1
-// tensor), on every tile shape the host supports, and on a row-major tensor with alignment padding. Each replica is
-// encoded from the same values with a different pad value, so the bytes differ in the padding alone; a third replica
-// changes one logical value. Values 2..100 keep a block float's shared exponents unchanged by a pad value of 1.
+// tensor, FP8_E4M3 under an alignment that pads a leading dimension), on every tile shape the host supports, and on a
+// row-major tensor with alignment padding. Each replica is encoded from the same values with a different pad value, so
+// the bytes differ in the padding alone; a third replica changes one logical value. Values 2..100 keep a block float's
+// shared exponents unchanged by a pad value of 1.
 // The shard buffer `from_vector` produces, kept as is so it carries the element type the dtype's readers expect
 // (uint32 for packed block floats), as a shard read back from a device does.
 HostBuffer encoded_shard(const TensorSpec& spec, const std::vector<float>& logical, float pad_value) {
@@ -1081,6 +1082,13 @@ TEST(TensorSerializationFlatbufferGuardTest, PaddedReplicasBeyondTheInPlaceWalkA
     check_encoded_padded_replicas(
         "bfloat4_b 30x30",
         TensorSpec(ttnn::Shape{1, 1, 30, 30}, TensorLayout(DataType::BFLOAT4_B, Layout::TILE, MemoryConfig{})),
+        rng);
+    // FP8_E4M3, which is row-major only, under an alignment that pads the leading dimension from 3 to 4.
+    check_encoded_padded_replicas(
+        "fp8_e4m3 3x2x30 aligned to 4x1x32",
+        TensorSpec(
+            ttnn::Shape{3, 2, 30},
+            TensorLayout(DataType::FP8_E4M3, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, Alignment({4, 1, 32}))),
         rng);
     // A transposed tile.
     check_encoded_padded_replicas(
