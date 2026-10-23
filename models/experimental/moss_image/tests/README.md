@@ -6,14 +6,10 @@ the full-resolution VAE; the corrected SFPU encoder recurrence runs within the
 same reservation. Run from the TT-Metal checkout with its freshly
 built native TTNN and the model runtime requirements installed. Use Python 3.11
 or newer for both TTNN and the model; Pillow 13 does not support Python 3.10.
-For CI, select a matching source-build image (for example Ubuntu 24.04 / Python
-3.12), rather than installing these requirements into the default Python 3.10
-image. Select **Ubuntu 24.04** in the Tier 3 model-unit-tests workflow
-platform input so the native TTNN build and test interpreter match.
 
 ## Assets
 
-Provision this read-only directory before enabling the pipeline entry:
+Provision this read-only directory for local replay and integrated validation:
 
 ```text
 /mnt/MLPerf/tt_dnn-models/OpenMOSS-Team/MOSS-Image/
@@ -32,9 +28,15 @@ against the pinned CUDA manifest before execution. An arbitrary extra shard
 cannot override an index-declared weight. These tests never download into or
 write to the asset mount. Output artifacts use pytest's temporary directory.
 
-`MOSS_IMAGE_ASSET_ROOT` overrides the asset root. Missing assets fail by default,
-including in CI. A developer intentionally collecting a host-only run can set
-`MOSS_IMAGE_ALLOW_MISSING_ASSETS=1`; this opt-out is rejected when `CI` is set.
+`MOSS_IMAGE_ASSET_ROOT` overrides the asset root. Asset-dependent tests skip
+when their pinned CUDA reference or checkpoint is absent, including under CI;
+no opt-out environment variable is needed. Available manifests must pass their
+digest and configuration checks even when the checkpoint is absent. Corrupt
+manifests, missing or altered referenced tensors, and checkpoint mismatches
+remain failures. A skip means the corresponding device path was not qualified.
+The integrated test currently uses the same pinned capture to verify checkpoint
+hashes; it also skips without that capture, although generation itself does not
+consume captured activations. Host and attention tests do not need these assets.
 
 ## Scope and commands
 
@@ -49,7 +51,7 @@ pytest models/experimental/moss_image/tests --timeout=600 -k 'not 2-cards'
 pytest models/experimental/moss_image/tests --timeout=600 -k '2-cards'
 
 # Full independent generation (both variants and card counts); this is a long
-# manual qualification, not the short unit-test CI job.
+# manual qualification, not a scheduled CI job.
 MOSS_IMAGE_FULL_E2E=1 pytest models/experimental/moss_image/tests/test_integrated.py --timeout=7200
 ```
 
@@ -68,18 +70,14 @@ qualification limitation and must be reported with the full-generation results.
 Do not interpret passing component PCC or the smoke tests as proving final-image
 numerical equivalence.
 
-## Current pipeline integration
+## CI scope
 
-The entry is in `tests/pipeline_reorg/models_unit_tests.yaml`, using the current
-`bh_p150` cloud-MLPerf functional SKU, tier 3, with a 20-minute job timeout.
-`bh_p150b_civ2` is current too, but its existing tier-3 budget is fully consumed;
-no shared budget was raised. Matrix generation, command lint and the repository
-wide time-budget verifier are run against the current pipeline implementation.
+This contribution does not register a scheduled model-unit-test CI job. CUDA
+reference generation and asset provisioning remain manual validation steps.
+Tests remain available for explicit runs using the commands above. Repository
+workflows, shared dependency pins and other models' CI registrations are unchanged.
+Two-card cases require an explicitly reserved connected pair; two discrete
+P150s are not represented by the P300 SKU.
 
-Before enabling upstream, maintainers must provision the pinned assets and
-assign the explicitly unassigned notification owner. No Slack identity is
-borrowed from another model. Two discrete P150s are not represented by the
-P300 SKU, so two-card cases remain explicit manual qualification until a
-matching runner lane is agreed. A new native source build and real-card test
-run are required after rebasing; old bring-up evidence alone does not qualify
-the current branch.
+A new native source build and real-card test run are required after rebasing;
+old bring-up evidence alone does not qualify a changed runtime.

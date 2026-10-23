@@ -104,16 +104,19 @@ sampled initial noise, schedule, every denoised latent, first-step predictions,
 raw final decoded pixels and `image.png`. The runner refuses to overwrite an
 existing output directory and reports nonfinite outputs as failures.
 
-## Accuracy and CI
+## Accuracy and tests
 
 The tests use the repository's device/mesh fixtures and call Python directly;
-no test interpolates environment variables into an OS command. The current
-model-unit-test pipeline registration and fixture-owned component/integrated
-cases live in [tests/](tests/). Tests report PCC together with relative RMS and
-maximum absolute error so gain errors cannot pass solely through correlation.
-Pinned required assets must be provisioned by the CI owner; missing assets are a
-failure when the CI-required-assets setting is active, not a successful device
-qualification. The test definitions describe exact provisioning and commands.
+no test interpolates environment variables into an OS command. Component replay
+and integrated cases live in [tests/](tests/). There is no scheduled CI model
+registration for MOSS-Image; CUDA captures are manually generated local
+validation assets. Tests report PCC together with relative RMS and maximum
+absolute error so gain errors cannot pass solely through correlation.
+Asset-dependent tests skip with a provisioning message when the CUDA reference
+or checkpoint is unavailable, including under CI. Available references still
+undergo digest and configuration checks; invalid assets fail. A skipped case
+is not a successful device qualification. See the [test instructions](tests/README.md)
+for asset layout and commands.
 
 Component replay intentionally supplies captured CUDA inputs to isolate a stage.
 Independent generation starts from raw prompts and independently sampled noise;

@@ -16,14 +16,20 @@ def moss_assets(request):
     variant = getattr(request, "param", "Base")
     root = Path(os.environ.get("MOSS_IMAGE_ASSET_ROOT", "/mnt/MLPerf/tt_dnn-models/OpenMOSS-Team/MOSS-Image"))
     pins = json.loads((Path(__file__).parent / "capture_pins.json").read_text())
-    directory = root / pins[variant]["capture"]
+    return _load_assets(root, variant, pins[variant])
+
+
+def _load_assets(root, variant, pin):
+    directory = root / pin["capture"]
     checkpoint = root / "checkpoints" / variant
-    if not (directory / "manifest.json").is_file() or not checkpoint.is_dir():
-        message = f"Missing pinned MOSS assets at {root}; see model README asset provisioning"
-        if os.environ.get("MOSS_IMAGE_ALLOW_MISSING_ASSETS") == "1" and not os.environ.get("CI"):
-            pytest.skip(message)
-        pytest.fail(message)
-    return checkpoint, Capture(directory, pins[variant]["manifest_sha256"], variant)
+    if not (directory / "manifest.json").is_file():
+        pytest.skip(f"Missing pinned MOSS CUDA reference at {directory}; see tests/README.md asset provisioning")
+    # Validate an available reference even if the checkpoint is absent. Corrupt
+    # or incompatible assets must fail rather than being reported as skips.
+    capture = Capture(directory, pin["manifest_sha256"], variant)
+    if not checkpoint.is_dir():
+        pytest.skip(f"Missing MOSS {variant} checkpoint at {checkpoint}; see tests/README.md asset provisioning")
+    return checkpoint, capture
 
 
 def verify_weights(checkpoint, capture, components):
