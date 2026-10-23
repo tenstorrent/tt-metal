@@ -1170,3 +1170,9 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - LoudBox: the tail is one program, 148 us device time (slowest chip) vs all-gather 83 + norm / up 163 + add 17 = 263
   in 4 programs; gather-bound on the line (chip 3's last block at ~110 us; link floor for the line's busiest hop,
   3 half-blocks of 573 KB: 73 us). 300-call soak min PCC 0.999913.
+- The exchange's tilize folded in: the tail takes the combine's row-major output (self.out, a 7 KB row a page) - each
+  engine core reads its K share of its row tile's 32 own rows (32 segments of 320-384 B) and tilizes them (5-6 tiles,
+  tilize_block) into its landing slot 0; the NCRISC marks slot 0 landed; the ports read their own block from the
+  owners like a relayed one. Tiles stay on the wire (a remote row's K half is needed tiled by every core of its row:
+  row packets would mean 320 B packets or a whole row tile tilized on one core per chunk, ~7 us on the path). 155 us
+  (148 before; run-to-run +- 10), 200-call soak min PCC 0.999914.

@@ -36,7 +36,7 @@ from ttnn.bringup.combine_rf.lin2d import column_split
 import ttnn
 from models.demos.moe_block.tt.se_engine3 import _ring_pages
 
-CB_W, CB_A, CB_PART, CB_PMY, CB_ONES, CB_ACCM, CB_XSEND, CB_SQM, CB_XRECV, CB_SE, CB_OUT = range(11)
+CB_W, CB_A, CB_PART, CB_PMY, CB_ONES, CB_ACCM, CB_XSEND, CB_SQM, CB_XRECV, CB_SE, CB_OUT, CB_L0, CB_RM = range(13)
 XT = 4  # (a chunk's exchange: up to 3 partial tiles + the half's sum of squares)
 ARENA_MAX = 1400 * 1024
 
@@ -49,7 +49,7 @@ constexpr uint32_t NSLOT = get_compile_time_arg_val(6), KT = get_compile_time_ar
 // semaphore at sl + 16 c (chunk 0: my BRISC; the others: the fabric - the upstream port's last packet of the share))
 constexpr uint32_t SA0 = 0, SP0 = NCK, SX = 2 * NCK, SFREE = 2 * NCK + 1, SW = 2 * NCK + 2;
 constexpr uint32_t CB_W = 0, CB_A = 1, CB_PART = 2, CB_PMY = 3, CB_ONES = 4, CB_XSEND = 6, CB_XRECV = 8, CB_SE = 9;
-constexpr uint32_t CB_OUT = 10;
+constexpr uint32_t CB_OUT = 10, CB_L0 = 11, CB_RM = 12;
 FORCE_INLINE volatile tt_l1_ptr uint32_t* sem(uint32_t i) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(i));
 }
@@ -59,7 +59,7 @@ _BRISC = (
     '#include <cstdint>\n#include "api/dataflow/dataflow_api.h"\n#include "tools/profiler/kernel_profiler.hpp"\n'
     + _CT
     + r"""
-constexpr auto z_args = TensorAccessorArgs<9>();
+constexpr auto z_args = TensorAccessorArgs<9>();  // (the combine's output: this chip's owned rows, row-major)
 constexpr auto s_args = TensorAccessorArgs<z_args.next_compile_time_args_offset()>();
 // NOC0: every DRAM read (my W' K range, my z shares, my se tiles) and the W' multicast down my half column
 void kernel_main() {
@@ -73,7 +73,7 @@ void kernel_main() {
     const uint32_t fn = get_arg_val<uint32_t>(a++), land = get_arg_val<uint32_t>(a++), SHMAX = get_arg_val<uint32_t>(a++);
     const uint32_t sl = get_arg_val<uint32_t>(a++);
     const uint32_t ord = a;
-    const auto zg = TensorAccessor(z_args, z_addr, 2048);
+    const auto zg = TensorAccessor(z_args, z_addr, KT * 64);  // (a page: one latent row)
     const auto sg = TensorAccessor(s_args, se_addr, 2048);
     cb_reserve_back(CB_ONES, 1);  // (the all-ones tile of the squares' row sums)
     {
@@ -81,11 +81,15 @@ void kernel_main() {
         for (uint32_t i = 0; i < 512; ++i) o[i] = 0x3F803F80u;
     }
     cb_push_back(CB_ONES, 1);
-    {  // my share of my own rows (chunk 0: K tiles kh0 + ak0 .. of my row tile r of y_own) into my landing region; the
-       // other chunks' shares land there by the fabric
-        for (uint32_t k = ak0; k < ak1; ++k) noc_async_read(zg.get_noc_addr(r * KT + kh0 + k), land + (k - ak0) * 2048, 2048);
+    {  // my share of my own rows, row-major (the combine's output: the 32 rows of my row tile r, K tiles kh0 + ak0 ..):
+       // the compute tilizes it into my landing slot 0 (the other chunks' shares land there by the fabric)
+        const uint32_t n = ak1 - ak0;
+        cb_reserve_back(CB_RM, n);
+        const uint32_t dst = get_write_ptr(CB_RM);
+        for (uint32_t i = 0; i < 32; ++i)
+            noc_async_read(zg.get_noc_addr(r * 32 + i, (kh0 + ak0) * 64), dst + i * n * 64, n * 64);
         noc_async_read_barrier();
-        noc_semaphore_inc(get_noc_addr(sl), 1);  // (the NCRISC multicasts it while W' loads)
+        cb_push_back(CB_RM, n);
     }
     {  // W': my K range of my half column's [K half][pn] (one contiguous bank region: one burst), then down the half column
         DeviceZoneScopedN("TL-WLOAD");
@@ -138,8 +142,13 @@ void kernel_main() {
     const auto og = TensorAccessor(o_args, o_addr, 2048);
     auto row = [&](uint32_t addr) { return get_noc_multicast_addr(rx, my, lx, my, addr); };  // (NOC1: right end first)
     uint32_t cs = 0, wr = 0;
+    bool own = false;
     auto pump = [&]() {
         invalidate_l1_cache();
+        if (!own && cb_pages_available_at_front(CB_L0, ak1 - ak0)) {  // (my own share tilized: landed, chunk 0)
+            noc_semaphore_inc(get_noc_addr(sl), 1);
+            own = true;
+        }
         while (wr < RT && (*sem(SW) >> wr & 1)) {  // (W' K range wr landed: to the compute, in K order)
             const uint32_t n = (get_arg_val<uint32_t>(wkb + wr + 1) - get_arg_val<uint32_t>(wkb + wr)) * pn;
             cb_reserve_back(CB_W, n);
@@ -212,7 +221,7 @@ void kernel_main() {
         if (c > 0) write_out(c - 1);
     }
     write_out(NCK - 1);
-    while (wr < RT || cs < NCK) pump();
+    while (wr < RT || cs < NCK || !own) pump();
     noc_async_atomic_barrier();
 }
 """
@@ -231,6 +240,7 @@ _COMPUTE = r"""
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/copy_dest_values.h"
+#include "api/compute/tilize.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #ifdef TRISC_MATH
 #include "llk_math_matmul_api.h"
@@ -241,7 +251,7 @@ _COMPUTE = r"""
 constexpr uint32_t KH = get_compile_time_arg_val(0), NCK = get_compile_time_arg_val(1), GX = get_compile_time_arg_val(2);
 constexpr uint32_t INV_HR = get_compile_time_arg_val(3), NORM_EPS = get_compile_time_arg_val(4), XT = get_compile_time_arg_val(5);
 constexpr uint32_t CB_W = 0, CB_A = 1, CB_PART = 2, CB_PMY = 3, CB_ONES = 4, CB_ACCM = 5, CB_XSEND = 6, CB_SQM = 7;
-constexpr uint32_t CB_XRECV = 8, CB_SE = 9, CB_OUT = 10;
+constexpr uint32_t CB_XRECV = 8, CB_SE = 9, CB_OUT = 10, CB_L0 = 11, CB_RM = 12;
 // (the squares' row sums at HiFi4 whatever the kernel's fidelity: HiFi2 truncates them ~0.8% low)
 ALWI void mm4_init(uint32_t in0, uint32_t in1) {
     UNPACK((llk_unpack_AB_matmul_init(in0, in1, 0, 1, 1, 1)));
@@ -258,6 +268,19 @@ void kernel_main() {
     const uint32_t sk0 = get_arg_val<uint32_t>(3), sk1 = get_arg_val<uint32_t>(4);
     uint32_t wr = 0, wnext = 0;  // (args 5 ..: the W' K range bounds 0, .., KH)
     compute_kernel_hw_startup<SrcOrder::Reverse>(CB_A, CB_W, CB_ACCM);
+    {  // my share of my own rows tilized into my landing slot 0 (no separate tilize: the combine's rows read once)
+        DeviceZoneScopedN("TL-TILIZE");
+        const uint32_t n = sk1 - sk0;
+        cb_wait_front(CB_RM, n);
+        cb_reserve_back(CB_L0, n);
+        reconfig_data_format_srca(CB_RM);
+        pack_reconfig_data_format(CB_L0);
+        tilize_init(CB_RM, n, CB_L0);
+        tilize_block(CB_RM, n, CB_L0);
+        tilize_uninit(CB_RM, CB_L0);
+        cb_push_back(CB_L0, n);
+        cb_pop_front(CB_RM, n);
+    }
     cb_wait_front(CB_ONES, 1);
     for (uint32_t c = 0; c < NCK; ++c) {
         cb_wait_front(CB_A, KH);
@@ -401,7 +424,6 @@ _PORT_READER = (
     '#include <cstdint>\n#include "api/dataflow/dataflow_api.h"\n'
     + _PORT_CT
     + r"""
-constexpr auto y_args = TensorAccessorArgs<6>();
 // NoC0: my own block's shares from DRAM (y_own), the relayed ones from this chip's owners (once landed), into the CB
 void kernel_main() {
     size_t a = 0;
@@ -415,7 +437,6 @@ void kernel_main() {
 #ifdef TL_DPRINT
     DPRINT("PR start n {}\n", n);
 #endif
-    const auto yg = TensorAccessor(y_args, y_addr, 2048);
     volatile tt_l1_ptr uint32_t* pw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll);
     // a group: PG packets' slots reserved, read, one barrier, pushed whole (padded) with its packet count in CBM - a
     // relayed share not landed yet ends the group early (never hold read packets while waiting)
@@ -432,7 +453,7 @@ void kernel_main() {
         const uint32_t w = get_arg_val<uint32_t>(units + u), part = w & 0xFF, pos = w >> 8;
         walk(part, ak, [&](uint32_t r, uint32_t cx, uint32_t k0, uint32_t t0, uint32_t m, bool) {
             const uint32_t ox = get_arg_val<uint32_t>(xs + cx), oy = get_arg_val<uint32_t>(ys + r);
-            if (u > 0 && t0 == k0) {  // (a relayed share: landed at its owner here - its landed word, over the NoC)
+            if (t0 == k0) {  // (the share landed / tilized at its owner here: its landed word, over the NoC)
                 auto in = [&]() {
                     noc_async_read(get_noc_addr(ox, oy, sl + 16 * pos), poll, 4);
                     noc_async_read_barrier();
@@ -450,11 +471,7 @@ void kernel_main() {
                 wp = get_write_ptr(CBP);
             }
             const uint32_t dst = wp + b * RP * 2048;
-            if (u == 0) {  // (my own rows)
-                for (uint32_t t = 0; t < m; ++t) noc_async_read(yg.get_noc_addr(r * KT + kh0 + t0 + t), dst + t * 2048, 2048);
-            } else {
-                noc_async_read(get_noc_addr(ox, oy, land + (pos * SHMAX + t0 - k0) * 2048), dst, m * 2048);
-            }
+            noc_async_read(get_noc_addr(ox, oy, land + (pos * SHMAX + t0 - k0) * 2048), dst, m * 2048);
             if (++b == PG) flush();
         });
     }
@@ -634,6 +651,7 @@ class TailEngine:
             ("xrecv", chunks * XT * 4096),
             ("se", self.FNR * 2048),
             ("out", self.FNR * 2048),
+            ("rm", self.SHMAX * 2048),
         ]:
             off[k], o = o, al(o + v)
         assert o <= ARENA_MAX, f"tail_engine: arena {o >> 10} KB > {ARENA_MAX >> 10} KB"
@@ -793,6 +811,8 @@ class TailEngine:
         cb(CB_XRECV, "xrecv", self.NCK * XT * 4096, ttnn.float32, 4096, [XT])
         cb(CB_SE, "se", self.FNR * 2048, ttnn.bfloat16, 2048, self.FNS)
         cb(CB_OUT, "out", self.FNR * 2048, ttnn.bfloat16, 2048, self.FNS)
+        cb(CB_L0, "land", self.SHMAX * 2048, ttnn.bfloat16, 2048, [1])  # (landing slot 0: my tilized own share)
+        cb(CB_RM, "rm", self.SHMAX * 2048, ttnn.bfloat16, 2048, [1])  # (its 32 rows, row-major: one push)
         # the ports' staging (carved at the arena's start on the port cores) and their poll word after it
         PG = 8  # (packets a port group: 4 158 us, 8 148, 12 151)
         PSTAGE = 2 * PG * self.RP
@@ -959,7 +979,7 @@ class TailEngine:
                 kernel_source=self.dbg + _PORT_READER,
                 source_type=st,
                 core_ranges=self.port_crs,
-                compile_time_args=pct + acc(y),
+                compile_time_args=pct,
                 runtime_args=pr_rt,
                 config=dm("RISCV_1", ttnn.NOC.NOC_0),
             ),
@@ -995,7 +1015,8 @@ class TailEngine:
         self.state["md"] = self._mesh()
 
     def run(self, y, w, se, out=None):
-        """y [1, 1, rows / G, Hr] TILE (DRAM): this chip's owned rows (the gather brings the rest of the mesh row's);
+        """y [1, 1, rows / G, Hr] ROW_MAJOR (DRAM): this chip's owned rows - the combine's output (the gather brings the
+        rest of the mesh row's);
         se [1, 1, rows, Ho] TILE -> out [1, 1, rows, Ho] bf16 TILE. The arena is taken for the call and given back."""
         if out is None:
             out = ttnn.allocate_tensor_on_device(

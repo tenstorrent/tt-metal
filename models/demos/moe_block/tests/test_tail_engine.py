@@ -49,7 +49,10 @@ def test_tail_engine(mesh_device, device_params):
     def inputs(scale):
         y = (torch.randn(R, C, S, Hr, generator=g_) * scale).to(torch.bfloat16)
         se = (torch.randn(R, C, ROWS, Ho, generator=g_) * 0.5).to(torch.bfloat16)
-        yt = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper)
+        # (row-major: the combine's output layout - the engine tilizes its own rows)
+        yt = ttnn.from_torch(
+            y, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, mesh_mapper=mapper
+        )
         st = ttnn.from_torch(se, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper)
         return y, se, yt, st
 
