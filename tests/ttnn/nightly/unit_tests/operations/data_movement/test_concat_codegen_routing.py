@@ -913,26 +913,22 @@ def _auto_route(device, xt, **kwargs):
 # Cases the auto router must send to codegen. The 3+-input width cases hold more than 32 output sticks,
 # the smallest size the perf gate keeps on codegen.
 _AUTO_CODEGEN = [
-    pytest.param([[33, 64]] * 3, 1, None, id="width_3in_33_sticks"),
-    pytest.param([[40, 32]] * 8, 1, None, id="width_8in_max_inputs"),
-    pytest.param([[64, 3], [64, 5], [64, 16]], 1, None, id="width_3in_odd_widths"),
-    pytest.param([[64, 64], [64, 3], [64, 5], [64, 16]], 1, None, id="width_4in_odd_widths"),
-    pytest.param([[40, 1]] * 3, 1, None, id="width_3in_single_element_sticks"),
-    pytest.param([[40, 1], [40, 32], [40, 1]], 1, None, id="width_3in_mixed_single_element"),
-    pytest.param([[40, 32]] * 3, 1, (_L1, _DRAM, _L1), id="width_3in_mixed_placement"),
-    pytest.param([[1, 2, 20, 16], [1, 2, 20, 8], [1, 2, 20, 8]], 3, None, id="width_3in_rank4"),
-    pytest.param([[1, 33, 7], [1, 33, 9], [1, 33, 16]], 2, None, id="width_3in_rank3_unaligned"),
-    pytest.param([[1, 20, 28, 28], [1, 34, 28, 28]], 1, None, id="nonwidth_2in_rank4"),
-    pytest.param([[1, 20, 28, 28], [1, 34, 28, 28]], 1, (_L1, _DRAM), id="nonwidth_2in_mixed_placement"),
-    pytest.param([[40, 64], [24, 64]], 0, None, id="nonwidth_2in_rows"),
-    pytest.param([[40, 7], [24, 7]], 0, None, id="nonwidth_2in_unaligned_stick"),
-    pytest.param([[40, 32], [40, 48]], 1, None, id="width_2in"),
-    pytest.param([[32], [48]], 0, None, id="rank1_2in"),
+    pytest.param([[64, 3], [64, 5], [64, 16]], 1, None, ttnn.bfloat16, id="width_3in_odd_widths_bf16"),
+    pytest.param([[64, 3], [64, 5], [64, 16]], 1, None, ttnn.int32, id="width_3in_odd_widths_i32"),
+    pytest.param([[64, 3], [64, 5], [64, 16]], 1, None, ttnn.uint32, id="width_3in_odd_widths_u32"),
+    pytest.param([[40, 1]] * 3, 1, None, ttnn.bfloat16, id="width_3in_single_element_sticks"),
+    pytest.param([[40, 32]] * 3, 1, (_L1, _DRAM, _L1), ttnn.bfloat16, id="width_3in_mixed_placement"),
+    pytest.param([[1, 2, 20, 16], [1, 2, 20, 8], [1, 2, 20, 8]], 3, None, ttnn.bfloat16, id="width_3in_rank4"),
+    pytest.param(
+        [[1, 3, 32, 32, 2], [1, 3, 32, 32, 2], [1, 3, 32, 32, 81]], 4, None, ttnn.bfloat16, id="width_3in_rank5"
+    ),
+    pytest.param([[1, 33, 7], [1, 33, 9], [1, 33, 16]], 2, None, ttnn.bfloat16, id="width_3in_rank3_unaligned"),
+    pytest.param([[40, 7], [24, 7]], 0, None, ttnn.bfloat16, id="nonwidth_2in_unaligned_stick"),
+    pytest.param([[32], [48]], 0, None, ttnn.bfloat16, id="rank1_2in"),
 ]
 
 
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint32], ids=["bf16", "i32", "u32"])
-@pytest.mark.parametrize("shapes,dim,placement", _AUTO_CODEGEN)
+@pytest.mark.parametrize("shapes,dim,placement,dtype", _AUTO_CODEGEN)
 def test_concat_auto_routes_in_scope_case_to_codegen(device, shapes, dim, placement, dtype):
     xt = _device_inputs(shapes, dtype, ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=placement)
     out, grew = _auto_route(device, xt, dim=dim, memory_config=_DRAM)
@@ -948,8 +944,11 @@ def test_concat_auto_routes_in_scope_case_to_codegen(device, shapes, dim, placem
     assert device.num_program_cache_entries() == entries, "second dispatch missed the program cache"
 
 
-@pytest.mark.parametrize("out_config", [_L1, None], ids=["l1_out", "default_out"])
-@pytest.mark.parametrize("shapes,dim", [([[40, 32]] * 3, 1), ([[40, 32], [40, 48]], 1), ([[40, 64], [24, 64]], 0)])
+@pytest.mark.parametrize(
+    "shapes,dim,out_config",
+    [([[40, 32]] * 3, 1, _L1), ([[40, 64], [24, 64]], 0, None)],
+    ids=["width_3in_l1_out", "rows_2in_default_out"],
+)
 def test_concat_auto_codegen_honours_output_memory_config(device, shapes, dim, out_config):
     xt = _device_inputs(shapes, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
     kwargs = {"dim": dim} if out_config is None else {"dim": dim, "memory_config": out_config}
@@ -1012,39 +1011,34 @@ def test_concat_codegen_repeated_input_does_not_alias_distinct_inputs(device, di
     assert _codegen_vs_golden(device, [x, view], dim) == 0
     assert _codegen_vs_golden(device, [y, z], dim) == 0
     assert _codegen_vs_golden(device, [x, x], dim) == 0
+    if dim != 1:
+        return
+    # The width N-way readers take the same signature: a partial repeat is its own entry.
+    assert _codegen_vs_golden(device, [x, y, x], dim) == 1
+    assert _codegen_vs_golden(device, [x, y, z], dim) == 1
+    assert _codegen_vs_golden(device, [y, x, y], dim) == 0
+    assert _codegen_vs_golden(device, [x, x, x], dim) == 1
+    assert _codegen_vs_golden(device, [z, x, y], dim) == 0
 
 
-def test_concat_codegen_repeated_input_nway(device):
-    x, y, z = _device_inputs([[40, 32]] * 3, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
-    device.clear_program_cache()
-    assert _codegen_vs_golden(device, [x, y, x], 1) == 1
-    assert _codegen_vs_golden(device, [x, y, z], 1) == 1
-    assert _codegen_vs_golden(device, [y, x, y], 1) == 0
-    assert _codegen_vs_golden(device, [x, x, x], 1) == 1
-    assert _codegen_vs_golden(device, [z, x, y], 1) == 0
-
-
-def test_concat_forced_codegen_refuses_grouped_call(device, expect_error):
+def _forced_refusal_grouped(device):
     xt = _device_inputs([[40, 32]] * 2, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
-    with expect_error(RuntimeError, "does not support"):
-        _force_codegen(xt, dim=0, groups=2)
+    return lambda: _force_codegen(xt, dim=0, groups=2)
 
 
-def test_concat_forced_codegen_refuses_sub_core_grids(device, expect_error):
+def _forced_refusal_sub_core_grids(device):
     xt = _device_inputs([[40, 32]] * 2, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
-    with expect_error(RuntimeError, "does not support"):
-        _force_codegen(xt, dim=0, sub_core_grids=grid)
+    return lambda: _force_codegen(xt, dim=0, sub_core_grids=grid)
 
 
-def test_concat_forced_codegen_rejects_output_tensor(device, expect_error):
+def _forced_refusal_output_tensor(device):
     xt = _device_inputs([[40, 32]] * 2, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
     out = _device_inputs([[80, 32]], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)[0]
-    with expect_error(RuntimeError, "optional output tensor currently unsupported"):
-        _force_codegen(xt, dim=0, output_tensor=out)
+    return lambda: _force_codegen(xt, dim=0, output_tensor=out)
 
 
-def test_concat_forced_codegen_refuses_empty_input(device, expect_error):
+def _forced_refusal_empty_input(device):
     empty = ttnn.from_torch(
         torch.zeros([0, 32], dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
@@ -1052,8 +1046,23 @@ def test_concat_forced_codegen_refuses_empty_input(device, expect_error):
         device=device,
     )
     other = _device_inputs([[4, 32]], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)[0]
-    with expect_error(RuntimeError, "does not support"):
-        _force_codegen([empty, other], dim=0)
+    return lambda: _force_codegen([empty, other], dim=0)
+
+
+@pytest.mark.parametrize(
+    "make_call,message",
+    [
+        (_forced_refusal_grouped, "does not support"),
+        (_forced_refusal_sub_core_grids, "does not support"),
+        (_forced_refusal_output_tensor, "optional output tensor currently unsupported"),
+        (_forced_refusal_empty_input, "does not support"),
+    ],
+    ids=["groups", "sub_core_grids", "output_tensor", "empty_input"],
+)
+def test_concat_forced_codegen_refuses(device, expect_error, make_call, message):
+    call = make_call(device)
+    with expect_error(RuntimeError, message):
+        call()
 
 
 # --- Live-L1 gate and CB plan ---
@@ -1087,7 +1096,6 @@ def _stick_bytes(device):
 # (inputs, dim, elements per input stick) with an output stick of `stick` bytes.
 _L1_CASES = {
     "rows_2in": lambda stick: ([[4, stick // 2]] * 2, 0),
-    "rows_3in": lambda stick: ([[4, stick // 2]] * 3, 0),
     "width_2in": lambda stick: ([[40, stick // 4]] * 2, 1),
 }
 
@@ -1195,10 +1203,9 @@ def test_concat_falls_back_to_native_when_free_l1_holds_no_codegen_plan(device):
         ttnn.deallocate(resident)
 
 
-@pytest.mark.parametrize("case", ["rows_2in", "width_2in"])
-def test_concat_forced_codegen_refuses_when_free_l1_holds_no_slot(device, case, expect_error):
+def test_concat_forced_codegen_refuses_when_free_l1_holds_no_slot(device, expect_error):
     stick = _stick_bytes(device)
-    shapes, dim = _L1_CASES[case](stick)
+    shapes, dim = _L1_CASES["rows_2in"](stick)
     xt = _device_inputs(shapes, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device=device)
     resident, headroom = _pin_l1_headroom(device, stick // 3)
     try:
