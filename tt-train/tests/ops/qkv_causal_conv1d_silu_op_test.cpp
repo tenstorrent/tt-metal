@@ -14,6 +14,8 @@
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "ops/binary_ops.hpp"
+#include "ops/unary_ops.hpp"
 
 namespace {
 
@@ -105,6 +107,11 @@ void expect_close(const xt::xarray<float>& expected, const xt::xarray<float>& ac
 
 xt::xarray<float> slice_cols(const xt::xarray<float>& t, size_t begin, size_t end) {
     return xt::view(t, xt::all(), xt::all(), xt::range(begin, end));
+}
+
+// [1,T,W] -> [1,1,T,W], the rank ttml activations have.
+xt::xarray<float> rank4(const xt::xarray<float>& a) {
+    return xt::reshape_view(a, {size_t{1}, size_t{1}, a.shape()[1], a.shape()[2]});
 }
 
 // The cost model reproduces the choices measured on a 110-core grid (see qkv_causal_conv1d_silu_bw.cpp).
@@ -320,22 +327,25 @@ TEST_F(QkvCausalConv1dSiluTest, NIGHTLY_RandomShapes) {
 
 class QkvCausalConv1dSiluOpTest : public QkvCausalConv1dSiluTest, public ::testing::WithParamInterface<uint32_t> {};
 
-// Autograd wrapper: forward matches, and grads seeded with grad_y = y match (loss = sum(y * y) / 2).
+// Autograd wrapper: forward matches, and loss = mean(q) + mean(k) + mean(v) reaches every input through all
+// three outputs' nodes.
 TEST_P(QkvCausalConv1dSiluOpTest, MatchesReference) {
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
     const Shape s{64, 96, 64, 32};
     const uint32_t channel_chunk_size = GetParam();
     auto p = random_problem(s, 1);
-    auto ref = reference(s, p);
-    p.grad_y = ref.y;
-    ref = reference(s, p);
+    for (const auto& [lo, hi] : {std::pair{0U, s.Q}, std::pair{s.Q, s.Q + s.K}, std::pair{s.Q + s.K, s.C()}}) {
+        xt::view(p.grad_y, xt::all(), xt::all(), xt::range(lo, hi)) = 1.0F / static_cast<float>(s.T * (hi - lo));
+    }
+    const auto ref = reference(s, p);
 
-    auto input = autograd::create_tensor(core::from_xtensor(p.x, device), /* requires_grad */ true);
-    auto history = core::from_xtensor(p.h, device, ttnn::Layout::ROW_MAJOR);
+    auto input = autograd::create_tensor(core::from_xtensor(rank4(p.x), device), /* requires_grad */ true);
+    auto history = core::from_xtensor(rank4(p.h), device, ttnn::Layout::ROW_MAJOR);
     std::array<TensorPtr, 4> tap_tensors;
     for (size_t j = 0; j < 4; ++j) {
-        tap_tensors[j] = autograd::create_tensor(core::from_xtensor(p.taps[j], device), /* requires_grad */ true);
+        tap_tensors[j] =
+            autograd::create_tensor(core::from_xtensor(rank4(p.taps[j]), device), /* requires_grad */ true);
     }
 
     auto [q, k, v] = ops::qkv_causal_conv1d_silu(
@@ -349,18 +359,16 @@ TEST_P(QkvCausalConv1dSiluOpTest, MatchesReference) {
         s.K,
         s.V,
         channel_chunk_size);
-    expect_close(slice_cols(ref.y, 0, s.Q), core::to_xtensor(q->get_value()), "q");
-    expect_close(slice_cols(ref.y, s.Q, s.Q + s.K), core::to_xtensor(k->get_value()), "k");
-    expect_close(slice_cols(ref.y, s.Q + s.K, s.C()), core::to_xtensor(v->get_value()), "v");
+    expect_close(rank4(slice_cols(ref.y, 0, s.Q)), core::to_xtensor(q->get_value()), "q");
+    expect_close(rank4(slice_cols(ref.y, s.Q, s.Q + s.K)), core::to_xtensor(k->get_value()), "k");
+    expect_close(rank4(slice_cols(ref.y, s.Q + s.K, s.C())), core::to_xtensor(v->get_value()), "v");
 
-    for (const auto& out : {q, k, v}) {
-        out->set_grad(out->get_value());
-    }
-    q->backward();
+    auto loss = ops::add(ops::mean(q), ops::add(ops::mean(k), ops::mean(v)));
+    loss->backward();
 
-    expect_close(ref.grad_input, core::to_xtensor(input->get_grad()), "grad_input");
+    expect_close(rank4(ref.grad_input), core::to_xtensor(input->get_grad()), "grad_input");
     for (size_t j = 0; j < 4; ++j) {
-        expect_close(ref.grad_taps[j], core::to_xtensor(tap_tensors[j]->get_grad()), "grad_tap");
+        expect_close(rank4(ref.grad_taps[j]), core::to_xtensor(tap_tensors[j]->get_grad()), "grad_tap");
     }
 }
 
@@ -400,9 +408,6 @@ TEST_F(QkvCausalConv1dSiluTest, RankFour) {
     auto ref = reference(s, p);
     p.grad_y = ref.y;
     ref = reference(s, p);
-    const auto rank4 = [](const xt::xarray<float>& a) {
-        return xt::xarray<float>(xt::reshape_view(a, {size_t{1}, size_t{1}, a.shape()[1], a.shape()[2]}));
-    };
     auto input = autograd::create_tensor(core::from_xtensor(rank4(p.x), device), /* requires_grad */ true);
     auto history = core::from_xtensor(rank4(p.h), device, ttnn::Layout::ROW_MAJOR);
     std::array<TensorPtr, 4> tap_tensors;
