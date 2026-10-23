@@ -27,7 +27,7 @@ import os
 import torch
 
 import ttnn
-from models.common.modules.moe.tt_moe_gate import TTMoEGate
+from models.common.moe.tt_moe_gate import TTMoEGate
 
 # moe_compute accumulates its three matmuls in bf16 DEST (fp32_dest_acc_en=false), which has a systematic +5% gain per
 # matmul (measured: tests/probe_matmul_gain.py) -> routed expert outputs come out ~1.14x too large (tests/

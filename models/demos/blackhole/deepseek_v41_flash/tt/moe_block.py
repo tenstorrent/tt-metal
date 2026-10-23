@@ -19,9 +19,10 @@ import os
 from pathlib import Path
 
 import ttnn
-from models.common.modules.moe.tt_moe_decode import TTMoEDecode
-from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
-from models.common.modules.moe.tt_moe_gate_config import TTMoEGateConfig
+from models.common.moe.tt_moe_decode import moe_compute_kwargs
+from models.common.moe.tt_moe_decode import TTMoEDecode
+from models.common.moe.tt_moe_decode_config import TTMoEDecodeConfig
+from models.common.moe.tt_moe_gate_config import TTMoEGateConfig
 from models.demos.blackhole.deepseek_v41_flash.tt.router import DSV41Gate
 
 
@@ -66,7 +67,7 @@ class _TailDecode(TTMoEDecode):
             self.expert_state.tt_w0_w1,
             self.expert_state.tt_w2,
             layer_id=layer_id,
-            **cfg.compute.model_dump(),
+            **moe_compute_kwargs(cfg),
             optional_output_tensor=self.buffers.tt_combine_output,
             optional_cross_device_semaphore=self.buffers.combine_global_semaphore,
         )
@@ -201,7 +202,7 @@ class DSV41MoEBlock:
 
         from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, effective_matmul_ring_size
 
-        from models.common.modules.moe.tt_moe_decode import _TTMoEDecodeBuffers
+        from models.common.moe.tt_moe_decode import _TTMoEDecodeBuffers
 
         dec = object.__new__(_TailDecode)
         dec.config = cfg

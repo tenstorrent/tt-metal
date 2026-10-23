@@ -221,8 +221,8 @@ class DraftMoEBlock:
     """``DSV41MoEBlock`` for 128 routed experts / top-3 (4 experts per chip), shared expert outside ``moe_compute``."""
 
     def __init__(self, md, weights, batch_per_device, topology=ttnn.Topology.Linear, buffers=None):
-        from models.common.modules.moe.tt_moe_decode import TTMoEDecode
-        from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
+        from models.common.moe.tt_moe_decode import TTMoEDecode
+        from models.common.moe.tt_moe_decode_config import TTMoEDecodeConfig
         from models.demos.blackhole.deepseek_v41_flash.tt.moe_block import clamp_text
 
         text = clamp_text(CONFIG_PATH.read_text(), "mtp")

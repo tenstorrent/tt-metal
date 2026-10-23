@@ -16,8 +16,8 @@ import torch
 from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, effective_matmul_ring_size
 
 import ttnn
-from models.common.modules.moe.tt_moe_decode import TTMoEDecode, _TTMoEDecodeBuffers
-from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
+from models.common.moe.tt_moe_decode import TTMoEDecode, _TTMoEDecodeBuffers
+from models.common.moe.tt_moe_decode_config import TTMoEDecodeConfig
 from models.demos.blackhole.deepseek_v41_flash.tt import moe_overlap, pf_tune
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_block import clamp_text
 

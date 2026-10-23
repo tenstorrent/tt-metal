@@ -82,8 +82,8 @@ def _moe_view(moe, Tn, buffers):
     if Tn > 32 and os.environ.get("DSV41_SPEC_ROWS") == "1":
         mb = _MoEBig(moe, Tn, buffers)
         return mb, mb.decode.buffers
-    from models.common.modules.moe.tt_moe_decode import _TTMoEDecodeBuffers
-    from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
+    from models.common.moe.tt_moe_decode import _TTMoEDecodeBuffers
+    from models.common.moe.tt_moe_decode_config import TTMoEDecodeConfig
 
     md = moe.mesh_device
     text = clamp_text(CONFIG_PATH.read_text(), "spec")

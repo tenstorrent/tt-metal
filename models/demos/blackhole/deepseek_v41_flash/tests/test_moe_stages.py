@@ -10,6 +10,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.moe.tt_moe_decode import moe_compute_kwargs
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_block import DSV41MoEBlock
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_weights import load_moe_layer
 
@@ -67,7 +68,7 @@ def stages(dec, tt_x, tt_scores, tt_indices, upto):
         dec.expert_state.tt_w0_w1,
         dec.expert_state.tt_w2,
         layer_id=0,
-        **dec.config.compute.model_dump(),
+        **moe_compute_kwargs(dec.config),
         optional_output_tensor=dec.buffers.tt_combine_output,
         optional_cross_device_semaphore=dec.buffers.combine_global_semaphore,
     )

@@ -240,6 +240,25 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // max(2*KC, .) keeps the QC<=2 double buffer and a whole multiple of QC*KC so a push never wraps mid-unit.
     make_cb(cb_acc_strip_arg, std::max(2u * KC, QC * KC), acc_fmt, acc_tile);
 
+    // On-device kv_len (kv_len_tensor, trace-safe): the reader reads the valid key length from the tensor at the
+    // start of every dispatch and publishes {kv_len_tiles, chunk_start, straddle words} to one single-consumer
+    // mailbox CB for compute and one for the writer -- the same mailboxes the fused-ring metadata path uses, so
+    // compute / writer need no new code (their ``chunk_start_from_metadata`` flag is simply set). Allocated after
+    // the shared CB slots so the indices of the unchanged path stay identical.
+    const bool has_kvt = tensors.has_kv_len_tensor();
+    uint32_t cb_meta_derived = 0, cb_meta_writer = 0;
+    if (has_kvt) {
+        const auto make_meta_cb = [&](uint32_t& slot) {
+            slot = next_cb_index++;
+            tt::tt_metal::CreateCircularBuffer(
+                program,
+                core_ranges,
+                tt::tt_metal::CircularBufferConfig(64, {{slot, tt::DataFormat::UInt32}}).set_page_size(slot, 64));
+        };
+        make_meta_cb(cb_meta_derived);
+        make_meta_cb(cb_meta_writer);
+    }
+
     // Common dimensions (including compressed-key ratio), then CB indices. chunk_t stays a runtime arg.
     std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB, G, block_tiles, args.key_compression_ratio};
     common_ct.insert(common_ct.end(), cb_id.begin(), cb_id.end());
@@ -299,11 +318,15 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // build error in the kernel, not a default. Fixed width: flag, rt base, two CBs, Sq, rotation-exact
     // flag, then a placeholder accessor. Pushed AFTER partial readiness AND after #55617's physical SP
     // size, matching the reader's meta_ct_base.
-    reader_ct.push_back(0u);
-    // 6 zeros: rt base, two CBs, Sq, rotation-exact flag, key-stripe split. The split is only read on the
-    // metadata path (rejected here), so 0 is inert -- but the WIDTH must match the reader.
-    reader_ct.insert(reader_ct.end(), 6, 0u);
-    tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
+    // The kv_len_tensor mode reuses this block: flag, common-arg base of the metadata words (ChunkMetadata: the
+    // tensor's address, then chunk_start / straddle_q / straddle_jump in the three slots after it), the two mailbox
+    // CBs, then Sq / rotation-exact / key-stripe split (fused-only fields: 0, inert) and the tensor's accessor.
+    reader_ct.push_back(has_kvt ? 1u : 0u);
+    reader_ct.push_back(has_kvt ? static_cast<uint32_t>(indexer_common::reader::ChunkMetadata) : 0u);
+    reader_ct.push_back(has_kvt ? cb_meta_derived : 0u);
+    reader_ct.push_back(has_kvt ? cb_meta_writer : 0u);
+    reader_ct.insert(reader_ct.end(), 3, 0u);
+    tt::tt_metal::TensorAccessorArgs(has_kvt ? *tensors.kv_len_tensor->buffer() : *q.buffer()).append_to(reader_ct);
     // Cache-slot metadata, same discipline minus the presence flag: rt base, pages-per-slot, mailbox CB,
     // cache extent, then a placeholder accessor.
     reader_ct.insert(reader_ct.end(), 4, 0u);
@@ -324,8 +347,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     writer_ct.push_back(1u);  // unused logical key stripe count
     writer_ct.push_back(1u);  // unused physical SP size
     tt::tt_metal::TensorAccessorArgs(*out.buffer()).append_to(writer_ct);
-    writer_ct.push_back(0u);
-    writer_ct.push_back(0u);
+    writer_ct.push_back(has_kvt ? 1u : 0u);  // mailbox (kv_len_tensor) instead of runtime args
+    writer_ct.push_back(has_kvt ? cb_meta_writer : 0u);
 
     std::vector<uint32_t> compute_ct = common_ct;
     compute_ct.push_back(qk_subblock_h);
@@ -341,8 +364,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     compute_ct.push_back(1u);                        // unused block-cyclic run width
     compute_ct.push_back(1u);                        // unused logical key stripe count
     compute_ct.push_back(1u);                        // unused physical SP size
-    compute_ct.push_back(0u);                        // trace-safe metadata off
-    compute_ct.push_back(0u);                        // metadata CB unused
+    compute_ct.push_back(has_kvt ? 1u : 0u);         // kv_len from the reader's mailbox (kv_len_tensor)
+    compute_ct.push_back(has_kvt ? cb_meta_derived : 0u);
 
     const std::unordered_map<std::string, uint32_t> schedule_args{
         {"schedule_blocks", num_blocks},
@@ -383,6 +406,12 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const std::array<uint32_t, 6> reader_prefix = {
         q.buffer()->address(), k.buffer()->address(), w.buffer()->address(), 0u, k_batch_page_offset, kv_len_tiles};
     std::copy(reader_prefix.begin(), reader_prefix.end(), reader_values.begin());
+    if (has_kvt) {  // the reader forwards the (host-scalar) causal words of this device into the mailboxes
+        reader_values[indexer_common::reader::ChunkMetadata] = tensors.kv_len_tensor->buffer()->address();
+        reader_values[indexer_common::reader::DeviceIndex] = chunk_t;
+        reader_values[indexer_common::reader::TpIndex] = geom.straddle_q_tile;
+        reader_values[indexer_common::reader::SlotMetadata] = geom.straddle_jump_tiles;
+    }
     append_multicast_axes(reader_values, phys);
     tt::tt_metal::SetCommonRuntimeArgs(program, reader_id, reader_values);
     tt::tt_metal::SetCommonRuntimeArgs(
@@ -458,6 +487,12 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
         const std::array<uint32_t, indexer_common::compute::Count> causal_values = {
             kv_len_tiles, geom.chunk_start_tiles, geom.straddle_q_tile, geom.straddle_jump_tiles};
         std::copy(reader_values.begin(), reader_values.end(), reader_args.data());
+        if (tensors.has_kv_len_tensor()) {  // (the copy above zeroed these slots: they are the reader's metadata words)
+            reader_args[indexer_common::reader::ChunkMetadata] = tensors.kv_len_tensor->buffer()->address();
+            reader_args[indexer_common::reader::DeviceIndex] = geom.chunk_start_tiles;
+            reader_args[indexer_common::reader::TpIndex] = geom.straddle_q_tile;
+            reader_args[indexer_common::reader::SlotMetadata] = geom.straddle_jump_tiles;
+        }
         std::copy(causal_values.begin(), causal_values.end(), compute_args.data());
         writer_args[indexer_common::writer::Output] = out_address;
         std::copy(causal_values.begin(), causal_values.end(), writer_args.data() + indexer_common::writer::KvLength);

@@ -9,7 +9,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.modules.moe.tt_moe_gate_config import TTMoEGateConfig
+from models.common.moe.tt_moe_gate_config import TTMoEGateConfig
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_block import CONFIG_PATH
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_weights import load_moe_layer
 from models.demos.blackhole.deepseek_v41_flash.tt.router import DSV41Gate

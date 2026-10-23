@@ -37,8 +37,23 @@ import torch
 from loguru import logger
 from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, map_shared_experts
 
+from ttnn.operations.ccl import MoEActivationFunction
+
 import ttnn
 from models.common.moe.tt_moe_decode_config import TTMoEDecodeConfig
+
+
+def moe_compute_kwargs(config) -> dict:
+    """``config.compute`` as moe_compute kwargs. ``swiglu_limit`` > 0 with a SILU activation (DeepSeek-V4.1 routed
+    experts: silu(min(gate, L)) * clamp(up, -L, L)) selects the op's CLAMPED_SILU activation with
+    ``activation_limit = L``."""
+    kwargs = config.compute.model_dump()
+    limit = float(kwargs.pop("swiglu_limit", 0.0) or 0.0)
+    if limit > 0.0:
+        assert kwargs["activation_type"] == MoEActivationFunction.SILU, "swiglu_limit needs activation_type SILU"
+        kwargs["activation_type"] = MoEActivationFunction.CLAMPED_SILU
+        kwargs["activation_limit"] = limit
+    return kwargs
 
 
 def _expert_weight_dtype():
@@ -935,6 +950,9 @@ class TTMoEDecode:
             tt_dispatch_input_expert_scores_tensor_bundle,
         )
 
+    def _compute_kwargs(self) -> dict:
+        return moe_compute_kwargs(self.config)
+
     def forward(
         self, tt_x: ttnn.Tensor, tt_scores: ttnn.Tensor, tt_indices: ttnn.Tensor, layer_id: int = 0
     ) -> ttnn.Tensor:
@@ -1015,7 +1033,7 @@ class TTMoEDecode:
             # mux_core_range_set
             # has_bias
             # activation_type
-            **self.config.compute.model_dump(),
+            **self._compute_kwargs(),
             optional_output_tensor=self.buffers.tt_combine_output,
             optional_cross_device_semaphore=self.buffers.combine_global_semaphore,
         )
