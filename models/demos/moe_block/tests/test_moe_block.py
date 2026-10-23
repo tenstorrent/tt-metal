@@ -289,17 +289,27 @@ def test_moe_block_traced(mesh_device, device_params, model):
         for x_ in xs
     ]
     x_in = block.input_buffer()
-    refs = {}  # k -> (routing rows, reference output): a replay's routing must repeat its x's first one
+    # k -> (routing rows, reference output); a replay whose routing differs from its x's first (a near tie: the router
+    # fin's sum order is the landing order unless MoEOptions.deterministic) is checked against its own routing's
+    refs, flips = {}, []
 
     def check(out, k, tag):
         y = ttnn.to_torch(out, mesh_composer=composer).reshape(T, H).float()
         rows = block.taps()["rows"]
-        if k not in refs:
+        if k not in refs or not all(torch.equal(a, b) for a, b in zip(rows, refs[k][0])):
             ids_d, wts_d = device_routing(rows, g.tokens_per_chip, m.top_k)
-            refs[k] = (rows, reference(xs[k], w, m, ids=ids_d, wts=wts_d)[0])
+            ref = (rows, reference(xs[k], w, m, ids=ids_d, wts=wts_d)[0])
+            if k in refs:
+                ids = lambda t: (t.to(torch.int64).reshape(-1, 2 * m.top_k) & 0xFFFF)[:, : m.top_k]  # noqa: E731
+                n = sum(int((ids(a) != ids(b)).any(-1).sum()) for a, b in zip(rows, refs[k][0]))
+                flips.append(n)
+                logger.info(f"{tag}: x {k}'s routing differs from its first ({n} tokens' picks: near ties)")
+                assert n <= 4, f"{tag}: x {k}'s picks differ in {n} tokens - more than near ties"
+            else:
+                refs[k] = ref
         else:
-            assert all(torch.equal(a, b) for a, b in zip(rows, refs[k][0])), f"{tag}: x {k}'s routing changed"
-        p_dev = pcc(y, refs[k][1])
+            ref = refs[k]
+        p_dev = pcc(y, ref[1])
         assert p_dev > 0.98, f"{tag} (x {k}): block output off (PCC {p_dev:.5f})"
         return p_dev
 
@@ -334,7 +344,10 @@ def test_moe_block_traced(mesh_device, device_params, model):
         ttnn.synchronize_device(mesh_device)
         ps.append(check(out, k, f"replay {i}"))
         if i % 50 == 49 or i == n - 1:
-            logger.info(f"MoEBlock {model} traced: {i + 1} replays checked, PCC min {min(ps):.5f}")
+            logger.info(
+                f"MoEBlock {model} traced: {i + 1} replays checked, PCC min {min(ps):.5f}; routing differed from the "
+                f"x's first in {len(flips)} ({sum(flips)} rows)"
+            )
     # timing
     REP = 20
     ttnn.synchronize_device(mesh_device)

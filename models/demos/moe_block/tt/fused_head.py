@@ -29,6 +29,8 @@ class RouterSpec:
     # (on the engine: its W streams start once every router core has its partials - their DRAM reads would crowd the
     # partials' writes; None: the head's choice, HeadSE3.router_w_gate)
     w_gate: bool | None = None
+    # (the fin sums the sources' partials in slot order: bit-identical runs; else in landing order - see RouterStream)
+    ordered: bool = False
 
 
 @dataclass(frozen=True)
@@ -237,6 +239,7 @@ class HeadSE3:
                 cores=free,
                 prio_first=self.logits_priority(router, latent),
                 on_engine=self.router_on_engine(router, latent),
+                ordered=router.ordered,
                 arena=(self.eng.arena, self.eng.base, self.eng.arena_bytes),
                 words=int(self.mbox.buffer_address()) + 4 * self.lw_off,
             )

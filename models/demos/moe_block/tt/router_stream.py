@@ -24,7 +24,7 @@ import torch
 
 import ttnn
 
-XR, WR, HOLD, ARRF, ARRB, BIAS, SC, FINC, PSYNC, BEST, BESTI, IDX = range(12)  # (ARRB, BESTI unused)
+XR, WR, HOLD, ARRF, ARRB, BIAS, SC, FINC, PSYNC, BEST, BESTI, IDX = range(12)  # (BESTI unused)
 _NCRISC = r"""
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -39,7 +39,7 @@ constexpr auto b_args = TensorAccessorArgs<w_args.next_compile_time_args_offset(
 constexpr auto i_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
 constexpr uint32_t XR = 0, WR = 1, ARRF = 3, ARRB = 4, BIAS = 5, IDX = 11, K = get_compile_time_arg_val(4), RDY = 12;
 // args: x, W_r^T, bias^T, expert index tiles; my rows [G]; the arrivals (na: every other chip's partial of my owner
-// rows, slot = its source index) and their counter
+// rows, slot = its source index) and their words (a word a slot, 16 B apart)
 void kernel_main() {
     const uint32_t x_addr = get_arg_val<uint32_t>(0), w_addr = get_arg_val<uint32_t>(1), b_addr = get_arg_val<uint32_t>(2);
     const uint32_t i_addr = get_arg_val<uint32_t>(3);
@@ -120,15 +120,29 @@ void kernel_main() {
         cb_push_back(WR, KBR * ET);
     }
 #endif
-    if (na) {  // every source's partial landed (one fused increment each): the zone's slots for the compute
-        {
+    if (na) {  // the sources' partials as they land (a fused increment of the source slot's own word, 16 B apart): each
+               // slot to the compute in landing order (ARRB) - it sums the early ones while the last is on its way (or in
+               // slot order, RT_ARR_ORDERED: the same sum every run)
         DeviceZoneScopedN("SE-RLWAIT");
-        noc_semaphore_wait_min(ctr, na);
+        for (uint32_t a = 0, seen = 0; a < na;) {
+            invalidate_l1_cache();
+            for (uint32_t s = 0; s < na; ++s) {
+#ifdef RT_ARR_ORDERED
+                if (s != a) {  // (slot order: the sum's order fixed)
+                    continue;
+                }
+#endif
+                if ((seen >> s & 1) || ctr[4 * s] == 0) {
+                    continue;
+                }
+                ctr[4 * s] = 0;  // (re-arm: one increment a call - the source's next one comes after this chip's exchange)
+                seen |= 1u << s;
+                ++a;
+                cb_reserve_back(ARRB, 1);
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(ARRB)) = s;
+                cb_push_back(ARRB, 1);
+            }
         }
-        cb_reserve_back(ARRF, na * ET);
-        cb_push_back(ARRF, na * ET);
-        noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(ctr)), 0u - na);  // (re-arm)
-        noc_async_atomic_barrier();
     }
     {  // (my share of the joint rows: tokens 11 .. 21, once the top-K is done)
         const uint32_t t2 = ab0 + nab + 2, words = get_arg_val<uint32_t>(t2);
@@ -237,6 +251,7 @@ void kernel_main() {
     cb_reserve_back(PSYNC, 1);
     cb_push_back(PSYNC, 1);
     cb_wait_front(PSYNC, 1);  // (UNPACK: the partials are in L1)
+    cb_pop_front(PSYNC, 1);
     cb_wait_front(BIAS, ET);
     const uint32_t nops = get_arg_val<uint32_t>(0), et0 = 1 + nops;
     for (uint32_t o = 0; o < nops; ++o) {
@@ -247,10 +262,43 @@ void kernel_main() {
             continue;
         }
         const uint32_t na = get_arg_val<uint32_t>(et0 + e);  // (the one fin: the owner's - G - 1 sources)
-        cb_wait_front(ARRF, na * ET);
         cb_reserve_back(SC, ET);
         cb_wait_front(IDX, ET);
         pack_reconfig_data_format(HOLD);
+        // the sources' partials in landing order (ARRB: the slot): all but the last summed into my block's HOLD as they
+        // land (fp32 on the SFPU, packed back in place), the last in the passes below - after the last arrival only its
+        // add is left
+        uint32_t last = 0;
+        for (uint32_t a = 0; a < na; ++a) {
+            cb_wait_front(ARRB, 1);
+            const uint32_t sl = read_tile_value(ARRB, 0, 0);
+            cb_pop_front(ARRB, 1);
+            if (a + 1 == na) {
+                last = sl;
+                break;
+            }
+            for (uint32_t i0 = 0; i0 < ET; i0 += 2) {
+                const uint32_t n = ET - i0 < 2 ? ET - i0 : 2;
+                tile_regs_acquire();
+                reconfig_data_format_srca(HOLD);
+                copy_init(HOLD);
+                for (uint32_t j = 0; j < n; ++j) copy_tile(HOLD, e * ET + i0 + j, j);
+                reconfig_data_format_srca(HOLD, ARRF);
+                copy_init(ARRF);
+                for (uint32_t j = 0; j < n; ++j) copy_tile(ARRF, sl * ET + i0 + j, 2 + j);
+                add_binary_tile_init();
+                for (uint32_t j = 0; j < n; ++j) add_binary_tile(j, 2 + j, j);
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t j = 0; j < n; ++j) pack_tile<true>(j, HOLD, e * ET + i0 + j);
+                tile_regs_release();
+            }
+            cb_reserve_back(PSYNC, 1);  // (PACK -> UNPACK: the sums are in HOLD before the next pass reads them)
+            cb_push_back(PSYNC, 1);
+            cb_wait_front(PSYNC, 1);
+            cb_pop_front(PSYNC, 1);
+        }
+        { DeviceZoneScopedN("SE-RFARR"); }  // (a mark: every arrival in - the fin from here to the top-K)
         // (all in DEST at fp32: the partials, the bias unpacked straight to DEST, the adds on the SFPU - the FPU's
         // srcA / srcB hold TF32, a 10-bit mantissa: the sums and the bias add through them moved scores by up to ~1e-3
         // and the picks of close experts with them)
@@ -260,10 +308,10 @@ void kernel_main() {
             reconfig_data_format_srca(HOLD);
             copy_init(HOLD);
             for (uint32_t j = 0; j < n; ++j) copy_tile(HOLD, e * ET + i0 + j, j);
-            for (uint32_t sl = 0; sl < na; ++sl) {  // (+ every source's partial)
+            if (na) {  // (+ the last source's partial)
                 reconfig_data_format_srca(HOLD, ARRF);
                 copy_init(ARRF);
-                for (uint32_t j = 0; j < n; ++j) copy_tile(ARRF, sl * ET + i0 + j, 2 + j);
+                for (uint32_t j = 0; j < n; ++j) copy_tile(ARRF, last * ET + i0 + j, 2 + j);
                 add_binary_tile_init();
                 for (uint32_t j = 0; j < n; ++j) add_binary_tile(j, 2 + j, j);
             }
@@ -545,7 +593,7 @@ void kernel_main() {
 
 # the port sender's poll (x_gather3 includes it): the router cores' hand-offs landed in this port's L1, sent in the
 # plan's walk (unit, core) as each core's word shows it; fp32 packets of RPL tiles, a sub-block's last one with the
-# fused increment of the downstream router core's arrival counter. One dedicated header, flushed per packet.
+# fused increment of the downstream router core's arrival word for this source's slot. One dedicated header, flushed per packet.
 LSTREAM = r"""
 struct LStream {
     uint32_t r0, nu, nc, buf, word, zone, actr, et, rpl, need, u, i, sent;
@@ -581,7 +629,7 @@ struct LStream {
                 noc_async_writes_flushed();  // (the header's previous packet has left)
                 (void)fabric_set_unicast_route(hdr, static_cast<uint16_t>(w0 & 0xFFFF), static_cast<uint16_t>(mesh));
                 if (t0 + rpl >= et) {
-                    hdr->to_noc_fused_unicast_write_atomic_inc(NocUnicastAtomicIncFusedCommandHeader{dst, get_noc_addr(x, y, actr), 1, true}, n * 4096);
+                    hdr->to_noc_fused_unicast_write_atomic_inc(NocUnicastAtomicIncFusedCommandHeader{dst, get_noc_addr(x, y, actr + 16 * (w0 >> 16)), 1, true}, n * 4096);
                 } else {
                     hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, n * 4096);
                 }
@@ -618,10 +666,14 @@ class RouterStream:
         words,
         fidelity=ttnn.MathFidelity.HiFi3,
         on_engine=False,
+        ordered=False,
     ):
         """arena: (tensor, base, bytes) - the engine's arena, also carved on these cores and the ports (lockstep L1);
-        words: the port words' address (a zeroed L1 tensor on the ports, 16 B a router core)."""
+        words: the port words' address (a zeroed L1 tensor on the ports, 16 B a router core). ordered: the fin sums the
+        sources' partials in slot order (bit-identical runs), else in landing order (the early ones while the last is on
+        its way: ~4 us of GLM's chain; a near tie's pick can then differ between runs)."""
         self.mesh, self.xg = mesh_device, xg
+        self.ordered = ordered
         G = self.G = xg.G
         CR = rows // 32
         assert CR % G == 0
@@ -652,6 +704,7 @@ class RouterStream:
                 ("best", 4096),
                 ("finc", 16 * 8),
                 ("psync", 16 * 2),
+                ("arrb", 16 * max(1, G - 1)),  # (the arrivals' slots in landing order)
                 ("rdy", 16 * 2),
                 ("out", 32 * 4 * K),
                 ("words", 128),
@@ -679,6 +732,21 @@ class RouterStream:
         # (arrivals / the engine's own-block tiles / the engine cores' "partials written", router core 0: the W gate)
         self.sems = [ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(3)]
         self.arr = [int(ttnn.get_global_semaphore_address(s)) for s in self.sems]
+        # (the arrivals: a word a source slot, 16 B apart, zero between calls - each re-armed by the router core that
+        # saw it; arr[0] is their base)
+        self.slot_words = ttnn.from_torch(
+            torch.zeros(len(self.cores), 4 * max(1, G - 1), dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(crs, [1, 4 * max(1, G - 1)], ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        self.arr[0] = int(self.slot_words.buffer_address())
         ttnn.synchronize_device(mesh_device)
 
     def upload(self, w_router, bias):
@@ -877,6 +945,7 @@ class RouterStream:
         cb(BEST, "best", 4096, ttnn.float32, 4096)
         cb(FINC, "finc", 16 * 8, ttnn.bfloat16, 16)
         cb(PSYNC, "psync", 16 * 2, ttnn.bfloat16, 16)
+        cb(ARRB, "arrb", 16 * max(1, G - 1), ttnn.uint32, 16)
         if self.on_engine:
             cb(12, "rdy", 16 * 2, ttnn.bfloat16, 16)
         n_rt, c_rt, b_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
@@ -942,6 +1011,7 @@ class RouterStream:
         acc = lambda t: list(ttnn.TensorAccessorArgs(t).get_compile_time_args())  # noqa: E731
         eng = f"#define RT_ENG {self.arr[1]}u\n" if self.on_engine else ""
         eng += f"#define RT_MSYNC {self.base + self.off['msync']}u\n"
+        eng += "#define RT_ARR_ORDERED\n" if self.ordered else ""
         if self.on_engine and self.gate is not None:  # (the engine's W-stream gate: se_engine3 gate_target)
             g = self.gate
             eng += f"#define RT_GATE {g['addr']}u\n#define RT_GATE_N {g['n']}u\n#define RT_GATE_SRC {self.base + self.off['gate']}u\n"

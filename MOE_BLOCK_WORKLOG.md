@@ -1080,3 +1080,21 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   (4.9-5.3 ms with the x copy from another tensor), eager device sum 1816; K3 3196 (3144) vs 5278 (6.5 ms), device sum
   3242. Traced is at the device time; the host left is the input write (host -> device x: +260 us GLM, +435 us K3), gone
   when the block's x comes from attention in the same trace.
+
+### GLM's chain: the router fin sums the sources' partials as they land
+- The chain, per router core (GLM, dev 6 - the chip that binds: its last source is the last-launched chip's
+  partial): last arrival -> the fin's compute 23.6 us -> top-K 21 us. Ablations (timing only, picks wrong): sigmoid
+  off -> 12.4 us (the fp32 sigmoid ~1.25 us a tile, 9 tiles), the sources' adds off -> 16.9 (3 x 9 tile adds ~6.7 us).
+- Now: a word a source slot (the ports' fused increment to arr base + 16 x slot, re-armed by the router NCRISC that
+  saw it: one increment a call), the NCRISC posting each slot as it lands (ARRB, CB 4 - was unused); the fin sums every
+  arrival but the last into its HOLD block in place (fp32: unpack to DEST, SFPU add, packed back; a PACK -> UNPACK
+  sync between arrivals) and only the last in the passes with the sigmoid. SE-RFARR: a mark at the last arrival.
+- GLM: the fin after the last arrival 23.6 -> 19.2 us; head Galaxy-projected 164-168 -> 161-162 (chain 161-162 binds,
+  SE 148-149). K3: chain 378 -> 354 (SE 384 binds). Picks unchanged (head test worst chip GLM 99.45-99.77%, K3
+  99.65-99.69%).
+- Order: the landing order changes the fp32 sum's association between runs - a near tie's bits can move: 600 traced
+  GLM replays, one replay's rows differed from its x's first in a weight's last bit, no pick. MoEOptions.deterministic
+  (RouterSpec.ordered: the slots in slot order, bit-identical to before) keeps the sum fixed - and the chain at 169.
+  The traced test now checks such a replay against its own routing's reference (picks may differ in <= 4 tokens).
+- Soak: eager 300 GLM / 100 K3, traced 600 GLM / 100 K3; mock Galaxy 2, protocol model 16. Traced replay unchanged
+  within noise (GLM 1732 us, K3 3171).

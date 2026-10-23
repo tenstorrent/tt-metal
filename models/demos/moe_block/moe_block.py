@@ -348,7 +348,7 @@ class MoEBlock(LightweightModule):
             self._warm_up_tail()
             hole = _l1_hole(mesh_device, FusedHead.HOLE)
             holes = [_l1_hole(mesh_device, FusedHead.HOLE_HEAD) for _ in range(2)]
-            self.fused = FusedHead(mesh_device, g, model, weights, holes)
+            self.fused = FusedHead(mesh_device, g, model, weights, holes, deterministic=options.deterministic)
             self._warm_up_head()
             self.fused.head.settle_arena()
             ttnn.deallocate(hole)
@@ -683,7 +683,7 @@ class FusedHead:
             return "shared expert: bf8 weights at HiFi2"
         return True
 
-    def __init__(self, mesh, g: Geometry, model: MoEModel, w: MoEWeights, l1_hole=None):
+    def __init__(self, mesh, g: Geometry, model: MoEModel, w: MoEWeights, l1_hole=None, deterministic=False):
         from ttnn.bringup.combine_rf.lin2d import glu_weight
 
         from models.demos.moe_block.tt.fused_head import HeadSE3, RouterSpec, RoutingSpec
@@ -700,7 +700,8 @@ class FusedHead:
             num_links=g.links,
             rs_dim=-1 if latent else -2,  # (K3: the latent up lands the width split, the shared output too)
             rs_mode="fused",
-            router=RouterSpec(E=E, K=K, route_scale=model.router.route_scale),
+            # (deterministic: the router fin's sum in a fixed order)
+            router=RouterSpec(E=E, K=K, route_scale=model.router.route_scale, ordered=deterministic),
             latent=latent,
             # (the planner's row capacity: the head's (2 S K + 32 EPC: the router cores' L1), within the exchange's
             # worst case - its plan tensors take a prefix)

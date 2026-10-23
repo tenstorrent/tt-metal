@@ -263,9 +263,10 @@ def _router_specs():
     from models.demos.moe_block.tt.fused_head import RouterSpec
 
     # (GLM-type: the logits ahead of the x gather; K3: after it) - the head's choices unless the test overrides them
-    # (HSE3_ON_ENGINE / HSE3_LOGITS_FIRST / HSE3_W_GATE = 0 | 1: the RouterSpec fields, for A/B runs)
+    # (HSE3_ON_ENGINE / HSE3_LOGITS_FIRST / HSE3_W_GATE / HSE3_ORDERED = 0 | 1: the RouterSpec fields, for A/B runs)
     o = lambda k: None if os.environ.get(k) is None else bool(int(os.environ[k]))  # noqa: E731
     kw = dict(on_engine=o("HSE3_ON_ENGINE"), logits_first=o("HSE3_LOGITS_FIRST"), w_gate=o("HSE3_W_GATE"))
+    kw["ordered"] = bool(o("HSE3_ORDERED"))
     return {
         "glm": RouterSpec(E=288, K=8, route_scale=2.5, **kw),
         "k3": RouterSpec(E=448, K=16, **kw),
