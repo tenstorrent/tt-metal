@@ -1494,3 +1494,10 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - The rounds' fixed cost: SE_PROBE=NOMATH,NOX,NOW,NOXWAIT (no matmul, no x / W data, no shard waits) still takes gate /
   up 165 us (128 rounds, ~1.3 us a round of protocol and loop overhead); NOMATH alone 255, NOMATH,NOXWAIT 254-263,
   NOMATH,NOX 237-255, NOMATH,NOW 230-266. The per-round machinery is the floor, not the data or the multiplies.
+- Per-step waits (SE_PROBE=GUWAIT,GUSTEP, the heavy core (1, 2), dev 3): steady steps 1.3-1.9 us, about the math's
+  1.42 (56 tile multiplies at 34.3 cycles) - the heavy core is math-bound between stalls. The stalls are x waits
+  at the shard boundaries (13 us waiting for shard 1 at step 32) and ~18 us around steps 2-5, plus W's first round
+  (13 us). So the gather's arrival is the lever, not the round protocol.
+- Logits-vs-x priority on the ring (HeadSE3.logits_priority): x first 453-455 us traced vs logits first 479-483.
+  The chain (RPLAN) still ends ~90 us before the SE path (~+20 for the Galaxy's N 32 routing). Now x first for a latent
+  model on a ring; lines unchanged. Default ring head 447-454 us, soak 300 calls, mock Galaxy K3 builds.

@@ -781,6 +781,7 @@ void kernel_main() {
 #endif
 #ifdef SE_PROBE_GUWAIT
     uint32_t gu_wx = 0, gu_ww = 0;  // (the unpacker's cycles waiting for x / W in gate / up: SE-GUWX / SE-GUWW)
+    uint32_t gu_ns = 0, gs_x = 0, gs_w = 0;
 #endif
     uint32_t opos = 0;  // (OUTF tiles pushed: its blocks end at multiples of 8 - the NCRISC reads it page by page,
                         // pack_tile does not wrap; the chunks' fins continue where the last one left it)
@@ -816,7 +817,16 @@ void kernel_main() {
                         cb_wait_front(WIN, WSLOT);
                         const uint32_t t2_ = *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
                         gu_wx += t1_ - t0_, gu_ww += t2_ - t1_;
+                        gs_x = t1_ - t0_, gs_w = t2_ - t1_;
                     }));
+#ifdef SE_PROBE_GUSTEP
+                    UNPACK(({  // (GUSTEP: the first 48 steps' x / W waits - the profiler's buffer)
+                        if (gu_ns++ < 48) {
+                            DeviceTimestampedData("SE-GUSX", gs_x);
+                            DeviceTimestampedData("SE-GUSW", gs_w);
+                        }
+                    }));
+#endif
 #endif
                     cb_wait_front(XIN, MT * KB);
                     cb_wait_front(WIN, WSLOT);
@@ -1069,7 +1079,8 @@ def _probes():
     """(timing only) SE_PROBE=NOX,NOW: skip the x / W data multicasts (semaphores kept); NOMATH: no matmuls; NOWL: no W
     DRAM reads (16 B a block); NOXWAIT: the x rounds do not wait for a shard's arrival (gate / up at its own pace in the
     head: GU_ALONE at the head's shapes) - the results are wrong. GUWAIT (results right): gate / up's unpacker cycles
-    waiting for x / W a core, SE-GUWX / SE-GUWW."""
+    waiting for x / W a core, SE-GUWX / SE-GUWW; GUSTEP (with GUWAIT): the first 48 steps' waits, one data marker each
+    (unnamed in the csv: their source lines sit inside a macro argument)."""
     import os
 
     out = "".join(f"#define SE_PROBE_{p}\n" for p in os.environ.get("SE_PROBE", "").split(",") if p)

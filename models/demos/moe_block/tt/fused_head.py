@@ -474,6 +474,8 @@ class HeadSE3:
         on a line too (K3 Galaxy-projected 367 us vs 380 x first from the mesh's last launch, 397 vs 461 eager)."""
         if router.logits_first is not None:
             return router.logits_first
+        if latent and self._ring():  # (measured on a ring of 4, K3 E 896: x first 453-455 us traced, logits first
+            return False  # 479-483 - the chain still ends ~90 us before the SE path, ~+20 for the Galaxy's N 32)
         return self._ring() or not latent or self.router_on_engine(router, latent)
 
     def upload_router(self, w_router, bias):
