@@ -417,3 +417,75 @@ def test_gpt_oss_kv_chunk_table_1k_all_layers_two_slots(mesh_device, device_para
                     comparisons += 1
     assert comparisons == 36864
     logger.info("GPT-OSS 1K table gate: all 36864 pages exact; both slots, 36 layers, 16 configs; slot0 preserved")
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.skipif(not is_blackhole(), reason="GPT-OSS multi-chunk table test requires a Blackhole Galaxy")
+@pytest.mark.timeout(1800)
+def test_gpt_oss_kv_chunk_table_two_chunks_plain_token_order(mesh_device, device_params):
+    """A 2K cache filled as two 1K chunks reads back in plain token order: the layout P/D migrates."""
+    num_layers, num_users, seq_len, chunk_size, num_heads = 4, 2, 2048, 1024, 8
+    cache = allocate_kv_cache(
+        mesh_device,
+        num_layers=num_layers,
+        max_seq_len=seq_len,
+        sp_axis=SP_AXIS,
+        num_users=num_users,
+        head_dim=HEAD_DIM,
+    )
+    table = build_kv_chunk_address_table(
+        mesh_device=mesh_device,
+        kv_cache=cache,
+        seq_len=seq_len,
+        num_layers=num_layers,
+        mesh_shape=(4, 8),
+        sp_axis=SP_AXIS,
+        num_users=num_users,
+        chunk_size=chunk_size,
+        num_kv_heads=num_heads,
+        head_dim=HEAD_DIM,
+    )
+
+    def fixture(slot, layer, kind):
+        # Eighths within [-4,4) are exact in BFP8_B; a seed per slot/layer/kind makes misplaced pages visible.
+        generator = torch.Generator().manual_seed(1000 * slot + 2 * layer + kind)
+        return torch.randint(-32, 32, (1, num_heads, seq_len, HEAD_DIM), generator=generator).to(torch.bfloat16) / 8
+
+    for slot in range(num_users):
+        for layer in range(num_layers):
+            full = [fixture(slot, layer, kind) for kind in (0, 1)]
+            for start in range(0, seq_len, chunk_size):
+                tensors = [
+                    ttnn.from_torch(
+                        values[:, :, start : start + chunk_size].contiguous(),
+                        device=mesh_device,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(4, 8), dims=[2, 1]),
+                    )
+                    for values in full
+                ]
+                write_kv_chunk(cache, *tensors, slot_idx=slot, layer_idx=layer, kv_actual=start, sp_axis=SP_AXIS)
+                for tensor in tensors:
+                    tensor.deallocate(True)
+    ttnn.synchronize_device(mesh_device)
+
+    comparisons = 0
+    for slot in range(num_users):
+        for layer in range(num_layers):
+            expected = [fixture(slot, layer, kind) for kind in (0, 1)]
+            for config in range(2 * num_heads):
+                kind, head = divmod(config, num_heads)
+                for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+                    raw = table.read_device_chunk(layer, position, slot, config)
+                    tensor = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(
+                        raw, [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, HEAD_DIM]
+                    )
+                    actual = ttnn.to_torch(tensor).to(torch.bfloat16)
+                    want = expected[kind][:, head : head + 1, position : position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK]
+                    assert torch.equal(actual, want), (slot, layer, config, position)
+                    comparisons += 1
+    assert comparisons == num_users * num_layers * 2 * num_heads * (seq_len // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK)
+    logger.info(f"GPT-OSS two-chunk table: all {comparisons} pages exact in plain token order")

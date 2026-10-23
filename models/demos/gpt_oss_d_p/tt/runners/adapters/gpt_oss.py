@@ -53,6 +53,7 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
     ttnn_cache_default = ""  # TTNN weight-cache root; PREFILL_TTNN_CACHE overrides (empty => no cache)
     prefill_trace_default = ""  # golden trace dir (token_ids + KV); PREFILL_TRACE_DIR overrides
     default_gate_mode = "DEVICE_FP32"
+    verify_layer_completions = True
 
     # --- test metadata ---
     hf_repo_id = "openai/gpt-oss-120b"
@@ -135,6 +136,10 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
         from models.demos.gpt_oss_d_p.tt.model_config import ModelArgs
         from models.demos.gpt_oss_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
+        expert_dtype = os.getenv("EXPERT_DTYPE", "bf4")
+        if expert_dtype not in ("bf4", "bf8"):
+            raise ValueError(f"EXPERT_DTYPE must be bf4 or bf8, got {expert_dtype!r}")
+        logger.info(f"GPT-OSS routed-expert weights: {expert_dtype}")
         runtime_config = TtPrefillRuntimeConfig(
             num_layers=params.num_layers,
             max_seq_len=params.max_seq_len,
@@ -145,7 +150,7 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
             tp_axis=params.tp_axis,
             weight_cache_path=params.weight_cache_path,
             # Same knob as the standalone harness; the tilized cache files are keyed by dtype.
-            expert_weight_dtype=(ttnn.bfloat8_b if os.getenv("EXPERT_DTYPE", "bf4") == "bf8" else ttnn.bfloat4_b),
+            expert_weight_dtype=ttnn.bfloat8_b if expert_dtype == "bf8" else ttnn.bfloat4_b,
             owns_kv_cache=False,  # engine owns the cache (from allocate_kv_cache); passed into every call
             # PREFILL_TOPOLOGY=linear runs pods without torus wraparound (same knob as the harness).
             topology=(
