@@ -31,6 +31,8 @@ STACK_CASES = [
     pytest.param([(24, 50, 83)] * 6, 2, TILE, id="tile-rank3-dim2-unsqueeze"),
     # unsqueeze-then-concat: rank-1 tile inputs stay there even on a trailing axis
     pytest.param([(1444,)] * 8, -1, TILE, id="tile-rank1-trailing-unsqueeze"),
+    # unsqueeze-then-concat: a single tile input is one tiled reshape, cheaper than the permute
+    pytest.param([(5, 7)], -1, TILE, id="tile-rank2-trailing-single-input-unsqueeze"),
     # leading-axis route, row-major
     pytest.param([(13600,)] * 4, 1, RM, id="rm-rank1-trailing-n4"),
     pytest.param([(1444,)] * 8, -1, RM, id="rm-rank1-trailing-n8"),
@@ -54,7 +56,6 @@ STACK_CASES = [
     pytest.param([(1, 23, 40, 64)] * 2, 4, TILE, id="tile-rank4-trailing"),
     pytest.param([(1, 5, 16, 16)] * 2, -1, TILE, id="tile-rank4-trailing-small"),
     pytest.param([(1, 2, 3, 32, 64)] * 2, 5, TILE, id="tile-rank5-trailing"),
-    pytest.param([(5, 7)], -1, TILE, id="tile-rank2-trailing-single-input"),
 ]
 
 
@@ -167,16 +168,17 @@ def test_stack_block_float_tile(device, input_shapes, dim):
 
 
 @pytest.mark.parametrize(
-    "input_shapes, dim, layout",
+    "input_shapes, dim, layout, expected_ops",
     [
-        pytest.param([(1500,)] * 4, 1, RM, id="rm-rank1"),
-        pytest.param([(8732, 1)] * 4, 2, TILE, id="tile-rank2"),
+        pytest.param([(1500,)] * 4, 1, RM, ["ConcatDeviceOperation", "PermuteDeviceOperation"], id="rm-rank1"),
+        pytest.param([(8732, 1)] * 4, 2, TILE, ["ConcatDeviceOperation", "PermuteDeviceOperation"], id="tile-rank2"),
+        pytest.param([(8732, 1)], 2, TILE, ["ReshapeViewDeviceOperation"], id="tile-single-input"),
     ],
 )
-def test_stack_trailing_axis_device_ops(device, input_shapes, dim, layout):
+def test_stack_trailing_axis_device_ops(device, input_shapes, dim, layout, expected_ops):
     # Values cannot tell the routes apart, so record the device operations: the leading-axis route
     # is one concat and one permute, while unsqueeze-then-concat starts with a reshape per input and,
-    # for row-major, wraps the concat in transposes.
+    # for row-major, wraps the concat in transposes. A single tile input stays on the reshape.
     torch_tensors = [torch.rand(shape, dtype=torch.bfloat16) for shape in input_shapes]
     ttnn_tensors = [
         ttnn.from_torch(tensor, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -188,8 +190,30 @@ def test_stack_trailing_axis_device_ops(device, input_shapes, dim, layout):
     finally:
         captured = ttnn.graph.end_graph_capture()
     device_ops = [name for name in ttnn.graph.extract_calltrace(captured) if name.endswith("DeviceOperation")]
-    assert device_ops == ["ConcatDeviceOperation", "PermuteDeviceOperation"], device_ops
+    assert device_ops == expected_ops, device_ops
     _check_result(torch.stack(torch_tensors, dim=dim), ttnn_result, layout)
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim, layout",
+    [
+        pytest.param((13600, 1), 2, RM, id="rm-last-dim-1"),
+        pytest.param((1024, 1, 1), 3, TILE, id="tile-last-two-dims-1"),
+    ],
+)
+def test_stack_single_input_view_runs_no_device_ops(device, input_shape, dim, layout):
+    # One input whose trailing unsqueeze is a view: the stack is metadata plus concat's single-input
+    # copy, a no-op for a DRAM input. The leading-axis route would spend a permute on it.
+    torch_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+    ttnn_tensor = ttnn.from_torch(torch_tensor, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        ttnn_result = ttnn.stack([ttnn_tensor], dim=dim)
+    finally:
+        captured = ttnn.graph.end_graph_capture()
+    device_ops = [name for name in ttnn.graph.extract_calltrace(captured) if name.endswith("DeviceOperation")]
+    assert device_ops == [], device_ops
+    _check_result(torch.stack([torch_tensor], dim=dim), ttnn_result, layout)
 
 
 def test_stack_trailing_axis_compiles_two_programs(device):
