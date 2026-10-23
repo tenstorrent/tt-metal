@@ -86,7 +86,6 @@ ALWI void swiglu_block(
             copy_tile(in_dfb, gate_tile_id, GATE_DST);
             copy_tile(in_dfb, up_tile_id, UP_DST);
 #endif
-            silu_tile_init();
             silu_tile(GATE_DST);
             mul_binary_tile_init();
             mul_binary_tile(GATE_DST, UP_DST, GATE_DST);

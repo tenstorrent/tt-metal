@@ -80,7 +80,6 @@ ALWI void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32
             copy_tile(in_cb, gate_tile_id, GATE_DST);
             copy_tile(in_cb, up_tile_id, UP_DST);
 #endif
-            silu_tile_init();
             silu_tile(GATE_DST);
             mul_binary_tile_init();
             mul_binary_tile(GATE_DST, UP_DST, GATE_DST);
