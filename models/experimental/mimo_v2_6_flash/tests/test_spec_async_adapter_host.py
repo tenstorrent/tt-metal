@@ -573,22 +573,10 @@ def test_a_hole_in_a_chain_row_s_page_tables_is_counted(adapter, defer):
     assert adapter.chain_stats["uncovered"] == 1
 
 
-# ---------------------------------------------------------------------- finishing slots and a prefill over a verify
+# ---------------------------------------------------------------------- a prefill over a verify
 def test_capabilities_of_the_chained_lane_path():
     caps = MiMoV2ForCausalLM.model_capabilities
-    assert caps["supports_finishing_slots"] and caps["supports_prefill_over_pending_spec"]
-
-
-def test_finishing_slots_are_taken_on_any_decode_step(adapter, defer):
-    drafts = start(adapter, 300)
-    out = deferred(adapter, *block(SEQ[300], 300, drafts), finishing_slots=[1, 2])
-    assert out.handle is not None and adapter.chain_stats["finishing"] == 2
-    read(adapter, submit(adapter, {SPEC_ROW: 310}))
-    tokens = torch.zeros(ROWS, 1, dtype=torch.int32)
-    positions = torch.full((ROWS,), -1, dtype=torch.int32)
-    adapter.decode_forward(tokens, positions, TABLE, None, sampling_params=GREEDY, finishing_slots=[0])
-    with pytest.raises(ValueError, match="finishing_slots"):
-        adapter.decode_forward(tokens, positions, TABLE, None, sampling_params=GREEDY, finishing_slots=[3, 1])
+    assert caps["supports_prefill_over_pending_spec"] and "supports_finishing_slots" not in caps
 
 
 def test_a_prefill_over_a_deferred_verify(adapter, defer, monkeypatch):
