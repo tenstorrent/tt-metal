@@ -18,6 +18,10 @@ namespace ckernel
  *   Compact          tiles 16 rows apart, output face 1 at row 8, no room for split partials
  *
  * Init and execute must use the same layout, on the math and pack threads alike.
+ *
+ * The tile spacing sets how many output tiles, and so how wide a ct_dim, fit in DEST: 8 Default, 16 Dense or 32
+ * Compact tiles in a 16-bit SyncHalf DEST (512 rows), twice that with SyncFull and half that with a 32-bit DEST.
+ * See custom_mm_fits_dest.
  */
 enum class CustomMmDestLayout : std::uint8_t
 {

@@ -208,7 +208,7 @@ struct Matmul {
             }
             cb_push_back(args.out, out_w);
 
-            custom_mm_block_uninit<dest_layout>();
+            custom_mm_block_uninit<dest_layout>(args.out);
 
             // Pop inputs
             if constexpr (pop_in0) {

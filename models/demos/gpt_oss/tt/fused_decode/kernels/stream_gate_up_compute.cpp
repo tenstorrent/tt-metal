@@ -116,5 +116,5 @@ void kernel_main() {
         }
     }
     cb_pop_front(cb_x, kt);
-    custom_mm_block_uninit<dest_layout>();
+    custom_mm_block_uninit<dest_layout>(cb_act);
 }

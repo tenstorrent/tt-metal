@@ -185,7 +185,9 @@ struct MatmulExpertCompressedSRAM {
                 cb_wait_front(cb_in0, num_tiles_k);
             }
             if constexpr (CTArgs::use_compression) {
-                compressed_custom_mm_block_init_short<false, true, true>(cb_in0, cb_in1, cb_out);
+                // The compressed API ignored split_acc and finalize before it took a layout, so this path has always
+                // run Dense.
+                compressed_custom_mm_block_init_short<false, CustomMmDestLayout::Dense>(cb_in0, cb_in1, cb_out);
             } else {
                 custom_mm_block_init_short<false, CustomMmDestLayout::DenseSplitAcc>(cb_in0, cb_in1, cb_out, out_w);
             }
@@ -242,14 +244,16 @@ struct MatmulExpertCompressedSRAM {
 
                         if (++sram_idx < num_sram_experts) {
                             if constexpr (CTArgs::use_compression) {
-                                compressed_custom_mm_block<false>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
+                                compressed_custom_mm_block<false /*finalize*/, CustomMmDestLayout::Dense>(
+                                    cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
                             } else {
                                 custom_mm_block<false, false, CustomMmDestLayout::DenseSplitAcc>(
                                     cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
                             }
                         } else {
                             if constexpr (CTArgs::use_compression) {
-                                compressed_custom_mm_block<true>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
+                                compressed_custom_mm_block<false /*finalize*/, CustomMmDestLayout::Dense>(
+                                    cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
                             } else {
                                 custom_mm_block<true, false, CustomMmDestLayout::DenseSplitAcc>(
                                     cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
@@ -297,7 +301,8 @@ struct MatmulExpertCompressedSRAM {
                     tile_regs_acquire();
 
                     if constexpr (CTArgs::use_compression) {
-                        compressed_custom_mm_block<true>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
+                        compressed_custom_mm_block<false /*finalize*/, CustomMmDestLayout::Dense>(
+                            cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
                     } else {
                         // DenseSplitAcc: this single call accumulates and finalizes its split partials.
                         custom_mm_block<true, false, CustomMmDestLayout::DenseSplitAcc>(
@@ -331,9 +336,9 @@ struct MatmulExpertCompressedSRAM {
 
             UNPACK(({ unified_kernels::override_cb_rd_ptr(cb_in0, in0_base); }));
             if constexpr (CTArgs::use_compression) {
-                compressed_custom_mm_block_uninit<true>();
+                compressed_custom_mm_block_uninit<CustomMmDestLayout::Dense>(cb_out);
             } else {
-                custom_mm_block_uninit<CustomMmDestLayout::DenseSplitAcc>();
+                custom_mm_block_uninit<CustomMmDestLayout::DenseSplitAcc>(cb_out);
             }
 
             if constexpr (pop_in1) {

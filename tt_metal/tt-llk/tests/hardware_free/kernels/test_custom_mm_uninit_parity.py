@@ -31,18 +31,16 @@ _UNINIT_PAIR = [
     ("compressed_custom_mm.h", "compressed_custom_mm_block_uninit"),
 ]
 
-# The helper call each compute API must reduce to. custom_mm passes its CustomMmDestLayout and the DEST
-# width, which the Compact strides follow; compressed_custom_mm maps its dense_packing flag to a layout.
+# The helper call each compute API must reduce to. custom_mm passes its CustomMmDestLayout and compressed_custom_mm
+# maps its dense_packing flag to a layout; both pass the output CB's pack source format, which sets the stride units.
 _PACK_HELPER_ARGS = (
-    r"<(?:layout, (?:fp32_dest_acc_en|DST_ACCUM_MODE)"
-    r"|dense_packing \? CustomMmDestLayout::Dense : CustomMmDestLayout::Default)>"
+    r"<(?:layout|dense_packing \? CustomMmDestLayout::Dense : CustomMmDestLayout::Default)>"
+    r"\( ?pack_src_format\[get_output_id\(out_cb_id\)\]\)"
 )
 _UNINIT_CALL = re.compile(
-    rf"PACK\(\(_llk_pack_custom_mm_uninit_{_PACK_HELPER_ARGS}\(\)\)\);"
+    rf"PACK\(\(_llk_pack_custom_mm_uninit_{_PACK_HELPER_ARGS}\)\);"
 )
-_INIT_CALL = re.compile(
-    rf"PACK\(\(_llk_pack_custom_mm_init_{_PACK_HELPER_ARGS}\(\)\)\);"
-)
+_INIT_CALL = re.compile(rf"PACK\(\(_llk_pack_custom_mm_init_{_PACK_HELPER_ARGS}\)\);")
 
 _BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 _LINE_COMMENT = re.compile(r"//[^\n]*")
@@ -111,10 +109,7 @@ def test_driver_and_compute_apis_use_the_shared_pack_helper():
 
     assert '#include "experimental/llk_pack_custom_mm.h"' in driver
     for operation in ("init", "uninit"):
-        call = (
-            f"_llk_pack_custom_mm_{operation}_"
-            "<uninit_layout, is_fp32_dest_acc_en>();"
-        )
+        call = f"_llk_pack_custom_mm_{operation}_<uninit_layout>(formats.pack_src);"
         assert call in driver, (
             f"The restore driver no longer calls {call}; its coverage must exercise "
             "the same PACK helper as the compute APIs."

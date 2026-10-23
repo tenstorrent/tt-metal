@@ -52,7 +52,7 @@ ALWI void custom_mm_reuse_dest_srcb_pack_init() {
  * dense strides.
  *
  * A chaining core therefore needs only this call, not also
- * custom_mm_block_uninit<CustomMmDestLayout::Dense>().
+ * custom_mm_block_uninit<CustomMmDestLayout::Dense>(out_cb_id).
  */
 ALWI void custom_mm_reuse_dest_srcb_pack_uninit() {
     PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_C_DIM * FACE_R_DIM * 2)));

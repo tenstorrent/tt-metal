@@ -73,7 +73,7 @@ ALWI void custom_mm_block_init(
     PACK((llk_pack_dest_init<fp32_dest_acc_en, PackMode::Default>(out_cb_id)));
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
     PACK((llk_pack_init<PackMode::Default, false /* zero_output */>(out_cb_id)));
-    PACK((_llk_pack_custom_mm_init_<layout, fp32_dest_acc_en>()));
+    PACK((_llk_pack_custom_mm_init_<layout>(pack_src_format[get_output_id(out_cb_id)])));
 }
 
 // clang-format off
@@ -113,7 +113,7 @@ ALWI void custom_mm_block_init_short(
 
     MATH((llk_math_custom_mm_init<transpose, layout>(in0_cb_id, in1_cb_id, ct_dim)));
 
-    PACK((_llk_pack_custom_mm_init_<layout, DST_ACCUM_MODE>()));
+    PACK((_llk_pack_custom_mm_init_<layout>(pack_src_format[get_output_id(out_cb_id)])));
 }
 
 // clang-format off
@@ -143,7 +143,7 @@ ALWI void custom_mm_block_init_short(
  * | in1_cb_id       | The identifier of the second input circular buffer (CB)                                                         | uint32_t           | 0 to 31                                                 | True                    |
  * | in0_tile_index  | The index of the tile in block A from the first input CB                                                        | uint32_t           | Must be less than the size of the CB                    | True                    |
  * | in1_tile_index  | The index of the tile in block B from the second input CB                                                       | uint32_t           | Must be less than the size of the CB                    | True                    |
- * | dst_index       | The index of the tile in DST REG to which the result C will be written                                          | uint32_t           | Must be less than the acquired size of DST REG          | True                    |
+ * | dst_index       | The first DST output tile, in tiles of the layout's custom_mm_tile_rows (64, 32 or 16 rows)                     | uint32_t           | Output tiles must fit the acquired DST REG              | True                    |
  * | kt_dim          | The inner dimension in tiles                                                                                    | uint32_t           | Any integer from 1 to 256 (inclusive)                   | True                    |
  * | ct_dim          | The width of the output matrix in tiles                                                                         | uint32_t           | 1 to 34                                                 | False (default 1)       |
  */
@@ -227,7 +227,7 @@ ALWI void custom_mm_block_unpack(
  * | layout    | Must match the init; dst_index counts its custom_mm_tile_rows            | CustomMmDestLayout | Default, DefaultSplitAcc, Dense, DenseSplitAcc, Compact | False (default Default) |
  * | in0_cb_id | The identifier of the first input circular buffer (CB)                   | uint32_t           | 0 to 31                                                 | True                    |
  * | in1_cb_id | The identifier of the second input circular buffer (CB)                  | uint32_t           | 0 to 31                                                 | True                    |
- * | dst_index | The index of the tile in DST REG to which the result C will be written   | uint32_t           | Must be less than the acquired size of DST REG          | True                    |
+ * | dst_index | The first DST output tile, in tiles of the layout's custom_mm_tile_rows  | uint32_t           | Output tiles must fit the acquired DST REG              | True                    |
  * | kt_dim    | The inner dimension in tiles                                             | uint32_t           | Any integer from 1 to 256 (inclusive)                   | True                    |
  * | ct_dim    | The width of the output matrix in tiles                                  | uint32_t           | 1 to 34                                                 | False (default 1)       |
  */
@@ -249,15 +249,15 @@ ALWI void custom_mm_block_math(
  *
  * Return value: None
  *
- * | Argument         | Description                                           | Type               | Valid Range                                             | Required                       |
- * |------------------|-------------------------------------------------------|--------------------|---------------------------------------------------------|--------------------------------|
- * | layout           | Must match the init                                   | CustomMmDestLayout | Default, DefaultSplitAcc, Dense, DenseSplitAcc, Compact | False (default Default)        |
- * | fp32_dest_acc_en | Whether dest accumulates in fp32; must match the init | bool               | true/false                                              | False (default DST_ACCUM_MODE) |
+ * | Argument  | Description                                             | Type               | Valid Range                                             | Required                |
+ * |-----------|---------------------------------------------------------|--------------------|---------------------------------------------------------|-------------------------|
+ * | layout    | Must match the init                                     | CustomMmDestLayout | Default, DefaultSplitAcc, Dense, DenseSplitAcc, Compact | False (default Default) |
+ * | out_cb_id | The output circular buffer (CB) the init was given      | uint32_t           | 0 to 31                                                 | True                    |
  */
 // clang-format on
-template <CustomMmDestLayout layout = CustomMmDestLayout::Default, bool fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void custom_mm_block_uninit() {
-    PACK((_llk_pack_custom_mm_uninit_<layout, fp32_dest_acc_en>()));
+template <CustomMmDestLayout layout = CustomMmDestLayout::Default>
+ALWI void custom_mm_block_uninit(const std::uint32_t out_cb_id) {
+    PACK((_llk_pack_custom_mm_uninit_<layout>(pack_src_format[get_output_id(out_cb_id)])));
 }
 
 #endif  // ARCH_BLACKHOLE

@@ -88,16 +88,19 @@ void kernel_main() {
     constexpr uint32_t total_tiles = num_tiles_k * out_w;
     constexpr bool use_barrier = COMPRESSED_MM_IMPL == 3 || COMPRESSED_MM_IMPL == 4 || COMPRESSED_MM_IMPL == 5;
     constexpr bool transpose = false;
-    constexpr bool split_acc = true;
-    constexpr bool dense_packing = true;
     constexpr bool clear_src = true;
-    // IMPL 0-5 drive the plain custom_mm math, whose layout matches split_acc + dense_packing above.
+    // Tiles sit 32 rows apart. IMPL 0-5 drive the plain custom_mm math, which accumulates the second k-face apart and
+    // finalizes; the compressed API of IMPL 6 has no split accumulation.
+#if COMPRESSED_MM_IMPL != 6
     constexpr auto dest_layout = CustomMmDestLayout::DenseSplitAcc;
+#else
+    constexpr auto dest_layout = CustomMmDestLayout::Dense;
+#endif
 
 #if COMPRESSED_MM_IMPL != 6
     compressed::custom_mm_compressed_block_init_short<use_barrier, out_w, dest_layout>(cb_in0, cb_in1, cb_out);
 #else
-    compressed_custom_mm_block_init_short<transpose, split_acc, dense_packing, clear_src>(cb_in0, cb_in1, cb_out);
+    compressed_custom_mm_block_init_short<transpose, dest_layout, clear_src>(cb_in0, cb_in1, cb_out);
 #endif
 
 #if COMPRESSED_MM_IMPL == 1 || COMPRESSED_MM_IMPL == 2 || COMPRESSED_MM_IMPL == 4 || COMPRESSED_MM_IMPL == 5
@@ -121,7 +124,7 @@ void kernel_main() {
     compressed::custom_mm_compressed_block_constexpr<num_tiles_k, out_w, num_packed, fmt_packed, dest_layout>(
         addr_in0, addr_in1, in0_face_r_dim, 0);
 #elif COMPRESSED_MM_IMPL == 6
-    compressed_custom_mm_block<split_acc>(cb_in0, cb_in1, fmt_l1_addr, 0, num_tiles_k, out_w);
+    compressed_custom_mm_block<false /*finalize*/, dest_layout>(cb_in0, cb_in1, fmt_l1_addr, 0, num_tiles_k, out_w);
 #endif
 
     tile_regs_commit();
@@ -131,7 +134,7 @@ void kernel_main() {
     }
     tile_regs_release();
 
-    compressed_custom_mm_block_uninit<dense_packing>();
+    compressed_custom_mm_block_uninit<dest_layout>(cb_out);
 
     cb_push_back(cb_out, out_w);
     cb_pop_front(cb_in0, num_tiles_k);

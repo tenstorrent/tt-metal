@@ -19,9 +19,9 @@ A standard tiled matmul ``C[M,N] = A[M,K] @ B[K,N]`` with the header's tile-shap
   in1 (B)  -> SrcA, full ``[32,32]`` tiles.
   rt_dim = 1, ct_dim in [1,34] (bounded by DEST capacity), kt_dim in [1,256], LoFi only.
 
-``split_acc=false`` / ``finalize=false``, so there is no finalization merge and DEST
-holds the plain accumulated product (custom_mm.h: finalize must be false when split_acc
-is false). The result is packed as ``ct_dim`` output tiles; inside each tile the two
+The SplitAcc layouts accumulate the second k-face apart and finalize on the last call,
+merging it back; the other layouts need no finalization. Either way DEST ends up holding the
+plain product. The result is packed as ``ct_dim`` output tiles; inside each tile the two
 16-col faces (M x 16, row-major) sit contiguously, then pad out to a full 32-row tile.
 
 Only defined lanes are asserted
@@ -49,7 +49,12 @@ import torch
 from conftest import blackhole_only, skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import MatmulGolden
-from helpers.llk_params import DestAccumulation, MathFidelity
+from helpers.llk_params import (
+    CustomMmDestLayout,
+    DestAccumulation,
+    DestSync,
+    MathFidelity,
+)
 from helpers.pack import pack_bfp4_b, pack_bfp8_b, pack_bfp16, pack_fp32
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
@@ -57,6 +62,8 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     CUSTOM_MM_CALLS,
+    CUSTOM_MM_LAYOUT,
+    DEST_SYNC,
     IN_FACE_DIMS,
     NUM_FACES,
     TemplateParameter,
@@ -96,19 +103,6 @@ class CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG = {str(self.preserve).lower()};"
-
-
-_LAYOUTS = {"default": 0, "dense": 1, "compact": 2}
-
-
-@dataclass
-class CUSTOM_MM_LAYOUT(TemplateParameter):
-    """DEST layout of the output tiles: default (64 rows apart), dense (32) or compact (16)."""
-
-    layout: str = "dense"
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t CUSTOM_MM_LAYOUT = {_LAYOUTS[self.layout]};"
 
 
 class CustomMMStimuliConfig(StimuliConfig):
@@ -151,7 +145,8 @@ def _build_custom_mm(
     torch_b,
     calls=None,
     preserve_zero_flag=False,
-    layout="dense",
+    layout=CustomMmDestLayout.Dense,
+    dest_sync=DestSync.Half,
 ):
     """Build (but do not run) one custom_mm variant; return it with its (M, N) golden."""
     K = kt * DEFAULT_TILE_R_DIM
@@ -225,6 +220,7 @@ def _build_custom_mm(
             calls if calls is not None else CUSTOM_MM_CALLS(),
             CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(preserve_zero_flag),
             CUSTOM_MM_LAYOUT(layout),
+            DEST_SYNC(dest_sync),
         ],
         runtimes=[
             # Result / in0 use 2 faces (M x 16 each); in1 (B) uses 4 full faces.
@@ -275,6 +271,7 @@ def _run_custom_mm(
     calls=CUSTOM_MM_CALLS(),
     preserve_zero_flag=False,
     operands=None,
+    layout=CustomMmDestLayout.Dense,
 ):
     """Run custom_mm and check it against the golden; return the (M, N) result.
 
@@ -292,6 +289,7 @@ def _run_custom_mm(
         torch_b,
         calls,
         preserve_zero_flag,
+        layout,
     )
     res_tensor = _device_rows(configuration.run().result, M, ct, out_format)
 
@@ -353,6 +351,97 @@ def test_custom_mm_fp32_dest(formats, M, kt, ct):
     _run_custom_mm(M, kt, ct, formats, DestAccumulation.Yes)
 
 
+# A Float16_b output from a 32-bit DEST packs from a Float16_b source. The packer counts its DEST strides in pack
+# source datums, not DEST datums, so the layout strides must follow the pack source.
+NARROW_PACK_SRC_FORMATS = [
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+]
+
+
+@blackhole_only
+@parametrize(
+    formats=NARROW_PACK_SRC_FORMATS,
+    M=[1, 8],
+    kt=KT_DIMS,
+    ct=[1, 4, 7],
+)
+def test_custom_mm_fp32_dest_narrow_pack_src(formats, M, kt, ct):
+    _run_custom_mm(M, kt, ct, formats, DestAccumulation.Yes)
+
+
+# The SplitAcc layouts accumulate the second k-face apart and finalize on the last call. kt = 1 finalizes with no
+# MOP iteration before it; the widths cover the one-, two- and four-slot unpack MOPs and fit the Default layout's
+# 8 tiles.
+SPLIT_ACC_LAYOUTS = [
+    CustomMmDestLayout.DefaultSplitAcc,
+    CustomMmDestLayout.DenseSplitAcc,
+]
+
+
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    layout=SPLIT_ACC_LAYOUTS,
+    M=[1, 8],
+    kt=[1, 2, 9],
+    ct=[1, 3, 7],
+)
+def test_custom_mm_split_acc(formats, layout, M, kt, ct):
+    _run_custom_mm(M, kt, ct, formats, DestAccumulation.No, layout=layout)
+
+
+@blackhole_only
+@parametrize(layout=SPLIT_ACC_LAYOUTS, ct=[1, 2])
+def test_custom_mm_split_acc_multi_call(layout, ct):
+    """Only the last of several calls into the same tiles finalizes."""
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    _run_custom_mm(
+        8,
+        8,
+        ct,
+        formats,
+        DestAccumulation.No,
+        CUSTOM_MM_CALLS(num_calls=4),
+        layout=layout,
+    )
+
+
+# kt above CUSTOM_MM_MAX_MOP_ITERATIONS (128) splits the unpack over several TT_MOPs, with the one-slot MOP at ct = 1
+# and the four-slot one at ct = 4 (Bfp8_b weights keep that B within L1). 256 is the widest kt_dim.
+LONG_K_CASES = [
+    pytest.param(
+        8,
+        200,
+        1,
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        id="k200-ct1",
+    ),
+    pytest.param(
+        1,
+        256,
+        1,
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        id="k256-ct1",
+    ),
+    pytest.param(
+        8,
+        130,
+        4,
+        InputOutputFormat(
+            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp8_b
+        ),
+        id="k130-ct4-bfp8",
+    ),
+]
+
+
+@blackhole_only
+@pytest.mark.parametrize("M,kt,ct,formats", LONG_K_CASES)
+def test_custom_mm_long_k(formats, M, kt, ct):
+    """kt_dim past one TT_MOP's 128 iterations, at the one- and four-slot unpack MOP widths."""
+    _run_custom_mm(M, kt, ct, formats, DestAccumulation.No)
+
+
 ODD_K_CASES = [
     pytest.param(
         1,
@@ -389,11 +478,12 @@ COMPACT_CT_DIMS_16BIT = [1, 3, 4, 7, 25, 32]
 COMPACT_CT_DIMS_32BIT = [1, 16]
 
 
-def _run_compact_against_default(M, kt, ct, formats, dest_acc):
-    """Run custom_mm<compact_packing> and require it bit-identical to default-layout runs.
+def _run_compact_against_default(M, kt, ct, formats, dest_acc, dest_sync=DestSync.Half):
+    """Run custom_mm in the Compact layout and require it bit-identical to Default-layout runs.
 
     The reference packs the same B in column slices narrow enough for the default 64-row
-    layout (8 tiles in a 16-bit SyncHalf DEST, 4 in a 32-bit one). Both do the same MVMULs
+    layout (8 tiles in a 16-bit SyncHalf DEST, 4 in a 32-bit one); only the compact run
+    takes ``dest_sync``. Both do the same MVMULs
     in the same order, so any difference is a layout or unpack-walk error. A tolerance
     against the fp32 golden cannot tell those apart from bf16 accumulation rounding at these
     widths. A PCC check against the golden still guards the case of both being wrong alike.
@@ -403,14 +493,29 @@ def _run_compact_against_default(M, kt, ct, formats, dest_acc):
     max_default_ct = 4 if dest_acc == DestAccumulation.Yes else 8
 
     compact, golden = _build_custom_mm(
-        M, kt, ct, formats, dest_acc, torch_a, torch_b, layout="compact"
+        M,
+        kt,
+        ct,
+        formats,
+        dest_acc,
+        torch_a,
+        torch_b,
+        layout=CustomMmDestLayout.Compact,
+        dest_sync=dest_sync,
     )
     slices = []
     for c0 in range(0, ct, max_default_ct):
         width = min(max_default_ct, ct - c0)
         cols = slice(c0 * DEFAULT_TILE_C_DIM, (c0 + width) * DEFAULT_TILE_C_DIM)
         reference, _ = _build_custom_mm(
-            M, kt, width, formats, dest_acc, torch_a, torch_b[:, cols], layout="default"
+            M,
+            kt,
+            width,
+            formats,
+            dest_acc,
+            torch_a,
+            torch_b[:, cols],
+            layout=CustomMmDestLayout.Default,
         )
         slices.append((width, reference))
 
@@ -462,6 +567,36 @@ def test_custom_mm_compact(formats, M, kt, ct):
 )
 def test_custom_mm_compact_fp32_dest(formats, M, kt, ct):
     _run_compact_against_default(M, kt, ct, formats, DestAccumulation.Yes)
+
+
+@blackhole_only
+@parametrize(
+    formats=NARROW_PACK_SRC_FORMATS,
+    M=[1, 8],
+    kt=[2],
+    ct=COMPACT_CT_DIMS_32BIT,
+)
+def test_custom_mm_compact_fp32_dest_narrow_pack_src(formats, M, kt, ct):
+    """Compact strides from a Float16_b pack source on a 32-bit DEST, half the DEST row width."""
+    _run_compact_against_default(M, kt, ct, formats, DestAccumulation.Yes)
+
+
+# SyncFull gives a 16-bit DEST 1024 rows, room for 34 compact tiles: the widest unpack MOP, whose four slots carry
+# 8, 8, 8 and 8 reuses at ct = 33 and 8, 8, 8 and 9 at ct = 34.
+COMPACT_SYNC_FULL_CT_DIMS = [33, 34]
+
+
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    M=[1, 8],
+    kt=[2],
+    ct=COMPACT_SYNC_FULL_CT_DIMS,
+)
+def test_custom_mm_compact_sync_full(formats, M, kt, ct):
+    _run_compact_against_default(
+        M, kt, ct, formats, DestAccumulation.No, dest_sync=DestSync.Full
+    )
 
 
 COMPACT_WIDE_BFP_CASES = [

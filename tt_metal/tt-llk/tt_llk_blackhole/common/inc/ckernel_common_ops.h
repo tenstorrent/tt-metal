@@ -170,8 +170,9 @@
 #define TT_OP_SETADCZW_THREAD_OVERRIDE(CntSetMask, ThreadId, Ch1_W, Ch1_Z, Ch0_W, Ch0_Z, BitMask) \
     TT_OP_SETADCZW(CntSetMask, (((ThreadId) << SETADC_THREAD_OVRD_CH1_SHIFT) | (Ch1_W)), Ch1_Z, Ch0_W, Ch0_Z, BitMask)
 
-// ZEROACC that clears nothing, so the instruction is a no-op apart from applying its AddrMode to the
-// address counters.
+// ZEROACC meant to clear nothing, so the instruction is a no-op apart from applying its AddrMode to the address
+// counters. On Blackhole it is not: CLR_16 clears the 16-row face WHERE_NOP selects (Dst rows 496-511 or 1008-1023),
+// see p_zeroacc::WHERE_NOP. Prefer SETRWC / INCRWC, as compressed custom_mm does for its skipped tiles.
 #define TTI_ZEROACC_ADDRMOD_ONLY(AddrMode) TTI_ZEROACC(p_zeroacc::CLR_16, 0 /*use_32_bit_mode*/, 0 /*clear_zero_flags*/, AddrMode, p_zeroacc::WHERE_NOP)
 
 #define TT_ZEROACC_ADDRMOD_ONLY(AddrMode) TT_ZEROACC(p_zeroacc::CLR_16, 0 /*use_32_bit_mode*/, 0 /*clear_zero_flags*/, AddrMode, p_zeroacc::WHERE_NOP)

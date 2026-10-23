@@ -17,6 +17,7 @@ from .llk_params import (
     SFPU_UNARY_OPERATIONS,
     ApproximationMode,
     BroadcastType,
+    CustomMmDestLayout,
     DataCopyType,
     DestSync,
     DstRoundingMode,
@@ -622,6 +623,19 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
                 f"constexpr bool UNINIT_SKIP = {str(self.skip).lower()};",
                 f"constexpr std::uint32_t BLOCK_MOP_NUM_FACES = {self.block_mop_num_faces}u;",
             ]
+        )
+
+
+@dataclass
+class CUSTOM_MM_LAYOUT(TemplateParameter):
+    """``CUSTOM_MM_LAYOUT``: the ckernel::CustomMmDestLayout a custom_mm test kernel runs, as its underlying value."""
+
+    dest_layout: CustomMmDestLayout = CustomMmDestLayout.Dense
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr std::uint8_t CUSTOM_MM_LAYOUT = {self.dest_layout.value}u; "
+            f"// CustomMmDestLayout::{self.dest_layout.name}"
         )
 
 

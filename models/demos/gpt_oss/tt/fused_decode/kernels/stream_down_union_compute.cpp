@@ -78,5 +78,5 @@ void kernel_main() {
         cb_push_back(cb_out, 1);
     }
     tile_regs_release();
-    custom_mm_block_uninit<dest_layout>();
+    custom_mm_block_uninit<dest_layout>(cb_out);
 }

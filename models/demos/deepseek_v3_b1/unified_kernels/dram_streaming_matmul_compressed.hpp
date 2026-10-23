@@ -306,7 +306,7 @@ struct DRAMStreamingMatmulCompressed {
                 cb_push_back(CTArgs::cb_out, 1);
             }
 
-            custom_mm_block_uninit<dest_layout>();
+            custom_mm_block_uninit<dest_layout>(CTArgs::cb_out);
 
             if constexpr (PopIn0) {
                 cb_pop_front(CTArgs::cb_in0, num_tiles_k);

@@ -60,23 +60,25 @@ void kernel_main() {
             const Weight b(experimental::cb_read_address(tt::CBIndex::c_1, 1));
             if constexpr (mixed) {
                 activation.pop_front(1);
-                compressed_custom_mm_block_init_short<false, false, true>(tt::CBIndex::c_0, b);
-                compressed_custom_mm_block<false>(tt::CBIndex::c_0, b, metadata_address, 0, 2);
+                compressed_custom_mm_block_init_short<false, CustomMmDestLayout::Dense>(
+                    tt::CBIndex::c_0, b, tt::CBIndex::c_16);
+                compressed_custom_mm_block<false, CustomMmDestLayout::Dense>(
+                    tt::CBIndex::c_0, b, metadata_address, 0, 2);
             } else {
                 const Activation a(
                     a_base + experimental::tile_stride_words(DataFormat::Float16_b, TensorShape{rows, 16, 1, 2}));
-                compressed_custom_mm_block_init_short<false, false, true>(a, b);
-                compressed_custom_mm_block<false>(a, b, metadata_address, 0, 2);
+                compressed_custom_mm_block_init_short<false, CustomMmDestLayout::Dense>(a, b, tt::CBIndex::c_16);
+                compressed_custom_mm_block<false, CustomMmDestLayout::Dense>(a, b, metadata_address, 0, 2);
             }
         } else {
             if constexpr (mixed) {
                 custom_mm_block_init_short<false, CustomMmDestLayout::Dense>(
-                    tt::CBIndex::c_0, Weight(b_base), producer_ct);
+                    tt::CBIndex::c_0, Weight(b_base), tt::CBIndex::c_16, producer_ct);
                 custom_mm_block<false, false, CustomMmDestLayout::Dense>(
                     tt::CBIndex::c_0, Weight(b_base), 1, 1, 0, 2, producer_ct);
             } else {
                 custom_mm_block_init_short<false, CustomMmDestLayout::Dense>(
-                    Activation(a_base), Weight(b_base), producer_ct);
+                    Activation(a_base), Weight(b_base), tt::CBIndex::c_16, producer_ct);
                 custom_mm_block<false, false, CustomMmDestLayout::Dense>(
                     Activation(a_base), Weight(b_base), 1, 1, 0, 2, producer_ct);
             }
@@ -105,5 +107,5 @@ void kernel_main() {
             custom_mm_reuse_dest_srcb_pack_uninit();
         }
     }
-    custom_mm_block_uninit<CustomMmDestLayout::Dense>();
+    custom_mm_block_uninit<CustomMmDestLayout::Dense>(tt::CBIndex::c_16);
 }

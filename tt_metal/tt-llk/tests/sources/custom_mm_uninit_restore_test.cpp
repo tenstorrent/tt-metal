@@ -7,13 +7,13 @@
 // (api/compute/experimental/{custom_mm,compressed_custom_mm}.h, merged to main by
 // tt-metal #52727).
 //
-// As merged, both uninits do exactly one thing:
+// The uninits restore the packer strides their init changed, in units of the pack source format:
 //
-//   dense_packing -> cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW> back to the
-//                    default 64-row tile-to-tile stride
+//   Dense   -> the tile (W) stride back to the default 64 rows
+//   Compact -> the tile (W) stride back to 64 rows and the face (Z) stride back to 16 rows, since the Compact
+//              layout packs faces 8 rows apart. UNINIT_COMPACT_PACKING drives that case.
 //
-// custom_mm_block_uninit<CustomMmDestLayout::Compact> also puts the face (Z) stride back to 16 rows,
-// since the Compact layout packs faces 8 rows apart. UNINIT_COMPACT_PACKING drives that case.
+// They change nothing else.
 //
 // An earlier revision of #52727 also restored the tile-pack MOP, first unconditionally
 // and then behind a restore_tile_pack_mop flag. **Neither survived review** -- main's
@@ -33,7 +33,7 @@
 //          tiles (64 rows) on purpose.
 //
 //   uninit Call the raw pack helper used by the compressed custom-mm compute API.
-//          It only restores the W-stride when dense_packing is enabled.
+//          It restores the strides the selected layout changed.
 //
 //   run 1  A plain per-tile _llk_pack_<PackMode::Default>, with NO packer re-init, so it
 //          packs through whatever state the uninit left.
@@ -158,7 +158,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
 
-    _llk_pack_custom_mm_init_<uninit_layout, is_fp32_dest_acc_en>();
+    _llk_pack_custom_mm_init_<uninit_layout>(formats.pack_src);
 
     // What a caller's pack_block_contiguous_init does: replace the MOP, keep the
     // ADDR_MODs/strides from the init above.
@@ -180,7 +180,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // ---- the function under test ----
     if constexpr (!UNINIT_SKIP)
     {
-        _llk_pack_custom_mm_uninit_<uninit_layout, is_fp32_dest_acc_en>();
+        _llk_pack_custom_mm_uninit_<uninit_layout>(formats.pack_src);
     }
 
     // ---- run 1: plain per-tile pack, deliberately with NO packer re-init ----
