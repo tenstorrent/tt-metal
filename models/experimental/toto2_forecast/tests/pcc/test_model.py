@@ -13,9 +13,13 @@ SDPA without a mask), V = 4 with two series ids (variate mask), and context 8192
 
 from __future__ import annotations
 
+import gc
 import pytest
 
 from models.experimental.toto2_forecast.tests.golden.goldens import have_golden, load_golden, pcc
+
+# One device per module, so a loaded model (2.5B: about a minute) serves every case that uses it.
+pytestmark = pytest.mark.use_module_device
 
 FLOORS = {"accuracy": (0.999, 0.99), "performance": (0.995, 0.98)}
 # The unit-test checkpoints (no contract floor): at context 8192 (32 read-out tokens, whose head outputs vary
@@ -36,17 +40,23 @@ CASES = [
 _MODEL: dict = {}
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _free_models_before_device_close(_device_module_impl):
+    """The cached model's device tensors must go before the module's device closes."""
+    yield
+    _MODEL.clear()
+    gc.collect()
+
+
 def tt_model(device, ckpt: str, precision_name: str):
     """One cached model per process (2.5B: one precision's weights at a time)."""
-    import ttnn
-
     from models.experimental.toto2_forecast.tt.common import Toto2Precision
     from models.experimental.toto2_forecast.tt.model import TtToto2
 
-    key = (ckpt, precision_name, id(device))
+    key = (ckpt, precision_name)
     if key not in _MODEL:
         _MODEL.clear()
-        ttnn.synchronize_device(device)
+        gc.collect()
         _MODEL[key] = TtToto2.from_checkpoint(device, ckpt, Toto2Precision.named(precision_name))
     return _MODEL[key]
 

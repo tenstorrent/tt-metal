@@ -15,11 +15,15 @@ Cases take every path: clean (causal), missing patches (the group mask), multiva
 
 from __future__ import annotations
 
+import gc
 import pytest
 import torch
 
 from models.experimental.toto2_forecast.tests.golden.goldens import have_golden, load_golden, pcc
 from models.experimental.toto2_forecast.tt.preprocessing import pad_to_tile
+
+# One device per module, so a loaded model (2.5B: about a minute) serves every case that uses it.
+pytestmark = pytest.mark.use_module_device
 
 MODULE_PCC = 0.999
 CASES = [
@@ -36,6 +40,14 @@ PRECISIONS = ["accuracy", "performance"]
 _MODELS: dict = {}
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _free_models_before_device_close(_device_module_impl):
+    """The cached model's device tensors must go before the module's device closes."""
+    yield
+    _MODELS.clear()
+    gc.collect()
+
+
 def _model(device, ckpt: str, precision_name: str):
     from models.experimental.toto2_forecast.tt.common import Toto2Precision
     from models.experimental.toto2_forecast.tt.model import TtToto2
@@ -43,6 +55,7 @@ def _model(device, ckpt: str, precision_name: str):
     key = (ckpt, precision_name)
     if key not in _MODELS:
         _MODELS.clear()
+        gc.collect()
         _MODELS[key] = TtToto2.from_checkpoint(device, ckpt, Toto2Precision.named(precision_name))
     return _MODELS[key]
 
