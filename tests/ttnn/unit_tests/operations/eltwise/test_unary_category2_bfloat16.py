@@ -191,7 +191,7 @@ def test_silu_swish_ops(device, ttnn_op):
 
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden = golden_function(input_tensor, device=device)
-    if ttnn.device.is_blackhole(device):
+    if ttnn.device.is_blackhole(device) or ttnn.device.is_wormhole_b0(device):
         # Torch's BF16 silu overflows exp(-x) in FP32 below x = -88.7; its float64 result is the exact one.
         lanes = input_tensor.float() < -88.5
         exact = golden_function(input_tensor[lanes].double(), device=device).to(torch.bfloat16)
@@ -202,8 +202,8 @@ def test_silu_swish_ops(device, ttnn_op):
 
     # (1) near-zero output FTZ: |x/2| <= smallest normal, i.e. |x| <= 2*SNB.
     near_zero_ftz = input_tensor.abs().float() <= 2 * SMALLEST_NORMAL_BF16
-    if ttnn.device.is_blackhole(device):
-        # Blackhole's BF16 kernel returns torch's result on this band, where the stock kernel
+    if ttnn.device.is_blackhole(device) or ttnn.device.is_wormhole_b0(device):
+        # Blackhole and Wormhole's BF16 kernel returns torch's result on this band, where the stock kernel
         # flushes to 0; it is checked as the BF16 pack stores it.
         expected = golden[near_zero_ftz]
         tiny = torch.finfo(torch.bfloat16).tiny
@@ -213,8 +213,8 @@ def test_silu_swish_ops(device, ttnn_op):
 
     # (2) negative sigmoid-underflow sliver: device must FTZ to exactly 0.
     neg_ftz_band = (input_tensor.float() >= -88.5) & (input_tensor.float() <= -87.5) & ~near_zero_ftz
-    if ttnn.device.is_blackhole(device):
-        # Blackhole's BF16 kernel returns torch's result on this band, where the stock kernel
+    if ttnn.device.is_blackhole(device) or ttnn.device.is_wormhole_b0(device):
+        # Blackhole and Wormhole's BF16 kernel returns torch's result on this band, where the stock kernel
         # flushes to 0; it is checked as the BF16 pack stores it.
         expected = golden[neg_ftz_band]
         tiny = torch.finfo(torch.bfloat16).tiny

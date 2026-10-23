@@ -194,11 +194,12 @@ ALWI void silu_tile(uint32_t idst) {
 #endif
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void silu_tile_init() {
 #ifdef ARCH_QUASAR
     MATH(SFPU_UNARY_INIT(silu));
 #else
-    MATH(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX, DST_ACCUM_MODE)));
+    MATH(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX, is_fp32_dest_acc_en)));
 #endif
 }
 

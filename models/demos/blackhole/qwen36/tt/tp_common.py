@@ -6,11 +6,13 @@ Used only when num_devices > 1. DRAM-sharded matmul cfgs, prefill progcfgs,
 mesh shard/replicate, FP8 dequant, HF weight reorder for per-device sharding.
 """
 import math
+import os
 
 import torch
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.tt_transformers.tt.ccl import tt_all_reduce
 
 # Hardware constants
 TILE_SIZE = 32
@@ -36,6 +38,95 @@ def prefill_grid_default():
 # Max grid COLUMNS a tuned prefill config may use. A Blackhole galaxy reports a 12-wide worker
 # grid, but harvested P150s expose only 11, so tuning to 12 would not port. 11 x 10 = 110 cores.
 PREFILL_MAX_COLS_PORTABLE = 11
+
+# Longest prefill chunk (rows) tuned for L1: up to it the S-sized activations stay L1-resident and the 2D matmuls take
+# one M block per core. Beyond it the activations go to DRAM (`prefill_act_mem`) -- at S=3072 they clash with a matmul's
+# static CBs -- and a 2D matmul whose output block would be too big walks M in smaller blocks (`_large_m_blocking`) --
+# at S=4096 the MLP w2 CBs alone exceed L1. S <= PREFILL_L1_MAX_SEQ is unchanged.
+PREFILL_L1_MAX_SEQ = 2048
+
+
+def prefill_act_mem(seq_len, l1_cfg=ttnn.L1_MEMORY_CONFIG):
+    """Placement of a prefill activation whose size scales with S: `l1_cfg` up to PREFILL_L1_MAX_SEQ rows, else DRAM."""
+    return l1_cfg if seq_len <= PREFILL_L1_MAX_SEQ else ttnn.DRAM_MEMORY_CONFIG
+
+
+def is_2d_mesh(mesh):
+    """True on a (rows, tp) mesh with both dims > 1: TP along axis 1, rows (axis 0) replicate or split the sequence."""
+    return all(d > 1 for d in tuple(mesh.shape))
+
+
+def tp_shard_mapper(mesh, dim):
+    """Mesh mapper sharding `dim` over the TP axis, replicated over rows on a 2D mesh."""
+    if not is_2d_mesh(mesh):
+        return ttnn.ShardTensorToMesh(mesh, dim=dim)
+    return ttnn.ShardTensor2dMesh(mesh, dims=(None, dim), mesh_shape=tuple(mesh.shape))
+
+
+def tp_reduce_scatter(partial, mesh, tt_ccl, args, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    """Row-parallel output reduce-scatter over the TP axis (prefill).
+
+    1xN: tt_all_reduce (its reduce_scatter branch). 2D mesh: the same reduce_scatter_minimal_async on cluster_axis=1,
+    so each row reduce-scatters among its own TP devices and the rows stay independent.
+
+    args.prefill_rs_bf8 (default off): the partial is cast to bfloat8_b before the reduce-scatter (half the fabric bytes)
+    and the result is cast back to the partial's dtype in `memory_config`. Numerics change: the partials and the ring's
+    running sums are held in bf8, so validate accuracy before enabling."""
+    if not getattr(args, "prefill_rs_bf8", False) or partial.dtype == ttnn.bfloat8_b:
+        return _tp_reduce_scatter(partial, mesh, tt_ccl, args, dim, memory_config)
+    orig = partial.dtype
+    p8 = ttnn.typecast(partial, ttnn.bfloat8_b, memory_config=partial.memory_config())
+    partial.deallocate(True)
+    reduced = _tp_reduce_scatter(p8, mesh, tt_ccl, args, dim, memory_config)  # consumes p8
+    out = ttnn.typecast(reduced, orig, memory_config=memory_config)
+    reduced.deallocate(True)
+    return out
+
+
+def _tp_reduce_scatter(partial, mesh, tt_ccl, args, dim, memory_config):
+    """tp_reduce_scatter without the bf8 option; consumes `partial`."""
+    if not is_2d_mesh(mesh):
+        # tt_all_reduce takes cluster_axis=0 on 1xN to reach its reduce-scatter branch, but link discovery on that
+        # size-1 axis falls back to 1 link (#58659); the TP ring is axis 1, so pass its link count explicitly.
+        return tt_all_reduce(
+            partial,
+            mesh,
+            tt_ccl,
+            cluster_axis=0,
+            dim=dim,
+            num_reduce_scatter_links=tt_ccl.get_num_links(1),
+            num_all_gather_links=tt_ccl.get_num_links(1),
+            topology=args.ccl_topology(),
+            memory_config=memory_config,
+            **prefill_rs_kwargs(args),
+        )
+    # tt_all_reduce wants dims 0 and 1 to be 1
+    shape = partial.shape
+    if shape[0] != 1 or shape[1] != 1:
+        partial = ttnn.reshape(partial, (1, 1, shape[-4] * shape[-3] * shape[-2], shape[-1]))
+    if partial.is_sharded():
+        partial_sharded = partial
+        partial = ttnn.sharded_to_interleaved(partial_sharded, ttnn.L1_MEMORY_CONFIG)
+        partial_sharded.deallocate(True)
+    rs = prefill_rs_kwargs(args)  # tt_all_reduce defaults when a key is absent
+    reduced = ttnn.experimental.reduce_scatter_minimal_async(
+        partial,
+        persistent_output_buffers=None,
+        dim=dim,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(1),
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(1),
+        num_links=tt_ccl.get_num_links(1),
+        cluster_axis=1,
+        memory_config=memory_config,
+        intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        topology=args.ccl_topology(),
+        chunks_per_sync=rs.get("chunks_per_sync", 10),
+        num_workers_per_link=rs.get("num_workers_per_link", 2),
+        num_buffers_per_channel=rs.get("num_buffers_per_channel", 2),
+    )
+    partial.deallocate(True)
+    return reduced
+
 
 # Why TP=8 wants different values (measured at S=2048, 27B, 1x8 Ring):
 #   * widest_cols -- `_best_prefill_cols` ranks candidate widths by (out_subblock_w, cols), i.e.
@@ -222,11 +313,36 @@ def _full_grid_crs(grid):
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
 
 
+# Per-core static-CB budget of a 2D prefill matmul at M > PREFILL_L1_MAX_SEQ: S=3072 at TP=4 (per_core_M=10,
+# per_core_N=16, in0_block_w=4; 1.29 MB of the 1.5 MB L1) is the largest config validated, S=2048 is 0.94 MB.
+_PREFILL_MM_CB_BUDGET = 1_300_000
+
+
+def _large_m_blocking(m_tiles, rows, per_core_N, in0_block_w):
+    """(per_core_M, out_block_h) for M > PREFILL_L1_MAX_SEQ: the S <= 2048 one-block config while its CBs fit
+    _PREFILL_MM_CB_BUDGET, else per_core_M walked in blocks of the tallest out_block_h that fits.
+
+    Static CBs per core, in bytes (bh = out_block_h; bf16 in0/out 2048 B, bf8 in1 1088 B, fp32 interm 4096 B per tile):
+    in0 2*bh*in0_block_w + in1 2*per_core_N*in0_block_w + out and interm bh*per_core_N each. TP=4 w2 at S=4096 (10 rows,
+    per_core_N=16, in0_block_w=4): bh=per_core_M=13 -> 212,992 + 139,264 + 425,984 + 851,968 = 1,630,208 B, over the
+    1.5 MB L1 with the CB base; per_core_M=14, bh=7 -> 114,688 + 139,264 + 229,376 + 458,752 = 942,080 B (the S=2048
+    footprint). The cost is in1 re-streamed once per block, hidden behind the compute at this block height. per_core_M
+    is padded by <= 2 tiles when the plain ceil has no usable divisor (13 is prime)."""
+    base = math.ceil(m_tiles / rows)
+    max_bh = (_PREFILL_MM_CB_BUDGET - 2 * in0_block_w * per_core_N * 1088) // (4096 * in0_block_w + 6144 * per_core_N)
+    if base <= max_bh:
+        return base, base
+    cands = [(pcm, _find_largest_divisor(pcm, max_bh)) for pcm in range(base, base + 3)]
+    return min(cands, key=lambda c: c[0] * (1 + 1 / c[1]))
+
+
 def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activation=None, tuning=None):
     """2D prefill matmul progcfg (DRAM-interleaved).
 
     fused_activation in packer; sharded kernel rejects ttnn.linear(activation=...) with progcfg.
-    tuning: a `_PREFILL_TUNING` entry (see `prefill_tuning`); None = the frozen TP=4 behavior."""
+    tuning: a `_PREFILL_TUNING` entry (see `prefill_tuning`); None = the frozen TP=4 behavior.
+
+    M > PREFILL_L1_MAX_SEQ may walk per_core_M in out_block_h blocks to keep the CBs in L1 (`_large_m_blocking`)."""
     if grid_size is None:
         grid_size = prefill_grid_default()
     tuning = tuning or _PREFILL_TUNING[4]
@@ -245,11 +361,16 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
     else:
         in0_block_w = min(cap, max(1, k_tiles // grid_size[0]))
 
+    out_block_h = per_core_M
+    if m > PREFILL_L1_MAX_SEQ:
+        per_core_M, out_block_h = _large_m_blocking(math.ceil(m / TILE_SIZE), grid_size[1], per_core_N, in0_block_w)
+
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
+        out_block_h=out_block_h,
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         transpose_mcast=False,
@@ -332,11 +453,19 @@ def shard_w(torch_tensor, mesh, dim, memory_config, cache_path, dtype=ttnn.bfloa
         preprocess=lambda t: t.to(torch.bfloat16).T.contiguous(),
         dtype=dtype,
         device=mesh,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=dim),
+        mesh_mapper=tp_shard_mapper(mesh, dim),
         layout=ttnn.TILE_LAYOUT,
         memory_config=memory_config,
         cache_file_name=cache_path,
     )
+
+
+# Prefill CCL experiments are model-args flags (Qwen36ModelArgs.prefill_agmm_bf8 / .prefill_fused_dist_norm, default from
+# QWEN36_AGMM_BF8 / QWEN36_FUSED_DIST_NORM = off), passed down as `act_bf8` / read when the layer is built. bf8 AGMM: every prefill
+# AGMM gathers its activation as bf8 (half the fabric bytes); matmul output stays bf16. Fused norm: prefill distributed norm is the
+# single dit_fused_distributed_rmsnorm op. Their buffers are allocated lazily in the warm pass, never during trace capture.
+# QWEN36_FUSED_NORM_LINKS = the fused norm's num_preferred_links, default 1 = the stats all-gather it replaces.
+FUSED_NORM_LINKS = int(os.environ.get("QWEN36_FUSED_NORM_LINKS", "1"))
 
 
 def agmm_k_block_size(k_local, default=8):
@@ -351,7 +480,7 @@ def agmm_k_block_size(k_local, default=8):
     return b
 
 
-def agmm_gather_buffer(tt_ccl, x, cluster_axis=1):
+def agmm_gather_buffer(tt_ccl, x, cluster_axis=1, act_bf8=False):
     """Persistent gather buffer for all_gather_minimal_matmul_async on activation x [.,S,K/tp].
 
     TODO(#57458): once all_gather_minimal_matmul_async honours barrier_semaphore (an in-kernel receiver-ready
@@ -360,17 +489,144 @@ def agmm_gather_buffer(tt_ccl, x, cluster_axis=1):
     cache = tt_ccl.__dict__.setdefault("_agmm_gather_buffers", {})
     mesh = tt_ccl.mesh_device
     S, K_local = x.shape[-2], x.shape[-1]
-    key = (S, K_local, cluster_axis, x.dtype)
+    dtype = ttnn.bfloat8_b if act_bf8 else x.dtype
+    key = (S, K_local, cluster_axis, dtype)
     if key not in cache:
         shape = ttnn.Shape([1, 1, S, K_local * mesh.shape[cluster_axis]])
         pair = [
-            ttnn.allocate_tensor_on_device(shape, x.dtype, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.allocate_tensor_on_device(shape, dtype, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
             for _ in range(2)
         ]
         cache[key] = [pair, 0]
     pair, idx = cache[key]
     cache[key][1] = idx ^ 1
     return pair[idx]
+
+
+def _agmm_bf8_inputs(x4, tt_ccl, persistent_output_buffer):
+    """prefill_agmm_bf8: (bf8 activation, bf8 gather buffer, temp to free after the op).
+
+    The op sizes its gather by the input's tile format and the matmul output by `dtype`, so the gather buffer must be bf8
+    like the input (a bf16 buffer, or the op's own one at dtype=bf16, would be tile-size-mismatched)."""
+    tmp = None
+    if x4.dtype != ttnn.bfloat8_b:
+        x4 = tmp = ttnn.typecast(x4, ttnn.bfloat8_b, memory_config=x4.memory_config())
+    if persistent_output_buffer is None or persistent_output_buffer.dtype != ttnn.bfloat8_b:
+        persistent_output_buffer = agmm_gather_buffer(tt_ccl, x4, act_bf8=True)
+    return x4, persistent_output_buffer, tmp
+
+
+def fused_norm_resources(tt_ccl, x, weight, num_links, cluster_axis=1):
+    """(global semaphore list, stats buffer) for one dit_fused_distributed_rmsnorm launch on x [1,1,S,dim/tp].
+
+    2-deep ping-pong per (shape, links) like agmm_gather_buffer: each launch resets its semaphore at the end but a fast
+    chip's next launch must not write the stats buffer a lagging peer is still reading. Allocated lazily on the first use
+    of a shape, i.e. in the warm pass before any trace capture (the sync lets every chip zero its semaphores first)."""
+    cache = tt_ccl.__dict__.setdefault("_fused_norm_resources", {})
+    mesh = tt_ccl.mesh_device
+    key = (tuple(x.shape), x.dtype, tuple(weight.shape), num_links, cluster_axis)
+    if key not in cache:
+        pairs = []
+        for _ in range(2):
+            sem = [ttnn.create_global_semaphore(mesh, tt_ccl.sub_device_crs, 0)]
+            stats = ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
+                x, cluster_axis, mesh, num_links=num_links, weight=weight
+            )
+            pairs.append((sem, stats))
+        ttnn.synchronize_device(mesh)
+        cache[key] = [pairs, 0]
+    pairs, idx = cache[key]
+    cache[key][1] = idx ^ 1
+    return pairs[idx]
+
+
+def fused_distributed_rmsnorm(x, weight, eps, tt_ccl, topology, compute_cfg, memory_config, cluster_axis=1):
+    """Prefill distributed RMSNorm as ONE op (stats partial sums + fabric all-gather + normalize) replacing
+    rms_norm_pre_all_gather / all_gather_async / rms_norm_post_all_gather.
+
+    x: hidden-fractured [1,1,S,dim/tp] bf16 TILE; weight: TILE [1,1,dim] (1+gamma) sharded on dim 2 -> [1,1,dim/tp] per
+    chip. Output dtype/placement match the 3-op path: x's dtype, `memory_config`. compute_cfg needs fp32_dest_acc_en."""
+    sems, stats = fused_norm_resources(tt_ccl, x, weight, FUSED_NORM_LINKS, cluster_axis)
+    return ttnn.experimental.dit_fused_distributed_rmsnorm(
+        x,
+        cluster_axis,
+        tt_ccl.mesh_device,
+        sems,
+        topology=topology,
+        epsilon=eps,
+        weight=weight,
+        dtype=x.dtype,
+        persistent_output_buffer=stats,
+        num_preferred_links=FUSED_NORM_LINKS,
+        memory_config=memory_config,
+        compute_kernel_config=compute_cfg,
+    )
+
+
+_AGMM_OVERRIDE_KEYS = frozenset(
+    "M_block K_block N_block subblock_h subblock_w grid_x grid_y num_links num_workers_per_link".split()
+)
+
+
+def agmm_config_override(args, S, shape_name):
+    """`config_override` for one prefill AGMM call site: args.prefill_agmm_config_fn(S, shape_name) -> dict | None.
+
+    shape_name: "mlp_gateup" | "gdn_in" | "attn_qkv" | "gdn_out". None when the hook is unset (the default)."""
+    fn = getattr(args, "prefill_agmm_config_fn", None)
+    return fn(S, shape_name) if fn is not None else None
+
+
+def prefill_rs_kwargs(args):
+    """tt_all_reduce kwargs for a prefill reduce-scatter: args.prefill_rs_hparams = (chunks_per_sync, num_workers_per_link,
+    num_buffers_per_channel) -> the kwargs; {} (the tt_all_reduce defaults) when unset (the default)."""
+    hp = getattr(args, "prefill_rs_hparams", None)
+    if hp is None:
+        return {}
+    chunks_per_sync, num_workers_per_link, num_buffers_per_channel = hp
+    return dict(
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
+    )
+
+
+def _agmm_launch_config(K_local, grid, M_block, N_block, config_override=None):
+    """(MinimalMatmulConfig, num_links, num_workers_per_link) for one prefill AGMM launch.
+
+    The call site's defaults (2 links, 8-wide grid, K_block = agmm_k_block_size, subblock 1x4, workers = ceil(grid_x /
+    links)), with any key of `config_override` replaced: {M_block, K_block, N_block, subblock_h, subblock_w, grid_x,
+    grid_y, num_links, num_workers_per_link}. The op validates the result (Ring: K_block | K tiles; links x workers
+    must cover grid_x; ...). None / {} = the defaults."""
+    o = config_override or {}
+    unknown = set(o) - _AGMM_OVERRIDE_KEYS
+    assert not unknown, f"unknown AGMM config_override keys {sorted(unknown)}"
+    num_links = o.get("num_links", 2)
+    grid_x, grid_y = o.get("grid_x", 8), o.get("grid_y", grid[1])
+    cfg = ttnn.MinimalMatmulConfig(
+        M_block_size=o.get("M_block", M_block),
+        K_block_size=o.get("K_block", agmm_k_block_size(K_local)),
+        N_block_size=o.get("N_block", N_block),
+        subblock_h=o.get("subblock_h", 1),
+        subblock_w=o.get("subblock_w", 4),
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+    )
+    return cfg, num_links, o.get("num_workers_per_link", -(-grid_x // num_links))
+
+
+def prefill_sdpa_chunks(args, S, default_chunk, max_chunk=None):
+    """(q_chunk, k_chunk, exp_approx_mode) for a prefill SDPA of S query rows.
+
+    (default_chunk, default_chunk, False) unless args.prefill_sdpa_config_fn is set: it is called as fn(S) and returns
+    (q_chunk, k_chunk, exp_approx). The chunks are then clamped to the tile-padded S and to max_chunk (the chunked SDPA
+    needs chunk_start_idx % chunk == 0 for both)."""
+    fn = getattr(args, "prefill_sdpa_config_fn", None)
+    if fn is None:
+        return default_chunk, default_chunk, False
+    q_chunk, k_chunk, exp_approx = fn(S)
+    cap = max(TILE_SIZE, -(-S // TILE_SIZE) * TILE_SIZE)
+    if max_chunk is not None:
+        cap = min(cap, max_chunk)
+    return min(q_chunk, cap), min(k_chunk, cap), bool(exp_approx)
 
 
 def all_gather_matmul_prefill(
@@ -384,6 +640,8 @@ def all_gather_matmul_prefill(
     fused_activation=None,
     out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     persistent_output_buffer=None,
+    act_bf8=False,
+    config_override=None,
 ):
     """Fused all-gather(dim=3) + column-parallel matmul for prefill (all_gather_minimal_matmul_async).
 
@@ -391,22 +649,17 @@ def all_gather_matmul_prefill(
     matmuls in one op, replacing a separate all_gather + linear. fused_activation applied per tile
     before pack (non-parametrized op, e.g. ttnn.UnaryOpType.SILU). out_memory_config places the result
     (default DRAM; L1 keeps it resident for downstream slices). persistent_output_buffer: the gather buffer
-    (agmm_gather_buffer); None lets the op allocate one per call."""
+    (agmm_gather_buffer); None lets the op allocate one per call. act_bf8: gather the activation as bf8.
+    config_override: optional dict replacing the block sizes / grid / links (see _agmm_launch_config); the gather
+    buffer's spec is [1,1,S,K] and does not depend on it."""
     S, K_local = x.shape[-2], x.shape[-1]
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
+    bf8_tmp = None
+    if act_bf8:
+        x4, persistent_output_buffer, bf8_tmp = _agmm_bf8_inputs(x4, tt_ccl, persistent_output_buffer)
     # AG-bound: 2 ethernet links parallelize the gather (P150x4 max; traced_8k TTFT win). grid.x must
     # = num_links*workers, and the 7-wide default (prime) forces 1 link -> widen to 8 (2 links, 4 workers).
-    num_links = 2
-    grid = (8, grid[1])
-    workers = grid[0] // num_links
-    cfg = ttnn.MinimalMatmulConfig(
-        M_block_size=4,
-        K_block_size=agmm_k_block_size(K_local),
-        N_block_size=8,
-        subblock_h=1,
-        subblock_w=4,
-        compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
-    )
+    cfg, num_links, workers = _agmm_launch_config(K_local, grid, 4, 8, config_override)
     out = ttnn.experimental.all_gather_minimal_matmul_async(
         input_tensor=x4,
         weight_tensor=weight,
@@ -424,6 +677,8 @@ def all_gather_matmul_prefill(
         num_buffers_per_channel=8,
         persistent_output_buffer=persistent_output_buffer,
     )[0]
+    if bf8_tmp is not None:
+        ttnn.deallocate(bf8_tmp)
 
     return out
 
@@ -434,25 +689,28 @@ def mlp_gateup_agmm_enabled(num_devices):
 
 
 def all_gather_swiglu_prefill(
-    x, weight, tt_ccl, compute_cfg, topology, grid=(7, 9), cluster_axis=1, out_memory_config=ttnn.DRAM_MEMORY_CONFIG
+    x,
+    weight,
+    tt_ccl,
+    compute_cfg,
+    topology,
+    grid=(7, 9),
+    cluster_axis=1,
+    out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    act_bf8=False,
+    config_override=None,
 ):
     """Fused all-gather + col-parallel gate/up matmul + SwiGLU for prefill (packing gate+up lets ff_norm's AG fuse in).
 
-    x: K-sharded [.,S,K/tp]; weight: tile-pair-interleaved [gate|up] [K, 2N/tp]. Emits silu(gate)*up of width N/tp."""
+    x: K-sharded [.,S,K/tp]; weight: tile-pair-interleaved [gate|up] [K, 2N/tp]. Emits silu(gate)*up of width N/tp.
+    config_override: as all_gather_matmul_prefill."""
     S, K_local = x.shape[-2], x.shape[-1]
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
-    num_links = 2
-    grid = (8, grid[1])
-    workers = grid[0] // num_links
-    cfg = ttnn.MinimalMatmulConfig(
-        M_block_size=8,
-        K_block_size=agmm_k_block_size(K_local),
-        N_block_size=16,
-        subblock_h=1,
-        subblock_w=4,
-        compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
-    )
-    return ttnn.experimental.all_gather_minimal_matmul_async(
+    bf8_tmp, gather_buf = None, None
+    if act_bf8:
+        x4, gather_buf, bf8_tmp = _agmm_bf8_inputs(x4, tt_ccl, None)
+    cfg, num_links, workers = _agmm_launch_config(K_local, grid, 8, 16, config_override)
+    out = ttnn.experimental.all_gather_minimal_matmul_async(
         input_tensor=x4,
         weight_tensor=weight,
         config=cfg,
@@ -467,7 +725,76 @@ def all_gather_swiglu_prefill(
         num_workers_per_link=workers,
         num_buffers_per_channel=8,
         fuse_swiglu=True,
+        persistent_output_buffer=gather_buf,
     )[0]
+    if bf8_tmp is not None:
+        ttnn.deallocate(bf8_tmp)
+    return out
+
+
+def use_small_m(args, S):
+    """True when a prefill projection of S tokens/device takes the separate all-gather + 1D-multicast matmul instead of
+    the fused all-gather-matmul: args.prefill_small_m_max > 0 and S <= it (default 0 = off, also when the attribute is
+    absent)."""
+    return 0 < getattr(args, "prefill_small_m_max", 0) and S <= args.prefill_small_m_max
+
+
+def tp_all_gather(x, tt_ccl, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG, topology=ttnn.Topology.Ring):
+    """All-gather x along `dim` over the TP axis (cluster_axis=1): [.., K/tp] -> [.., K], same dtype as x.
+
+    The direct ttnn.experimental.all_gather_async call of tests/test_small_m_bench.py (chunks_per_sync=10, 2 workers per
+    link, 2 buffers per channel, all the TP axis' links up to 4, the TT_CCL ag + barrier semaphores). Unlike
+    tt_all_gather it takes no dtype / DRAM-copy detour and does not skip the gather on a (1, N) mesh, so it works on 1xN
+    and on 2D meshes alike. x is not deallocated and keeps its dtype and layout; `memory_config` places the result."""
+    links = tt_ccl.__dict__.get("_tp_ag_num_links")
+    if links is None:
+        links = tt_ccl.__dict__["_tp_ag_num_links"] = max(1, min(4, int(tt_ccl.get_num_links(1))))
+    return ttnn.experimental.all_gather_async(
+        x,
+        persistent_output_buffer=None,
+        dim=dim,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(1),
+        num_links=links,
+        cluster_axis=1,
+        topology=topology,
+        memory_config=memory_config,
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(1),
+        chunks_per_sync=10,
+        num_workers_per_link=2,
+        num_buffers_per_channel=2,
+        subdevice_id=None,
+    )
+
+
+def small_m_matmul(
+    x_full,
+    weight,
+    S,
+    K,
+    N,
+    num_cores,
+    compute_cfg,
+    grid_w=8,
+    fused_activation=None,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    dtype=ttnn.bfloat16,
+):
+    """Short-S prefill matmul: x_full [.., S, K] (gathered activation) @ weight [K, N] (DRAM-interleaved) on the 1D
+    multicast program config of the model's decode matmuls (create_matmul_1d_decode_progcfg, ~`num_cores` cores on a
+    grid up to `grid_w` wide, per_core_M = S/32). Below ~128 tokens/device it beats the fused all-gather-matmul's ~100 us
+    floor (all-gather + this matmul, tests/test_small_m_bench.py variant E). The program config's fp32 subblock cap
+    follows compute_cfg.fp32_dest_acc_en (True for every qwen36 compute config, as the bench's default)."""
+    fp32_acc = bool(getattr(compute_cfg, "fp32_dest_acc_en", True))
+    return ttnn.linear(
+        x_full,
+        weight,
+        compute_kernel_config=compute_cfg,
+        program_config=create_matmul_1d_decode_progcfg(
+            S, K, N, num_cores=num_cores, fused_activation=fused_activation, fp32_acc=fp32_acc, grid_w=grid_w
+        ),
+        memory_config=memory_config,
+        dtype=dtype,
+    )
 
 
 def build_mmrs_decode_state(mesh_device, M, K_local, N, nd, dtype=ttnn.bfloat16):
@@ -675,7 +1002,7 @@ def shard_small(torch_tensor, mesh, cache_path, dim=-1, dtype=ttnn.bfloat16):
         torch_tensor.to(torch.bfloat16),
         dtype=dtype,
         device=mesh,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=dim),
+        mesh_mapper=tp_shard_mapper(mesh, dim),
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         cache_file_name=cache_path,
