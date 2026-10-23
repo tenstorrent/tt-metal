@@ -18,6 +18,8 @@ struct endpoint<ShardView<Accessor>> : endpoint<Accessor> {};
 template <typename Accessor>
 struct endpoint<BankView<Accessor>> : endpoint<Accessor> {};
 template <typename Accessor>
+struct endpoint<tensor_accessor::detail::ShardEndpoint<Accessor>> : endpoint<Accessor> {};
+template <typename Accessor>
 struct endpoint<tensor_accessor::AccessorPage<Accessor>> : endpoint<Accessor> {};
 template <typename Accessor>
 struct endpoint<tensor_accessor::ShardPage<Accessor>> : endpoint<Accessor> {};
@@ -258,6 +260,39 @@ struct noc_traits_t<ShardView<Accessor>> {
             return noc_address_backend::extract_local_address(noc_addr);
         }
         return noc_addr;
+    }
+};
+
+// ShardView::Shard: offset_bytes into a shard whose NoC address ShardView::shard already looked up.
+template <typename Accessor>
+struct noc_traits_t<tensor_accessor::detail::ShardEndpoint<Accessor>> {
+    using Shard = tensor_accessor::detail::ShardEndpoint<Accessor>;
+    struct src_args_type {
+        uint32_t offset_bytes = 0;
+    };
+    struct dst_args_type {
+        uint32_t offset_bytes = 0;
+    };
+    template <Noc::AddressType address_type>
+    static uint64_t src_addr(const Shard& src, const Noc& noc, const src_args_type& args) {
+        static_assert(address_type == Noc::AddressType::NOC, "ShardView::Shard can only be the NoC side of a transfer");
+        ASSERT(src.noc_ == noc.get_noc_id());
+        return add_offset(src.noc_addr_, args.offset_bytes);
+    }
+    template <Noc::AddressType address_type>
+    static uint64_t dst_addr(const Shard& dst, const Noc& noc, const dst_args_type& args) {
+        static_assert(address_type == Noc::AddressType::NOC, "ShardView::Shard can only be the NoC side of a transfer");
+        ASSERT(dst.noc_ == noc.get_noc_id());
+        return add_offset(dst.noc_addr_, args.offset_bytes);
+    }
+
+private:
+    // An offset inside the shard never carries out of the low 32 bits of its NoC address (they hold the local
+    // address, below the coordinate bits), so only the low word is added and the coordinates pass through.
+    static uint64_t add_offset(uint64_t noc_addr, uint32_t offset_bytes) {
+        const uint32_t low = static_cast<uint32_t>(noc_addr) + offset_bytes;
+        ASSERT(low >= static_cast<uint32_t>(noc_addr));
+        return (noc_addr & ~uint64_t{0xFFFF'FFFF}) | low;
     }
 };
 

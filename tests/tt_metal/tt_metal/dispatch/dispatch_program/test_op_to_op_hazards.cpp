@@ -623,13 +623,13 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEn
         "unused"};
     std::vector<MeshTensor> tensors;
     std::vector<std::pair<std::string, const MeshTensor*>> bound;
-    tensors.reserve(dram_names.size() + 3);
-    bound.reserve(dram_names.size() + 3);
+    tensors.reserve(dram_names.size() + 5);
+    bound.reserve(dram_names.size() + 5);
     for (size_t i = 0; i < dram_names.size(); ++i) {
         tensors.push_back(alloc(*md, BufferType::DRAM));
     }
     tensors.push_back(alloc(*md, BufferType::L1));
-    for (int i = 0; i < 2; ++i) {  // "shard", "shard_iter"
+    for (int i = 0; i < 4; ++i) {  // "shard", "shard_iter", "shard_once_r", "shard_once_w"
         ShardSpec shard_spec(CoreRangeSet(CoreRange(CoreCoord{0, 0})), {1, 32}, ShardOrientation::ROW_MAJOR);
         MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec};
         TensorLayout layout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config);
@@ -641,6 +641,8 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEn
     bound.emplace_back("local", &tensors[dram_names.size()]);
     bound.emplace_back("shard", &tensors[dram_names.size() + 1]);
     bound.emplace_back("shard_iter", &tensors[dram_names.size() + 2]);
+    bound.emplace_back("shard_once_r", &tensors[dram_names.size() + 3]);
+    bound.emplace_back("shard_once_w", &tensors[dram_names.size() + 4]);
 
     exp::KernelSpec k{
         .unique_id = exp::KernelSpecName{"paths"},
@@ -686,10 +688,20 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEn
     EXPECT_EQ(
         names(rw.reads),
         (std::set<std::string_view>{
-            "view", "iter", "shard_iter", "shard", "bank_r", "bank_state", "legacy_r", "wrap", "escape", "local"}));
+            "view",
+            "iter",
+            "shard_iter",
+            "shard",
+            "shard_once_r",
+            "bank_r",
+            "bank_state",
+            "legacy_r",
+            "wrap",
+            "escape",
+            "local"}));
     EXPECT_EQ(
         names(rw.writes),
-        (std::set<std::string_view>{"bank_w", "state", "zero", "legacy_w", "wrap", "escape", "local"}));
+        (std::set<std::string_view>{"shard_once_w", "bank_w", "state", "zero", "legacy_w", "wrap", "escape", "local"}));
 }
 
 // Every public raw-address API family, independently: each FAMILY_* build of hazard_raw_family_coverage.cpp

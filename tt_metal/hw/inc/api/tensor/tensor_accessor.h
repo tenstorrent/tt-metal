@@ -882,6 +882,26 @@ struct PageView {
     }
 };
 
+template <typename T>
+struct noc_traits_t;
+template <typename Accessor>
+struct ShardView;
+
+namespace tensor_accessor::detail {
+// ShardView<Accessor>::Shard (see there). Only ShardView makes one and only the NoC traits read it.
+template <typename Accessor>
+class ShardEndpoint {
+    friend struct ShardView<Accessor>;
+    friend struct ::noc_traits_t<ShardEndpoint>;
+    ShardEndpoint(uint64_t noc_addr, uint8_t noc) : noc_addr_(noc_addr), noc_(noc) {}
+    uint64_t noc_addr_;
+    uint8_t noc_;
+};
+}  // namespace tensor_accessor::detail
+
+// Addresses a sharded tensor by shard: `{.shard_id, .offset_bytes}` names a byte range inside shard shard_id, which may
+// be part of a page or span pages (a shard is contiguous on its core). For kernels built around shard ownership
+// (gathering from or scattering to the shards' cores); kernels that work in pages address the tensor by page id.
 template <typename Accessor>
 struct ShardView {
     const Accessor& accessor;
@@ -890,6 +910,15 @@ struct ShardView {
     bool is_local_shard(uint32_t shard_id, uint8_t noc) const { return accessor.is_local_shard(shard_id, noc); }
     uint64_t get_noc_addr(uint32_t shard_id, uint32_t offset, uint8_t noc) const {
         return accessor.get_shard_noc_addr(shard_id, offset, noc);
+    }
+
+    // One shard of the tensor, looked up once: a NoC endpoint whose transfers take `{.offset_bytes}` into the shard.
+    // A kernel that moves many pieces of one shard pays the shard lookup once per shard instead of once per transfer.
+    // Valid only on the NoC it was looked up for.
+    using Shard = tensor_accessor::detail::ShardEndpoint<Accessor>;
+    // The lookup is in software: it runs once per shard, so there is nothing for the address generator to walk.
+    Shard shard(uint32_t shard_id, uint8_t noc) const {
+        return Shard(tensor_accessor::detail::TransferAccess::shard(accessor, shard_id, 0, noc), noc);
     }
 };
 
