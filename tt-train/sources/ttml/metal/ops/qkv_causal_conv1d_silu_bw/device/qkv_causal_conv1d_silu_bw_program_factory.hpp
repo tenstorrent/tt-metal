@@ -54,7 +54,9 @@ inline std::vector<QkvCausalConv1dSiluBackwardDataflowBuffer> qkv_conv_bw_datafl
         {"ones", 1, bf16},
     };
     if (compute_tap_grads) {
-        buffers.push_back({"partial", 4 * channel_tiles_per_block, fp32});  // grad_w [4][channel_tiles], L1 accumulated
+        // grad_w [4][channel_tiles], L1 accumulated. One item deep: a core's next item waits for the writer to drain
+        // it, but two items deep gained 1% at 8 splits and nothing at 16 for 128 KB more L1 at chunk 256.
+        buffers.push_back({"partial", 4 * channel_tiles_per_block, fp32});
     }
     return buffers;
 }
