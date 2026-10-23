@@ -72,4 +72,4 @@ def test_slot_s0_and_per_row_switch(monkeypatch):
     assert not PS.per_row_enabled(1)
     monkeypatch.delenv("DSV41_PF_PERROW")
     monkeypatch.setenv("DSV41_VISION", "1")
-    assert not PS.per_row_enabled(1)  # image prompts keep the window loop
+    assert PS.per_row_enabled(1)  # image prompts too
