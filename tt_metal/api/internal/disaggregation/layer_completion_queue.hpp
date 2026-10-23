@@ -2,10 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// LayerCompletionQueue: POSIX-SHM-backed bounded MPSC ring of layer-completion messages. create() owns the
-// segment (creates, initialises, unlinks on shutdown); connect() attaches to an existing one. Either side may
-// push or pop: the router owns the host-local ring and pops while runners push; the master router owns the
-// scheduler-facing ring and pushes while the scheduler pops.
+// LayerCompletionQueue — POSIX-SHM-backed bounded MPSC ring carrying
+// LayerCompletionMessages. Dual role, modelled on
+// InterProcessCounterChannel:
+//   * create(name)  → owner. Creates /dev/shm/<name>, initialises the
+//                     ring, owns its lifetime, unlinks on shutdown.
+//   * connect(name) → producer/consumer. Attaches to an owner-created
+//                     segment by name (polls until present or timeout).
+//
+// The ring itself is symmetric (any attached process may push and/or
+// pop). In the prefill topology the router owns it and is the sole
+// consumer; the prefill runner(s) connect and push.
 
 #pragma once
 
@@ -17,24 +24,26 @@
 #include <internal/disaggregation/layer_completion_message.hpp>
 
 namespace tt::tt_metal::distributed {
-class NamedShm;
+class NamedShm;  // fwd — defined in tt-metalium/experimental/sockets/named_shm.hpp
 }  // namespace tt::tt_metal::distributed
 
 namespace tt::tt_metal::internal {
 
-using tt::tt_metal::distributed::NamedShm;
+using tt::tt_metal::distributed::NamedShm;  // tt-metalium/experimental/sockets/named_shm.hpp
 
-struct LayerCompletionRingHeader;
-struct LayerCompletionCell;
+struct LayerCompletionRingHeader;  // fwd — defined in layer_completion_ring_layout.hpp
+struct LayerCompletionCell;        // fwd — defined in layer_completion_ring_layout.hpp
 
 class LayerCompletionQueue {
 public:
-    // Owner: shm_open(O_CREAT|O_EXCL), initialise header and cells, mmap. Throws if the segment exists.
-    // shm_name: leading '/', no other slashes. completions_per_chunk goes into the header; must be non-zero.
-    static std::unique_ptr<LayerCompletionQueue> create(const std::string& shm_name, uint32_t completions_per_chunk);
+    // Owner: shm_open(O_CREAT|O_EXCL) the segment at /dev/shm/<shm_name>,
+    // initialise the ring header + cell sequences, mmap. Throws
+    // std::runtime_error if the segment already exists (caller unlinks a
+    // stale segment first). shm_name: leading '/', no other slashes.
+    static std::unique_ptr<LayerCompletionQueue> create(const std::string& shm_name);
 
-    // Connector: poll for the segment up to connect_timeout_ms, mmap, validate magic, capacity and
-    // completions_per_chunk. Throws on timeout or mismatch.
+    // Connector: poll for /dev/shm/<shm_name> up to connect_timeout_ms,
+    // mmap, validate magic + capacity. Throws on timeout / mismatch.
     static std::unique_ptr<LayerCompletionQueue> connect(
         const std::string& shm_name, uint32_t connect_timeout_ms = 30'000);
 
@@ -44,18 +53,17 @@ public:
     LayerCompletionQueue(LayerCompletionQueue&&) = delete;
     LayerCompletionQueue& operator=(LayerCompletionQueue&&) = delete;
 
-    // False when the ring is full.
+    // Producer. Returns false (no write) when the ring is full.
     bool try_push(const LayerCompletionMessage& msg);
 
-    // False (out untouched) when the ring is empty.
+    // Consumer. Returns false (out untouched) when the ring is empty.
     bool try_pop(LayerCompletionMessage& out);
 
-    // Idempotent. The owner also unlinks the segment.
+    // Idempotent. Owner: munmap + shm_unlink. Connector: munmap only.
     void shutdown();
 
     const std::string& shm_name() const noexcept { return shm_name_; }
     static constexpr uint32_t capacity() noexcept { return kLayerCompletionRingCapacity; }
-    uint32_t completions_per_chunk() const noexcept;
 
 private:
     enum class Role : uint8_t { Owner, Connector };
