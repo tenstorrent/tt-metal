@@ -31,8 +31,6 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> qkv_ca
         channel_chunk_size != 0 ? channel_chunk_size
                                 : metal::qkv_causal_conv1d_silu_chunk_size(q_width + k_width + v_width, *device);
     const ttnn::experimental::kda::QkvCausalConv1dSiluProgramConfig program_config{forward_chunk_size};
-    // The forward reads the TILE input as is; only the backward reader wants rows.
-    auto input_rm = ttnn::to_layout(input->get_value(), ttnn::Layout::ROW_MAJOR);
     auto history_rm = ttnn::to_layout(history, ttnn::Layout::ROW_MAJOR);
     auto actual_start = core::from_vector<uint32_t, ttnn::DataType::UINT32>(
         std::vector<uint32_t>{0}, ttnn::Shape({1}), device, ttnn::Layout::ROW_MAJOR);
@@ -62,7 +60,6 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> qkv_ca
                                    out_q,
                                    out_k,
                                    out_v,
-                                   input_rm,
                                    history_rm,
                                    q_width,
                                    k_width,
@@ -74,6 +71,8 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> qkv_ca
                 out->set_grad(core::zeros_like(out->get_value()));
             }
         }
+        // Only the backward reader wants rows; the forward reads the TILE input as is.
+        auto input_rm = ttnn::to_layout(input->get_value(), ttnn::Layout::ROW_MAJOR);
         auto [grad_input, grad_tap0, grad_tap1, grad_tap2, grad_tap3] = metal::qkv_causal_conv1d_silu_bw(
             out_q->get_grad(),
             out_k->get_grad(),
