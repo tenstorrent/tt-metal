@@ -51,6 +51,7 @@ TEST(MatmulModelSelector, PickCacheKeepsFirstAndIsThreadSafe) {
     EXPECT_EQ(cache.insert("k", other).description, "fallback");  // the first decision stands
     EXPECT_FALSE(cache.find("k")->candidate.has_value());
     std::vector<std::thread> threads;
+    threads.reserve(8);
     for (int t = 0; t < 8; ++t) {
         threads.emplace_back([&cache, t] {
             for (int i = 0; i < 200; ++i) {

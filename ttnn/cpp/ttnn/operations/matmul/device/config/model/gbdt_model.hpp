@@ -59,8 +59,8 @@ struct GbdtModel {
     std::string structure_error() const;
 
 private:
-    std::int32_t step(std::uint32_t node, const double* row) const;
-    std::uint32_t leaf_of(std::size_t tree, const double* row) const;
+    std::int32_t step(std::uint32_t i, const double* x) const;
+    std::uint32_t leaf_of(std::size_t t, const double* x) const;
 };
 
 // Owning storage for a model read from the exporter's binary blob (--format blob / cpp-blob).

@@ -98,7 +98,7 @@ struct L1CostTables {
 
 struct DeviceParams {
     static constexpr std::size_t kMaxCols = 16, kMaxRows = 16, kMaxChannels = 12, kEndpoints = 3, kMaxBanks = 16;
-    std::string_view name{};
+    std::string_view name;
 
     // Worker grid the model places configs on (configs larger than this cannot be scored); the interleaved-L1 page
     // spread also covers this whole grid.

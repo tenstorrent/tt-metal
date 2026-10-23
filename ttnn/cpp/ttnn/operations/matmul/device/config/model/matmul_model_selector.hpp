@@ -66,7 +66,7 @@ class PickCache {
 public:
     std::optional<Pick> find(const std::string& key) const;
     // Keeps the first pick stored under a key (concurrent first calls may both score; either result is the same)
-    Pick insert(const std::string& key, Pick pick);
+    Pick insert(const std::string& key, const Pick& pick);
     // Stores a pick made again for a key (a pick that failed for lack of L1, retried with more free)
     Pick replace(const std::string& key, Pick pick);
     std::size_t size() const;

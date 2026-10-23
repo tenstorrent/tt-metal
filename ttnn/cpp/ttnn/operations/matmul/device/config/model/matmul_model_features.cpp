@@ -711,7 +711,7 @@ double l1_cycles(const DeviceParams& d, const MatmulProblem& p, const MatmulCand
         return kNaN;
     }
     const auto nb = static_cast<std::int64_t>(std::ceil(std::ceil(static_cast<double>(p.K) / 32) / kwi));
-    const auto S = static_cast<std::int64_t>((pcM / h) * (pcN / w));
+    const auto S = static_cast<std::int64_t>(pcM / h) * static_cast<std::int64_t>(pcN / w);
     // memo key: (h, w, fidelity, kw) and (nb, pcM, pcN)
     const std::uint64_t k0 = (std::uint64_t(h) << 40) | (std::uint64_t(w) << 32) |
                              (std::uint64_t(static_cast<std::uint8_t>(p.fidelity)) << 24) | kwi;

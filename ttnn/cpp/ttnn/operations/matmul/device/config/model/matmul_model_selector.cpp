@@ -117,9 +117,9 @@ std::optional<Pick> PickCache::find(const std::string& key) const {
     return it->second;
 }
 
-Pick PickCache::insert(const std::string& key, Pick pick) {
+Pick PickCache::insert(const std::string& key, const Pick& pick) {
     std::lock_guard lock(mutex_);
-    return picks_.try_emplace(key, std::move(pick)).first->second;
+    return picks_.try_emplace(key, pick).first->second;
 }
 
 Pick PickCache::replace(const std::string& key, Pick pick) {
