@@ -267,3 +267,17 @@ def test_only_a_literal_loop_or_a_plain_file_list_is_split():
     loop = task("A.1", f"for t in p q; do {r} --run-all test_c_${{t}}.py || exit 1; done && {r} --run-all l.py")
     assert [u for u, _ in gate_units(loop)] == ["A.1#p", "A.1#q", "A.1#l"]
     assert gate_command(loop) == f"{r} --run-all test_c_p.py && {r} --run-all test_c_q.py && {r} --run-all l.py"
+
+
+def test_a_docstring_or_setting_text_edit_keeps_the_code_under_test():
+    """F173: DeepSeek-V4.1 P.22 re-ran 18 accuracy units because a Setting's explanation text changed in tt/settings.py.
+    Comments, formatting, docstrings and a Setting's `why` do not change the semantic hash; code and defaults do."""
+    from models.demos.common.bringup.core.stamps import semantic_py_hash as h
+
+    base = 'def f(x):\n    """doc"""\n    return x + 1  # c\nS = Setting("fused", ("fused", "ops"), "old text")\n'
+    assert h(base) == h(base.replace('"""doc"""', '"""other doc"""').replace("# c", "# d"))
+    assert h(base) == h(base.replace('"old text"', '"new, much longer text"'))
+    assert h(base) == h(base.replace("return x + 1", "return (x\n            + 1)"))
+    assert h(base) != h(base.replace("x + 1", "x + 2"))
+    assert h(base) != h(base.replace('Setting("fused"', 'Setting("ops"'))
+    assert h("def (") != h("def ( ")  # unparsable: hashed as text
