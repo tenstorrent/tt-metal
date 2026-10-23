@@ -255,7 +255,7 @@ def test_packed_forwards_continue_each_slot(expect_error):
     runtime = Gemma4BatchedPrefillRuntime.__new__(Gemma4BatchedPrefillRuntime)
     runtime.config = batched_params()
     runtime.forward_chunks = 4
-    runtime.slot_ends = [4096, 0, 2048, 0]
+    runtime.slot_ends = [4096, 2304, 2048, 0]
     assert runtime.validate_forward([E(0, 4096, 6144), E(0, 6144, 8192), E(1, 0, 2048), E(2, 2048, 2100)]) == [
         E(0, 4096, 6144),
         E(0, 6144, 8192),
@@ -266,6 +266,11 @@ def test_packed_forwards_continue_each_slot(expect_error):
         E(0, 0, 2048),
         E(3, 0, 1),
     ]
+    # Mid-chunk resumes on a slab boundary (256 tokens at chunk 2048), one rewinding into what slot 2 holds.
+    assert runtime.validate_forward([E(1, 2304, 4352), E(2, 1792, 3840), EMPTY_ENTRY, EMPTY_ENTRY]) == [
+        E(1, 2304, 4352),
+        E(2, 1792, 3840),
+    ]
     for entries in (
         [E(0, 6144, 8192)],  # three entries short
         [E(0, 6144, 8192), EMPTY_ENTRY, EMPTY_ENTRY, EMPTY_ENTRY],  # slot 0 resumes at 4096
@@ -273,7 +278,7 @@ def test_packed_forwards_continue_each_slot(expect_error):
         [E(2, 0, 1000), E(2, 1000, 2048), EMPTY_ENTRY, EMPTY_ENTRY],  # partial before the run's last entry
         [E(1, 0, 2048), E(3, 0, 2048), E(1, 2048, 4096), EMPTY_ENTRY],  # slot 1 in two runs
         [E(4, 0, 2048), EMPTY_ENTRY, EMPTY_ENTRY, EMPTY_ENTRY],  # no such slot
-        [E(1, 32, 2080), EMPTY_ENTRY, EMPTY_ENTRY, EMPTY_ENTRY],  # tile-aligned but not chunk-aligned
+        [E(1, 2336, 4384), EMPTY_ENTRY, EMPTY_ENTRY, EMPTY_ENTRY],  # tile-aligned but not slab-aligned
         [EMPTY_ENTRY, E(1, 0, 2048), EMPTY_ENTRY, EMPTY_ENTRY],  # empty before a real entry
     ):
         with expect_error(ValueError, "Slot|slot|Entry|entries"):

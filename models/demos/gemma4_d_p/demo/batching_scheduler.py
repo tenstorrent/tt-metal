@@ -9,6 +9,8 @@ Modes:
   requests with chunks left (Scheduler._plan). Every chunk is 2k, so every request's KV has the 2k layout;
 - serial 8k / 4k / 2k: one request at a time at a fixed chunk size, as an unbatched server runs. The last chunk is
   padded to the full chunk size, as in the serving producer.
+A request resumes at its cached prefix rounded down to its chunk width (align "chunk") or to the model's resume
+granularity at that width (align "resume": a per-rank slab, 256 tokens at 2k, 512 at 4k, 1024 at 8k).
 Running requests keep their mode; after a switch, new ones wait until those finish. A request keeps one chunk width
 for its whole life. Latencies and step times are host wall clock around each step (staging + trace replay). Projections
 take each request's own chunk fidelity: HiFi2 for 2k lanes, LoFi for serial 4k and 8k, as an unbatched server runs them.
@@ -47,7 +49,7 @@ class Request:
     label: str
     tokens: torch.Tensor
     arrived: float
-    start: int = 0  # tokens already cached; _admit rounds it down to the request's chunk width into done
+    start: int = 0  # tokens already cached; _admit rounds it down (per Scheduler.align) into done
     slot: int = -1
     mode: str = BATCHED
     width: int = CHUNK
@@ -96,7 +98,7 @@ def _chunks_left(request):
 class Scheduler:
     """Owns the device. Admits requests into free KV slots and runs one traced step at a time."""
 
-    def __init__(self, runner, num_slots, capacity, stream):
+    def __init__(self, runner, num_slots, capacity, stream, resume_headroom=False):
         assert capacity % WIDE == 0, f"capacity {capacity} must be a multiple of {WIDE}: serial 8k pads prompts to it"
         self.runner = runner
         self.layouts = set(step_layouts(num_slots))
@@ -104,6 +106,10 @@ class Scheduler:
         self.capacity = capacity
         self.stream = stream
         self.mode = BATCHED
+        self.align = "chunk"  # or "resume" (needs resume_headroom); switchable between plays, like mode
+        self.resume_headroom = resume_headroom
+        cp = runner.mesh_config.cp_degree
+        self.resume_steps = {w: w // cp for w in (CHUNK, MID, WIDE)}  # Gemma4PrefillRuntime.resume_granularity
         self.incoming = queue.Queue()  # the only state the submitting thread touches
         self.waiting, self.active = collections.deque(), []
         self.ids = itertools.count()
@@ -112,7 +118,7 @@ class Scheduler:
 
     def submit(self, n_tokens, label, start=0):
         """Queue a prompt of n_tokens (rounded up to whole 2k chunks). start: tokens of it already cached; the request
-        resumes there, rounded down to the current mode's chunk width (the KV below it is whatever the slot holds)."""
+        resumes there, rounded down per self.align (the KV below it is whatever the slot holds)."""
         n_tokens = -(-int(n_tokens) // CHUNK) * CHUNK
         if not CHUNK <= n_tokens <= self.capacity:
             raise ValueError(f"prompt of {n_tokens} tokens outside [{CHUNK}, {self.capacity}] (DEMO_CAPACITY)")
@@ -156,6 +162,8 @@ class Scheduler:
             self.waiting.append(self.incoming.get_nowait())
         if any(r.mode != self.mode for r in self.active):
             return  # after a mode switch, the requests of the old mode finish first
+        if self.align == "resume" and not self.resume_headroom:
+            raise ValueError("align 'resume' needs the KV headroom of start_scheduler(..., resume=True)")
         limit = self.num_slots if self.mode == BATCHED else 1
         free = [s for s in range(self.num_slots) if all(r.slot != s for r in self.active)]
         admitted = []
@@ -163,9 +171,10 @@ class Scheduler:
             request = self.waiting.popleft()
             request.slot, request.mode, request.started = free.pop(0), self.mode, time.perf_counter()
             # Serial modes: one at a time, at the mode's chunk size (see _lanes for the last chunk). Resume at the
-            # cached prefix rounded down to that width.
+            # cached prefix rounded down to that width, or to the resume granularity at that width.
             request.width = SERIAL_CHUNKS.get(self.mode, CHUNK)
-            request.done = (request.start // request.width) * request.width
+            step = self.resume_steps[request.width] if self.align == "resume" else request.width
+            request.done = request.start // step * step
             admitted.append(request)
         self.active.extend(admitted)
 
@@ -218,10 +227,11 @@ def _zero_lanes(layout):
     return [(slot, 0, torch.zeros(w, dtype=torch.int32)) for slot, w in enumerate(layout)]
 
 
-def start_scheduler(mesh_device, num_slots, capacity):
+def start_scheduler(mesh_device, num_slots, capacity, resume=False):
     """Build the batched model, compile and capture every step layout, and return (scheduler, runner). The caller runs
-    scheduler.run() on this thread (it owns the device) and releases the runner's traces afterwards."""
-    mesh_config, _, model = build_batched_model(mesh_device, CHUNK, num_slots, capacity)
+    scheduler.run() on this thread (it owns the device) and releases the runner's traces afterwards. resume: the KV
+    slots get one wide chunk of headroom, since a request that resumes mid-chunk pads its last chunk past its prompt."""
+    mesh_config, _, model = build_batched_model(mesh_device, CHUNK, num_slots, capacity + (WIDE if resume else 0))
     runner = StepRunner(mesh_device, mesh_config, model, CHUNK)
     # The layouts mix widths (serial 8k / 4k next to 2k steps), so every step takes the PrefillLanes path
     # (StepRunner.always_lanes), and the widest layout compiles first, so lazily created all-gather semaphores land
@@ -232,4 +242,5 @@ def start_scheduler(mesh_device, num_slots, capacity):
     # One untimed replay of every trace, so no request pays a trace's first replay.
     for layout in layouts:
         runner.step(_zero_lanes(layout))
-    return Scheduler(runner, num_slots, capacity, _text_token_stream(_hf_model_id())[0]), runner
+    stream = _text_token_stream(_hf_model_id())[0]
+    return Scheduler(runner, num_slots, capacity, stream, resume_headroom=resume), runner
