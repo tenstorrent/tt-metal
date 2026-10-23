@@ -389,8 +389,15 @@ def _kv_fill_to_tt(k_torch, mesh_device, *, num_kv_heads, num_attention_heads, t
 @pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
 @pytest.mark.parametrize("batch", [1, 16, 32], ids=lambda b: f"batch{b}")
 @pytest.mark.parametrize("cache_len", [512, 1500], ids=lambda c: f"cache{c}")
-def test_attention_decode_paged_batched(layer_idx, batch, cache_len, mesh_device, reset_seeds, request):
+@pytest.mark.parametrize("qkv_path", ["composite", "fused_presliced"])
+def test_attention_decode_paged_batched(layer_idx, batch, cache_len, qkv_path, mesh_device, reset_seeds, request):
     """True batched decode (batch > 1 single forward) with paged KV cache.
+
+    ``qkv_path``: ``composite`` = the per-head norms + RoPE composite with the 2D cache gathered inside attention
+    (the historical path); ``fused_presliced`` = the model's decode form (cos / sin gathered once per step into
+    ``[1, 1, 32, head_dim]`` rows, ``rope_presliced=True``) with the fused ``custom_ops/qkv_norm_rope`` program
+    (GEMMA4_QKV_NORM_ROPE_FUSED=1, GEMMA4_QKV_L1_OUT=1, GEMMA4_HEAD_NORM_4D=1): the end-to-end attention check the
+    op's own unit test cannot give (sharded q into SDPA, k / v into the paged cache, per-layer-type tables).
 
     Each user gets independent random K/V, an independent query, and a distinct
     position ``cache_len - b`` so the per-user RoPE path (apply_rope_decode_peruser
@@ -542,14 +549,38 @@ def test_attention_decode_paged_batched(layer_idx, batch, cache_len, mesh_device
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
     )
 
-    tt_output = tt_attn(
-        x_tt,
-        rope_mats=(cos_tt, sin_tt),
-        position_idx=position_idx_tt,
-        is_decode=True,
-        page_table=page_table_tt,
-        position_idx_cache=position_idx_cache_tt,
-    )
+    fused_env = {"GEMMA4_QKV_NORM_ROPE_FUSED": "1", "GEMMA4_QKV_L1_OUT": "1", "GEMMA4_HEAD_NORM_4D": "1"}
+    saved_env = {k: os.environ.get(k) for k in fused_env}
+    try:
+        if qkv_path == "fused_presliced":
+            os.environ.update(fused_env)
+            # the model's per-step gather (tt/model.py): row u of the [1, 1, 32, head_dim] table = user u's position
+            cos_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx_tt, cos_tt, layout=ttnn.TILE_LAYOUT))
+            sin_pos = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx_tt, sin_tt, layout=ttnn.TILE_LAYOUT))
+            tt_output = tt_attn(
+                x_tt,
+                rope_mats=(cos_pos, sin_pos),
+                position_idx=position_idx_tt,
+                is_decode=True,
+                page_table=page_table_tt,
+                position_idx_cache=position_idx_cache_tt,
+                rope_presliced=True,
+            )
+        else:
+            tt_output = tt_attn(
+                x_tt,
+                rope_mats=(cos_tt, sin_tt),
+                position_idx=position_idx_tt,
+                is_decode=True,
+                page_table=page_table_tt,
+                position_idx_cache=position_idx_cache_tt,
+            )
+    finally:
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
     # tt_output: [1, 1, batch_padded(32), hidden_size] — the decode batch dim is
     # tile-padded; production slices [:, :, :B] in process_output_decode.
     tt_output_torch = _from_device(tt_output, mesh_device)[:, :, :batch, :].reshape(batch, config.hidden_size).float()

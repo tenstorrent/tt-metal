@@ -24,7 +24,10 @@ def _dev(t, device, mem=ttnn.DRAM_MEMORY_CONFIG):
 
 
 def _gamma_full(g, device):
-    row = _dev(g.reshape(1, 1, 1, -1), device)
+    """The op's row-replicated gamma built the model's way (tt/rms_norm.py): the ROW_MAJOR ``[1, 1, W/32, 32]``
+    weight -> reshape to the ``[1, 1, 1, W]`` row -> tilize -> ``full_gamma``."""
+    w = ttnn.from_torch(g.reshape(1, 1, -1, 32), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+    row = ttnn.to_layout(ttnn.reshape(w, (1, 1, 1, g.numel())), ttnn.TILE_LAYOUT)
     return FusedNormDecode.full_gamma(row)
 
 
@@ -51,6 +54,12 @@ CASES = {
     "dense12b_single": (32, 3840, 1, [True], [1.0], False, False, "dram", 22),
     "dense12b_residual_scalar": (32, 3840, 1, [True], [1.1015625], True, False, "dram", 22),
     "dense12b_b1_residual": (1, 3840, 1, [True], [1.0], True, False, "dram", 22),
+    # the 26B layer's forms as the model issues them: the three-output call with a gamma AND the hidden**-0.5
+    # scalar on the router output, and the residual / two-input forms at batch 1
+    "three_outputs_router": (32, 2816, 3, [True, True, True], [1.0, 1.0, 2816**-0.5], False, False, "dram", 22),
+    "three_outputs_router_b1": (1, 2816, 3, [True, True, True], [1.0, 1.0, 2816**-0.5], False, False, "dram", 22),
+    "residual_scalar_b1": (1, 2816, 1, [True], [0.7265625], True, False, "dram", 22),
+    "two_inputs_b1": (1, 2816, 1, [True], [1.0], False, True, "dram", 22),
 }
 
 

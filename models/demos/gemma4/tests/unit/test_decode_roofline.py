@@ -58,10 +58,12 @@ def _roofline_max_seq_len() -> int:
 # attributed per op by the Tracy post-processing on this build, so the measured
 # step wall time (TPOT from the benchmarks) is used for the gap estimate instead.
 TRACED = os.environ.get("GEMMA4_ROOFLINE_TRACE", "0") == "1"
-# GEMMA4_ROOFLINE_DEVICE_ARGMAX=1: the next token is an on-device ``ttnn.argmax`` over the vocab of the (replicated)
-# decode logits and only the ``[batch]`` ids are read back, so the timed loop measures the device step. The default
-# path reads the full logits to the host every step ([batch, 262144] bf16 = 16.8 MB at batch 32 inside the timed
-# loop), which bounds the batch-32 wall time and hides the device step; it is kept as the baseline of earlier runs.
+# GEMMA4_ROOFLINE_DEVICE_ARGMAX=1: the next token comes from the model's on-device sampling module (the serving
+# path: greedy SamplingParams, force-argmax over the TP-sharded logits, multi-core) and only the ``[batch]`` ids are
+# read back, so the timed loop measures the device step. The default path reads the full logits to the host every
+# step ([batch, 262144] bf16 = 16.8 MB at batch 32 inside the timed loop), which bounds the batch-32 wall time and
+# hides the device step; it is kept as the baseline of earlier runs. (A plain ``ttnn.argmax`` over the 262144-wide
+# replicated logits took 140 ms per step on a P150: not usable for timing.)
 DEVICE_ARGMAX = os.environ.get("GEMMA4_ROOFLINE_DEVICE_ARGMAX", "0") == "1"
 
 
@@ -154,6 +156,13 @@ def test_decode_roofline(mesh_device, model_path, batch_size):
     tok = torch.argmax(out.reshape(batch_size, -1).float(), dim=-1, keepdim=True)
     current_pos = torch.full((batch_size,), PREFILL_LEN, dtype=torch.int32)
 
+    greedy = None
+    if DEVICE_ARGMAX:
+        from models.common.sampling.sampling_params import SamplingParams
+
+        greedy = SamplingParams(temperature=0.0, top_k=1, top_p=1.0)
+    first_call = [True]
+
     def step(t):
         o = generator.decode_forward(
             t,
@@ -161,21 +170,17 @@ def test_decode_roofline(mesh_device, model_path, batch_size):
             page_table=page_table,
             kv_cache=tt_kv_cache,
             enable_trace=TRACED,
-            read_from_device=not DEVICE_ARGMAX,
+            sampling_params=greedy,
             reload_inputs=True,
             reload_page_table=False,
-            reload_sampling_params=False,
-            reset_sampling_state=False,
+            reload_sampling_params=bool(DEVICE_ARGMAX and first_call[0]),
+            reset_sampling_state=bool(DEVICE_ARGMAX and first_call[0]),
         )
+        first_call[0] = False
         if DEVICE_ARGMAX:
-            # the traced decode output: one (logits, log_probs) entry per data-parallel rank, logits [1, 1, B, V]
-            # replicated over the mesh; argmax on device, read back the ids of one shard only
-            entry = o[0] if isinstance(o, (list, tuple)) else o
-            logits_tt = entry[0] if isinstance(entry, (list, tuple)) else entry
-            ids_tt = ttnn.argmax(logits_tt, dim=-1, keepdim=False)
-            ids = ttnn.to_torch(ttnn.get_device_tensors(ids_tt)[0]).reshape(-1)[:batch_size].to(torch.int64)
-            ids_tt.deallocate(True)
-            return ids.unsqueeze(-1)
+            # on-device greedy sampling: the host sees the [batch] token ids only
+            toks = o[0] if isinstance(o, (list, tuple)) else o
+            return toks.reshape(-1)[:batch_size].to(torch.int64).unsqueeze(-1)
         logits = o[0] if isinstance(o, tuple) else o
         return torch.argmax(logits.reshape(batch_size, -1).float(), dim=-1, keepdim=True)
 
