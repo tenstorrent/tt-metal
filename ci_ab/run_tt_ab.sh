@@ -35,7 +35,7 @@ for a in ${RA_ARMS:-M H H2 H2 H M}; do
   timeout -s INT -k 60 1800 python3 -m tracy -r -p --no-web-server -o $o $S/mm_ci.py > $o.log 2>&1; rc=$?
   echo "== run $r $a rc=$rc $(( $(date +%s) - t0 )) s: $(grep -c 'case done' $o.log) done $(grep -c 'case FAIL' $o.log) fail"
   grep -a 'case done\|case FAIL' $o.log | sed "s/^/== out $a r$r /"
-  [[ $rc -ne 0 ]] && { fail=1; grep -a -m5 -E 'Error|error:' $o.log | cut -c1-200; }
+  [[ $rc -ne 0 ]] && { fail=1; grep -a -m5 -E 'Error|error:' $o.log | cut -c1-200; tail -15 $o.log | cut -c1-200; }
   python3 $S/sum_mm.py $o $a $r
   e=$(elfsum $TT_METAL_CACHE); ES[$a]+=" $e"; echo "== elf $a r$r $e"
 done
