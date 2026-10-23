@@ -36,6 +36,12 @@ from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 MODELS = {"12B": "google/gemma-4-12B-it", "31B": "google/gemma-4-31B-it"}
+# The lab is a measurement harness run by the device-queue lab jobs (one chip per case, tracy session); the CI
+# unit tiers (CI=true, E2B / E4B checkpoints) skip it: it names the dense checkpoints itself and needs their
+# configs from the HF cache.
+pytestmark = pytest.mark.skipif(
+    os.environ.get("CI") == "true", reason="layer lab: devq measurement harness, not a CI unit test"
+)
 KINDS = {"sliding": "sliding_attention", "global": "full_attention"}
 CASES = [(m, k, tp, b) for m in ("12B", "31B") for k in ("sliding", "global") for tp in (4, 8) for b in (1, 32)]
 PREFILL_LEN = int(os.environ.get("GEMMA4_LAB_PREFILL_LEN", "128"))  # positions already in the cache
@@ -56,7 +62,10 @@ def shard_text_config(model_name: str, tp: int):
     """The HF text config of ``model_name`` cut to one shard of a TP=``tp`` mesh."""
     from transformers import AutoConfig
 
-    cfg = AutoConfig.from_pretrained(MODELS[model_name], trust_remote_code=True).text_config
+    try:
+        cfg = AutoConfig.from_pretrained(MODELS[model_name], trust_remote_code=True).text_config
+    except Exception as e:  # no local config for the dense checkpoint: not this machine's job
+        pytest.skip(f"{MODELS[model_name]} config unavailable: {e}")
     assert cfg.num_attention_heads % tp == 0 and cfg.num_key_value_heads % tp == 0, (model_name, tp)
     cfg.num_attention_heads //= tp
     cfg.num_key_value_heads //= tp
