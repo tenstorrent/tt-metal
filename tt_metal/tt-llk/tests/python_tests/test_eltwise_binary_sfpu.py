@@ -2294,9 +2294,7 @@ def _run_sfpu_binary_bcast(
         input_dimensions_B=input_dimensions,
     )
 
-    # The broadcast operand is the one tile in buffer_B, so an explicit src_B fully
-    # controls the column / row that is broadcast and the columns / rows the kernel
-    # must ignore.
+    # The broadcast operand is the one tile in buffer_B; an explicit src_B controls it fully.
     if src_B_override is not None:
         if src_B_override.numel() != src_B.numel():
             raise ValueError("SFPU bcast override must be exactly one tile")
@@ -2403,12 +2401,8 @@ def test_eltwise_binary_sfpu_bcast(
     _run_sfpu_binary_bcast(formats, bcast_dim, mathop, dest_acc, **run_kwargs)
 
 
-# BCAST_COL loads the column-vector tile's even-column slot, so SFPU lane c of each
-# 8-lane row group holds tile column 2c: column 0 is the broadcast value and columns
-# 2, 4, ..., 14 are the lanes the kernel discards. The API says columns 1..31 are
-# ignored, so a non-finite value there must not reach the output. Only the formats
-# whose Dest carries Inf / NaN unchanged are swept: Bfp8_b cannot hold them, and
-# Float16's infinity handling is a config choice.
+# BCAST_COL loads the even columns, so SFPU lanes 1..7 hold the discarded tile columns 2, 4, ..., 14;
+# Inf / NaN there must not reach the output. Bfp8_b cannot hold them, so it is not swept.
 _BCAST_COL_IGNORED_SWEEP = dict(
     formats=input_output_formats(
         [DataFormat.Float32, DataFormat.Float16_b],
@@ -2424,15 +2418,12 @@ _BCAST_COL_IGNORED_SWEEP = dict(
 
 
 def _column_vector_with_nonfinite_ignored_columns() -> torch.Tensor:
-    """One 32x32 tile: finite column 0, +Inf / NaN / -Inf in the discarded
-    even columns 2, 10 and 14 of every row (one of the three per row)."""
+    """One 32x32 tile: finite column 0, +Inf / NaN / -Inf in discarded columns 2, 10 and 14."""
     gen = torch.Generator().manual_seed(0)
     tile = torch.empty(32, 32, dtype=torch.float32).uniform_(-2.0, 2.0, generator=gen)
     tile[0::3, 2] = float("inf")  # SFPU lane 1
     tile[1::3, 10] = float("nan")  # SFPU lane 5
     tile[2::3, 14] = -float("inf")  # SFPU lane 7
-    if not bool(torch.isfinite(tile[:, 0]).all()):
-        raise AssertionError("column 0 of the broadcast operand must stay finite")
     return tile.flatten()
 
 
@@ -2440,11 +2431,8 @@ def _column_vector_with_nonfinite_ignored_columns() -> torch.Tensor:
 def test_eltwise_binary_sfpu_bcast_col_nonfinite_ignored_columns(
     formats, mathop, dest_acc, **run_kwargs
 ):
-    """Inf / NaN in the ignored columns of the column vector leaves the output finite.
-
-    The golden only reads column 0. On a kernel that zeroes the discarded lanes with a
-    multiply, Inf * 0 = NaN is added into column 0 by the rotate-add broadcast and the
-    whole row of the output turns NaN.
+    """Inf / NaN in the ignored columns leaves the output finite; a kernel that zeroes the discarded
+    lanes with a multiply turns the whole row NaN (Inf * 0) through the rotate-add broadcast.
     """
     _skip_fp32_no_dest_acc(formats, dest_acc)
 
