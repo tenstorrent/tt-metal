@@ -13,6 +13,7 @@
 
 namespace ttnn::operations::matmul::model {
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 TEST(MatmulModelFeatures, Smoke) {
     MatmulProblem prob;
@@ -88,5 +89,6 @@ TEST(MatmulModelFeatures, GalaxyGrid) {
     EXPECT_EQ(compute_model_input(prob, c, p150).status, ScoreStatus::kGridExceedsDevice);
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 }  // namespace ttnn::operations::matmul::model

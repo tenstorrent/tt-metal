@@ -323,6 +323,28 @@ std::optional<std::uint32_t> default_in0_block_w(
         config);
 }
 
+std::uint32_t k_blocks(const MatmulDesc& p, std::uint32_t in0_block_w) {
+    return (p.Kt + in0_block_w - 1) / in0_block_w;
+}
+
+// Without packer L1 accumulation or fp32 dest accumulation the factories keep partial sums in the output format
+// between K blocks, so with a block-float output every K block after the first re-quantizes them (the model scores
+// time, not accuracy). The most K blocks a pick may use, so the model never rounds the partial sums more often than
+// the default selection's config does: nullopt when no bound applies, 0 when the default has no K blocking to compare
+// with (no pick allowed). The default's K blocking depends on live L1, so a cached pick is checked again on every call.
+std::optional<std::uint32_t> max_k_blocks(
+    const MatmulDesc& p,
+    const Tensor& a,
+    const Tensor& b,
+    const std::optional<const Tensor>& bias,
+    const ttnn::prim::MatmulParams& attributes) {
+    if (p.packer_l1_acc || p.fp32_dest_acc || (p.out != DataType::kBfloat8B && p.out != DataType::kBfloat4B)) {
+        return std::nullopt;
+    }
+    const auto default_k_block = default_in0_block_w(a, b, bias, attributes);
+    return default_k_block && *default_k_block > 0 ? k_blocks(p, *default_k_block) : 0;
+}
+
 MatmulProgramConfig to_program_config(const Candidate& c) {
     const Blocking& b = c.blocking;
     const CoreCoord grid(c.grid_x, c.grid_y);
@@ -417,7 +439,8 @@ std::optional<MatmulProgramConfig> choose(
     }
     // The model is loaded once per process, so the call signature alone identifies a pick
     const std::string& key = call->key;
-    const std::uint32_t budget = l1_cb_budget(a, call->desc, call->desc.out_place.in_l1);
+    // A preallocated output is already outside the free L1 the budget starts from
+    const std::uint32_t budget = l1_cb_budget(a, call->desc, call->desc.out_place.in_l1 && !output.has_value());
     call->hw.l1_cb_budget = budget;
 
     auto use = [&](const Pick& pick) -> std::optional<MatmulProgramConfig> {
@@ -435,33 +458,34 @@ std::optional<MatmulProgramConfig> choose(
     const auto cached = pick_cache().find(key);
     // A pick that failed for lack of L1 is made again once more L1 is free
     if (cached && !(cached->failed_budget && budget > *cached->failed_budget)) {
+        if (cached->candidate) {
+            const auto limit = max_k_blocks(call->desc, a, b, bias, attributes);
+            if (limit && k_blocks(call->desc, cached->candidate->blocking.in0_block_w) > *limit) {
+                last = fmt::format("default: cached pick has more K blocks than the default's {} now", *limit);
+                return std::nullopt;
+            }
+        }
         return use(*cached);
     }
 
     auto candidates = enumerate_candidates_with_narrower_grid(call->desc, call->hw);
-    const bool none_fit = candidates.empty();
     std::string none_left = "no candidate fits L1";
     if (bias.has_value()) {
         // The reuse factory doesn't fuse a row bias (matmul post-processes it for an explicit Reuse config)
         std::erase_if(candidates, [](const Candidate& c) { return c.family == Family::kReuse; });
     }
-    // Without packer L1 accumulation or fp32 dest accumulation the factories keep partial sums in the output format
-    // between K blocks, so with a block-float output every K block after the first re-quantizes them (the model
-    // scores time, not accuracy). Keep the candidates with no more K blocks than the default selection's config, so
-    // the model never rounds the partial sums more often than matmul does without it.
-    const MatmulDesc& p = call->desc;
-    if (!p.packer_l1_acc && !p.fp32_dest_acc && (p.out == DataType::kBfloat8B || p.out == DataType::kBfloat4B) &&
-        !candidates.empty()) {
-        auto k_blocks = [&](std::uint32_t in0_block_w) { return (p.Kt + in0_block_w - 1) / in0_block_w; };
-        const auto default_k_block = default_in0_block_w(a, b, bias, attributes);
-        if (default_k_block && *default_k_block > 0) {
-            const std::uint32_t limit = k_blocks(*default_k_block);
-            std::erase_if(candidates, [&](const Candidate& c) { return k_blocks(c.blocking.in0_block_w) > limit; });
-            none_left = fmt::format("no candidate fits L1 with at most the default's {} K blocks", limit);
-        } else {
-            candidates.clear();
-            none_left = "block-float output and the default config has no K blocking to compare with";
-        }
+    // Keep only the candidates within the precision bound (max_k_blocks)
+    std::optional<std::uint32_t> limit;
+    if (!candidates.empty()) {
+        limit = max_k_blocks(call->desc, a, b, bias, attributes);
+    }
+    if (limit && *limit > 0) {
+        std::erase_if(
+            candidates, [&](const Candidate& c) { return k_blocks(call->desc, c.blocking.in0_block_w) > *limit; });
+        none_left = fmt::format("no candidate fits L1 with at most the default's {} K blocks", *limit);
+    } else if (limit) {
+        candidates.clear();
+        none_left = "block-float output and the default config has no K blocking to compare with";
     }
     const std::vector<double> predicted = m->predict_ns(call->problem, candidates, call->arch);
     Pick pick;
@@ -495,7 +519,8 @@ std::optional<MatmulProgramConfig> choose(
     if (!pick.candidate && rejected > 0) {
         pick.description = fmt::format("all {} scored candidates rejected", rejected);
     }
-    if (!pick.candidate && (none_fit || rejected_for_l1 > 0)) {
+    // Retried once more L1 is free: with more L1 there are more candidates, including ones within the precision bound
+    if (!pick.candidate && (candidates.empty() || rejected_for_l1 > 0)) {
         pick.failed_budget = budget;
     }
     // Time of this selection; later calls reuse the pick and its description

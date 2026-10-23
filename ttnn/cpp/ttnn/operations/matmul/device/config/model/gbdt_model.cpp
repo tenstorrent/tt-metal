@@ -96,8 +96,10 @@ std::string GbdtModel::structure_error() const {
         return "tree offsets do not cover the node/leaf arrays";
     }
     for (std::size_t t = 0; t < num_trees(); ++t) {
-        if (node_begin[t + 1] < node_begin[t] || leaf_begin[t + 1] < leaf_begin[t]) {
-            return "tree offsets not monotone";
+        // Bound this tree's end offsets before walking its nodes: a later tree's offsets are only checked later
+        if (node_begin[t + 1] < node_begin[t] || leaf_begin[t + 1] < leaf_begin[t] || node_begin[t + 1] > nodes ||
+            leaf_begin[t + 1] > leaf_value.size()) {
+            return "tree offsets not monotone or out of range";
         }
         const std::int64_t tree_nodes = node_begin[t + 1] - node_begin[t];
         const std::int64_t tree_leaves = leaf_begin[t + 1] - leaf_begin[t];

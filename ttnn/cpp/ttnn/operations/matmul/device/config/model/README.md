@@ -66,14 +66,19 @@ It decides once per matmul, in `bound_matmul`, on the inputs, bias and attribute
 3. **Precision.** With a bfp8_b or bfp4_b output and neither packer L1 nor fp32 accumulation, the factories keep
    partial sums in the output format, so every K block after the first re-quantizes them. Only candidates with no
    more K blocks than the default selection's config are kept, so the model never rounds more often than matmul does
-   without it. Otherwise the model changes only the program config: output dtype, math fidelity and accumulation stay
+   without it. The default's K blocking depends on live L1, so a cached pick is checked against it again on every
+   call. Otherwise the model changes only the program config: output dtype, math fidelity and accumulation stay
    what the caller asked for.
 4. **Pick.** Candidates are tried in order of prediction; ties keep candidate order. The first one that passes the
    device op's own validation (`validate_on_program_cache_miss`) and the live L1 budget is used. If none passes, or
    none can be scored, the default selection runs.
 5. **Cache.** Picks are cached process-wide, keyed on the call's full signature (the model is loaded once per
-   process). On every hit the cached pick is re-checked against the current L1 budget, and a pick that found no
-   candidate for lack of L1 is made again once more L1 is free.
+   process). On every hit the cached pick is re-checked against the current L1 budget (and the precision bound), and
+   a pick that found no candidate for lack of L1 is made again once more L1 is free.
+
+The pick can depend on live L1, like the default selection's. With trace capture, warm up each matmul shape once, in
+the same allocation state as the capture, before capturing: the first call of a shape also does the selection's host
+work (model load, candidate enumeration, validation).
 
 A candidate that the device op rejects costs a caught exception and the critical-level log line that every
 `TT_FATAL` writes. Candidates are checked best first, so this happens only when the best-ranked ones are invalid.
@@ -90,8 +95,12 @@ mmodel export ...                                                    # the repos
 python -m bench.export.export_gbdt <lightgbm_model.txt> model.blob --format blob   # what it runs today
 ```
 
-The blob carries the GBDT trees, the feature names (checked against `kFeatureNames` at load) and the sha256 of the
-LightGBM model it was exported from. The analytic part (`matmul_model_features.cpp`,
+The blob carries the GBDT trees, the feature names (checked against `kFeatureNames` at load, so a blob trained on
+other features is refused) and the sha256 of the LightGBM model it was exported from. The shipped blob: file sha256
+`7dc37af22b6ae0d2ecb4f415a14cdc7e9b6e0208ee2ac2c2aacd049576ee9ae2`, model sha256
+`46dc43100ba9d1bdd6d30e408d23c7012a5e535cefab4d32ddb04910f1ba73a5` (logged at load), trained on device-time
+measurements of matmul program configs on Blackhole p150 (11x10 grid); the training data and training code live in
+`tt-matmul-predictor`. The analytic part (`matmul_model_features.cpp`,
 `matmul_model_device_params.cpp`) is code. Its constants must match the model the blob was trained with.
 
 ## Tests

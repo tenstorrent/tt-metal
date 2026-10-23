@@ -197,6 +197,31 @@ def test_block_float_output_keeps_precision(device, model_on):
     assert_with_pcc(ttnn.to_torch(ta).float() @ ttnn.to_torch(tb).float(), ttnn.to_torch(out), 0.99)
 
 
+def test_preallocated_l1_output_is_not_counted_twice(device, model_on):
+    """A preallocated L1 output is already outside the free L1 the pick's budget starts from. Here it fills about 55%
+    of every L1 bank, so counting it a second time would leave no L1 for any candidate and keep the default."""
+    grid = device.compute_with_storage_grid_size()
+    free_bank = 1461120  # a free Blackhole L1 bank, as in the gtests
+    tiles_per_bank = 14 * 28  # 392 bf16 tiles, 0.55 of the bank
+    assert tiles_per_bank * 2048 > 0.5 * free_bank
+    M, K, N = 32 * 14 * grid.y, 256, 32 * 28 * grid.x
+    torch.manual_seed(0)
+    a = torch.randn(1, 1, M, K).bfloat16()
+    b = torch.randn(1, 1, K, N).bfloat16()
+    ta = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tb = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.from_torch(
+        torch.zeros(1, 1, M, N).bfloat16(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    ttnn.matmul(ta, tb, memory_config=ttnn.L1_MEMORY_CONFIG, optional_output_tensor=out)
+    assert last_pick().startswith("model: "), last_pick()
+    assert_with_pcc(a.float() @ b.float(), ttnn.to_torch(out), 0.99)
+
+
 @pytest.mark.parametrize("a_shape, b_shape, dtype_b, a_mem, out_mem, bias, transpose_b", CASES[:3])
 def test_flag_off_is_the_default(device, a_shape, b_shape, dtype_b, a_mem, out_mem, bias, transpose_b):
     """Flag off (the default): the model is never consulted and matmul's results are bit-identical run to run."""

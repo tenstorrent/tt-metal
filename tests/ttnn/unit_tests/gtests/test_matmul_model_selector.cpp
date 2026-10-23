@@ -20,6 +20,7 @@
 
 namespace ttnn::operations::matmul::model {
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 constexpr std::uint32_t kBudget = 1461120 - 16 * 1024;  // a free Blackhole p150 L1 bank less the headroom
 
@@ -121,5 +122,6 @@ TEST(MatmulModelSelector, ScoresCandidatesWithTheModel) {
     }
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 }  // namespace ttnn::operations::matmul::model

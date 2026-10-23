@@ -19,6 +19,7 @@
 
 namespace ttnn::operations::matmul::model {
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 constexpr double kInf = std::numeric_limits<double>::infinity();
@@ -120,6 +121,16 @@ TEST(GbdtModel, ValidateRejectsBackEdges) {
     EXPECT_NE(m.structure_error(), "");
 }
 
+TEST(GbdtModel, ValidateRejectsTreeOffsetsPastTheArrays) {
+    // Tree 0 claims 5 of the 4 nodes; its end offsets pass the per-tree checks, so the walk must be bounded first
+    constexpr std::uint32_t node_begin[] = {0, 5, 2, 3, 4};
+    constexpr std::uint32_t leaf_begin[] = {0, 6, 4, 6, 8};
+    GbdtModel m = kToy;
+    m.node_begin = node_begin;
+    m.leaf_begin = leaf_begin;
+    EXPECT_EQ(m.structure_error(), "tree offsets not monotone or out of range");
+}
+
 TEST(GbdtModel, BlobRejectsGarbage) {
     const char junk[] = "not a model";
     std::string error;
@@ -164,5 +175,6 @@ TEST(GbdtModel, ParityWithLightGBM) {
     EXPECT_LT(max_abs, 1e-9) << "over " << ref.size() << " rows";
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 }  // namespace ttnn::operations::matmul::model
