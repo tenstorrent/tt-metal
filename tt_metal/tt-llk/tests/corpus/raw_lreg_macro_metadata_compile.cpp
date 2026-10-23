@@ -38,10 +38,15 @@ constexpr bool effect_is(unsigned word, unsigned read_mask, unsigned write_mask)
 
 constexpr unsigned sfpadd_1234 = TT_OP_SFPADD(1, 2, 3, 4, 0);
 static_assert(effect_is(sfpadd_1234, 0x0eu, 0x10u));
-// The macro contract includes the old destination for inactive lanes, even
-// when the opcode has no explicit destination read.
+// A lane-merge compiler owns destination preservation. Older effect compilers
+// require the old destination explicitly even for write-only instructions.
+#if defined(__riscv_xtt_sfprawlreg_merge)
+static_assert(ckernel::raw_lreg_effect::inputs(sfpadd_1234) == 0x0eu);
+static_assert(ckernel::raw_lreg_effect::inputs(TT_OP_SFPLOADI(3, 0, 0)) == 0x00u);
+#else
 static_assert(ckernel::raw_lreg_effect::inputs(sfpadd_1234) == 0x1eu);
 static_assert(ckernel::raw_lreg_effect::inputs(TT_OP_SFPLOADI(3, 0, 0)) == 0x08u);
+#endif
 static_assert(effect_is(TT_OP_SFPMAD(1, 2, 3, 4, 4), 0xffu, 0x10u));
 static_assert(effect_is(TT_OP_SFPMAD(1, 2, 3, 4, 8), 0x8eu, 0xffu));
 static_assert(effect_is(TT_OP_SFPADDI(0, 3, 8), 0x88u, 0xffu));
@@ -147,6 +152,14 @@ static_assert(lut_modifier_masks());
 // REPLAY playback (load_mode 0) touches every LREG; recording touches none.
 static_assert(ckernel::raw_lreg_effect::replay_effect(TT_OP(0x04, 0)) == 0xffu);
 static_assert(ckernel::raw_lreg_effect::replay_effect(TT_OP(0x04, 1)) == 0x00u);
+
+// Compile the explicit template and known-macro paths on every architecture.
+// They preserve the statement-expression contract of ordinary TT/TTI macros.
+void known_macro_issue()
+{
+    TT_LLK_SFPU_ISSUE_TTI_TEMPLATE(TT_OP_SFPMAD(0, 0, 0, 13, 4));
+    TT_LLK_SFPU_ISSUE_TT_MACRO(TT_OP(0x93, 0), 0x80u, 0x03u);
+}
 
 // Wrappers decode effects from a word with address and immediate operands
 // zeroed; those operands must never change the decoded masks.

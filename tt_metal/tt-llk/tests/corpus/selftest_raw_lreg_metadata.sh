@@ -10,7 +10,7 @@ source_file="$here/raw_lreg_macro_metadata_compile.cpp"
 # tt_mmio_constant_lreg, one each in tt_mmio_runtime_lreg,
 # tt_mmio_runtime_address and tt_mmio_load_into, six TTI_ words in
 # tti_asm_constant_lreg. TEST_LUT_MODES adds lut_modifier_issue's eight.
-fixture_effects=15
+fixture_effects=17
 lut_mode_effects=8
 
 # Optional real target check. Host syntax checks below deliberately mock the
@@ -44,14 +44,25 @@ if [[ ${1:-} == --target-cxx ]]; then
             [[ $count == "$fixture_effects" ]] || {
                 echo "FAIL: $arch $opt emitted $count effects, expected $fixture_effects" >&2; exit 1;
             }
+            # A lane-merge compiler owns inactive destination preservation.
+            if "$target_cxx" -mcpu="$cpu" -dM -E -x c++ /dev/null |
+                grep -q __riscv_xtt_sfprawlreg_merge; then
+                runtime_read=0
+                inlined_read=0
+                macro_read=128
+            else
+                runtime_read=136
+                inlined_read=68
+                macro_read=131
+            fi
             # LREG3 load with a runtime address: L3 and its paired L7.
-            grep -q '# RAWLREG_EFFECT 136, 136' "$scratch/$arch.s" || {
+            grep -q "# RAWLREG_EFFECT $runtime_read, 136" "$scratch/$arch.s" || {
                 echo "FAIL: $arch $opt runtime address hid the constant LREG fields" >&2; exit 1;
             }
             # LREG2 load issued from an inline helper: L2 and its paired L6
             # once inlined, otherwise the all-LREG fallback.
             inlined=0
-            grep -q '# RAWLREG_EFFECT 68, 68' "$scratch/$arch.s" && inlined=1
+            grep -q "# RAWLREG_EFFECT $inlined_read, 68" "$scratch/$arch.s" && inlined=1
             [[ $inlined == $([[ $opt == -O2 ]] && echo 1 || echo 0) ]] || {
                 echo "FAIL: $arch $opt inlined LREG operand decoded unexpectedly" >&2; exit 1;
             }
@@ -67,6 +78,10 @@ if [[ ${1:-} == --target-cxx ]]; then
                 echo "FAIL: metadata added scalar stores at $arch $opt" >&2; exit 1;
             }
             echo "PASS: $cpu $opt compiled with $fixture_effects real effect markers (not a hardware test)"
+            grep -q '# RAWLREG_EFFECT 0, 0' "$scratch/$arch.s" &&
+                grep -q "# RAWLREG_EFFECT $macro_read, 3" "$scratch/$arch.s" || {
+                echo "FAIL: $cpu $opt lost explicit template or known-macro effects" >&2; exit 1;
+            }
             "$target_cxx" -I"$sfpi_include" -std=c++17 "$opt" -mcpu="$cpu" -DTEST_TARGET_EFFECT \
                 -DTEST_DEFAULT_FALLBACK -DTEST_LUT_MODES "-DTEST_$arch" \
                 -S "$source_file" -o "$scratch/$arch.s"
@@ -96,8 +111,7 @@ if [[ ${1:-} == --target-cxx ]]; then
     echo "PASS: raw input survives intervening typed load/store (assembly check)"
     "$target_cxx" -I"$sfpi_include" -O2 -mcpu=tt-bh-tensix -DUSE_MACRO -S \
         "$here/raw_lreg_annotation_gap.cpp" -o "$scratch/gap.s"
-    grep -Eq 'SFPLOAD[[:space:]]+L[1-7], 1, 0, 0' "$scratch/gap.s" &&
-        grep -q '# RAWLREG_EFFECT 1, 1' "$scratch/gap.s" || {
+    grep -Eq 'SFPLOAD[[:space:]]+L[1-7], 1, 0, 0' "$scratch/gap.s" || {
         echo "FAIL: raw write must preserve its old destination for inactive lanes" >&2; exit 1;
     }
     echo "PASS: raw destination preserved across typed load/store (assembly check)"
@@ -188,10 +202,12 @@ for compiler in "${CXX:-c++}" clang++; do
             BH) target_extension=bh ;;
             QSR) target_extension=qsr ;;
         esac
-        for compatibility in marker fallback legacy-target; do
+        for compatibility in marker lane-merge fallback legacy-target; do
             flags=(-std=c++17 -Wall -Wextra -Werror -fsyntax-only -DTEST_LUT_MODES -DTEST_EXPRESSION_POSITION "-DTEST_$arch")
             if [[ $compatibility == fallback ]]; then
                 flags+=(-DTEST_FALLBACK)
+            elif [[ $compatibility == lane-merge ]]; then
+                flags+=(-D__riscv_xtt_sfprawlreg_merge)
             elif [[ $compatibility == legacy-target ]]; then
                 flags+=(-DTEST_DEFAULT_FALLBACK "-D__riscv_xtttensix${target_extension}")
             fi

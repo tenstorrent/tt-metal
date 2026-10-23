@@ -20,8 +20,12 @@ void raw_input_gap()
     auto temporary = __builtin_rvtt_sfpload(nullptr, 1, 0, 0, 0, 0);
     __builtin_rvtt_sfpstore(nullptr, temporary, 0, 0, 0, 0, 0);
 #if defined(USE_MACRO)
-    // Lane enable state is unknown here: inactive lanes retain the old L0.
+    // Disable lanes, partially overwrite L0, then expose its retained lanes.
+    // A compiler that owns lane merging must infer that old L0 is still needed.
+    TTI_SFPSETCC(0, 1, 0, 0);
     TTI_SFPLOADI(0, 0, 123);
+    TTI_SFPENCC(0, 0, 0, 0);
+    TTI_SFPMOV(0, 0, 2, 0);
 #else
 #if !defined(USE_EFFECT)
     __builtin_rvtt_sfpwritelreg(__builtin_rvtt_sfpreadlreg(0), 0);

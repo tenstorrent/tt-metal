@@ -176,9 +176,15 @@ TT_LLK_RAW_LREG_FN unsigned write(unsigned x) {
 }
 // Raw instructions execute under externally managed lane predicates. The
 // instruction word alone cannot prove that every destination lane is written.
-// Preserve the old destination as an input, including for nominally write-only
-// operations. This is deliberately conservative when all lanes are enabled.
-TT_LLK_RAW_LREG_FN unsigned inputs(unsigned x) { return read(x) | write(x); }
+// A compiler advertising lane merging preserves old destination lanes itself.
+// Older effect compilers need the destination explicitly included as an input.
+// Keep that compatibility rule shared with caller-described LOADMACRO effects.
+#if defined(__riscv_xtt_sfprawlreg_merge)
+TT_LLK_RAW_LREG_FN unsigned lane_inputs(unsigned reads, unsigned) { return reads; }
+#else
+TT_LLK_RAW_LREG_FN unsigned lane_inputs(unsigned reads, unsigned writes) { return reads | writes; }
+#endif
+TT_LLK_RAW_LREG_FN unsigned inputs(unsigned x) { return lane_inputs(read(x), write(x)); }
 // An unsupported word reached only after inlining has no static_assert; keep
 // every LREG for it rather than trusting a partial decode.
 TT_LLK_RAW_LREG_FN unsigned checked_inputs(unsigned x) { return supported(x) ? inputs(x) : all_lregs; }
@@ -227,6 +233,19 @@ template <unsigned Mask> struct constant_mask { enum : unsigned { value = Mask }
 #define TT_LLK_SFPU_ISSUE_TTI_LREGS(word, lreg_word) ({ TTI_INSN(word); TT_LLK_SFPU_EFFECT(lreg_word); })
 #define TT_LLK_SFPU_ISSUE_TT(word)                   TT_LLK_SFPU_ISSUE_TT_LREGS(word, word)
 #define TT_LLK_SFPU_ISSUE_TTI(word)                  TT_LLK_SFPU_ISSUE_TTI_LREGS(word, word)
+// These words program a configured LOADMACRO template (VD 12..15 with the
+// instruction-template backdoor enabled); they do not execute its SFPU work.
+// Use only while programming such a template, never for an ordinary raw word.
+#define TT_LLK_SFPU_ISSUE_TTI_TEMPLATE(word) ({ TTI_INSN(word); TT_LLK_SFPRAWLREG_EFFECT(0u, 0u); })
+// A caller that owns the configured LOADMACRO may describe its full LREG effects.
+// Unknown macros must continue to use TT_SFPLOADMACRO's all-register fallback.
+// The caller must also drain the scheduled work before subsequent typed work.
+#define TT_LLK_SFPU_ISSUE_TT_MACRO(word, reads, writes)                                               \
+    ({ TT_INSN(word);                                                                               \
+       TT_LLK_SFPRAWLREG_EFFECT(                                                                    \
+           (ckernel::raw_lreg_effect::constant_mask<                                                 \
+               ckernel::raw_lreg_effect::lane_inputs((reads), (writes))>::value),                    \
+           (ckernel::raw_lreg_effect::constant_mask<(writes)>::value)); })
 // MODE_WORD is the REPLAY word with only its load_mode operand kept.
 #define TT_LLK_REPLAY_EFFECT(mode_word) \
     TT_LLK_SFPRAWLREG_EFFECT(TT_LLK_SFPU_MASK(replay_effect, mode_word), TT_LLK_SFPU_MASK(replay_effect, mode_word))
