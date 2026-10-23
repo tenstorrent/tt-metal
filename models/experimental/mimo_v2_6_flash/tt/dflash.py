@@ -16,19 +16,18 @@ A prefill chunk writes its last RING rows the same way (``prefill_tap``, ``prefi
 ring rows written since ``reset`` (a new request); the host keeps the ring continuous (generator_vllm.py) and resets
 it when it is not.
 
-Block. Each of the 5 layers runs over 32 rows (block rows 0..7, the rest padding) stacked with the 32 context rows
-(one qkv matmul serves both: the context's K / V use the layer's own k_proj / v_proj / k_norm): q_norm / k_norm per
-head, RoPE (64 of 128 dims, neox pairs, theta 10000: the q / k weights are permuted for rotary_embedding_llama's
-adjacent pairs, as the target's are), then attention over [ring, block keys, one sink tile] as two matmuls and a
-softmax: one additive bias per layer carries the sink logit (attention_sink_bias), the ring's validity and the
-padding. Every block row sees the whole ring (the last RING committed positions) and the whole block: the reference's
-window (keys > own position - 1024) differs only in the oldest few positions. The dense SiLU MLP is column / row
-parallel with one all-reduce, as is o_proj. The final norm's rows 1..MAX_DRAFTS (moved to rows 0.. by a one-hot
-matmul) go through the target's LM head into a GreedyHead: its token row is the drafts.
+Block. Each of the 5 layers runs over 32 rows (block rows 0..7, the rest padding): q_norm / k_norm per head, RoPE
+(64 of 128 dims, neox pairs, theta 10000: the q / k weights are permuted for rotary_embedding_llama's adjacent pairs,
+as the target's are), then a non-causal decode SDPA of one user whose query heads are the (block row, head) pairs, over the keys [ring,
+block, zero rows], with the layer's sinks and one mask per draft (the ring's validity, the block's padding). The context rows' K / V use the layer's own k_proj / v_proj /
+k_norm. Every block row sees the whole ring (the last RING committed positions) and the whole block: the reference's
+window (keys > own position - 1024) differs only in the oldest few positions. Every projection is a DRAM-sharded
+matmul (32 rows); o_proj and the dense SiLU MLP's down projection are row-parallel with one all-reduce each. The final
+norm's rows 1..MAX_DRAFTS (moved to rows 0.. by a one-hot matmul) go through the target's LM head into a GreedyHead:
+its token row is the drafts.
 
 Inputs per draft (``enqueue``, host-planned): the anchor token, the context scatter P [32, RING] (row r of the taps
-to ring row p % RING; zero rows skip), and the RoPE cos / sin of the block and context rows (the query's carry the
-softmax scale, which rotary_embedding_llama applies linearly).
+to ring row p % RING; zero rows skip), and the RoPE cos / sin of the block and context rows.
 """
 
 import os
@@ -40,7 +39,7 @@ import ttnn
 
 from ..reference.dflash import DFlashConfig, load_dflash_weights
 from ..reference.spec_decode import MAX_DRAFTS
-from .common import TILE, as_weight, cache_name, compute_config
+from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config
 from .decoder import TtRMSNorm
 from .greedy_head import GreedyHead
 from .rope import MiMoRotarySetup, meta_rope_permutation, partial_rope_cos_sin
@@ -55,9 +54,17 @@ class TtDFlashLayer:
         tag = f"dflash_tp{tp}_layer{index}"
         nh, nkv, hd, h = cfg.num_heads, cfg.num_kv_heads, cfg.head_dim, cfg.hidden_size
         assert nh % tp == 0 and nkv % tp == 0 and nkv // tp == 1, "one KV head per chip"
-        self.nh_local = nh // tp
+        self.nh_local = nl = nh // tp
+        inter = cfg.intermediate_size // tp
         perm = meta_rope_permutation(hd, cfg.rope_dim)
-        wqkv = wo = wg = wu = wd = qn = kn = bias = None
+        mm_config = compute_config(ttnn.MathFidelity.HiFi2)
+        # Every projection reads its weight once per draft (32 rows): DRAM-sharded matmuls, one reader core per bank.
+        self.qkv_mm = DramShardedMatmul(plan, h, (nl + 2) * hd, compute_kernel_config=mm_config)
+        self.kv_mm = DramShardedMatmul(plan, h, 2 * hd, compute_kernel_config=mm_config)
+        self.o_mm = DramShardedMatmul(plan, nl * hd, h, compute_kernel_config=mm_config)
+        self.up_mm = DramShardedMatmul(plan, h, inter, compute_kernel_config=mm_config)
+        self.down_mm = DramShardedMatmul(plan, inter, h, compute_kernel_config=mm_config)
+        wqkv = wkv = wo = wg = wu = wd = qn = kn = sinks = None
         if weights is not None:
 
             def w(name):
@@ -66,34 +73,40 @@ class TtDFlashLayer:
             q = w("self_attn.q_proj.weight").view(nh, hd, h)[:, perm]
             k = w("self_attn.k_proj.weight").view(nkv, hd, h)[:, perm]
             v = w("self_attn.v_proj.weight").view(nkv, hd, h)
-            nl = self.nh_local
-            blocks = []
+            qkv, kv = [], []
             for c in range(tp):  # chip c: its q heads, then its K and V head (nlp_create_qkv_heads' order)
-                blocks += [q[c * nl : (c + 1) * nl].reshape(-1, h), k[c].reshape(-1, h), v[c].reshape(-1, h)]
-            wqkv = torch.cat(blocks).T.contiguous()  # [hidden, tp * (nl + 2) * hd]
+                qkv += [q[c * nl : (c + 1) * nl].reshape(-1, h), k[c], v[c]]
+                kv += [k[c], v[c]]
+            wqkv = torch.cat(qkv).T.contiguous()  # [hidden, tp * (nl + 2) * hd]
+            wkv = torch.cat(kv).T.contiguous()  # [hidden, tp * 2 * hd]: the context rows' K and V
             wo = w("self_attn.o_proj.weight").T.contiguous()  # [nh * hd, hidden]: rows by head
             wg = w("mlp.gate_proj.weight").T.contiguous()
             wu = w("mlp.up_proj.weight").T.contiguous()
             wd = w("mlp.down_proj.weight").T.contiguous()
             qn = w("self_attn.q_norm.weight")[perm].reshape(1, 1, 1, hd)
             kn = w("self_attn.k_norm.weight")[perm].reshape(1, 1, 1, hd)
-            # Per head: the ring and block keys open (their validity / padding is added per draft), block padding rows
-            # and the sink tile closed but for its first column, the sink logit (the zero key's score is 0).
-            ring = cfg.window
-            bias = torch.zeros(1, nh, TILE, ring + 2 * TILE)
-            bias[..., ring + cfg.block : ring + TILE] = NEG
-            bias[..., ring + TILE + 1 :] = NEG
-            bias[..., ring + TILE] = w("self_attn.attention_sink_bias").float().reshape(1, nh, 1)
+            # The attention's queries are the (block row, head) pairs of the chip, row r * heads + h (TtDFlash._body).
+            # The SDPA kernel scales the sink logit with the scores: pre-divided, in column 0 of a tile row (the
+            # target's SWA decode sinks).
+            s = (w("self_attn.attention_sink_bias").float() * hd**0.5).reshape(tp, 1, nl).expand(tp, cfg.block, nl)
+            sinks = torch.nn.functional.pad(s.reshape(tp * cfg.block * nl, 1), (0, TILE - 1))
         dt = weight_dtype
-        self.wqkv = as_weight(wqkv, plan, plan.shard(-1), dt, cache_name(cache_dir, tag, "wqkv"))
-        self.wo = as_weight(wo, plan, plan.shard(-2), dt, cache_name(cache_dir, tag, "wo"))
-        self.w_gate = as_weight(wg, plan, plan.shard(-1), dt, cache_name(cache_dir, tag, "w_gate"))
-        self.w_up = as_weight(wu, plan, plan.shard(-1), dt, cache_name(cache_dir, tag, "w_up"))
-        self.w_down = as_weight(wd, plan, plan.shard(-2), dt, cache_name(cache_dir, tag, "w_down"))
+
+        def sharded(t, mapper, mm, name):
+            return as_weight(
+                t, plan, mapper, dt, cache_name(cache_dir, tag, name), memory_config=mm.weight_memory_config
+            )
+
+        self.wqkv = sharded(wqkv, plan.shard(-1), self.qkv_mm, "wqkv_ds")
+        self.wkv = sharded(wkv, plan.shard(-1), self.kv_mm, "wkv_ds")
+        self.wo = sharded(wo, plan.shard(-2), self.o_mm, "wo_ds")
+        self.w_gate = sharded(wg, plan.shard(-1), self.up_mm, "w_gate_ds")
+        self.w_up = sharded(wu, plan.shard(-1), self.up_mm, "w_up_ds")
+        self.w_down = sharded(wd, plan.shard(-2), self.down_mm, "w_down_ds")
         rep = plan.replicate()
         self.q_norm = as_weight(qn, plan, rep, ttnn.bfloat16, cache_name(cache_dir, tag, "q_norm"))
         self.k_norm = as_weight(kn, plan, rep, ttnn.bfloat16, cache_name(cache_dir, tag, "k_norm"))
-        self.bias = as_weight(bias, plan, plan.shard(1), ttnn.bfloat16, cache_name(cache_dir, tag, "bias"))
+        self.sinks = as_weight(sinks, plan, plan.shard(0), ttnn.bfloat16, cache_name(cache_dir, tag, "sinks"))
         eps = cfg.eps
         self.input_norm = TtRMSNorm(
             plan, weights and w("input_layernorm.weight"), eps, cache_name(cache_dir, tag, "input_norm")
@@ -121,7 +134,7 @@ class TtDFlash:
         self.tap_layers = list(cfg.target_layer_ids)
         self.layers = [TtDFlashLayer(plan, cfg, weights, i, cache_dir, weight_dtype) for i in range(cfg.num_layers)]
         h = cfg.hidden_size
-        fc = None
+        fc = full = None
         if weights is not None:
             # fc [hidden, taps * hidden] -> per tap layer its [hidden, hidden] block, column-parallel.
             full = weights["fc.weight"].T.contiguous()
@@ -130,6 +143,19 @@ class TtDFlash:
             as_weight(fc and fc[k], plan, plan.shard(-1), weight_dtype, cache_name(cache_dir, tag, f"fc{k}"))
             for k in range(len(self.tap_layers))
         ]
+        # The draft's 32 tap rows go through all of fc in one DRAM-sharded matmul.
+        taps_width = len(self.tap_layers) * h
+        self.fc_mm = DramShardedMatmul(
+            plan, taps_width, h // tp, compute_kernel_config=compute_config(ttnn.MathFidelity.HiFi2)
+        )
+        self.fc_all = as_weight(
+            full if weights is not None else None,
+            plan,
+            plan.shard(-1),
+            weight_dtype,
+            cache_name(cache_dir, tag, "fc_ds"),
+            memory_config=self.fc_mm.weight_memory_config,
+        )
         self.hidden_norm = TtRMSNorm(
             plan, weights and weights["hidden_norm.weight"], cfg.eps, cache_name(cache_dir, tag, "hidden_norm")
         )
@@ -142,11 +168,24 @@ class TtDFlash:
             mask[:, :, 0] = 0  # row 0 is the anchor's embedding
         self.mask_rows = as_weight(mask, plan, plan.replicate(), ttnn.bfloat16, cache_name(cache_dir, tag, "mask_rows"))
         del weights, fc
+        full = None
         if done is not None and not warm:
             open(done, "w").close()
         self.rope = MiMoRotarySetup(plan.mesh_device, TILE, cfg.head_dim, cfg.rope_dim, cfg.rope_theta)
         self.scale = cfg.head_dim**-0.5
         self.mm_config = compute_config(ttnn.MathFidelity.HiFi2)
+        self.sdpa_config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=True, packer_l1_acc=False)
+        # The block's attention is one decode-SDPA user whose query heads are the (block row, head) pairs, all on the
+        # chip's one KV head: the keys (the ring, the block's keys and padding: KEYS rows, a whole number of K chunks)
+        # split over the cores.
+        self.keys = self.ring + 4 * TILE
+        self.queries = cfg.block * self.layers[0].nh_local
+        self.sdpa_program = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+            q_chunk_size=self.queries,
+            k_chunk_size=4 * TILE,
+            exp_approx_mode=False,
+        )
         self.exact_config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=True, packer_l1_acc=False)
         self.norm_config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=True, packer_l1_acc=False)
         self.taps = None  # the decode traces' tap buffers (setup_cache)
@@ -181,8 +220,11 @@ class TtDFlash:
         self.valid = self._tensor(torch.zeros(1, 1, TILE, r))
         self.ones_kv = self._tensor(torch.ones(1, 1, TILE, hd))
         self.ones_sq = self._tensor(torch.ones(1, 1, TILE, TILE))
-        self.zeros_kv = self._tensor(torch.zeros(1, 1, TILE, hd))
-        self.zeros_pad = self._tensor(torch.zeros(1, 1, TILE, 2 * TILE))
+        self.zeros_kv = self._tensor(torch.zeros(1, 1, self.keys - r - TILE, hd))
+        # The attention mask's columns after the ring: the block's rows open, its padding and the zero rows closed.
+        tail = torch.full((1, 1, TILE, self.keys - r), NEG)
+        tail[..., : cfg.block] = 0
+        self.mask_tail = self._tensor(tail)
         sel = torch.zeros(1, 1, TILE, h)
         sel[:, :, 0] = 1
         self.anchor_sel = self._tensor(sel)
@@ -192,10 +234,12 @@ class TtDFlash:
         self.inputs = {
             "tokens": self._tensor(torch.zeros(1, TILE, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
             "scatter": self._tensor(torch.zeros(1, 1, TILE, r)),
-            "cos_q": self._tensor(torch.zeros(1, 1, TILE, hd)),
-            "sin_q": self._tensor(torch.zeros(1, 1, TILE, hd)),
-            "cos_k": self._tensor(torch.zeros(1, 1, 2 * TILE, hd)),
-            "sin_k": self._tensor(torch.zeros(1, 1, 2 * TILE, hd)),
+            "cos_q": self._tensor(torch.zeros(1, 1, self.queries, hd)),
+            "sin_q": self._tensor(torch.zeros(1, 1, self.queries, hd)),
+            "cos_b": self._tensor(torch.zeros(1, 1, TILE, hd)),
+            "sin_b": self._tensor(torch.zeros(1, 1, TILE, hd)),
+            "cos_c": self._tensor(torch.zeros(1, 1, TILE, hd)),
+            "sin_c": self._tensor(torch.zeros(1, 1, TILE, hd)),
         }
         self.head = GreedyHead(self.plan, m.vocab_local, MAX_DRAFTS, b)
         if m.verify_sampler is not None:
@@ -262,10 +306,10 @@ class TtDFlash:
                 p[0, 0, i, pos % self.ring] = 1
         return p
 
-    def _cos_sin(self, positions, scale=1.0):
+    def _cos_sin(self, positions):
         pos = torch.tensor([max(int(p), 0) for p in positions])
         cos, sin = partial_rope_cos_sin(pos, self.cfg.head_dim, self.cfg.rope_dim, self.cfg.rope_theta)
-        return (cos * scale).reshape(1, 1, -1, cos.shape[-1]), (sin * scale).reshape(1, 1, -1, sin.shape[-1])
+        return cos.reshape(1, 1, -1, cos.shape[-1]), sin.reshape(1, 1, -1, sin.shape[-1])
 
     def _scatter(self, ring, rows, pt, keep):
         """ring <- ring * keep + P^T rows (in place)."""
@@ -295,23 +339,13 @@ class TtDFlash:
         hit.deallocate(True)
         return keep
 
-    def _qkv(self, layer, x):
-        xqkv = ttnn.linear(
-            x,
-            layer.wqkv,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.mm_config,
-        )
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-            xqkv,
-            num_heads=layer.nh_local,
-            num_kv_heads=1,
-            transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        xqkv.deallocate(True)
-        return q, k, v
+    def _split_kv(self, kv, rows):
+        """[1, 1, rows, 2 * head_dim] -> K, V [1, 1, rows, head_dim] (consumes ``kv``)."""
+        hd = self.cfg.head_dim
+        k = ttnn.slice(kv, (0, 0, 0, 0), (1, 1, rows, hd))
+        v = ttnn.slice(kv, (0, 0, 0, hd), (1, 1, rows, 2 * hd))
+        kv.deallocate(True)
+        return k, v
 
     def _norm_rope(self, t, weight, cos, sin):
         n = ttnn.rms_norm(
@@ -339,8 +373,12 @@ class TtDFlash:
         pt = ttnn.transpose(p, -2, -1)
         keep = self._keep(pt)
         for layer in self.layers:
-            q, k, v = self._qkv(layer, h)
-            q.deallocate(True)
+            w = ttnn.to_memory_config(layer.wkv, ttnn.DRAM_MEMORY_CONFIG)
+            kv = ttnn.linear(
+                h, w, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=self.mm_config
+            )
+            w.deallocate(True)
+            k, v = self._split_kv(kv, rows)
             kr = self._norm_rope(k, layer.k_norm, cos, sin)
             k.deallocate(True)
             self._scatter(layer.ring_k, kr, pt, keep)
@@ -357,17 +395,19 @@ class TtDFlash:
         GreedyHead whose token row (rows 0 .. MAX_DRAFTS - 1) is the drafts."""
         m, cfg, inp = self.model, self.cfg, self.inputs
         # Context: hidden_norm(fc(taps)) of the 32 tap rows; the scatter writes the committed ones.
-        acc = None
-        for k, tap in enumerate(self.taps):
-            acc = self.prefill_tap(self.tap_layers[k], tap, acc)
+        taps = ttnn.concat(self.taps, dim=-1)
+        acc = self.fc_mm(taps, self.fc_all)
+        taps.deallocate(True)
         hctx = self._context_hidden(acc, prefill=False)
         p = inp["scatter"]
         pt = ttnn.transpose(p, -2, -1)
         keep = self._keep(pt)
         self._mark_valid(p)
-        open_ = ttnn.multiply(ttnn.subtract(self.valid, 1.0), -NEG)  # 0 on valid ring rows, NEG elsewhere
-        ring_bias = ttnn.concat([open_, self.zeros_pad], dim=-1)
-        open_.deallocate(True)
+        closed = ttnn.multiply(ttnn.subtract(self.valid, 1.0), -NEG)  # 0 on valid ring rows, NEG elsewhere
+        full = ttnn.concat([closed, self.mask_tail], dim=-1)
+        closed.deallocate(True)
+        mask = ttnn.concat([full] * (self.queries // TILE), dim=2)  # [1, 1, queries, keys]: every query alike
+        full.deallocate(True)
         # Block rows: the anchor's embedding in row 0, the mask embedding below it.
         e = ttnn.embedding(inp["tokens"], m.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         e = ttnn.reshape(e, (1, 1, TILE, cfg.hidden_size))
@@ -377,69 +417,61 @@ class TtDFlash:
         anchor.deallocate(True)
         for layer in self.layers:
             hn = layer.input_norm(x)
-            stacked = ttnn.concat([hn, hctx], dim=2)  # block rows 0..31, context rows 32..63
+            xqkv = layer.qkv_mm(hn, layer.wqkv)
             hn.deallocate(True)
-            q, k, v = self._qkv(layer, stacked)
-            stacked.deallocate(True)
-            qb = ttnn.slice(q, (0, 0, 0, 0), (1, layer.nh_local, TILE, cfg.head_dim))
-            q.deallocate(True)
-            qr = self._norm_rope(qb, layer.q_norm, inp["cos_q"], inp["sin_q"])
-            qb.deallocate(True)
-            kr = self._norm_rope(k, layer.k_norm, inp["cos_k"], inp["sin_k"])
-            k.deallocate(True)
-            kv = {}
-            for name, t in (("k", kr), ("v", v)):
-                kv[name] = (
-                    ttnn.slice(t, (0, 0, 0, 0), (1, 1, TILE, cfg.head_dim)),
-                    ttnn.slice(t, (0, 0, TILE, 0), (1, 1, 2 * TILE, cfg.head_dim)),
-                )
+            hd, nl = cfg.head_dim, layer.nh_local
+            # Queries: the block rows' q heads as rows r * heads + h; the block's K / V rows.
+            qrows = ttnn.slice(xqkv, (0, 0, 0, 0), (1, 1, cfg.block, nl * hd))
+            q = ttnn.reshape(qrows, (1, 1, self.queries, hd))
+            qrows.deallocate(True)
+            kb = ttnn.slice(xqkv, (0, 0, 0, nl * hd), (1, 1, TILE, (nl + 1) * hd))
+            vb = ttnn.slice(xqkv, (0, 0, 0, (nl + 1) * hd), (1, 1, TILE, (nl + 2) * hd))
+            xqkv.deallocate(True)
+            kc, vc = self._split_kv(layer.kv_mm(hctx, layer.wkv), TILE)
+            qr = self._norm_rope(q, layer.q_norm, inp["cos_q"], inp["sin_q"])
+            kbr = self._norm_rope(kb, layer.k_norm, inp["cos_b"], inp["sin_b"])
+            kcr = self._norm_rope(kc, layer.k_norm, inp["cos_c"], inp["sin_c"])
+            for t in (q, kb, kc):
                 t.deallocate(True)
-            self._scatter(layer.ring_k, kv["k"][1], pt, keep)
-            self._scatter(layer.ring_v, kv["v"][1], pt, keep)
-            keys = ttnn.concat([layer.ring_k, kv["k"][0], self.zeros_kv], dim=2)
-            vals = ttnn.concat([layer.ring_v, kv["v"][0], self.zeros_kv], dim=2)
-            for pair in kv.values():
-                for t in pair:
-                    t.deallocate(True)
-            keys_t = ttnn.transpose(keys, -2, -1)
-            keys.deallocate(True)
-            s = ttnn.matmul(qr, keys_t, dtype=ttnn.bfloat16, compute_kernel_config=self.exact_config)
-            qr.deallocate(True)
-            keys_t.deallocate(True)
-            bias = ttnn.add(layer.bias, ring_bias)
-            sb = ttnn.add(s, bias)
-            s.deallocate(True)
-            bias.deallocate(True)
-            probs = ttnn.softmax(sb, dim=-1, numeric_stable=True, compute_kernel_config=self.exact_config)
-            sb.deallocate(True)
-            o = ttnn.matmul(probs, vals, dtype=ttnn.bfloat16, compute_kernel_config=self.exact_config)
-            probs.deallocate(True)
-            vals.deallocate(True)
-            cat = ttnn.experimental.nlp_concat_heads(o, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            o.deallocate(True)
-            x = self._residual(x, cat, layer.wo)
+            self._scatter(layer.ring_k, kcr, pt, keep)
+            self._scatter(layer.ring_v, vc, pt, keep)
+            kcr.deallocate(True)
+            vc.deallocate(True)
+            keys = ttnn.concat([layer.ring_k, kbr, self.zeros_kv], dim=2)
+            vals = ttnn.concat([layer.ring_v, vb, self.zeros_kv], dim=2)
+            kbr.deallocate(True)
+            vb.deallocate(True)
+            attn = ttnn.transformer.scaled_dot_product_attention_decode(
+                qr,
+                keys,
+                vals,
+                is_causal=False,
+                attn_mask=mask,
+                attention_sink=layer.sinks,
+                scale=self.scale,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=self.sdpa_program,
+                compute_kernel_config=self.sdpa_config,
+            )
+            for t in (qr, keys, vals):
+                t.deallocate(True)
+            # [1, 1, rows * heads, D] -> each block row's heads concatenated, padded back to the tile's 32 rows
+            rows = ttnn.reshape(attn, (1, 1, cfg.block, nl * hd))
+            attn.deallocate(True)
+            cat = ttnn.pad(rows, padding=((0, 0), (0, 0), (0, TILE - cfg.block), (0, 0)), value=0.0)
+            rows.deallocate(True)
+            x = self._residual(x, cat, layer.o_mm, layer.wo)
             h2 = layer.post_norm(x)
-            g = ttnn.linear(
-                h2,
-                layer.w_gate,
-                dtype=ttnn.bfloat16,
-                activation="silu",
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.mm_config,
-            )
-            u = ttnn.linear(
-                h2,
-                layer.w_up,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.mm_config,
-            )
+            gate = layer.up_mm(h2, layer.w_gate)
+            up = layer.up_mm(h2, layer.w_up)
             h2.deallocate(True)
-            gu = ttnn.multiply(g, u)
-            g.deallocate(True)
-            u.deallocate(True)
-            x = self._residual(x, gu, layer.w_down)
-        for t in (hctx, pt, keep, ring_bias):
+            act = ttnn.mul(
+                gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            gate.deallocate(True)
+            up.deallocate(True)
+            x = self._residual(x, act, layer.down_mm, layer.w_down)
+        for t in (hctx, pt, keep, mask):
             t.deallocate(True)
         hf = self.final_norm(x)
         x.deallocate(True)
@@ -452,11 +484,9 @@ class TtDFlash:
         self.head(logits)
         logits.deallocate(True)
 
-    def _residual(self, x, a, w):
-        """x + all_reduce(a @ w) (row-parallel ``w``; consumes ``x`` and ``a``)."""
-        part = ttnn.linear(
-            a, w, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=self.mm_config
-        )
+    def _residual(self, x, a, mm, w):
+        """x + all_reduce(a @ w) (row-parallel ``w`` through DramShardedMatmul ``mm``; consumes ``x`` and ``a``)."""
+        part = mm(a, w)
         a.deallocate(True)
         full = self.plan.all_reduce(part)
         out = ttnn.add(x, full)
@@ -493,8 +523,9 @@ class TtDFlash:
         for row, pos in context:
             positions[row] = int(pos)
         block = [start + min(j, cfg.block - 1) for j in range(TILE)]
-        cos_q, sin_q = self._cos_sin(block, self.scale)
         cos_b, sin_b = self._cos_sin(block)
+        heads = self.queries // cfg.block
+        cos_q, sin_q = (t[:, :, : cfg.block].repeat_interleave(heads, dim=2) for t in (cos_b, sin_b))
         cos_c, sin_c = self._cos_sin([p if p is not None else 0 for p in positions])
         rep = self.plan.replicate()
 
@@ -506,8 +537,10 @@ class TtDFlash:
             "scatter": host(self._scatter_matrix(TILE, positions)),
             "cos_q": host(cos_q),
             "sin_q": host(sin_q),
-            "cos_k": host(torch.cat([cos_b, cos_c], dim=2)),
-            "sin_k": host(torch.cat([sin_b, sin_c], dim=2)),
+            "cos_b": host(cos_b),
+            "sin_b": host(sin_b),
+            "cos_c": host(cos_c),
+            "sin_c": host(sin_c),
         }
 
     def upload(self, context, anchor, start):
