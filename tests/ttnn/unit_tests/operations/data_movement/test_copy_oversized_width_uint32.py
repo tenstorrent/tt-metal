@@ -4,6 +4,7 @@
 
 import pytest
 import torch
+
 import ttnn
 
 
@@ -34,13 +35,45 @@ def test_to_memory_config_oversized_width_uint32(device, output_memory):
 
 
 @pytest.mark.timeout(60, method="thread")
-@pytest.mark.parametrize("repeats", [(1, 1, 2), (1, 2, 2)], ids=["width", "height-and-width"])
-def test_repeat_unshards_oversized_width_uint32(device, repeats):
-    # A WIDTH-sharded last-dimension repeat cannot use the native sharded path.
-    # Both calls must unshard through the row-major copy before repeating.
+@pytest.mark.parametrize("pattern", ["bf16-block-to-width", "uint32-width-to-block"])
+def test_to_memory_config_both_shard_rows_oversized(device, pattern):
+    single_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
     for offset in (0, 37):
-        source, host = _make_oversized_width_input(device, offset)
-        result = ttnn.repeat(source, repeats, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        assert result.memory_config() == ttnn.DRAM_MEMORY_CONFIG
-        assert torch.equal(ttnn.to_torch(result).to(torch.int32), host.repeat(*repeats))
-        assert torch.equal(ttnn.to_torch(source).to(torch.int32), host)
+        if pattern == "bf16-block-to-width":
+            host = (torch.arange(7).reshape(1, 7) * 0.25 - 1.75 + offset).to(torch.bfloat16)
+            input_memory = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(single_core, [1, 63], ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            source = ttnn.from_torch(
+                host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_memory
+            )
+            output_memory = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(single_core, [1, 21], ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            word_dtype = torch.int16
+        else:
+            source, host = _make_oversized_width_input(device, offset)
+            output_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))})
+            output_memory = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(output_grid, [1, 63], ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            word_dtype = torch.int32
+
+        expected_words = host.view(word_dtype)
+        assert torch.equal(ttnn.to_torch(source).view(word_dtype), expected_words)
+        result = ttnn.to_memory_config(source, output_memory)
+        actual_words = ttnn.to_torch(result).view(word_dtype)
+        input_words = ttnn.to_torch(source).view(word_dtype)
+        assert result.memory_config() == output_memory
+        assert torch.equal(
+            input_words, expected_words
+        ), f"{torch.count_nonzero(input_words != expected_words)} input words changed"
+        assert torch.equal(
+            actual_words, expected_words
+        ), f"{torch.count_nonzero(actual_words != expected_words)} output words differ"
