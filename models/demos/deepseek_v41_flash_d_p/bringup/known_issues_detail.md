@@ -400,3 +400,24 @@ CPU only, layer 2, golden inputs (script /tmp/fix10diag/idx_ties.py; framework's
 - Not from P.21 or FIX.10: P.21 did not touch tt/indexer.py (last changed P.19 066340ecb1c); the device's flips match
   what bf16 scores alone give, so no indexer change since 2026-10-17 is needed to explain them.
 - enc_source_engram_17 also hits pytest-timeout (300 s) in the same run.
+
+## FPU matmul fidelity = operand mantissa bits, truncated: in0 (srcB) 6 explicit bits at LoFi / HiFi2, 10 at HiFi3 / 4; in1 (srcA) 4 at LoFi, 9 at HiFi2 / 4
+
+Probe `tests/ttnn/unit_tests/operations/mhc_post_ds41/probes/probe_002.py` (2x2 BH, O.1): mhc_post(stats_weight=W) on
+bf16 F / X, the projection of the device's own bf16 X' ([4096, 10240] x [10240, 24], fp32 W) against CPU models that
+truncate in0 (X') and in1 (W) to k explicit mantissa bits, then multiply in float64:
+
+| fidelity | device vs float64 | best model (in0, in1 bits) | device vs that model |
+|---|---|---|---|
+| LoFi | 2.84e-2 | (6, 4) | 3.2e-4 |
+| HiFi2 | 4.58e-3 | (6, 9) | 3.1e-4 |
+| HiFi4 | 8.5e-4 | (7+, 9) | 3.1e-4 |
+
+The residual ~3e-4 is DS41-16's in-tile TF32 rounding. HiFi2's error is a bias (-2.8e-3 with bf16-valued W: bf16 x'
+loses its 7th mantissa bit by truncation). The flat routed expert (probe flat_expert_ds41, bf16 x / h tiles, LoFi):
+device 5.5e-2 from float64, 2.8e-3 from the (6, 4) model; bfp8 weights are truncated to 4 bits there too. With bfp8 x
+/ h tiles the device sits ~1.8e-2 from an RNE bfp8 model (the packer's ties-away rounding, DS41-103, is not bit-exact
+in any simple model tried: along K / tokens, ties away / even / truncate / ceil), inside its distance from float64
+(shared expert 4.0e-2, routed + combine 2.0e-2). The fork cases' noise floors (O.1) use these models:
+mhc_post_ttnn `reference.fpu_operands`, indexer_score `reference.dsa_score_at(fidelity=)` (device 7.7e-3 = the model's
+own 7.7e-3 vs float64 at HiFi2), flat_routed_expert_ttnn `reference.ffn(formats=)`.

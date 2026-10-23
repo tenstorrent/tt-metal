@@ -5,7 +5,10 @@
 (reference.py: mhc_pre_xing_coefficients = xing40_a4b_d_p reference/xing_ref.py:hc_weights after its projection,
 mhc_pre_xing_collapse), one case per model call (xing_cases.py). Inputs differ per device (sharded over the mesh on
 dim 0); each chip's output is checked on its own data. test_reference_matches_xing_ref checks the reference itself
-against xing_ref.hc_weights on the CPU."""
+against xing_ref.hc_weights on the CPU.
+
+Cases with `noise` (deepseek_v41_flash_d_p O.1: partials + collapse_pre + bf16 streams, the bf16 pack, the engram pack)
+run in test_mhc_pre_xing_ds41, every output within fork_cases.noise_limit at its declared formats (F139)."""
 
 import importlib.util
 from pathlib import Path
@@ -15,6 +18,7 @@ import torch
 
 import ttnn
 from models.demos.common.bringup.testing import determinism
+from models.demos.common.bringup.testing.fork_cases import noise_limit
 
 _HERE = Path(__file__).resolve().parent
 
@@ -151,7 +155,10 @@ def _device_call(case, mesh, seed):
     return (x, row, base, want), call
 
 
-@pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
+_LEGACY = [c for c in CASES if "noise" not in c]
+
+
+@pytest.mark.parametrize("case", _LEGACY, ids=[c["id"] for c in _LEGACY])
 def test_mhc_pre_xing(mesh, case):
     n = case["n"]
     (x, row, base, want), run_a = _device_call(case, mesh, case["seed"])
@@ -245,3 +252,135 @@ def test_reference_matches_deepseek_kernel():
         assert rel <= 2e-5, rel
         xing = ref.mhc_pre_xing_coefficients(row, scale, base.tolist(), float(n * H), n, 1e-6, 1e-6, 20, (-30.0, 30.0))
         assert ((xing - want).abs() / want.abs()).max() > 1e-2, "the Xing math must differ from DeepSeek's"
+
+
+# ---------------------------------------------------------------------------------------------------------------- DS41
+_DS41 = [c for c in CASES if "noise" in c]
+
+
+def _put(t, mesh, dtype=ttnn.float32, shard=True):
+    return ttnn.from_torch(
+        t.contiguous(),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0) if shard else ttnn.ReplicateTensorToMesh(mesh),
+    )
+
+
+def _ds41_case(case, mesh, seed):
+    """Host tensors (dict) and the device call (built once; the call only runs the op) of a DS41 case."""
+    g = torch.Generator().manual_seed(seed)
+    nd = mesh.get_num_devices()
+    n, H, C, T = case["n"], case["hidden"], case["C"], case["T"]
+    host = {"x": torch.randn(nd, 1, T, n * C, generator=g).to(torch.bfloat16)}  # the chip's bf16 streams
+    if case["mode"] == "coef":
+        # the TP group's partial rows: the two column halves of a random full-width row's projection / sum x^2
+        full = torch.randn(nd, 1, T, n * H, generator=g)
+        fn = torch.randn(NG, n * H, generator=g) * (n * H) ** -0.5
+        P = case["partials"]
+        rows = torch.zeros(nd, P, T, 32)
+        for p in range(P):
+            cols = slice(p * n * H // P, (p + 1) * n * H // P)
+            rows[:, p, :, :NG] = full[:, 0, :, cols] @ fn[:, cols].T
+            rows[:, p, :, NG] = full[:, 0, :, cols].square().sum(-1)
+        row = rows[:, :1]
+        for p in range(1, P):
+            row = row + rows[:, p : p + 1]  # the op's exact fp32 sum, in dim-1 order
+        host.update(row=row, pre=torch.rand(nd, 1, T, NG, generator=g))
+        args = (_put(rows, mesh), _put(host["x"], mesh, ttnn.bfloat16))
+        pre_d = _put(host["pre"], mesh)
+        call = lambda: ttnn.bringup.mhc_pre_xing(  # noqa: E731
+            *args,
+            scale=case["scale"],
+            base=case["base"],
+            norm_width=float(n * H),
+            n=n,
+            norm_eps=case["norm_eps"],
+            hc_eps=case["hc_eps"],
+            sinkhorn_iters=case["sinkhorn_iters"],
+            deepseek=True,
+            collapse_pre=pre_d,
+            partials=P,
+        )
+    elif case["mode"] == "pack":
+        mix = torch.zeros(nd, 1, T, 32)
+        mix[..., :NG] = torch.randn(nd, 1, T, NG, generator=g)
+        host["mix"] = mix
+        args = (_put(mix, mesh), _put(host["x"], mesh, ttnn.bfloat16))
+        call = lambda: ttnn.bringup.mhc_pre_xing_pack(*args, n=n)  # noqa: E731
+    else:  # engram
+        host["x"] = (host["x"].float() * 2).to(torch.bfloat16)
+        host["k"] = torch.randn(nd, 1, T, case["keys_width"], generator=g).to(torch.bfloat16)
+        host["w"] = torch.randn(n * C, generator=g) * 0.1
+        w32 = host["w"].reshape(1, 1, 1, -1).expand(1, 1, 32, n * C)
+        args = (
+            _put(host["x"], mesh, ttnn.bfloat16),
+            _put(host["k"], mesh, ttnn.bfloat16),
+            _put(w32, mesh, shard=False),
+        )
+        call = lambda: ttnn.bringup.mhc_pre_xing_pack(  # noqa: E731
+            None, args[0], n=n, engram_keys=args[1], engram_weight=args[2]
+        )
+    return host, call
+
+
+def _ds41_check(name, got, want, lim):
+    got, want = got.double().reshape(want.shape), want.double()
+    a, b = (got - got.mean()).flatten(), (want - want.mean()).flatten()
+    p = float(a @ b / (a.norm() * b.norm()))
+    rel = float((got - want).norm() / want.norm())
+    print(
+        f"{name}: rel {rel:.3e} (limit {lim['rel']:.3e}, noise {lim['noise_rel']:.3e}) pcc {p:.9f} (min {lim['pcc']:.9f})"
+    )
+    assert rel <= lim["rel"], f"{name}: rel L2 {rel:.3e} > limit {lim['rel']:.3e} (pcc {p:.9f}, a diagnostic)"
+
+
+def _sumsq(t):
+    return ref.running_sum(t * t) if t.dtype == torch.float32 else (t * t).sum(-1)
+
+
+@pytest.mark.parametrize("case", _DS41, ids=[c["id"] for c in _DS41])
+def test_mhc_pre_xing_ds41(mesh, case):
+    n, nz = case["n"], case["noise"]
+    host, run_a = _ds41_case(case, mesh, case["seed"])
+    out = run_a()
+    nd = mesh.get_num_devices()
+    for d in range(nd):
+        one = lambda t: ttnn.to_torch(ttnn.get_device_tensors(t)[d]).double()  # noqa: E731
+        x = host["x"][d : d + 1]
+        if case["mode"] == "coef":
+            hc, y = out
+            row = host["row"][d : d + 1]
+            args = (case["scale"], case["base"], float(n * case["hidden"]), n, case["norm_eps"], case["hc_eps"])
+            coef = lambda r: ref.mhc_pre_xing_coefficients(  # noqa: E731
+                r, *args, case["sinkhorn_iters"], case["clamp"], deepseek=True, dtype=r.dtype
+            )
+            want = coef(row.double())
+            got = one(hc).reshape(want.shape)
+            for name, sl in (("pre", slice(0, n)), ("post", slice(n, 2 * n)), ("comb", slice(2 * n, NG))):
+                lim = noise_limit(lambda r: coef(r)[..., sl], [row], nz["hc"]["inputs"], nz["hc"]["out"])
+                _ds41_check(f"{case['id']} dev {d} {name}", got[..., sl], want[..., sl], lim)
+            pre = host["pre"][d : d + 1, ..., :n]
+            want_y = ref.mhc_pre_xing_collapse(pre, x, n)
+            fy = lambda p, xx: ref.mhc_pre_xing_collapse(p, xx, n).to(p.dtype)  # noqa: E731
+            assert y.dtype == ttnn.bfloat16, y.dtype
+            _ds41_check(f"{case['id']} dev {d} y", one(y), want_y, noise_limit(fy, [pre, x], *nz["y"].values()))
+        elif case["mode"] == "pack":
+            got = one(out).reshape(*x.shape[:-1], 32)
+            mix = host["mix"][d : d + 1].double()
+            assert torch.equal(got[..., :NG], mix[..., :NG]) and torch.equal(got[..., NG + 1 :], mix[..., NG + 1 :])
+            lim = noise_limit(_sumsq, [x], nz["ss"]["inputs"], nz["ss"]["out"])
+            _ds41_check(f"{case['id']} dev {d} ss", got[..., NG], x.double().square().sum(-1), lim)
+        else:  # engram
+            got = one(out).reshape(*x.shape[:-1], 32)
+            k, w = host["k"][d : d + 1], host["w"]
+            fe = lambda hh, kk, ww: ref.engram_pack(hh, kk, ww, n, running=hh.dtype == torch.float32)  # noqa: E731
+            want = ref.engram_pack(x.double(), k.double(), w.double(), n)
+            for name, sl in (("dot", slice(0, n)), ("hh", slice(n, 2 * n)), ("kk", slice(2 * n, 3 * n))):
+                lim = noise_limit(lambda *t: fe(*t)[..., sl], [x, k, w], nz["row"]["inputs"], nz["row"]["out"])
+                _ds41_check(f"{case['id']} dev {d} {name}", got[..., sl], want[..., sl], lim)
+            assert bool((got[..., 3 * n :] == 0).all()), "engram row: columns past 3 n must be zero"
+    run_b = _ds41_case(case, mesh, case["seed"] + 1)[1]
+    determinism.assert_deterministic(run_a, run_b, first=out, label=case["id"])

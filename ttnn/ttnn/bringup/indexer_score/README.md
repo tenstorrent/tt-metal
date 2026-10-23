@@ -85,7 +85,6 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7):
 - Source multi-device tests are not carried (they open FABRIC_1D / torus meshes); the ring op is covered by the
   fork's own 2x2 FABRIC_2D tests. `tests/unit/test_key_stride_ring.py` has a 2x4 case skipped on a 2x2 box.
 - Known source-test divergence: `test_indexer_score_rejects_fp32_dest_acc` fails on the fork by design (`tests/source.yaml`).
-- No model case for deepseek_v41_flash_d_p's call (ratio 2 / 1, natural_query_blocks) in `tests/cases.py`.
 
 ## How to call
 ```python

@@ -1,0 +1,46 @@
+{
+ "used": [
+  {
+   "id": "K-45",
+   "how": "sigs keyed on argument values: diffed the uncovered call against attempt 1's case and found the varying value is the int extra_key, which a repr cannot fix",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-109",
+   "how": "started from its MeshProgramDescriptor repr (holds: one sig for all 8 layers) and found the remaining per-run variance",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-109",
+   "evidence": "'1 stable sig' is wrong across runs: attempt 1's capture had 284a4a9ead (extra_key 9507296), the gate's capture b155b17c4d (extra_key 9582688); sha1 of the gate entry with extra_key=9507296 reproduces 284a4a9ead exactly. Cause: tt/weighted_combine.py:346 key0 = 9_100_000 + (id(self) % 100_000) * 8",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "fork_capture records int arguments by value, so a cache key derived from id() (or any address) gives a new sig every run; K-45's fix (a value __repr__) covers only handle types",
+  "Check a sig's stability by capturing twice before writing the case (attempt 1 captured once)"
+ ],
+ "overseer": [],
+ "cited_only": [
+  "DS41-110"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "O.1",
+  "role": "optests",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-10-23T03:56:00",
+  "head": "6c052789ab5",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/O.1.optests.2.json"
+  ]
+ }
+}

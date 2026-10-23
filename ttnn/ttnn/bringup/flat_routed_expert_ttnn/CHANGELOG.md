@@ -189,3 +189,21 @@ shapes, mesh, row-major y).
   `device/flat_routed_expert_{plan.hpp,plan.cpp,types.hpp,device_operation.cpp,program_factory.hpp,program_factory.cpp}`,
   `device/kernels/{se3_compute.cpp,se5_recv.cpp}`, `device/kernels/se_rh.hpp` (deleted),
   `tests/unit/test_ds41_h_options.py` (deleted), `tests/unit/test_weights_nk.py`
+
+### Tests: fork model-case suite with deepseek_v41_flash_d_p cases (O.1, 2026-10-23)
+- What: tests/cases.py, reference.py, test_flat_routed_expert_ttnn.py, weighted_case.py: the shared expert's
+  flat_routed_expert call (bfp8, I 1280, one always-on expert, token index) and the routed experts'
+  flat_routed_expert_with_program call with the weighted combine fused in (bfp4, 24 of 96 experts a chip, top 6, one
+  pass of 1024 home tokens, bf16 sums; weighted_case.py ports the model's WeightedCombine wiring onto the combine_rf
+  builders). Random weights at exact block-float values (check_exact); limits from noise_limit at the op's formats
+  (bfp8 x / h tiles, LoFi operand bits, fp32 sums; reference.ffn(formats=)): shared 4.0e-2 vs 9.9e-2, routed 2.0e-2 vs
+  2.95e-2; zero rows exact for unseen home tokens; determinism 5 x A. A halved block of rows fails (checked by hand).
+  ttnn/ttnn/bringup/__init__.py: a value repr for MeshProgramDescriptor (`extra`), so the fork-call capture gives one
+  signature for the 8 layers' calls instead of one per object address and run. No op change.
+- Why: task O.1, every call a model makes to a fork gets a case.
+- Needed by: deepseek_v41_flash_d_p O.1
+- Files: tests/cases.py, tests/reference.py, tests/test_flat_routed_expert_ttnn.py, tests/weighted_case.py,
+  ttnn/ttnn/bringup/__init__.py
+- Follow-up (O.1 attempt 4): the routed case's sig is the F179 stable one, 3fc158f72b (the capture now leaves out
+  extra_key, an id()-derived program-cache key, DS41-110). Same call as the earlier 284a4a9ead / 31755c8401, which
+  differ only in extra_key (checked by re-hashing the captured entry). No op change.

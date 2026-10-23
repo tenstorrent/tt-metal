@@ -80,7 +80,7 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7):
   errors identical to the unchanged file (`models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md`, P.5).
 - `import ttnn.bringup.fabric_reduce_scatter_ttnn.fabric_reduce_scatter as m` yields the function, not the module (use
   `sys.modules`) (same file, P.5).
-- No DeepSeek-V4.1 model case in `tests/cases.py` yet.
+- DeepSeek-V4.1's 2x2 calls have model cases in `tests/cases.py` (O.1).
 
 ## How to call
 ```python

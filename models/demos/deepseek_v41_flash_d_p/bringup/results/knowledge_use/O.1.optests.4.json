@@ -1,0 +1,68 @@
+{
+ "used": [
+  {
+   "id": "DS41-110",
+   "how": "the uncovered flat_routed_expert_with_program call differs from the routed case only in extra_key (re-hashed with attempt 1's key -> 284a4a9ead): set the case's sig to the F179 stable 3fc158f72b instead of building a second case",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-45",
+   "how": "sigs keyed on argument values: checked the new sig is the stable one (sig_full 31755c8401 carries the volatile extra_key)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-46",
+   "how": "the case keeps one sig in cases.py CASES; verified with fork_cases --lint (uncovered 0, lint 0)",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-110",
+   "evidence": "its Fix (a deterministic key0 in tt/weighted_combine.py) is superseded by F179 commit 8022b4a9d12 (testing/fork_capture.py VOLATILE_KWARGS); entry's Fix updated in the model's known_issues.md",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "fork tests of ring (fused all-gather) ops: the gathered destination buffer must not be written from the host between calls; peers run ahead by one call (new DS41-111)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-34",
+   "answer": "done",
+   "evidence": "F179 in HEAD 8022b4a9d12; fork_calls.json (the gate's post-F179 capture) has sig 3fc158f72b with sig_full 31755c8401 for the routed call"
+  },
+  {
+   "id": "OV-35",
+   "answer": "done",
+   "evidence": "the missing call is the routed case's own call (only extra_key differs); its sig in flat_routed_expert_ttnn/tests/cases.py is now 3fc158f72b instead of adding a duplicate ~100 s case; other cases untouched; fork_cases --lint: uncovered 0. The gate's capture re-captures. Also fixed the gate's second failure (indexer_score DS41 determinism, a test-side host-write race, DS41-111)"
+  }
+ ],
+ "cited_only": [
+  "DS41-111"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "O.1",
+  "role": "optests",
+  "attempt": 4,
+  "agent": "bringup-engineer",
+  "t": "2026-10-23T05:01:19",
+  "head": "8022b4a9d12",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/O.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/fork_calls.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/O.1.optests.4.json",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/cases.py",
+   "ttnn/ttnn/bringup/indexer_score/CHANGELOG.md",
+   "ttnn/ttnn/bringup/indexer_score/tests/test_indexer_score.py"
+  ]
+ }
+}

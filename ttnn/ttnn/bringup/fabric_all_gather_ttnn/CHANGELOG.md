@@ -46,3 +46,12 @@ Tests: `tests/unit/` (the source branch's `tests/ttnn/unit_tests/operations/ccl/
 
 ### Tests: fork test suite with glm53_flash_d_p cases (O.1, 2026-10-13)
 - Model-case suite `tests/cases.py`, `tests/reference.py`, `tests/test_fabric_all_gather_ttnn.py`: GLM's four calls (axis 0 / axis 1 TILE row gathers, the full-mesh ROW_MAJOR striped-latent prefix gather with gathered_dim_size), bit-exact incl. the untouched fill, plus determinism. No op change.
+
+### Tests: deepseek_v41_flash_d_p cases (O.1, 2026-10-23)
+- What: 15 random-input cases for the calls deepseek_v41_flash_d_p makes (tt/ccl.py:all_gather, 2x2: bf16 / fp32 TILE
+  and uint32 ROW_MAJOR, dims 1 / 2 / 3, axes 0 / 1), with the model's caller-owned L1_SMALL semaphore pair, num_links
+  None and its 10880 B fabric payload; the test takes the case's dtype (bf16, fp32, uint32: bit compares) and
+  semaphores (GLM cases unchanged). Exact, every element; a corrupted element fails (checked by hand). No op change.
+- Why: task O.1, every call a model makes to a fork gets a case.
+- Needed by: deepseek_v41_flash_d_p O.1
+- Files: tests/cases.py, tests/test_fabric_all_gather_ttnn.py

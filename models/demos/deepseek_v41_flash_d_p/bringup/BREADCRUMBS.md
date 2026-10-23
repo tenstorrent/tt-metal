@@ -2958,3 +2958,69 @@ Checked: `ops_lint.violations` and `settings_lint.violations` on every changed f
 min layer PCC 0.99676 (L03), pcc_chunk_out 0.99961, host_transfers_per_layer 0, chunk_wall_ms 99.2 (spread 14.2);
 the same accuracy digits as attempt 1 (deterministic). Before / after numbers: attempt 1's section above.
 Re-run: `python -m models.demos.common.bringup.orchestrator measure --task P.22`.
+
+## O.1 optests attempt 1 (2026-10-23): a random-input case for every ttnn.bringup call
+
+What: 56 distinct fork calls (ladder rung last, 2x2) now each have a case: fabric_all_gather 15, fabric_reduce_scatter
+6, rms_norm 8, mhc_post 3, mhc_pre_xing 16 + mhc_pre_xing_pack 2, ring_indexer_score_dsa 3, moe_grouped_topk 1
+(new suite: cases.py / reference.py / test_moe_grouped_topk.py: the previous gate failed "forks without
+tests/test_*.py: ['moe_grouped_topk']" before running any test), flat_routed_expert 1 + flat_routed_expert_with_program
+1 (new suite incl. tests/weighted_case.py). No op changed; CHANGELOG / README of each fork updated.
+Decisions:
+- K-45 / DS41-109: the 8 per-layer flat_routed_expert_with_program sigs were keyed on the `extra` descriptor's
+  address; `ttnn/ttnn/bringup/__init__.py:_stable_arg_reprs` gives MeshProgramDescriptor a value repr (kernel counts per
+  program) -> one stable sig 284a4a9ead. Re-captured once (63 -> 56 calls); every other sig unchanged.
+- Limits: new math cases declare `noise` and check rel L2 <= fork_cases.noise_limit (F139); PCC printed only (asserting
+  noise_limit's pcc failed 7 mhc_pre cases at 1 - 1e-15 with rel inside its limit). Where the op's real formats are
+  coarser than its inputs, the formats run models them, never a measured device number: the FPU's operand mantissa
+  bits per fidelity (DS41-108: in0 6 bits at LoFi / HiFi2, in1 4 at LoFi / 9 at HiFi2-4; fitted on probes, the device
+  3e-4 from the model), bfp8 x / h tiles (round_to), fp32 running sums (mhc_pre pack / engram).
+- Measured vs limits: reduce-scatter bf16 1.8e-3 / 3.6e-3 (exact case bit-identical); rms_norm 1.7e-3 / 3.3e-3,
+  stats_out 2.8e-8 / 1.1e-7; mhc_post X' 1.66e-3 / 3.3e-3, HiFi2 projection 4.06e-3 / 8.2e-3, sum x'^2 5.9e-8 / 1.0e-7;
+  mhc_pre worst ratio 0.73; router weights 1.7e-3 / 3.4e-3 (4096 / 4096 rows clear, all match); indexer (HiFi2) 7.7e-3
+  / 1.55e-2; shared expert (LoFi bfp8) 4.0e-2 / 9.9e-2; routed + weighted combine (LoFi bfp4, bf16 sums) 2.0e-2 /
+  2.95e-2. Negative checks by hand: a corrupted all-gather element and a halved block of routed rows both fail.
+- The routed case ports the model's WeightedCombine (tt/weighted_combine.py) into the fork's tests (copied, not
+  imported) on combine_rf's builders; experts at exact bfp4 values (check_exact), built in ~100 s.
+Gotchas: fork_tests runs every top-level tests/test_*.py of the 8 forks (other models' cases too; 4x2 xing cases of
+mhc_post / mhc_pre run on the 2x2 box per chip; flat's test_flat_bench passes, 13 s).
+Checked (not the gate's own --check: its one unit, capture ~8 min + the 8 forks' suites ~12.5 min, exceeds a 10 min
+foreground call): the gate's capture command by hand (56 calls), `fork_cases --capture ... --spec ... --lint`
+(uncovered 0, lint 0), and `fork_tests --fork <f>` for all 8 forks on the final files, every model's cases: all pass
+(rms_norm 18 + 2 skipped-size, mhc_pre 121, indexer 5, flat 2 + bench, all_gather 19, reduce_scatter 8, mhc_post 5,
+moe_grouped_topk 1).
+Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate O.1 --spec
+models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml --check`; one fork: `python -m
+models.demos.common.bringup.testing.fork_tests --fork <fork>`.
+
+## O.1 optests attempt 2 (2026-10-23): blocked, the remaining uncovered sig cannot be fixed in this step's paths
+
+What: the gate (attempt 1's code) failed only on fork_calls_uncovered 1: flat_routed_expert_with_program sig
+b155b17c4d (x8), while the case carries attempt 1's 284a4a9ead. Every fork test passed (fork_tests_failed 0).
+Cause (DS41-110): the call's `extra_key` = `tt/weighted_combine.py:346` key0 = 9_100_000 + (id(self) % 100_000) * 8, a
+Python object address that differs run to run. Checked: hashing the gate's entry with extra_key 9507296 instead of
+9582688 gives exactly 284a4a9ead, so nothing else differs. DS41-109's descriptor repr does work (one sig for all 8
+layers), but its "stable across captures" claim was wrong (attempt 1 captured only once).
+Not done: no case for b155b17c4d. It would only match until the next capture, so it would be a guess, not a fix.
+Fixing this needs a path this step may not change: a deterministic key0 in tt/weighted_combine.py (e.g. a class-level
+itertools.count; the key only needs to be unique per WeightedCombine instance and pass), or a capture that normalizes
+cache keys (testing/fork_capture.py). After that: capture twice, set the routed case's sig in
+flat_routed_expert_ttnn/tests/cases.py to the stable value, and re-run the gate.
+Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate O.1 --spec
+models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml --check`.
+
+## O.1 optests attempt 4 (2026-10-23): stable routed sig, indexer test race fixed
+
+What: (1) flat_routed_expert_ttnn/tests/cases.py routed case sig 284a4a9ead -> 3fc158f72b, the F179 stable sig
+(capture leaves out extra_key, DS41-110 / OV-35). The captured entry re-hashed with attempt 1's extra_key gives
+284a4a9ead, so it is the same call; no second case (it would rebuild the ~100 s routed case). (2) The orchestrator's
+gate after attempt 3 also failed fork_tests_failed 1: test_ring_indexer_score_dsa_ds41 ratio-2 case "not
+deterministic", A run 4, chip 3. Probe (indexer_score_ds41_det, deleted): 4 of 299 calls wrong on chip 3 with two
+cycled semaphore sets (so not semaphore reuse), wrong on exactly the 13824 remote-shard columns. Cause (DS41-111): the
+test wrote each call's fresh k buffer from the host just before the call; the peer done with call N starts N+1 and
+writes its shard there while chip 3 (most causal work, slowest) still runs N, then chip 3's queued host write overwrites
+it. Fix (test only): every call's buffer written before the first call (`kbufs`); 0 of 299 and 0 of 599. The model is
+not affected: its buffer is written once at load (tt/indexer.py _kbuf). The hy4 / glm53 ring tests keep the per-call
+write (other models' tests; latent, they pass). No op change.
+Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate O.1 --spec
+models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml --check`.

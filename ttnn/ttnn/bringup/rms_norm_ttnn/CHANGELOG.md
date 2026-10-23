@@ -222,3 +222,12 @@ Source: ai-generated (codegen, `dnijemcevic/rms_norm_replacement_run0` @ `31b0b1
 
 ### Tests: glm53_flash_d_p kv_a_layernorm case re-captured (O.1, 2026-10-13)
 - GLM's [1, 1, 5120, 512] fp32 case (no longer called) replaced by the striped-latent [1, 1, 1280, 512] fp32 call (`tests/cases.py`). No op change.
+
+### Tests: deepseek_v41_flash_d_p cases (O.1, 2026-10-23)
+- What: 8 random-input cases for the calls deepseek_v41_flash_d_p makes (tt/norm.py, 2x2, HiFi4 + fp32 DEST, fp32
+  weights, eps 1e-20: stats_out, partial_stats / stats_width 5120, input_window (0, 1280) / (1280, 1792), dtype bf16,
+  the default program), run by test_rms_norm_ttnn_ds41: rel L2 within noise_limit (bf16 outputs 1.68-1.77e-3 vs
+  3.3e-3; stats_out row sums 2.8e-8 vs 1.1e-7), determinism. No op change.
+- Why: task O.1, every call a model makes to a fork gets a case.
+- Needed by: deepseek_v41_flash_d_p O.1
+- Files: tests/cases.py, tests/test_rms_norm_ttnn.py

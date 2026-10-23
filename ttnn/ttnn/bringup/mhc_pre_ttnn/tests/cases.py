@@ -257,7 +257,11 @@ def _xing_cases():
     from pathlib import Path
 
     xs = runpy.run_path(str(Path(__file__).resolve().parent / "xing_cases.py"))["CASES"]
-    return [{**c, "op": "mhc_pre_xing_pack" if c["mode"] == "pack" else "mhc_pre_xing"} for c in xs if "sig" in c]
+    return [
+        {**c, "op": "mhc_pre_xing_pack" if c["mode"] in ("pack", "engram") else "mhc_pre_xing"}
+        for c in xs
+        if "sig" in c
+    ]
 
 
 CASES += _xing_cases()
