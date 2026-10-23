@@ -265,8 +265,9 @@ vllm serve ... \
   commit. The anchor needs no gather: the fill pass runs the MTP layer on every committed slot's own hidden row (the
   verify's final-norm buffer), and the anchor is the one slot the chain gives step positions. `MIMO_SPEC_CHAIN=0`
   restores the unchained flow (an `argmax_ids` verify then runs no accept step); `MIMO_SPEC_CHAIN_CHECK=1` drafts every
-  chained draft again from the host plan and logs differences. `MIMO_VLLM_TIMING=1` splits the verify's wait at the
-  accept trace's end (the verify's device share, then the chained draft's) and counts chained and host-planned drafts.
+  chained draft again from the host plan and logs differences (a deferred verify, below, waits for its pages and checks
+  its drafts before it returns). `MIMO_VLLM_TIMING=1` splits the verify's wait at the accept trace's end (the
+  verify's device share, then the chained draft's) and counts chained and host-planned drafts.
   Every buffer the chain reads or writes is persistent (accept page, `mtp_packed`, the MTP heads' token rows, the
   result page), so the relay step of a chained verify (below) reads them.
 - **Async scheduling** (`supports_async_spec_decode`; `MIMO_ASYNC_SPEC=0` declares none, and the launch then needs

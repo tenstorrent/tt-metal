@@ -44,6 +44,7 @@ from models.experimental.mimo_v2_6_flash.tests.test_spec_chain_adapter_host impo
     verify,
 )
 from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
+    DRAFTS_AT,
     drafts_step,
     plan_step,
     stash_page,
@@ -544,6 +545,41 @@ def test_the_chain_survives_the_ring_and_reads_its_pages_late(adapter, defer):
         seq += readout.accepted_token_ids[SPEC_ROW, :m].tolist()
         adapter.propose_draft_tokens(MAX_DRAFTS, *commit(readout), hidden=h)
     assert seq == SEQ[: len(seq)] and len(seq) > 256
+
+
+def test_the_chain_check_covers_deferred_and_chained_verifies(adapter, defer):
+    """MIMO_SPEC_CHAIN_CHECK in the chained lane loop: every deferred verify, the host-built one and each one chained
+    onto the verify in flight, waits for its pages and drafts its chained draft again from the host plan before it
+    returns. The loop commits what it commits without the check."""
+    lane = adapter.models[1]
+    adapter.chain_check = True
+    seq, counts = run_chained(adapter, 200, steps_to=300)
+    assert seq == SEQ[: len(seq)]
+    stats = adapter.chain_stats
+    assert stats["checked"] == len(counts) and stats["mismatched"] == 0
+    assert lane.mtp.planned == 1 + len(counts), "the first draft, then one redraft per verify"
+
+
+def test_the_chain_check_counts_a_deferred_draft_the_host_plan_drafts_otherwise(adapter, defer, monkeypatch):
+    """A host plan that drafts another token than the chain did: the deferred verify counts the mismatch, and its
+    propose still returns the chained drafts (the handle's copy of the page, made before the redraft)."""
+    lane = adapter.models[1]
+    drafts = start(adapter, 600)
+    adapter.chain_check = True
+    name = "enqueue_layers" if lane.mtp.multi else "enqueue"
+    enqueue = getattr(lane.mtp, name)
+
+    def other_drafts(*args):
+        enqueue(*args)
+        lane.chain.words[DRAFTS_AT + 2] = (lane.chain.words[DRAFTS_AT + 2] + 1) % VOCAB
+
+    monkeypatch.setattr(lane.mtp, name, other_drafts)
+    handle = deferred(adapter, *block(SEQ[600], 600, drafts)).handle
+    assert adapter.chain_stats["checked"] == adapter.chain_stats["mismatched"] == 1
+    readout = read_on_thread(adapter, handle)
+    m = int(readout.accepted_counts[SPEC_ROW])
+    out = adapter.propose_draft_tokens(MAX_DRAFTS, *commit(readout), hidden=handle)
+    assert out.draft_token_ids[SPEC_ROW].tolist() == [draft_of(600 + m, k) for k in range(MAX_DRAFTS)]
 
 
 def test_fewer_drafts_than_the_device_made(adapter, defer):

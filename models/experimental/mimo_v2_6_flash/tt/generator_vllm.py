@@ -153,8 +153,11 @@ MTP_BACKFILL = os.environ.get("MIMO_MTP_BACKFILL", "1") == "1"
 # MIMO_SPEC_CHAIN=0: no draft chained behind a verify (every draft host-planned after the plugin's walk, and an
 # argmax_ids verify reads its greedy tokens without an accept step), the flow before tt/spec_chain.py, for comparison.
 SPEC_CHAIN = os.environ.get("MIMO_SPEC_CHAIN", "1") == "1"
-# MIMO_SPEC_CHAIN_CHECK=1 (debug): every draft returned from the chain is drafted again from the host plan (the same
-# MTP inputs, rewriting the same ring entries) and compared; mismatches are logged (``chain_stats``).
+# MIMO_SPEC_CHAIN_CHECK=1 (debug): a draft chained behind a verify is drafted again from the host plan of the commit it
+# drafted from (the same MTP inputs, rewriting the same ring entries) and compared; mismatches are logged
+# (``chain_stats``). A synchronous verify's chained draft is checked at its propose when the plugin committed what the
+# device did; a deferred verify reads its pages and checks its drafts before it returns (``_check_deferred``), so the
+# host waits for the device on every verify.
 SPEC_CHAIN_CHECK = os.environ.get("MIMO_SPEC_CHAIN_CHECK") == "1"
 # MIMO_ASYNC_SPEC=0: declare no asynchronous speculative decoding (``supports_async_spec_decode``), so a speculating
 # launch runs synchronously (vLLM's --no-async-scheduling), for comparison.
@@ -1065,6 +1068,8 @@ class MiMoV2ForCausalLM:
             self._next_tip += 1
             handle.tip_id = self._next_tip
             self._tip = handle
+            if self.chain_check:
+                self._check_deferred(handle)
             if TIMING:
                 self._spec_timing("verify", t0, 0.0, sum(map(len, lanes)), self._verify_tables_s, chained=chained)
             self._log_fused()
@@ -1338,19 +1343,9 @@ class MiMoV2ForCausalLM:
                 hits += 1
                 if not self.chain_check:
                     continue
-            slot = source.row - lane * self.per_lane
-            self._backfill(lane, slot, int(committed_positions[r, 0]) - 1)
-            self.mtp_ring[lane] = (slot, int(committed_positions[r, m - 1]) - 1)
-            if mtp.multi:
-                mtp.enqueue_layers(source, committed_tokens[r].tolist(), committed_positions[r].tolist(), m)
-                anchor = SPEC_SLOTS - 1
-            else:
-                plan = plan_mtp(source, committed_positions[r].tolist(), m)
-                slot_tokens = [0] * SPEC_SLOTS
-                for c in range(m):
-                    slot_tokens[source.slots[c]] = int(committed_tokens[r, c])
-                mtp.enqueue(slot_tokens, plan)
-                anchor = plan.anchor
+            anchor = self._enqueue_host_draft(
+                lane, source, committed_tokens[r].tolist(), committed_positions[r].tolist(), m
+            )
             inputs_s += mtp.last_inputs_s
             jobs.append((lane, r, anchor, hit))
         waited = 0.0
@@ -1372,6 +1367,44 @@ class MiMoV2ForCausalLM:
         if TIMING:
             self._spec_timing("propose", t0, waited, planned, inputs_s, chained=hits)
         return DraftOutput(draft_token_ids=drafts, num_valid=valid)
+
+    def _enqueue_host_draft(self, lane, source, tokens, positions, m):
+        """The MTP draft of the host plan for the commit of ``m`` tokens ``tokens`` at ``positions`` of the lane's
+        DraftSource (non-blocking), behind the backfill when the rings do not hold the request's rows before it: with
+        one layer reference.spec_decode.plan_mtp, with every layer the commit's description (the device plans the
+        passes: their rows depend on its stash). It reads the resident final hidden, which must still be that step's.
+        Returns the anchor slot whose drafts ``read_drafts`` returns."""
+        mtp = self.models[lane].mtp
+        slot = source.row - lane * self.per_lane
+        self._backfill(lane, slot, int(positions[0]) - 1)
+        self.mtp_ring[lane] = (slot, int(positions[m - 1]) - 1)
+        if mtp.multi:
+            mtp.enqueue_layers(source, tokens, positions, m)
+            return SPEC_SLOTS - 1
+        plan = plan_mtp(source, positions, m)
+        slot_tokens = [0] * SPEC_SLOTS
+        for c in range(m):
+            slot_tokens[source.slots[c]] = int(tokens[c])
+        mtp.enqueue(slot_tokens, plan)
+        return plan.anchor
+
+    def _check_deferred(self, handle):
+        """MIMO_SPEC_CHAIN_CHECK on a deferred verify, right after its enqueue: waits for its pages, then drafts each
+        draft chained behind a pass again from the host plan of the commit the device drafted from, while nothing is
+        enqueued behind the verify (the resident hidden is still its own), and compares. The plugin reads the handle's
+        page copies as before, and a verify chained onto this one relays the page the redraft rewrote with the same
+        drafts; a mismatch is logged, and the relay then verifies the host plan's drafts."""
+        results = handle.read()
+        jobs = []
+        for lane, source in handle.sources.items():
+            result = next(res for ln, _, res in results if ln == lane)
+            chained = chained_draft(result, source, layers=self._mtp_layers(lane))
+            if chained is not None:
+                anchor = self._enqueue_host_draft(lane, source, chained.tokens, chained.positions, len(chained.tokens))
+                jobs.append((lane, chained, anchor))
+        for lane, chained, anchor in jobs:
+            host = torch.tensor(self.models[lane].mtp.read_drafts(anchor), dtype=torch.int32)
+            self._check_chained(lane, torch.tensor(chained.drafts, dtype=torch.int32), host)
 
     def _propose_deferred(self, handle, num_drafts, committed_tokens, committed_positions, accepted_counts):
         """The propose of a deferred verify (once, on the engine thread, after its read, possibly steps later): the
