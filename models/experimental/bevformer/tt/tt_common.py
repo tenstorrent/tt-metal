@@ -74,7 +74,7 @@ class TTConv2D:
     ``input_layout``; a call with ``subsampled`` passes the subsample (``subsample``) itself. Its
     ``conv_pth`` is then a Linear's ``(in, out)`` weight and ``(1, out)`` bias, which
     ``model_preprocessing`` emits for such convs. A spatial conv keeps conv2d and runs in
-    ``dram_conv_slices`` width slices.
+    ``dram_conv_slices`` width slices, or height slices with ``dram_height_slices``.
 
     ``dealloc_act`` lets conv2d free the L1-sharded copy it makes of a DRAM input once the
     halo has read it; the DRAM input itself is never freed.
@@ -106,6 +106,7 @@ class TTConv2D:
         fp32_dest_acc_en=False,
         dram_activation=False,
         dram_conv_slices=None,
+        dram_height_slices=False,
         input_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
         input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -170,8 +171,12 @@ class TTConv2D:
             # count is fixed here. Width slices of a TILE output are whole tiles wide, so a
             # conv whose output is W wide takes at most ceil(W / TILE_SIZE) of them.
             assert dram_conv_slices is not None, "a spatial conv with dram_activation needs dram_conv_slices"
-            num_slices = min(dram_conv_slices, math.ceil(self.output_width / ttnn.TILE_SIZE))
-            self.slice_config = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=num_slices)
+            if dram_height_slices:
+                slice_type, num_slices = ttnn.Conv2dDRAMSliceHeight, dram_conv_slices
+            else:
+                slice_type = ttnn.Conv2dDRAMSliceWidth
+                num_slices = min(dram_conv_slices, math.ceil(self.output_width / ttnn.TILE_SIZE))
+            self.slice_config = ttnn.Conv2dSliceConfig(slice_type=slice_type, num_slices=num_slices)
         elif output_layout == ttnn.ROW_MAJOR_LAYOUT:
             self.slice_config = ttnn.Conv2dL1FullSliceConfig
 

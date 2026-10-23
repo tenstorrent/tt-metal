@@ -367,9 +367,10 @@ class TTResNet:
     DRAM the same way. ``block_sharded_stages`` lists the layers whose downsample and non-DCN
     conv2s are block sharded, ``fp32_acc_stages`` the layers whose convs accumulate in an
     fp32 destination register (see TTBottleneck), and ``dcn_sharded_input_stages`` the layers
-    whose DCNs take a height-sharded L1 input (TTModulatedDeformConv2dPack). ``stem_act_block_h``
-    and ``conv2_act_block_h`` are the stem conv's and the non-DCN conv2s' act_block_h overrides,
-    None for conv2d's own, and
+    whose DCNs take a height-sharded L1 input (TTModulatedDeformConv2dPack). The stem conv and the
+    max pool read their DRAM inputs in ``stem_conv_height_slices`` and ``stem_maxpool_height_slices``
+    height slices. ``stem_act_block_h`` and ``conv2_act_block_h`` are the stem conv's and the
+    non-DCN conv2s' act_block_h overrides, None for conv2d's own, and
     ``weights_dtype`` the convs' weight dtype. ``model_config.tt_resnet_kwargs`` gives the
     configured variant's values, and ``model_config.RESNET_KWARGS["out_indices"]`` its
     ``out_indices``.
@@ -381,6 +382,8 @@ class TTResNet:
         conv_args, conv_pth = params.conv_args, params["res_model"]
         stage_config = dict(params.tt_kwargs)
         stem_act_block_h = stage_config.pop("stem_act_block_h")
+        stem_conv_height_slices = stage_config.pop("stem_conv_height_slices")
+        stem_maxpool_height_slices = stage_config.pop("stem_maxpool_height_slices")
         weights_dtype = stage_config["weights_dtype"]
         self.out_indices = out_indices
         self.maxpool_args = conv_args.maxpool
@@ -393,8 +396,14 @@ class TTResNet:
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             act_block_h=stem_act_block_h,
             dealloc_act=True,
+            dram_activation=True,
+            dram_conv_slices=stem_conv_height_slices,
+            dram_height_slices=True,
             input_dtype=ttnn.bfloat16,
             input_layout=ttnn.TILE_LAYOUT,
+        )
+        self.maxpool_slice_config = ttnn.Op2DSliceConfig(
+            slice_type=ttnn.Op2DDRAMSliceHeight, num_slices=stem_maxpool_height_slices
         )
 
         # The max pool emits a bfloat16 ROW_MAJOR tensor and every layer emits bfloat16 TILE.
@@ -482,6 +491,7 @@ class TTResNet:
             dilation=[pool.dilation, pool.dilation],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ceil_mode=False,
+            dram_slice_config=self.maxpool_slice_config,
         )
         signpost(header="ResNet Stem End")
 

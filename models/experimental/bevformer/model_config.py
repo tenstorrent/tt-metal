@@ -311,9 +311,15 @@ FPN_OUTPUT_CONV_DRAM_CONV_SLICES = {0: 4, 1: 1}
 # do not amortize it.
 DCN_SHARDED_INPUT_STAGES = (2,)
 
+# Height slices for the stem conv and the max pool after it, both on 6 x 928 x 1600 images in DRAM:
+# the fewest that fit L1. Height slices run faster than width slices on both, and the stem conv's
+# larger act_block_h pays off with them.
+STEM_CONV_HEIGHT_SLICES = 4
+STEM_MAXPOOL_HEIGHT_SLICES = 6
+
 # conv2d's act_block_h overrides: the stem conv's, the non-DCN 3x3 conv2's of the bottlenecks and
 # the DRAM levels' FPN output convs'. The FPN's larger blocks overflow L1 at these slice counts.
-STEM_ACT_BLOCK_H = 64
+STEM_ACT_BLOCK_H = 128
 CONV2_ACT_BLOCK_H = 32
 FPN_OUTPUT_CONV_ACT_BLOCK_H = 32
 
@@ -330,6 +336,8 @@ def tt_resnet_kwargs():
         fp32_acc_stages=FP32_ACC_STAGES,
         dcn_sharded_input_stages=DCN_SHARDED_INPUT_STAGES,
         stem_act_block_h=STEM_ACT_BLOCK_H,
+        stem_conv_height_slices=STEM_CONV_HEIGHT_SLICES,
+        stem_maxpool_height_slices=STEM_MAXPOOL_HEIGHT_SLICES,
         conv2_act_block_h=CONV2_ACT_BLOCK_H,
         weights_dtype=_ttnn_dtype("CONV_WEIGHT_DTYPE"),
     )
