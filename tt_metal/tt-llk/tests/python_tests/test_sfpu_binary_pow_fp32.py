@@ -168,7 +168,9 @@ def test_sfpu_binary_pow_fp32_infinite_exponent(formats, base):
 
     for i in range(len(values)):
         got, want = device[i :: len(values)], golden[i :: len(values)]
-        assert (_raw_bits(got) == _raw_bits(want)).all(), (
+        assert (
+            _raw_bits(got) == _raw_bits(want)
+        ).all(), (
             f"pow({base}, {values[i]}) = {got[0].item()!r}, expected {want[0].item()!r}"
         )
 
