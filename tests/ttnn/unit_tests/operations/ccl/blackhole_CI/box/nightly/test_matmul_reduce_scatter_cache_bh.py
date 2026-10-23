@@ -45,6 +45,11 @@ def test_matmul_reduce_scatter_cache_hit(mesh_device, in_dtype, w_dtype, use_bia
     grid = (8, 8)
 
     crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid[0] - 1, grid[1] - 1))})
+    # The RS workers sit below the matmul grid, so the semaphores must cover the whole grid.
+    grid_size = mesh_device.compute_with_storage_grid_size()
+    sem_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+    )
     shard_k = lambda dim: ttnn.ShardTensorToMesh(mesh_device, dim=dim)
     replicate = ttnn.ReplicateTensorToMesh(mesh_device)
 
@@ -77,8 +82,8 @@ def test_matmul_reduce_scatter_cache_hit(mesh_device, in_dtype, w_dtype, use_bia
                 "bias": to_device(bias, in_dtype, replicate) if use_bias else None,
                 "interm": to_device(torch.zeros(1, 1, M, N), in_dtype, replicate),
                 "out_buf": to_device(torch.zeros(1, 1, M, N // nd), in_dtype, replicate),
-                "rs_sems": [ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(3)],
-                "barrier_sem": ttnn.create_global_semaphore(mesh_device, crs, 0),
+                "rs_sems": [ttnn.create_global_semaphore(mesh_device, sem_crs, 0) for _ in range(3)],
+                "barrier_sem": ttnn.create_global_semaphore(mesh_device, sem_crs, 0),
                 "ref": x @ w + nd * bias if use_bias else x @ w,
             }
         )

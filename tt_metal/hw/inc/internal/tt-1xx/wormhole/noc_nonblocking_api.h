@@ -14,6 +14,7 @@
 #include "internal/risc_attribs.h"
 #include "internal/tt-1xx/cache.h"
 #include "api/debug/assert.h"
+#include "internal/debug/shared_noc_cmd_buf.h"
 
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
@@ -134,6 +135,11 @@ inline __attribute__((always_inline)) void set_noc_counter_val(uint32_t noc, uin
 
 inline __attribute__((always_inline)) void NOC_CMD_BUF_WRITE_REG(
     uint32_t noc, uint32_t buf, uint32_t addr, uint32_t val) {
+#if defined(DEBUG_SANITIZE_SHARED_NOC_CMD_BUF)
+    if (addr == NOC_CMD_CTRL) {
+        debug_sanitize_shared_noc_cmd_buf(noc, buf);
+    }
+#endif
     uint32_t offset = (buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT) + addr;
     volatile uint32_t* ptr = (volatile uint32_t*)offset;
     *ptr = val;
@@ -333,10 +339,15 @@ inline __attribute__((always_inline)) void noc_increment_nonposted_writes_issued
     noc_nonposted_writes_num_issued[noc] += delta;
 }
 
-// Returns true if the hardware nonposted-write counter has reached (or passed) expected_count.
-inline __attribute__((always_inline)) bool noc_nonposted_writes_sent_at_count(uint32_t noc, uint32_t expected_count) {
+// Returns a checkpoint of the nonposted writes issued so far, for a later noc_nonposted_writes_sent_since.
+inline __attribute__((always_inline)) uint32_t noc_nonposted_writes_checkpoint(uint32_t noc) {
+    return noc_nonposted_writes_num_issued[noc];
+}
+
+// Returns true once every nonposted write issued before the checkpoint has been sent (wrap-around safe).
+inline __attribute__((always_inline)) bool noc_nonposted_writes_sent_since(uint32_t noc, uint32_t checkpoint) {
     uint32_t sent = NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
-    return (int32_t)(sent - expected_count) >= 0;
+    return (int32_t)(sent - checkpoint) >= 0;
 }
 
 /**

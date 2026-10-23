@@ -5,6 +5,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_sfpu_sqrt_bf16_replay_window.h"
 #include "sfpi.h"
 
 // Sibling stock wrappers may include another generated config while this
@@ -29,7 +30,7 @@ namespace ckernel::sfpu::bf16::sqrt
 // raw compare 0x8000 - raw < 0 (sign set, rest nonzero) sends every negative word but -0 to NaN.
 constexpr std::uint32_t kNewtonSqrtCompactSlots = 26u;
 
-inline void newton_sqrt_wh_compact_row()
+inline void newton_sqrt_wh_compact_row_head()
 {
     TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_3, 0);                                  // x
     TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);                                // WH shifts its destination in place
@@ -47,6 +48,10 @@ inline void newton_sqrt_wh_compact_row()
     TTI_SFPLOADI(p_sfpu::LREG6, 0, 0x7F80);                                       // +Inf
     TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0); // xy
     TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG3, 1);                               // -y
+}
+
+inline void newton_sqrt_wh_compact_row_tail()
+{
     TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG4, 0); // 1 - y*xy
     TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG6, 2);                              // |x| < +Inf
     TTI_SFPDIVP2(0xFFF, p_sfpu::LREG4, p_sfpu::LREG3, 1);                         // (1 - y*xy)/2
@@ -66,14 +71,17 @@ inline void calculate_newton_root()
     static_assert(Config::kKind == 0);
     static_assert(Iterations == 8 || Iterations == 32);
     static_assert(Config::kBodySlots == kNewtonSqrtCompactSlots);
-    TTI_REPLAY(0, Config::kBodySlots, 1, 1);
-    newton_sqrt_wh_compact_row();
-    TTI_INCRWC(0, 2, 0, 0);
-#pragma GCC unroll 8
-    for (int row = 1; row < Iterations; ++row)
     {
-        TTI_REPLAY(0, Config::kBodySlots, 0, 0);
+        auto head = [&] { newton_sqrt_wh_compact_row_head(); };
+        auto tail = [&] { newton_sqrt_wh_compact_row_tail(); };
+        record_split<0, Config::kBodySlots, 16>(head, tail);
         TTI_INCRWC(0, 2, 0, 0);
+#pragma GCC unroll 8
+        for (int row = 1; row < Iterations; ++row)
+        {
+            replay_split<0, Config::kBodySlots, 16>(head, tail);
+            TTI_INCRWC(0, 2, 0, 0);
+        }
     }
 }
 } // namespace ckernel::sfpu::bf16::sqrt
