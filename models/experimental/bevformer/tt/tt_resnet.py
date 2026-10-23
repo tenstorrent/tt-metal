@@ -141,6 +141,7 @@ class TTResLayer:
         dram_activation=False,
         dram_input=False,
         dram_conv_slices=None,
+        conv2_dram_conv_slices=None,
         block_sharded=False,
         fp32_acc=False,
         dcn_sharded_input=False,
@@ -161,6 +162,7 @@ class TTResLayer:
                     dram_activation=dram_activation,
                     dram_input=dram_input and first,
                     dram_conv_slices=dram_conv_slices,
+                    conv2_dram_conv_slices=conv2_dram_conv_slices,
                     block_sharded=block_sharded,
                     fp32_acc=fp32_acc,
                     dcn_sharded_input=dcn_sharded_input,
@@ -188,7 +190,8 @@ class TTBottleneck:
     ``input_dtype`` and ``input_layout`` describe the block input; the dtype and layout
     each conv sees follow from them. ``dram_activation`` keeps the activations of conv1,
     a non-DCN conv2, conv3 and the downsample in DRAM, slicing the spatial convs into
-    ``dram_conv_slices`` width slices; a DCN conv2 is unaffected. ``dram_input`` only
+    ``dram_conv_slices`` width slices, a non-DCN conv2 in ``conv2_dram_conv_slices`` when given;
+    a DCN conv2 is unaffected. ``dram_input`` only
     covers the convs that read the block input, for a block fed by a DRAM layer whose own
     activations fit in L1. ``block_sharded`` block-shards the downsample and a non-DCN conv2.
     ``fp32_acc`` turns on fp32 destination accumulation (``fp32_dest_acc_en``) for conv1, a
@@ -212,6 +215,7 @@ class TTBottleneck:
         dram_activation=False,
         dram_input=False,
         dram_conv_slices=None,
+        conv2_dram_conv_slices=None,
         block_sharded=False,
         fp32_acc=False,
         dcn_sharded_input=False,
@@ -273,7 +277,7 @@ class TTBottleneck:
                 act_block_h=conv2_act_block_h,
                 dealloc_act=True,
                 dram_activation="conv2" in dram_convs,
-                dram_conv_slices=dram_conv_slices,
+                dram_conv_slices=conv2_dram_conv_slices or dram_conv_slices,
                 input_dtype=conv2_dtype,
                 input_layout=ttnn.ROW_MAJOR_LAYOUT if self.row_major_conv2 else ttnn.TILE_LAYOUT,
                 output_layout=ttnn.ROW_MAJOR_LAYOUT if self.row_major_conv2 else ttnn.TILE_LAYOUT,
@@ -359,8 +363,8 @@ class TTResNet:
     ``out_indices`` and every ``*_stages`` argument index the four ResNet layers (0 is layer1).
     ``dram_activation_stages`` lists the layers
     whose activations are kept in DRAM, for layers whose convs do not fit in L1: their
-    spatial convs run in ``dram_conv_slices`` width slices and their 1x1 convs as a DRAM
-    matmul. A layer that follows one of them and is not listed itself reads its input from
+    spatial convs run in ``dram_conv_slices`` width slices, their non-DCN conv2s in
+    ``conv2_dram_conv_slices[i]`` where given, and their 1x1 convs as a DRAM matmul. A layer that follows one of them and is not listed itself reads its input from
     DRAM the same way. ``block_sharded_stages`` lists the layers whose downsample and non-DCN
     conv2s are block sharded, ``fp32_acc_stages`` the layers whose convs accumulate in an
     fp32 destination register (see TTBottleneck), and ``dcn_sharded_input_stages`` the layers
@@ -421,6 +425,7 @@ class TTResNet:
         i,
         dram_activation_stages=(),
         dram_conv_slices=None,
+        conv2_dram_conv_slices=None,
         block_sharded_stages=(),
         fp32_acc_stages=(),
         dcn_sharded_input_stages=(),
@@ -433,6 +438,7 @@ class TTResNet:
             dram_activation=i in dram_activation_stages,
             dram_input=i not in dram_activation_stages and i - 1 in dram_activation_stages,
             dram_conv_slices=dram_conv_slices,
+            conv2_dram_conv_slices=(conv2_dram_conv_slices or {}).get(i),
             block_sharded=i in block_sharded_stages,
             fp32_acc=i in fp32_acc_stages,
             dcn_sharded_input=i in dcn_sharded_input_stages,
