@@ -363,6 +363,9 @@ class Qwen36Model:
         # Traced B=1 EXACT-bucket short-prompt prefill (QWEN36_PREFILL_BUCKET_TRACE): bucket -> _ShortPrefillTrace.
         # Captured in the untimed warmup phase (capture_prefill_trace_short), replayed by prefill_short_traced.
         self._short_traces = {}
+        # bucket -> _ShortPrefillTrace whose inputs are allocated and warmed (prepare_prefill_traces_short) but not
+        # captured yet; never replayed from (see _short_trace_for).
+        self._short_prepared = {}
         # Grouped (batched) short prefill: (bucket, Bg) -> _BatchedShortCfg; Bg -> {id(gdn layer): group scratch}.
         self._batched_short_cfgs = {}
         self._batched_gdn_scratch = {}
@@ -2781,21 +2784,11 @@ class Qwen36Model:
         """Capture ONE bucket's short-prompt prefill trace (see capture_prefill_traces_short)."""
         return self.capture_prefill_traces_short(device, page_table, buckets=(bucket,))
 
-    def capture_prefill_traces_short(self, device, page_table, buckets=None):
-        """Capture the B=1 short-prompt prefill trace of every bucket in `buckets` (default
-        short_prefill_trace_buckets()). Call in the UNTIMED warmup phase, after allocate_kv_caches (and normally
-        after capture_prefill_trace_chunked, which allocates the vision-splice buffers and warms the masked-bucket
-        programs), with the GDN state bound EXACTLY as requests will run it (decode buffers for B=1 serving, the
-        persistent prefill scratch for batched serving). Replay: prefill_short_traced / prefill_short_traced_logits /
-        prefill_traced_chunked.
-
-        Persistent device inputs per bucket (all replicated, addresses baked into the trace, ALL rewritten per
-        request so none has to survive other traces' replays): tokens [1,Tb], chunk_start_idx, full page table
-        [1,buf_blocks], chunk page table [1,Tb/block], cos/sin [1,1,Tb,rope_dim], last-row one-hot select
-        [1,1,1,Tb], GDN masks m_bg [1,Tb,1] fp32 + conv_sel [1,3,Tb] bf16 (+ q/k/v mask if enabled); plus the
-        vision-splice buffers shared with the chunk path. EVERY bucket's inputs are allocated before the first
-        warm pass and every warm pass runs before the first capture (no compile / allocation behind a parked trace;
-        later buckets' intermediates cannot alias earlier buckets' inputs)."""
+    def prepare_prefill_traces_short(self, device, page_table, buckets=None):
+        """Eager half of capture_prefill_traces_short: validate, allocate EVERY bucket's persistent inputs and run the
+        warm passes (every program compiled, steady-state path taken once). No capture: call it while NO trace is live
+        (vLLM's prepare pass), so nothing persistent is allocated behind a parked trace (#56474); the record pass then
+        only captures (capture_prefill_traces_short). Same arguments and GDN binding as the capture."""
         assert self.num_devices > 1 and self._lmhead_vocab_sharded, "short prefill trace is the TP vocab-sharded path"
         assert self._paged_kv_caches is not None, "Call allocate_kv_caches first"
         buckets = sorted(set(self.short_prefill_trace_buckets() if buckets is None else buckets))
@@ -2896,18 +2889,52 @@ class Qwen36Model:
                 for o in outs:
                     ttnn.deallocate(o)
 
-        for bucket, tr in trs.items():
-            tr.trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-            tr.idx, tr.val, tr.logits = self._forward_prefill_short_tp(tr)
-            ttnn.end_trace_capture(device, tr.trace_id, cq_id=0)
-            ttnn.synchronize_device(device)
-            self._short_traces[bucket] = tr
-            logger.info(
-                f"Short-prompt prefill trace (TP, bucket {bucket}, any length <= {bucket}"
-                f"{'' if masked else ' [exact only: no KDA conv]'}, on-device argmax + pre-gather logits) captured."
-            )
-        # The warm/capture passes advanced GDN state and wrote KV blocks [0, bucket/block): zero the state for
-        # whatever runs next (a request's replay re-zeroes it in-trace and rewrites those KV blocks).
+        # The warm passes advanced GDN state and wrote KV blocks [0, bucket/block): zero the state for what runs next.
+        self._reset_gdn_state_for_new_sequence()
+        self._short_prepared = trs
+        return trs
+
+    def capture_prefill_traces_short(self, device, page_table, buckets=None):
+        """Capture the B=1 short-prompt prefill trace of every bucket in `buckets` (default
+        short_prefill_trace_buckets()). Call in the UNTIMED warmup phase, after allocate_kv_caches (and normally
+        after capture_prefill_trace_chunked, which allocates the vision-splice buffers and warms the masked-bucket
+        programs), with the GDN state bound EXACTLY as requests will run it (decode buffers for B=1 serving, the
+        persistent prefill scratch for batched serving). Replay: prefill_short_traced / prefill_short_traced_logits /
+        prefill_traced_chunked.
+
+        Persistent device inputs per bucket (all replicated, addresses baked into the trace, ALL rewritten per
+        request so none has to survive other traces' replays): tokens [1,Tb], chunk_start_idx, full page table
+        [1,buf_blocks], chunk page table [1,Tb/block], cos/sin [1,1,Tb,rope_dim], last-row one-hot select
+        [1,1,1,Tb], GDN masks m_bg [1,Tb,1] fp32 + conv_sel [1,3,Tb] bf16 (+ q/k/v mask if enabled); plus the
+        vision-splice buffers shared with the chunk path. EVERY bucket's inputs are allocated before the first
+        warm pass and every warm pass runs before the first capture (no compile / allocation behind a parked trace;
+        later buckets' intermediates cannot alias earlier buckets' inputs).
+
+        The buffers come from prepare_prefill_traces_short (vLLM runs it in the eager pass, before any trace is
+        parked); without a matching prepare this prepares first, so call it directly only while no trace is live.
+        The outputs (on-device argmax + logits) are read right after each replay, before any other trace runs:
+        corruptible_allocation_scope, like the chunk and grouped traces."""
+        buckets = sorted(set(self.short_prefill_trace_buckets() if buckets is None else buckets))
+        trs = self._short_prepared
+        refs = self._gdn_binding_refs()
+        if sorted(trs) != buckets or any(
+            len(tr.gdn_refs) != len(refs) or any(x is not y for x, y in zip(tr.gdn_refs, refs)) for tr in trs.values()
+        ):
+            trs = self.prepare_prefill_traces_short(device, page_table, buckets)
+        self._short_prepared = {}
+        with trace_allocation_tracker.corruptible_allocation_scope(device):
+            for bucket, tr in trs.items():
+                tr.trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+                tr.idx, tr.val, tr.logits = self._forward_prefill_short_tp(tr)
+                ttnn.end_trace_capture(device, tr.trace_id, cq_id=0)
+                ttnn.synchronize_device(device)
+                self._short_traces[bucket] = tr
+                logger.info(
+                    f"Short-prompt prefill trace (TP, bucket {bucket}, any length <= {bucket}"
+                    f"{'' if tr.masked else ' [exact only: no KDA conv]'}, on-device argmax + pre-gather logits) captured."
+                )
+        # The capture passes advanced GDN state and wrote KV blocks [0, bucket/block): zero the state for whatever runs
+        # next (a request's replay re-zeroes it in-trace and rewrites those KV blocks).
         self._reset_gdn_state_for_new_sequence()
 
     def release_prefill_trace_short(self, bucket=None):
@@ -2915,31 +2942,28 @@ class Qwen36Model:
         input buffers. Called on re-capture and from free_kv_caches (the traces bake the KV/GDN addresses)."""
         if bucket is None:
             self.release_prefill_batched_short_traces()  # the grouped traces bake the same KV/GDN addresses
-        buckets = list(self._short_traces) if bucket is None else [bucket]
+        buckets = list(self._short_traces) + list(self._short_prepared) if bucket is None else [bucket]
         for b in buckets:
             tr = self._short_traces.pop(b, None)
+            prepared = self._short_prepared.pop(b, None)
+            if prepared is not None and prepared is not tr:
+                self._free_short_trace_inputs(prepared)
             if tr is None:
                 continue
             if tr.trace_id is not None:
                 ttnn.release_trace(self.device, tr.trace_id)
                 tr.trace_id = None
-            for buf in (
-                tr.tok,
-                tr.csi,
-                tr.full_pt,
-                tr.chunk_pt,
-                tr.cos,
-                tr.sin,
-                tr.sel,
-                tr.m_bg,
-                tr.conv_sel,
-                tr.m_qkv,
-            ):
-                if buf is not None:
-                    ttnn.deallocate(buf)
-            tr.idx = tr.val = tr.logits = None  # trace outputs: freed with their last reference
-            tr.gdn_refs = ()
-            tr.host_cache.clear()
+            self._free_short_trace_inputs(tr)
+
+    @staticmethod
+    def _free_short_trace_inputs(tr):
+        """Deallocate a short trace's persistent inputs and drop its outputs and host cache."""
+        for buf in (tr.tok, tr.csi, tr.full_pt, tr.chunk_pt, tr.cos, tr.sin, tr.sel, tr.m_bg, tr.conv_sel, tr.m_qkv):
+            if buf is not None:
+                ttnn.deallocate(buf)
+        tr.idx = tr.val = tr.logits = None  # trace outputs: freed with their last reference
+        tr.gdn_refs = ()
+        tr.host_cache.clear()
 
     @staticmethod
     def _short_trace_host_torch(bucket, valid_len, n_hist):

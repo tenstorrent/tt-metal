@@ -535,8 +535,16 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         if store is None:
             store = self._bucket_trace_store = {}
         if B not in store:
-            store[B] = (defaultdict(lambda: None), defaultdict(lambda: None), defaultdict(lambda: None))
-        self.trace_ids_decode, self.trace_inputs_decode, self.trace_output_decode = store[B]
+            store[B] = (defaultdict(lambda: None), defaultdict(lambda: None), defaultdict(lambda: None), {})
+        # The staged (prepared) decode trace inputs are per width too: Generator keys them by on_device_sampling only,
+        # so a shared dict let width 1's eager staging hide widths 2..Bmax, whose inputs were then allocated at capture,
+        # behind the already-parked traces (#56474; test_vllm_warmup_leaves_no_late_allocations).
+        (
+            self.trace_ids_decode,
+            self.trace_inputs_decode,
+            self.trace_output_decode,
+            self._prepared_decode_traces,
+        ) = store[B]
         # Key the sampling trace by bucket width too: Generator binds it to one logits tensor
         # by identity, and each decode-bucket width has its own.
         for _m in self.model:
@@ -862,6 +870,12 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                         logger.warning(f"release_prefill_batched_short after failed prepare also raised: {e2}")
                     model._batched_short_unavailable = True
                     grouped = False
+            short = model.short_prefill_trace_enabled() and model.num_devices > 1 and model._lmhead_vocab_sharded
+            if short and not enable_trace:
+                # Traced short prefill: allocate every bucket's persistent inputs and run its warm passes HERE, in the
+                # eager pass (no trace parked yet); the record pass below only captures (#56474).
+                model.prefill_trash_block = 0
+                model.prepare_prefill_traces_short(self.mesh_device, page_table)
             if enable_trace:
                 model.record_prefill_trace_chunked(self.mesh_device)
                 # Traced short prefill for ANY prompt length < 2048 (QWEN36_PREFILL_BUCKET_TRACE, default 1): one B=1 trace
@@ -870,7 +884,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                 # with (the scratch when batched, the decode buffers at max_batch_size==1), and only because this call
                 # has enable_trace=True (the plugin's trace_mode == "all"). Block 0 is vLLM's null block, never
                 # allocated to a request: padded K/V writes of a bucket land there.
-                if model.short_prefill_trace_enabled() and model.num_devices > 1 and model._lmhead_vocab_sharded:
+                if short:
                     model.prefill_trash_block = 0
                     model.capture_prefill_traces_short(self.mesh_device, page_table)
                 if grouped:
