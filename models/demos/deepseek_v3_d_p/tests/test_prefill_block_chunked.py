@@ -51,6 +51,7 @@ from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import (
     cache_half_pccs,
+    gather_cache_natural,
     gather_cache_tp0,
     interleave_pe,
     read_sharded_rows,
@@ -244,6 +245,7 @@ def run_chunked_block(
     kv_reduction_reference=None,
     determinism_check=False,
     num_iterations=1,
+    tp_shard_kv=False,
 ):
     is_dense = layer_idx < variant.model_config.NUM_DENSE_LAYERS
     if weight_cache_path is None:
@@ -327,6 +329,7 @@ def run_chunked_block(
         is_chunked=True,
         slot_num=1,
         layer_num=1,
+        tp_shard_kv=tp_shard_kv or None,
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
@@ -348,6 +351,7 @@ def run_chunked_block(
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
         num_users=1,
+        tp_axis=tp_axis if tp_shard_kv else None,
     )
 
     hidden_shard_dims = [None, None]
@@ -489,15 +493,10 @@ def run_chunked_block(
     _pcc("layer_output", ref_out, out_accum, THRESHOLDS.output)
 
     # --- Independent sanity check: un-rotate the final device cache and compare to kv_post_transform. ---
-    cache_sr = ttnn.to_torch(
-        tt_kvpe_cache.storage,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-    ).to(torch.float32)[:, :1][
-        0, 0
-    ]  # [SEQ_CACHE, kvpe]
-    p = blockcyclic_positions(sp, CHUNK, SEQ_CACHE)
+    cache_sr, stripes = gather_cache_natural(tt_kvpe_cache.storage, mesh_device, tp_shard_kv)
+    p = blockcyclic_positions(stripes, CHUNK, SEQ_CACHE)
     nat = torch.empty(SEQ_CACHE, kvpe_dim, dtype=torch.float32)
-    nat[p] = cache_sr
+    nat[p] = cache_sr[0]
     dev_cache = nat[:total_len]
     logger.info("Device cache sanity vs kv_post_transform:")
     _pcc("cache[nope]", g_post[:, :kv_lora], dev_cache[:, :kv_lora], THRESHOLDS.kv_nope)
@@ -753,7 +752,16 @@ def test_ds_prefill_block_chunked_multiuser(
 
 
 def run_chunked_block_padded(
-    variant, config, mesh_device, weight_cache_path, splits, layer_idx, gate_fallback_mode, num_links, topology
+    variant,
+    config,
+    mesh_device,
+    weight_cache_path,
+    splits,
+    layer_idx,
+    gate_fallback_mode,
+    num_links,
+    topology,
+    tp_shard_kv=False,
 ):
     """Variable/partial chunked prefill: a single prompt of sum(splits) real tokens fed in chunks of
     variable real length `splits` (e.g. [1024, 4096]), each run as a full CHUNK-wide tile padded with
@@ -854,6 +862,7 @@ def run_chunked_block_padded(
         is_chunked=True,
         slot_num=1,
         layer_num=1,
+        tp_shard_kv=tp_shard_kv or None,
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
@@ -874,6 +883,7 @@ def run_chunked_block_padded(
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
         num_users=1,
+        tp_axis=tp_axis if tp_shard_kv else None,
     )
 
     hidden_shard_dims = [None, None]
@@ -977,15 +987,10 @@ def run_chunked_block_padded(
 
     # --- Final: gather the device KV cache, un-rotate, compare the contiguous [:total_real] valid
     #     region to the trace's kv_post_transform (this is the "5k gathered from 2 chunks" check). ---
-    cache_sr = ttnn.to_torch(
-        tt_kvpe_cache.storage,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-    ).to(torch.float32)[:, :1][
-        0, 0
-    ]  # [seq_len_cache, kvpe]
-    p = blockcyclic_positions(sp, CHUNK, seq_len_cache)
+    cache_sr, stripes = gather_cache_natural(tt_kvpe_cache.storage, mesh_device, tp_shard_kv)
+    p = blockcyclic_positions(stripes, CHUNK, seq_len_cache)
     nat = torch.empty(seq_len_cache, kvpe_dim, dtype=torch.float32)
-    nat[p] = cache_sr
+    nat[p] = cache_sr[0]
     dev_cache = nat[:total_real]
     logger.info("Device KV cache (gathered across chunks) vs kv_post_transform:")
     _pcc("cache[nope]", g_post[:, :kv_lora], dev_cache[:, :kv_lora], THRESHOLDS.kv_nope)
@@ -1100,6 +1105,7 @@ def test_kimi_prefill_block_chunked(
         topology,
         determinism_check=determinism_check,
         num_iterations=num_iterations,
+        tp_shard_kv=True,
     )
 
 
@@ -1138,7 +1144,16 @@ def test_kimi_prefill_block_chunked_padded(
 ):
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_block_padded(
-        variant, config_only, mesh_device, weight_cache_path, splits, layer_idx, gate_fallback_mode, num_links, topology
+        variant,
+        config_only,
+        mesh_device,
+        weight_cache_path,
+        splits,
+        layer_idx,
+        gate_fallback_mode,
+        num_links,
+        topology,
+        tp_shard_kv=True,
     )
 
 

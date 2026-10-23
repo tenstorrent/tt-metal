@@ -224,9 +224,28 @@ def bf16_exhaustive_sweep(
             expected[lane] = word.view(torch.bfloat16).to(expected.dtype)[0]
     judged = golden.clone()
     judged[tail] = expected
+    # Where Wormhole leaves the sign of a NaN the op makes open (nan_sign off), the
+    # pack stores that NaN as an infinity of either sign and the golden as +inf: that
+    # lane's sign is spared in both checks. Those lanes are the specials whose golden
+    # is NaN, from a non-NaN input, in a pipeline that keeps NaN.
+    made_nan = torch.zeros(len(specials), dtype=torch.bool)
+    if nonfinite and not nan_sign:
+        probe = torch.zeros(TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1], dtype=src_A.dtype)
+        probe[: len(specials)] = src_A[tail]
+        kept = get_golden_generator(UnarySFPUGolden)(
+            mathop,
+            probe,
+            DataFormat.Float32,
+            DestAccumulation.Yes,
+            formats.input_format,
+            list(TILE_DIMENSIONS),
+        )
+        made_nan = kept[: len(specials)].isnan() & ~src_A[tail].float().isnan()
+    spared = made_nan & result[tail].float().isinf()
     failures = nonfinite_mismatches(judged, result) & _normal_input(
         src_A, formats.input_format, formats.output_format, dest_acc
     )
+    failures[tail] &= ~spared
     assert (
         not failures.any()
     ), f"{mathop.name}: {int(failures.sum())} lanes disagree on finiteness"
@@ -243,14 +262,21 @@ def bf16_exhaustive_sweep(
         )
 
     wrong = output_class(expected) != output_class(result[tail])
-    if nonfinite and not nan_sign:
-        # The pack stores a NaN the kernel makes as an infinity, whose sign Wormhole leaves unspecified.
-        wrong[3] &= ~result[tail].float().isinf()
+    wrong[3] &= ~spared
     wrong = wrong.any(0)
     assert not wrong.any(), (
         f"{mathop.name}: {int(wrong.sum())} of {len(specials)} special inputs "
         f"{specials} change output class or sign"
     )
+    # The specials sit in the padding measurable_mask leaves out: a finite result there
+    # is held to the same budget here.
+    assert passed_test(
+        expected,
+        result[tail],
+        formats.output_format,
+        max_ulp=max_ulp,
+        mask=torch.isfinite(expected.float()),
+    ), f"{mathop.name}: special-input outputs exceed the {max_ulp}-ULP budget"
     mask = measurable_mask(
         src_A, golden, result, formats.input_format, formats.output_format, dest_acc
     )

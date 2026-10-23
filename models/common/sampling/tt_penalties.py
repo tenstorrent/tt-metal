@@ -429,5 +429,7 @@ class TTPenalties(LightweightModule):
         )
         original_shape = tt_logits.shape
         reshaped = ttnn.reshape(tt_logits, (-1, original_shape[-1]))
+        if reshaped.dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+            reshaped = ttnn.typecast(reshaped, ttnn.bfloat16, **self._op_kwargs)
         apply_penalties(reshaped, context)
         return ttnn.reshape(reshaped, original_shape)

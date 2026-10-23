@@ -5,6 +5,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "ckernel_sfpu_softshrink_bf16_replay_window.h"
 #include "ckernel_sfpu_softshrink_bf16_simple_algebraic.h"
 namespace ckernel::sfpu::bf16::softshrink {
 template <typename Config>

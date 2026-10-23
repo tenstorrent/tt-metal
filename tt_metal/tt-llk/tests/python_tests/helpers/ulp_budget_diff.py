@@ -12,9 +12,10 @@ hardware still fits the gates it declares.
   the budgets. The sweep already fails a cell it cannot meet; this says which budgets
   are about to become regressions, and judges the tolerance cells the sweep cannot.
 
-Standalone on purpose -- ``yaml`` and the standard library, so it runs without the LLK
-environment and can parse a *base* revision of the table. ``test_ulp_budget_diff.py``
-ties this parse back to the real loader so the two cannot drift.
+Standalone on purpose -- ``yaml``, the standard library and the sibling
+``ulp_provenance`` (itself the same), so it runs without the LLK environment and can
+parse a *base* revision of the table. ``test_ulp_budget_diff.py`` ties this parse back
+to the real loader so the two cannot drift.
 """
 
 from __future__ import annotations
@@ -22,18 +23,32 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
-import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from xml.etree import ElementTree
 
 import yaml
 
-#: The key dimensions of a row, in the order a cell is named in a report. The registry's
-#: own map is ``sfpu_accuracy_budget._KEY_FIELDS``; a host test holds the two equal.
-KEY_FIELDS = ("in", "out", "approx", "dest", "arch")
+if __package__:
+    from .ulp_provenance import (
+        KEY_FIELDS,
+        PROVENANCE_FIELDS,
+        BudgetTable,
+        Provenance,
+        check_provenance,
+        key_value,
+    )
+else:  # run by path on the slim runner, where `helpers/__init__.py` cannot import
+    from ulp_provenance import (
+        KEY_FIELDS,
+        PROVENANCE_FIELDS,
+        BudgetTable,
+        Provenance,
+        check_provenance,
+        key_value,
+    )
 
 #: ``sfpu_accuracy_budget.MEASURED_ARCH``, by enum name. A ULP row that does not name an
 #: arch binds only here; anywhere else the registry hands the cell its tolerance. Spelled
@@ -71,18 +86,6 @@ _SLACK_FRACTION = 0.5
 #: the emitter deliberately refused to write.
 _SLACK_MIN_BUDGET = 2
 
-#: The worst lane a row's comment says the last sweep measured. Written by the emitter
-#: on every row it produces ("max 393 ULP, budget 433 > ceiling 25"); a row without one
-#: has no baseline and is not judged.
-_RECORDED_MAX = re.compile(r"\bmax (\d+) ULP")
-
-#: The lanes a "not measurable" row says disagreed with the golden about being finite.
-#: Both spellings: rows emitted before the check also judged a finite answer to an
-#: infinite golden read "non-finite against a finite golden".
-_RECORDED_NONFINITE = re.compile(
-    r"not measurable: (\d+) lane\(s\) (?:non-finite|disagreeing with the golden)"
-)
-
 
 def _cell_name(op: str, key: Tuple[Tuple[str, str], ...]) -> str:
     if not key:
@@ -97,7 +100,9 @@ class Row:
     op: str
     key: Tuple[Tuple[str, str], ...]
     max_ulp: Optional[int]
-    provenance: str
+    #: The measurement the row records, from its own fields. A raise that comes with a
+    #: new one is a re-measurement; one that leaves it as it was is a number edited.
+    provenance: Provenance
     #: The near-zero floor is part of the gate: `ulp_elementwise_valid` accepts a lane
     #: inside it however many steps out it is, so widening it loosens the gate.
     near_zero_atol: Optional[float] = None
@@ -105,8 +110,9 @@ class Row:
     #: tolerance cell with them, so widening one loosens that cell.
     atol: Optional[float] = None
     rtol: Optional[float] = None
-    #: The row's own comment, without the op header it falls back to.
-    comment: str = ""
+    #: An alias row (``- *anchor``, or ``Neg: *low``): its provenance is its anchor's,
+    #: so a retargeted alias carries a measurement the base already had.
+    alias: bool = field(default=False, compare=False)
 
     @property
     def gated(self) -> bool:
@@ -137,10 +143,15 @@ class Change:
     differently than the base did, since a collapsed row governs several. *held_before*
     and *held_after* say what the cell was held to on each side, as the report shows it.
 
-    *remeasured* is whether the deciding row's provenance comment differs from the same
-    row's in the base table -- the table's rule for raising a budget. Read off that one
-    row, not off the two rows the cell resolves to: when a deleted row hands its cells to
-    a broader one, those two comments differ although no comment was touched.
+    *remeasured* is whether the deciding row's provenance (its measurement fields)
+    differs from the same row's in the base table -- the table's rule for raising a
+    budget. Read off that one row, not off the two rows the cell resolves to: when a
+    deleted row hands its cells to a broader one, those two rows' fields differ although
+    neither was re-measured. An alias row's fields are its anchor's, so it counts only
+    with provenance no base row had. ``None`` -- reported "n/a" -- for a widened
+    ``atol``/``rtol`` bound when no row involved records a measurement: not the deciding
+    row in either revision, nor the row the cell resolved to in the base. ``measured``
+    is a step count, which such a row cannot record, so the rule cannot apply to it.
     """
 
     cell: Cell
@@ -150,7 +161,7 @@ class Change:
     variants: int = 1
     held_before: str = "—"
     held_after: str = "—"
-    remeasured: bool = False
+    remeasured: Optional[bool] = False
 
     #: The kinds that weaken a gate. Everything else is neutral or an improvement.
     REGRESSIONS = frozenset(
@@ -175,66 +186,21 @@ class Change:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _comment(line: str) -> str:
-    """The provenance comment of one line, or ``""``."""
-    _, sep, comment = line.partition("#")
-    return comment.strip() if sep else ""
+class DuplicateRow(ValueError):
+    """Two rows of one op pin the same cell: ``_load_table`` refuses such a table, so no
+    verdict about it is meaningful. *cell* is the cell they both pin."""
 
-
-def _provenance_by_op(text: str) -> Dict[str, Tuple[str, List[str]]]:
-    """Each op's header comment and its row comments, in file order. PyYAML drops
-    comments, and they are what says whether a raised budget was re-measured."""
-    by_op: Dict[str, Tuple[str, List[str]]] = {}
-    op: Optional[str] = None
-    for line in text.splitlines():
-        head = re.match(r"^([A-Za-z_]\w*):", line)
-        if head:
-            op = head.group(1)
-            by_op.setdefault(op, (_comment(line), []))
-        elif op is not None and line.strip().startswith("- "):
-            by_op[op][1].append(_comment(line))
-    return by_op
-
-
-def _key_value(field: str, value) -> str:
-    """A key field as the registry reads it. YAML 1.1 reads a bare ``Yes``/``No`` as a
-    boolean and the registry maps it back to the enum member; keyed as ``"True"`` the
-    row would describe a cell that does not exist, and the two readers would disagree
-    about which cell a raise landed on. An arch is accepted by enum name or value
-    (``WORMHOLE`` or ``wormhole``) and named by the enum name, as a measurement is."""
-    if value is True:
-        return "Yes"
-    if value is False:
-        return "No"
-    if field == "arch":
-        return str(value).upper()
-    return str(value)
+    def __init__(self, cell: Cell):
+        self.cell = cell
+        super().__init__(
+            f"{cell[0]}: duplicate row for {_cell_name(*cell)}. The registry refuses "
+            "two rows of equal specificity, so this table cannot load; no budget "
+            "verdict is meaningful for it."
+        )
 
 
 def _number(value) -> Optional[float]:
     return value if isinstance(value, (int, float)) and value is not True else None
-
-
-class _NoDuplicateKeys(yaml.SafeLoader):
-    """``SafeLoader`` refusing a repeated mapping key, which PyYAML lets the last one
-    win and the registry's ``_read_yaml`` refuses."""
-
-    def construct_mapping(self, node, deep=False):
-        # On the node's own keys, before a `<<` merge folds in the anchor's: an explicit
-        # key overriding a merged one is YAML, a key written twice is not.
-        seen = set()
-        for key_node, _ in node.value:
-            if (
-                isinstance(key_node, yaml.ScalarNode)
-                and key_node.tag != "tag:yaml.org,2002:merge"
-            ):
-                if key_node.value in seen:
-                    raise ValueError(
-                        f"line {key_node.start_mark.line + 1}: repeated key "
-                        f"{key_node.value!r}"
-                    )
-                seen.add(key_node.value)
-        return super().construct_mapping(node, deep=deep)
 
 
 def _check_number(where: str, name: str, value, *, integer: bool = False) -> None:
@@ -251,14 +217,16 @@ def _check_number(where: str, name: str, value, *, integer: bool = False) -> Non
 
 def _check_row(where: str, fields: dict) -> None:
     """What the registry refuses in one row, so a table it cannot load gets no verdict:
-    an unknown field, a metric that is neither, a bad number, or the two metrics' fields
-    mixed in one row."""
-    unknown = set(fields) - set(KEY_FIELDS) - CONTRACT_FIELDS
+    an unknown field, a metric that is neither, provenance fields wrong on their own or
+    for the row's contract (:func:`check_provenance`, the registry's own check), a bad
+    number, or the two metrics' fields mixed in one row."""
+    unknown = set(fields) - set(KEY_FIELDS) - CONTRACT_FIELDS - set(PROVENANCE_FIELDS)
     if unknown:
         raise ValueError(f"{where}: unknown field(s) {sorted(unknown)}")
     metric = fields.get("metric", "ulp")
     if metric not in ("ulp", "tolerance"):
         raise ValueError(f"{where}: metric must be ulp or tolerance, got {metric!r}")
+    check_provenance(where, fields, tolerance=metric == "tolerance")
     for name in ("atol", "rtol", "near_zero_atol"):
         if fields.get(name) is not None:
             _check_number(where, name, fields[name])
@@ -271,7 +239,7 @@ def _check_row(where: str, fields: dict) -> None:
     elif fields.get("max_ulp") is not None or fields.get("near_zero_atol") is not None:
         raise ValueError(f"{where}: max_ulp/near_zero_atol belong to the ulp metric")
     for flag in ("approx", "dest"):
-        if fields.get(flag) is not None and _key_value(flag, fields[flag]) not in (
+        if fields.get(flag) is not None and key_value(fields[flag]) not in (
             "Yes",
             "No",
         ):
@@ -279,55 +247,38 @@ def _check_row(where: str, fields: dict) -> None:
 
 
 def parse_table(text: str) -> Dict[Cell, Row]:
-    """Every row of the table, keyed by the cell it governs: values through PyYAML, so
-    anchors and ``<<`` merge keys mean what they mean, and comments through a positional
-    scan zipped with the loaded rows (sound while every row is one inline mapping).
-    Refuses, as the registry does, a table it could not load."""
-    loaded = yaml.load(text, Loader=_NoDuplicateKeys) or {}
+    """Every row of the table, keyed by the cell it governs, read through
+    :class:`BudgetTable`: values as PyYAML loads them, so anchors and ``<<`` merge keys
+    mean what they mean, and a YAML boolean names the cell the registry would. Refuses,
+    as the registry does, a table it could not load. The file is loaded once, by
+    :class:`BudgetTable`, and its rows are checked on that load."""
+    table = BudgetTable(text)
+    loaded = table.loaded or {}
     if not isinstance(loaded, dict):
         raise ValueError("expected a mapping of op names at the top level")
-    comments = _provenance_by_op(text)
-    rows: Dict[Cell, Row] = {}
     for op, entries in loaded.items():
-        if not isinstance(entries, list):
-            continue
-        header, found = comments.get(op, ("", []))
-        # A row split over several lines would slide every comment after it by one;
-        # rather than mislabel provenance, drop it for that op and keep the budgets.
-        if len(found) != len(entries):
-            found = [""] * len(entries)
-        for index, (fields, comment) in enumerate(zip(entries, found)):
+        for index, fields in enumerate(entries if isinstance(entries, list) else []):
             if not isinstance(fields, dict):
                 raise ValueError(f"{op}: row {index + 1} is not a mapping")
             _check_row(f"{op} row {index + 1}", fields)
-            key = tuple(
-                (k, _key_value(k, fields[k]))
-                for k in KEY_FIELDS
-                if fields.get(k) is not None
-            )
-            if (op, key) in rows:
-                # `_load_table` refuses two rows of equal specificity, so this table
-                # cannot load; keeping the last row silently produced a verdict for it.
-                raise ValueError(
-                    f"{op}: duplicate row for {_cell_name(op, key)}. The registry "
-                    "refuses two rows of equal specificity, so this table cannot load; "
-                    "no budget verdict is meaningful for it."
-                )
-            max_ulp = fields.get("max_ulp")
-            if fields.get("metric") == "tolerance":
-                max_ulp = None
-            rows[(op, key)] = Row(
-                op=op,
-                key=key,
-                max_ulp=max_ulp,
-                # A row's own comment wins; one without inherits the op header's run
-                # identity, so updating either registers as a re-measurement.
-                provenance=comment or header,
-                comment=comment,
-                near_zero_atol=_number(fields.get("near_zero_atol")),
-                atol=_number(fields.get("atol")),
-                rtol=_number(fields.get("rtol")),
-            )
+    rows: Dict[Cell, Row] = {}
+    for row in table.rows:
+        cell: Cell = (row.op, row.key)
+        if cell in rows:
+            # `_load_table` refuses two rows of equal specificity, so this table
+            # cannot load; keeping the last row silently produced a verdict for it.
+            raise DuplicateRow(cell)
+        values = row.values
+        rows[cell] = Row(
+            op=row.op,
+            key=cell[1],
+            max_ulp=row.max_ulp,
+            provenance=row.provenance,
+            near_zero_atol=row.near_zero_atol,
+            atol=_number(values.get("atol")),
+            rtol=_number(values.get("rtol")),
+            alias=row.alias,
+        )
     return rows
 
 
@@ -444,9 +395,9 @@ class _Held:
 
     @property
     def _tolerance_row(self) -> Optional[Row]:
-        """The row, if it is a tolerance row: the only kind whose comment is a baseline.
-        A step budget that does not bind on this arch is not one, and its "max N ULP"
-        describes the arch it binds on."""
+        """The row, if it is a tolerance row: the only kind whose `measured` is a
+        baseline. A step budget that does not bind on this arch is not one, and its
+        `measured` describes the arch it binds on."""
         if not self.measured_shape or self.row is None or self.row.gated:
             return None
         return self.row
@@ -596,6 +547,12 @@ def compare(base: Dict[Cell, Row], head: Dict[Cell, Row]) -> List[Change]:
             # collapsed row replacing N keyed rows of one budget is one line marked xN.
             ident = (op, kind, deciding.key, was.describe(), now.describe())
             found = grouped.get(ident)
+            remeasured = _remeasured(base, now.row, kind, was.row)
+            if found is not None:
+                # `_remeasured` reads `was.row`, which can differ between the variants
+                # of one group: the group is n/a only if every variant is, and not
+                # re-measured if any variant is not.
+                remeasured = _combined_remeasured(found.remeasured, remeasured)
             grouped[ident] = Change(
                 (op, deciding.key),
                 kind,
@@ -604,21 +561,57 @@ def compare(base: Dict[Cell, Row], head: Dict[Cell, Row]) -> List[Change]:
                 variants=found.variants + 1 if found else 1,
                 held_before=was.describe(),
                 held_after=now.describe(),
-                remeasured=_remeasured(base, now.row),
+                remeasured=remeasured,
             )
     return sorted(grouped.values(), key=lambda c: (_KIND_ORDER.index(c.kind), c.cell))
 
 
-def _remeasured(base: Dict[Cell, Row], row: Optional[Row]) -> bool:
-    """Whether *row*, the head row deciding a cell, carries a provenance comment the base
-    table's same row did not. A new row counts only with a comment of its own: one that
-    leans on the op header carries no measurement of its own."""
+def _combined_remeasured(a: Optional[bool], b: Optional[bool]) -> Optional[bool]:
+    """Two variants' :func:`_remeasured`, for the one ``Change`` they share."""
+    if a is None and b is None:
+        return None
+    return a is not False and b is not False
+
+
+def _remeasured(
+    base: Dict[Cell, Row],
+    row: Optional[Row],
+    kind: str,
+    resolved_before: Optional[Row],
+) -> Optional[bool]:
+    """Whether *row*, the head row deciding a cell, carries provenance the base table's
+    same row did not; a row counts only with provenance fields of its own, and an alias
+    row only with provenance new to the whole base. ``None`` for a widened bound when
+    neither *row* on either side nor *resolved_before*, the row the cell resolved to in
+    the base, records a measurement (see :class:`Change`); any other loosening is held
+    to the rule, an ungating one too."""
     if row is None:
         return False
     was = base.get((row.op, row.key))
-    if was is None:
-        return bool(row.comment)
-    return was.provenance != row.provenance
+    unrecorded = all(
+        r is None or r.provenance == Provenance() for r in (row, was, resolved_before)
+    )
+    if kind == "tolerance_widened" and row.declares_tolerance and unrecorded:
+        return None
+    # Dropping a measurement is not taking one: the head row needs fields of its own.
+    if row.provenance == Provenance():
+        return False
+    if row.alias:
+        # `Neg: *low` -> `*high` hands Neg the measurement `&high` already carried.
+        return row.provenance not in _provenances(base)
+    return was is None or was.provenance != row.provenance
+
+
+#: Every provenance a table records, built once per table, for :func:`_remeasured`.
+_PROVENANCES: Dict[int, Tuple[Dict[Cell, Row], frozenset]] = {}
+
+
+def _provenances(table: Dict[Cell, Row]) -> frozenset:
+    cached = _PROVENANCES.get(id(table))
+    if cached is None or cached[0] is not table:
+        found = frozenset(r.provenance for r in table.values())
+        cached = _PROVENANCES[id(table)] = (table, found)
+    return cached[1]
 
 
 _KIND_TEXT = {
@@ -662,7 +655,8 @@ def _change_row(c: Change, *, with_provenance: bool) -> str:
     cells = f"| `{_describe(c)}` | {_KIND_TEXT[c.kind]} | {c.held_before} | "
     cells += f"{c.held_after} |"
     if with_provenance:
-        cells += f" {'yes' if c.remeasured else '**no**'} |"
+        text = {True: "yes", False: "**no**", None: "n/a"}[c.remeasured]
+        cells += f" {text} |"
     return cells
 
 
@@ -676,9 +670,9 @@ def render_budget_diff(changes: List[Change]) -> str:
     if regressions:
         out += [
             f"**{len(regressions)} cell(s) loosen a gate.** A budget may only be raised "
-            "by re-measuring and updating that row's provenance comment in the same "
-            "change — that is the table's own rule, and it is what makes every number "
-            "in it traceable.",
+            "by re-measuring and updating that row's `measured` figure and its date in "
+            "the same change — that is the table's own rule, and it is what makes "
+            "every number in it traceable.",
             "",
             *_md_table(
                 ("cell", "change", "before", "after", "re-measured"),
@@ -713,11 +707,12 @@ def _allowed_note(regressions: List[Change]) -> str:
         f"\n_Advisory: {len(regressions)} loosened gate(s) reported, not blocked; "
         "approving them is the table's code owners' review._\n"
     )
-    unmeasured = [c for c in regressions if not c.remeasured]
+    # A bound that cannot record a measurement ("n/a") was not edited instead of one.
+    unmeasured = [c for c in regressions if c.remeasured is False]
     if unmeasured:
         note += (
             f"\n**{len(unmeasured)} of them carry no fresh measurement** -- the row's "
-            "provenance comment is unchanged, so the budget was edited rather than "
+            "measurement is unchanged, so the budget was edited rather than "
             "re-measured:\n\n"
         )
         note += "".join(f"- `{(c.after or c.before).describe()}`\n" for c in unmeasured)
@@ -774,8 +769,7 @@ def _nonfinite_cells(rows: Iterable[dict]) -> Dict[Cell, int]:
 def recorded_nonfinite(row: Row) -> int:
     """How many non-finite lanes the row already accounts for: the count on a "not
     measurable" row, 0 on any other."""
-    found = _RECORDED_NONFINITE.search(row.provenance)
-    return int(found.group(1)) if found else 0
+    return row.provenance.nonfinite or 0
 
 
 def recorded_max(row: Row) -> Optional[int]:
@@ -789,18 +783,30 @@ def recorded_max(row: Row) -> Optional[int]:
     pinned = dict(row.key)
     if "in" not in pinned or "out" not in pinned:
         return None
-    found = _RECORDED_MAX.search(row.provenance)
-    return int(found.group(1)) if found else None
+    return row.provenance.measured
 
 
 def _headroom_line(cell: Cell, worst: int, reference: int, verdict: str) -> str:
     return f"| `{_cell_name(*cell)}` | {worst} | {reference} | {verdict} |"
 
 
-#: The sweep's test id (test_unary_sfpu_ulp.py's parametrize ids), read back into the
-#: cell it ran: ``test_unary_sfpu_ulp_sweep[Abs-in:Float16_b-out:Float16_b-approx:No-
+#: The labels of the sweep's test id after the op (test_unary_sfpu_ulp.py's parametrize
+#: ids): ``test_unary_sfpu_ulp_sweep[Abs-in:Float16_b-out:Float16_b-approx:No-
 #: dest_acc:Yes]``.
-_SWEEP_ID = re.compile(r"\[(\w+)-in:(\w+)-out:(\w+)-approx:(\w+)-dest_acc:(\w+)\]$")
+_SWEEP_ID_LABELS = ("in", "out", "approx", "dest_acc")
+
+
+def _sweep_cell(name: str) -> Optional[Tuple[str, str, str, str, str]]:
+    """The cell a sweep test id ran, as ``(op, in, out, approx, dest)``, or ``None`` for
+    any other test. Neither an op nor a format name holds a ``-``."""
+    if not name.endswith("]") or "[" not in name:
+        return None
+    op, *parts = name[name.index("[") + 1 : -1].split("-")
+    pairs = [part.partition(":") for part in parts]
+    if [label for label, _, _ in pairs] != list(_SWEEP_ID_LABELS):
+        return None
+    return (op, *(value for _, _, value in pairs))
+
 
 #: A failure message longer than this is cut: the first line of an assertion already
 #: names the cell and the figure, and the rest of a long message buries the next one.
@@ -843,12 +849,11 @@ def junit_failures(text: str) -> List[Failure]:
             continue
         name = case.get("name", "")
         lines = (bad.get("message") or bad.text or "").strip().splitlines()
-        found = _SWEEP_ID.search(name)
         failures.append(
             Failure(
                 test=name[name.find("[") :] if "[" in name else name,
                 message=(lines[0] if lines else "")[:_MESSAGE_CHARS],
-                cell=found.groups() if found else None,
+                cell=_sweep_cell(name),
             )
         )
     return failures
@@ -869,9 +874,9 @@ def junit_completed(text: str) -> List[Tuple[str, str, str, str, str]]:
             (skipped.get("message") or "") + (skipped.text or "")
         ):
             continue
-        found = _SWEEP_ID.search(case.get("name", ""))
-        if found:
-            cells.append(found.groups())
+        cell = _sweep_cell(case.get("name", ""))
+        if cell is not None:
+            cells.append(cell)
     return cells
 
 
@@ -977,7 +982,7 @@ def render_headroom(
         # nothing to hold the cell to, and a clean summary must not read as covering it.
         out += [
             f"{unjudged + uncovered} tolerance cell(s) measured but not judged: "
-            f"{unjudged} on a row that records no `max N ULP` or does not pin both "
+            f"{unjudged} on a row that records no `measured` figure or does not pin both "
             f"`in` and `out`, {uncovered} covered by no row at all.",
             "",
         ]
@@ -1042,11 +1047,19 @@ def render_headroom(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _parse_side(path: Path, side: str) -> Dict[Cell, Row]:
+    """:func:`parse_table` of one side of a diff, a refusal naming that side. A base from
+    before the table carried provenance fields is refused like any other table the
+    registry cannot load: its rows would all read as unmeasured, and every recorded
+    figure the head adds as a raised baseline."""
+    try:
+        return parse_table(path.read_text(encoding="utf-8"))
+    except (ValueError, yaml.YAMLError) as refused:
+        raise ValueError(f"the {side} table ({path}): {refused}") from None
+
+
 def _diff(args) -> Tuple[str, int]:
-    changes = compare(
-        parse_table(args.base.read_text(encoding="utf-8")),
-        parse_table(args.head.read_text(encoding="utf-8")),
-    )
+    changes = compare(_parse_side(args.base, "base"), _parse_side(args.head, "head"))
     report = render_budget_diff(changes)
     regressions = [c for c in changes if c.is_regression]
     if regressions and args.allow_raises:

@@ -538,8 +538,8 @@ def test_softshrink_bf16_bfloat8_b(device):
     BF16 cases do. The result must correlate with torch's on the input as stored to PCC 0.999, as upstream's
     bfloat8_b unary cases require. Over every finite BF16 exponent, each output must also be within one bfloat8_b
     step of the BF16 call's for the same stored input, packed to bfloat8_b (two in a block that holds an infinity
-    or NaN), and of its class (infinity, NaN, zero): the op packs DEST to Bfp8_b, and the typecast rounds and
-    sets a block's exponent its own way.
+    or NaN), and of its class where that is infinity or NaN: the op packs DEST to Bfp8_b, and the typecast
+    rounds and sets a block's exponent its own way.
     """
     board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
     if board not in ("blackhole",):
@@ -577,11 +577,12 @@ def test_softshrink_bf16_bfloat8_b(device):
     # its finite values land up to two steps apart (polygamma's overflow binade, BH job 142644).
     special = (~finite).reshape(-1, 16).any(dim=1, keepdim=True).expand(-1, 16).reshape(-1)
     step = torch.where(special, 2 * step, step)
-    # Infinity, NaN and zero keep their class exactly; a finite value may round one step apart.
+    # Infinity and NaN keep their class exactly; a finite value, zero included, may round one step apart (a value
+    # under one step of its block packs to zero on one side and not the other: gelu at -8.625, BH job 142674).
     same = (
         (actual == expected)
         | (torch.isnan(actual) & torch.isnan(expected))
-        | (finite & ((actual == 0) == (expected == 0)) & ((actual - expected).abs() <= step))
+        | (finite & ((actual - expected).abs() <= step))
     )
     assert same.all(), (
         f"{int((~same).sum())} bfloat8_b outputs are more than one bfloat8_b step from the BF16 call's on the same "
