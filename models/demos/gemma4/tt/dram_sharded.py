@@ -358,6 +358,32 @@ class DramShardedLinear:
     def _prefill_pc(self, m):
         return prefill_progcfg(m, self.k, self.n, max_cols=self._prefill_max_cols)
 
+    @property
+    def act_memory_config(self):
+        """The L1 width-sharded layout the decode kernel reads its activation in (one row tile)."""
+        return self._act_memcfg
+
+    def accepts_sharded_rows(self) -> bool:
+        """True when a producer may hand this matmul its decode activation already in ``act_memory_config``
+        (the DRAM-sharded kernel; the 1D decode path reads interleaved rows)."""
+        return self._decode_1d is None
+
+    def _decode_sharded_rows(self, x_sh, out_mc, compute_kernel_config, m_rows):
+        """Decode on an activation that is already width-sharded in ``act_memory_config`` (no reshard program)."""
+        out = ttnn.linear(
+            x_sh,
+            self.weight,
+            program_config=self._decode_pc,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
+        x_sh.deallocate(True)
+        out = ttnn.to_memory_config(out, out_mc)
+        if m_rows < TILE_SIZE:
+            n_out = int(out.shape[-1])
+            out = ttnn.reshape(out, ttnn.Shape([1, 1, m_rows, n_out]), ttnn.Shape([1, 1, TILE_SIZE, n_out]))
+        return out
+
     def __call__(self, x, compute_kernel_config=None, out_memory_config=None):
         out_mc = out_memory_config if out_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
         # Prefill with batch>1 reshapes activations to [B, 1, S, K] (see
@@ -371,6 +397,8 @@ class DramShardedLinear:
         M = 1
         for d in orig_leading:
             M *= d
+        if x.is_sharded() and M <= TILE_SIZE and self._decode_1d is None and x.memory_config() == self._act_memcfg:
+            return self._decode_sharded_rows(x, out_mc, compute_kernel_config, M)
         flat_shape = [1, 1, M, n_in]
         x_work = x if x_shape == flat_shape else ttnn.reshape(x, flat_shape)
 

@@ -642,6 +642,7 @@ def concat_heads(
     head_dim: int = None,
     mesh_device=None,
     memory_config=None,
+    o_proj=None,
 ):
     """Concatenate attention heads back to hidden dimension.
 
@@ -663,10 +664,19 @@ def concat_heads(
         batch = tensor.shape[1]
         if decode_flag("GEMMA4_CONCAT_HEADS_FUSED") == "1" and not tensor.is_sharded():
             # GEMMA4_CONCAT_HEADS_FUSED=1: one program straight from the interleaved SDPA output to the
-            # interleaved o_proj input (custom_ops/concat_heads_decode) instead of reshard, concat, reshard, slice
+            # interleaved o_proj input (custom_ops/concat_heads_decode) instead of reshard, concat, reshard, slice.
+            # GEMMA4_CONCAT_HEADS_SHARDED=1: the output lands in the DRAM-sharded o_proj matmul's L1 activation
+            # layout, so that matmul skips its interleaved -> width-sharded copy (one program fewer per layer).
             from models.demos.gemma4.custom_ops.concat_heads_decode import ConcatHeadsDecode
 
-            return ConcatHeadsDecode.op(tensor, num_heads)
+            out_mem = None
+            if (
+                decode_flag("GEMMA4_CONCAT_HEADS_SHARDED") == "1"
+                and isinstance(o_proj, DramShardedLinear)
+                and o_proj.accepts_sharded_rows()
+            ):
+                out_mem = o_proj.act_memory_config
+            return ConcatHeadsDecode.op(tensor, num_heads, out_memory_config=out_mem)
         # One core per user (batch), arranged as a contiguous rectangle. A plain
         # num_cores_to_corerangeset spills into a non-rectangular set once
         # batch > grid width, which the height-sharded mem config rejects

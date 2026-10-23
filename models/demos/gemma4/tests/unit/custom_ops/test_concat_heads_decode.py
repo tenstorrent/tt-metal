@@ -45,3 +45,49 @@ def test_concat_heads_decode_matches_composite(mesh_device, device_params, B, H,
     assert torch.equal(out, ref[:, :, :B, :]), f"max|diff| vs composite {(out - ref[:, :, :B, :]).abs().max()}"
     tx2 = ttnn.from_torch(x, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     assert torch.equal(ttnn.to_torch(ConcatHeadsDecode.op(tx2, H, heads_per_unit=hg)).float(), out)
+
+
+@pytest.mark.parametrize(
+    "B, H, D, K_N",
+    [
+        (32, 8, 256, (2048, 5376)),
+        (1, 8, 256, (2048, 5376)),
+        (32, 4, 256, (1024, 3840)),
+        (32, 2, 256, (512, 3840)),
+        (32, 8, 512, (4096, 5376)),
+    ],
+    ids=["31b_tp4", "31b_tp4_b1", "12b_tp4", "12b_tp8", "31b_tp4_global"],
+)
+@pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
+def test_concat_heads_decode_sharded_output(mesh_device, device_params, B, H, D, K_N):
+    """The output written straight into the DRAM-sharded o_proj decode matmul's L1 activation layout
+    (activation_memcfg(K, N)): bit-identical to the interleaved form, one program, and the matmul takes it
+    without its interleaved -> sharded copy (GEMMA4_CONCAT_HEADS_SHARDED=1)."""
+    from models.demos.gemma4.tt.dram_sharded import activation_memcfg, can_dram_shard
+
+    K, N = K_N
+    assert K == H * D
+    if not can_dram_shard(K, N, dtype=ttnn.bfloat8_b):
+        pytest.skip(f"[{K}, {N}] has no DRAM-sharded decode config on this grid")
+    torch.manual_seed(0)
+    x = torch.randn(1, B, 32, D).to(torch.bfloat16)
+    golden = ConcatHeadsDecode.golden(x.float(), H)
+    tx = ttnn.from_torch(x, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    ref = ttnn.to_torch(ConcatHeadsDecode.op(tx, H)).float()
+    mem = activation_memcfg(K, N)
+    out = ConcatHeadsDecode.op(tx, H, out_memory_config=mem)
+    assert out.is_sharded() and out.memory_config() == mem
+    got = ttnn.to_torch(out).float()
+    assert list(got.shape) == [1, 1, B, H * D]
+    assert torch.equal(got, golden), f"sharded output vs golden max|diff| {(got - golden).abs().max()}"
+    assert torch.equal(got, ref), "sharded output differs from the interleaved form"
+    # the DRAM-sharded matmul consumes it as is: same result as from the interleaved input
+    from models.demos.gemma4.tt.dram_sharded import DramShardedLinear
+
+    w = (torch.randn(1, 1, K, N) * 0.02).to(torch.bfloat16)
+    lin = DramShardedLinear(w, mesh_device, None, k=K, n=N, dtype=ttnn.bfloat8_b, cache_file_name=None)
+    assert lin.accepts_sharded_rows() and lin.act_memory_config == mem
+    y_ref = ttnn.to_torch(lin(ConcatHeadsDecode.op(tx, H))).float()
+    y_sh = ttnn.to_torch(lin(ConcatHeadsDecode.op(tx, H, out_memory_config=mem))).float()
+    assert list(y_sh.shape) == [1, 1, B, N]
+    assert torch.equal(y_sh, y_ref), f"matmul on the sharded input differs: max|diff| {(y_sh - y_ref).abs().max()}"

@@ -34,7 +34,11 @@ class ConcatHeadsDecode:
         return x[:, :, :H, :].reshape(1, 1, B, H * D)
 
     @classmethod
-    def op(cls, x: ttnn.Tensor, num_heads: int, heads_per_unit: int = None) -> ttnn.Tensor:
+    def op(cls, x: ttnn.Tensor, num_heads: int, heads_per_unit: int = None, out_memory_config=None) -> ttnn.Tensor:
+        """``out_memory_config``: the output's memory config (default: the input's interleaved one). An L1
+        WIDTH_SHARDED config -- the activation layout of the DRAM-sharded o_proj decode matmul, a shard of whole
+        column tiles per core -- makes the op write the o_proj input in place of that matmul's interleaved ->
+        sharded copy (the page accessor maps output tile ``(h, c)`` to its shard core)."""
         assert (
             x.layout == ttnn.TILE_LAYOUT and x.dtype == ttnn.bfloat16 and not x.is_sharded()
         ), "x: bf16 TILE interleaved"
@@ -43,9 +47,16 @@ class ConcatHeadsDecode:
         assert D % TILE == 0
         cols = D // TILE
         device = x.device()
-        out = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, B, num_heads * D]), x.dtype, x.layout, device, x.memory_config()
-        )
+        out_mem = x.memory_config() if out_memory_config is None else out_memory_config
+        if out_mem.is_sharded():
+            shard_w = int(out_mem.shard_spec.shape[1])
+            assert (
+                out_mem.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+                and int(out_mem.shard_spec.shape[0]) == TILE
+                and shard_w % TILE == 0
+                and (num_heads * D) % shard_w == 0
+            ), f"width-sharded output must hold whole column tiles of one row tile: {out_mem}"
+        out = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, B, num_heads * D]), x.dtype, x.layout, device, out_mem)
         grid = device.compute_with_storage_grid_size()
         n_grid = grid.x * grid.y
         if heads_per_unit is None:

@@ -134,27 +134,62 @@ def decode_forward(
         memory_config=ttnn.L1_MEMORY_CONFIG if decode_flag("GEMMA4_QKV_L1_OUT") == "1" else None,
     )
 
-    # 2. Split into Q, K, V heads
-    tt_q, tt_k, tt_v = split_qkv_heads_decode(
-        xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
-    )
-
-    # 3. Per-head norms (move to DRAM for rms_norm, restore sharded for RoPE)
-    q_sharded_mem = tt_q.memory_config()
-    fused_qkv = (
-        decode_flag("GEMMA4_QKV_NORM_ROPE_FUSED") == "1"
-        and not is_kv_shared
+    batch_rows = int(xqkv.shape[2])
+    fused_rope_ok = (
+        not is_kv_shared
         and rope_presliced
         and len(cos_cache.shape) == 4
         and int(cos_cache.shape[1]) == 1
-        and not (sequential_kv_write and int(tt_q.shape[1]) > 1)
-        # With fresh (not in-place) outputs the op's six live [32, 512] shards per core push the lowest live L1
-        # buffer under the static circular-buffer region of the following paged_update_cache program on the
-        # head_dim-512 global layers at 32 users ("statically allocated dataflow buffers clash with L1 buffers"),
-        # so that form serves the sliding layers only.
-        and (int(config.head_dim) <= 256 or QkvNormRope.in_place())
+        and not (sequential_kv_write and batch_rows > 1)
     )
-    if fused_qkv:
+    # GEMMA4_QKV_HEADS_FUSED=1 (with GEMMA4_QKV_L1_OUT=1): the head split, the per-head norms and the q/k RoPE as
+    # one program straight from the L1 projection output (custom_ops/qkv_heads_norm_rope), in place of
+    # nlp_create_qkv_heads_decode + qkv_norm_rope; the head_dim-256 (sliding) layers, as the fresh-output form.
+    heads_fused = (
+        decode_flag("GEMMA4_QKV_HEADS_FUSED") == "1"
+        and fused_rope_ok
+        and int(config.head_dim) <= 256
+        and not xqkv.is_sharded()
+        and xqkv.memory_config().buffer_type == ttnn.BufferType.L1
+    )
+    if heads_fused:
+        from models.demos.gemma4.custom_ops.qkv_heads_norm_rope import QkvHeadsNormRope
+
+        gq, gk = _gamma_tiles(weights, config.head_dim)
+        tt_q, tt_k, tt_v = QkvHeadsNormRope.op(
+            xqkv,
+            config.num_attention_heads // tp,
+            1 if weights.kv_replicated else config.num_key_value_heads // tp,
+            config.head_dim,
+            gq,
+            gk,
+            cos_cache,
+            sin_cache,
+            config.rms_norm_eps,
+        )
+        xqkv.deallocate(True)
+        q_sharded_mem = tt_q.memory_config()
+        fused_qkv = True
+    else:
+        # 2. Split into Q, K, V heads
+        tt_q, tt_k, tt_v = split_qkv_heads_decode(
+            xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
+        )
+
+        # 3. Per-head norms (move to DRAM for rms_norm, restore sharded for RoPE)
+        q_sharded_mem = tt_q.memory_config()
+        fused_qkv = (
+            decode_flag("GEMMA4_QKV_NORM_ROPE_FUSED") == "1"
+            and fused_rope_ok
+            # With fresh (not in-place) outputs the op's six live [32, 512] shards per core push the lowest live
+            # L1 buffer under the static circular-buffer region of the following paged_update_cache program on
+            # the head_dim-512 global layers at 32 users ("statically allocated dataflow buffers clash with L1
+            # buffers"), so that form serves the sliding layers only.
+            and (int(config.head_dim) <= 256 or QkvNormRope.in_place())
+        )
+    if heads_fused:
+        pass  # split, norms and RoPE done above
+    elif fused_qkv:
         # norms + RoPE on the sharded head tensors, outputs in the same sharded layout (custom_ops/qkv_norm_rope)
         gq, gk = _gamma_tiles(weights, config.head_dim)
         nq, nk, nv = QkvNormRope.op(tt_q, tt_k, tt_v, gq, gk, cos_cache, sin_cache, config.rms_norm_eps)
@@ -433,7 +468,12 @@ def decode_forward(
     # 7. Concat heads + output projection + allreduce
     num_local_heads = config.num_attention_heads // tp
     tt_out = concat_heads(
-        tt_sdpa, is_decode_mode=True, num_heads=num_local_heads, head_dim=config.head_dim, mesh_device=mesh_device
+        tt_sdpa,
+        is_decode_mode=True,
+        num_heads=num_local_heads,
+        head_dim=config.head_dim,
+        mesh_device=mesh_device,
+        o_proj=weights.o_proj,
     )
     tt_out = apply_output_projection(tt_out, weights)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
