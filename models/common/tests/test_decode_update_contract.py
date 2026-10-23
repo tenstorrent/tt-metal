@@ -450,6 +450,31 @@ def test_adapter_forwards_deferred_decode(adapter_path, forwarded_width, monkeyp
     assert buckets == ([forwarded_width] if forwarded_width < 8 else [])
 
 
+@pytest.mark.parametrize(
+    "adapter_path",
+    [
+        "models.tt_transformers.tt.generator_vllm:LlamaForCausalLM",
+        "models.tt_transformers.tt.generator_vllm:QwenForCausalLM",
+        "models.tt_transformers.tt.generator_vllm:MistralForCausalLM",
+        "models.tt_transformers.tt.generator_vllm:Gemma3ForConditionalGeneration",
+        "models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM",
+        "models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36MTPContractForCausalLM",
+    ],
+    ids=lambda value: value.rsplit(":", 1)[1],
+)
+def test_device_grammar_requires_device_sampling(adapter_path, monkeypatch):
+    """The vLLM TT plugin refuses to start a model that declares device grammar without device sampling.
+
+    Read from the imported class, so a subclass that spreads its base's capabilities is checked as resolved.
+    """
+    stub_vllm_if_missing(monkeypatch)
+    module_name, class_name = adapter_path.split(":")
+    capabilities = getattr(importlib.import_module(module_name), class_name).model_capabilities
+
+    if capabilities.get("supports_device_grammar", False):
+        assert capabilities.get("supports_sample_on_device", False) is True
+
+
 def test_sglang_bridge_explicitly_requests_host_authoritative_decode(monkeypatch):
     from models.tt_transformers.tt.generator import Generator
     from models.tt_transformers.tt.generator_sglang import LlamaForCausalLM
