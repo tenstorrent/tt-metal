@@ -539,8 +539,9 @@ _RECORD_TEST_ORDER: bool = False
 _ULP_REPORT: bool = False
 
 # --ulp-measure=<path>: append one Measurement per comparison that followed exactly one
-# accuracy_contract lookup in the same test (see _record_ulp_measurement). Reporting
-# only: written after the verdict and never read back into it.
+# accuracy_contract lookup in the same test (see _record_ulp_measurement). Written
+# after the verdict and never read back into it, but the sweep's records are required:
+# one not written fails its cell (RecordDropped).
 _ULP_MEASURE_PATH: Optional[str] = None
 # Set by the first failed write: a path that stops taking writes mid-run (disk full, the
 # directory removed) is reported once, not once per comparison per worker.

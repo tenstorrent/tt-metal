@@ -213,6 +213,9 @@ two others are gated at 3. `log` answers nothing below 0 and is 1 step from 0 up
   ```
 
   Each line of `ulp.jsonl` is one `ulp_table.Measurement`.
+- **`--ulp-measure` can fail the sweep**: the sweep's records are required, since the
+  headroom report judges only the cells it reads, so a sweep cell whose record is not
+  written fails (`RecordDropped`), and a path that cannot be prepared is a usage error.
 - **`CHIP_ARCH` must be set**, and `--ulp-emit` refuses to run off Wormhole, because the
   emitter writes no `arch`.
 
