@@ -773,6 +773,64 @@ class LlamaForCausalLM(Generator):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
+class Phi3ForCausalLM(Generator):
+    decode_input_update_contract = 1
+
+    # Class-level capabilities. Longrope picks its factors from the whole prompt, which the generator passes to
+    # chunked and prefix-cached prefill and which keeps prompts past the original context off traced prefill.
+    model_capabilities = {
+        "supports_prefix_caching": True,
+        "supports_async_decode": True,
+        "supports_sample_on_device": True,
+        "supports_device_grammar": True,
+        "max_device_top_k": 32,
+        "supports_chunked_prefill": True,
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @classmethod
+    def initialize_vllm_model(
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations: str = "performance",
+    ):
+        tt_model, model_args = initialize_vllm_text_transformer(
+            hf_config,
+            tt_data_parallel,
+            mesh_device,
+            max_batch_size,
+            max_seq_len=max_seq_len,
+            n_layers=n_layers,
+            dtype=ttnn.bfloat8_b,
+            optimizations=(
+                DecodersPrecision.from_string(optimizations)
+                if optimizations is not None
+                else DecodersPrecision.performance
+            ),
+        )
+        return cls(tt_model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].model_cache_path
+
+    def prefill_forward(self, *args, **kwargs):
+        return super().prefill_forward_text(*args, **kwargs)
+
+    def decode_forward(self, *args, **kwargs):
+        return super().decode_forward(*args, **kwargs)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+
 class QwenForCausalLM(Generator):
     decode_input_update_contract = 1
 
