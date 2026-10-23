@@ -141,9 +141,18 @@ class TTTemporalSelfAttention:
 
         Returns:
             Output features [B, num_queries, embed_dims].
+
+        With ``batch_first`` False, ``query``, ``value``, ``query_pos``, ``identity`` and the output
+        are sequence-first instead.
         """
         if use_signpost:
             signpost(header="TTNN TSA Forward Start")
+
+        if not self.batch_first:
+            # The features to batch-first; the reference points and the shift are batch-first already.
+            query, value, query_pos, identity = (
+                None if t is None else ttnn.permute(t, (1, 0, 2)) for t in (query, value, query_pos, identity)
+            )
 
         bs, num_queries, embed_dims = query.shape
         queue = self.num_bev_queue
@@ -219,6 +228,8 @@ class TTTemporalSelfAttention:
         output = ttnn.mean(ttnn.to_layout(output, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG), dim=1)
         output = ttnn.linear(output, self.params.output_proj.weight, bias=self.params.output_proj.bias)
         output = ttnn.add(output, identity)
+        if not self.batch_first:
+            output = ttnn.permute(output, (1, 0, 2))
 
         if use_signpost:
             signpost(header="TTNN TSA Forward End")

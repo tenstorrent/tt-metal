@@ -48,6 +48,8 @@ pytestmark = pytest.mark.use_module_device({"l1_small_size": 10 * 1024})
     ],
 )
 @pytest.mark.parametrize("seed", [0])
+# The TT module also takes sequence-first features; the reference always runs batch-first.
+@pytest.mark.parametrize("batch_first", [True, False], ids=["batch_first", "seq_first"])
 def test_temporal_self_attention_forward(
     device,
     config_name,
@@ -60,6 +62,7 @@ def test_temporal_self_attention_forward(
     expected_rel_error,
     expected_high_error_ratio,
     seed,
+    batch_first,
 ):
     """Test TTTemporalSelfAttention against PyTorch reference implementation using configurations."""
     torch.manual_seed(seed)
@@ -92,7 +95,12 @@ def test_temporal_self_attention_forward(
     level_start_index = torch.cat([torch.tensor([0], dtype=torch.long), indices[:-1]], 0)
 
     # Convert tensors to ttnn format for ttnn model
-    tt_current_bev = ttnn.from_torch(current_bev, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_current_bev = ttnn.from_torch(
+        current_bev if batch_first else current_bev.permute(1, 0, 2),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
     tt_reference_points_2d = ttnn.from_torch(
         reference_points_2d, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
     )
@@ -124,7 +132,7 @@ def test_temporal_self_attention_forward(
         num_levels=num_levels,
         num_points=num_points,
         num_bev_queue=num_bev_queue,
-        batch_first=True,
+        batch_first=batch_first,
         spatial_shapes=bev_spatial_shapes,
     )
 
@@ -146,6 +154,8 @@ def test_temporal_self_attention_forward(
         query=tt_current_bev,
         reference_points=tt_reference_points_2d,
     )
+    if not batch_first:
+        tt_model_output = ttnn.permute(tt_model_output, (1, 0, 2))
 
     # --------------------------------------------------------------------------- #
     # Output Comparison                                                           #
