@@ -134,7 +134,7 @@ void fused_bw(const Inputs& in, Widths w, uint32_t chunk, uint32_t splits, bool 
         in.grad_q,
         in.grad_k,
         in.grad_v,
-        in.input_rm,
+        in.input_tile,
         in.history_rm,
         in.taps[0],
         in.taps[1],

@@ -115,13 +115,11 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> qkv_ca
                 out->set_grad(core::zeros_like(out->get_value()));
             }
         }
-        // Only the backward reader wants rows; the forward reads the TILE input as is.
-        auto input_rm = ttnn::to_layout(x, ttnn::Layout::ROW_MAJOR);
         auto [grad_input, grad_tap0, grad_tap1, grad_tap2, grad_tap3] = metal::qkv_causal_conv1d_silu_bw(
             rank3(out_q->get_grad()),
             rank3(out_k->get_grad()),
             rank3(out_v->get_grad()),
-            input_rm,
+            x,
             history_rm,
             tap0->get_value(),
             tap1->get_value(),

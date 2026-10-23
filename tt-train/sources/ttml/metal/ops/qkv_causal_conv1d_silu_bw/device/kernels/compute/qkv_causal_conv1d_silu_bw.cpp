@@ -162,7 +162,7 @@ void grad_input_tile(DataflowBuffer& grad_preact_shifted, DataflowBuffer& output
 
 template <uint32_t channel_tiles_per_block, uint32_t tile_rows, uint32_t row_splits>
 TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
-    compute_kernel_hw_startup(dfb::x_shifted_rm, dfb::x_shifted_tile, dfb::grad_preact_rm);
+    compute_kernel_hw_startup(dfb::x_shifted_tile, dfb::weights, dfb::preact);
     DataflowBuffer x_shifted(dfb::x_shifted_tile);
     DataflowBuffer weights(dfb::weights);
     DataflowBuffer grad_out(dfb::grad_out);
@@ -200,7 +200,6 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
             ones.wait_front(1);
         }
         for (uint32_t step = 0; step < step_count; ++step) {
-            compute_kernel_lib::tilize<channel_tiles_per_block, dfb::x_shifted_rm, dfb::x_shifted_tile>(tap_count);
             x_shifted.wait_front(tap_count * channel_tiles_per_block);
             grad_out.wait_front(channel_tiles_per_block);
 

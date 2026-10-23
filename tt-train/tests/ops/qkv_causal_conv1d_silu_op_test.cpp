@@ -158,7 +158,7 @@ DeviceInputs make_inputs(const Shape& s, const Problem& p) {
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
     DeviceInputs d{
-        .input = core::from_xtensor(p.x, device, ttnn::Layout::ROW_MAJOR),
+        .input = core::from_xtensor(p.x, device),
         .history = core::from_xtensor(p.h, device, ttnn::Layout::ROW_MAJOR),
         .grad_q = core::from_xtensor(slice_cols(p.grad_y, 0, s.Q), device),
         .grad_k = core::from_xtensor(slice_cols(p.grad_y, s.Q, s.Q + s.K), device),

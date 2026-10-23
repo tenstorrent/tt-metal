@@ -53,7 +53,7 @@ void QkvCausalConv1dSiluBackwardOperation::validate_on_program_cache_miss(
         op_name);
     TT_FATAL(!attrs.output_mem_config.is_sharded(), "{}: output memory layout must be INTERLEAVED", op_name);
 
-    check_device_tensor(in.input, op_name, "input", {.layout = Layout::ROW_MAJOR});
+    check_device_tensor(in.input, op_name, "input");
     const auto check = [&](const Tensor& tensor, std::string_view name, Layout layout = Layout::TILE) {
         check_device_tensor(tensor, op_name, name, {.layout = layout});
         check_same_device(tensor, in.input, op_name, name, "input");

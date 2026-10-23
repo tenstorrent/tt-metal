@@ -32,11 +32,10 @@ inline std::vector<QkvCausalConv1dSiluBackwardDataflowBuffer> qkv_conv_bw_datafl
     const auto bf16 = input_format;
     constexpr auto fp32 = tt::DataFormat::Float32;
     std::vector<QkvCausalConv1dSiluBackwardDataflowBuffer> buffers{
-        // x window copied 4x, each one row lower, row-major; x2 so the reader builds the next step's copies while
-        // compute tilizes these
-        {"x_shifted_rm", 8 * channel_tiles_per_block, bf16},
-        {"x_shifted_tile", 4 * channel_tiles_per_block, bf16},  // the same 4 copies as tiles
-        {"weights", 8 * channel_tiles_per_block, bf16},         // taps [4][channel_tiles_per_block], x2 to prefetch
+        // the tile row copied 4x, each one row lower, as tiles [tap][ct]; x2 so the reader builds the next step's
+        // copies while compute consumes these
+        {"x_shifted_tile", 8 * channel_tiles_per_block, bf16},
+        {"weights", 8 * channel_tiles_per_block, bf16},  // taps [4][channel_tiles_per_block], x2 to prefetch
         {"grad_out", 2 * channel_tiles_per_block, bf16},
         {"preact", channel_tiles_per_block, bf16},
         // fp32: silu_bw needs preact * (1 - s), and a bf16 s near 1 leaves (1 - s) with few bits. One block, so
@@ -65,7 +64,7 @@ inline uint64_t qkv_conv_bw_window_bytes(uint64_t channel_tiles_per_block, uint6
     return qkv_conv_bw_window_rows * channel_tiles_per_block * tt::constants::TILE_WIDTH * bytes_per_element;
 }
 
-// L1 per core: every dataflow buffer plus the input and grad_preact row windows.
+// L1 per core: every dataflow buffer, the reader's strip scratch and the writer's grad_preact row window.
 inline uint64_t qkv_conv_bw_l1_bytes(
     uint32_t channel_tiles_per_block,
     tt::DataFormat input_format,
@@ -75,7 +74,8 @@ inline uint64_t qkv_conv_bw_l1_bytes(
     for (const auto& buffer : qkv_conv_bw_dataflow_buffers(channel_tiles_per_block, input_format, compute_tap_grads)) {
         bytes += static_cast<uint64_t>(buffer.tiles) * tt::tile_size(buffer.format);
     }
-    return bytes + 2 * qkv_conv_bw_window_bytes(channel_tiles_per_block, bytes_per_element);
+    return bytes + qkv_conv_bw::ReaderScratch{channel_tiles_per_block}.bytes() +
+           qkv_conv_bw_window_bytes(channel_tiles_per_block, bytes_per_element);
 }
 
 struct QkvCausalConv1dSiluBackwardProgramFactory {

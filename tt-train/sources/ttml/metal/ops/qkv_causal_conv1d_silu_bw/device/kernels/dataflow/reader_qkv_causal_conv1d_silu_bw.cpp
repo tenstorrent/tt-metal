@@ -7,16 +7,18 @@
 #include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "internal/local_mem/address_access.h"
 #include "tt-train/sources/ttml/metal/ops/qkv_causal_conv1d_silu_bw/device/hostdevcommon/qkv_causal_conv1d_silu_bw_layout.hpp"
 
-using qkv_conv_bw::halo_rows;
-using qkv_conv_bw::tap_count;
-using qkv_conv_bw::tile_height;
+using namespace qkv_conv_bw;
 
-// Per work item (channel_block, split): weights, then for every 32-row step a 35-row input window (3 rows of history or
-// previous rows + 32 new rows), 4 shifted copies of it, and the matching grad_q/k/v tiles.
+static_assert(read_alignment % DRAM_ALIGNMENT == 0 && read_alignment % L1_ALIGNMENT == 0);
+
+// Per work item (channel_block, split): weights, then for every tile row the TILE input's faces staged as strips (3
+// halo rows + 32 rows), the 4 shifted tiles copied out of the strips, and the matching grad_q/k/v tiles.
 template <
     uint32_t channel_tiles_per_block,
+    uint32_t channel_tiles,
     uint32_t tile_rows,
     uint32_t row_splits,
     uint32_t q_tiles,
@@ -32,19 +34,26 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const auto tap1 = TensorAccessor(tensor::tap1);
     const auto tap2 = TensorAccessor(tensor::tap2);
     const auto tap3 = TensorAccessor(tensor::tap3);
-    // x_shifted = the x window copied 4 times, each copy one row lower. preact = conv(x_shifted) = sum_j w_j * copy_j
-    DataflowBuffer x_shifted(dfb::x_shifted_rm);  // 64 slots: the 4 copies, row-major, 8 slots each, x2
+    // x_shifted[tap][ct]: the tile row copied 4 times, each copy one row lower. preact = sum_tap w_tap * x_shifted[tap]
+    DataflowBuffer x_shifted(dfb::x_shifted_tile);
     DataflowBuffer weights(dfb::weights);
     DataflowBuffer grad_out(dfb::grad_out);
-    Scratchpad<uint16_t> window(scratch::x_window);
+    Scratchpad<uint16_t> scratch(scratch::x_window);
     Noc noc;
 
-    constexpr uint32_t row_bytes = channel_tiles_per_block * tt::constants::TILE_WIDTH * sizeof(uint16_t);
-    constexpr uint32_t view_bytes = tile_height * row_bytes;
-    static_assert(row_bytes % L1_ALIGNMENT == 0 && row_bytes % DRAM_ALIGNMENT == 0);
-    const uint32_t tile_bytes = weights.get_entry_size();
+    constexpr uint32_t block_row_bytes = channel_tiles_per_block * tile_row_bytes;
+    constexpr ReaderScratch layout{channel_tiles_per_block};
+    // The strips need a 64-byte aligned base; the scratchpad's is only known at run time.
+    const uint32_t scratch_base = local_mem::detail::AddressAccess::address(scratch.local_mem());
+    const uint32_t base = align_up(scratch_base, read_alignment);
+    const auto offset_of = [&](uint32_t address) { return address - scratch_base; };
+    const uint32_t staging = offset_of(base + layout.staging());  // previous tile row's bottom faces [ct][side]
+    const uint32_t rows = offset_of(base + layout.rows());        // the 3 history rows, row-major
+    const auto strip = [&](uint32_t parity, uint32_t ct, uint32_t side) {
+        return offset_of(base + strip_phase + ((parity * channel_tiles_per_block + ct) * 2 + side) * strip_stride);
+    };
     // The row broadcast reads row 0, so only the two top faces of a tap tile are needed.
-    constexpr uint32_t tap_bytes = 2 * tt::constants::FACE_HW * sizeof(uint16_t);
+    constexpr uint32_t tap_bytes = 2 * face_bytes;
 
     DataflowBuffer ones(dfb::ones);
     // A tile of 1.0, needed because the FPU has no add-constant: stage B computes 1 + preact * (1 - s) with it.
@@ -66,7 +75,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
         const uint32_t channel_block = work / row_splits;
         const uint32_t split = work % row_splits;
         const uint32_t first_tile_column = channel_block * channel_tiles_per_block;
-        const uint32_t col_bytes = first_tile_column * tt::constants::TILE_WIDTH * sizeof(uint16_t);
+        const uint32_t col_bytes = first_tile_column * tile_row_bytes;
         const uint32_t first_tile_row = split * tile_rows / row_splits;
         const uint32_t end_tile_row = (split + 1) * tile_rows / row_splits;
         const uint32_t step_count = end_tile_row - first_tile_row + (end_tile_row < tile_rows ? 1 : 0);
@@ -93,32 +102,34 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
             loaded_block = channel_block;
         }
 
+        uint32_t parity = 0;
         for (uint32_t step = 0; step < step_count; ++step) {
             const uint32_t tile_row = first_tile_row + step;
-            if (step == 0) {
+            // The 3 rows above this tile row: the caller's history at the sequence start, the previous tile row's
+            // bottom faces at an item start, else the previous strip's last rows.
+            const bool from_history = step == 0 && tile_row == 0;
+            const bool from_previous_tile = step == 0 && tile_row > 0;
+            if (from_history) {
                 for (uint32_t row = 0; row < halo_rows; ++row) {
-                    const int32_t source_row = static_cast<int32_t>(tile_row * tile_height + row) - halo_rows;
-                    if (source_row < 0) {
-                        noc.async_read(
-                            history,
-                            window,
-                            row_bytes,
-                            {.page_id = static_cast<uint32_t>(source_row + halo_rows), .offset_bytes = col_bytes},
-                            {.offset_bytes = row * row_bytes});
-                    } else {
-                        noc.async_read(
-                            input,
-                            window,
-                            row_bytes,
-                            {.page_id = static_cast<uint32_t>(source_row), .offset_bytes = col_bytes},
-                            {.offset_bytes = row * row_bytes});
-                    }
+                    noc.async_read(
+                        history,
+                        scratch,
+                        block_row_bytes,
+                        {.page_id = row, .offset_bytes = col_bytes},
+                        {.offset_bytes = rows + row * block_row_bytes});
                 }
-            } else {
-                noc.async_read(window, window, halo_rows * row_bytes, {.offset_bytes = tile_height * row_bytes}, {});
-                noc.async_read_barrier();
+            } else if (from_previous_tile) {
+                for (uint32_t ct = 0; ct < channel_tiles_per_block; ++ct) {
+                    noc.async_read(
+                        input,
+                        scratch,
+                        2 * face_bytes,
+                        {.page_id = (tile_row - 1) * channel_tiles + first_tile_column + ct,
+                         .offset_bytes = 2 * face_bytes},
+                        {.offset_bytes = staging + ct * 2 * face_bytes});
+                }
             }
-            // Issued before the row reads so the two DRAM round trips overlap; the barrier below covers both.
+            // Issued before the face reads so the two DRAM round trips overlap; the barrier below covers both.
             grad_out.reserve_back(channel_tiles_per_block);
             for (uint32_t tile_column_in_block = 0; tile_column_in_block < channel_tiles_per_block;
                  ++tile_column_in_block) {
@@ -146,28 +157,70 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
                         {.offset_bytes = tile_column_in_block * tile_bytes});
                 }
             }
-            for (uint32_t row = 0; row < tile_height; ++row) {
-                noc.async_read(
-                    input,
-                    window,
-                    row_bytes,
-                    {.page_id = tile_row * tile_height + row, .offset_bytes = col_bytes},
-                    {.offset_bytes = (halo_rows + row) * row_bytes});
+            // The tile's faces, into strip rows [3, 35).
+            for (uint32_t ct = 0; ct < channel_tiles_per_block; ++ct) {
+                const uint32_t page = tile_row * channel_tiles + first_tile_column + ct;
+                for (uint32_t face = 0; face < 4; ++face) {
+                    noc.async_read(
+                        input,
+                        scratch,
+                        face_bytes,
+                        {.page_id = page, .offset_bytes = face * face_bytes},
+                        {.offset_bytes =
+                             strip(parity, ct, face % 2) + (halo_rows + (face / 2) * face_rows) * face_row_bytes});
+                }
             }
             noc.async_read_barrier();
 
+            // Strip rows [0, 3).
+            constexpr uint32_t carried_bytes = halo_rows * face_row_bytes;
+            for (uint32_t ct = 0; ct < channel_tiles_per_block; ++ct) {
+                for (uint32_t side = 0; side < 2; ++side) {
+                    const uint32_t dst = strip(parity, ct, side);
+                    if (from_history) {
+                        for (uint32_t row = 0; row < halo_rows; ++row) {
+                            noc.async_read(
+                                scratch,
+                                scratch,
+                                face_row_bytes,
+                                {.offset_bytes = rows + row * block_row_bytes + (ct * 2 + side) * face_row_bytes},
+                                {.offset_bytes = dst + row * face_row_bytes});
+                        }
+                    } else {
+                        // The last three rows of the previous tile row on this side.
+                        const uint32_t previous_end =
+                            from_previous_tile ? staging + ct * 2 * face_bytes + side * face_bytes + face_bytes
+                                               : strip(parity ^ 1, ct, side) + strip_rows * face_row_bytes;
+                        noc.async_read(
+                            scratch,
+                            scratch,
+                            carried_bytes,
+                            {.offset_bytes = previous_end - carried_bytes},
+                            {.offset_bytes = dst});
+                    }
+                }
+            }
+            noc.async_read_barrier();
+
+            // Shifted tiles [tap][ct]: face f of tap t is strip f % 2 from row t + 16 * (f / 2).
             x_shifted.reserve_back(tap_count * channel_tiles_per_block);
             for (uint32_t tap = 0; tap < tap_count; ++tap) {
-                noc.async_read(
-                    window,
-                    x_shifted,
-                    view_bytes,
-                    {.offset_bytes = tap * row_bytes},
-                    {.offset_bytes = tap * view_bytes});
+                for (uint32_t ct = 0; ct < channel_tiles_per_block; ++ct) {
+                    for (uint32_t face = 0; face < 4; ++face) {
+                        noc.async_read(
+                            scratch,
+                            x_shifted,
+                            face_bytes,
+                            {.offset_bytes =
+                                 strip(parity, ct, face % 2) + (tap + (face / 2) * face_rows) * face_row_bytes},
+                            {.offset_bytes = (tap * channel_tiles_per_block + ct) * tile_bytes + face * face_bytes});
+                    }
+                }
             }
             noc.async_read_barrier();
             x_shifted.push_back(tap_count * channel_tiles_per_block);
             grad_out.push_back(channel_tiles_per_block);
+            parity ^= 1;
         }
     }
 }
