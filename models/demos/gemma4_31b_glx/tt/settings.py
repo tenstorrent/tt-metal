@@ -34,7 +34,7 @@ TABLE = {
         "past the 0.005 norm bias limit.",
     ),
     "NORM_FP32_SHARDED": Setting(
-        False,
+        True,
         None,
         "NORM_WEIGHT=fp32 path block-sharded, one tile row per core row (manual perf pass); False: interleaved "
         "rms_norm, which runs one core per tile row.",
@@ -66,7 +66,7 @@ TABLE = {
         "False is also the maximum precision. Softmax statistics are kept by the op as for gemma4_d_p.",
     ),
     "ATTN_HEAD_NORM": Setting(
-        "fp32",
+        "fp32_fused",
         ("fp32", "fp32_fused", "rms_norm"),
         "q/k/v per-head RMS norm. fp32: x * rsqrt(mean(x^2) + eps) * w as fp32 eltwise/reduce ops (matches the "
         "reference to bf16 input rounding, no norm bias); fp32_fused: one ttnn.rms_norm on the fp32 heads (fp32 out, "
@@ -186,7 +186,7 @@ TABLE = {
         "linear but the global layers' transposed [out, in] QK and o_proj; 2d_all: for those too.",
     ),
     "ACT_MEMORY": Setting(
-        "dram",
+        "l1",
         ("dram", "l1"),
         "Short-lived activations inside attention and the MLP (manual perf pass): DRAM, or L1 interleaved as "
         "gemma4_d_p (prefill_short_lived_memcfg). Collective outputs, the KV caches and the residual stream stay in DRAM.",
@@ -233,10 +233,10 @@ TABLE = {
         "False in each (gemma4_d_p: False).",
     ),
     "PACKER_L1_ACC": Setting(
-        False,
+        True,
         None,
-        "packer_l1_acc of every compute kernel config of the model; was a literal False in each. gemma4_d_p turns it "
-        "on for its MLP and projection matmuls (a perf choice for later).",
+        "packer_l1_acc of every compute kernel config of the model (True since the manual perf pass, as gemma4_d_p "
+        "for its MLP and projection matmuls; was a literal False).",
     ),
     "SDPA_EXP_APPROX": Setting(
         False,

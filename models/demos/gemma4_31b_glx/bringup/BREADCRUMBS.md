@@ -373,3 +373,16 @@
   ATTN_HEAD_NORM=fp32_fused, NORM_FP32_SHARDED, NORM_WEIGHT=fp32_gamma. The modules also mark profile sections
   (`signpost("attention.s_qkv")` ...), free when nothing profiles.
 - Warm 60-layer chunk, traced: start 0 387.9 -> 200.0 ms, start 51200 430.7 -> 242.7 ms.
+
+## Manual perf pass: L1 activations and fewer fp32 norm ops (not pipeline-generated), 2026-10-23
+- `ACT_MEMORY` l1: the short-lived activations inside attention and the MLP are L1 interleaved (gemma4_d_p's
+  prefill_short_lived_memcfg). The ring SDPA operands (Q, caches) and the collectives' outputs stay in DRAM (ring
+  joint SDPA asserts DRAM operands).
+- `ATTN_HEAD_NORM` fp32_fused: the per-head q / k / v norm is one fp32 ttnn.rms_norm (HiFi4, fp32 acc) on the heads
+  flattened to rows plus the fp32 weight multiply (3 ops instead of 7).
+- `NORM_FP32_SHARDED`: the fp32 residual norms run block-sharded, one tile row per core row (60 cores); the
+  interleaved fp32 rms_norm ran one core per tile row (5 cores for 160 rows, ~69 us).
+- `PACKER_L1_ACC` True (gemma4_d_p for its matmuls).
+- Warm 60-layer chunk, traced: start 0 200.0 -> 161.5 ms, start 51200 242.7 -> 204.3 ms. s56320 max rel 0.138
+  (limit 0.15): little precision headroom is left. Measured but not taken: global ring_mla LoFi (layer 59 bias 0.0126
+  with these switches), MLP / projection LoFi and fp32_gamma norms (see the next entries if taken).
