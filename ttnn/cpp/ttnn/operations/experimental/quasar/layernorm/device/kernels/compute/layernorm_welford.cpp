@@ -15,9 +15,10 @@
 //   Pass 1 (statistics): the reader streams the Wt tiles of the row through dfb::in, whose per-NEO capacity
 //   is `cb_length` tiles (the window). Each tile is transposed into DST and fed to the Welford LLK (mean / M2
 //   live in SFPU registers across the row). The first `Wt - tail` tiles are popped as consumed; the last
-//   `tail = min(Wt, cb_length / 2)` tiles are NOT popped and stay resident in the window. The tail is capped at
-//   half the window so the reader always has a double-buffer half free for the DM0 ISR credit batch. The host
-//   picks cb_length / 2 as a divisor of Wt so every ring's per-row stream is a whole number of credit batches.
+//   `tail` tiles (host compile-time arg, = min(Wt, cb_length / 2)) are NOT popped and stay resident in the
+//   window. The tail is capped at half the window so the reader always has a double-buffer half free for the
+//   DM0 ISR credit batch. The host picks cb_length / 2 as a divisor of Wt so every ring's per-row stream is a
+//   whole number of credit batches.
 //
 //   Pass 2 (normalize + affine): stats are finalised to mean / rstd column tiles. The resident tail is
 //   normalised first (it is at the front of the FIFO), then the reader re-sends ("reloads") tiles
@@ -36,7 +37,7 @@
 // Reader contract (dfb::gamma / beta):  per row, Wt tiles in processing order (if FUSE_GAMMA / FUSE_BETA).
 // Writer contract (dfb::out):           per row, Wt tiles arrive in processing order.
 //
-// Compile-time args: Wt, W, cb_length, block_size, compute_threads   Runtime args: NCHt
+// Compile-time args: Wt, W, cb_length, tail, block_size, compute_threads   Runtime args: NCHt
 // Defines:           FUSE_GAMMA, FUSE_BETA (gate the dfb::gamma / dfb::beta bindings)
 //
 // Notes:
@@ -47,6 +48,7 @@
 
 #include <array>
 #include <cstdint>
+#include <type_traits>
 
 #include "api/compute/bcast.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -55,12 +57,10 @@
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/reg_api.h"
-#include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose.h"
 #include "api/compute/transpose_dest.h"
 #include "api/compute/welford.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -68,17 +68,18 @@ void kernel_main() {
     constexpr uint32_t Wt = get_arg(args::Wt);
     constexpr uint32_t W = get_arg(args::W);
     constexpr uint32_t cb_length = get_arg(args::cb_length);  // dfb::in capacity per NEO, in tiles
+    constexpr uint32_t tail = get_arg(args::tail);            // window tail resident between the passes
     constexpr uint32_t blk = get_arg(args::block_size);       // pass-2 block (tiles per DST acquire)
     constexpr uint32_t C = get_arg(args::compute_threads);    // NEOs sharing this node
 
     constexpr uint32_t tile_width = 32;
     static_assert(Wt > 0 && cb_length > 0 && blk > 0 && C > 0, "bad geometry");
     static_assert(cb_length % 2 == 0, "window must split into two ISR credit halves");
+    static_assert(tail == (Wt < cb_length / 2 ? Wt : cb_length / 2), "tail must be min(Wt, half the window)");
     static_assert(blk <= cb_length / 2, "pass-2 block must fit in one half of the window");
-    static_assert(blk <= 4, "pass-2 block is limited by DST capacity (fp32 acc)");
+    static_assert(cb_length % blk == 0, "a pack batch must never straddle the end of a ring");
+    static_assert(blk <= 4, "pass-2 block is limited by DST capacity (4 fp32 tiles in SyncHalf)");
 
-    // Window tail that stays resident between the passes: at most half the window.
-    constexpr uint32_t tail = Wt < cb_length / 2 ? Wt : cb_length / 2;
     constexpr uint32_t head = Wt - tail;
     // Valid columns in the last tile of the row (rows after the transpose).
     constexpr uint32_t last_tile_rows = (W % tile_width) == 0 ? tile_width : W % tile_width;
@@ -144,6 +145,14 @@ void kernel_main() {
         tile_regs_release();
         dst_obj.push_back(nb16);
     };
+    // Pack a pass-2 stage result: into dfb::xmm when another stage follows, else straight to dfb::out.
+    auto pack_stage = [&](auto to_xmm, uint32_t nb) __attribute__((always_inline)) {
+        if constexpr (decltype(to_xmm)::value) {
+            pack_batch(dfb_xmm, xmm, nb);
+        } else {
+            pack_batch(dfb_out, out, nb);
+        }
+    };
 
     for (uint32_t round = 0; round < rounds; ++round) {
         // ------------------------------------------------------------------ pass 1: Welford stats
@@ -157,8 +166,8 @@ void kernel_main() {
         // Head: consume and pop.
         for (uint32_t wt = 0; wt < head; ++wt) {
             in.wait_front(1);
-            transpose_tile(dfb_in, 0, input_dst);
-            welford_update<0>(input_dst, n, no_lut);
+            transpose_tile(dfb_in, 0 /*itile*/, input_dst);
+            welford_update<0 /*reciprocal_size*/>(input_dst, n /*start_idx*/, no_lut);
             n += tile_width;
             in.pop_front(1);
         }
@@ -166,19 +175,19 @@ void kernel_main() {
         for (uint32_t j = 0; j < tail; ++j) {
             const uint32_t wt = head + j;
             in.wait_front(static_cast<uint16_t>(j + 1));
-            transpose_tile(dfb_in, j, input_dst);
+            transpose_tile(dfb_in, j /*itile*/, input_dst);
             const uint32_t rows = (wt == Wt - 1) ? last_tile_rows : tile_width;
             if (rows == tile_width) {
-                welford_update<0>(input_dst, n, no_lut);
+                welford_update<0 /*reciprocal_size*/>(input_dst, n /*start_idx*/, no_lut);
             } else {
-                welford_update_rows<0>(input_dst, n, 0, rows, no_lut);
+                welford_update_rows<0 /*reciprocal_size*/>(input_dst, n /*start_idx*/, 0 /*start_row*/, rows, no_lut);
             }
             n += rows;
         }
 
         // mean / var -> row 0 of mean_dst / var_dst (scale 1/W), then rotate into column 0 so the
         // pass-2 FPU ops can column-broadcast them.
-        welford_finalize_to_row<0>(mean_dst, W - 1, no_lut);
+        welford_finalize_to_row<0 /*reciprocal_size*/>(mean_dst, W - 1 /*scale_idx*/, no_lut);
         transpose_dest_init<DST_ACCUM_MODE>(dfb_in);
         transpose_dest<DST_ACCUM_MODE>(mean_dst);
         transpose_dest<DST_ACCUM_MODE>(var_dst);
@@ -202,7 +211,7 @@ void kernel_main() {
         tile_regs_acquire();
         reconfig_data_format(dfb_ex2, dfb_eps);
         add_init(dfb_ex2, dfb_eps);
-        add_tiles(dfb_ex2, dfb_eps, 0, 0, dst0);
+        add_tiles(dfb_ex2, dfb_eps, 0 /*itile0*/, 0 /*itile1*/, dst0);
         rsqrt_tile_init();
         rsqrt_tile(dst0);
         tile_regs_commit();
@@ -227,56 +236,38 @@ void kernel_main() {
             sub_bcast_cols_init(dfb_in, dfb_ex);
             for (uint32_t i = 0; i < nb; ++i) {
                 in.wait_front(1);
-                sub_tiles_bcast_cols(dfb_in, dfb_ex, 0, 0, i);
+                sub_tiles_bcast_cols(dfb_in, dfb_ex, 0 /*itile0*/, 0 /*itile1*/, i);
                 in.pop_front(1);
             }
             tile_regs_commit();
             pack_batch(dfb_xmm, xmm, nb);
 
             // norm = xmm * rstd   -> xmm again if gamma/beta follow, else straight to out
-            {
-                constexpr auto dfb_dst = (do_gamma || do_beta) ? dfb_xmm : dfb_out;
-                auto& dst_obj = [&]() -> auto& {
-                    if constexpr (do_gamma || do_beta) {
-                        return xmm;
-                    } else {
-                        return out;
-                    }
-                }();
-                tile_regs_acquire();
-                reconfig_data_format(dfb_xmm, dfb_ex2pe);
-                mul_bcast_cols_init(dfb_xmm, dfb_ex2pe);
-                for (uint32_t i = 0; i < nb; ++i) {
-                    xmm.wait_front(1);
-                    mul_tiles_bcast_cols(dfb_xmm, dfb_ex2pe, 0, 0, i);
-                    xmm.pop_front(1);
-                }
-                tile_regs_commit();
-                pack_batch(dfb_dst, dst_obj, nb);
+            tile_regs_acquire();
+            reconfig_data_format(dfb_xmm, dfb_ex2pe);
+            mul_bcast_cols_init(dfb_xmm, dfb_ex2pe);
+            for (uint32_t i = 0; i < nb; ++i) {
+                xmm.wait_front(1);
+                mul_tiles_bcast_cols(dfb_xmm, dfb_ex2pe, 0 /*itile0*/, 0 /*itile1*/, i);
+                xmm.pop_front(1);
             }
+            tile_regs_commit();
+            pack_stage(std::bool_constant<(do_gamma || do_beta)>{}, nb);
 
             // * gamma  (row-broadcast; gamma tiles arrive in processing order)
             if constexpr (do_gamma) {
-                constexpr auto dfb_dst = do_beta ? dfb_xmm : dfb_out;
-                auto& dst_obj = [&]() -> auto& {
-                    if constexpr (do_beta) {
-                        return xmm;
-                    } else {
-                        return out;
-                    }
-                }();
                 tile_regs_acquire();
                 reconfig_data_format(dfb_xmm, dfb_gamma);
                 mul_bcast_rows_init(dfb_xmm, dfb_gamma);
                 for (uint32_t i = 0; i < nb; ++i) {
                     xmm.wait_front(1);
                     gamma.wait_front(1);
-                    mul_tiles_bcast_rows(dfb_xmm, dfb_gamma, 0, 0, i);
+                    mul_tiles_bcast_rows(dfb_xmm, dfb_gamma, 0 /*itile0*/, 0 /*itile1*/, i);
                     xmm.pop_front(1);
                     gamma.pop_front(1);
                 }
                 tile_regs_commit();
-                pack_batch(dfb_dst, dst_obj, nb);
+                pack_stage(std::bool_constant<do_beta>{}, nb);
             }
 
             // + beta  (row-broadcast; beta tiles arrive in processing order)
@@ -287,7 +278,7 @@ void kernel_main() {
                 for (uint32_t i = 0; i < nb; ++i) {
                     xmm.wait_front(1);
                     beta.wait_front(1);
-                    add_tiles_bcast_rows(dfb_xmm, dfb_beta, 0, 0, i);
+                    add_tiles_bcast_rows(dfb_xmm, dfb_beta, 0 /*itile0*/, 0 /*itile1*/, i);
                     xmm.pop_front(1);
                     beta.pop_front(1);
                 }

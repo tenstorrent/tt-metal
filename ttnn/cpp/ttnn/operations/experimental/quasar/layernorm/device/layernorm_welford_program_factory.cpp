@@ -103,11 +103,20 @@ ttnn::device_operation::ProgramArtifacts LayerNormWelfordProgramFactory::create_
     };
     const uint32_t batch = largest_divisor_up_to(Wt, 4);
     const uint32_t cb_length = 2 * batch;
-    // Pass-2 block: DST tiles per acquire (fp32 dest halves the register file), a divisor of Wt (so also
-    // of the credit batch) so every block is full: a pack batch must never straddle the end of its ring
-    // (the packer writes a batch linearly).
-    const uint32_t block_size = largest_divisor_up_to(Wt, fp32_dest_acc_en ? 2u : 4u);
-    TT_FATAL(cb_length % 2 == 0 && block_size <= cb_length / 2, "layer_norm: window / block geometry");
+    // Window tail that stays resident between the passes: at most half the window (the other half is the
+    // in-flight ISR credit batch). Passed to all three kernels so they share one definition.
+    const uint32_t tail = std::min(Wt, cb_length / 2);
+    // Pass-2 block: DST tiles per acquire. The pass-2 stages keep only the block in DST (mean / rstd are
+    // read from L1) and Quasar's SyncHalf DST holds 4 fp32 tiles (8 in 16-bit mode), so 4 is the cap in
+    // both modes. A divisor of Wt, so every block is full, and (asserted below) a divisor of the window,
+    // so a pack batch never straddles the end of its ring: the packer writes a batch linearly.
+    const uint32_t block_size = largest_divisor_up_to(Wt, 4);
+    TT_FATAL(
+        cb_length % 2 == 0 && block_size <= cb_length / 2 && cb_length % block_size == 0,
+        "layer_norm: window / block geometry (Wt={}, window={}, block={})",
+        Wt,
+        cb_length,
+        block_size);
 
     // ---- Formats ----
     const tt::DataFormat in_df = datatype_to_dataformat_converter(input.dtype());
@@ -190,7 +199,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormWelfordProgramFactory::create_
         .compiler_options = {.defines = affine_defines},
         .dfb_bindings = reader_dfbs,
         .tensor_bindings = reader_tensors,
-        .compile_time_args = {{"Wt", Wt}, {"cb_length", cb_length}, {"block_size", block_size}, {"compute_threads", C}},
+        .compile_time_args =
+            {{"Wt", Wt}, {"cb_length", cb_length}, {"tail", tail}, {"block_size", block_size}, {"compute_threads", C}},
         .runtime_arg_schema = {.runtime_arg_names = {"row_start", "NCHt", "eps"}},
         .hw_config = reader_hw,
     };
@@ -216,21 +226,13 @@ ttnn::device_operation::ProgramArtifacts LayerNormWelfordProgramFactory::create_
         compute_dfbs.push_back(m2::ConsumerOf(BETA_DFB, "beta"));
     }
     auto compute_hw = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
-    // fp32 operands with fp32 dest: ValidateProgramSpec wants an explicit unpack mode; the FPU path unpacks
-    // to SRC. (Quasar's transpose_tile cannot unpack fp32 to DEST, validated on the device op.)
-    if (in_df == tt::DataFormat::Float32) {
-        compute_hw.unpack_modes.emplace(IN, UnpackMode::UnpackToSrc);
-    }
+    // fp32 self-loop rings with fp32 dest: ValidateProgramSpec wants an explicit unpack mode, and the FPU
+    // bcast ops unpack to SRC. (Input and gamma / beta are pinned to BFLOAT16 by validate; fp32 input
+    // would need an UnpackToSrc mode too, see tt-llk#1559.)
     if (stats_df == tt::DataFormat::Float32) {
         for (const auto& name : {EX, EX2, EX2PE, XMM}) {
             compute_hw.unpack_modes.emplace(name, UnpackMode::UnpackToSrc);
         }
-    }
-    if (gamma.has_value() && gamma->dtype() == DataType::FLOAT32) {
-        compute_hw.unpack_modes.emplace(GAMMA_DFB, UnpackMode::UnpackToSrc);
-    }
-    if (beta.has_value() && beta->dtype() == DataType::FLOAT32) {
-        compute_hw.unpack_modes.emplace(BETA_DFB, UnpackMode::UnpackToSrc);
     }
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
@@ -239,7 +241,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormWelfordProgramFactory::create_
         .compiler_options = {.defines = affine_defines},
         .dfb_bindings = compute_dfbs,
         .compile_time_args =
-            {{"Wt", Wt}, {"W", W}, {"cb_length", cb_length}, {"block_size", block_size}, {"compute_threads", C}},
+            {{"Wt", Wt},
+             {"W", W},
+             {"cb_length", cb_length},
+             {"tail", tail},
+             {"block_size", block_size},
+             {"compute_threads", C}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt"}},
         .hw_config = compute_hw,
     };
@@ -251,7 +258,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormWelfordProgramFactory::create_
         .num_threads = Wr,
         .dfb_bindings = {m2::ConsumerOf(OUT, "out")},
         .tensor_bindings = {m2::TensorBinding{OUTPUT, "output"}},
-        .compile_time_args = {{"Wt", Wt}, {"cb_length", cb_length}, {"compute_threads", C}},
+        .compile_time_args = {{"Wt", Wt}, {"tail", tail}, {"compute_threads", C}},
         .runtime_arg_schema = {.runtime_arg_names = {"row_start", "NCHt"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };

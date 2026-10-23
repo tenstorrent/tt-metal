@@ -39,8 +39,8 @@ Tensor layer_norm(
     const auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     const auto rank = input_tensor.logical_shape().rank();
     TT_FATAL(rank > 0, "LayerNorm operation not supported for 0D tensors. (rank={})", rank);
-
-    // TODO: 0-volume inputs (original op clones the input). Left for the glue pass.
+    // Empty (zero-volume) inputs are rejected by the device op: ttnn.layer_norm clones them, this port has no
+    // zero-row path.
 
     const auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                          : ttnn::GetDefaultDevice()->arch();

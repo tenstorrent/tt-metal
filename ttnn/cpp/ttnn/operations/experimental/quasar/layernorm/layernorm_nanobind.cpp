@@ -37,7 +37,9 @@ void bind_layernorm(nb::module_& mod) {
             program_config (ttnn.LayerNormProgramConfig, optional): Defaults to
                 `LayerNormDefaultProgramConfig(use_welford=True)`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
-            recip_tensor (ttnn.Tensor, optional): reciprocal LUT for the Welford algorithm. Defaults to `None`.
+            recip_tensor (ttnn.Tensor, optional): kept for signature parity with :func:`ttnn.layer_norm` but
+                not supported (the kernel computes the Welford reciprocals in-line); passing one raises.
+                Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.

@@ -21,6 +21,11 @@ bool layernorm_is_minimally_tile_padded(const Tensor& t) {
     const auto& logical = t.logical_shape();
     const auto& padded = t.padded_shape();
     const auto& tile = t.tensor_spec().tile();
+    // A rank-1 TILE tensor carries an implicit tile-height dim: logical [W] pads to [tile_h, round_up(W)].
+    if (logical.rank() == 1) {
+        return padded.rank() == 2 && padded[0] == tile.get_height() &&
+               padded[1] == tt::round_up(logical[0], tile.get_width());
+    }
     if (logical.rank() != padded.rank()) {
         return false;
     }
@@ -62,6 +67,11 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         !operation_attributes.output_mem_config.is_sharded(), "Quasar layer_norm does not support sharded output.");
     TT_FATAL(a.layout() == Layout::TILE, "Input tensor must have TILE layout, got: {}", a.layout());
+    // The factory derives the tile-row count from the padded width, so an empty input has no valid geometry.
+    TT_FATAL(
+        a.logical_volume() > 0,
+        "Quasar layer_norm does not support empty tensors (logical shape {})",
+        a.logical_shape());
     // BFLOAT16 only: Quasar has no BFLOAT8_B, and the pass-1 transpose_tile cannot unpack fp32 to DEST
     // (tt-llk#1559), so FLOAT32 input is not supported yet.
     TT_FATAL(a.dtype() == DataType::BFLOAT16, "Quasar layer_norm: input must be BFLOAT16, got: {}", a.dtype());
@@ -80,8 +90,12 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         a.logical_shape(),
         a.padded_shape());
 
-    // Scope of the current kernels: no residual add yet.
+    // Scope of the current kernels: no residual add yet, and no reciprocal LUT (the Welford LLK divides
+    // in-line), so a recip_tensor would be silently ignored.
     TT_FATAL(!b.has_value(), "Quasar layer_norm does not support residual_input_tensor yet.");
+    TT_FATAL(
+        !tensor_args.recip_tensor.has_value(),
+        "Quasar layer_norm does not support recip_tensor (the kernel computes the Welford reciprocals in-line).");
 
     // TILE-layout, standard-tile gamma/beta that cover the input row.
     for (const auto* affine : {&gamma, &beta}) {
@@ -90,6 +104,9 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         }
         const auto& t = affine->value();
         TT_FATAL(t.layout() == Layout::TILE, "Quasar layer_norm requires TILE-layout gamma/beta, got: {}", t.layout());
+        // Only bf16 affine tiles are validated (fp32 would take the untested UnpackToSrc path; integer formats
+        // reach the FPU as garbage).
+        TT_FATAL(t.dtype() == DataType::BFLOAT16, "Quasar layer_norm: gamma/beta must be BFLOAT16, got: {}", t.dtype());
         TT_FATAL(t.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         TT_FATAL(a.device() == t.device(), "Input and gamma/beta tensors must be on same device");
         TT_FATAL(

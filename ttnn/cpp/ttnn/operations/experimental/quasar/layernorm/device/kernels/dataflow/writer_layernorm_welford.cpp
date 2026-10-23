@@ -10,14 +10,15 @@
 // degenerate case: hart w drains NEO w only.
 //
 // Output tiles arrive per row in processing order p = 0..Wt-1 and belong to source tile
-// src(p) = (Wt - tail + p) mod Wt, tail = min(Wt, cb_length/2). Every NEO runs rounds = ceil(NCHt / C)
-// rows; NEO t's row in round k is row_start + k*C + t when real, else NEO 0's row of that round (the
-// compute recomputed it, so the bytes are identical to what NEO 0's drain stores).
+// src(p) = (Wt - tail + p) mod Wt, tail (host compile-time arg) = min(Wt, cb_length/2). Every NEO runs
+// rounds = ceil(NCHt / C) rows; NEO t's row in round k is row_start + k*C + t when real, else NEO 0's row of
+// that round (the compute recomputed it, so the bytes are identical to what NEO 0's drain stores). Both
+// mappings live in layernorm_welford_common.hpp, shared with the reader and compute kernels.
 //
 // dfb::out uses implicit sync (noc.async_write<TXN_ID>, DM0 ISR acks credits back to the packer); the drain
 // and write flush run in ~DataflowBuffer().
 //
-// Compile-time args: Wt, cb_length, compute_threads   Runtime args: row_start, NCHt
+// Compile-time args: Wt, tail, compute_threads   Runtime args: row_start, NCHt
 
 #include <cstdint>
 
@@ -28,16 +29,15 @@
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/operations/experimental/quasar/layernorm/device/kernels/layernorm_welford_common.hpp"
 
 void kernel_main() {
     const uint32_t row_start = get_arg(args::row_start);
     const uint32_t NCHt = get_arg(args::NCHt);
     constexpr uint32_t Wt = get_arg(args::Wt);
-    constexpr uint32_t cb_length = get_arg(args::cb_length);
+    constexpr uint32_t tail = get_arg(args::tail);
     constexpr uint32_t C = get_arg(args::compute_threads);
-
-    constexpr uint32_t tail = Wt < cb_length / 2 ? Wt : cb_length / 2;
-    constexpr uint32_t head = Wt - tail;
+    static_assert(tail <= Wt, "tail must not exceed the row");
 
     const uint32_t w = get_my_thread_id();
     const uint32_t W = get_num_threads();
@@ -48,15 +48,13 @@ void kernel_main() {
     const auto out_acc = TensorAccessor(tensor::output);
     DataflowBuffer out(dfb::out);
 
-    // Row of NEO t in round k: its own row when real, else NEO 0's row of that round.
-    auto row_of = [&](uint32_t t, uint32_t k) __attribute__((always_inline)) {
-        const uint32_t local = k * C + t;
-        return row_start + (local < NCHt ? local : k * C);
-    };
+    // Row of NEO t in round k, and source tile of processing position q (shared definitions).
+    auto row_of = [&](uint32_t t, uint32_t k)
+                      __attribute__((always_inline)) { return qsr_layernorm::row_of(row_start, NCHt, C, t, k); };
 
     for (uint32_t k = 0; k < rounds; ++k) {
         for (uint32_t q = 0; q < Wt; ++q) {
-            const uint32_t src = q < tail ? head + q : q - tail;
+            const uint32_t src = qsr_layernorm::src_of<Wt, tail>(q);
             // One tile from each NEO of the group, in ring rotation order.
             for (uint32_t j = 0; j < group; ++j) {
                 noc.async_write<NocOptions::TXN_ID>(out, out_acc, {}, {.page_id = row_of(w + j * W, k) * Wt + src});
