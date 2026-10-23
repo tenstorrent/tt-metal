@@ -30,5 +30,13 @@
       "shared_mlp": "bfp8",
       "attention": "bfp8"
     }
+  },
+  "gemma-4-26B-A4B-it": {
+    "1x4": {
+      "experts": "bfp8"
+    },
+    "4x1": {
+      "experts": "bfp8"
+    }
   }
 }

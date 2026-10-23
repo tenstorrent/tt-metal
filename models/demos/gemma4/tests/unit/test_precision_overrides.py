@@ -65,3 +65,16 @@ def test_the_bfp8_ceiling_does_not_apply_on_a_mesh_where_bf16_will_not_fit():
 def test_below_the_ceiling_bfp8_is_kept_on_the_measured_mesh():
     o = Gemma4Precision.load("/x/gemma-4-31B-it", (1, 8), max_seq_len=131072)
     assert o.get("shared_mlp") == ttnn.bfloat8_b
+
+
+# ── A line in the other orientation takes the same entry ────────────────────
+
+
+def test_column_mesh_takes_the_transposed_entry():
+    """The 4-chip line as the (4,1) column mesh (dispatch prefill orientation) holds the same per-chip weights as
+    (1,4): the 26B experts stay bfp8 in both orientations (the bf16 miss doubled both expert copies and OOM'd the
+    served KV pool, 2026-10-23)."""
+    row = Gemma4Precision.load("google/gemma-4-26B-A4B-it", (1, 4))
+    col = Gemma4Precision.load("google/gemma-4-26B-A4B-it", (4, 1))
+    assert row.get("experts", ttnn.bfloat16) == ttnn.bfloat8_b
+    assert col.get("experts", ttnn.bfloat16) == ttnn.bfloat8_b
