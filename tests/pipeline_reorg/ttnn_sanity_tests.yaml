@@ -362,3 +362,65 @@
   team: ttnn
   budget_type: sanity
   owner_id: U0976495SLU # Nikola Ostojic
+
+# ---------------------------------------------------------------------------------------------
+# Quasar simulator coverage (#61750): the four ttnn Quasar suites from the issue, on sim_quasar
+# (libttsim_qsr.so on ubuntu-latest, .github/sku_config.yaml). Every entry pins the two-compute-node grid
+# the issue asks for with TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" (an inclusive end coordinate:
+# workers (2,2)-(3,2)).
+#
+# The cmds are the issue's, verbatim, plus `-m emulator` on the three generated suites (their own
+# two-node-emulator slice). Cases that do not pass on the simulator are not deselected here: they are
+# listed, with the reason, in the quasar section of tests/pipeline_reorg/ttsim-skip-list.yaml, which the
+# sim leg applies through PYTEST_ADDOPTS.
+#
+# -n 0 is given on the command line for the three model-op suites because their conftest's
+# tt_device_lock (one flock for the whole module-scoped device) makes xdist workers error with
+# DeviceLockTimeout after 60 s; command-line -n 0 beats the -n 4 the impl exports via PYTEST_ADDOPTS. The
+# resnet entry has no such lock and keeps the impl's -n 4. Four entries rather than one `&&` chain so each
+# suite has its own timeout and red/green, and because the impl's `--lf` re-run appends to the whole cmd.
+# ---------------------------------------------------------------------------------------------
+
+# #61750 item 1: the 18 resnet50/quasar per-op files.
+- name: "ttnn quasar resnet50 ops"
+  cmd: >-
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" pytest --timeout 600 -v models/demos/vision/classification/resnet50/quasar/tests/ops/test_reshape_tiled.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_padded_slice.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_reallocate.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_reshape.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_sharded_to_interleaved.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_slice_write.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_tilize.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_to_layout.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_to_memory_config.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_untilize_with_unpadding.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_add.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_linear.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_avg_pool2d.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_global_avgpool.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer3_downsample_split.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer_conv2_modelcfg.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_1x3.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_strided_reduce.py
+  skus:
+    sim_quasar:
+      timeout: 10
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel
+
+# #61750 item 2. MESH_DEVICE=N150 is not read by this suite's conftest; kept to match the issue.
+- name: "ttnn quasar llama32_1b graph ops"
+  cmd: >-
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" MESH_DEVICE=N150 pytest --timeout 600 -v -n 0 -m emulator models/experimental/llama32_1b_quasar/tests/graph_ops/
+  skus:
+    sim_quasar:
+      timeout: 10
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel
+
+# #61750 item 3. 15 min: the 32x151936 argmax case alone takes 3.5 min on an EPYC 7352.
+- name: "ttnn quasar qwen3_vl ops"
+  cmd: >-
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" pytest --timeout 600 -v -n 0 -m emulator models/experimental/ops/quasar/tests/qwen3_vl_ops/
+  skus:
+    sim_quasar:
+      timeout: 15
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel
+
+# #61750 item 4.
+- name: "ttnn quasar yolo ops"
+  cmd: >-
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" pytest --timeout 600 -v -n 0 -m emulator models/experimental/ops/quasar/tests/yolo_ops/
+  skus:
+    sim_quasar:
+      timeout: 10
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel
