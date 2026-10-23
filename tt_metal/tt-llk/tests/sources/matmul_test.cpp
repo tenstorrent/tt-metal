@@ -118,6 +118,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_K_LOOP)
+                {
+                    const bool perf_ring       = LOOP_FACTOR > 1;
+                    const std::uint32_t addr_a = perf_ring ? PERF_ADDRESS(PERF_INPUT_A, 0) : L1_ADDRESS(buffer_A[0]);
+                    const std::uint32_t addr_b = perf_ring ? PERF_ADDRESS(PERF_INPUT_B, 0) : L1_ADDRESS(buffer_B[0]);
+                    _llk_unpack_AB_matmul_k_<MAX_TILES_DEST>(
+                        addr_a,
+                        addr_b,
+                        0,
+                        0,
+                        TILE_SIZE_UNPACK_A,
+                        TILE_SIZE_UNPACK_B,
+                        /* partial face */ false,
+                        /* partial face */ false,
+                        CT_DIM,
+                        RT_DIM,
+                        KT_DIM,
+                        KT_DIM,
+                        CT_DIM);
+                }
+#else
                 for (std::uint32_t j = 0; j < KT_DIM; j++)
                 {
                     // Golden (LOOP_FACTOR==1) reads unique stimuli tiles. Perf
@@ -155,6 +176,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         RT_DIM,
                         KT_DIM);
                 }
+#endif
             }
         }
         PROFILER_SYNC();
@@ -162,6 +184,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 }
 
 #endif
+// zone markers of the other threads keep their line numbers
+#line 165
 
 #ifdef LLK_TRISC_MATH
 
