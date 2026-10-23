@@ -26,7 +26,11 @@ namespace wire = dataflow_kernel_lib::mcast_wire;
 namespace m2 = tt::tt_metal::experimental;
 using dataflow_kernel_lib::SenderMcastMode;
 using dataflow_kernel_lib::TransferMode;
-class McastHostFixture : public ::ttnn::TTNNFixtureWithSuiteDevice<McastHostFixture> {};
+class McastHostFixture : public ::ttnn::TTNNFixtureWithSuiteDevice<McastHostFixture> {
+public:
+    // The suite's device, for the free helpers below that need a MeshDevice to build a Program on.
+    static tt::tt_metal::distributed::MeshDevice& mesh_device() { return *device_; }
+};
 
 inline CoreRangeSet grid(CoreCoord start, CoreCoord end) { return CoreRangeSet(CoreRange(start, end)); }
 inline CoreRangeSet cores(const std::vector<CoreCoord>& values) {
@@ -76,7 +80,7 @@ void bind_for_inspection(McastType& mcast, tt::tt_metal::Program& program, const
 
 template <typename McastType>
 std::vector<uint32_t> compile_args(McastType mcast, const std::vector<uint32_t>& existing = {}) {
-    tt::tt_metal::Program program;
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(McastHostFixture::mesh_device());
     bind_for_inspection(mcast, program, existing);
     std::vector<uint32_t> args;
     mcast.append_compile_time_args_to(args);
@@ -85,7 +89,7 @@ std::vector<uint32_t> compile_args(McastType mcast, const std::vector<uint32_t>&
 
 template <typename McastType>
 std::vector<uint32_t> runtime_args(McastType mcast, CoreCoord core, const std::vector<uint32_t>& existing = {}) {
-    tt::tt_metal::Program program;
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(McastHostFixture::mesh_device());
     bind_for_inspection(mcast, program, existing);
     std::vector<uint32_t> args;
     mcast.append_runtime_args_to(args, core);
@@ -158,7 +162,7 @@ inline uint32_t emitted_semaphore(const std::vector<uint32_t>& ct, wire::Semapho
 template <typename McastType>
 std::vector<tt::tt_metal::SemaphoreDescriptor> allocated_semaphores(
     McastType mcast, const std::vector<uint32_t>& existing = {}) {
-    tt::tt_metal::Program program;
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(McastHostFixture::mesh_device());
     bind_for_inspection(mcast, program, existing);
     std::vector<tt::tt_metal::SemaphoreDescriptor> result;
     const auto& semaphores = program.impl().semaphores();

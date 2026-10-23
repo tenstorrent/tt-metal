@@ -117,7 +117,7 @@ void benchmark_args_combinations_single_core(
             tt::LogTest,
             "Creating single-core benchmarking program with the following args config: {}",
             crta_config_str);
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh_device_);
 
         constexpr CoreCoord grid = {0, 0};
 

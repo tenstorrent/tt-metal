@@ -231,7 +231,7 @@ TEST_F(McastFixture, HandshakeSubsetOwnsDataAndVariesBySender) {
     const auto snapshot = emitted(copy);
     EXPECT_EQ(snapshot.compile_time_args.at(1), 0u);
     EXPECT_EQ(test::emitted_metadata(snapshot.compile_time_args, 0).mcast.ack_count, UINT32_MAX);
-    tt::tt_metal::Program program;
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device_);
     copy.append_semaphores(program);
     std::vector<uint32_t> ct, first_rt, second_rt;
     copy.append_compile_time_args_to(ct);
@@ -360,7 +360,7 @@ TEST_F(McastFixture, DescriptorSpecAndDirectAttachmentParity) {
     auto direct_ct = kernel.compile_time_args;
     channel.attach(descriptor, "channel", std::array{std::ref(kernel)}, 0);
     auto direct = channel;
-    tt::tt_metal::Program program;
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device_);
     direct.append_semaphores(program);
     const auto ct_offset = static_cast<uint32_t>(direct_ct.size());
     const auto rt_offset = static_cast<uint32_t>(

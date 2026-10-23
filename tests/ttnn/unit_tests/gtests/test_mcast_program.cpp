@@ -8,7 +8,7 @@ TEST_F(McastHostFixture, ProgramBindingAllocatesOnceAndAppendsResolvedIds) {
     using namespace tt::tt_metal;
     const auto participants = grid({0, 0}, {1, 0});
     auto mcast = make_mcast(device_, {{participants, {{0, 0}}}});
-    Program program;
+    Program program = CreateProgram(*device_);
     program.impl().add_semaphore(participants, 0, 7, tt::CoreType::WORKER);
     program.impl().add_semaphore(participants, 2, 9, tt::CoreType::WORKER);
     std::vector<uint32_t> ct{71}, rt{73};
@@ -29,7 +29,7 @@ TEST_F(McastHostFixture, ProgramBindingAllocatesOnceAndAppendsResolvedIds) {
     auto copy = mcast;
     EXPECT_ANY_THROW(copy.append_semaphores(program));
     EXPECT_EQ(program.impl().semaphores().size(), 4u);
-    Program other;
+    Program other = CreateProgram(*device_);
     EXPECT_ANY_THROW(copy.append_semaphores(other));
     EXPECT_TRUE(other.impl().semaphores().empty());
     Program moved = std::move(program);
@@ -47,7 +47,7 @@ TEST_F(McastHostFixture, ProgramBindingAllocatesOnceAndAppendsResolvedIds) {
 TEST_F(McastHostFixture, ProgramBindingCoversChainExhaustionAndUnsupportedPrograms) {
     using namespace tt::tt_metal;
     auto chain = make_mcast(device_, {{cores({{0, 0}, {1, 1}, {2, 0}}), {{0, 0}}}}, chain_config());
-    Program chain_program;
+    Program chain_program = CreateProgram(*device_);
     chain.append_semaphores(chain_program);
     std::vector<uint32_t> ct;
     chain.append_compile_time_args_to(ct);
@@ -56,7 +56,7 @@ TEST_F(McastHostFixture, ProgramBindingCoversChainExhaustionAndUnsupportedProgra
 
     const auto participants = grid({0, 0}, {1, 0});
     auto mcast = make_mcast(device_, {{participants, {{0, 0}}}});
-    Program full;
+    Program full = CreateProgram(*device_);
     for (uint32_t id = 0; id < NUM_SEMAPHORES; ++id) {
         full.impl().add_semaphore(participants, id, 0, tt::CoreType::WORKER);
     }
@@ -69,7 +69,7 @@ TEST_F(McastHostFixture, ProgramBindingCoversChainExhaustionAndUnsupportedProgra
     kernel.core_ranges = grid({0, 0}, {0, 0});
     kernel.config = ReaderConfigDescriptor{};
     descriptor.kernels.push_back(kernel);
-    Program compiled(descriptor);
+    Program compiled(*device_, descriptor);
     compiled.impl().compile(device_);
     ASSERT_TRUE(compiled.impl().is_compiled());
     EXPECT_ANY_THROW(mcast.append_semaphores(compiled));
