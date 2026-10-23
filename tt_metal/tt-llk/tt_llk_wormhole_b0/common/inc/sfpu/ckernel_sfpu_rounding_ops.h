@@ -154,6 +154,28 @@ sfpi_inline sfpi::vFloat _round_even_(sfpi::vFloat v)
     return v;
 }
 
+sfpi_inline sfpi::vFloat _top_byte_(sfpi::vFloat x)
+{
+    return sfpi::as<sfpi::vFloat>((sfpi::as<sfpi::vUInt>(x) >> 16) << 16);
+}
+
+sfpi_inline sfpi::vFloat _div_pow10_(sfpi::vFloat a, sfpi::vFloat neg_p, sfpi::vFloat rp)
+{
+    sfpi::vFloat q = a * rp;
+    v_if (sfpi::exexp(q) < 128)
+    {
+        sfpi::vFloat hi = _top_byte_(q);
+        sfpi::vFloat r  = hi * neg_p + a;
+        sfpi::vFloat t  = q - hi;
+        hi              = _top_byte_(t);
+        r               = hi * neg_p + r;
+        r               = (t - hi) * neg_p + r;
+        q               = sfpi::copysgn(r * rp + q, q);
+    }
+    v_endif;
+    return q;
+}
+
 template <bool APPROXIMATE, int ITERATIONS = 8>
 void _calculate_round_(const int decimals)
 {
@@ -177,9 +199,21 @@ void _calculate_round_(const int decimals)
 
     for (int d = 0; d < ITERATIONS; ++d)
     {
-        sfpi::vFloat v      = sfpi::dst_reg[0];
-        sfpi::vFloat result = inverse * _round_even_(v * coeff);
-        sfpi::dst_reg[0]    = result;
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::vFloat result;
+        if (decimals < 0)
+        {
+            result = inverse * _round_even_(_div_pow10_(v, -inverse, coeff));
+        }
+        else if (decimals > 0)
+        {
+            result = _div_pow10_(_round_even_(v * coeff), -coeff, inverse);
+        }
+        else
+        {
+            result = inverse * _round_even_(v * coeff);
+        }
+        sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 }
