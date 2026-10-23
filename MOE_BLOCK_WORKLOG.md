@@ -1295,3 +1295,14 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   across 120 cores (kernel duration = first core's start to last core's end). Traced device times are the better per-
   program numbers from here on. Profiler overhead on the fused kernels: none measurable (replay wall with it 2991-2998
   vs 2991-2997 without). The device CSV carries the trace id / counter columns; tt-perf-report not tried.
+
+### Fused head at 1024 rows: what one chunk can't hold (step 2, head half)
+- One chunk of 32 row tiles = GY 8 x MT 4. Two engine fixes (no change at 640: same code path, no define):
+  dummy gate / up passes (MT 4 = one pair a pass; a column with fewer pairs repeats its first pair, the h past its
+  pairs unread) and W-own as a ring of 5 block slots when the arena would not fit otherwise (one chunk: every block is
+  used once a call; the DRAM layout unchanged) - K3 W-own 442 -> 85 KB.
+- x chain alone at 1024 (parts test): GLM 267.9 us PCC 0.99978, K3 553.1 us PCC 0.99973.
+- The full head (RS + router + latent + routing + prep) does not fit: K3 2016 KB at KB 7 (~1576 with every overlay),
+  GLM 1452 at KB 1 (576 of it arrival zones sized for every slot). Per-core state scales with MT -> the chunked head
+  (NCH 2, chunk m = block m of every owner) is the plan.
+- 640 check after the two fixes (traced, b2b): GLM 1693 us PCC 0.98654, K3 2998 PCC 0.99604 (before 1695 / 2993-2997).

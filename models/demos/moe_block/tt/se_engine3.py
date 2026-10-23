@@ -375,6 +375,12 @@ void kernel_main() {
     constexpr uint32_t WPF = 3;
     uint8_t trid_of[64];
     uint32_t wi = 0, ni = 0, pending = 0;  // (prefetch cursor over the first chunk's rounds; issued; issued unsent)
+#ifdef SE_WRING
+    // (one chunk: my W-own a ring of SE_WRING block slots - a block read into slot (its issue index % SE_WRING) once
+    // the block SE_WRING before it was sent (multicast flushed); the DRAM region keeps every block)
+    uint8_t slot_of[64];
+    uint32_t nsent = 0;
+#endif
     auto offset_of = [&](uint32_t b) {
         uint32_t o = 0;
         for (uint32_t b2 = cy; b2 < b; b2 += GY) o += bsize(b2);
@@ -382,15 +388,27 @@ void kernel_main() {
     };
     auto prefetch = [&](uint32_t upto) {  // (issue my blocks of rounds < upto, and the window)
         while (wi < NB && (wi < upto || pending < WPF)) {
-            const uint32_t b = blk(wi++);
-            if (b % GY != cy) continue;
+            const uint32_t b = blk(wi);
+            if (b % GY != cy) {
+                ++wi;
+                continue;
+            }
+#ifdef SE_WRING
+            if (ni >= nsent + SE_WRING) break;  // (its slot still sending)
+            const uint32_t lo = (ni % SE_WRING) * WSLOT;
+            slot_of[b / GY] = ni % SE_WRING;
+#endif
+            ++wi;
             const uint32_t t = (ni++ % 14) + 1, o = offset_of(b);
+#ifndef SE_WRING
+            const uint32_t lo = o;
+#endif
             trid_of[b / GY] = t;
             noc_async_read_set_trid(t);
 #ifdef SE_PROBE_NOWL
-            noc_async_read(get_noc_addr_from_bank_id<true>(wbank, w_addr + wbase + o * WTB), wown + o * WTB, 16);  // (probe)
+            noc_async_read(get_noc_addr_from_bank_id<true>(wbank, w_addr + wbase + o * WTB), wown + lo * WTB, 16);  // (probe)
 #else
-            noc_async_read(get_noc_addr_from_bank_id<true>(wbank, w_addr + wbase + o * WTB), wown + o * WTB, bsize(b) * WTB);
+            noc_async_read(get_noc_addr_from_bank_id<true>(wbank, w_addr + wbase + o * WTB), wown + lo * WTB, bsize(b) * WTB);
 #endif
             ++pending;
         }
@@ -529,7 +547,11 @@ void kernel_main() {
         if (ws < NR && (ws < NWS || *sem(WFREE + ws % NWS) >= GY * (nf[ws % NWS] + 1))) {  // my block: down the column
             const uint32_t b = blk(ws), n = bsize(b), kb = b / GY;  // (kb: its index among my blocks)
             woff = 0;  // (its offset in my W-own: my blocks before it)
+#ifdef SE_WRING
+            woff = slot_of[kb] * WSLOT;
+#else
             for (uint32_t b2 = cy; b2 < b; b2 += GY) woff += bsize(b2);
+#endif
             if (ws < NB) {  // (first chunk: its reads issued and landed)
                 prefetch(ws + 1);
                 noc_async_read_barrier_with_trid(trid_of[kb]);
@@ -547,6 +569,9 @@ void kernel_main() {
             noc_async_writes_flushed();
             if (ws >= NWS) ++nf[ws % NWS];
             ++ws;
+#ifdef SE_WRING
+            ++nsent;  // (flushed: its slot may take a later block)
+#endif
             while (ws < NR && blk(ws) % GY != cy) ++ws;
         }
         if (wr < NR && *sem(WV + wr % NWS) >= wr + 1) {  // W round wr landed here
@@ -948,6 +973,13 @@ def _split(n, parts, unit):
     return [(base + (1 if i < rem else 0)) * unit for i in range(parts)]
 
 
+def _split_pad(n, parts, unit):
+    """_split, or (fewer than `parts` units) a unit a part with the tail parts repeating the first unit (dummy passes:
+    a column with fewer gate / up pairs than the passes every row's x stream walks - their h lands past the column's
+    pairs, unread)."""
+    return _split(n, parts, unit) if n // unit >= parts else [unit] * parts
+
+
 def _subsets(nf, GX):
     """Two owner-subset sizes (families 0 / 1) dividing nf, together covering as many of GX columns as possible."""
     divs = [d for d in range(1, GX + 1) if nf % d == 0]
@@ -1015,7 +1047,7 @@ class SeEngine3:
         self.POMAX = max(pairs)
         pwmax = (8 // MT) // 2 * 2
         self.NPG = max(-(-2 * p // pwmax) for p in pairs)
-        self.wg = [_split(2 * p, self.NPG, 2) for p in pairs]
+        self.wg = [_split_pad(2 * p, self.NPG, 2) for p in pairs]
         self.NGU, self.LT = self.NPG, latent  # (gate / up passes; then the latent's)
         if latent:
             lw = column_split(latent, GX, 1)
@@ -1058,69 +1090,79 @@ class SeEngine3:
         self.wown_t = max(
             sum(bsize(c, b) for b in range(self.NB) if b % GY == cy) for c in range(GX) for cy in range(GY)
         )
+        # (W-own in L1: every block of mine - or, one chunk and the arena too large otherwise, a ring of WRING slots
+        # (the NCRISC's prefetch window + 2); the DRAM region always holds every block, wown_t)
+        self.WRING = 0
         nown = max((nf // self.S0 if c in self.fam0 else 0) + (nf // self.S1 if c in self.fam1 else 0) for c in cols)
         self.xown_t = self.NCH * nown * MT * self.KB
         # dispatch prep: a unit = one row tile's run of x own (a K step: KB tiles) or of a latent block (LWMAX)
         self.prep = prep
         self.PFULL = self.LWMAX if latent else self.KB
         self.PBCT = max(d for d in range(1, 9) if self.PFULL % d == 0)
-        al = lambda v: (v + 63) // 64 * 64  # noqa: E731
-        self.acc_pages = MT * (max(sum(c) for c in self.wg) + max(sum(self.wg, [])))
-        self.acc_blocks = [MT * pw for pw in sum(self.wg, [])]
-        off, o = {}, 0
-        rsr = self._rs_regions() if rs is not None else []
-        # (the reduce-scatter's local buffers - HOLD, FINB: this core's compute and, after its hand-off, its port read
-        # them - overlay XIN + ACC, which are dead once this core's gate / up is done: no row peer multicasts into XIN
-        # after the last round it consumed; only its own compute touches ACC)
-        ovl = dict(rsr[:2]) if rsr else {}
-        rsr = rsr[2:]
-        for k, v in (
-            [
-                ("xown", self.xown_t * 2048),
-                ("wown", self.wown_t * self.wtb),
-                ("win", NWS * self.WSLOT * self.wtb),
-                ("hown", MT * self.POMAX * 2048),
-                ("hall", min(self.NCH, 2) * GX * MT * self.POMAX * 2048 if down else 0),
-                ("xin", 2 * MT * self.KB * 2048),
-                # (ACC: a FIFO of fp32 pass partials, MT x pw tiles a block - the pass widths differ (K3's latent-
-                # down passes): its straddle room (without it the tail overwrote the W stream's ready words: a W
-                # round taken before it landed, a hang)
-                ("acc", _ring_pages(self.acc_pages, self.acc_blocks) * 4096),
-                ("out", NOUT * MT * self.PWDMAX * 2048 if down and rs is None else 0),
-                ("words", 256),
-            ]
-            + rsr
-            + ([("lat", MT * self.LWMAX * 2048), ("latz", (shards - 1) * MT * self.LWMAX * 2048)] if latent else [])
-            + ([("po", 2 * self.PFULL * 2048)] + ([("lrdy", 64)] if latent else []) if prep else [])
-        ):
-            off[k], o = o, al(o + v)
-        self.seq_ends = sorted(set(off.values()) | {o})  # (the sequential regions' bounds: the CB plan check's)
-        if ovl:
-            room = off["out"] - off["xin"]
-            if al(ovl["hold"]) + ovl["finb"] <= room:
-                off["hold"], off["finb"] = off["xin"], off["xin"] + al(ovl["hold"])
-            else:  # (no room: their own regions)
-                for k, v in ovl.items():
-                    off[k], o = o, al(o + v)
-        # the router logits on the engine (router: dict(ET, KTO)): x rows, W_r^T expert tiles, the fp32 out - in the
-        # arena's tail past the words (the reduce-scatter's zones, the latent's, the prep's: all written only after
-        # gate / up, the router's phase is over before it), else their own region
-        self.rtr = router
-        if router is not None:
-            self.ETC = -(-router["ET"] // GX)
-            KTO = router["KTO"]
-            self.KC = KTO // 2 if KTO % 2 == 0 else KTO  # (K chunk: x / W_r^T rounds - two, a buffer each)
-            rsz = [("rx", 2 * self.KC * MT * 2048), ("rw", 2 * self.ETC * self.KC * 2048), ("ro", self.ETC * MT * 4096)]
-            need = sum(al(v) for _, v in rsz)
-            t0 = off[rsr[0][0]] if rsr else o
-            if o - t0 < need:
-                hall = off["xin"] - off["hall"]
-                t0 = off["hall"] if down and hall >= need else o
-                if t0 == o:
-                    o = o + need
-            for k, v in rsz:
-                off[k], t0 = t0, al(t0 + v)
-        self.off, self.arena_bytes = off, o
+        for self.WRING in [0] + ([5] if self.NCH == 1 else []):  # (WRING: see wown_t)
+            al = lambda v: (v + 63) // 64 * 64  # noqa: E731
+            self.acc_pages = MT * (max(sum(c) for c in self.wg) + max(sum(self.wg, [])))
+            self.acc_blocks = [MT * pw for pw in sum(self.wg, [])]
+            off, o = {}, 0
+            rsr = self._rs_regions() if rs is not None else []
+            # (the reduce-scatter's local buffers - HOLD, FINB: this core's compute and, after its hand-off, its port read
+            # them - overlay XIN + ACC, which are dead once this core's gate / up is done: no row peer multicasts into XIN
+            # after the last round it consumed; only its own compute touches ACC)
+            ovl = dict(rsr[:2]) if rsr else {}
+            rsr = rsr[2:]
+            for k, v in (
+                [
+                    ("xown", self.xown_t * 2048),
+                    ("wown", (self.WRING * self.WSLOT if self.WRING else self.wown_t) * self.wtb),
+                    ("win", NWS * self.WSLOT * self.wtb),
+                    ("hown", MT * self.POMAX * 2048),
+                    ("hall", min(self.NCH, 2) * GX * MT * self.POMAX * 2048 if down else 0),
+                    ("xin", 2 * MT * self.KB * 2048),
+                    # (ACC: a FIFO of fp32 pass partials, MT x pw tiles a block - the pass widths differ (K3's latent-
+                    # down passes): its straddle room (without it the tail overwrote the W stream's ready words: a W
+                    # round taken before it landed, a hang)
+                    ("acc", _ring_pages(self.acc_pages, self.acc_blocks) * 4096),
+                    ("out", NOUT * MT * self.PWDMAX * 2048 if down and rs is None else 0),
+                    ("words", 256),
+                ]
+                + rsr
+                + ([("lat", MT * self.LWMAX * 2048), ("latz", (shards - 1) * MT * self.LWMAX * 2048)] if latent else [])
+                + ([("po", 2 * self.PFULL * 2048)] + ([("lrdy", 64)] if latent else []) if prep else [])
+            ):
+                off[k], o = o, al(o + v)
+            self.seq_ends = sorted(set(off.values()) | {o})  # (the sequential regions' bounds: the CB plan check's)
+            if ovl:
+                room = off["out"] - off["xin"]
+                if al(ovl["hold"]) + ovl["finb"] <= room:
+                    off["hold"], off["finb"] = off["xin"], off["xin"] + al(ovl["hold"])
+                else:  # (no room: their own regions)
+                    for k, v in ovl.items():
+                        off[k], o = o, al(o + v)
+            # the router logits on the engine (router: dict(ET, KTO)): x rows, W_r^T expert tiles, the fp32 out - in the
+            # arena's tail past the words (the reduce-scatter's zones, the latent's, the prep's: all written only after
+            # gate / up, the router's phase is over before it), else their own region
+            self.rtr = router
+            if router is not None:
+                self.ETC = -(-router["ET"] // GX)
+                KTO = router["KTO"]
+                self.KC = KTO // 2 if KTO % 2 == 0 else KTO  # (K chunk: x / W_r^T rounds - two, a buffer each)
+                rsz = [
+                    ("rx", 2 * self.KC * MT * 2048),
+                    ("rw", 2 * self.ETC * self.KC * 2048),
+                    ("ro", self.ETC * MT * 4096),
+                ]
+                need = sum(al(v) for _, v in rsz)
+                t0 = off[rsr[0][0]] if rsr else o
+                if o - t0 < need:
+                    hall = off["xin"] - off["hall"]
+                    t0 = off["hall"] if down and hall >= need else o
+                    if t0 == o:
+                        o = o + need
+                for k, v in rsz:
+                    off[k], t0 = t0, al(t0 + v)
+            self.off, self.arena_bytes = off, o
+            if o <= ARENA_MAX:
+                break
         if o > ARENA_MAX:
             sizes = {
                 k: (off[k2] if i + 1 < len(off) else o) - off[k]
@@ -1236,6 +1278,10 @@ class SeEngine3:
                 g0 = 2 * self.h0[c]
                 for pg, pw in enumerate(self.wg[c]):
                     c0 = g0 + sum(self.wg[c][:pg])
+                    if pg < self.NGU and c0 + pw > 2 * (
+                        self.h0[c] + self.po[c]
+                    ):  # (a dummy pass: the first pair again)
+                        c0 = g0
                     src = wgt
                     if pg >= self.NGU:  # (latent passes: this column's slice of the chip's latent columns)
                         src, c0 = w_lat[dev], self.l0[c] + sum(self.wg[c][self.NGU : pg])
@@ -1452,6 +1498,8 @@ class SeEngine3:
             NOUT,
         ]
         nd = "" if self.down else "#define SE_NODOWN\n"
+        if self.WRING:
+            nd += f"#define SE_WRING {self.WRING}\n"
         if self.rs is not None:
             nd += "#define SE_RS\n" + "".join(f"#define SE_{k.upper()} {v}\n" for k, v in RS_CB.items())
             nd += f"#define SE_P {self.rs.P}\n"
