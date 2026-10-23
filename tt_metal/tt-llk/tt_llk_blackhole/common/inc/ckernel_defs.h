@@ -375,6 +375,12 @@ enum class BinaryOp : std::uint8_t
     REQUANT   = 48,
     DEQUANT   = 49,
     COPY_DEST = 50,
+    // situ_glu has a Blackhole kernel only: the harness dispatches it on Blackhole.
+    // SITU_GLU is also a kernel define (hybrid_program_factory.cpp): the member is spelled with it set aside.
+#pragma push_macro("SITU_GLU")
+#undef SITU_GLU
+    SITU_GLU = 51,
+#pragma pop_macro("SITU_GLU")
 };
 
 enum class PackMode : std::uint8_t

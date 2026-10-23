@@ -1022,7 +1022,7 @@ void kernel_main() {
 #else
     // First Compute API call in the kernel, as compute_kernel_hw_startup.h requires: it does MMIO
     // config of MATH/PACK/UNPACK and needs those units idle. Nothing below it depends on the count
-    // handshake, and the SFPU init that follows must not run before it (SiTU-GLU's tanh_init loads
+    // handshake, and the SFPU init that follows must not run before it (SiTU-GLU's situ_glu_init loads
     // the vConstFloatPrgm registers the activation reads back on every tile).
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0_x, cb_in1_gate, cb_partials_gu);
 #endif
