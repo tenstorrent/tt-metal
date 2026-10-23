@@ -1120,7 +1120,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
     model_capabilities = {
         **_build_model_capabilities(),
         # QWEN36_SPEC_PREFIX_CACHE=1 (default): APC via the model's GDN snapshot cache (tt/prefix_cache.py); the spec
-        # prefill resumes from a snapshot at or below start_pos (B > 1 eager path; B == 1 recomputes from 0).
+        # prefill resumes from a snapshot at or below start_pos (B == 1 recomputes from 0).
         "supports_prefix_caching": _spec_prefix_cache_enabled(),
         # QWEN36_SPEC_CHUNKED_PREFILL=1 + prefix cache: non-final chunks snapshot the GDN state at e-128 and the next chunk
         # resumes there (spec_engine.prefill final=False); the plugin passes intermediate_prefill_mask.
