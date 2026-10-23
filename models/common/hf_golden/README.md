@@ -31,7 +31,8 @@ the dtype, the layers it exists on and what it is.
 | `generate_golden_kimi_k2_7_code.py` | moonshotai/Kimi-K2.7-Code | transformers `kimi_k25` (DeepseekV3 text model), INT4 experts dequantized, needs transformers >= 5.17 |
 | `generate_golden_k2_horizon.py` | IFM/K2-Horizon-375B-A23B | repo remote code (GQA + partial RoPE + MoE), plain bf16 |
 | `generate_golden_nemotron_3_ultra.py` | nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16 | transformers `nemotron_h` (Mamba-2 + latent MoE + NoPE GQA), needs `--with kernels==0.12.3` |
-| `generate_golden_whole_model.py` | Qwen/Qwen3.8-27B, Llama-3.1-8B, Mistral-Medium-3.5 | whole model, one forward (see below) |
+| `generate_golden_llama_3_1_8b_instruct.py` | meta-llama/Llama-3.1-8B-Instruct | transformers `llama` |
+| `generate_golden_whole_model.py` | Qwen/Qwen3.8-27B, Mistral-Medium-3.5 | whole model, one forward (see below) |
 
 Not covered yet:
 - **DeepSeek-V4.1-Flash**: transformers has no implementation and the repo ships no modeling code.
@@ -137,9 +138,14 @@ raw, 7.15 chat; score PPL with the multiplier and softcap applied, or it reads i
 sliding layers keep every position (make_cache: DynamicCache(config) would keep only the last 2047), and the first
 10240 positions of that trace are bit-identical to a bare isl 10240 run (hidden states and K/V, all 52 layers).
 
+**Llama-3.1-8B-Instruct:** `<|begin_of_text|>` prefix, the BOS its tokenizer prepends (wikitext ppl at isl 10240
+over the same 10100 tokens: 8.358 BOS, 8.428 raw, 8.623 chat). isl 56320 on CPU (64-core EPYC 9354P) with
+`--prefill-chunk 5120 --attn-chunk 4096`: 18.5 min, 4.9 GB host peak, 22 GB on disk; its first 10240 rows equal the
+isl 10240 run with the same flags bit for bit (99/99 tensors), ppl 6.842 over all 56318 tokens.
+
 **`--device cuda` under torch 2.11:** `torch.cuda.set_device` rejects a device without an index; pass `cuda:0`.
 
-`generate_golden_whole_model.py` is the original script behind the Qwen, Llama and Mistral traces. It loads the whole
+`generate_golden_whole_model.py` is the original script behind the Qwen3.8-27B and Mistral traces. It loads the whole
 model, runs one forward, and writes the older format the device-side grader (`galaxy_prefill_kv_pcc.py`) reads:
 `kv_cache/layer_<i>.safetensors` (`key_cache_layer_<i>`, `value_cache_layer_<i>`, or GDN conv/recurrent state) and
 `final_hidden.safetensors`. It computes in fp32 and writes to `/mnt/models/agentic-prefill-goldens` by default. Every
