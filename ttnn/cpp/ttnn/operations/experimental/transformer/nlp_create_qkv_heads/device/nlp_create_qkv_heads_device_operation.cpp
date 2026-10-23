@@ -13,6 +13,13 @@
 namespace ttnn::operations::experimental::transformer {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
+// The InterleavedRuntimeRows factory serves the call: the flag is ignored for sharded input.
+bool runtime_rows_selected(
+    const NlpCreateHeadsDeviceOperation::operation_attributes_t& operation_attributes,
+    const NlpCreateHeadsDeviceOperation::tensor_args_t& tensor_args) {
+    return operation_attributes.runtime_rows && !tensor_args.input_tensor_q.is_sharded();
+}
+
 void validate_q_head_split(
     const NlpCreateHeadsDeviceOperation::operation_attributes_t& operation_attributes,
     const NlpCreateHeadsDeviceOperation::tensor_args_t& tensor_args) {
@@ -221,9 +228,12 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-// Only the row-dependent invariants: the row count is not in the Interleaved hash.
+// Only the row-dependent invariants of the row-free program; the other factories hash the full specs.
 void NlpCreateHeadsDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (!CMAKE_UNIQUE_NAMESPACE::runtime_rows_selected(operation_attributes, tensor_args)) {
+        return;
+    }
     using namespace tt::constants;
     const auto& input_shape = tensor_args.input_tensor_q.padded_shape();
     TT_FATAL(input_shape[2] % TILE_HEIGHT == 0, "Unsupported input height {} is not tile aligned", input_shape[2]);
@@ -250,13 +260,11 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_hit(
 
 ttsl::hash::hash_t NlpCreateHeadsDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (!CMAKE_UNIQUE_NAMESPACE::runtime_rows_selected(operation_attributes, tensor_args)) {
+        return ttsl::hash::hash_objects_with_default_seed(operation_attributes, tensor_args);
+    }
     using ttnn::operations::common::hash_spec_without_rows;
     constexpr uint64_t kSalt = 0x6e6c705f63716b76ULL;  // "nlp_cqkv"
-    const bool sharded = tensor_args.input_tensor_q.is_sharded();
-    const auto hash_tensor = [&](const Tensor& tensor) {
-        return sharded ? ttsl::hash::hash_objects_with_default_seed(kSalt, tensor.tensor_spec())
-                       : hash_spec_without_rows(tensor, kSalt);
-    };
     auto hash = tt::tt_metal::operation::hash_operation<NlpCreateHeadsDeviceOperation>(
         operation_attributes.num_q_heads,
         operation_attributes.num_kv_heads,
@@ -265,15 +273,12 @@ ttsl::hash::hash_t NlpCreateHeadsDeviceOperation::compute_program_hash(
         operation_attributes.kv_tied,
         operation_attributes.output_mem_config,
         operation_attributes.q_head_split,
-        sharded,
-        hash_tensor(tensor_args.input_tensor_q),
-        tensor_args.input_tensor_kv.has_value(),
+        operation_attributes.runtime_rows,
+        hash_spec_without_rows(tensor_args.input_tensor_q, kSalt),
+        hash_spec_without_rows(tensor_args.input_tensor_kv, kSalt),
         tensor_args.optional_output_tensors.size());
-    if (tensor_args.input_tensor_kv.has_value()) {
-        hash = ttsl::hash::hash_objects(hash, hash_tensor(*tensor_args.input_tensor_kv));
-    }
     for (const auto& output : tensor_args.optional_output_tensors) {
-        hash = ttsl::hash::hash_objects(hash, output.has_value(), output.has_value() ? hash_tensor(*output) : 0);
+        hash = ttsl::hash::hash_objects(hash, hash_spec_without_rows(output, kSalt));
     }
     return hash;
 }
@@ -373,10 +378,13 @@ NlpCreateHeadsDeviceOperation::tensor_return_value_t NlpCreateHeadsDeviceOperati
 }
 
 NlpCreateHeadsDeviceOperation::program_factory_t NlpCreateHeadsDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor_q;
     if (input_tensor.is_sharded()) {
         return Sharded{};
+    }
+    if (operation_attributes.runtime_rows) {
+        return InterleavedRuntimeRows{};
     }
     return Interleaved{};
 }
@@ -395,7 +403,8 @@ std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads(
     bool kv_tied,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors,
-    std::optional<uint32_t> q_head_split) {
+    std::optional<uint32_t> q_head_split,
+    bool runtime_rows) {
     using OperationType = ttnn::operations::experimental::transformer::NlpCreateHeadsDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -405,7 +414,8 @@ std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads(
         .transpose_k_heads = transpose_k_heads,
         .kv_tied = kv_tied,
         .output_mem_config = memory_config.value_or(input_tensor_q.memory_config()),
-        .q_head_split = q_head_split};
+        .q_head_split = q_head_split,
+        .runtime_rows = runtime_rows};
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor_q = input_tensor_q,
         .input_tensor_kv = input_tensor_kv,
