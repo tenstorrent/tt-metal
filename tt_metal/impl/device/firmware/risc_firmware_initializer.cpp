@@ -26,6 +26,7 @@
 #include "dispatch/dispatch_core_manager.hpp"
 #include "dispatch/topology.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
+#include "impl/buffers/dram_sender_topology.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "llrt/llrt.hpp"
@@ -119,6 +120,7 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
     l1_bank_to_noc_xy_.reserve(device_ids.size());
     worker_logical_col_to_virtual_col_.reserve(device_ids.size());
     worker_logical_row_to_virtual_row_.reserve(device_ids.size());
+    tensor_prefetcher_signal_noc_xy_.reserve(device_ids.size());
     for (tt::ChipId device_id : device_ids) {
         dram_bank_offset_map_[device_id].reserve(num_hw_cqs_);
         l1_bank_offset_map_[device_id].reserve(num_hw_cqs_);
@@ -138,6 +140,7 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
         std::vector<uint16_t>* l1_bank_to_noc_xy;
         std::vector<uint8_t>* worker_logical_col_to_virtual_col;
         std::vector<uint8_t>* worker_logical_row_to_virtual_row;
+        std::vector<uint32_t>* tensor_prefetcher_signal_noc_xy;
     };
     std::vector<PerDeviceTableRefs> table_refs;
     table_refs.reserve(device_ids.size());
@@ -149,7 +152,8 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
              &dram_bank_to_noc_xy_[device_id],
              &l1_bank_to_noc_xy_[device_id],
              &worker_logical_col_to_virtual_col_[device_id],
-             &worker_logical_row_to_virtual_row_[device_id]});
+             &worker_logical_row_to_virtual_row_[device_id],
+             &tensor_prefetcher_signal_noc_xy_[device_id]});
     }
 
     for (auto refs : table_refs) {
@@ -172,10 +176,13 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
                 *refs.l1_bank_offset_map,
                 *refs.dram_bank_to_noc_xy,
                 *refs.l1_bank_to_noc_xy);
-            // Quasar FW never loads the logical→virtual scratch table (WH/BH brisc/ncrisc only).
+            // Quasar FW never loads the logical→virtual scratch table or the Tensor prefetcher signal table
+            // (WH/BH brisc/ncrisc only).
             if (cluster_.arch() != ARCH::QUASAR) {
                 generate_worker_logical_to_virtual_map(
                     device_id, *refs.worker_logical_col_to_virtual_col, *refs.worker_logical_row_to_virtual_row);
+                generate_tensor_prefetcher_signal_table(
+                    device_id, refs.dram_bank_offset_map->size(), *refs.tensor_prefetcher_signal_noc_xy);
             }
 
             // Register the build env unconditionally so JIT compilation (CompileProgram) works on mock
@@ -675,6 +682,24 @@ void RiscFirmwareInitializer::generate_worker_logical_to_virtual_map(
     worker_logical_row_to_virtual_row.resize(tt::round_up(tensix_grid_size.y, 4), 0);
 }
 
+void RiscFirmwareInitializer::generate_tensor_prefetcher_signal_table(
+    tt::ChipId device_id, size_t num_dram_banks, std::vector<uint32_t>& tensor_prefetcher_signal_noc_xy) const {
+    tensor_prefetcher_signal_noc_xy.assign(num_dram_banks, 0);
+    if (!hal_.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        return;
+    }
+    const auto& soc_desc = cluster_.get_soc_desc(device_id);
+    for (uint32_t bank_id = 0; bank_id < num_dram_banks; ++bank_id) {
+        // The bank's free subchannel: its NIUs are in stream mode on both NoCs, so a signal reaches its L1 from
+        // either. Blackhole virtualizes DRAM coords identically on both NoCs, so one coord serves both.
+        const CoreCoord signal_core = pick_unused_dram_logical_core(soc_desc, bank_id, device_id);
+        const CoreCoord xy =
+            cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, signal_core, CoreType::DRAM);
+        tensor_prefetcher_signal_noc_xy[bank_id] = ((xy.y << hal_.get_noc_addr_node_id_bits()) | xy.x)
+                                                   << hal_.get_noc_coord_reg_offset();
+    }
+}
+
 void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
     tt::ChipId device_id,
     const HalProgrammableCoreType& core_type,
@@ -714,9 +739,17 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
     const uint64_t mem_bank_to_noc_addr = hal_.get_dev_noc_addr(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
     const uint32_t mem_bank_to_noc_size = hal_.get_dev_size(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
 
+    // Only WH/BH Tensix firmware (brisc/ncrisc) loads the Tensor prefetcher signal table, and Tensix always
+    // takes the multicast path below.
+    const bool loads_tensor_prefetcher_signal_table =
+        core_type == HalProgrammableCoreType::TENSIX && cluster_.arch() != ARCH::QUASAR;
+    const uint32_t tensor_prefetcher_sz_in_bytes =
+        loads_tensor_prefetcher_signal_table ? tensor_prefetcher_signal_noc_xy_[device_id].size() * sizeof(uint32_t)
+                                             : 0;
+
     TT_ASSERT(
-        (dram_to_noc_sz_in_bytes + l1_to_noc_sz_in_bytes + dram_offset_sz_in_bytes + l1_offset_sz_in_bytes) <=
-            mem_bank_to_noc_size,
+        (dram_to_noc_sz_in_bytes + l1_to_noc_sz_in_bytes + dram_offset_sz_in_bytes + l1_offset_sz_in_bytes +
+         tensor_prefetcher_sz_in_bytes) <= mem_bank_to_noc_size,
         "Size of bank_to_noc table is greater than available space");
 
     if (end_core.has_value()) {
@@ -745,6 +778,16 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
             start_core,
             end_core.value(),
             l1_offset_addr);
+
+        if (tensor_prefetcher_sz_in_bytes > 0) {
+            cluster_.noc_multicast_write(
+                tensor_prefetcher_signal_noc_xy_[device_id].data(),
+                tensor_prefetcher_sz_in_bytes,
+                device_id,
+                start_core,
+                end_core.value(),
+                l1_offset_addr + l1_offset_sz_in_bytes);
+        }
     } else {
         cluster_.write_core(
             dram_noc_data, dram_to_noc_sz_in_bytes, tt_cxy_pair(device_id, virtual_core), mem_bank_to_noc_addr);

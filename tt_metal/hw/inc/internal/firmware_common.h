@@ -42,6 +42,14 @@ extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
 extern bank_noc_xy_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];
 extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
 
+// Per DRAM bank, the DRAM core that holds the bank's Tensor prefetcher op signal counters: the bank's free
+// subchannel, whose NIUs are in stream mode on both NoCs, so a plain local address reaches its L1 from either.
+// Packed the way dram_bank_to_noc_xy packs a coordinate, which is the same on both NoCs. The host fills it per
+// device at init (all zero on a device without programmable DRAM cores) right after the bank tables above, and
+// only Tensix data-movement firmware loads it. uint32_t entries keep the table 4-byte sized for any bank count.
+// See api/dataflow/tensor_prefetcher_signal.h.
+extern uint32_t tensor_prefetcher_signal_noc_xy[NUM_DRAM_BANKS];
+
 // These arrays are used to store the worker logical to virtual coordinate mapping. Only
 // defined in cores that need this information for NOC transactions (e.g. DM cores).
 // Round up to nearest multiple of 4 to ensure uint32_t alignment for L1 to local copies
@@ -107,6 +115,17 @@ inline void noc_bank_table_init(uint64_t mem_bank_to_noc_addr) {
         (uint tt_l1_ptr*)(mem_bank_to_noc_addr + dram_to_noc_size_bytes + l1_to_noc_size_bytes +
                           dram_offsets_size_bytes),
         l1_word_count_from_bytes(l1_offsets_size_bytes));
+}
+
+// Load tensor_prefetcher_signal_noc_xy, which the host writes right after the four tables
+// noc_bank_table_init loads from the same scratch.
+inline void tensor_prefetcher_signal_table_init(uint64_t mem_bank_to_noc_addr) {
+    constexpr int32_t bank_tables_size_bytes = sizeof(dram_bank_to_noc_xy) + sizeof(l1_bank_to_noc_xy) +
+                                               sizeof(bank_to_dram_offset) + sizeof(bank_to_l1_offset);
+    l1_to_local_mem_copy(
+        (uint*)tensor_prefetcher_signal_noc_xy,
+        (uint tt_l1_ptr*)(mem_bank_to_noc_addr + bank_tables_size_bytes),
+        l1_word_count_from_bytes(sizeof(tensor_prefetcher_signal_noc_xy)));
 }
 
 inline void noc_worker_logical_to_virtual_map_init(uint64_t worker_logical_to_virtual_map_addr) {
