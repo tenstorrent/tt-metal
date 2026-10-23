@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <optional>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <ttnn/tensor/tensor.hpp>
 
 namespace ttml::metal::ops::softmax_backward::device {
@@ -24,10 +23,5 @@ struct SoftmaxBackwardInputs {
 
 using spec_return_value_t = tt::tt_metal::TensorSpec;
 using tensor_return_value_t = ttnn::Tensor;
-
-struct shared_variables_t {
-    tt::tt_metal::KernelHandle unary_reader_kernel_id;
-    tt::tt_metal::KernelHandle unary_writer_kernel_id;
-};
 
 }  // namespace ttml::metal::ops::softmax_backward::device
