@@ -14,6 +14,12 @@ namespace ckernel::sfpu {
 // Roots Using a Magic Constant and Its Implementation on Microcontrollers" by
 // Moroz et al. <https://doi.org/10.3390/en14041058>
 
+// Whether BF16 DEST runs the generated cbrt kernel as one call over the whole tile.
+inline constexpr bool cbrt_bf16_whole_tile = false;
+// The stock cbrt kernel needs no BF16 setup.
+template <bool bf16_kernel>
+inline void cbrt_bf16_tile_init() {}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cube_root() {
     sfpi::vFloat negative_third_256 = -0x1.555556p-10f;

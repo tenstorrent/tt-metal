@@ -28,6 +28,16 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void cbrt_tile(uint32_t idst) {
+    MATH(if constexpr (ckernel::sfpu::cbrt_bf16_whole_tile && !is_fp32_dest_acc_en) {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_cube_root,
+            (APPROX, is_fp32_dest_acc_en, 32),
+            idst,
+            VectorMode::None);
+        return;
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -40,6 +50,10 @@ ALWI void cbrt_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void cbrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(cbrt, sfpu::cube_root_init, (APPROX))); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void cbrt_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(cbrt, sfpu::cube_root_init, (APPROX)));
+    MATH(ckernel::sfpu::cbrt_bf16_tile_init<!is_fp32_dest_acc_en>());
+}
 
 }  // namespace ckernel
