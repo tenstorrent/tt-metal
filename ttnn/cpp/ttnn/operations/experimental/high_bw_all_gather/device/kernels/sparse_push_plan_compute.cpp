@@ -24,14 +24,13 @@ void kernel_main() {
     constexpr uint32_t num_devices = get_compile_time_arg_val(0);
     constexpr uint32_t stripe_chunk = get_compile_time_arg_val(1);
     constexpr uint32_t bitmap_off = get_compile_time_arg_val(2);
-    constexpr uint32_t prefix_off = get_compile_time_arg_val(3);
-    constexpr uint32_t counts_off = get_compile_time_arg_val(4);
-    constexpr uint32_t pages_per_packet = get_compile_time_arg_val(7);
-    constexpr uint32_t banks = get_compile_time_arg_val(8);
-    constexpr uint32_t cores = get_compile_time_arg_val(9);
-    constexpr uint32_t total_chunks = get_compile_time_arg_val(11);
-    constexpr uint32_t bucket_cap = get_compile_time_arg_val(16);
-    constexpr uint32_t range_blocks = get_compile_time_arg_val(17);
+    constexpr uint32_t counts_off = get_compile_time_arg_val(3);
+    constexpr uint32_t pages_per_packet = get_compile_time_arg_val(6);
+    constexpr uint32_t banks = get_compile_time_arg_val(7);
+    constexpr uint32_t cores = get_compile_time_arg_val(8);
+    constexpr uint32_t total_chunks = get_compile_time_arg_val(10);
+    constexpr uint32_t bucket_cap = get_compile_time_arg_val(15);
+    constexpr uint32_t range_blocks = get_compile_time_arg_val(16);
     constexpr uint32_t words_per_block = stripe_chunk / 32;
 
     const uint32_t core_idx = get_arg_val<uint32_t>(0);

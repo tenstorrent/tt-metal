@@ -116,7 +116,7 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
                 .page_size = bytes}}},
         });
     };
-    add_cb(kImage, layout.pages * SparsePushPlanLayout::kPageWords * sizeof(uint32_t));
+    add_cb(kImage, round_up(layout.image_words * sizeof(uint32_t), 64));
     add_cb(kIdx, per_core * sizeof(uint32_t));
     add_cb(kDirtyBytes, round_up(chunks, 64));
     add_cb(kAllDirty, 3 * array_words * 4);
@@ -132,12 +132,11 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanDeviceOperation::create_descriptor
             .id = i, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
     }
 
-    // Shared by the data movement and compute kernels (the compute kernel reads the first 18).
+    // Shared by the data movement and compute kernels (the compute kernel reads the first 17).
     std::vector<uint32_t> ct = {
         attrs.num_devices,
         attrs.stripe_chunk,
         SparsePushPlanLayout::kBitmapOff,
-        layout.prefix_off,
         layout.counts_off,
         SparsePushPlanLayout::kOwnerOff,
         SparsePushPlanLayout::kOwnerPrefixOff,

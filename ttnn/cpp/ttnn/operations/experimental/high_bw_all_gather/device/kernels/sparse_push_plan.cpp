@@ -5,17 +5,18 @@
 // On-device plan for the sparse KV push (see sparse_push_plan_device_operation.hpp for the table layout).
 // One requester chip, `cores` cores; on each core five workers (BRISC, NCRISC, three TRISCs, see
 // sparse_push_plan_work.hpp) split the L1 loops and BRISC drives the steps and the NOC:
-//   0. load the core's slice of the indices into L1; zero the bitmap and the dirty-chunk bytes;
-//   1. scatter: each worker sets the bits of its bitmap words (word % 5) and marks the 512-row chunks it touched;
-//      BRISC packs the marks into a dirty map and multicasts it with the largest row to every core;   [barrier]
-//   2. reduce-scatter, chunk-cyclic so the sink and local-window chunks every core touches spread over all cores:
-//      core c reduces chunks c + k * cores; BRISC and NCRISC read every core's dirty copy of them, all workers OR
-//      them, BRISC multicasts the reduced chunks so every core holds the whole bitmap;                 [barrier]
-//   3. block prefixes: core c fills the in-block word prefixes and block counts of its block range and multicasts
-//      them;                                                                                              [barrier]
-//   4. per-owner block prefixes and compact-buffer bases, every core for itself, split by owner over the workers;
+//   0. load the core's slice of the indices into L1; zero the bitmap, the dirty-chunk bytes and the map column;
+//   1. scatter: the workers bucket their slices by bitmap-word owner and set the bits of their own words, marking
+//      the 512-row chunks touched; they map those marks reducer-major, and BRISC and NCRISC push every dirty chunk
+//      copy to its reducer's scratch and add the map word into the reducer's column;                     [exchange]
+//   2. reduce-scatter, chunk-cyclic (core c reduces chunks c + k * cores) so the sink and local-window chunks every
+//      core touches spread over all cores: the workers OR the pushed copies, split by word;               [exchange]
+//   3. ranks: each core fills the 16-bit in-range ranks, block counts and per-owner partials of its 128-block
+//      ranges;                                                                                             [exchange]
+//   4. per-owner prefixes over the ranges and compact-buffer bases, every core for itself, split by owner;
 //   5. rewrite the core's indices to compact slots (all workers) and write them out.
-// The bitmap is zero before the scatter, so chunks no core touched stay zero everywhere without being sent.
+// An exchange gathers every core's part on core 0, which multicasts the result (one sender: concurrent multicasts
+// from every core serialize on the NOC). The bitmap is zero before the scatter, so untouched chunks need no sending.
 
 #include "api/dataflow/dataflow_api.h"
 #include "sparse_push_plan_work.hpp"
@@ -28,21 +29,20 @@ void kernel_main() {
     constexpr uint32_t num_devices = get_compile_time_arg_val(0);
     constexpr uint32_t stripe_chunk = get_compile_time_arg_val(1);
     constexpr uint32_t bitmap_off = get_compile_time_arg_val(2);        // words
-    constexpr uint32_t prefix_off = get_compile_time_arg_val(3);        // words; in-block word prefixes, one byte each
-    constexpr uint32_t counts_off = get_compile_time_arg_val(4);        // words; block counts
-    constexpr uint32_t owner_off = get_compile_time_arg_val(5);         // words; per-owner row counts
-    constexpr uint32_t owner_prefix_off = get_compile_time_arg_val(6);  // words; per-owner rows before the split
-    constexpr uint32_t pages_per_packet = get_compile_time_arg_val(7);
-    constexpr uint32_t banks = get_compile_time_arg_val(8);
-    constexpr uint32_t cores = get_compile_time_arg_val(9);
-    constexpr uint32_t magic = get_compile_time_arg_val(10);
-    constexpr uint32_t total_chunks = get_compile_time_arg_val(11);  // 512-row chunks of the bitmap
-    constexpr bool has_split = get_compile_time_arg_val(14) != 0;
-    constexpr uint32_t bitmap_words = get_compile_time_arg_val(15);
-    constexpr uint32_t bucket_cap = get_compile_time_arg_val(16);    // indices per (from, to) scatter bucket
-    constexpr uint32_t range_blocks = get_compile_time_arg_val(17);  // blocks per rank range, a multiple of num_devices
-    constexpr uint32_t topk = get_compile_time_arg_val(18);
-    constexpr auto indices_args = TensorAccessorArgs<19>();
+    constexpr uint32_t counts_off = get_compile_time_arg_val(3);        // words; block counts
+    constexpr uint32_t owner_off = get_compile_time_arg_val(4);         // words; per-owner row counts
+    constexpr uint32_t owner_prefix_off = get_compile_time_arg_val(5);  // words; per-owner rows before the split
+    constexpr uint32_t pages_per_packet = get_compile_time_arg_val(6);
+    constexpr uint32_t banks = get_compile_time_arg_val(7);
+    constexpr uint32_t cores = get_compile_time_arg_val(8);
+    constexpr uint32_t magic = get_compile_time_arg_val(9);
+    constexpr uint32_t total_chunks = get_compile_time_arg_val(10);  // 512-row chunks of the bitmap
+    constexpr bool has_split = get_compile_time_arg_val(13) != 0;
+    constexpr uint32_t bitmap_words = get_compile_time_arg_val(14);
+    constexpr uint32_t bucket_cap = get_compile_time_arg_val(15);    // indices per (from, to) scatter bucket
+    constexpr uint32_t range_blocks = get_compile_time_arg_val(16);  // blocks per rank range, a multiple of num_devices
+    constexpr uint32_t topk = get_compile_time_arg_val(17);
+    constexpr auto indices_args = TensorAccessorArgs<18>();
     constexpr auto table_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto compact_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
     constexpr auto split_args = TensorAccessorArgs<has_split ? compact_args.next_compile_time_args_offset() : 0>();
@@ -332,9 +332,7 @@ void kernel_main() {
         f(partials_l1, ranges * num_devices * 4);
     });
     for_my_ranges([&](uint32_t r, uint32_t b0, uint32_t b1) {
-        // The owners' push reads the bitmap from the gathered tables; counts go along for inspection.
         write_span((bitmap_off + b0 * words_per_block) * 4, (b1 - b0) * words_per_block * 4);
-        write_span((counts_off + b0) * 4, (b1 - b0) * 4);
     });
 
     // 4. Owner bases and 5. rewrite, all workers.
