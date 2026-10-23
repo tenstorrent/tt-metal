@@ -2,16 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""TensorShape coverage for the math unary datacopy (tt-llk#1033, step 2).
-
-Runs unpack_A -> _llk_math_eltwise_unary_datacopy_ -> pack on one tile per
-shape, with the math side given the real TensorShape (unpack_A_test.cpp builds
-it from the face grid). Covers the plain copy (A2D), the SrcB broadcasts (B2D)
-and the 32-bit unpack-to-dest path (Float32 with dest_acc=Yes).
-
-Only shapes that work on main run. The ones that do not are asserted in the LLK
-and skipped here with the name of the assert.
-"""
+"""TensorShape coverage for the math unary datacopy: one tile per shape, A2D, SrcB broadcasts and unpack-to-dest."""
 
 import pytest
 import torch
