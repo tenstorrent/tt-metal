@@ -361,7 +361,8 @@ def test_repeat_sharded_row_major_placement(device, rank, strategy, split_row, a
         kwargs["optional_output_tensor"] = preallocated
     output = ttnn.repeat(tensor, repeats, **kwargs)
     assert torch.equal(ttnn.to_torch(output).to(torch.int64) & 0xFFFFFFFF, expected_input.repeat(*repeats))
-    if output_mode == "implicit" and not aligned:
+    if output_mode == "implicit" and not aligned and split_row:
+        # Codegen places split unaligned rows on a derived spec; a row on one page stays native on the input grid.
         _assert_derived_placement(output, input_memory)
     else:
         assert output.memory_config() == expected_memory

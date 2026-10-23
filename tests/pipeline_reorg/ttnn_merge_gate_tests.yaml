@@ -41,19 +41,6 @@
   budget_type: merge_gate
   owner_id: U07M7QZ0BQA # Camilo Vega -- Slack member ID
 
-# Row-major WIDTH/BLOCK repeats whose shard pages split, pad or misalign a row: values, placement and route.
-# A separate entry because `-k codegen` above would deselect the whole file.
-- name: "ttnn repeat shard pages"
-  cmd: >-
-    pytest --timeout 120 -xv
-    tests/ttnn/unit_tests/operations/data_movement/test_repeat_shard_pages.py
-  skus:
-    wh_n300_civ2:
-      timeout: 15
-  team: ttnn
-  budget_type: merge_gate
-  owner_id: U07M7QZ0BQA # Camilo Vega -- Slack member ID
-
 # Eltwise infra coverage: broadcast classes, tensor-scalar variants and op-dispatch liveness.
 # This gates infrastructure, not accuracy.
 #

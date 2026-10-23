@@ -300,8 +300,9 @@ bool same_placement(const MemoryConfig& a, const MemoryConfig& b) {
 
 using repeat::interleaved_in;
 
-// sharded_to_interleaved takes only L1-aligned row-major shard pages; to_memory_config copies any other page, and that
-// copy does not complete when the page is wider than the row. Throw instead of moving such a tensor off its shards.
+// sharded_to_interleaved takes only L1 shards with L1-aligned row-major pages; to_memory_config copies any other page,
+// and that copy does not complete when the page is wider than the row. Throw instead of moving such a tensor off its
+// shards.
 void check_rows_can_leave_shards(const ttnn::Tensor& tensor) {
     if (tensor.layout() != ttnn::ROW_MAJOR_LAYOUT || !tensor.memory_config().is_sharded() ||
         !tensor.shard_spec().has_value()) {
@@ -309,14 +310,17 @@ void check_rows_can_leave_shards(const ttnn::Tensor& tensor) {
     }
     const uint32_t row_width = tensor.logical_shape()[-1];
     const uint32_t shard_width = tensor.shard_spec()->shape[1];
+    const bool in_l1 = tensor.memory_config().buffer_type() == BufferType::L1;
     TT_FATAL(
         row_width >= shard_width ||
-            !repeat::is_unaligned_row_major_shard_page(tensor.memory_config(), tensor.element_size()),
-        "repeat: this call would move {}-element rows out of {}-element row-major shards whose page is not "
-        "L1-aligned, and that copy does not complete. Repeat along one axis other than the last into the input's "
-        "sharded layout and grid, or use a shard width whose page is L1-aligned.",
+            (in_l1 && !repeat::is_unaligned_row_major_shard_page(tensor.memory_config(), tensor.element_size())),
+        "repeat: this call would move {}-element rows out of {}-element row-major shards {}, and that copy does not "
+        "complete. Repeat takes such rows natively only from L1 shards, along one axis other than the last, into the "
+        "input's sharded layout and grid, with each repeated group of rows inside one shard; otherwise use L1 shards "
+        "whose page is L1-aligned.",
         row_width,
-        shard_width);
+        shard_width,
+        in_l1 ? "whose page is not L1-aligned" : "in DRAM");
 }
 
 // Gives a spec-less sharded output the spec native would land it in; the legs need it to plan the final write.

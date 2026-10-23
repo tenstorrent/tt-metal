@@ -109,17 +109,20 @@ bool is_native_repeat_sharding(
     if (input_spec.layout() == Layout::ROW_MAJOR) {
         const auto& shard = input_spec.memory_config().shard_spec()->shape;
         // A row narrower than its shard is one padded page, and repeat's views keep that padding. Codegen and the
-        // composite path unshard it first: an L1-aligned page takes sharded_to_interleaved, but any other page takes
-        // a row-major copy that does not complete when the page is wider than the row, so repeat throws there.
-        // A split row whose final shard is partial stays on codegen or the composite path, which copy it exactly;
-        // the native kernels have not been verified on its padded last page.
+        // composite path unshard it first: an L1 shard with an L1-aligned page takes sharded_to_interleaved, but any
+        // other page takes a row-major copy that does not complete when the page is wider than the row, so repeat
+        // throws there. A split row whose final shard is partial stays on codegen or the composite path; the native
+        // kernels have not been verified on its padded last page.
         const bool narrow_row = input_spec.logical_shape()[-1] < shard[1];
         if (!narrow_row && input_spec.padded_shape()[-1] != input_spec.logical_shape()[-1]) {
             return false;
         }
-        // Codegen and the composite path copy unaligned WIDTH/BLOCK pages faster than the staged kernel.
+        // Codegen and the composite path copy unaligned WIDTH/BLOCK pages that split a row faster than the staged
+        // kernel. A row on one page needs no staging and stays eligible, as on main: codegen then places its output as
+        // native would, and native takes it where codegen does not apply.
+        const bool split_row = shard[1] < input_spec.padded_shape()[-1];
         const auto layout = input_spec.memory_config().memory_layout();
-        if (!narrow_row && !unaligned_rows_native &&
+        if (!narrow_row && split_row && !unaligned_rows_native &&
             (layout == TensorMemoryLayout::WIDTH_SHARDED || layout == TensorMemoryLayout::BLOCK_SHARDED) &&
             input_spec.compute_page_size_bytes() % hal::get_l1_alignment() != 0) {
             return false;
