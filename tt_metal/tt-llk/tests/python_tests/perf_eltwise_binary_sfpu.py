@@ -30,23 +30,6 @@ _ATAN2_PERF_AXES = {
     "approx_mode": [ApproximationMode.Yes, ApproximationMode.No],
 }
 
-_PERF_EXCLUDED_MATHOPS = {
-    # TODO(#58145): profiler register pressure prevents a production-equivalent build.
-    MathOperation.SfpuDivInt32,
-    MathOperation.SfpuDivInt32Floor,
-}
-
-# A functional sweep dict shared below becomes perf cases, times the run types.
-# Narrow it here when a point should stay functional-only, as with the ops below.
-_INT_UNIFORM_PERF_SWEEP = {
-    **_func.INT_UNIFORM_SWEEP,
-    "mathop": [
-        mathop
-        for mathop in _func.INT_UNIFORM_SWEEP["mathop"]
-        if mathop not in _PERF_EXCLUDED_MATHOPS
-    ],
-}
-
 
 _BOTH_DEST_ACC = [DestAccumulation.No, DestAccumulation.Yes]
 
@@ -189,6 +172,32 @@ def test_perf_eltwise_binary_sfpu_float_shallow(
         mathop,
         bcast_dim,
         input_dimensions=input_dimensions,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    **_func.MIXED_FORMAT_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_mixed_format(
+    perf_report,
+    formats,
+    mathop,
+    dest_acc,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_mixed_format(
+        formats,
+        mathop,
+        dest_acc,
         **_perf_kwargs(
             perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
         ),
@@ -455,7 +464,7 @@ def test_perf_eltwise_binary_sfpu_bitwise(
 
 @pytest.mark.perf
 @parametrize(
-    **_INT_UNIFORM_PERF_SWEEP,
+    **_func.INT_UNIFORM_SWEEP,
     **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_int_uniform(
@@ -577,6 +586,30 @@ def test_perf_eltwise_binary_sfpu_bcast(
         bcast_dim,
         mathop,
         dest_acc,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    **_func.QUANT_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_quant(
+    perf_report,
+    mathop,
+    sign_magnitude,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_quant(
+        mathop,
+        sign_magnitude,
         **_perf_kwargs(
             perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
         ),

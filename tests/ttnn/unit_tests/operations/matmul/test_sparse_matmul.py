@@ -1226,6 +1226,37 @@ def test_sparse_matmul_rejects_zero_out_block_w(device, expect_error):
         )
 
 
+def test_sparse_matmul_rejects_per_core_M_above_Mt(device, expect_error):
+    in0, in1, sparsity, nnz, pc, dims = _make_sparse_inputs(device, m=96)
+    _, _, _, _, tile_h, tile_w = dims
+
+    bad_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=pc.compute_with_storage_grid_size,
+        in0_block_w=pc.in0_block_w,
+        out_subblock_h=pc.out_subblock_h,
+        out_subblock_w=pc.out_subblock_w,
+        out_block_h=4,
+        out_block_w=pc.out_block_w,
+        per_core_M=4,
+        per_core_N=pc.per_core_N,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    with expect_error(RuntimeError, "requires per_core_M"):
+        ttnn.sparse_matmul(
+            in0,
+            in1,
+            sparsity=sparsity,
+            nnz=nnz,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=ttnn.Tile([tile_h, tile_w]),
+            program_config=bad_pc,
+        )
+
+
 def test_sparse_matmul_rejects_indivisible_per_core_M(device, expect_error):
     """per_core_M must be divisible by out_block_h.
 
@@ -1250,6 +1281,37 @@ def test_sparse_matmul_rejects_indivisible_per_core_M(device, expect_error):
         mcast_in0=True,
     )
     with expect_error(RuntimeError, "must be divisible by out_block_h"):
+        ttnn.sparse_matmul(
+            in0,
+            in1,
+            sparsity=sparsity,
+            nnz=nnz,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=ttnn.Tile([tile_h, tile_w]),
+            program_config=bad_pc,
+        )
+
+
+def test_sparse_matmul_rejects_per_core_M_below_Mt(device, expect_error):
+    in0, in1, sparsity, nnz, pc, dims = _make_sparse_inputs(device, m=64)
+    _, _, _, _, tile_h, tile_w = dims
+
+    bad_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=pc.compute_with_storage_grid_size,
+        in0_block_w=pc.in0_block_w,
+        out_subblock_h=pc.out_subblock_h,
+        out_subblock_w=pc.out_subblock_w,
+        out_block_h=pc.out_block_h,
+        out_block_w=pc.out_block_w,
+        per_core_M=1,
+        per_core_N=pc.per_core_N,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    with expect_error(RuntimeError, "requires num_blocks_y == 1"):
         ttnn.sparse_matmul(
             in0,
             in1,
