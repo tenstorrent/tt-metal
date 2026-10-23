@@ -43,9 +43,6 @@ from typing import NoReturn, Optional
 
 from ttsim_error import parse_ttsim_error
 
-# ttsim runs in-process (no SimulationServer). Its init must complete before the
-# skip_for_* markers in this plugin call get_chip_architecture() (which reaches
-# check_context()) at module-load time.
 # TT_METAL_SIMULATOR is the canonical env var (matches tt-metal runtime and the ttsim README);
 # TT_UMD_SIMULATOR_PATH is kept as an alias for the existing RTL-simulator workflow.
 # Gate on --run-simulator so the env var being set doesn't force a ttsim init on silicon runs,
