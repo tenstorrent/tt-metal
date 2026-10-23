@@ -28,7 +28,7 @@ from models.demos.gemma4.config import gemma4_kv_bfp8_enabled
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
 from models.demos.gemma4.tt.generator_trace import short_prefill_stash_skipped
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
-from models.demos.gemma4.tt.mesh_orientation import set_decode_fusion_profile
+from models.demos.gemma4.tt.mesh_orientation import decode_flag, set_decode_fusion_profile
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
