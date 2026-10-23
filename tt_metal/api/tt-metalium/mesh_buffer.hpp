@@ -219,7 +219,10 @@ private:
         tt::tt_metal::distributed::MeshDevice*,
         const tt::tt_metal::distributed::MeshCoordinate&);
     friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::fixed_address_allocation::allocate_at_address(
-        const MeshBufferConfig&, const DeviceLocalBufferConfig&, MeshDevice*, DeviceAddr);
+        const tt::tt_metal::distributed::MeshBufferConfig&,
+        const tt::tt_metal::distributed::DeviceLocalBufferConfig&,
+        tt::tt_metal::distributed::MeshDevice*,
+        tt::tt_metal::DeviceAddr);
 };
 
 class [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-22.")]] AnyBuffer {
