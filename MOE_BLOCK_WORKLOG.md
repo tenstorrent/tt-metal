@@ -1306,3 +1306,28 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   GLM 1452 at KB 1 (576 of it arrival zones sized for every slot). Per-core state scales with MT -> the chunked head
   (NCH 2, chunk m = block m of every owner) is the plan.
 - 640 check after the two fixes (traced, b2b): GLM 1693 us PCC 0.98654, K3 2998 PCC 0.99604 (before 1695 / 2993-2997).
+
+### Chunked fused head (NCH > 1), stage 1: x chain + down + SE reduce-scatter + latent (no router yet)
+- Chunk m = block m of every owner (GROW(m, lr): an owner's rows stay contiguous - dispatch / combine / tail
+  unchanged). The one-chunk body in a loop; every per-call counter counts up over the chunks (thresholds m x a
+  chunk's count + the chunk's): RS arrival counters, port mailbox targets, latent words / counter, FINC pops.
+- Reuse behind credits, not doubled: RS arrival zones - a core's NCRISC, before chunk m + 1's first slot, waits the
+  compute's pop of chunk m's zone and +1s the zone-free word of the port facing that upstream; the port forwards a
+  fabric atomic inc to the upstream's port (its zone-credit word), which waits >= m before chunk m's units. FINB -
+  the ports' readers +1 a FINB-free word on each core they read after a chunk; the NCRISC hands the compute a page.
+  Arrival-zone CB pointers kept at the zone's start: the NCRISC pads a chunk to the whole zone, the compute pops it.
+- The latent's LAT + LATZ a chunk each (36 + 12 KB a chunk on K3: no zone reused in a call, no credits); dispatch
+  prep's units chunk-major, the chunk's prep op runs its share.
+- Two bugs found on the way: (1) the compute's chunk m + 1 gate / up ran with the RS fins' unpack formats (garbage,
+  std 43x) - reconfig to (W, x) at each chunk's start; (2) OUTF straddle: a fin of 22 tiles left OUTF's pointer at
+  6, the next chunk's 8-tile block straddled the end (pack_tile does not wrap) - OUTF blocks now end at multiples of 8.
+- L1 at 1024 rows (GY 8 x MT 2 x 2 chunks): W-own ring (5 slots, re-read a chunk) when resident W does not fit,
+  h-all 2 slots else 1, HOLD over ACC (compute-only both; chunk m's RS runs between the two gate / ups), no
+  HOLD / FINB over XIN (the next chunk's x rounds land in XIN while the ports read FINB). K3 1274 KB (ring, h-all 1),
+  GLM 1248 (resident, h-all 2).
+- Parts test (LoudBox 2x4, eager us a call): 1024 rows GLM x chain 244.8, + RS 364.7 (PCC 0.99986); K3 + RS 781.4,
+  + latent 843.2 (PCC 0.99984, latent 0.99993). Soaks 1000 calls each, fresh inputs, no hang. 640 unchanged: parts
+  GLM 287.1 / K3 504.3, block traced b2b GLM 1695 / K3 2997 (PCC 0.98654 / 0.99604).
+- Router chain: still one chunk (asserted). Its zones (K3 3 x 28 fp32 tiles a router core) cannot double in L1 and
+  its sends are multi-hop - next: a credit from the owner's router core back to each source's (through the ports'
+  logits stream), which also frees the source port's sub-block buffer.

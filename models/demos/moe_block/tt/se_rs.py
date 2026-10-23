@@ -306,6 +306,17 @@ class RsPlan:
             out.append((e, b, mask, slots[0], slots[1]))
         return out
 
+    def finb_readers(self, p, cx, cy):
+        """The ports (directions on core (cx, cy)'s link) that read its FINB: a unit of theirs takes tiles of it."""
+        k = self.k(cx, cy)
+        h = self.half(k)
+        return [
+            d
+            for d in DIRS
+            if self.down(p, d) is not None
+            and any((m >> h) & 1 and self.count(cx, cy, b) > 0 for _, b, m, _, _ in self.port_units(p, d))
+        ]
+
     def port_cores(self, l):
         """Cores (cx, cy) of link l, in k order."""
         return [(cx, cy) for cy in range(self.GY) for cx in range(self.GX) if self.link(self.k(cx, cy)) == l]

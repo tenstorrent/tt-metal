@@ -22,6 +22,7 @@ from models.demos.moe_block.tt.routing_stream import RA_SEND
 from models.demos.moe_block.tt.se_engine3 import _probes
 
 INC_EVERY = 8
+RSX = 10  # (the RS block's words past the entry order - the kernels' RSX)
 CB = 0
 DIRS_I = {"fwd": 0, "bwd": 1}
 
@@ -31,6 +32,8 @@ constexpr uint32_t RP = get_compile_time_arg_val(3), CR = get_compile_time_arg_v
 constexpr uint32_t NV = get_compile_time_arg_val(6), KLT = get_compile_time_arg_val(7), GROUP = get_compile_time_arg_val(8);
 constexpr uint32_t INC = get_compile_time_arg_val(9), GX = get_compile_time_arg_val(10), GY = get_compile_time_arg_val(11);
 constexpr uint32_t S0 = get_compile_time_arg_val(12), S1 = get_compile_time_arg_val(13), G = get_compile_time_arg_val(14);
+constexpr uint32_t RSX = 10;  // (the RS block's words past the entry order: FINB, mailbox, zone, counter, P, FINB-free,
+                              // zone credit, zone free, the zone-free signals a chunk, the credits a call expected)
 """
 
 _WALK = r"""
@@ -74,14 +77,18 @@ _RS_READER = r"""
 // (compact in the chip's entry order) in chunks of RP tiles; a batch ends at a multiple of GROUP chunks, at the end
 // of a unit and before a blocking wait (matmul_reduce_scatter's port reader). At the end my mailbox words re-armed.
 // args at r0: nu, (e | b << 8 | mask << 16, slot0 | slot1 << 16) x nu, nc, (x | y << 8 | half << 16 | k << 20,
-// counts (8 bits a block)) x nc, the chip's entry order [G], FINB address, mailbox address
-FORCE_INLINE void rs_gather(uint32_t r0, uint32_t& pos) {
+// counts (8 bits a block)) x nc, the chip's entry order [G], FINB address, mailbox address, .., FINB-free address.
+// Chunk m of NCH: the mailbox targets count up (seen, the caller's, over the chunks); after chunk m (not the last) +1
+// on the FINB-free word of every core read - its FINB is free for chunk m + 1; after the last the words re-armed
+FORCE_INLINE void rs_gather(uint32_t r0, uint32_t& pos, uint32_t m, uint32_t* seen) {
     const uint32_t nu = get_arg_val<uint32_t>(r0), u0 = r0 + 1, nc = get_arg_val<uint32_t>(u0 + 2 * nu);
     if (nu == 0) return;
     const uint32_t c0 = u0 + 2 * nu + 1, en0 = c0 + 2 * nc;
     const uint32_t finb = get_arg_val<uint32_t>(en0 + G), mbox = get_arg_val<uint32_t>(en0 + G + 1);
-    uint32_t seen[128];
-    for (uint32_t i = 0; i < nc; ++i) seen[i] = 0;
+    if (m == 0)
+        for (uint32_t i = 0; i < nc; ++i) seen[i] = 0;
+    uint8_t rdc[128];
+    for (uint32_t i = 0; i < nc; ++i) rdc[i] = 0;
     uint32_t c = 0, need = 0, wptr = 0;  // (pos: chunks pushed since the phases began - the CB's batch alignment)
 #ifdef SE_PROBE_RSSTAT
     DeviceZoneScopedN("SE-RSG");
@@ -116,6 +123,7 @@ FORCE_INLINE void rs_gather(uint32_t r0, uint32_t& pos) {
             }
 #endif
             noc_semaphore_wait_min(mb, target);
+            rdc[i] = 1;
             const uint64_t src = get_noc_addr(cw & 0xFF, (cw >> 8) & 0xFF, finb + fo * 2048);
             for (uint32_t t0 = 0; t0 < cnt; t0 += RP) {
                 if (c == 0) {
@@ -140,6 +148,16 @@ FORCE_INLINE void rs_gather(uint32_t r0, uint32_t& pos) {
     DeviceTimestampedData("SE-RSG-WCB", wcb);
     DeviceTimestampedData("SE-RSG-NW", nw);
 #endif
+    if (m + 1 < NCH) {  // (every read of the chunk landed - each unit ends in a flush: FINB free)
+        const uint32_t ffa = get_arg_val<uint32_t>(en0 + G + 5);
+        for (uint32_t i = 0; i < nc; ++i)
+            if (rdc[i]) {
+                const uint32_t cw = get_arg_val<uint32_t>(c0 + 2 * i);
+                noc_semaphore_inc(get_noc_addr(cw & 0xFF, (cw >> 8) & 0xFF, ffa), 1);
+            }
+        noc_async_atomic_barrier();
+        return;
+    }
     for (uint32_t i = 0; i < nc; ++i)  // (re-arm: every hand-off of the call was waited for)
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mbox + 16 * (get_arg_val<uint32_t>(c0 + 2 * i) >> 20)) = 0;
 }
@@ -149,14 +167,15 @@ _LA_READER = r"""
 // (K3's latent all-to-all) per destination block b of my direction, per core of my link holding rows of b: wait its
 // hand-off on my latent word of it, NoC-read its rows [r0, r0 + nr) of its latent block [MT][LWMAX] in RP-tile chunks
 // (the batch rules of rs_gather). args at a0: nu, (b | slot << 8 | chip << 16, mesh) x nu, nc, (x | y << 8 | k << 16,
-// rows: 4 bits a block - r0 | nr << 2) x nc, LAT address, word address, LATZ address, counter address, LWMAX
-FORCE_INLINE void la_gather(uint32_t a0, uint32_t& pos) {
+// rows: 4 bits a block - r0 | nr << 2) x nc, LAT address, word address, LATZ address, counter address, LWMAX. Chunk
+// m: its LAT at + m LA_CHL bytes, the words' targets count up (seen, the caller's), re-armed after the last
+FORCE_INLINE void la_gather(uint32_t a0, uint32_t& pos, uint32_t m, uint32_t* seen) {
     const uint32_t nu = get_arg_val<uint32_t>(a0), u0 = a0 + 1, nc = get_arg_val<uint32_t>(u0 + 2 * nu);
     if (nu == 0) return;
     const uint32_t c0 = u0 + 2 * nu + 1, t0a = c0 + 2 * nc;
-    const uint32_t lat = get_arg_val<uint32_t>(t0a), word = get_arg_val<uint32_t>(t0a + 1), LW = get_arg_val<uint32_t>(t0a + 4);
-    uint32_t seen[128];
-    for (uint32_t i = 0; i < nc; ++i) seen[i] = 0;
+    const uint32_t lat = get_arg_val<uint32_t>(t0a) + m * LA_CHL, word = get_arg_val<uint32_t>(t0a + 1), LW = get_arg_val<uint32_t>(t0a + 4);
+    if (m == 0)
+        for (uint32_t i = 0; i < nc; ++i) seen[i] = 0;
     uint32_t c = 0, need = 0, wptr = 0;  // (pos: chunks pushed since the phases began - the CB's batch alignment)
     auto flush = [&]() {
         noc_async_read_barrier();
@@ -190,6 +209,7 @@ FORCE_INLINE void la_gather(uint32_t a0, uint32_t& pos) {
         }
         if (c > 0) flush();
     }
+    if (m + 1 < NCH) return;
     for (uint32_t i = 0; i < nc; ++i)
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word + 16 * (get_arg_val<uint32_t>(c0 + 2 * i) >> 16)) = 0;
 }
@@ -199,11 +219,11 @@ _LA_SENDER = r"""
 // (K3's latent all-to-all) the reader's walk: chunks into chip b's same core (multi-hop fabric unicast: a header
 // routed to b a unit), LATZ slot of my chip, its rows; a core's last chunk with the fused increment of its counter
 template <typename C, typename H, typename L>
-FORCE_INLINE void la_send(uint32_t a0, C& conn, H* hdrs, L&& lpoll, uint32_t& rpos) {
+FORCE_INLINE void la_send(uint32_t a0, C& conn, H* hdrs, L&& lpoll, uint32_t& rpos, uint32_t m) {
     const uint32_t nu = get_arg_val<uint32_t>(a0), u0 = a0 + 1, nc = get_arg_val<uint32_t>(u0 + 2 * nu);
     if (nu == 0) return;
     const uint32_t c0 = u0 + 2 * nu + 1, t0a = c0 + 2 * nc;
-    const uint32_t latz = get_arg_val<uint32_t>(t0a + 2), lctr = get_arg_val<uint32_t>(t0a + 3), LW = get_arg_val<uint32_t>(t0a + 4);
+    const uint32_t latz = get_arg_val<uint32_t>(t0a + 2) + m * LA_CHL, lctr = get_arg_val<uint32_t>(t0a + 3), LW = get_arg_val<uint32_t>(t0a + 4);
     {  // (end-to-end fence: every destination chip started this call - its LATZ is free; my neighbour's ready only
        // fences the first hop)
         const uint32_t fence = get_arg_val<uint32_t>(t0a + 5), need = get_arg_val<uint32_t>(t0a + 6);
@@ -259,12 +279,19 @@ _RS_SENDER = r"""
 // its arrival counter. Pops at the reader's batch boundaries. args at r0: as the reader's, then the zone base, the
 // arrival counter's address, P (zone slot tiles)
 template <typename C, typename H, typename L>
-FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs, L&& lpoll, uint32_t& rpos) {
+FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs, L&& lpoll, uint32_t& rpos, uint32_t m) {
     const uint32_t nu = get_arg_val<uint32_t>(r0), u0 = r0 + 1, nc = get_arg_val<uint32_t>(u0 + 2 * nu);
     if (nu == 0) return;
     const uint32_t c0 = u0 + 2 * nu + 1, en0 = c0 + 2 * nc;
     const uint32_t zb = get_arg_val<uint32_t>(en0 + G + 2), actr = get_arg_val<uint32_t>(en0 + G + 3);
     const uint32_t P = get_arg_val<uint32_t>(en0 + G + 4);
+    if (m > 0) {  // (chunk m into the downstream's zones once its cores read chunk m - 1's: its port's credits)
+        volatile tt_l1_ptr uint32_t* zc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(en0 + G + 6));
+        while (*zc < m) {
+            invalidate_l1_cache();
+            lpoll();
+        }
+    }
     uint32_t u = 0, lim = GROUP - rpos % GROUP, h = 0;
 #ifdef SE_PROBE_RSSTAT
     DeviceZoneScopedN("SE-RSS");
@@ -392,11 +419,14 @@ void kernel_main() {
     noc_async_atomic_barrier();
     const uint32_t rsa = xl0 + 2, rnu = get_arg_val<uint32_t>(rsa), rnc = get_arg_val<uint32_t>(rsa + 1 + 2 * rnu);
     uint32_t pos = 0;  // (the gather left the CB batch-aligned; the phases after it share one chunk count)
-    HWW(20, 0xB1);
-    la_gather(rsa + 2 + 2 * rnu + 2 * rnc + G + 5, pos);
-    HWW(20, 0xB2);
-    rs_gather(rsa, pos);
-    HWW(20, 0xB3);
+    uint32_t seen[128], lseen[128];
+    for (uint32_t m = 0; m < NCH; ++m) {
+        HWW(20, 0xB1);
+        la_gather(rsa + 2 + 2 * rnu + 2 * rnc + G + RSX, pos, m, lseen);
+        HWW(20, 0xB2);
+        rs_gather(rsa, pos, m, seen);
+        HWW(20, 0xB3);
+    }
 }
 """
 )
@@ -432,7 +462,15 @@ void kernel_main() {
     const uint32_t ent = a, T = ent + 3 * n;  // entries (q, part, packets a chunk); tables
     a = T + G + S0 + S1 + 3 * GX + GY;  // (past the tables: the RS units, then the fabric connection)
     const uint32_t rs0 = a, rnu = get_arg_val<uint32_t>(rs0), rnc = get_arg_val<uint32_t>(rs0 + 1 + 2 * rnu);
-    const uint32_t ls0 = rs0 + 2 + 2 * rnu + 2 * rnc + G + 5;
+    const uint32_t ls0 = rs0 + 2 + 2 * rnu + 2 * rnc + G + RSX;
+    // (chunks: the zone credits - my zone-free word (my chip's cores, a chunk's arrivals from my peer read), the
+    // signals a chunk; forwarded to the peer's port facing me (its zone-credit word): NCH - 1 a call)
+    const uint32_t rse = rs0 + 2 + 2 * rnu + 2 * rnc + G;
+    volatile tt_l1_ptr uint32_t* zfree = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(rse + 7));
+    const uint32_t zneed = get_arg_val<uint32_t>(rse + 8), zexp = get_arg_val<uint32_t>(rse + 9);
+    const uint32_t zcred = get_arg_val<uint32_t>(rse + 6);
+    const uint32_t NZF = zneed && NCH > 1 ? NCH - 1 : 0;
+    uint32_t zfw = 0;
     LStream ls;
     ls.init(ls0);
     const uint32_t la0 = ls0 + LStream::len(ls0), lnu = get_arg_val<uint32_t>(la0);
@@ -447,7 +485,7 @@ void kernel_main() {
     RAFwd rf;
     rf.init(rf0);
     a = rf0 + RAFwd::len(rf0);
-    if (n > 0 || send_ready || rnu > 0 || ls.nu > 0 || lnu > 0 || lns > 0 || !ra.done || rf.left) {
+    if (n > 0 || send_ready || rnu > 0 || ls.nu > 0 || lnu > 0 || lns > 0 || !ra.done || rf.left || NZF) {
         auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);
         volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[GROUP + 1 + 3];
         for (uint32_t h = 0; h <= GROUP; ++h) {
@@ -496,7 +534,17 @@ void kernel_main() {
 #define RA_BBP_ 16
 #define RA_MAXP_ 64
 #endif
+        auto zpoll = [&]() {  // (my chip's cores read a chunk's zones: credit the peer's sends, a blocking header -
+            // the gather's fence / watcher header, never in flight across this)
+            if (zfw < NZF && *zfree >= (zfw + 1) * zneed) {
+                hdrs[GROUP]->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{get_noc_addr(rx, ry, zcred), 1, true});
+                conn.wait_for_empty_write_slot();
+                conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdrs[GROUP]), sizeof(PACKET_HEADER_TYPE));
+                ++zfw;
+            }
+        };
         auto lpoll = [&]() {
+            zpoll();
             ls.poll(conn, lshdr, false);
             ra.poll(conn, rahdr, false, RA_N_, RA_M_, RA_EPC_, RA_ME_, RA_HBP_, RA_BB_, RA_BBP_, RA_MAXP_);
             rf.poll(conn, rahdr, false, RA_N_, RA_M_, RA_HBP_, RA_MAXP_);
@@ -538,15 +586,26 @@ void kernel_main() {
         }
         lpoll();
         uint32_t rpos = 0;  // (as the reader's pos)
-        HWW(28, 0xE1);
-        la_send(la0, conn, hdrs, lpoll, rpos);
-        HWW(28, 0xE2);
-        rs_send(rs0, conn, hdrs, lpoll, rpos);
-        HWW(28, 0xE3);
+        for (uint32_t m = 0; m < NCH; ++m) {
+            HWW(28, 0xE1);
+            la_send(la0, conn, hdrs, lpoll, rpos, m);
+            HWW(28, 0xE2);
+            rs_send(rs0, conn, hdrs, lpoll, rpos, m);
+            HWW(28, 0xE3);
+        }
+        while (zfw < NZF) {  // (the chunks' credits still owed)
+            invalidate_l1_cache();
+            lpoll();
+        }
         ls.poll(conn, lshdr, true);  // (whatever is left of the logits)
         ra.poll(conn, rahdr, true, RA_N_, RA_M_, RA_EPC_, RA_ME_, RA_HBP_, RA_BB_, RA_BBP_, RA_MAXP_);  // (the routing)
         rf.poll(conn, rahdr, true, RA_N_, RA_M_, RA_HBP_, RA_MAXP_);  // (and what passes through)
         noc_async_writes_flushed();
+        if (NZF) noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(zfree)), 0u - NZF * zneed);  // (re-arm)
+        if (zexp) {  // (every credit of the call came: they were waited for, the last before the last chunk)
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zcred), zexp);
+            noc_semaphore_inc(get_noc_addr(zcred), 0u - zexp);
+        }
         ls.rearm();
         if (lneed) noc_semaphore_inc(get_noc_addr(lfence), 0u - lneed);  // (re-arm: a next call's early "started" stays)
         conn.close();
@@ -778,7 +837,20 @@ class XGather3:
             c, k = virt(cx, cy), plan.k(cx, cy)
             out += [c.x | c.y << 8 | plan.half(k) << 16 | k << 20, plan.counts_word(cx, cy)]
         i = DIRS_I[d]
-        return out + plan.entries(p) + [rs["finb"], rs["mbox"], rs["zone"][i], rs["arr"][i], plan.P]
+        # (chunks: zone credits - my chip's cores taking arrivals from the peer this port faces (opposite direction)
+        # signal here a chunk; the peer's port facing me (direction opposite) sends me its cores' signals)
+        opp = "bwd" if d == "fwd" else "fwd"
+        zneed = sum(1 for cx, cy in plan.port_cores(v) if plan.arrivals(p, cx, cy)[opp]) if e.NCH > 1 else 0
+        zexp = 0
+        q = plan.down(p, d)
+        if e.NCH > 1 and q is not None:
+            zexp = e.NCH - 1 if any(plan.arrivals(q, cx, cy)[d] for cx, cy in plan.port_cores(v)) else 0
+        return (
+            out
+            + plan.entries(p)
+            + [rs["finb"], rs["mbox"], rs["zone"][i], rs["arr"][i], plan.P]
+            + [rs["ffree"], rs["zcred"], rs["zfree"], zneed, zexp]
+        )
 
     def la_block(self, rs, la, d, v):
         """A port's latent all-to-all args (la_gather / la_send): its destination blocks, its link's cores with their
@@ -871,10 +943,10 @@ class XGather3:
                 + ent_r
                 + T
                 + [self.xloaded, e.GX * e.GY]
-                + (self.rs_block(rs, d, v) if rs else [0, 0] + [0] * (self.G + 5))
+                + (self.rs_block(rs, d, v) if rs else [0, 0] + [0] * (self.G + RSX))
                 + self.la_block(rs, la, d, v)
             )
-            rsb = self.rs_block(rs, d, v) if rs else [0, 0] + [0] * (self.G + 5)
+            rsb = self.rs_block(rs, d, v) if rs else [0, 0] + [0] * (self.G + RSX)
             rsb = rsb + (router.port_block(coord, d, v) if router else [0, 0] + [0] * 7)
             lab = self.la_block(rs, la, d, v)
             assert lab[0] == 0 or mine, "the latent needs the gather's fence"
@@ -932,7 +1004,9 @@ class XGather3:
         x_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
         kernels = [
             ttnn.KernelDescriptor(
-                kernel_source=_probes() + _READER,
+                kernel_source=f"#define LA_CHL {getattr(e, 'LATP', 0) * 2048 if e.NCH > 1 else 0}u\n"
+                + _probes()
+                + _READER,
                 source_type=st,
                 core_ranges=cs(list(ports.values())),
                 compile_time_args=ct + x_ct,
@@ -941,6 +1015,7 @@ class XGather3:
             ),
             ttnn.KernelDescriptor(
                 kernel_source=f"#define LS_FIRST {int(bool(router and router.prio_first))}\n"
+                + f"#define LA_CHL {getattr(e, 'LATP', 0) * 2048 if e.NCH > 1 else 0}u\n"
                 + (routing.defines(coord) if routing is not None else "")
                 + _probes()
                 + _SENDER,

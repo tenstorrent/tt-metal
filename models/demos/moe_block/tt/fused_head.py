@@ -147,6 +147,7 @@ class HeadSE3:
                 continue
         else:
             raise ValueError(f"HeadSE3: no K step fits L1 at {rows} rows ({last_err})")
+        assert self.eng.NCH == 1 or router is None, "HeadSE3: the router chain is one chunk's (chunked: to do)"
         holes = list(l1_hole or [])
         if holes:  # (the arena placed: what this head keeps from here on lands in the hole, above it)
             ttnn.deallocate(holes.pop(0))
@@ -196,7 +197,10 @@ class HeadSE3:
             # (SE / latent hand-offs, the router cores', the routing's forwards and their landed count, then the logits
             # ports' sub-block words: 16 B a (unit, core), 16 a port)
             self.lw_off = (2 * GX * GY * 4 + 4 * 8 + 4 * 16 + 4 + 3) // 4 * 4
-            words = self.lw_off + 4 * 16
+            # (then, with chunks, the RS zone credits: a port's zone-free word (its chip's cores) and zone-credit word
+            # (its peer's port))
+            self.zw_off = self.lw_off + 4 * 16
+            words = self.zw_off + (8 if self.eng.NCH > 1 else 0)
             self.mbox = ttnn.from_torch(
                 torch.zeros(len(cores), words, dtype=torch.int32),
                 dtype=ttnn.uint32,
@@ -209,7 +213,10 @@ class HeadSE3:
                 ),
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
-            self.arr_sems = [ttnn.create_global_semaphore(mesh_device, self.eng.crs, 0) for _ in range(3)]
+            # (arrivals fwd / bwd, the latent's; with chunks the ports' FINB-free credits)
+            self.arr_sems = [
+                ttnn.create_global_semaphore(mesh_device, self.eng.crs, 0) for _ in range(4 if self.eng.NCH > 1 else 3)
+            ]
             ttnn.synchronize_device(mesh_device)
         self.router = None
         if router is not None:
@@ -490,6 +497,7 @@ class HeadSE3:
                     pc = {(d, l): virt(c) for (_, d, l), c in self.xg.chips[coord]["ports"].items()}
                     mbox = int(self.mbox.buffer_address())
                     arr = tuple(int(ttnn.get_global_semaphore_address(s_)) for s_ in self.arr_sems)
+                    zfree = mbox + 4 * self.zw_off
                     rsx = dict(
                         plan=self.plan,
                         p=p,
@@ -497,6 +505,9 @@ class HeadSE3:
                         mbox=mbox,
                         zone=(e.base + e.off["arrf"], e.base + e.off["arrb"]),
                         arr=arr,
+                        ffree=arr[3] if len(arr) > 3 else 0,
+                        zfree=zfree,
+                        zcred=zfree + 16,
                     )
                     rsx["coord"] = coord
                     la = None
@@ -510,6 +521,7 @@ class HeadSE3:
                         rs_port=lambda d, l, pc=pc: (pc[(d, l)].x, pc[(d, l)].y),
                         rs_mbox=mbox,
                         rs_arr=arr[:2],
+                        rs_chunk=dict(zfree=zfree, ffree=arr[3] if len(arr) > 3 else 0),
                         la=la,
                     )
                 if self.router is not None:  # (first: the routing's serve plan is made by the router's planner args)

@@ -471,7 +471,22 @@ def test_head_se3(mesh_device, device_params):
                     ps.append(pcc(ys[d], refs[d].reshape(-1)))
                 else:  # (chip (r, c): block c of the sum over its TP row)
                     tot = sum(refs[r * C + cc] for cc in range(C))
-                    ps.append(pcc(ys[d], torch.chunk(tot, C, dim=head.rs_dim)[c].reshape(-1)))
+                    ref_d = torch.chunk(tot, C, dim=head.rs_dim)[c]
+                    ps.append(pcc(ys[d], ref_d.reshape(-1)))
+                    if not ps[-1] > 0.999:  # (where: per 32-row tile, finite and PCC)
+                        yy = ys[d].reshape(ref_d.shape)
+                        bad = [
+                            (
+                                t,
+                                bool(torch.isfinite(yy[t * 32 : t * 32 + 32]).all()),
+                                round(
+                                    pcc(yy[t * 32 : t * 32 + 32].reshape(-1), ref_d[t * 32 : t * 32 + 32].reshape(-1)),
+                                    3,
+                                ),
+                            )
+                            for t in range(yy.shape[0] // 32)
+                        ]
+                        logger.info(f"HSE3 {name} chip {d} row tiles (finite, PCC): {bad}")
             logger.info(f"HSE3 {name} call {k}: PCC min {min(ps):.5f}")
             assert os.environ.get("SE_PROBE") or min(ps) > 0.999, (k, ps)
             return min(ps)
