@@ -17,7 +17,7 @@
 #include "impl/context/context_types.hpp"
 #include "impl/jit_server/jit_compile_rpc_client.hpp"
 #include "impl/jit_server/types.hpp"
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
 

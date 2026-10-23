@@ -24,7 +24,7 @@
 #include "impl/trace/trace_buffer.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "impl/allocator/allocator.hpp"
 
 namespace tt::tt_metal {
