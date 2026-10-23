@@ -222,13 +222,14 @@ enum class ReduceWithinTile { Collapse, Skip };
  *                 ckl::BinaryFpuOp::Add,
  *                 ckl::BroadcastDim::None,
  *                 ckl::Dst::D0,
- *                 ckl::DestAccumulation::WholeShape>{0, HALF},   // <- the two operand BASES
+ *                 ckl::DestAccumulation::WholeShape>{in, in, 0, HALF},   // <- buffers, then the two operand BASES
  *             ckl::PackTile<ckl::output(cb_out, ckl::ReservePolicy::PerOuter, ckl::PushPolicy::PerOuter,
  *                                       ckl::DataFormatReconfig::Enabled, ckl::TileAddressing::Direct,
  *                                       ckl::DestAccumulation::WholeShape,
- *                                       ckl::L1Accumulation::Disabled)>{});
+ *                                       ckl::L1Accumulation::Disabled)>{out});
  *
- *     `{0, HALF}` are the A and B operand base offsets — that brace pair is the whole trick, and it is
+ *     (`in` / `out` are the kernel's DataflowBuffer objects for cb_in / cb_out.) `0, HALF` are the
+ *     A and B operand base offsets — those two bases are the whole trick, and it is
  *     the same idiom the `eltwise_l1_vs_dest_accumulate` example measures. `tiles(...)` is one
  *     contiguous shape, so the accumulation scope is WholeShape (PerRow is rejected there); for a 2D
  *     walk use `grid(H, W)` with `TileAddressing::Strided` and a `StridedTileRange{base, row_stride}` per
