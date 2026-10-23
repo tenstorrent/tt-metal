@@ -1060,3 +1060,9 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   1410): the weight stream's contention stretches the dispatch ~40-50 us; after x-ready the experts take ~1150 (separate
   ~1290: the prefetch saves ~130 - eaten by the stretch). Next: an L1-relay dispatch (forwarded rows not round-tripped
   through DRAM).
+
+### Rejected: x's address patched into the head's cached runtime args (instead of the copy into a persistent x)
+- Fresh x every call moves its address, so the patch runs every call: 339 arg slots a chip x 8 chips, plus the kernel
+  descriptors reassigned to each program. That costs 2.5-3.6 ms of host a call; the device copy it would replace is
+  ~0.1 ms and one program. GLM wall 4.8 -> 7.2 ms; reverted. Traced, x is the trace's fixed input buffer anyway (written
+  before each replay), so the copy leaves the forward altogether.
