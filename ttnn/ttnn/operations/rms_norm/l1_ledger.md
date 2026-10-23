@@ -31,10 +31,10 @@ axis of the R2 combine, extent `w_group_size` (`gw`).
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_x_rm_sticks` (RM input only) | `2·c` (page = `T_in` = 32 sticks × 32 elems) | `c` being tilized + `c` landing | `{row: streams → 1 tile-row, w: spans → c (chunk), member: n/a → 1}` | input dtype (raw sticks; no accumulation) | reader | compute | one (row, chunk) slab each | concurrent with `cb_x_tiles` (it feeds it) and with `cb_out_rm_sticks` (the reader lands block b+1 slabs while compute untilizes block b — verifier note); 2× live = double buffering (reader one slab ahead) |
-| `cb_x_tiles` | `d_x · b · s` | `b · s` (the resident block) | `{row: spans → b, w: spans → s (resident slice, nominal), member: n/a → 1}` | input dtype — loaded data / tilize output, no accumulation crosses this boundary (audit 2: not a DEST-accumulated intermediate) | reader (TILE) / compute tilize (RM) | compute | a block; popped per chunk `b·c` | concurrent with every compute phase of its block; capacity = live set at Phase 0 (`d_x = 1`) |
-| `cb_gamma_rm_stick` (RM gamma only) | 1 page of `round_up(n·32·e_g, dram_align)` bytes | 1 | `{row: n/a → 1, w: spans → n·32 elements, member: n/a → 1}` | gamma dtype, raw bytes | writer | writer | kernel start only (before first output) | could alias `cb_out_rm_sticks` / `cb_out_tiles` (disjoint lifetime: gamma is built before the first output chunk) — not done: ≤ `n·128` B (≤ 1/16 of one gamma tile row-set) is below the cost of an alias and its lockstep rule |
-| `cb_gamma_tiles` (gamma only) | `s` | `slice_w_tiles_this_core` (≤ `n`) | `{row: n/a (reuse-shared over rows) → 1, w: spans → s, member: n/a → 1}` | gamma dtype (bf8b / bf16 / fp32; loaded data — a bf8b page is read whole, the others row 0 of faces 0/1 only) | writer | compute | whole kernel | concurrent with every block; `s − n` padding pages = chunk rounding (nominal quanta, M6) |
+| `cb_x_rm_sticks` (RM input only) | `2·c` (page = `T_in` = 32 sticks × 32 elems); **zero-copy RM shard: the input shard itself** (Refinement 2) | `c` being tilized + `c` landing | `{row: streams → 1 tile-row, w: spans → c (chunk), member: n/a → 1}` | input dtype (raw sticks; no accumulation) | reader | compute | one (row, chunk) slab each | concurrent with `cb_x_tiles` (it feeds it) and with `cb_out_rm_sticks` (the reader lands block b+1 slabs while compute untilizes block b — verifier note); 2× live = double buffering (reader one slab ahead) |
+| `cb_x_tiles` | `d_x · b · s`; **TILE shard: the input shard itself** (zero-copy, not in the CB region) | `b · s` (the resident block) | `{row: spans → b, w: spans → s (resident slice, nominal), member: n/a → 1}` | input dtype — loaded data / tilize output, no accumulation crosses this boundary (audit 2: not a DEST-accumulated intermediate) | reader (TILE) / compute tilize (RM) | compute | a block; popped per chunk `b·c` | concurrent with every compute phase of its block; capacity = live set at Phase 0 (`d_x = 1`) |
+| `cb_gamma_rm_stick` (RM gamma only) | 1 page of `round_up(w·32·e_g, dram_align) + dram_align` bytes, `w = n` (resident) / `c` (streamed); the extra unit lets a sharded RM slice that starts mid-alignment-unit be read aligned down | 1 | `{row: n/a → 1, w: spans → n·32 elements, member: n/a → 1}` | gamma dtype, raw bytes | writer | writer | kernel start only (before first output) | could alias `cb_out_rm_sticks` / `cb_out_tiles` (disjoint lifetime: gamma is built before the first output chunk) — not done: ≤ `n·128` B (≤ 1/16 of one gamma tile row-set) is below the cost of an alias and its lockstep rule |
+| `cb_gamma_tiles` (gamma only) | `s` resident; `2·c` when `gamma_streamed` (sharded R1 only, Refinement 2) | `slice_w_tiles_this_core` (≤ `n`) | `{row: n/a (reuse-shared over rows) → 1, w: spans → s, member: n/a → 1}` | gamma dtype (bf8b / bf16 / fp32; loaded data — a bf8b page is read whole, the others row 0 of faces 0/1 only) | writer | compute | whole kernel | concurrent with every block; `s − n` padding pages = chunk rounding (nominal quanta, M6) |
 | `cb_reduce_scaler` | 2 | 2 (constant) | `{row: n/a → 1, w: n/a → 1 (the partial tile encodes the last tile's valid columns), member: n/a → 1}` | bf16 (reduce LLK scaler format) | reader | compute | whole kernel | constant; nothing to share with (2 pages) |
 | `cb_sumsq` | `2 · b` | `2 · b` | `{row: spans → b, w: collapsed → 2 (P_full, P_last), member: n/a → 1}` | intermediate (fp32 / bf16 per DEST width; DEST accumulation) | compute | compute | sum-of-squares → rowsum of one block | disjoint from `cb_x_gamma` in time (rowsum completes before x·γ starts) — not aliased: `2·b` fp32 pages are smaller than any `cb_x_gamma` window and aliasing would force lockstep accounting across two helpers for ≤ 8 KiB at `b = 1` |
 | `cb_rowsum_partial` (R2 only) | `b` | `b` | `{row: spans → b, w: collapsed → 1, member: n/a → 1}` | intermediate (fp32 / bf16 per DEST width) | compute | writer | rowsum → partial sent | concurrent with `cb_x_gamma` (written while x·γ runs, S1); different consumer than `cb_inv_rms` |
@@ -42,8 +42,8 @@ axis of the R2 combine, extent `w_group_size` (`gw`).
 | `cb_inv_rms_root` (R2 only) | `b` | `b` on roots | `{row: spans → b, w: collapsed → 1, member: n/a → 1}` | intermediate (fp32 / bf16 per DEST width) | compute (root) | writer (root) | per block | cannot be `cb_inv_rms`: that CB's consumer is compute, and the multicast source needs the writer as consumer (one consumer per CB) |
 | `cb_inv_rms` | `b` | `b` | `{row: spans → b, w: collapsed → 1 (broadcast over w), member: n/a → 1}` | intermediate (fp32 / bf16 per DEST width) | compute (R1) / writer (R2, multicast receive) | compute | rowsum/combine → last normalize chunk | concurrent with `cb_x_gamma` and `cb_out_tiles` |
 | `cb_x_gamma` (gamma only) | `L · b · c` | `L · b · c` | `{row: spans → b, w: streams → L·c (L = chunks_per_row in R2 ⇒ spans s), member: n/a → 1}` | intermediate (fp32 / bf16 per DEST width; DEST product) | compute | compute | per chunk (R1) / per block (R2) | concurrent with `cb_x_tiles` (produced from it) and `cb_out_tiles` (consumed into it) |
-| `cb_out_tiles` | `o · b · c` | `b · c` | `{row: spans → b, w: streams → c, member: n/a → 1}` | output dtype (final result; packed from fp32 DEST to the output format by design) | compute | writer (TILE) / compute untilize (RM) | per chunk | TILE: 2× = double buffering against the writer; RM: 1× (sequential helpers on one thread) |
-| `cb_out_rm_sticks` (RM output only) | `2 · b · c` | `b · c` | `{row: spans → b, w: streams → c, member: n/a → 1}` | output dtype, raw sticks | compute | writer | per chunk | 2× = double buffering against the writer |
+| `cb_out_tiles` | `o · b · c`; **TILE shard: the output shard itself** (zero-copy) | `b · c` | `{row: spans → b, w: streams → c, member: n/a → 1}` | output dtype (final result; packed from fp32 DEST to the output format by design) | compute | writer (TILE) / compute untilize (RM) | per chunk | TILE: 2× = double buffering against the writer; RM: 1× (sequential helpers on one thread) |
+| `cb_out_rm_sticks` (RM output only) | `2 · b · c`; **zero-copy RM shard: the output shard itself** | `b · c` | `{row: spans → b, w: streams → c, member: n/a → 1}` | output dtype, raw sticks | compute | writer | per chunk | 2× = double buffering against the writer |
 
 ## Symbol table (every non-block parameter in a capacity expression)
 
@@ -113,3 +113,41 @@ L1 (sum-of-squares, then x·γ or normalize), x·γ once, inverse-RMS once per c
 > 1×, plus `≤ (2·gw−1)·b` fp32 tiles of NoC per block) where R1 would under-fill the grid or cannot keep a slice
 > resident. The implemented split **is** the cheapest wherever R1 is selected; where R2 is selected, R1 is either
 > infeasible (slice does not fit — the only alternative would be R3 at x 2×) or at equal DRAM bytes with idle cores.
+
+## Sharded placements (Refinement 2)
+
+The shard spec pins `gw` (shard columns), `gr` (shard rows) and `n` (TILE: shard width / 32; RM: `ceil(shard_w/32)`),
+so `_select_sharded_blocking` only solves `(c, L, b, gamma residency)` with `_fit_block`, the same fit the interleaved
+selector uses. `_l1_budget_bytes` already stops at the lowest allocated L1 block, so it excludes the input and
+output shards.
+
+**Shard-backed CBs.** These are rows whose `backing` field in `_cb_specs` is `input_shard` / `output_shard`. They
+are created with `ttnn.cb_descriptor_from_sharded_tensor` over the used cores, with the page overridden to the CB's
+own unit. They are globally allocated on the shard, so `_footprint` skips them: no byte is counted twice. They also
+do not move the CB-region addresses of `cb_rowsum_gather` / `cb_inv_rms`, which stay identical on every core of a
+W-group (M1).
+
+| Path | Shard-backed (zero-copy) | Still in the CB region | Wrap-safety rule |
+|---|---|---|---|
+| TILE shard | `cb_x_tiles` ← input shard, `cb_out_tiles` ← output shard | everything else | `k·c == n`; a short last block runs at its actual rows (`ragged_last_block`) |
+| RM shard, sticks are whole tile-rows of whole tiles (`shard_h % 32 == 0`, `shard_w % 32 == 0`, `W % 32 == 0`) | `cb_x_rm_sticks` (tilize source) ← input shard, `cb_out_rm_sticks` (untilize destination) ← output shard | `cb_x_tiles` (tilize output, the resident block), `cb_out_tiles` | `k == 1` (a tilize / untilize row is one shard stick); short last block as above |
+| any other RM shard | none — the reader / writer restride sticks between the shard and the staging CBs by **local** L1 NoC copies (no `TensorAccessor`, no DRAM); the M9 tail zero-fill is kept | as interleaved RM | none (nominal blocks) |
+
+Why the RM restride exists: the tilize unpacker reads 32 sticks at a `c·32`-element stride. A shard whose stick
+is not a whole number of tiles has a different stride. A shard that is not a whole tile-row tall would also be read,
+and written, past its own allocation. So those shards cannot back the tilize source or the untilize destination.
+
+**Streamed gamma (`gamma_streamed`, sharded R1 only).** A HEIGHT shard pins the whole W row on one core. For
+example, at `(1,1,160,11008)` the two shards take 1.38 MB, leaving 52 KB of CB budget, so the resident gamma slice
+(688 KB) cannot fit. With streaming, `cb_gamma_tiles` is `2·c` and the writer loads gamma once per (block, chunk), two
+chunks ahead. Streaming is chosen only when no resident-gamma fit exists, and never for interleaved inputs, which
+widen `gw` instead.
+
+### Data-movement budget, sharded
+
+| Tensor | DRAM crossings | Notes |
+|---|---|---|
+| x (input) | 0 | resident shard; TILE / whole-tile RM: consumed in place; other RM: 1 local L1→L1 copy |
+| output | 0 | written into the resident output shard; other RM: 1 local L1→L1 copy |
+| gamma | `num_shard_rows` (resident) / `num_shard_rows · num_blocks` (streamed) | interleaved, as before |
+| partial sums, inverse-RMS (WIDTH / BLOCK) | 0 | the same combine traffic as interleaved R2, with W-groups being the shard-grid rows of cores |

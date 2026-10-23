@@ -287,14 +287,31 @@ w_group_size, ttnn.McastFixedSenderConfig(sender_index=0), RowMajor)` — runs t
 rectangles, handled by the helper). Peer (root) coordinates passed as RT args through
 `device.worker_core_from_logical_core`.
 
-Placement axis (TARGET `memory_layout`) as the physical realization of the logical shards:
+Placement axis (TARGET `memory_layout`) as the physical realization of the logical shards (implemented in
+Refinement 2; `_shard_placement` → `ShardPlacement`, `_select_sharded_blocking`):
 
-| `memory_layout` value | Cut axis (this op's character) | Maps onto | Cost class | Physical realization |
-|---|---|---|---|---|
-| `INTERLEAVED` | — | R1 / R2 by `_select_blocking` | built (Phase 0) | DRAM pages via `TensorAccessor` |
-| `HEIGHT_SHARDED` | row axis (independent) | R1, `num_row_groups` = shard grid, `block_rows` = shard tile-rows (one block = whole shard) | knob-turn (placement) | `cb_x_tiles` / `cb_out_tiles` backed on the shard via `ttnn.cb_descriptor_from_sharded_tensor` (zero-copy, no NoC re-read); RM shard → tilize from the shard CB |
-| `WIDTH_SHARDED` | W axis (dependent) | R2 with `num_row_groups = 1`, `w_group_size` = shard count, `core_w_tiles` = shard width | knob-turn — the combine it needs is built in Phase 0 | as above; Mcast groups = the shard grid's rows-of-cores order |
-| `BLOCK_SHARDED` | both | R2, row groups = shard-grid rows, W-groups = shard-grid columns | knob-turn (combine built) | as above; ragged shards follow the nominal-quanta rule (M1/M6) |
+| `memory_layout` value | Cut axis (this op's character) | Maps onto | Physical realization |
+|---|---|---|---|
+| `INTERLEAVED` | — | R1 / R2 by `_select_blocking` | DRAM / L1 pages via `TensorAccessor` |
+| `HEIGHT_SHARDED` | row axis (independent) | R1: `gw = 1`, row groups = shards | TILE: `cb_x_tiles` / `cb_out_tiles` backed on the input / output shard (zero-copy); RM: see below |
+| `WIDTH_SHARDED` | W axis (dependent) | R2: one row group, `gw` = shard count, `n` = shard width | as above. The W-group is the shard cores in orientation order and may span several grid rows; the `ttnn.Mcast` grouping uses the same order |
+| `BLOCK_SHARDED` | both | R2: row groups = shard-grid rows, W-group members = the shard columns of that row | as above |
+
+- **Shard mapping.** Shard `(sr, sc)` → core `cores[sr·cols + sc]`. HEIGHT / WIDTH use `corerange_to_cores(grid,
+  orientation)`; BLOCK uses the bounding-box start + `(sc, sr)` for ROW_MAJOR and `(sr, sc)` for COL_MAJOR. The
+  root is `sc = 0`. A grid whose shard order is not the Mcast's sorted order is refused.
+- **The shard is the block.** `_fit_block` picks the coarsest block that fits, down from the whole resident shard.
+- **TILE shards.** Every core walks its nominal shard, so all W-group members run the same blocks, and padding rows
+  are row-local. A ragged W shard sums only its valid tiles (`slice_w_tiles`). A short last block runs at its actual
+  row count (`ragged_last_block`).
+- **RM shards.**
+  - If the shard is whole tile-rows of whole tiles, `cb_x_rm_sticks` / `cb_out_rm_sticks` are backed on the shards
+    (zero-copy tilize source / untilize destination).
+  - Otherwise the reader / writer restride sticks by local L1 copies. A sharded RM W slice is element-granular,
+    because the shard width need not be a multiple of 32.
+- **Gamma** stays interleaved. It is streamed per chunk only for sharded R1 slices too wide to keep resident.
+- **Placement contract** (`validate`): a sharded input requires an L1 sharded output with the same shard spec, and
+  `memory_config=None` inherits the input's. Interleaved ↔ sharded mismatches are refused.
 
 ## Work Distribution
 

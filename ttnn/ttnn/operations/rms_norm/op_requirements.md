@@ -116,7 +116,7 @@ refused only on these values (all INTERLEAVED) to passing. The 6180 `xfail_expec
 - the 12 interleaved `_perf_case` profiles pass their soft PCC 0.9995 at their exact config;
 - the loud categories stay 0.
 
-### [ ] Refinement 2 — Sharded placements: HEIGHT / WIDTH / BLOCK, native zero-copy
+### [x] Refinement 2 — Sharded placements: HEIGHT / WIDTH / BLOCK, native zero-copy
 
 **Goal**: Add `HEIGHT_SHARDED`, `WIDTH_SHARDED` and `BLOCK_SHARDED` to `SUPPORTED["memory_layout"]` natively. Map
 each placement onto the already-built regimes, with the geometry pinned by the shard spec (`op_design.md`
@@ -173,6 +173,20 @@ translated sharded tests).
 - `infeasible_skipped` contains only harness-side shard-allocation skips;
 - the 9 sharded `_perf_case` profiles pass their soft PCC 0.9995 at their exact config and geometry;
 - the loud categories stay 0.
+
+**Result** (implementer): landed. All three placements are in `SUPPORTED`. The 9 sharded perf profiles pass at
+rel_rms ≤ 0.0071. Golden slices: the sharded loose and translated cells give 337 pass / 0 fail / 3 harness
+shard-OOM skips / 2 expected bf8b xfails, and the cartesian sharded slices give 911 pass / 0 fail.
+
+Device ns measured as a baseline for Refinement 3, against the 1350 MHz reference:
+
+- WIDTH 32×{1024, 2304, 5120, 7168}: 4051 / 4617 / 5433 / 5918;
+- BLOCK 640×{6144, 7168}: 13826 / 17114;
+- BLOCK 7168×{1024, 2048}: 43424 / 51570;
+- BLOCK 8192×1024: 60432.
+
+The tall BLOCK profiles are 2.0–2.4× off their reference and compute-bound per tile: one 23-row block per core still
+costs ≈ 470 ns per tile. That is Refinement 3's scope.
 
 ### [ ] Refinement 3 — Speed up the sharded LLM profiles
 

@@ -97,3 +97,93 @@
     - the ExcludedCell checks.
   - `test_rms_norm_precision_baseline.py` gains `test_rms_norm_precision_baseline_numeric_formats` (bf16 at 16-bit
     DEST, and bf8b at both DEST widths). The existing rows are unchanged.
+
+## Refinement 2 — Sharded placements: HEIGHT / WIDTH / BLOCK, native zero-copy
+- Date: 2026-10-23
+- What was done:
+  - **Op file.** `SUPPORTED["memory_layout"]` gains `HEIGHT_SHARDED`, `WIDTH_SHARDED` and `BLOCK_SHARDED`.
+    `_validate_placement()` enforces the placement contract:
+    - a sharded input requires an L1-sharded output with the same shard spec;
+    - `memory_config=None` now inherits a sharded input's spec, so it is written in place (interleaved inputs still
+      default to DRAM);
+    - interleaved ↔ sharded mismatches raise `UnsupportedAxisValue`.
+    `EXCLUSIONS` mirrors the author-scoped INVALID `{ROW_MAJOR, *_SHARDED, gamma TILE}`: a sharded RM slice is
+    element-granular, and the TILE-gamma load is tile-granular.
+  - **Mapping onto the built regimes.** `_shard_placement()` resolves the shard spec into a `ShardPlacement`:
+    shard (sr, sc) maps to core `cores[sr·cols + sc]`, with the orientation order checked against the Mcast order.
+    - HEIGHT → R1 (`gw = 1`).
+    - WIDTH / BLOCK → R2. The W-groups are the shard-grid rows of cores, and the Mcast uses the shard orientation's
+      core order. A WIDTH group may span several grid rows (for example 32 cores on an 8×4 grid).
+    - The interleaved and sharded per-core arguments are now built from one `CoreWork` record each
+      (`_interleaved_work` / `_sharded_work`).
+  - **Zero-copy.**
+    - TILE: `cb_x_tiles` and `cb_out_tiles` are backed on the input and output shards
+      (`ttnn.cb_descriptor_from_sharded_tensor`, page overridden to the CB unit). The reader publishes the shard with
+      one reserve/push (no NoC), and the writer only retires chunks.
+    - RM shards that are whole tile-rows of whole tiles: `cb_x_rm_sticks` (tilize source) and `cb_out_rm_sticks`
+      (untilize destination) are backed on the shards.
+    - Any other RM shard: the stick stride is not a tilize stride and the shard is not a whole tile-row tall, so
+      sticks are restrided by local L1 NoC copies. No `TensorAccessor` and no DRAM are involved.
+    - Kernel CT mode: 0 = interleaved, 1 = RM restride, 2 = zero-copy.
+  - **Blocking.** `_fit_block()` is the chunk / lookahead / block-rows fit now shared by `_select_blocking`
+    (interleaved) and `_select_sharded_blocking`. The shard is the block: the selector picks the coarsest block that
+    fits, down from the whole shard.
+    - Zero-copy needs `k·c == n`, and a short last block runs at its actual row count (CT `ragged_last_block`).
+      Without that, a prime 23-tile-row shard collapsed to `b = 1`; BLOCK 7168×2048 went from 74.7 µs to 51.6 µs.
+    - Interleaved keeps nominal blocks and is byte-identical in behavior.
+  - **Streamed gamma** (`plan.gamma_streamed`, sharded R1 only, used only when no resident fit exists):
+    `cb_gamma_tiles` is `2·c`, and the writer loads gamma per (block, chunk) two ahead of the output. This is needed
+    for HEIGHT shards with W = 11008, whose zero-copy shards leave 52 KB of CB L1.
+  - **RM gamma** is read from the DRAM-alignment unit below the slice start (`cb_gamma_rm_stick` + 1 alignment
+    unit). Face rows that are not 16 B aligned (an fp32 RM shard with a bf16 gamma) are copied by the RISC, at
+    2 × 16 elements per tile.
+  - **`_footprint`** skips shard-backed CBs: the shard bytes are already excluded by `_l1_budget_bytes`, so they are
+    not counted twice. The CB-region addresses of `cb_rowsum_gather` / `cb_inv_rms` are unchanged (M1).
+  - **Reused:** R1 / R2 kernels and every compute helper call, the combine (gather + semaphore + `ttnn.Mcast`),
+    `_cb_specs` as the single CB source, and the RM tilize / untilize staging.
+    **Added:** the shard placement, CB backing in `_cb_specs`, the x / out mode, short last blocks, streamed gamma,
+    and element-granular RM slices (`slice_valid_elems`, `x_col0_bytes` / `out_col0_bytes`, `gamma_col0_elem`).
+- Accuracy achieved: all at bf16 / HiFi2 / `fp32_dest_acc_en=False` / bf16 gamma.
+  - The 9 sharded `_perf_case` geometries: rel_rms ≤ 0.0070, max_abs ≤ 0.197; the soft PCC 0.9995 gate passes on
+    every profile.
+  - HEIGHT 256×512 TILE, WIDTH 416×1184 RM and BLOCK 333×1000 RM: rel_rms ≤ 0.0071.
+  - `test_rms_norm_sharded.py` gates every case at the dtype PCC (0.995 bf16, 0.999 fp32, 0.99 bf8b) and
+    rel_rms < 0.05.
+- Device-kernel ns (baseline for Refinement 3, BH p150b, against the reference at 1350 MHz):
+
+  | Placement | Profile | ns | Reference ns |
+  |---|---|---|---|
+  | WIDTH | 32×1024 | 4051 | 4110 |
+  | WIDTH | 32×2304 | 4617 | 4617 |
+  | WIDTH | 32×5120 | 5433 | 5267 |
+  | WIDTH | 32×7168 | 5918 | 5481 |
+  | BLOCK | 640×6144 | 13826 | 19039 |
+  | BLOCK | 640×7168 | 17114 | 21669 |
+  | BLOCK | 7168×1024 | 43424 | 18871 |
+  | BLOCK | 7168×2048 | 51570 | 25947 |
+  | BLOCK | 8192×1024 | 60432 | 25640 |
+
+  The tall BLOCK profiles are compute-bound per tile (≈ 470 ns per tile with one 23-row block per core, including
+  the root's `gw`-way AccumulateViaAdd). Perf lamps L4 / L5 / L8 in Refinement 3 target that.
+- Golden test progress (targeted slices; the harness's full run is the run of record):
+  - sharded loose cells (resilience, pad-poison, perf, `_SHARDED`) plus the translated sharded tests: 337 passed,
+    0 failed, 3 skipped (input-shard OOM in the harness), 2 xfailed (bf8b `w_non_aligned` EXCLUSION);
+  - cartesian sharded cells for 1x1x32x8192, 4x8x47x256, 2x1x100x47, 128x8192 and the first ~527 cells in id order:
+    911 passed, 0 failed, the rest INVALID / expected xfail;
+  - interleaved loose cells plus the non-sharded translated tests: 159 passed, 0 failed.
+- Issues encountered:
+  1. The refactored chunk-candidate loop never terminated for `n = 1` (`ceil(1/k) = 1` never drops below the
+     floor). It hung RM WIDTH shards with 8-element slices, which surfaced as a pytest timeout and also stalled the
+     precompile collect pass. Fixed by bounding `k ≤ n`.
+  2. A HEIGHT shard with W = 11008 could not keep gamma resident; streamed gamma fixes it.
+  3. A prime shard height collapsed the block to 1; short last blocks fix it.
+- Tests added: `test_rms_norm_sharded.py` (114 cases). It covers:
+  - TILE auto geometry over 8 adversarial shapes × 3 placements;
+  - poisoned padding;
+  - fp32 / bf8b / no-gamma formats;
+  - the 9 pinned perf geometries;
+  - RM auto restride (6 shapes × 3 placements × gamma / no gamma);
+  - fp32 RM with bf16 / fp32 gamma (misaligned gamma face rows);
+  - RM zero-copy pinned geometries, with an assertion that the zero-copy path is the one selected;
+  - streamed gamma (W = 11008 / 8192 HEIGHT);
+  - the placement-mismatch, RM-sharded-TILE-gamma and default-`memory_config` contract cases.

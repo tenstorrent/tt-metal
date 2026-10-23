@@ -11,3 +11,6 @@
 {"event":"test_run","suite":"test_rms_norm.py + debug + precision_baseline","result":"151 passed, 2 skipped","classification":"pass","ts":"2026-10-23T08:32:52+00:00"}
 {"event":"test_run","suite":"golden slice (4 cartesian shapes target cells + 104 interleaved loose incl 12 perf cases)","result":"192 passed, 584 skipped (INVALID)","classification":"pass","ts":"2026-10-23T08:32:52+00:00"}
 {"event":"test_run","suite":"test_translated.py","result":"52 passed, 54 xfailed (sharded only)","classification":"pass","ts":"2026-10-23T08:32:52+00:00"}
+{"event":"fix_applied","what":"R2 sharded: TILE zero-copy x/out CBs, RM zero-copy or local restride, W-groups = shard-grid rows, streamed gamma, short last block","ts":"2026-10-23T10:29:44+00:00"}
+{"event":"test_run","suite":"unit dir + golden slices","result":"unit 356 pass; golden sharded loose+translated 337 pass/0 fail; cartesian sharded slices 911 pass/0 fail; interleaved loose 159 pass","ts":"2026-10-23T10:29:44+00:00"}
+{"event":"hypothesis","what":"pytest timeout on RM WIDTH 1x1x32x50 was host-side: chunk candidate list infinite for n=1 (ceil(1/k) never < floor); fixed with k<=n bound","ts":"2026-10-23T10:29:44+00:00"}
