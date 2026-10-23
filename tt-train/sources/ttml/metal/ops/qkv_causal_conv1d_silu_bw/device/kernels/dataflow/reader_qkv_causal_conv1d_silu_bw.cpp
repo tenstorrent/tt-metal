@@ -118,25 +118,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
                 noc.async_read(window, window, halo_rows * row_bytes, {.offset_bytes = tile_height * row_bytes}, {});
                 noc.async_read_barrier();
             }
-            for (uint32_t row = 0; row < tile_height; ++row) {
-                noc.async_read(
-                    input,
-                    window,
-                    row_bytes,
-                    {.page_id = tile_row * tile_height + row, .offset_bytes = col_bytes},
-                    {.offset_bytes = (halo_rows + row) * row_bytes});
-            }
-            noc.async_read_barrier();
-
-            x_shifted.reserve_back(tap_count * channel_tiles_per_block);
-            for (uint32_t tap = 0; tap < tap_count; ++tap) {
-                noc.async_read(
-                    window,
-                    x_shifted,
-                    view_bytes,
-                    {.offset_bytes = tap * row_bytes},
-                    {.offset_bytes = tap * view_bytes});
-            }
+            // Issued before the row reads so the two DRAM round trips overlap; the barrier below covers both.
             grad_out.reserve_back(channel_tiles_per_block);
             for (uint32_t tile_column_in_block = 0; tile_column_in_block < channel_tiles_per_block;
                  ++tile_column_in_block) {
@@ -163,6 +145,25 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
                         {.page_id = tile_row * v_tiles + (tile_column - q_tiles - k_tiles)},
                         {.offset_bytes = tile_column_in_block * tile_bytes});
                 }
+            }
+            for (uint32_t row = 0; row < tile_height; ++row) {
+                noc.async_read(
+                    input,
+                    window,
+                    row_bytes,
+                    {.page_id = tile_row * tile_height + row, .offset_bytes = col_bytes},
+                    {.offset_bytes = (halo_rows + row) * row_bytes});
+            }
+            noc.async_read_barrier();
+
+            x_shifted.reserve_back(tap_count * channel_tiles_per_block);
+            for (uint32_t tap = 0; tap < tap_count; ++tap) {
+                noc.async_read(
+                    window,
+                    x_shifted,
+                    view_bytes,
+                    {.offset_bytes = tap * row_bytes},
+                    {.offset_bytes = tap * view_bytes});
             }
             noc.async_read_barrier();
             x_shifted.push_back(tap_count * channel_tiles_per_block);
