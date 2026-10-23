@@ -188,7 +188,8 @@ class SharedMLP:
         # PCC to ~0.93 vs HF (threshold 0.99) on BH 1x4. Keep interleaved path
         # for MoE; dense 12B/31B retain the sharded opt.
         is_moe = bool(getattr(hf_config, "enable_moe_block", False))
-        dram_shard = _DRAM_SHARD_MLP and tp > 1 and not is_moe and not fractured
+        lab_tp1 = os.environ.get("GEMMA4_DRAM_SHARD_TP1", "0") == "1"  # one TP shard on one chip (the layer lab)
+        dram_shard = _DRAM_SHARD_MLP and (tp > 1 or lab_tp1) and not is_moe and not fractured
         decode_1d = flag("GEMMA4_MLP_DECODE_1D")
 
         if dram_shard and can_dram_shard(self.hidden_size, gu_n, dtype=dtype):

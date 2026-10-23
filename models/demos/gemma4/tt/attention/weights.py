@@ -176,7 +176,10 @@ def load_attention_weights(
     # MoE (26B-A4B): sharded QKV/O-proj decode matmuls regress layer-decode PCC
     # on BH 1x4 (~0.93 vs 0.99). Dense models keep the opt.
     is_moe = bool(getattr(config, "enable_moe_block", False))
-    dram_shard = _DRAM_SHARD_ATTN and tp > 1 and not is_moe and not fractured
+    # GEMMA4_DRAM_SHARD_TP1=1: the DRAM-sharded decode path on a single chip as well (the layer lab builds one
+    # TP shard of the serving mesh on one chip, tests/unit/test_layer_lab.py).
+    lab_tp1 = os.environ.get("GEMMA4_DRAM_SHARD_TP1", "0") == "1"
+    dram_shard = _DRAM_SHARD_ATTN and (tp > 1 or lab_tp1) and not is_moe and not fractured
     decode_1d = flag("GEMMA4_ATTN_DECODE_1D")
     qkv_cache = get_cache_file_name(tensor_cache_path, f"wqkv{tp_suffix}{dtype_suffix}")
     oproj_cache = get_cache_file_name(tensor_cache_path, f"o_proj{o_proj_cache_suffix}{tp_suffix}{dtype_suffix}")
