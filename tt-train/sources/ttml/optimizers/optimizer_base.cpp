@@ -11,6 +11,22 @@
 
 namespace ttml::optimizers {
 
+void require_bf16_parameters(const serialization::NamedParameters& parameters, std::string_view optimizer_name) {
+    for (const auto& [name, tensor_ptr] : parameters) {
+        if (!tensor_ptr->get_requires_grad()) {
+            continue;
+        }
+        const auto dtype = tensor_ptr->get_value(autograd::PreferredPrecision::NATIVE).dtype();
+        TT_FATAL(
+            dtype == ttnn::DataType::BFLOAT16,
+            "{} supports bf16 parameters only, but parameter '{}' is stored as {}. fp32 parameters are supported by "
+            "AdamW, and by other optimizers once the precision config lands (#56513).",
+            optimizer_name,
+            name,
+            dtype);
+    }
+}
+
 OptimizerBase::OptimizerBase(serialization::NamedParameters&& parameters) : m_parameters(std::move(parameters)) {
 }
 
@@ -33,6 +49,16 @@ void OptimizerBase::restore_initial_lr(const serialization::StateDict& dict) {
             "checkpoints written before it was added are not supported and must be regenerated.");
     }
     m_initial_lr = serialization::get_value_type<float>(dict, "initial_lr");
+}
+
+void restore_topology(
+    std::initializer_list<autograd::TensorPtr> written, const tt::tt_metal::TensorTopology& topology) {
+    for (const auto& tensor_ptr : written) {
+        // A Tensor is a handle: this copy shares the stored tensor's attributes, so the relabel lands on the stored
+        // tensor (the one the step wrote) and on every alias of it. No set_value: nothing else changes.
+        auto value = tensor_ptr->get_value(autograd::PreferredPrecision::NATIVE);
+        value.update_tensor_topology(topology);
+    }
 }
 
 void OptimizerBase::print_stats() const {

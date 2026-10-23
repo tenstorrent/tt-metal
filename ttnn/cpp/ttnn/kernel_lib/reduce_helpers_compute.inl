@@ -211,9 +211,9 @@ ALWI constexpr uint32_t get_dst_index(const AccumulateT& accumulate) {
     }
 }
 
-template <PoolType reduce_type, ReduceDim reduce_dim, typename AccumulateT, bool is_sfpu = false>
+template <PoolType reduce_type, ReduceDim reduce_dim, typename AccumulateT, bool is_sfpu = false, typename AccumDFB>
 ALWI void reload_accumulator_if_needed(
-    DataflowBuffer& accum_dfb,
+    AccumDFB& accum_dfb,
     uint32_t input_dfb_id,
     uint32_t scaler_dfb_id,
     const AccumulateT& accumulate,
@@ -582,7 +582,10 @@ ALWI void reduce(
         const uint32_t stride = (input_memory_layout.row_stride > 0) ? input_memory_layout.row_stride : Wt;
         const uint32_t tiles_per_bulk = Ht * stride;
         const uint32_t total_input_tiles = tiles_per_bulk * num_batches;
-        UNPACK((assert_input_dfb_size<input_policy>(input_dfb_id, Ht * chunk_size, total_input_tiles)));
+        // Largest bulk wait is Ht * min(chunk_size, Wt): a narrow input (e.g. Wt == 1) never waits
+        // on a full DEST-sized chunk, so don't demand a DFB that deep.
+        const uint32_t max_chunk = (Wt < chunk_size) ? Wt : chunk_size;
+        UNPACK((assert_input_dfb_size<input_policy>(input_dfb_id, Ht * max_chunk, total_input_tiles)));
         PACK((assert_output_dfb_size(output_dfb_id)));
 
         // PersistentPolicy: wait for all tiles upfront

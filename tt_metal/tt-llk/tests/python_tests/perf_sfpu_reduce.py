@@ -25,13 +25,20 @@ from helpers.test_variant_parameters import (
 
 @pytest.mark.perf
 @parametrize(
+    # Float32 and Int32 are the formats ttnn routes to the SFPU reduce.
     formats=input_output_formats(
-        [DataFormat.Float32],
+        [DataFormat.Float32, DataFormat.Int32],
         same=True,
     ),
     dest_acc=[DestAccumulation.Yes],
-    mathop=[MathOperation.ReduceRow],
-    reduce_pool=[ReducePool.Max],
+    reduce_pool=[ReducePool.Max, ReducePool.Sum, ReducePool.Average],
+    # Integer row AVG is not supported (integer AVG is column-only).
+    mathop=lambda formats, reduce_pool: (
+        [MathOperation.ReduceColumn]
+        if reduce_pool == ReducePool.Average
+        and formats.input_format == DataFormat.Int32
+        else [MathOperation.ReduceRow, MathOperation.ReduceColumn]
+    ),
     loop_factor=list(range(10, 201, 10)),
 )
 def test_perf_sfpu_reduce(

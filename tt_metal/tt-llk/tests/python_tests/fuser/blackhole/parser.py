@@ -49,6 +49,8 @@ from fuser.validator import (
     FpuMathSchemaBase,
     OperationSchemaBase,
     PackSchema,
+    TernarySfpuMathSchema,
+    TopKSfpuMathSchema,
     UnarySfpuMathSchema,
     eltwise_unpacker_rules,
     forced_unpackers,
@@ -73,6 +75,8 @@ from .fpu.transpose_dest import TransposeDestFpu
 from .packer.packer import Packer
 from .packer.untilize import PackUntilize
 from .sfpu.binary import BinarySfpu
+from .sfpu.ternary import TernarySfpu
+from .sfpu.topk import TopKSfpu
 from .sfpu.unary import UnarySfpu
 from .unpacker.matmul import MatmulUnpacker
 from .unpacker.reduce import ReduceUnpacker
@@ -291,6 +295,11 @@ BINARY_SFPU_OPS = {
 }
 
 
+TERNARY_SFPU_OPS = {
+    MathOperation.SfpuWhere,
+}
+
+
 class FpuMathSchema(FpuMathSchemaBase):
     _fpu_map: ClassVar = FPU_MAP
     _unpacker_map: ClassVar = UNPACKER_MAP
@@ -307,8 +316,23 @@ class BlackholeBinarySfpuMathSchema(BinarySfpuMathSchema):
     _sfpu_ops: ClassVar = BINARY_SFPU_OPS
 
 
+class BlackholeTernarySfpuMathSchema(TernarySfpuMathSchema):
+    _sfpu_cls: ClassVar = TernarySfpu
+    _sfpu_ops: ClassVar = TERNARY_SFPU_OPS
+
+
+class BlackholeTopKSfpuMathSchema(TopKSfpuMathSchema):
+    _sfpu_cls: ClassVar = TopKSfpu
+
+
 MathSchema = Annotated[
-    Union[FpuMathSchema, BlackholeUnarySfpuMathSchema, BlackholeBinarySfpuMathSchema],
+    Union[
+        FpuMathSchema,
+        BlackholeUnarySfpuMathSchema,
+        BlackholeBinarySfpuMathSchema,
+        BlackholeTernarySfpuMathSchema,
+        BlackholeTopKSfpuMathSchema,
+    ],
     Field(discriminator="type"),
 ]
 
@@ -318,7 +342,11 @@ class BlackholePackSchema(PackSchema):
 
 
 PackEntrySchema = Union[
-    BlackholeUnarySfpuMathSchema, BlackholeBinarySfpuMathSchema, BlackholePackSchema
+    BlackholeUnarySfpuMathSchema,
+    BlackholeBinarySfpuMathSchema,
+    BlackholeTernarySfpuMathSchema,
+    BlackholeTopKSfpuMathSchema,
+    BlackholePackSchema,
 ]
 
 

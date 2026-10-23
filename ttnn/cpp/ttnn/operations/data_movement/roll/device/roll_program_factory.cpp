@@ -629,6 +629,19 @@ void RollShardedProgramFactory::override_runtime_arguments(
     }
 }
 
+bool sharded_roll_input_has_padding(const Tensor& input) {
+    if (!input.is_sharded() || !input.shard_spec().has_value()) {
+        return false;
+    }
+    if (input.logical_shape() != input.padded_shape()) {
+        return true;
+    }
+    const auto& shard_shape = input.shard_spec()->shape;
+    const uint32_t width = input.padded_shape()[-1];
+    const uint32_t height = input.physical_volume() / width;
+    return height % shard_shape[0] != 0 || width % shard_shape[1] != 0;
+}
+
 bool dram_rm_roll_needs_extra_source_shards(const Tensor& input, uint32_t shift, int32_t dim) {
     // Only DRAM ROW_MAJOR sharded input can hit the reader's `src_base[2]` limit. Everything
     // else routes through kernels that don't have this shape-dependent staging cap.

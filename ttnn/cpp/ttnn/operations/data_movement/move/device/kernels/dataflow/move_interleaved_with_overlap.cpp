@@ -34,7 +34,7 @@ void kernel_main() {
     uint32_t range_2_end_noc_x = get_arg_val<uint32_t>(21);
     uint32_t range_2_end_noc_y = get_arg_val<uint32_t>(22);
     uint32_t range_2_size = get_arg_val<uint32_t>(23);
-    bool do_third_multicast = get_arg_val<uint32_t>(24) == 1;
+    uint32_t num_multicast_regions = get_arg_val<uint32_t>(24);
 
     constexpr uint32_t cb_id = get_compile_time_arg_val(0);
     constexpr auto src_args = TensorAccessorArgs<1>();
@@ -69,12 +69,17 @@ void kernel_main() {
     if (is_controller) {
         sem.wait(control_value);
 
-        // signal to cores that write to dst can begin
-        sem.set_multicast<NocOptions::DEFAULT>(
-            noc, range_0_start_noc_x, range_0_start_noc_y, range_0_end_noc_x, range_0_end_noc_y, range_0_size);
-        sem.set_multicast<NocOptions::DEFAULT>(
-            noc, range_1_start_noc_x, range_1_start_noc_y, range_1_end_noc_x, range_1_end_noc_y, range_1_size);
-        if (do_third_multicast) {
+        // signal to cores that write to dst can begin. A single-row/single-column shard grid or a lone
+        // controller core can leave fewer than 3 regions non-empty, so only multicast the real ones.
+        if (num_multicast_regions > 0) {
+            sem.set_multicast<NocOptions::DEFAULT>(
+                noc, range_0_start_noc_x, range_0_start_noc_y, range_0_end_noc_x, range_0_end_noc_y, range_0_size);
+        }
+        if (num_multicast_regions > 1) {
+            sem.set_multicast<NocOptions::DEFAULT>(
+                noc, range_1_start_noc_x, range_1_start_noc_y, range_1_end_noc_x, range_1_end_noc_y, range_1_size);
+        }
+        if (num_multicast_regions > 2) {
             sem.set_multicast<NocOptions::DEFAULT>(
                 noc, range_2_start_noc_x, range_2_start_noc_y, range_2_end_noc_x, range_2_end_noc_y, range_2_size);
         }

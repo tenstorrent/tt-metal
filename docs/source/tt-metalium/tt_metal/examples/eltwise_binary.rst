@@ -146,7 +146,7 @@ In the previous example (DRAM loopback), we used a single kernel to perform the 
         program,
         "eltwise_binary/kernels/compute/tiles_add.cpp",
         core,
-        ComputeConfig{.math_fidelity = MathFidelity::HiFi4});
+        ComputeConfig{.math_fidelity = tt::tt_metal::MathFidelity::HiFi4});
 
 Notice the ``ComputeConfig`` object. This indicates to the framework that a compute kernel should be created. There's a plethora of settings that can be set here. The most important one is the ``math_fidelity`` setting. This controls how accurate certain floating point operations are on the FPU specifically. Other operations (like the ones in the vector engine) are _not_ affected by this setting.
 

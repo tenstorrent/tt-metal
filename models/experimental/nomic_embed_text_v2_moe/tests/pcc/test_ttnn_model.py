@@ -126,9 +126,7 @@ def pooled_embedding(tt_model, input_ids, attention_mask, matryoshka_dim=None):
     kernel_config = tt_model.tt_config.compute_kernel_config(OpGroup.REDUCE)
     hidden = tt_model(input_ids, attention_mask)
     pooled = pooling.mean_pool(
-        hidden,
-        pooling_mask(attention_mask, tt_model.device, dtype=tt_model.tt_config.activation_dtype),
-        compute_kernel_config=kernel_config,
+        hidden, pooling_mask(attention_mask, tt_model.device), compute_kernel_config=kernel_config
     )
     ttnn.deallocate(hidden)
     return pooling.l2_normalize(
@@ -150,6 +148,14 @@ def test_last_hidden_state(config, reference_model, tt_model, batch, seqlen):
     assert_with_pcc(ref, got, MODEL_PCC)
 
 
+def test_a_small_input_still_returns_dram(config, tt_model):
+    """At 4 tile rows every block passes its output to the next in L1 (activation_memory_config),
+    but the model's output outlives the forward, and in L1 it would sit under ops that plan L1 as
+    free."""
+    out = tt_model(*random_input_ids(1, 128, config))
+    assert out.memory_config().buffer_type == ttnn.BufferType.DRAM
+
+
 # B*S past MAX_TOKENS_PER_PASS, 4096, makes the expert bank split the token axis; see
 # tt/experts.py. 9x512 ends in a 512-token pass, 6x704 in a 128-token one, so its forward runs
 # both pass layouts. Kept out of MODEL_SHAPES, which several tests multiply over.
@@ -162,7 +168,7 @@ def test_a_batch_that_chunks_the_expert_token_axis(config, reference_model, tt_m
 
     Same gates as the single-pass shapes. The split changes the arithmetic, since each pass
     picks its own layout and K blocks: 4096 + 512 transposed at 9x512, 4096 transposed + 128
-    token-major at 6x704. test_chunking_the_token_axis_does_not_change_the_answer bounds that at
+    stacked at 6x704. test_chunking_the_token_axis_does_not_change_the_answer bounds that at
     module level; this one exists for the shape, so a regression in the pass limit is caught end
     to end.
     """
@@ -382,10 +388,11 @@ def test_token_type_ids_must_be_zero(config, tt_model, expect_error):
 
 @pytest.mark.parametrize("batch, seqlen", MODEL_SHAPES)
 def test_no_mask_matches_an_all_ones_mask(config, tt_model, batch, seqlen):
-    """forward(attention_mask=None) skips building a (B, 1, S, S) mask, so it must be equivalent.
+    """forward skips building a (B, 1, S, S) mask when there is none or it keeps every token.
 
-    The saving is real, 1 MB at B=2 S=512 plus the SDPA work, and the equivalence is what
-    test_an_all_ones_mask_is_a_no_op established at module level. This holds the model to it.
+    The saving is real: a mask doubled SDPA's time at 8x512, read by every head of every call.
+    The equivalence is what test_an_all_ones_mask_is_a_no_op established at module level. This
+    holds the model to it.
     """
     input_ids, _ = random_input_ids(batch, seqlen, config)
 

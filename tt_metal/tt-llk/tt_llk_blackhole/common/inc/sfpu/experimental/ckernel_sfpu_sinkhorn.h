@@ -70,6 +70,7 @@
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_load_config.h"
 
 namespace ckernel
 {
@@ -108,7 +109,8 @@ inline void _sinkhorn_zero_rect_padding_addrs_()
         }
         if constexpr (valid_rows < 4)
         {
-            v_if (sfpi::vConstTileId >= 16 * valid_rows)
+            // vConstTileId is a signed vInt; sfpi only compares it against a signed scalar.
+            v_if (sfpi::vConstTileId >= static_cast<std::int32_t>(16 * valid_rows))
             {
                 value = 0.0f;
             }
@@ -427,6 +429,8 @@ inline void _sinkhorn_4x4_()
         // Face 3, strips 2+3.
         _sinkhorn_strip_pair_multi_<56, 58, 60, 62>(ITERS);
     }
+
+    _restore_lconst_neg1_();
 }
 
 } // namespace sfpu

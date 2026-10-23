@@ -250,7 +250,8 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         });
     }
 
-    // MIN on Int32 uses -MAX(-x) in reduce_hw_neg.
+    // MIN on an SFPU path uses the base reduce.cpp kernel (negate=false); every other MIN
+    // (bfloat8_b, fast-mode fp32) uses -MAX(-x) in reduce_hw_neg.
     const std::string compute_kernel =
         std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +
         (operation_attributes.negate ? "_hw_neg" : "") + ".cpp";

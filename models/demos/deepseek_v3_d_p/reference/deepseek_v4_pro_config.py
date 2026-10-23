@@ -22,7 +22,7 @@ class DeepSeekV4ProConfig:
     # shape the composite already wins from 256 and gives the band back only at 576, where its
     # tail per_core_M rounds 18 tile-rows up to 32. 128 is the aggregate-optimal cut over that
     # sawtooth (+0.02% against a per-count oracle, worst cell +3.8% at 576).
-    # Not enabled: only Kimi K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
+    # Not enabled: only Kimi K2.7 and GLM 5.2 dispatch both routed-expert ops today.
     # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
     # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 128
@@ -31,6 +31,10 @@ class DeepSeekV4ProConfig:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 384
     NUM_EXPERTS_PER_TOKEN = 6
+    # Divisor on combine_fabric2d's forwarding region -- see DeepSeekV3Config.COMBINE_FWD_REDUCTION for
+    # what it trades. Measured 8x4 over 1x-64x: 16 costs this model 5.9% on hot_expert traffic and
+    # nothing on balanced, for 35 -> 17 MB a chip.
+    COMBINE_FWD_REDUCTION = 16
     NUM_SHARED_EXPERTS = 1
     # V4 drops V3's expert-group routing: a single group means the gate collapses to a plain top-k.
     NUM_EXPERT_GROUPS = 1
@@ -47,6 +51,9 @@ class DeepSeekV4ProConfig:
     NUM_LAYERS = 61
     NUM_DENSE_LAYERS = 0  # first_k_dense_replace - every layer is MoE
     NUM_HASH_LAYERS = 3
+    # Per-layer attention kind as config.json's compress_ratios encodes it: 0 sliding, 4 CSA, 128 HCA.
+    # Two bootstrap layers, then CSA / HCA alternating from layer 2.
+    COMPRESS_RATIOS = (128, 128) + tuple(4 if i % 2 == 0 else 128 for i in range(NUM_LAYERS - 2))
     VOCAB_SIZE = 129280
     SLIDING_WINDOW = 128
 

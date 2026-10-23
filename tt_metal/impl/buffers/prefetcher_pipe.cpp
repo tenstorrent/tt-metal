@@ -331,7 +331,7 @@ void PrefetcherPipeSpaceImpl::write_page(const CoreRangeSet& cores, const std::v
     const uint32_t page_bytes = static_cast<uint32_t>(page.size() * sizeof(uint32_t));
     // Named: ranges() returns a view into the merged set, which must outlive the loop.
     const CoreRangeSet merged = cores.merge_ranges();
-    for (IDevice* target_device : device_->get_devices()) {
+    for (auto* target_device : device_->impl().get_devices()) {
         for (const CoreRange& range : merged.ranges()) {
             if (range.size() == 1) {
                 auto page_copy = page;
@@ -670,11 +670,15 @@ void PrefetcherPipeImpl::build_config_pages() {
     }
 }
 
+std::vector<CoreCoord> PrefetcherPipeImpl::dram_sender_receiver_table() const {
+    return corerange_to_cores(receiver_cores_, /*max_cores=*/std::nullopt, /*row_wise=*/true);
+}
+
 void PrefetcherPipeImpl::build_dram_sender_config_pages() {
     TT_FATAL(space_->credit_lane_capacity() == 1, "DRAM-sender PrefetcherPipes support one credit lane per receiver");
     const uint32_t l1_alignment = l1_alignment_for(space_->get_device());
     const auto& layout = space_->layout();
-    const auto receivers = corerange_to_cores(receiver_cores_, /*max_cores=*/std::nullopt, /*row_wise=*/true);
+    const auto receivers = dram_sender_receiver_table();
     const uint32_t num_receivers = static_cast<uint32_t>(receivers.size());
     const PrefetcherPipePageCommon common{
         .layout = layout,
@@ -693,7 +697,7 @@ void PrefetcherPipeImpl::build_dram_sender_config_pages() {
 
     const distributed::MeshDevice* mesh_device = space_->get_device();
     config_pages_.clear();
-    for (IDevice* target_device : mesh_device->get_devices()) {
+    for (auto* target_device : mesh_device->impl().get_devices()) {
         std::vector<CoreCoord> receiver_phys;
         receiver_phys.reserve(receivers.size());
         for (const CoreCoord& receiver : receivers) {

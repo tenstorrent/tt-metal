@@ -4,6 +4,7 @@
 
 #include "tensor_prefetcher.hpp"
 
+#include "ttnn/prefetcher_pipe.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
@@ -60,13 +61,21 @@ void queue_tensor_prefetcher_request(
     inputs.reserve(tensors.size());
     for (const auto& item : tensors) {
         // (tensor, block_count) defaults to batched (empty rotation); (tensor, block_count,
-        // rotation) supplies the per-receiver streaming rotation table for that tensor.
+        // rotation) supplies the per-receiver streaming rotation table for that tensor, and a fourth
+        // element the mask selecting which of a grouped weight's groups to stream.
         if (const auto* pair = std::get_if<std::pair<ttnn::Tensor, uint32_t>>(&item)) {
             inputs.push_back({pair->first.mesh_tensor(), pair->second, /*rotation=*/{}});
-        } else {
-            const auto& [tensor, block_count, rotation] =
-                std::get<std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>>>(item);
+        } else if (const auto* triple = std::get_if<std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>>>(&item)) {
+            const auto& [tensor, block_count, rotation] = *triple;
             inputs.push_back({tensor.mesh_tensor(), block_count, rotation});
+        } else {
+            const auto& [tensor, block_count, rotation, selector] =
+                std::get<std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>, ttnn::Tensor>>(item);
+            inputs.push_back(
+                {tensor.mesh_tensor(),
+                 block_count,
+                 rotation,
+                 tt::tt_metal::experimental::TensorPrefetcherGroupSelector{selector.mesh_tensor()}});
         }
     }
     // There is no cq_id parameter to consult: a `cq_id`/`queue_id` keyword is consumed by
@@ -77,7 +86,7 @@ void queue_tensor_prefetcher_request(
     auto* trace_cq = capture_into_trace ? &mesh_device->mesh_command_queue() : nullptr;
     if (has_pipes) {
         tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
-            *mesh_device, prefetcher_pipe_refs(prefetcher_pipes), device_subset, inputs, trace_cq);
+            *mesh_device, ttnn::prefetcher_pipe_refs(prefetcher_pipes), device_subset, inputs, trace_cq);
     } else {
         tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
             *mesh_device, *global_cb, device_subset, inputs, trace_cq);
@@ -86,7 +95,7 @@ void queue_tensor_prefetcher_request(
 
 std::vector<std::shared_ptr<metal_exp::PrefetcherPipe>> create_prefetcher_pipes_for_tensor_prefetcher(
     metal_exp::PrefetcherPipeSpace& space,
-    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    const std::vector<std::pair<uint32_t, tt::tt_metal::CoreRangeSet>>& bank_to_receivers,
     bool support_multi_receiver_shards) {
     std::vector<metal_exp::PrefetcherPipe> pipes =
         metal_exp::CreatePrefetcherPipesForTensorPrefetcher(space, bank_to_receivers, support_multi_receiver_shards);
@@ -96,17 +105,6 @@ std::vector<std::shared_ptr<metal_exp::PrefetcherPipe>> create_prefetcher_pipes_
         shared.push_back(std::make_shared<metal_exp::PrefetcherPipe>(std::move(pipe)));
     }
     return shared;
-}
-
-std::vector<std::reference_wrapper<const metal_exp::PrefetcherPipe>> prefetcher_pipe_refs(
-    const std::vector<std::shared_ptr<metal_exp::PrefetcherPipe>>& prefetcher_pipes) {
-    std::vector<std::reference_wrapper<const metal_exp::PrefetcherPipe>> refs;
-    refs.reserve(prefetcher_pipes.size());
-    for (const auto& pipe : prefetcher_pipes) {
-        TT_FATAL(pipe != nullptr, "PrefetcherPipe list holds a null pipe at index {}", refs.size());
-        refs.emplace_back(*pipe);
-    }
-    return refs;
 }
 
 void wait_for_cq_on_tensor_prefetcher(

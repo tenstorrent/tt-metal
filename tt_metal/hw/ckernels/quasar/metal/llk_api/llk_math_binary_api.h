@@ -26,8 +26,8 @@
  * @tparam binary_reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB
  * @param operand_A: Logical dataflow buffer id for input A, used to derive the tensor shape
  * @param operand_B: Logical dataflow buffer id for input B
- * @param acc_to_dest: Flag to control if the result should be accumulated with the current dest
- *     (NONE broadcast path only).
+ * @param acc_to_dest: Flag to control if the result should be accumulated with the current dest.
+ *     Applies to NONE and to ROW, COL, and SCALAR broadcast.
  */
 template <
     EltwiseBinaryType eltwise_binary_type,
@@ -47,14 +47,18 @@ inline void llk_math_eltwise_binary_init(
     _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
         srcA_format, srcB_format);
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
+        const DataFormat dest_src_format = ckernel::math::dest_src_format<DST_ACCUM_MODE>(srcA_format);
         _llk_math_eltwise_binary_init_<eltwise_binary_type, effective_math_fidelity, binary_reuse_dest>(
-            tensor_shape_A, acc_to_dest);
+            binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA ? dest_src_format : srcA_format,
+            binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB ? dest_src_format : srcB_format,
+            tensor_shape_A,
+            acc_to_dest);
     } else {
         static_assert(
             binary_reuse_dest == EltwiseBinaryReuseDestType::NONE,
             "Quasar: dest reuse (binary_reuse_dest) is not supported on the broadcast eltwise binary init path");
         _llk_math_eltwise_binary_broadcast_init_<eltwise_binary_type, src_b_bcast_type, effective_math_fidelity>(
-            tensor_shape_A);
+            srcA_format, srcB_format, tensor_shape_A, acc_to_dest);
     }
 }
 
@@ -83,6 +87,9 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary(std::uint32_t dst_index, [[maybe_unused]] const bool clear_fp32_dst_acc = true) {
     constexpr auto effective_math_fidelity = get_effective_math_fidelity<eltwise_binary_type, math_fidelity>();
+    LLK_ASSERT(
+        (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        "llk_math_eltwise_binary: dst_index exceeds dest capacity");
 
     WAYPOINT("MBIW");
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
@@ -105,7 +112,8 @@ inline void llk_math_eltwise_binary(std::uint32_t dst_index, [[maybe_unused]] co
  * @tparam src_b_bcast_type: Broadcast type for SrcB; one of {NONE, ROW, COL, SCALAR}.
  * @tparam is_fp32_dest_acc_en: Unused tparam; only for API compatibility.
  * @tparam math_fidelity: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication
- *     when input is Tf32 format. Unused in assert and for API compatibility.
+ *     when input is Tf32 format. Unused tparam; only for API compatibility. Fidelity is programmed by
+ *     @ref llk_math_eltwise_binary_init, which runs ELWADD/ELWSUB at LoFi regardless of this value.
  * @tparam binary_reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB.
  *     The MOVD2A/B instruction copies a face from dest to the source register before each MOP run.
  * @param operand_A: Logical dataflow buffer id for input A, used to derive the number of faces
@@ -126,9 +134,9 @@ inline void llk_math_eltwise_binary(
     [[maybe_unused]] const std::uint32_t operand_B,
     std::uint32_t dst_index,
     [[maybe_unused]] const bool clear_fp32_dst_acc) {
-    static_assert(
-        eltwise_binary_type == EltwiseBinaryType::ELWMUL || math_fidelity == MathFidelity::LoFi,
-        "Math fidelity must be LoFi for non-ELWMUL ops");
+    LLK_ASSERT(
+        (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        "llk_math_eltwise_binary: dst_index exceeds dest capacity");
 
     WAYPOINT("MBIW");
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {

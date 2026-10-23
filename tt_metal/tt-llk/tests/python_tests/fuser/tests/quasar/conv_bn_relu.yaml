@@ -32,7 +32,7 @@ operations:
         in1: "weights"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
-        math_fidelity: "HiFi2"
+        math_fidelity: "LoFi"
     pack:
       - output: "conv_result"
         block_size: [64, 64]
@@ -46,7 +46,7 @@ operations:
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         broadcast_type: "ROW"
-        math_fidelity: "HiFi2"
+        math_fidelity: "LoFi"
         indexes:
           in0: {count: 16}
           in1: {count: 16, step: 0}

@@ -16,15 +16,16 @@
 
 namespace ttnn::prim {
 
-enum class GroupNormMode : uint32_t { LEGACY = 0, WELFORD_NATIVE = 1, WELFORD_RECIPROCALS = 2 };
+enum class GroupNormMode : uint32_t { TILE_REDUCTION = 0, TWO_PASS = 1 };
 
 // Non-tile-aligned H*W: the reduce scaler must divide by the real element count (`scaler_bits`),
 // and the padding rows must be excluded from both accumulation passes. The interleaved kernels do
 // that by switching to a row-masked set of input-mask tiles on each batch's final row-tile, of
 // which `rows_in_last_tile` are real; the sharded kernels compose that row mask on device from a
-// rowvalid tile (c_18) and the column selector. Shared by all three two-pass factories. Kernels
-// re-derive `active` from (padded_hw != logical_hw), hence kernel_logical_hw reporting padded_hw
-// when off.
+// rowvalid tile (c_18) and the column selector. This correction is shared by the tile-reduction
+// route in all three GroupNorm factories; the SFPU two-pass route accepts only tile-aligned H*W.
+// Kernels re-derive `active` from (padded_hw != logical_hw), hence kernel_logical_hw reporting
+// padded_hw when off.
 struct GroupNormPadCorrection {
     bool active = false;
     uint32_t logical_hw = 0;
@@ -53,6 +54,79 @@ inline bool group_norm_core_owns_pad_tile(uint32_t m_index, uint32_t num_cores_p
 // True when any reconfig-relevant CB format is fp32, so the compute kernel must run its
 // reconfig_data_format calls. When all are bf16 those calls are no-ops and the kernel skips them.
 bool groupnorm_needs_fp32_reconfig(std::initializer_list<tt::DataFormat> reconfig_formats);
+
+// The SFPU local statistics combiner is shared by Wormhole and Blackhole. Quasar does not support
+// the two-pass GroupNorm path.
+bool groupnorm_use_sfpu_local_combine(bool use_welford, tt::ARCH arch, bool fp32_dest_acc_en, uint32_t tile_width);
+
+// Geometry shared by the interleaved program factories and their replay selector. Keeping these
+// values together ensures the program hash prices the same per-core workload that the descriptor
+// eventually constructs.
+struct GroupNormInterleavedGeometry {
+    bool valid = false;
+    uint32_t height_tiles = 0;
+    uint32_t width_tiles = 0;
+    uint32_t num_virtual_cols = 0;
+    uint32_t num_actual_cols = 0;
+    uint32_t num_actual_rows = 0;
+    uint32_t num_virtual_rows = 0;
+    uint32_t num_cores = 0;
+    uint32_t per_core_height_tiles_group_1 = 0;
+    uint32_t per_core_height_tiles_group_2 = 0;
+    uint32_t per_core_height_group_1 = 0;
+    uint32_t per_core_height_group_2 = 0;
+    uint32_t per_core_width = 0;
+    uint32_t per_core_width_tiles = 0;
+    uint32_t channels_per_group = 0;
+    uint32_t channels_per_group_mod_tile_width = 0;
+    uint32_t num_row_shards = 0;
+    uint32_t num_cores_per_batch = 0;
+    uint32_t num_col_shards = 0;
+    uint32_t num_cores_per_group = 0;
+    uint32_t batches_per_core_group_1 = 0;
+    uint32_t batches_per_core_group_2 = 0;
+    uint32_t groups_per_core = 0;
+    uint32_t rows_per_batch_per_core_group_1 = 0;
+    uint32_t rows_per_batch_per_core_group_2 = 0;
+    uint32_t block_width_tiles = 0;
+    uint32_t num_groups_per_reset = 0;
+    uint32_t block_height_tiles_group_1 = 0;
+    uint32_t block_height_tiles_group_2 = 0;
+    uint32_t last_block_width_tiles = 0;
+    bool equal_batches_per_core = true;
+    uint32_t last_row_with_extra_batch = 0;
+};
+
+GroupNormInterleavedGeometry derive_groupnorm_interleaved_geometry(
+    uint32_t height,
+    uint32_t width,
+    uint32_t num_batches,
+    uint32_t num_groups,
+    tt::tt_metal::CoreCoord grid,
+    uint32_t tile_height,
+    uint32_t tile_width);
+
+// Two-pass interleaved replay footprint; tile-reduction-only buffers are not allocated.
+struct GroupNormInterleavedCbFootprint {
+    std::uint64_t output = 0;
+    std::uint64_t input_staging = 0;
+    std::uint64_t untilize_output = 0;
+    std::uint64_t epsilon = 0;
+    std::uint64_t gamma = 0;
+    std::uint64_t beta = 0;
+    std::uint64_t input_mask = 0;
+    std::uint64_t repack = 0;
+    std::uint64_t x = 0;
+    std::uint64_t xmm = 0;
+    std::uint64_t xmm3 = 0;
+    std::uint64_t partial_stats = 0;
+    std::uint64_t global_stats = 0;
+    std::uint64_t normalisation_stats = 0;
+    constexpr std::uint64_t total_with_input(std::uint64_t input) const {
+        return input + output + input_staging + untilize_output + epsilon + gamma + beta + input_mask + repack + x +
+               xmm + xmm3 + partial_stats + global_stats + normalisation_stats;
+    }
+};
 
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w);
 

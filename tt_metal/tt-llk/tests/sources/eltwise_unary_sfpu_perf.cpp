@@ -151,8 +151,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             is_fp32_dest_acc_en,
             ITERATIONS,
             FAST_MODE,
-            false /* STABLE_SORT */,
-            CLAMP_NEGATIVE>();
+            STABLE_SORT,
+            CLAMP_NEGATIVE,
+            DataFormat::Invalid /* TYPECAST_IN */,
+            DataFormat::Invalid /* TYPECAST_OUT */,
+            FUSED_SORT>(formats.math);
 #endif
 #ifdef TT_POLY_LLK_TEST_INIT
 #ifdef TT_POLY_LLK_TEST_REPLACE_INIT

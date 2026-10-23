@@ -36,11 +36,15 @@ from loguru import logger
 import ttnn
 from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    moe_fabric_payload,
+    torus_xy_device_params,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
@@ -990,7 +994,7 @@ def test_ds_prefill_transformer(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(KimiK27Config)),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1052,7 +1056,7 @@ def test_kimi_prefill_transformer(
     )
 
 
-@pytest.mark.skipif(not is_blackhole(), reason="GLM-5.1 requires Blackhole")
+@pytest.mark.skipif(not is_blackhole(), reason="GLM-5.3 requires Blackhole")
 @pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
 @pytest.mark.parametrize("use_pretrained", [True], ids=["pretrained"])
@@ -1091,7 +1095,7 @@ def test_kimi_prefill_transformer(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(fabric_payload_size=moe_fabric_payload(GLM53Config)),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1099,7 +1103,7 @@ def test_kimi_prefill_transformer(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_3"], indirect=True, ids=["glm51", "glm53"])
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 @pytest.mark.timeout(0)
 def test_glm_prefill_transformer(
     variant,
@@ -1184,7 +1188,7 @@ def test_glm_prefill_transformer(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(fabric_payload_size=GLM53Config.FABRIC_PAYLOAD_SIZE),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1192,7 +1196,7 @@ def test_glm_prefill_transformer(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_3"], indirect=True, ids=["glm51", "glm53"])
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 @pytest.mark.timeout(0)
 def test_glm_build_ttnn_cache(
     variant,
@@ -1335,7 +1339,7 @@ MISTRAL4_THRESHOLDS = PrefillTransformerThresholds(
     [
         pytest.param(
             (8, 4),
-            fabric2d_device_params(fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE),
+            fabric2d_device_params(fabric_payload_size=moe_fabric_payload(MistralSmall4Config)),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="fabric2d-mesh-8x4",

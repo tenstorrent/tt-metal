@@ -22,7 +22,7 @@ operations:
         reduce_dim: "REDUCE_ROW"
         reduce_pool: "SUM"
         unpacker: "ReduceUnpacker"
-        math_fidelity: "HiFi2"
+        math_fidelity: "LoFi"
     pack:
       - output: "reduce_row_out"
         block_size: [64, 128]

@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from ttnn.device import is_blackhole as ttnn_is_blackhole
 
 import ttnn
 from models.demos.wormhole.bge_m3.reference.hf_reference import PositionwiseFeedForward
@@ -15,6 +16,12 @@ from models.demos.wormhole.bge_m3.tests.test_utils import (
     to_ttnn_tensor,
 )
 from models.demos.wormhole.bge_m3.tt.mlp import BgeM3MLP
+from models.demos.wormhole.bge_m3.tt.optimizations import (
+    _WORMHOLE_L1_UNRESERVED_BASE_BYTES,
+    Optimizations,
+    _minimal_matmul_fits_wormhole_l1,
+    _minimal_matmul_l1_bytes,
+)
 
 HIDDEN_SIZE = 1024
 INTERMEDIATE_SIZE = 4096
@@ -70,3 +77,70 @@ def test_mlp_vs_pytorch(device, seq_len):
 
     reference_output = reference_layer(x.squeeze(1)).unsqueeze(1).to(torch.float32)
     assert_pcc(reference_output, tt_output_torch, 0.999)
+
+
+# The two S8192 minimal_matmul configs Optimizations resolves on Wormhole (optimizations.py).
+_WI_S8192 = ttnn.MinimalMatmulConfig(
+    M_block_size=16,
+    K_block_size=16,
+    N_block_size=8,
+    subblock_h=4,
+    subblock_w=2,
+    compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+)
+_WO_S8192 = ttnn.MinimalMatmulConfig(
+    M_block_size=8,
+    K_block_size=32,
+    N_block_size=4,
+    subblock_h=4,
+    subblock_w=2,
+    compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+)
+_BF16 = ttnn.bfloat16
+_BF8 = ttnn.bfloat8_b
+
+
+@pytest.mark.parametrize(
+    "config, in0_dtype, weight_dtype, out_dtype, region_end, fits",
+    [
+        # The error the bf16 pcc build hit after #58149: "grow to 2481376 B which is beyond max L1 size of 1499136 B".
+        pytest.param(_WI_S8192, _BF16, _BF16, _BF16, 2_481_376, False, id="wi-bf16"),
+        pytest.param(_WI_S8192, _BF8, _BF8, _BF8, 1_490_656, True, id="wi-bf8"),
+        # bf8 model with the mlp_wi_output_dtype override: the wider output alone breaks the fit.
+        pytest.param(_WI_S8192, _BF8, _BF8, _BF16, 1_736_416, False, id="wi-bf8-bf16-out"),
+        pytest.param(_WO_S8192, _BF16, _BF16, _BF16, 1_883_360, False, id="wo-bf16"),
+        pytest.param(_WO_S8192, _BF8, _BF8, _BF8, 1_080_800, True, id="wo-bf8"),
+    ],
+)
+def test_s8192_minimal_matmul_l1_footprint(config, in0_dtype, weight_dtype, out_dtype, region_end, fits):
+    """Pins the footprint arithmetic to the numbers minimal_matmul_program_descriptor.cpp produces
+    (in0 / in1 / out double buffered, one Float16_b intermediate block, one bias block)."""
+    dtypes = dict(
+        in0_dtype=in0_dtype,
+        in1_dtype=weight_dtype,
+        out_dtype=out_dtype,
+        bias_dtype=weight_dtype,
+        fp32_dest_acc_en=False,
+    )
+    assert _WORMHOLE_L1_UNRESERVED_BASE_BYTES + _minimal_matmul_l1_bytes(config, **dtypes) == region_end
+    assert _minimal_matmul_fits_wormhole_l1(config, **dtypes) is fits
+
+
+def test_s8192_minimal_matmul_configs_follow_the_l1_fit(device):
+    """Optimizations keeps the S8192 minimal_matmul configs only for dtype mixes whose buffers fit."""
+    require_single_device(device)
+    if ttnn_is_blackhole(device):
+        pytest.skip("the S8192 minimal_matmul configs are Wormhole-only")
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < 8 or grid.y < 8:
+        pytest.skip("the S8192 minimal_matmul configs need an 8x8 grid")
+
+    bf8 = Optimizations.build(device, max_batch_size=1, max_seq_len=8192, dtype=_BF8)
+    assert bf8.mlp.wi_minimal_config is not None and bf8.mlp.wo_minimal_config is not None
+    assert bf8.mlp.wi_prg_config is None and bf8.mlp.wo_prg_config is None
+
+    bf16 = Optimizations.build(device, max_batch_size=1, max_seq_len=8192, dtype=_BF16)
+    assert bf16.mlp.wi_minimal_config is None and bf16.mlp.wo_minimal_config is None
+
+    mixed = Optimizations.build(device, max_batch_size=1, max_seq_len=8192, dtype=_BF8, mlp_wi_output_dtype=_BF16)
+    assert mixed.mlp.wi_minimal_config is None and mixed.mlp.wo_minimal_config is None

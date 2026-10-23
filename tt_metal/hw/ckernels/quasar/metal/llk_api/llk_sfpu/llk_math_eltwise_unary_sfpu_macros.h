@@ -70,3 +70,27 @@ inline __attribute__((always_inline)) void _sfpu_check_(std::uint32_t dst_index,
 //   SFPU_UNARY_INIT_FN_ARGS(exponential, sfpu::exp_init, (APPROX), scale, clamp_neg);
 #define SFPU_UNARY_INIT_FN_ARGS(OP, INIT_FN, TEMPLATES, ...) \
     ::ckernel::llk_math_eltwise_unary_sfpu_init<::ckernel::SfpuType::OP>(INIT_FN<_SFPU_EXPAND TEMPLATES>, ##__VA_ARGS__)
+
+#ifdef TRISC_PACK
+// Quasar has no pack-thread SFPU. The Compute API's *_tile_pack / *_init_pack entry points keep one
+// signature on every arch and reach these macros only on the pack thread (PACK(...)), so on Quasar
+// the pack-thread forms reject the call instead of emitting SFPU code there.
+namespace ckernel {
+inline __attribute__((always_inline)) void _sfpu_unary_on_pack_thread_() {
+    LLK_ASSERT(false, "Quasar has no pack-thread SFPU; use the math-thread entry point");
+}
+}  // namespace ckernel
+
+#undef SFPU_UNARY_CALL
+#undef SFPU_UNARY_CALL_TINY_TILE
+#undef SFPU_UNARY_CALL_NO_TEMPLATE_ARGS
+#undef SFPU_UNARY_INIT
+#undef SFPU_UNARY_INIT_FN
+#undef SFPU_UNARY_INIT_FN_ARGS
+#define SFPU_UNARY_CALL(...) ::ckernel::_sfpu_unary_on_pack_thread_()
+#define SFPU_UNARY_CALL_TINY_TILE(...) ::ckernel::_sfpu_unary_on_pack_thread_()
+#define SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(...) ::ckernel::_sfpu_unary_on_pack_thread_()
+#define SFPU_UNARY_INIT(...) ::ckernel::_sfpu_unary_on_pack_thread_()
+#define SFPU_UNARY_INIT_FN(...) ::ckernel::_sfpu_unary_on_pack_thread_()
+#define SFPU_UNARY_INIT_FN_ARGS(...) ::ckernel::_sfpu_unary_on_pack_thread_()
+#endif  // TRISC_PACK
