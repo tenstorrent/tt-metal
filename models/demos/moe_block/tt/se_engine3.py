@@ -132,7 +132,9 @@ void kernel_main() {
                 cb_reserve_back(CB_XIN, MT * KB);
                 const uint32_t dst = xin + (j & 1) * MT * KB * 2048;
                 if (mine(j)) {  // (position j: the shard of rank j / sps must be in - the own shard always is)
+#ifndef SE_PROBE_NOXWAIT
                     if (j >= sps) noc_semaphore_wait_min(xready, m * (g - 1) + j / sps);
+#endif
 #ifdef SE_PROBE_NOX
                     constexpr uint32_t XBYTES = 16;  // (timing probe: no x data)
 #else
@@ -877,7 +879,8 @@ void kernel_main() {
 
 def _probes():
     """(timing only) SE_PROBE=NOX,NOW: skip the x / W data multicasts (semaphores kept); NOMATH: no matmuls; NOWL: no W
-    DRAM reads (16 B a block) - the results are wrong."""
+    DRAM reads (16 B a block); NOXWAIT: the x rounds do not wait for a shard's arrival (gate / up at its own pace in the
+    head: GU_ALONE at the head's shapes) - the results are wrong."""
     import os
 
     return "".join(f"#define SE_PROBE_{p}\n" for p in os.environ.get("SE_PROBE", "").split(",") if p)

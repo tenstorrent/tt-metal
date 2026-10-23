@@ -891,3 +891,17 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   L1 acc: x reuse over all of a column's tiles, ~28% less per-MAC traffic, more pack traffic); the W stream on NOC0 /
   bank-local readers (NOC1 DRAM reads are the slow ones on BH); W for the next layer prefetched under other ops (a
   model-level change).
+
+### GU_ALONE re-measured at the head's shapes; the router back on its own cores for K3
+- The projection's SE front = max(gate / up end - the ring's gather shrink, GU_ALONE). GU_ALONE was 60 / 250 us
+  (an older engine-alone measurement, before the router's matmul moved onto the engine). SE_PROBE=NOXWAIT (the x
+  rounds do not wait for a shard: gate / up at its own pace inside the head) - the slowest chip's gate / up end from
+  its start: GLM 89 (router on the engine) / 73 (router cores), K3 307 / 272. galaxy_projection keys GU_ALONE by the
+  router's place (detected: the engine's SE-RTRLD zone).
+- Galaxy-projected from the mesh's last launch: K3 router on the engine 424 (SE binds; was shown as 366-370 with the
+  250 floor), router cores logits first 388 (SE 388, chain 377), x first 391. GLM engine 166 (both paths), router
+  cores 191 (chain binds, SE 149). router_on_engine: not latent (GLM on, K3 off).
+- The SE tail (K3, RSSTAT): after gate / up ~27 us to the first RS packet (h exchange ~9 + the first entry's down
+  passes), the end links at link rate (~152 us = 3u on the line), ~18 after (the last arrivals and fins): ring-
+  projected 27 + 73.5 + 18 ~ 119. The W DRAM stream runs at ~390 GB/s (skeleton: 40 MB in ~102 us) - not slow; its
+  ~60 us in the full run is NOC1 sharing with the W multicasts.

@@ -28,7 +28,9 @@ import sys
 
 U = {"glm": 28.0, "k3": 49.0}  # (us: one unit at 47 GB/s)
 E_GATHER = 1.3  # (the fused gather's time over its link floor, measured on the line)
-GU_ALONE = {"glm": 60.0, "k3": 250.0}  # (gate/up (+ K3's latent) compute alone: engine-alone / fused minimum)
+# (gate / up's end with no gather wait, from a chip's start - the router phase on the engine included when it runs
+# there: the head's own shapes, SE_PROBE=NOXWAIT, the slowest chip; keyed by the router's place)
+GU_ALONE = {("glm", True): 89.0, ("glm", False): 73.0, ("k3", True): 307.0, ("k3", False): 272.0}
 CHAIN_GROWTH = {"glm": 20.0, "k3": 20.0}
 LOGITS_AFTER_GATHER = {"glm": False, "k3": False}
 FREQ = 1350.0
@@ -89,12 +91,15 @@ def project(path, model, logits_first=None, offsets=None):
     (eager); a chip's compute still never finishes before its own start + its compute alone."""
     u = U[model]
     after = not logits_first if logits_first is not None else LOGITS_AFTER_GATHER[model]
+    zs = zones(path)
+    on_engine = any("SE-RTRLD" in e for e in zs.values())  # (the router's matmul ran on the engine)
+    gu_alone = GU_ALONE[(model, on_engine)]
     res = []
-    for dev, e in zones(path).items():
+    for dev, e in zs.items():
         sh = offsets.get(int(dev), 0.0) if offsets else 0.0
         gu, ds, rp = e["SE-GU"] + sh, e["SE-DOWNRS"] + sh, e.get("SE-RPLAN", 0.0) + sh
         end = max(v for k, v in e.items() if k.endswith("-KERNEL")) + sh
-        front = max(gu - 1.5 * u * E_GATHER, GU_ALONE[model] + sh)
+        front = max(gu - 1.5 * u * E_GATHER, gu_alone + sh)
         se = front + (ds - gu) - 1.5 * u
         shift = (gu - front) if after else 0.0
         chain = rp - shift + CHAIN_GROWTH[model]

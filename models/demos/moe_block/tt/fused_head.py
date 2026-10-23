@@ -310,14 +310,13 @@ class HeadSE3:
         )
 
     def router_on_engine(self, router, latent):
-        """Where the logits' matmul runs. From the Galaxy projections (tests/galaxy_projection.py): on the engine's cores
-        at the start every chip's routing chain starts ~25 us earlier (GLM: Galaxy-projected 265-273 us vs 296-299),
-        the SE path ~15 us later - the chain binds there, so on. K3 too (from the mesh's last launch / each row's /
-        eager, logits first: 367 / 367 / 397 us vs 365 / 443 / 507 on the router cores; x first 380 / 423 / 461 vs
-        385 / 464 / 499) - the same picks (99.45%)."""
+        """Where the logits' matmul runs. On the engine's cores at the start, every chip's routing chain starts earlier
+        but gate / up starts later by the router phase (GLM ~16 us, K3 ~35: gate / up's end with no gather wait 89 vs 73
+        / 307 vs 272 us, SE_PROBE=NOXWAIT). Galaxy-projected from the mesh's last launch: GLM (the chain binds) 166 us
+        on the engine vs 191 on the router cores; K3 (the SE path binds) 424 vs 388 - so on where there is no latent."""
         if router.on_engine is not None:
             return router.on_engine
-        return True
+        return not latent
 
     def router_w_gate(self, router, latent):
         """The engine's W streams gated on every engine core's partials written (RouterSpec.w_gate). Ungated, the
