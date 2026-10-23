@@ -440,6 +440,12 @@ uint32_t get_num_pages(const ttnn::Tensor& tensor);
 // B/W-sh → shard_W*E (feeds split branch); other sharded → buffer->aligned_page_size() (16-aligned L1 stride).
 uint32_t per_shard_page_size_bytes(const ttnn::Tensor& tensor, uint32_t row_bytes);
 
+// True for a BLOCK/WIDTH-sharded placement whose shard row (shard width * element_size) is not a
+// multiple of the buffer alignment. For such a placement of an RM buffer, the shard row size differs
+// from the buffer's aligned page size, and RM kernels that use `noc_async_*_sharded` need the two to
+// be equal.
+bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& memory_config, uint32_t element_size);
+
 bool codegen_supported_on_arch(const ttnn::Tensor& input);
 
 }  // namespace ttnn::operations::data_movement

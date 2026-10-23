@@ -454,7 +454,9 @@ def test_gather_specless_sharded_output_grid_shrinks_height(device):
             id="RM_block_regular_to_block",
         ),
         # RM WIDTH/BLOCK-sharded with a shard row (shard_width * element_size) that is not a multiple of
-        # the 16 B SRAM alignment, so the SRAM row pitch of each shard is larger than the row size.
+        # the 16 B SRAM alignment, so the SRAM row pitch of each shard is larger than the row size. The
+        # index is always uint32. For a sharded input or output with a shard width of 12, only the bf16
+        # run (24 B row) is sub-aligned; the float32 run (48 B row) is an aligned control.
         pytest.param(
             (1, 1, 32, 96),
             (1, 1, 32, 96),
@@ -491,6 +493,27 @@ def test_gather_specless_sharded_output_grid_shrinks_height(device):
             lambda d: _explicit_block_shard_config(d, 2, 8, 16, 12),
             id="RM_interleaved_to_block_subaligned_shard_row",
         ),
+        pytest.param(
+            (1, 1, 32, 96),
+            (1, 1, 32, 96),
+            -1,
+            lambda d: _explicit_block_shard_config(d, 2, 8, 16, 12),
+            _interleaved_l1,
+            _interleaved_l1,
+            id="RM_block_subaligned_shard_row_input_to_interleaved",
+        ),
+        # A uint32 index shard row of 14 columns is 56 B, which is sub-aligned; an even 12-column split
+        # would give an aligned 48 B row. 7 shards of 14 columns cover the 96 index columns, and the last
+        # shard is partly filled.
+        pytest.param(
+            (1, 1, 32, 96),
+            (1, 1, 32, 96),
+            -1,
+            _interleaved_l1,
+            lambda d: _explicit_block_shard_config(d, 2, 7, 16, 14),
+            _interleaved_l1,
+            id="RM_block_subaligned_shard_row_index_to_interleaved",
+        ),
         # Multi-core RM (W > 60 * TILE_W = 1920).
         pytest.param(
             (1, 1, 4, 1984),
@@ -501,8 +524,8 @@ def test_gather_specless_sharded_output_grid_shrinks_height(device):
             lambda d: _explicit_width_shard_config(d, 32, 4, 62),
             id="RM_multicore_interleaved_to_width_subaligned_shard_row",
         ),
-        # Multi-core RM whose W_index does not divide into equal per-core slices: each core's offset
-        # into the index and output rows must still be a multiple of the buffer alignment.
+        # Multi-core RM with W_index = 1984: an even split over a 64-core grid gives 31 columns per
+        # core, which is not an aligned byte size for any of the dtypes used here.
         pytest.param(
             (1, 1, 4, 1984),
             (1, 1, 4, 1984),
@@ -510,7 +533,7 @@ def test_gather_specless_sharded_output_grid_shrinks_height(device):
             _interleaved_l1,
             _interleaved_l1,
             _interleaved_l1,
-            id="RM_multicore_interleaved_uneven_split",
+            id="RM_multicore_interleaved_unaligned_column_split",
         ),
         pytest.param(
             (1, 1, 4, 1984),
@@ -519,7 +542,28 @@ def test_gather_specless_sharded_output_grid_shrinks_height(device):
             _interleaved_dram,
             _interleaved_dram,
             _interleaved_dram,
-            id="RM_multicore_interleaved_DRAM_uneven_split",
+            id="RM_multicore_interleaved_DRAM_unaligned_column_split",
+        ),
+        # Multi-core RM with an odd W_index, so the columns cannot be split into slices that all have
+        # an aligned byte size.
+        pytest.param(
+            (1, 1, 4, 64),
+            (1, 1, 4, 1985),
+            -1,
+            _interleaved_l1,
+            _interleaved_l1,
+            _interleaved_l1,
+            id="RM_multicore_interleaved_odd_index_width",
+        ),
+        # Multi-core RM with an input row that is not a multiple of the buffer alignment.
+        pytest.param(
+            (1, 1, 4, 1985),
+            (1, 1, 4, 1984),
+            -1,
+            _interleaved_l1,
+            _interleaved_l1,
+            _interleaved_l1,
+            id="RM_multicore_interleaved_unaligned_input_row",
         ),
     ],
 )
@@ -586,23 +630,49 @@ def test_gather_rm_sharded_in_sharded_no_spec_out(device):
     )
 
 
-def test_gather_rm_width_sharded_index_no_spec_subaligned_out(device):
-    """RM WIDTH no-spec output derives its shard shape in elements from the index: a (32, 4) uint32 index
-    shard row is 16 B, but the same shard shape gives an 8 B bfloat16 output shard row."""
+@pytest.mark.parametrize(
+    "dtype, index_dtype",
+    [
+        # A (32, 4) uint32 index shard row is 16 B; the same shard shape gives an 8 B bfloat16 output shard row.
+        pytest.param(ttnn.bfloat16, ttnn.uint32, id="subaligned_out"),
+        # A (32, 4) uint16 index shard row is 8 B; the same shard shape gives a 16 B float32 output shard row.
+        pytest.param(ttnn.float32, ttnn.uint16, id="subaligned_index"),
+    ],
+)
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_gather_rm_width_sharded_index_no_spec_out(dtype, index_dtype, orientation, device):
+    """RM WIDTH no-spec output takes its shard shape (in elements) and orientation from a WIDTH-sharded
+    index, also when the index or the output shard row is not a multiple of the buffer alignment."""
     in_shape = (1, 1, 32, 96)
     idx_shape = (1, 1, 32, 96)
-    out_no_spec = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
-    _run_gather(
-        in_shape,
-        idx_shape,
-        -1,
-        ttnn.ROW_MAJOR_LAYOUT,
-        L1_INTERLEAVED,
-        _explicit_width_shard_config(device, 24, 32, 4),
-        out_no_spec,
-        ttnn.bfloat16,
-        device,
+    shard_shape = (32, 4)
+    ncores = idx_shape[-1] // shard_shape[1]
+    compute_grid = device.compute_with_storage_grid_size()
+    if ncores > compute_grid.x * compute_grid.y:
+        pytest.skip(f"Device has {compute_grid.x * compute_grid.y} cores, test needs {ncores}")
+    idx_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(ttnn.num_cores_to_corerangeset(ncores, compute_grid, True), shard_shape, orientation),
     )
+    out_no_spec = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+
+    torch.manual_seed(0)
+    x = torch.randn(in_shape, dtype=_TTNN_TO_TORCH_DTYPE[dtype])
+    idx = torch.randint(0, in_shape[-1], idx_shape, dtype=torch.int64)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, device=device, memory_config=L1_INTERLEAVED)
+    ttnn_idx = ttnn.from_torch(
+        idx, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=index_dtype, device=device, memory_config=idx_mc
+    )
+
+    result = ttnn.gather(ttnn_in, -1, index=ttnn_idx, memory_config=out_no_spec)
+
+    actual = result.memory_config()
+    assert actual.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    assert actual.shard_spec is not None
+    assert tuple(actual.shard_spec.shape) == shard_shape
+    assert actual.shard_spec.orientation == orientation
+    assert_equal(torch.gather(x, -1, idx), ttnn.to_torch(result))
 
 
 # ────────────────────────────────────────────────────────────────────────────────

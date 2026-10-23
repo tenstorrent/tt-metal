@@ -383,36 +383,46 @@ Tensor gather_dispatch(
     }
 
     // The native RM factories need every BLOCK/WIDTH-sharded shard row to be a multiple of the buffer
-    // alignment (see ttnn::prim::has_subaligned_shard_row). Operands that are not get moved to
-    // interleaved SRAM, and an output that is not gets computed in interleaved SRAM and then moved to
-    // the placement the device op would have given it.
+    // alignment (see has_subaligned_shard_row). An input or index tensor whose shard row fails this
+    // check is moved to interleaved memory of the same buffer type. An output whose shard row fails
+    // this check is computed in interleaved memory and then moved to the memory config the device op
+    // would have given it.
     auto native_memory_config = memory_config_value;
     auto native_output_tensor = optional_output_tensor_value;
     std::optional<tt::tt_metal::MemoryConfig> rerouted_output_memory_config;
     if (!use_codegen && padded_input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
-        const auto l1_interleaved =
-            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
-        // Taken before the operands move, because a sharded output with no shard spec derives its
-        // spec from the index tensor's.
-        const auto output_spec = ttnn::prim::GatherDeviceOperation::compute_output_specs(
-            ttnn::prim::GatherParams{normalized_dim, sparse_grad, memory_config_value, sub_core_grids},
-            ttnn::prim::GatherInputs{padded_input_tensor, padded_index_tensor, optional_output_tensor_value});
-        uint32_t output_elem_size = padded_input_tensor.element_size();
-        if (optional_output_tensor_value.has_value()) {
-            output_elem_size = optional_output_tensor_value->element_size();
+        auto interleaved_like = [](const tt::tt_metal::MemoryConfig& mc) {
+            return tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, mc.buffer_type());
+        };
+        const bool output_is_sharded = optional_output_tensor_value.has_value()
+                                           ? optional_output_tensor_value->is_sharded()
+                                           : memory_config_value.is_sharded();
+        if (output_is_sharded) {
+            // Taken before the operands move, because a sharded output with no shard spec derives
+            // its spec from the index and input tensors. The device op gets this spec rather than
+            // re-deriving it from operands that may have moved.
+            const auto output_spec = ttnn::prim::GatherDeviceOperation::compute_output_specs(
+                ttnn::prim::GatherParams{normalized_dim, sparse_grad, memory_config_value, sub_core_grids},
+                ttnn::prim::GatherInputs{padded_input_tensor, padded_index_tensor, optional_output_tensor_value});
+            uint32_t output_elem_size = padded_input_tensor.element_size();
+            if (optional_output_tensor_value.has_value()) {
+                output_elem_size = optional_output_tensor_value->element_size();
+            } else {
+                native_memory_config = output_spec.memory_config();
+            }
+            if (has_subaligned_shard_row(output_spec.memory_config(), output_elem_size)) {
+                rerouted_output_memory_config = output_spec.memory_config();
+                native_memory_config = interleaved_like(output_spec.memory_config());
+                native_output_tensor = std::nullopt;
+            }
         }
-        if (ttnn::prim::has_subaligned_shard_row(output_spec.memory_config(), output_elem_size)) {
-            rerouted_output_memory_config = output_spec.memory_config();
-            native_memory_config = l1_interleaved;
-            native_output_tensor = std::nullopt;
+        if (has_subaligned_shard_row(padded_input_tensor.memory_config(), padded_input_tensor.element_size())) {
+            padded_input_tensor =
+                ttnn::to_memory_config(padded_input_tensor, interleaved_like(padded_input_tensor.memory_config()));
         }
-        if (ttnn::prim::has_subaligned_shard_row(
-                padded_input_tensor.memory_config(), padded_input_tensor.element_size())) {
-            padded_input_tensor = ttnn::to_memory_config(padded_input_tensor, l1_interleaved);
-        }
-        if (ttnn::prim::has_subaligned_shard_row(
-                padded_index_tensor.memory_config(), padded_index_tensor.element_size())) {
-            padded_index_tensor = ttnn::to_memory_config(padded_index_tensor, l1_interleaved);
+        if (has_subaligned_shard_row(padded_index_tensor.memory_config(), padded_index_tensor.element_size())) {
+            padded_index_tensor =
+                ttnn::to_memory_config(padded_index_tensor, interleaved_like(padded_index_tensor.memory_config()));
         }
     }
 
