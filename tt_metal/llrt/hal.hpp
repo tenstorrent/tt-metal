@@ -17,11 +17,12 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <string_view>
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/cluster_types.hpp>
-#include <umd/device/utils/semver.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/types/cluster_types.hpp>
+#include <tt-umd/utils/semver.hpp>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -34,8 +35,8 @@
 #include "hal/generated/realtime_profiler_msgs.hpp"  // IWYU pragma: export
 
 #include <tt_stl/overloaded.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include "llrt/hal_proc_set.hpp"  // IWYU pragma: export
 
@@ -223,6 +224,8 @@ private:
     std::vector<uint32_t> mem_map_sizes_;
     std::vector<uint32_t> eth_fw_mailbox_msgs_;
     std::vector<uint32_t> eth_debug_regs_;
+    // The physical RISCs the core has.
+    std::optional<uint32_t> num_physical_riscs_;
     bool supports_cbs_ = false;
     bool supports_dfbs_ = false;
     bool supports_receiving_multicast_cmds_ = false;
@@ -428,7 +431,14 @@ private:
     uint32_t noc_stream_remote_dest_buf_start_reg_index_{};
     uint32_t noc_stream_remote_dest_buf_space_available_reg_index_{};
     uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_{};
+    uint32_t noc_stream_remote_dest_words_free_width_{};
+    uint32_t noc_stream_remote_src_reg_index_{};
     uint32_t operand_start_stream_{};
+    uint32_t risc_soft_reset_addr_{};
+    uint32_t wall_clock_low_addr_{};
+    uint32_t wall_clock_high_addr_{};
+    // Indexed by active Ethernet processor id.
+    std::vector<uint32_t> active_eth_physical_eriscs_;
     bool has_stream_registers_{};
     bool supports_fds_{};
     NoCTopologyType noc_topology_{};
@@ -545,7 +555,22 @@ public:
     uint32_t get_noc_stream_remote_dest_buf_space_available_update_reg_index() const {
         return noc_stream_remote_dest_buf_space_available_update_reg_index_;
     }
+    uint32_t get_noc_stream_remote_dest_words_free_width() const { return noc_stream_remote_dest_words_free_width_; }
+    uint32_t get_noc_stream_remote_src_reg_index() const { return noc_stream_remote_src_reg_index_; }
     uint32_t get_operand_start_stream() const { return operand_start_stream_; }
+    uint32_t get_risc_soft_reset_addr() const { return risc_soft_reset_addr_; }
+    // Reading the low word latches the high word, so read the low word first.
+    uint32_t get_wall_clock_low_addr() const { return wall_clock_low_addr_; }
+    uint32_t get_wall_clock_high_addr() const { return wall_clock_high_addr_; }
+    // The physical ERISC that active Ethernet processor `processor_id` runs on.
+    uint32_t get_active_eth_physical_erisc(uint32_t processor_id) const {
+        TT_FATAL(
+            processor_id < active_eth_physical_eriscs_.size(),
+            "Active Ethernet processor {} is not one of the HAL's {}",
+            processor_id,
+            active_eth_physical_eriscs_.size());
+        return active_eth_physical_eriscs_[processor_id];
+    }
     bool supports_fds() const { return supports_fds_; }
     bool has_stream_registers() const { return has_stream_registers_; }
     bool has_tile_counter_registers() const { return has_tile_counter_registers_; }
@@ -657,7 +682,11 @@ public:
 
     bool get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const;
 
+    // The processors metal runs on a core of this type.
     uint32_t get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const;
+    // The physical RISCs a core of this type has.
+    // NOTE: This includes the RISCs that metal runs processors on and the ones it doesn't.
+    uint32_t get_num_physical_risc_processors(HalProgrammableCoreType programmable_core_type) const;
     // Returns the processor index within a core.  There is a 1-1 mapping between
     // (processor_class, processor_type) and processor_index.  This is useful
     // For indexing data structures on devices (only 1-d arrays are needed).
@@ -723,7 +752,9 @@ public:
     // This interface guarantees that go_msg_t is 4B and has the same layout for all core types.
     // Code that assumes that should use this interface to create go_msg_t values,
     // as it is otherwise not guaranteed by the HAL interface.
-    uint32_t make_go_msg_u32(uint8_t signal, uint8_t master_x, uint8_t master_y, uint8_t dispatch_message_offset) const;
+    // The dispatcher that sends the go fills in its own coordinates and adds its CQ's completion counter base to
+    // dispatch_message_offset, so a go names only the sub-device's completion counter.
+    uint32_t make_go_msg_u32(uint8_t signal, uint8_t dispatch_message_offset) const;
 
     // If the specified processor uses IRAM, update the launch message to set the IRAM text size.
     void set_iram_text_size(

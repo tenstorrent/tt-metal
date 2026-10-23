@@ -12,7 +12,7 @@ using namespace ::sfpi;
 using ::sfpi::DataLayout;
 
 template <std::uint32_t Output, std::uint32_t Hold, std::uint32_t Advance>
-inline void simple_wh_gated_row()
+inline void simple_wh_gated_row_head()
 {
     TTI_SFPLOAD(ckernel::p_sfpu::LREG0, 0, Hold, 0);                             // 0: x
     TTI_SFPLOAD(ckernel::p_sfpu::LREG1, sfpi::SFPLOAD_MOD0_FMT_UINT16, Hold, 0); // 1: raw / x-load gap
@@ -31,9 +31,14 @@ inline void simple_wh_gated_row()
     TTI_SFPSETCC(0, ckernel::p_sfpu::LREG4, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);                                         // 13
     TTI_SFPSETMAN(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG2, 1);                                              // 14: signed MIN_NORMAL
     TTI_SFPENCC(0, 0, 0, 0);                                                                                          // 15
-    TTI_SFPSETCC(0, ckernel::p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);                                         // 16
-    TTI_SFPLOADI(ckernel::p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, Output);                                         // 17
-    TTI_SFPENCC(0, 0, 0, 0);                                                                                          // 18
+}
+
+template <std::uint32_t Output, std::uint32_t Hold, std::uint32_t Advance>
+inline void simple_wh_gated_row_tail()
+{
+    TTI_SFPSETCC(0, ckernel::p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0); // 16
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, Output); // 17
+    TTI_SFPENCC(0, 0, 0, 0);                                                  // 18
     TTI_SFP_STOCH_RND(
         sfpi::SFPSTOCHRND_RND_EVEN, 0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG2, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B); // 19
     TTI_SFPNOP;                                          // 20: round/store gap
