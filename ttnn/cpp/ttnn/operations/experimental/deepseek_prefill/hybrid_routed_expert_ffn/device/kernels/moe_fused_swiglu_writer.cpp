@@ -129,8 +129,16 @@ constexpr uint32_t cb_mailbox_writer = CT(CB_MAILBOX_WRITER);
 constexpr uint32_t RT_PEERS = 17;  // KGROUPS (vx, vy) pairs — the whole column, in row order
 constexpr uint32_t RT_HRECT = RT_PEERS + 2 * KGROUPS;
 // Per-expert weight bases, role-major: EXPERTS_PER_CHIP W_up addresses then EXPERTS_PER_CHIP
-// W_down addresses. Appended AFTER the mcast rectangle, so none of the offsets above moved.
+// W_down addresses. Appended AFTER the mcast rectangle, so none of the offsets above moved. Absent
+// when the union kernel reads them from its weight table instead; see hybrid_weight_table.hpp.
 constexpr uint32_t RT_WEIGHTS = RT_HRECT + 4;
+#ifdef HYB_WEIGHT_TABLE
+inline uint32_t w_up_addr(uint32_t e) { return hyb_weight_addr(HYB_W_UP, EXPERTS_PER_CHIP, e); }
+inline uint32_t w_down_addr(uint32_t e) { return hyb_weight_addr(HYB_W_DOWN, EXPERTS_PER_CHIP, e); }
+#else
+inline uint32_t w_up_addr(uint32_t e) { return get_arg_val<uint32_t>(RT_WEIGHTS + e); }
+inline uint32_t w_down_addr(uint32_t e) { return get_arg_val<uint32_t>(RT_WEIGHTS + EXPERTS_PER_CHIP + e); }
+#endif
 constexpr bool kHMcastPosted = (H_MCAST_POSTED != 0);
 
 inline bool h_round_on_writer(uint32_t r) { return ((H_ROUND_NOC1_MASK >> r) & 1u) != 0; }
@@ -278,9 +286,8 @@ void kernel_main() {
     // selecting token rows and the weight-residency gate.
     uint32_t gb = 0;
     for (uint32_t local_expert_id = 0; local_expert_id < EXPERTS_PER_CHIP; ++local_expert_id) {
-        const auto wu_acc = TensorAccessor(wu_args, get_arg_val<uint32_t>(RT_WEIGHTS + local_expert_id), W_TILE);
-        const auto wd_acc =
-            TensorAccessor(wd_args, get_arg_val<uint32_t>(RT_WEIGHTS + EXPERTS_PER_CHIP + local_expert_id), W_TILE);
+        const auto wu_acc = TensorAccessor(wu_args, w_up_addr(local_expert_id), W_TILE);
+        const auto wd_acc = TensorAccessor(wd_args, w_down_addr(local_expert_id), W_TILE);
         // The reader owns the device-resident count read and publishes it to the
         // program-local aliased mailbox CB. The FIFO event makes the raw payload
         // read safe even when L1 contains bytes from an earlier program.

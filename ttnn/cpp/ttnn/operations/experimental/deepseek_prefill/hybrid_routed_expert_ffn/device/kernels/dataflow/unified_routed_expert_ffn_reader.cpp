@@ -238,6 +238,12 @@ void kernel_main() {
     // runtime-arg blocks of experts_per_chip each: gate[0..N), up[0..N),
     // down[0..N). gate_addr(e) = arg[WEIGHTS_RT + e], etc.
     constexpr uint32_t WEIGHTS_RT = M_ROW_NOC_RT_OFFSET + 2 * GRID_X_NOC + 1;
+    // Absent when the union kernel reads the weight bases from its table; see hybrid_weight_table.hpp.
+#ifdef HYB_WEIGHT_TABLE
+    constexpr uint32_t WEIGHT_RT_EXPERTS = 0;
+#else
+    constexpr uint32_t WEIGHT_RT_EXPERTS = experts_per_chip;
+#endif
 
 #ifdef FUSE_BIAS
     // gpt-oss expert biases. CT bias CB ids + accessor descriptors follow the
@@ -245,7 +251,7 @@ void kernel_main() {
     // three further runtime-arg blocks (gate_bias[0..N), up_bias, down_bias)
     // starting at BIAS_RT. Read per expert in the loop, added by the compute
     // kernel (gate/up before the activation, down after the down matmul).
-    constexpr uint32_t BIAS_RT = WEIGHTS_RT + 3 * experts_per_chip;
+    constexpr uint32_t BIAS_RT = WEIGHTS_RT + 3 * WEIGHT_RT_EXPERTS;
     constexpr uint32_t bias_cb_offset = start_args.next_compile_time_args_offset();
     // ::get_ct_arg, not get_compile_time_arg_val: bias_cb_offset is derived from an accessor
     // offset that is ALREADY absolute, and the macro routes through a shim that would add the
@@ -473,9 +479,15 @@ void kernel_main() {
     for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
         // Per-expert weight accessors, built from the shared layout descriptors
         // and this expert's base addresses (runtime-arg arrays after start).
+#ifdef HYB_WEIGHT_TABLE
+        const uint32_t gate_addr_e = hyb_weight_addr(HYB_W_GATE, experts_per_chip, local_expert_id);
+        const uint32_t up_addr_e = hyb_weight_addr(HYB_W_UP, experts_per_chip, local_expert_id);
+        const uint32_t down_addr_e = hyb_weight_addr(HYB_W_DOWN, experts_per_chip, local_expert_id);
+#else
         const uint32_t gate_addr_e = get_arg_val<uint32_t>(WEIGHTS_RT + 0 * experts_per_chip + local_expert_id);
         const uint32_t up_addr_e = get_arg_val<uint32_t>(WEIGHTS_RT + 1 * experts_per_chip + local_expert_id);
         const uint32_t down_addr_e = get_arg_val<uint32_t>(WEIGHTS_RT + 2 * experts_per_chip + local_expert_id);
+#endif
         const auto gate_acc = TensorAccessor(gate_args, gate_addr_e, gate_tile_bytes);
         const auto up_acc = TensorAccessor(up_args, up_addr_e, up_tile_bytes);
         const auto down_acc = TensorAccessor(down_args, down_addr_e, down_tile_bytes);

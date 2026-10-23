@@ -213,8 +213,18 @@ constexpr bool HMCAST_ACTIVE = get_compile_time_arg_val(CT_HMCAST + 0) != 0;
 // kernel-config ring the union program is short of.
 constexpr uint32_t RT_HGROUP_RECT = RT_HMCAST + 4;
 // Per-expert weight bases, role-major: EXPERTS_PER_CHIP W_gate addresses then EXPERTS_PER_CHIP
-// W_down addresses. Appended AFTER every mcast block, so none of the offsets above moved.
+// W_down addresses. Appended AFTER every mcast block, so none of the offsets above moved. Absent
+// when the union kernel reads them from its weight table instead; see hybrid_weight_table.hpp.
 constexpr uint32_t RT_WEIGHTS = RT_HGROUP_RECT + 4;
+#ifdef HYB_WEIGHT_TABLE
+constexpr uint32_t RT_WEIGHT_EXPERTS = 0;
+inline uint32_t w_gate_addr(uint32_t e) { return hyb_weight_addr(HYB_W_GATE, EXPERTS_PER_CHIP, e); }
+inline uint32_t w_down_addr(uint32_t e) { return hyb_weight_addr(HYB_W_DOWN, EXPERTS_PER_CHIP, e); }
+#else
+constexpr uint32_t RT_WEIGHT_EXPERTS = EXPERTS_PER_CHIP;
+inline uint32_t w_gate_addr(uint32_t e) { return get_arg_val<uint32_t>(RT_WEIGHTS + e); }
+inline uint32_t w_down_addr(uint32_t e) { return get_arg_val<uint32_t>(RT_WEIGHTS + EXPERTS_PER_CHIP + e); }
+#endif
 
 // Virtual coordinates of the grid core at column x / row y. The grid's virtual coordinates are
 // separable (the factory checks), so x comes from this row's x-multicast senders and y from this
@@ -307,7 +317,7 @@ constexpr uint32_t cb_down_bias = get_compile_time_arg_val(BIAS_CB_OFFSET + 2);
 constexpr auto gate_bias_args = TensorAccessorArgs<BIAS_CB_OFFSET + 3>();
 constexpr auto up_bias_args = TensorAccessorArgs<gate_bias_args.next_compile_time_args_offset()>();
 constexpr auto down_bias_args = TensorAccessorArgs<up_bias_args.next_compile_time_args_offset()>();
-constexpr uint32_t RT_BIAS = RT_WEIGHTS + 2 * EXPERTS_PER_CHIP;
+constexpr uint32_t RT_BIAS = RT_WEIGHTS + 2 * RT_WEIGHT_EXPERTS;
 #endif
 
 // Three `WeightRuns` bindings, because the three tensors this kernel touches can have DIFFERENT
@@ -517,9 +527,8 @@ void kernel_main() {
     // `block_idx` stays expert-relative — it selects token rows and the residency gate.
     uint32_t gb = 0;
     for (uint32_t local_expert_id = 0; local_expert_id < EXPERTS_PER_CHIP; ++local_expert_id) {
-        const auto wg_acc = TensorAccessor(wg_args, get_arg_val<uint32_t>(RT_WEIGHTS + local_expert_id), W_TILE);
-        const auto wd_acc =
-            TensorAccessor(wd_args, get_arg_val<uint32_t>(RT_WEIGHTS + EXPERTS_PER_CHIP + local_expert_id), W_TILE);
+        const auto wg_acc = TensorAccessor(wg_args, w_gate_addr(local_expert_id), W_TILE);
+        const auto wd_acc = TensorAccessor(wd_args, w_down_addr(local_expert_id), W_TILE);
 #ifdef FUSE_BIAS
         // This expert's bias windows, fetched once. Gate/up take the COLUMN's whole HN_PAD window
         // rather than a per-core slice: after the reduce-scatter a core's gate/up slice is a flat

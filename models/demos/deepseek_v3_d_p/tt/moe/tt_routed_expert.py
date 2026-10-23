@@ -127,6 +127,26 @@ def routed_expert_weight_memory_config(mesh_device, n_dim: int, dram_nd_sharded:
     )
 
 
+def routed_expert_weight_address_table(mesh_device, gate_projs, up_projs, down_projs) -> ttnn.Tensor:
+    """Every expert's weight base addresses as the one-page table hybrid_routed_expert_moe reads.
+
+    Laid out [gate[0..E), up[0..E), down[0..E)] as uint32, replicated: the op hands every device one
+    address per weight tensor, so the table does too. It describes these exact buffers, so build it
+    after the weights are placed and rebuild it whenever they move.
+    """
+    addresses = [w.buffer_address() for w in (*gate_projs, *up_projs, *down_projs)]
+    # uint32 bit patterns carried through int32, the integer dtype from_torch maps to UINT32.
+    words = torch.tensor([addresses], dtype=torch.int64).to(torch.int32)
+    return ttnn.from_torch(
+        words,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
 class TtRoutedExpert(LightweightModule):
     @staticmethod
     def check_cache_complete(
@@ -590,6 +610,13 @@ class TtRoutedExpert(LightweightModule):
 
         assert result is not None, "Expected weight tensors to be returned when device is provided"
         self.gate_projs, self.up_projs, self.down_projs = result
+        # Built once, here, where the weights are placed: the weights never move after this, so the
+        # table cannot go stale. Only the Blackhole one-program op reads it.
+        self.weight_address_table = (
+            routed_expert_weight_address_table(self.mesh_device, self.gate_projs, self.up_projs, self.down_projs)
+            if self._is_blackhole
+            else None
+        )
 
         # Convert + distribute optional per-expert biases (gpt-oss), one (1, N)
         # tensor per local expert, mesh-distributed like the weights.
@@ -903,4 +930,5 @@ class TtRoutedExpert(LightweightModule):
             expert_go_semaphore=combine_semaphores[2],
             forwarding_buffer=forwarding_buffer,
             channel_semaphores=list(combine_semaphores[3:]),
+            weight_address_table=self.weight_address_table,
         )
