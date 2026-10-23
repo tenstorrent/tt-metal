@@ -1280,3 +1280,10 @@ def device_model(mesh, spec, layers, lm_head=True):
     from models.demos.deepseek_v41_flash_d_p.tt.model import TtDS41Model
 
     return TtDS41Model(mesh, hf_path(spec), layers, max_seq=_max_seq(spec), chunk=_chunk(spec), lm_head=lm_head)
+
+
+def settings():
+    """Every switch's current value (tt/settings.py): the profile's record."""
+    from models.demos.deepseek_v41_flash_d_p.tt.settings import settings as _settings
+
+    return _settings.all()
