@@ -60,32 +60,39 @@ std::optional<size_t> fixed_element_size(tt::tt_metal::DataType dtype) {
 
 // Compares the logical values of two shards in place, walking the logical region through the physical layout
 // (row-major tiles, row-major faces within a tile, rows within a face) and comparing each contiguous run of logical
-// elements, so padding takes no part and nothing is decoded or allocated. nullopt when the layout is not one this
-// walk describes: block floats, transposed tile faces, or a physical shape that is not the padded last two
-// dimensions times the leading ones; the caller then compares decoded values instead.
+// elements, so padding takes no part and nothing is decoded or allocated. A rank-0 or rank-1 shape is one row, as
+// TensorSpec::logical_2d_shape() reads it. nullopt when the layout is not one this walk describes: block floats,
+// transposed tile faces, padded leading dimensions, or a physical shape that is not the padded last two dimensions
+// times the leading ones; the caller then compares decoded values instead.
 std::optional<bool> logical_values_equal_in_place(
     const tt::tt_metal::HostBuffer& a, const tt::tt_metal::HostBuffer& b, const tt::tt_metal::TensorSpec& spec) {
     const auto elem = fixed_element_size(spec.data_type());
-    const auto& logical = spec.logical_shape();
-    const auto& padded = spec.padded_shape();
-    const size_t rank = logical.rank();
-    if (!elem.has_value() || rank < 2 || padded.rank() != rank) {
+    if (!elem.has_value()) {
         return std::nullopt;
     }
+    const auto& logical = spec.logical_shape();
+    const auto& padded = spec.padded_shape();
+    // Shape indexes with int32_t (a negative index counts from the end). A dimension a shape lacks counts as 1, so a
+    // rank-1 tile-layout tensor (one row, padded to a rank-2 tile) lines up with its padded shape.
+    const int32_t rank = static_cast<int32_t>(logical.rank());
+    const int32_t padded_rank = static_cast<int32_t>(padded.rank());
+    const auto extent = [](const tt::tt_metal::Shape& shape, int32_t shape_rank, int32_t i) -> size_t {
+        return i >= -shape_rank ? shape[i] : 1;
+    };
     const size_t E = *elem;
-    const size_t H = logical[-2], W = logical[-1], PH = padded[-2], PW = padded[-1];
+    const size_t H = extent(logical, rank, -2), W = extent(logical, rank, -1);
+    const size_t PH = extent(padded, padded_rank, -2), PW = extent(padded, padded_rank, -1);
     size_t batch = 1;
-    // Shape indexes with int32_t (a negative index counts from the end).
-    for (int32_t i = 0; i < static_cast<int32_t>(rank) - 2; ++i) {
-        if (logical[i] != padded[i]) {
+    for (int32_t i = -3; i >= -std::max(rank, padded_rank); --i) {
+        if (extent(logical, rank, i) != extent(padded, padded_rank, i)) {
             return std::nullopt;
         }
-        batch *= logical[i];
+        batch *= extent(logical, rank, i);
     }
     const auto bytes_a = a.view_bytes();
     const auto bytes_b = b.view_bytes();
-    if (spec.physical_shape() != tt::tt_metal::Shape2D(batch * PH, PW) || bytes_a.size() != bytes_b.size() ||
-        bytes_a.size() != batch * PH * PW * E) {
+    if (H > PH || W > PW || spec.physical_shape() != tt::tt_metal::Shape2D(batch * PH, PW) ||
+        bytes_a.size() != bytes_b.size() || bytes_a.size() != batch * PH * PW * E) {
         return std::nullopt;
     }
     const std::byte* pa = bytes_a.data();
@@ -134,7 +141,8 @@ std::optional<bool> logical_values_equal_in_place(
 }
 
 // The shard's logical values as bytes, in row-major order of the logical shape: the comparison for layouts the
-// in-place walk does not describe. Block floats are unpacked to float first, so the comparison is on values.
+// in-place walk does not describe. Block floats are unpacked to float first, so the comparison is on values. FP8_E4M3
+// has no host decoder, so its one-byte codes are read as UINT8 through the same layout and compared as codes.
 std::vector<std::byte> logical_bytes(const tt::tt_metal::HostBuffer& shard, const tt::tt_metal::TensorSpec& spec) {
     const tt::tt_metal::HostTensor host = tt::tt_metal::HostTensor::from_buffer(shard, spec);
     const auto as_bytes = [](const auto& values) {
@@ -154,6 +162,23 @@ std::vector<std::byte> logical_bytes(const tt::tt_metal::HostBuffer& shard, cons
         case tt::tt_metal::DataType::UINT16: return as_bytes(host.to_vector<uint16_t>());
         case tt::tt_metal::DataType::UINT8: return as_bytes(host.to_vector<uint8_t>());
         case tt::tt_metal::DataType::INT8: return as_bytes(host.to_vector<int8_t>());
+        case tt::tt_metal::DataType::FP8_E4M3: {
+            const auto bytes = shard.view_bytes();
+            std::vector<uint8_t> codes(bytes.size());
+            if (!codes.empty()) {
+                std::memcpy(codes.data(), bytes.data(), codes.size());
+            }
+            const tt::tt_metal::TensorSpec codes_spec(
+                spec.logical_shape(),
+                tt::tt_metal::TensorLayout(
+                    tt::tt_metal::DataType::UINT8,
+                    spec.page_config(),
+                    spec.memory_config(),
+                    spec.tensor_layout().get_alignment()));
+            return as_bytes(
+                tt::tt_metal::HostTensor::from_buffer(tt::tt_metal::HostBuffer(std::move(codes)), codes_spec)
+                    .to_vector<uint8_t>());
+        }
         default: TT_THROW("verify_shards_match_topology: unsupported data type {}", spec.data_type());
     }
 }
