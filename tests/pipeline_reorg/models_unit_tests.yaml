@@ -2392,6 +2392,6 @@
     bh_p150:
       timeout: 20
       tier: 3
-  owner_id: "" # Maintainer action: assign a notification owner before enabling upstream.
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by erertertet)
   team: models
   budget_type: unit
