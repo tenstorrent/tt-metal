@@ -156,8 +156,9 @@ inline void _llk_sync_advance_dest_section_()
 /**
  * @brief Spin on the RISC until semaphore `sem_index` is nonzero. No Tensix wait is armed while it spins.
  *
- * Call it before this thread's first wait on a semaphore that another thread seeds and posts: that thread's first post
- * follows its SEMINIT, so a nonzero read proves the SEMINIT has landed, and no wait was pending when it did.
+ * Call it right before this thread's first wait on a semaphore that another thread seeds and posts: that thread's first
+ * post follows its SEMINIT, so a nonzero read proves the SEMINIT has landed, and no wait was pending when it did. Not
+ * at startup: a program with no sections never posts, and the spin would never end.
  *
  * @param sem_index Semaphore id in range [0, 7].
  * @note The semaphore must be 0 when the program starts.

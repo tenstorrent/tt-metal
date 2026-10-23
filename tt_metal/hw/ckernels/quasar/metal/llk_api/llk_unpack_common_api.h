@@ -78,8 +78,8 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     if constexpr (UnpackToDestEn) {
         _llk_unpack_dest_init_();
         // Seed the semaphores this thread posts, in front of its own first wait and post on them. Math arms no wait on
-        // UNPACK_MATH before this thread's first post (llk_math_pack_sync_init), and pack's first get on UNPACK_PACK
-        // follows math's first MATH_PACK post, so neither SEMINIT lands on a pending wait.
+        // UNPACK_MATH before this thread's first post (llk_math_wait_for_dest_available), and pack's first get on
+        // UNPACK_PACK follows math's first MATH_PACK post, so neither SEMINIT lands on a pending wait.
         constexpr std::uint32_t N = (DST_SYNC_MODE == DstSync::SyncFull) ? 1 : 2;
         _llk_sync_init_(semaphore::UNPACK_MATH, N /*max*/, 0 /*init*/);
         // DEST occupancy: unpack posts, pack gets; the unpacker's only gate, see llk_unpack_wait_for_dest_available.

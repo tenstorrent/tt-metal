@@ -132,6 +132,8 @@ using namespace ckernel;
 #if defined(UCK_CHLKC_MATH)
 thread_local ckernel::math::DataFormatConfigSet data_format_config_set __attribute__((used)) =
     ckernel::math::DataFormatConfigSet::UNCONFIGURED;
+// Unpack-to-dest: set once math has seen the unpacker's first UNPACK_MATH post of the program.
+thread_local bool unpack_math_seeded __attribute__((used)) = false;
 #endif
 
 void init_sync_registers() {
