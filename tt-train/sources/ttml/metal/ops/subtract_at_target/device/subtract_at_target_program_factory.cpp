@@ -6,10 +6,13 @@
 
 #include <cstring>
 #include <enchantum/enchantum.hpp>
+#include <optional>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
+#include "subtract_at_target_device_operation.hpp"
 #include "subtract_at_target_device_operation_types.hpp"
 
 namespace {
@@ -19,6 +22,10 @@ constexpr auto kReaderKernelPath =
 
 constexpr auto kWriterKernelPath =
     "tt-train/sources/ttml/metal/ops/subtract_at_target/device/kernels/dataflow/subtract_at_target_writer.cpp";
+
+// Kernel push order: reader, then writer
+constexpr uint32_t kReaderKernelIdx = 0U;
+constexpr uint32_t kWriterKernelIdx = 1U;
 
 // Reader runtime arg indices
 constexpr uint32_t kInputBufferIdx = 0U;
@@ -43,9 +50,20 @@ uint32_t float_to_uint32_bits(float v) {
     return bits;
 }
 
+// Rows of tiles (NC * Ht) of the padded input shape: the unit of the work split. create_descriptor() and the override
+// both split them over the device grid with compute_work_split, so the override patches exactly the cores that got
+// runtime args.
+uint32_t num_tile_rows(const ttnn::Shape& padded_shape) {
+    const uint32_t Ht = padded_shape[-2] / tt::constants::TILE_HEIGHT;
+    const uint32_t NC = padded_shape[0] * padded_shape[1];
+    return NC * Ht;
+}
+
 }  // namespace
 
 namespace ttml::metal::ops::subtract_at_target::device {
+
+TTML_ASSERT_DESCRIPTOR_OVERRIDE(SubtractAtTargetDeviceOperation, SubtractAtTargetProgramFactory);
 
 namespace {
 
@@ -72,21 +90,38 @@ ShardWindow compute_shard_window(
     return {first_v, last_v};
 }
 
-struct CreatedProgram {
-    tt::tt_metal::Program program;
-    SubtractAtTargetProgramFactory::shared_variables_t shared_variables;
+// The reader runtime args left out of the program hash: the device's shard window and the bits of subtract_value.
+// create_descriptor() and override_runtime_arguments() both take them from here, so a cache hit writes exactly what a
+// miss would.
+struct RuntimeScalars {
+    ShardWindow window;
+    uint32_t subtract_bits;
 };
 
-// Builds a single-device program with explicit shard window [first_v, last_v).
-// Mirrors the pre-mesh-workload `create` body; factored here so create_mesh_workload
-// can call it once per mesh coordinate.
-CreatedProgram create_program_for_device(
-    const ShardWindow& window, float subtract_value, const tensor_args_t& tensor_args, const ttnn::Tensor& output) {
+RuntimeScalars compute_runtime_scalars(
+    const operation_attributes_t& attrs,
+    const ttnn::Tensor& input,
+    const std::optional<ttnn::MeshCoordinate>& mesh_coordinate) {
+    TT_FATAL(mesh_coordinate.has_value(), "subtract_at_target: the shard window needs the device's mesh coordinate");
+    return RuntimeScalars{
+        compute_shard_window(attrs, *mesh_coordinate, input.device()->shape()),
+        float_to_uint32_bits(attrs.subtract_value)};
+}
+
+}  // namespace
+
+// Builds the program of one device, with the shard window of its mesh coordinate.
+tt::tt_metal::ProgramDescriptor SubtractAtTargetProgramFactory::create_descriptor(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output,
+    const std::optional<ttnn::MeshCoordinate>& mesh_coordinate) {
     const auto& input = tensor_args.input;
     const auto& target = tensor_args.target;
 
     auto* device = input.device();
-    tt::tt_metal::Program program{};
+    TT_FATAL(device != nullptr, "subtract_at_target: input must be on a (mesh) device");
+    tt::tt_metal::ProgramDescriptor desc;
 
     TT_FATAL(
         datatype_to_dataformat_converter(input.dtype()) == tt::DataFormat::Float16_b,
@@ -99,23 +134,24 @@ CreatedProgram create_program_for_device(
 
     const uint32_t Wt = padded_shape[-1] / tt::constants::TILE_WIDTH;
     const uint32_t Ht = padded_shape[-2] / tt::constants::TILE_HEIGHT;
-    const uint32_t NC = padded_shape[0] * padded_shape[1];
-    const uint32_t total_rows = NC * Ht;
+    const uint32_t total_rows = num_tile_rows(padded_shape);
 
     const uint32_t target_page_size = target.logical_shape()[-1] * target.element_size();
     const uint32_t target_read_page_size = tt::datum_size(tt::DataFormat::UInt32) * tt::constants::TILE_HEIGHT;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows);
+    const WorkSplit split = compute_work_split(compute_with_storage_grid_size, total_rows);
+    check_work_split(
+        split, num_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2);
 
-    create_circular_buffer(
-        program, all_cores, kTargetCbIndex, tt::DataFormat::UInt32, target_read_page_size, /*num_tiles=*/1U);
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kTargetCbIndex, tt::DataFormat::UInt32, target_read_page_size, /*num_tiles=*/1U));
 
-    create_circular_buffer(
-        program, all_cores, kOutputCbIndex, tt::DataFormat::Float16_b, bfloat16_tile_bytes, kNumOutputTiles);
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, kOutputCbIndex, tt::DataFormat::Float16_b, bfloat16_tile_bytes, kNumOutputTiles));
 
     auto* input_buffer = input.buffer();
     TT_FATAL(
@@ -139,149 +175,68 @@ CreatedProgram create_program_for_device(
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(target_buffer).append_to(reader_ct_args);
 
-    auto reader_kernel = create_reader_kernel(program, all_cores, reader_ct_args, {}, kReaderKernelPath);
+    desc.kernels.push_back(make_reader_kernel_descriptor(all_cores, reader_ct_args, {}, kReaderKernelPath));
 
     std::vector<uint32_t> writer_ct_args{Wt};
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_ct_args);
 
-    auto writer_kernel = create_writer_kernel(program, all_cores, writer_ct_args, {}, kWriterKernelPath);
+    desc.kernels.push_back(make_writer_kernel_descriptor(all_cores, writer_ct_args, {}, kWriterKernelPath));
 
-    const uint32_t subtract_bits = float_to_uint32_bits(subtract_value);
+    // Buffers are passed as Buffer*; override_runtime_arguments() rewrites them, the window and the subtract bits on
+    // every cache hit. Row counts and start rows follow from the hashed input shape.
+    const RuntimeScalars scalars = compute_runtime_scalars(operation_attributes, input, mesh_coordinate);
+    auto& reader = desc.kernels[kReaderKernelIdx];
+    auto& writer = desc.kernels[kWriterKernelIdx];
+    for_each_core_with_work(split, [&](const CoreWork& work) {
+        const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
+        reader.emplace_runtime_args(
+            core,
+            {input_buffer,
+             target_buffer,
+             num_rows,
+             start_row,
+             scalars.window.first_v,
+             scalars.window.last_v,
+             scalars.subtract_bits});
+        writer.emplace_runtime_args(core, {output_buffer, num_rows, start_row});
+    });
 
-    for_each_core_with_work(
-        num_cores,
-        num_cores_y,
-        core_group_1,
-        core_group_2,
-        num_rows_per_core_group_1,
-        num_rows_per_core_group_2,
-        [&](const CoreWork& work) {
-            const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
-            SetRuntimeArgs(
-                program,
-                reader_kernel,
-                core,
-                {input_buffer->address(),
-                 target_buffer->address(),
-                 num_rows,
-                 start_row,
-                 window.first_v,
-                 window.last_v,
-                 subtract_bits});
-            SetRuntimeArgs(program, writer_kernel, core, {output_buffer->address(), num_rows, start_row});
-        });
-
-    return CreatedProgram{
-        std::move(program),
-        SubtractAtTargetProgramFactory::shared_variables_t{
-            reader_kernel, writer_kernel, core_group_1, core_group_2, num_cores, num_cores_y}};
-}
-
-}  // namespace
-
-SubtractAtTargetProgramFactory::cached_mesh_workload_t SubtractAtTargetProgramFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    auto* mesh_device = tensor_args.input.device();
-    TT_FATAL(mesh_device != nullptr, "subtract_at_target: input must be on a (mesh) device");
-    const auto mesh_shape = mesh_device->shape();
-
-    tt::tt_metal::distributed::MeshWorkload mesh_workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_vars;
-
-    if (operation_attributes.cluster_axis.has_value()) {
-        // All devices sharing the same tp_rank form a contiguous slab (the hyperplane fixing
-        // the TP axis), so we register exactly one program per tp_rank.
-        const uint32_t tp_axis = *operation_attributes.cluster_axis;
-        const uint32_t tp_size = mesh_shape[tp_axis];
-
-        auto slab_start = ttnn::MeshCoordinate::zero_coordinate(mesh_shape.dims());
-        auto slab_end = ttnn::MeshCoordinate::zero_coordinate(mesh_shape.dims());
-        for (size_t d = 0; d < mesh_shape.dims(); ++d) {
-            slab_end[static_cast<int32_t>(d)] = mesh_shape[d] - 1U;
-        }
-
-        for (uint32_t rank = 0; rank < tp_size; ++rank) {
-            slab_start[static_cast<int32_t>(tp_axis)] = rank;
-            slab_end[static_cast<int32_t>(tp_axis)] = rank;
-            ttnn::MeshCoordinateRange slab{slab_start, slab_end};
-
-            const ShardWindow window{
-                operation_attributes.first_v + rank * operation_attributes.local_V,
-                operation_attributes.first_v + (rank + 1U) * operation_attributes.local_V};
-
-            // Restrict the slab to the part that's actually backed by the input tensor.
-            for (const auto& range : tensor_coords.ranges()) {
-                auto inter = slab.intersection(range);
-                if (!inter.has_value()) {
-                    continue;
-                }
-
-                auto created =
-                    create_program_for_device(window, operation_attributes.subtract_value, tensor_args, output);
-                mesh_workload.add_program(*inter, std::move(created.program));
-                shared_vars[*inter] = std::move(created.shared_variables);
-            }
-        }
-    } else {
-        // No cluster_axis: every coord may have a distinct flat-index tp_rank, so each device
-        // needs its own program with its own runtime args.
-        for (const auto& range : tensor_coords.ranges()) {
-            for (const auto& mesh_coord : range) {
-                auto window = compute_shard_window(operation_attributes, mesh_coord, mesh_shape);
-                auto created =
-                    create_program_for_device(window, operation_attributes.subtract_value, tensor_args, output);
-
-                ttnn::MeshCoordinateRange single_coord_range{mesh_coord};
-                mesh_workload.add_program(single_coord_range, std::move(created.program));
-                shared_vars[single_coord_range] = std::move(created.shared_variables);
-            }
-        }
-    }
-
-    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_vars)};
+    return desc;
 }
 
 void SubtractAtTargetProgramFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    auto* input_buffer = tensor_args.input.buffer();
-    auto* target_buffer = tensor_args.target.buffer();
-    auto* output_buffer = tensor_return_value.buffer();
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_coordinate) {
+    // The output address comes from the return value, which is the input itself on the in-place production call.
+    // Row counts and start rows follow from the hashed input shape and stay as create_descriptor() set them.
+    const auto& input = tensor_args.input;
+    const uint32_t input_addr = input.buffer()->address();
+    const uint32_t target_addr = tensor_args.target.buffer()->address();
+    const uint32_t output_addr = tensor_return_value.buffer()->address();
+    const RuntimeScalars scalars = compute_runtime_scalars(operation_attributes, input, mesh_coordinate);
+    const WorkSplit split =
+        compute_work_split(input.device()->compute_with_storage_grid_size(), num_tile_rows(input.padded_shape()));
 
-    auto* mesh_device = tensor_args.input.device();
-    const auto mesh_shape = mesh_device->shape();
-
-    const uint32_t subtract_bits = float_to_uint32_bits(operation_attributes.subtract_value);
-
-    for (auto& [coord_range, program] : cached_workload.workload.get_programs()) {
-        auto& sv = cached_workload.shared_variables.at(coord_range);
-        const auto& start_coord = coord_range.start_coord();
-
-        const auto window = compute_shard_window(operation_attributes, start_coord, mesh_shape);
-
-        auto& reader_args = GetRuntimeArgs(program, sv.reader_kernel_id);
-        auto& writer_args = GetRuntimeArgs(program, sv.writer_kernel_id);
-
-        for_each_core(sv.num_cores, sv.num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
-            {
-                auto& args = reader_args[core.x][core.y];
-                args[kInputBufferIdx] = input_buffer->address();
-                args[kTargetBufferIdx] = target_buffer->address();
-                args[kFirstVIdx] = window.first_v;
-                args[kLastVIdx] = window.last_v;
-                args[kSubtractValueIdx] = subtract_bits;
-            }
-            {
-                auto& args = writer_args[core.x][core.y];
-                args[kOutputBufferIdx] = output_buffer->address();
-            }
-        });
-    }
+    auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
+    auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);
+    for_each_core_with_work(split, [&](const CoreWork& work) {
+        const auto& core = work.core;
+        {
+            auto& runtime_args = reader_runtime_args[core.x][core.y];
+            runtime_args[kInputBufferIdx] = input_addr;
+            runtime_args[kTargetBufferIdx] = target_addr;
+            runtime_args[kFirstVIdx] = scalars.window.first_v;
+            runtime_args[kLastVIdx] = scalars.window.last_v;
+            runtime_args[kSubtractValueIdx] = scalars.subtract_bits;
+        }
+        {
+            auto& runtime_args = writer_runtime_args[core.x][core.y];
+            runtime_args[kOutputBufferIdx] = output_addr;
+        }
+    });
 }
 
 }  // namespace ttml::metal::ops::subtract_at_target::device

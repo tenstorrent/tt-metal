@@ -80,16 +80,18 @@ std::vector<tt::tt_metal::TensorTopology> SGDDeviceOperation::compute_output_top
     return {tensor_args.param.tensor_topology()};
 }
 
+// lr, momentum, dampening and weight_decay are left out of the key: they change between steps (lr schedules; dampening
+// is 0 on a momentum buffer's first update) and reach the kernels only through runtime args, which
+// SGDProgramFactory::override_runtime_arguments re-applies on every cache hit. Every other attribute and the full spec
+// of every tensor, including whether the momentum buffer is present, are keyed.
 ttsl::hash::hash_t SGDDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& param_tensor = tensor_args.param;
-    const auto& param_logical_shape = param_tensor.logical_shape();
-    auto nesterov = args.nesterov;
-    auto momentum_initialized = tensor_args.momentum_buffer.has_value();
-    auto hash = tt::tt_metal::operation::hash_operation<SGDDeviceOperation>(
-        nesterov, momentum_initialized, param_tensor.dtype(), param_logical_shape);
-
-    return hash;
+    operation_attributes_t keyed_args = args;
+    keyed_args.lr = 0.0F;
+    keyed_args.momentum = 0.0F;
+    keyed_args.dampening = 0.0F;
+    keyed_args.weight_decay = 0.0F;
+    return tt::tt_metal::operation::hash_operation<SGDDeviceOperation>(keyed_args, tensor_args);
 }
 
 }  // namespace ttml::metal::optimizers::sgd::device

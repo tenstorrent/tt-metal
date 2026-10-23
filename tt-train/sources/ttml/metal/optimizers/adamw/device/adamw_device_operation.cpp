@@ -96,17 +96,23 @@ std::vector<tt::tt_metal::TensorTopology> AdamWDeviceOperation::compute_output_t
     return {tensor_args.param.tensor_topology()};
 }
 
+// lr, beta1, beta2, beta1_pow, beta2_pow, epsilon, weight_decay and stochastic_rounding_seed are left out of the key:
+// they change from step to step (weight_decay also from parameter to parameter) and reach the kernels only through
+// runtime args, which AdamWProgramFactory::override_runtime_arguments re-applies on every cache hit. Every other
+// attribute and the full spec of every tensor (memory config and padded shape included), as well as whether
+// max_exp_avg_sq is present, are keyed.
 ttsl::hash::hash_t AdamWDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& param_tensor = tensor_args.param;
-    const auto& param_logical_shape = param_tensor.logical_shape();
-    auto amsgrad = args.amsgrad;
-    auto stochastic_rounding = args.stochastic_rounding;
-    auto max_exp_avg_sq_initialized = tensor_args.max_exp_avg_sq.has_value();
-    auto hash = tt::tt_metal::operation::hash_operation<AdamWDeviceOperation>(
-        amsgrad, stochastic_rounding, max_exp_avg_sq_initialized, param_tensor.dtype(), param_logical_shape);
-
-    return hash;
+    operation_attributes_t keyed_args = args;
+    keyed_args.lr = 0.0F;
+    keyed_args.beta1 = 0.0F;
+    keyed_args.beta2 = 0.0F;
+    keyed_args.beta1_pow = 0.0F;
+    keyed_args.beta2_pow = 0.0F;
+    keyed_args.epsilon = 0.0F;
+    keyed_args.weight_decay = 0.0F;
+    keyed_args.stochastic_rounding_seed = std::nullopt;
+    return tt::tt_metal::operation::hash_operation<AdamWDeviceOperation>(keyed_args, tensor_args);
 }
 
 }  // namespace ttml::metal::optimizers::adamw::device
