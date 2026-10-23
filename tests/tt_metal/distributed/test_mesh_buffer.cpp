@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -184,50 +185,58 @@ TEST_F(MeshBufferViewTest, RejectsInvalidPlacements) {
                 ShardSpec(config.shard_grid(), {1, 64}, ShardOrientation::ROW_MAJOR))));
     const DeviceAddr address = owner->address();
     const MeshCoordinate coord(0, 0);
-    const std::vector<SRAMTensorViewAddress> valid{
-        {MeshCoreCoord{coord, CoreCoord(0, 0)}, address}, {MeshCoreCoord{coord, CoreCoord(1, 0)}, address}};
+    PerNodeMeshDeviceMemorySpan valid;
+    valid.per_device_spans[coord].per_node_spans = {
+        {CoreCoord(0, 0), {address, 256}}, {CoreCoord(1, 0), {address, 256}}};
     using ::testing::HasSubstr;
     using ::testing::ThrowsMessage;
     EXPECT_EQ(create_sram_buffer_view(*mesh_device_, spec, valid).address(), address);
     EXPECT_THAT(
         [&] { create_sram_buffer_view(*mesh_device_, spec, {}); },
         ThrowsMessage<std::runtime_error>(HasSubstr("requires addresses")));
-    EXPECT_THAT(
-        [&] { create_sram_buffer_view(*mesh_device_, spec, {valid.front()}); },
-        ThrowsMessage<std::runtime_error>(HasSubstr("must cover every configured data core")));
     auto invalid = valid;
-    invalid.push_back(valid.front());
+    invalid.per_device_spans.at(coord).per_node_spans.erase(CoreCoord(1, 0));
     EXPECT_THAT(
         [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
-        ThrowsMessage<std::runtime_error>(HasSubstr("Duplicate SRAM view placement")));
+        ThrowsMessage<std::runtime_error>(HasSubstr("must cover every configured data core")));
     invalid = valid;
-    invalid.back().first.core_coord = CoreCoord(2, 0);
+    invalid.per_device_spans.at(coord).per_node_spans.emplace(CoreCoord(2, 0), NodeLocalSpan{address, 256});
     EXPECT_THAT(
         [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
         ThrowsMessage<std::runtime_error>(HasSubstr("core is not in the buffer configuration")));
     invalid = valid;
-    invalid.back().second += 1;
+    invalid.per_device_spans.at(coord).per_node_spans.at(CoreCoord(1, 0)).address += 1;
     EXPECT_THAT(
         [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
         ThrowsMessage<std::runtime_error>(HasSubstr("address must be aligned")));
-    invalid.back().second = address + 256;
+    invalid.per_device_spans.at(coord).per_node_spans.at(CoreCoord(1, 0)).address = address + 256;
     EXPECT_THAT(
         [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
         ThrowsMessage<std::runtime_error>(HasSubstr("requires one address on every core")));
     invalid = valid;
-    invalid.front().first.device_coord = MeshCoordinate(0, 1);
+    invalid.per_device_spans.emplace(MeshCoordinate(0, 1), valid.per_device_spans.at(coord));
     EXPECT_THAT(
         [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
         ThrowsMessage<std::runtime_error>(HasSubstr("device coordinate is outside the mesh")));
     invalid = valid;
-    for (auto& [location, value] : invalid) {
-        value = mesh_device_->get_device(coord)->l1_size_per_core();
+    for (auto& [core, span] : invalid.per_device_spans.at(coord).per_node_spans) {
+        span.address = mesh_device_->get_device(coord)->l1_size_per_core();
     }
     EXPECT_THAT(
         [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
         ThrowsMessage<std::runtime_error>(HasSubstr("outside allocatable L1")));
     invalid = valid;
-    invalid.front().second = 0;
+    invalid.per_device_spans.at(coord).per_node_spans.at(CoreCoord(0, 0)).address = 0;
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("outside allocatable L1")));
+    invalid = valid;
+    invalid.per_device_spans.at(coord).per_node_spans.at(CoreCoord(0, 0)).size = 255;
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("padded tensor footprint exceeds supplied span")));
+    invalid = valid;
+    invalid.per_device_spans.at(coord).per_node_spans.at(CoreCoord(0, 0)).size = std::numeric_limits<uint64_t>::max();
     EXPECT_THAT(
         [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
         ThrowsMessage<std::runtime_error>(HasSubstr("outside allocatable L1")));
@@ -258,15 +267,19 @@ TEST_F(MeshBufferViewBoundsTest, RespectsAllocatorRegions) {
                 BufferType::L1,
                 ShardSpec(config.shard_grid(), {1, 64}, ShardOrientation::ROW_MAJOR))));
     const auto footprint = spec.compute_consumed_memory_bytes_per_bank(alignment, 1);
+    // Describe the supplied bytes without claiming ownership or writing them.
+    const auto memory_at = [&](DeviceAddr address) {
+        PerNodeMeshDeviceMemorySpan memory;
+        memory.per_device_spans[coord].per_node_spans.emplace(CoreCoord(0, 0), NodeLocalSpan{address, footprint});
+        return memory;
+    };
     // Boundary views carry metadata only; no writes occur without an owning allocation.
     for (const DeviceAddr address : {base, end - footprint}) {
-        EXPECT_EQ(
-            create_sram_buffer_view(*mesh_device_, spec, {{MeshCoreCoord{coord, CoreCoord(0, 0)}, address}}).address(),
-            address);
+        EXPECT_EQ(create_sram_buffer_view(*mesh_device_, spec, memory_at(address)).address(), address);
     }
     for (const DeviceAddr address : {base - alignment, end - alignment, end, end + 16 * 1024}) {
         EXPECT_THAT(
-            [&] { create_sram_buffer_view(*mesh_device_, spec, {{MeshCoreCoord{coord, CoreCoord(0, 0)}, address}}); },
+            [&] { create_sram_buffer_view(*mesh_device_, spec, memory_at(address)); },
             ThrowsMessage<std::runtime_error>(HasSubstr("outside allocatable L1")));
     }
     const DeviceLocalBufferConfig small_config{
@@ -338,12 +351,11 @@ TEST_F(MeshBufferViewTest, DistinctCoreAddressesPreserveBacking) {
         ShardSpec(config.shard_grid(), {1, 64}, ShardOrientation::ROW_MAJOR));
     set_per_core_allocation(memory, true);
     const TensorSpec spec(Shape{2, 64}, TensorLayout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), memory));
+    PerNodeMeshDeviceMemorySpan spans;
+    spans.per_device_spans[coord].per_node_spans = {
+        {CoreCoord(0, 0), {owner->address(), 256}}, {CoreCoord(1, 0), {owner->address() + 256, 256}}};
     // These legacy transfer helpers require shared ownership; the view factory itself does not.
-    auto view = std::make_shared<MeshBuffer>(create_sram_buffer_view(
-        *mesh_device_,
-        spec,
-        {{MeshCoreCoord{coord, CoreCoord(0, 0)}, owner->address()},
-         {MeshCoreCoord{coord, CoreCoord(1, 0)}, owner->address() + 256}}));
+    auto view = std::make_shared<MeshBuffer>(create_sram_buffer_view(*mesh_device_, spec, spans));
     std::vector<uint32_t> values(128, 17);
     std::fill(values.begin() + 64, values.end(), 29);
     WriteShard(mesh_device_->mesh_command_queue(), view, values, coord, true);

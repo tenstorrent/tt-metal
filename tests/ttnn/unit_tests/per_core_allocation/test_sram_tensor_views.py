@@ -42,11 +42,23 @@ def _read(tensor):
 
 
 def _view(mesh, spec, owner, placements):
-    """Create an address-based view after resolving this test's backing offsets."""
-    addresses = [
-        (ttnn.MeshCoreCoord(coord, core), _address(owner, coord, core) + offset) for coord, core, offset in placements
-    ]
-    return ttnn.experimental_create_sram_tensor_view(mesh, spec, addresses)
+    """Describe the remaining owned bytes after each view offset."""
+    core_count = owner.memory_config().shard_spec.grid.num_cores()
+    size = owner.spec.compute_consumed_memory_bytes_per_bank(ttnn.get_l1_alignment(), core_count)
+    spans = _memory(
+        [(coord, core, _address(owner, coord, core) + offset, size - offset) for coord, core, offset in placements]
+    )
+    return ttnn.experimental_create_sram_tensor_view(mesh, spec, spans)
+
+
+def _memory(entries):
+    """Build explicit per-device and per-core spans for view tests."""
+    devices = {}
+    for coord, core, address, size in entries:
+        devices.setdefault(coord, {})[core] = ttnn.NodeLocalSpan(address, size)
+    return ttnn.PerNodeMeshDeviceMemorySpan(
+        {coord: ttnn.PerNodeDeviceLocalMemorySpan(cores) for coord, cores in devices.items()}
+    )
 
 
 def _address(tensor, coord, core):
@@ -80,21 +92,40 @@ def test_caller_owned_views_preserve_neighbor_bytes(per_core_mesh_device, per_co
     assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == baseline
 
 
-@pytest.mark.parametrize("bad", ["alignment", "duplicate", "missing"])
+@pytest.mark.parametrize("bad", ["alignment", "short_span", "missing"])
 def test_view_rejects_invalid_placements(per_core_mesh_device, bad, expect_error):
     mesh = per_core_mesh_device
     coord, core = ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0)
     owner = _owner(mesh, core)
     spec = _spec([core], 256)
     address = _address(owner, coord, core)
-    placement = (ttnn.MeshCoreCoord(coord, core), address)
+    placement = (coord, core, address, 256)
     if bad == "alignment":
-        placement = (ttnn.MeshCoreCoord(coord, core), address + 1)
+        placement = (coord, core, address + 1, 256)
+    if bad == "short_span":
+        placement = (coord, core, address, 255)
     placements = [] if bad == "missing" else [placement]
-    if bad == "duplicate":
-        placements.append(placement)
     with expect_error(RuntimeError, "SRAM"):
-        ttnn.experimental_create_sram_tensor_view(mesh, spec, placements)
+        ttnn.experimental_create_sram_tensor_view(mesh, spec, _memory(placements))
+
+
+def test_view_rejects_span_that_fits_payload_but_not_padding(per_core_mesh_device, expect_error):
+    """Reject a 17-byte span when the tensor's aligned writes need more bytes."""
+    mesh = per_core_mesh_device
+    coord, core = ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0)
+    owner = _owner(mesh, core)
+    spec = _spec([core], 17)
+    footprint = spec.compute_consumed_memory_bytes_per_bank(ttnn.get_l1_alignment(), 1)
+    assert footprint > 17
+    with expect_error(RuntimeError, "padded tensor footprint exceeds supplied span"):
+        ttnn.experimental_create_sram_tensor_view(
+            mesh, spec, _memory([(coord, core, _address(owner, coord, core), 17)])
+        )
+    view = ttnn.experimental_create_sram_tensor_view(
+        mesh, spec, _memory([(coord, core, _address(owner, coord, core), footprint)])
+    )
+    assert _address(view, coord, core) == _address(owner, coord, core)
+    assert torch.all(_read(owner) == 0)
 
 
 def test_nested_view_preserves_address_and_geometry(per_core_mesh_device):
@@ -123,7 +154,7 @@ def test_lockstep_view_requires_one_address(per_core_mesh_device, expect_error):
         ttnn.experimental_create_sram_tensor_view(
             mesh,
             spec,
-            [(ttnn.MeshCoreCoord(coord, core), owner.buffer_address() + i * 256) for i, core in enumerate(cores)],
+            _memory([(coord, core, owner.buffer_address() + i * 256, 256) for i, core in enumerate(cores)]),
         )
 
 
@@ -180,6 +211,21 @@ def test_view_preserves_selected_device_coverage(mesh_device):
     selected_host = ttnn.distribute_tensor(ttnn.from_torch(value, dtype=ttnn.uint8), mapper)
     ttnn.copy_host_to_device_tensor(selected_host, view)
     torch.testing.assert_close(_read(view), value)
+
+
+def test_view_device_order_is_independent_of_span_insertion(mesh_device):
+    """Keep tensor topology and reference addresses stable for unordered span maps."""
+    mesh, core = mesh_device, ttnn.CoreCoord(0, 0)
+    coords = list(ttnn.MeshCoordinateRange(mesh.shape))[:2]
+    assert len(coords) == 2
+    owner = _owner(mesh, core)
+    entries = [(coord, core, _address(owner, coord, core), 256) for coord in coords]
+    first = ttnn.experimental_create_sram_tensor_view(mesh, _spec([core], 256), _memory(entries))
+    second = ttnn.experimental_create_sram_tensor_view(mesh, _spec([core], 256), _memory(reversed(entries)))
+    assert first.device_coords() == second.device_coords() == coords
+    assert first.buffer_address() == second.buffer_address()
+    for coord in coords:
+        assert _address(first, coord, core) == _address(second, coord, core)
 
 
 def test_allocation_only_views_narrow_writes_and_lifetime(mesh_device):
