@@ -33,6 +33,7 @@ ALWI void sin_tile_init() { MATH(SFPU_UNARY_INIT_FN(sine, ckernel::sfpu::sine_in
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sin_tile(uint32_t idst) {
+    sin_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -63,6 +64,7 @@ ALWI void cos_tile_init() { MATH(SFPU_UNARY_INIT_FN(cosine, ckernel::sfpu::cosin
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void cos_tile(uint32_t idst) {
+    cos_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
