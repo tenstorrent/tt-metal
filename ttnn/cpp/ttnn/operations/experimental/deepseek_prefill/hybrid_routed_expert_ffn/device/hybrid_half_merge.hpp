@@ -39,6 +39,13 @@ struct PassBarrierPlan {
     uint32_t total_arrivals = 0;
 };
 
+// The per-expert weight-base table, [gate[0..E), up[0..E), down[0..E)] as uint32, when the halves read it
+// instead of runtime args. No buffer means they were built with the runtime args.
+struct WeightTablePlan {
+    tt::tt_metal::Buffer* buffer = nullptr;
+    uint32_t experts_per_chip = 0;
+};
+
 // What the merge decided. Logged by the caller on a cache miss; the arena footprint is also
 // enforced against the arena's real per-core size inside overlay_circular_buffers.
 struct MergeReport {
@@ -73,6 +80,11 @@ struct MergeReport {
 // passes never run at once, so their CBs are laid out from the arena's base independently and the
 // program's L1 cost is the larger half, not the sum -- which is what lets both halves keep the
 // whole core grid.
+//
+// `weight_table`, when its buffer is set, is the one-page DRAM table of every expert's weight bases
+// that both halves were built to read instead of per-expert runtime args (each half's
+// weights_from_table). The merge gives it an L1 page past both halves' buffers and hands the
+// reader its address; see kernels/hybrid_weight_table.hpp.
 tt::tt_metal::ProgramDescriptor merge_halves(
     tt::tt_metal::ProgramDescriptor fused,
     tt::tt_metal::ProgramDescriptor unified,
@@ -80,6 +92,7 @@ tt::tt_metal::ProgramDescriptor merge_halves(
     bool run_fused_pass,
     tt::tt_metal::Buffer* l1_arena,
     const PassBarrierPlan& barrier,
+    const WeightTablePlan& weight_table,
     MergeReport& report);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn

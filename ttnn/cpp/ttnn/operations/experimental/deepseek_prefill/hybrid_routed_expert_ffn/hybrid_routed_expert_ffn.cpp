@@ -58,7 +58,8 @@ ttnn::Tensor hybrid_routed_expert_moe(
     const std::optional<GlobalSemaphore>& final_arrived_semaphore,
     const std::optional<GlobalSemaphore>& expert_go_semaphore,
     const std::optional<ttnn::Tensor>& forwarding_buffer,
-    const std::vector<GlobalSemaphore>& channel_semaphores) {
+    const std::vector<GlobalSemaphore>& channel_semaphores,
+    const std::optional<ttnn::Tensor>& weight_address_table) {
     TT_FATAL(
         gate_projs.size() == up_projs.size() && gate_projs.size() == down_projs.size(),
         "gate/up/down projection lists must have the same length (got {}, {}, {})",
@@ -228,7 +229,8 @@ ttnn::Tensor hybrid_routed_expert_moe(
             .dispatched_metadata = dispatched_metadata,
             .expert_offsets = expert_offsets,
             .replicated_global_expert_idx_table = replicated_global_expert_idx_table,
-            .forwarding_buffer = forwarding_buffer});
+            .forwarding_buffer = forwarding_buffer,
+            .weight_table = weight_address_table});
 }
 
 uint32_t hybrid_routed_expert_moe_channel_semaphore_count(ttnn::MeshDevice* mesh_device, uint32_t combine_axis) {
