@@ -524,7 +524,7 @@ inline void calculate_cbrt_bf16_scheduled() {
 }
 
 template <int ITERATIONS = 32>
-inline void calculate_cbrt_bf16() {
+__attribute__((noinline)) inline void calculate_cbrt_bf16() {
     if constexpr (ITERATIONS == 32) {
         calculate_cbrt_bf16_scheduled();
     } else {

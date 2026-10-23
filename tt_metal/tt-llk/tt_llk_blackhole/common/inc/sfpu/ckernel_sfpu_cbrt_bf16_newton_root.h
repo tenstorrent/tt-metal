@@ -6,6 +6,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_cbrt_bf16_newton_root_core.h"
+#include "ckernel_sfpu_cbrt_bf16_replay_window.h"
 #include "sfpi.h"
 
 // Sibling stock wrappers may include another generated config while this
@@ -34,19 +35,16 @@ inline void calculate_newton_root()
         TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, magic_bits >> 16);
         TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, magic_bits & 0xffffu);
     }
-    load_replay_buf<Exec>(
-        0,
-        Config::kBodySlots,
-        [&]
-        {
-            ttpoly::cbrt::newton_cbrt_body<ADDR_MOD_7, ADDR_MOD_7>();
-            TTI_INCRWC(0, 2, 0, 0);
-        });
-#pragma GCC unroll 8
-    for (int row = 1; row < Iterations; ++row)
     {
-        TTI_REPLAY(0, Config::kBodySlots, 0, 0);
+        auto body = [&] { ttpoly::cbrt::newton_cbrt_body<ADDR_MOD_7, ADDR_MOD_7>(); };
+        record_row<0, Config::kBodySlots>(body);
         TTI_INCRWC(0, 2, 0, 0);
+#pragma GCC unroll 8
+        for (int row = 1; row < Iterations; ++row)
+        {
+            replay_row<0, Config::kBodySlots>(body);
+            TTI_INCRWC(0, 2, 0, 0);
+        }
     }
 }
 } // namespace ckernel::sfpu::bf16::cbrt

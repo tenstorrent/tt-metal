@@ -5,6 +5,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_cbrt_bf16_replay_window.h"
 #include "sfpu/ckernel_sfpu_cbrt_bf16_newton_root_core.h"
 #include "sfpu/ckernel_sfpu_cbrt_bf16_newton_root.h"
 // Sibling stock wrappers may include another generated config while this
