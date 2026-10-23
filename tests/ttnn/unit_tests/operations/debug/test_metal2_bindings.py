@@ -1,16 +1,19 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
 """Host-only tests of the Metal 2.0 program spec Python bindings (ttnn.experimental.metal2).
 
-No device is opened. The tests pin three things: every struct field the binding exposes (a
-field renamed or removed in tt_metal fails here, a field added fails the static_assert in
-ttnn/cpp/ttnn-nanobind/program_specs.cpp), the defaults mirror the C++ defaults, and every
-container converts in both directions (Table <-> dict, Group <-> list, Nodes <-> CoreCoord /
-CoreRange / CoreRangeSet, source and hw_config variants).
+No device is opened. The tests pin: the exact set of fields every struct exposes (a field renamed
+or removed in tt_metal fails here, a field added fails the static_assert in
+ttnn/cpp/ttnn-nanobind/program_specs.cpp); that the keyword constructors' defaults equal the C++
+default member initialisers; every container conversion in both directions (Table <-> dict,
+Group <-> list, Nodes <-> CoreCoord / CoreRange / CoreRangeSet, the source and hw_config
+variants); and the copy semantics of every property (nothing read from a spec can dangle after
+the spec changes).
 """
 
+import copy
 import pathlib
 
 import pytest
@@ -19,7 +22,7 @@ import torch
 import ttnn
 from ttnn.experimental import metal2 as m2
 
-# The Python-visible fields of every bound struct. Keep in step with the static_asserts in
+# The Python-visible fields of every bound struct, exactly. Keep in step with the static_asserts in
 # program_specs.cpp: that file pins the C++ field count, this pins what Python sees.
 EXPECTED_FIELDS = {
     m2.TensorSpecRelaxations: {
@@ -35,13 +38,14 @@ EXPECTED_FIELDS = {
         "entry_size",
         "num_entries",
         "data_format",
+        "data_format_raw",
         "tile_format",
         "borrowed_from",
         "advanced_options",
     },
     m2.SemaphoreAdvancedOptions: {"max_value"},
     m2.SemaphoreSpec: {"unique_id", "target_nodes", "advanced_options"},
-    m2.ScratchpadSpec: {"unique_id", "size_per_node", "data_format", "tile_format"},
+    m2.ScratchpadSpec: {"unique_id", "size_per_node", "data_format", "data_format_raw", "tile_format"},
     m2.DataMovement1XXConfig: {"processor", "noc", "noc_mode", "dedicated_noc_sharing"},
     m2.DataMovement2XXConfig: {"disable_dfb_implicit_sync_for", "disable_dfb_implicit_sync_for_all"},
     m2.DataMovementHardwareConfig: {"config_1xx", "config_2xx"},
@@ -102,7 +106,28 @@ EXPECTED_FIELDS = {
     m2.AdvancedKernelRunArgs: {"runtime_varargs", "common_runtime_varargs"},
     m2.KernelRunArgs: {"kernel", "runtime_arg_values", "common_runtime_arg_values", "advanced_options"},
     m2.DFBRunOverrides: {"dfb", "entry_size", "num_entries"},
-    m2.ProgramRunArgs: {"kernel_run_args", "dfb_run_overrides"},
+    m2.ProgramRunArgs: {"kernel_run_args", "dfb_run_overrides", "prefetcher_pipe_names"},
+}
+
+# Required constructor arguments per class (everything else has a default).
+REQUIRED = {
+    m2.TensorParameter: lambda: {"unique_id": "a", "spec": _host_spec()},
+    m2.DataflowBufferSpec: lambda: {"unique_id": "ring", "entry_size": 2048, "num_entries": 2},
+    m2.SemaphoreSpec: lambda: {"unique_id": "s", "target_nodes": ttnn.CoreCoord(0, 0)},
+    m2.ScratchpadSpec: lambda: {"unique_id": "tmp", "size_per_node": 64},
+    m2.DataMovement1XXConfig: lambda: {"processor": ttnn.DataMovementProcessor.RISCV_1, "noc": ttnn.NOC.NOC_0},
+    m2.SourceCode: lambda: {"code": ""},
+    m2.DFBBinding: lambda: {"dfb_spec_name": "r", "accessor_name": "a", "endpoint_type": m2.DFBEndpointType.PRODUCER},
+    m2.SemaphoreBinding: lambda: {"semaphore_spec_name": "s", "accessor_name": "a"},
+    m2.ScratchpadBinding: lambda: {"scratchpad_spec_name": "s", "accessor_name": "a"},
+    m2.TensorBinding: lambda: {"tensor_parameter_name": "t", "accessor_name": "a"},
+    m2.TensorBindingSequence: lambda: {"sequence_name": "seq"},
+    m2.PrefetcherPipeBinding: lambda: {"pipe_parameter_names": ["p"], "accessor_name": "a"},
+    m2.KernelSpec: lambda: {"unique_id": "k", "source": "/tmp/k.cpp", "hw_config": m2.ComputeHardwareConfig()},
+    m2.WorkUnitSpec: lambda: {"name": "main", "kernels": ["k"], "target_nodes": ttnn.CoreCoord(0, 0)},
+    m2.PrefetcherPipeParameter: lambda: {"unique_id": "pipe", "receivers": ttnn.CoreCoord(0, 0)},
+    m2.KernelRunArgs: lambda: {"kernel": "k"},
+    m2.DFBRunOverrides: lambda: {"dfb": "ring"},
 }
 
 
@@ -110,30 +135,72 @@ def _host_spec(shape=(32, 32)):
     return ttnn.from_torch(torch.zeros(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT).spec
 
 
-def test_namespace_is_experimental_only():
-    assert ttnn.experimental.metal2.ProgramSpec is ttnn._ttnn.program_spec.ProgramSpec
-    assert set(m2.__all__) <= set(dir(m2))
-    # The host API is experimental; nothing leaks into the public ttnn namespace.
-    for name in ("ProgramSpec", "KernelSpec", "DataflowBufferSpec", "Precision", "UnpackMode", "SourceCode"):
-        assert not hasattr(ttnn, name), f"ttnn.{name} must not exist; use ttnn.experimental.metal2.{name}"
-
-
 def _instance(cls):
     # TensorParameter has no default constructor (TensorSpec does not); everything else does.
     if cls is m2.TensorParameter:
-        return m2.TensorParameter("a", _host_spec())
+        return m2.TensorParameter(**REQUIRED[cls]())
     return cls()
 
 
+def _exposed_fields(instance):
+    cls = type(instance)
+    return {
+        name
+        for name in dir(instance)
+        if not name.startswith("_")
+        and not callable(getattr(cls, name, None))
+        and isinstance(getattr(cls, name, None), property)
+    }
+
+
+def _plain(value):
+    """A comparable Python value: bound structs become dicts of their fields, enums their names."""
+    if type(value) in EXPECTED_FIELDS:
+        return {f: _plain(getattr(value, f)) for f in EXPECTED_FIELDS[type(value)]}
+    if isinstance(value, dict):
+        return {str(k): _plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)) or type(value).__name__ == "VectorUInt32":
+        return [_plain(v) for v in value]
+    if hasattr(value, "name") and hasattr(value, "value") and not isinstance(value, (str, bytes)):
+        return value.name  # enum member
+    if isinstance(value, (ttnn.TensorSpec, ttnn.CoreCoord, ttnn.CoreRange, ttnn.CoreRangeSet, ttnn.Tile)):
+        return str(value)
+    return value
+
+
+def test_namespace_is_experimental_only():
+    assert ttnn.experimental.metal2.ProgramSpec is ttnn._ttnn.program_spec.ProgramSpec
+    bound = {n for n in dir(ttnn._ttnn.program_spec) if not n.startswith("_")}
+    assert set(m2.__all__) == bound | {"KernelBuildOptLevel"}
+    # The host API is experimental; nothing leaks into the public ttnn namespace.
+    leaked = set(m2.__all__) & set(dir(ttnn))
+    assert not leaked, f"{sorted(leaked)} must live under ttnn.experimental.metal2 only"
+
+
 @pytest.mark.parametrize("cls", list(EXPECTED_FIELDS), ids=lambda c: c.__name__)
-def test_struct_exposes_every_field(cls):
-    instance = _instance(cls)
-    missing = {f for f in EXPECTED_FIELDS[cls] if not hasattr(instance, f)}
-    assert not missing, f"{cls.__name__} lost fields {sorted(missing)}"
-    # tensor_args and advanced_options of ProgramRunArgs hold non-owning references and stay unbound.
-    if cls is m2.ProgramRunArgs:
-        assert not hasattr(instance, "tensor_args")
-        assert not hasattr(instance, "advanced_options")
+def test_struct_exposes_exactly_the_expected_fields(cls):
+    assert _exposed_fields(_instance(cls)) == EXPECTED_FIELDS[cls]
+
+
+@pytest.mark.parametrize("cls", list(EXPECTED_FIELDS), ids=lambda c: c.__name__)
+def test_keyword_constructor_defaults_equal_cpp_defaults(cls):
+    """cls(required...) equals a default-constructed instance with the same required fields set."""
+    if cls is m2.TensorParameter:
+        return  # no default constructor; its only defaulted field is checked in test_defaults_mirror_cpp
+    required = REQUIRED.get(cls, dict)()
+    via_keywords = cls(**required)
+    via_default = cls()
+    for name, value in required.items():
+        setattr(via_default, name, value)
+    assert _plain(via_keywords) == _plain(via_default)
+
+
+@pytest.mark.parametrize("cls", list(EXPECTED_FIELDS), ids=lambda c: c.__name__)
+def test_copy_and_deepcopy(cls):
+    original = _instance(cls)
+    for clone in (copy.copy(original), copy.deepcopy(original)):
+        assert clone is not original
+        assert _plain(clone) == _plain(original)
 
 
 def test_enums():
@@ -142,6 +209,7 @@ def test_enums():
     assert {m.name for m in m2.UnpackMode} == {"UnpackToSrc", "UnpackToDest"}
     assert {m.name for m in m2.Precision} == {"Approximate", "Precise"}
     assert {m.name for m in m2.DedicatedNocSharing} == {"EXCLUSIVE", "SHARED_DISJOINT_TRAFFIC"}
+    assert m2.KernelBuildOptLevel is ttnn.experimental.fabric_mux.KernelBuildOptLevel
 
 
 def test_defaults_mirror_cpp():
@@ -149,6 +217,7 @@ def test_defaults_mirror_cpp():
     assert not any(
         (relax.match_padded_shape_only, relax.dynamic_tensor_shape, relax.relax_logical_rank, relax.match_page_size)
     )
+    assert _plain(m2.TensorParameter("a", _host_spec()).relaxations) == _plain(m2.TensorSpecRelaxations())
 
     binding = m2.DFBBinding("ring", "in", m2.DFBEndpointType.PRODUCER)
     assert binding.access_pattern == m2.DFBAccessPattern.STRIDED
@@ -167,10 +236,8 @@ def test_defaults_mirror_cpp():
     assert compute.config_1xx is None and compute.config_2xx is None
     assert m2.Compute1XXConfig().bfp_pack_precision_mode == m2.Precision.Approximate
 
-    assert m2.CompilerOptions().opt_level == ttnn.experimental.fabric_mux.KernelBuildOptLevel.O2
-    assert m2.CompilerOptions(opt_level=ttnn.experimental.fabric_mux.KernelBuildOptLevel.O3).opt_level == (
-        ttnn.experimental.fabric_mux.KernelBuildOptLevel.O3
-    )
+    assert m2.CompilerOptions().opt_level == m2.KernelBuildOptLevel.O2
+    assert m2.CompilerOptions(opt_level=m2.KernelBuildOptLevel.O3).opt_level == m2.KernelBuildOptLevel.O3
 
     kernel = m2.KernelSpec("k", "/tmp/k.cpp", m2.create_reader_dm_config())
     assert kernel.num_threads == 1
@@ -179,9 +246,25 @@ def test_defaults_mirror_cpp():
     assert kernel.advanced_options.num_runtime_varargs == 0
 
     assert m2.DataflowBufferSpec("ring", 2048, 2).data_format is None
+    assert m2.DataflowBufferSpec("ring", 2048, 2).data_format_raw is None
     assert m2.DataflowBufferSpec("ring", 2048, 2).borrowed_from is None
     assert m2.SemaphoreAdvancedOptions().max_value == 0
     assert m2.DFBRunOverrides("ring").entry_size is None
+    assert m2.ProgramSpec().name == ""
+    assert m2.SourceCode().code == ""
+    pipe = m2.PrefetcherPipeParameter("pipe", ttnn.CoreCoord(0, 0))
+    assert (pipe.ring_size, pipe.entry_size) == (0, 0)
+
+
+def test_optional_tails_are_keyword_only(expect_error):
+    with expect_error(TypeError, "incompatible function arguments"):
+        m2.DataflowBufferSpec("in", 2048, 2, ttnn.bfloat16)
+    with expect_error(TypeError, "incompatible function arguments"):
+        m2.PrefetcherPipeParameter("pipe", ttnn.CoreCoord(0, 0), 4096, 64)
+    with expect_error(TypeError, "incompatible function arguments"):
+        m2.KernelSpec("k", "/tmp/k.cpp", m2.ComputeHardwareConfig(), 4)
+    with expect_error(TypeError, "incompatible function arguments"):
+        m2.DFBBinding("r", "a", m2.DFBEndpointType.PRODUCER, m2.DFBAccessPattern.ALL)
 
 
 def test_binding_helpers():
@@ -215,10 +298,26 @@ def test_reader_writer_configs():
     writer = m2.create_writer_dm_config()
     assert writer.config_1xx.processor == ttnn.DataMovementProcessor.RISCV_0
     assert writer.config_1xx.noc.value == ttnn.NOC.NOC_1.value
+
+    shared = m2.DataMovementHardwareConfig(
+        config_1xx=m2.DataMovement1XXConfig(
+            ttnn.DataMovementProcessor.RISCV_0,
+            ttnn.NOC.NOC_1,
+            noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+            dedicated_noc_sharing=m2.DedicatedNocSharing.SHARED_DISJOINT_TRAFFIC,
+        )
+    )
+    assert shared.config_1xx.noc_mode == ttnn.NOC_MODE.DM_DYNAMIC_NOC
+    assert shared.config_1xx.dedicated_noc_sharing == m2.DedicatedNocSharing.SHARED_DISJOINT_TRAFFIC
+
     quasar = m2.DataMovementHardwareConfig(config_2xx=m2.DataMovement2XXConfig(disable_dfb_implicit_sync_for_all=True))
     assert quasar.config_1xx is None
     assert quasar.config_2xx.disable_dfb_implicit_sync_for_all is True
     assert quasar.config_2xx.disable_dfb_implicit_sync_for == []
+
+    compute = m2.ComputeHardwareConfig(config_1xx=m2.Compute1XXConfig(bfp_pack_precision_mode=m2.Precision.Precise))
+    assert compute.config_1xx.bfp_pack_precision_mode == m2.Precision.Precise
+    assert m2.ComputeHardwareConfig(config_2xx=m2.Compute2XXConfig()).config_2xx is not None
 
 
 def test_tables_round_trip_as_dicts():
@@ -235,18 +334,31 @@ def test_tables_round_trip_as_dicts():
         kernel="k",
         runtime_arg_values={"num_tiles": {c00: 3, c10: 4}, "start_id": {c00: 0, c10: 3}},
         common_runtime_arg_values={"scaler": 0x3F800000},
+        advanced_options=m2.AdvancedKernelRunArgs(runtime_varargs={c00: [1, 2, 3]}, common_runtime_varargs=[9]),
     )
     assert run_args.runtime_arg_values["num_tiles"][c10] == 4
     assert run_args.runtime_arg_values["start_id"] == {c00: 0, c10: 3}
     assert run_args.common_runtime_arg_values == {"scaler": 0x3F800000}
-
-    varargs = m2.AdvancedKernelRunArgs(runtime_varargs={c00: [1, 2, 3]}, common_runtime_varargs=[9])
-    assert varargs.runtime_varargs == {c00: [1, 2, 3]}
-    assert varargs.common_runtime_varargs == [9]
+    assert list(run_args.advanced_options.runtime_varargs[c00]) == [1, 2, 3]
+    assert list(run_args.advanced_options.common_runtime_varargs) == [9]
 
     defines = m2.CompilerOptions(defines={"FAST": "1"}, include_paths=["/tmp/inc"])
     assert defines.defines == {"FAST": "1"}
     assert [pathlib.Path(p) for p in defines.include_paths] == [pathlib.Path("/tmp/inc")]
+
+
+def test_duplicate_keys_after_conversion_are_rejected(expect_error):
+    # (0, 0) and CoreCoord(0, 0) are distinct dict keys in Python but the same node once converted.
+    with expect_error(TypeError, "incompatible function arguments"):
+        m2.KernelRunArgs("k", runtime_arg_values={"n": {(0, 0): 1, ttnn.CoreCoord(0, 0): 2}})
+
+
+def test_vector_uint32_fields_are_the_opaque_vector_type():
+    # std::vector<uint32_t> is bound opaquely (VectorUInt32) for the whole extension; lists convert on input.
+    advanced = m2.KernelAdvancedOptions(compile_time_varargs=[7, 8])
+    assert type(advanced.compile_time_varargs).__name__ == "VectorUInt32"
+    assert list(advanced.compile_time_varargs) == [7, 8]
+    assert advanced.compile_time_varargs == [7, 8]
 
 
 def test_variants_round_trip():
@@ -260,6 +372,11 @@ def test_variants_round_trip():
     assert inline.is_compute_kernel()
     assert isinstance(inline.hw_config, m2.ComputeHardwareConfig)
 
+    inline.source = "/tmp/other.cpp"
+    assert pathlib.Path(inline.source) == pathlib.Path("/tmp/other.cpp")
+    inline.hw_config = m2.create_writer_dm_config()
+    assert inline.is_data_movement_kernel()
+
     core = ttnn.CoreCoord(2, 3)
     core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))
     core_set = ttnn.CoreRangeSet([core_range])
@@ -267,16 +384,17 @@ def test_variants_round_trip():
         unit = m2.WorkUnitSpec("main", ["k"], nodes)
         assert isinstance(unit.target_nodes, cls)
         assert m2.SemaphoreSpec("s", nodes).target_nodes == nodes
-    assert m2.PrefetcherPipeParameter("pipe", core_set, 4096, 64).receivers == core_set
+    assert m2.PrefetcherPipeParameter("pipe", core_set, ring_size=4096, entry_size=64).receivers == core_set
 
 
-def test_dataflow_buffer_spec_formats():
+def test_dataflow_buffer_spec_formats(expect_error):
     dfb = m2.DataflowBufferSpec("in", entry_size=2048, num_entries=2, data_format=ttnn.bfloat16)
     assert dfb.data_format == ttnn.bfloat16
+    assert dfb.data_format_raw is not None
     dfb.data_format = ttnn.float32
     assert dfb.data_format == ttnn.float32
     dfb.data_format = None
-    assert dfb.data_format is None
+    assert dfb.data_format is None and dfb.data_format_raw is None
 
     tiled = m2.DataflowBufferSpec("in", 2048, 2, data_format=ttnn.bfloat16, tile_format=ttnn.Tile((32, 32)))
     assert tiled.tile_format.tile_shape == [32, 32]
@@ -287,30 +405,56 @@ def test_dataflow_buffer_spec_formats():
         8,
         data_format=ttnn.bfloat16,
         borrowed_from="a",
-        advanced_options=m2.DFBAdvancedOptions(alias_with=["other"], allow_instance_multi_binding=False),
+        advanced_options=m2.DFBAdvancedOptions(alias_with=["other"], prefetcher_pipe_relays=["pipe"]),
     )
     assert borrowed.borrowed_from == "a"
     assert borrowed.advanced_options.alias_with == ["other"]
-    assert borrowed.advanced_options.prefetcher_pipe_relays == []
+    assert borrowed.advanced_options.prefetcher_pipe_relays == ["pipe"]
 
     scratch = m2.ScratchpadSpec("tmp", 4096, data_format=ttnn.uint32)
     assert scratch.size_per_node == 4096
     assert scratch.data_format == ttnn.uint32
     assert scratch.tile_format is None
+    scratch.data_format = ttnn.bfloat16
+    scratch.tile_format = ttnn.Tile((16, 32))
+    assert scratch.data_format == ttnn.bfloat16
+    assert scratch.tile_format.tile_shape == [16, 32]
+
+    # A DataType with no DataFormat is refused before the object is built.
+    with expect_error(RuntimeError, "Unsupported DataType"):
+        m2.DataflowBufferSpec("r", 1, 2, data_format=ttnn.DataType.INVALID)
 
 
 def test_advanced_options():
     advanced = m2.KernelAdvancedOptions(
         num_runtime_varargs=2,
         compile_time_varargs=[7, 8],
-        tensor_binding_sequences=[m2.TensorBindingSequence("inputs", ["a", "b"])],
+        tensor_binding_sequences=[m2.TensorBindingSequence("inputs", members=["a", "b"])],
         prefetcher_pipe_bindings=[m2.PrefetcherPipeBinding(["pipe"], "weights")],
     )
     assert advanced.num_runtime_varargs == 2
-    assert advanced.compile_time_varargs == [7, 8]
+    assert list(advanced.compile_time_varargs) == [7, 8]
     assert advanced.tensor_binding_sequences[0].members == ["a", "b"]
     assert advanced.prefetcher_pipe_bindings[0].pipe_parameter_names == ["pipe"]
     assert advanced.prefetcher_pipe_bindings[0].accessor_name == "weights"
+
+    kernel = m2.KernelSpec(
+        "k",
+        "/tmp/k.cpp",
+        m2.create_reader_dm_config(),
+        num_threads=2,
+        compiler_options=m2.CompilerOptions(defines={"A": "1"}, opt_level=m2.KernelBuildOptLevel.O3),
+        semaphore_bindings=[m2.SemaphoreBinding("sem", "ready")],
+        scratchpad_bindings=[m2.ScratchpadBinding("tmp", "scratch")],
+        advanced_options=advanced,
+    )
+    assert kernel.num_threads == 2
+    assert kernel.compiler_options.defines == {"A": "1"}
+    assert kernel.compiler_options.opt_level == m2.KernelBuildOptLevel.O3
+    assert kernel.semaphore_bindings[0].semaphore_spec_name == "sem"
+    assert kernel.semaphore_bindings[0].accessor_name == "ready"
+    assert kernel.scratchpad_bindings[0].scratchpad_spec_name == "tmp"
+    assert kernel.advanced_options.prefetcher_pipe_bindings[0].accessor_name == "weights"
 
     semaphore = m2.SemaphoreSpec("s", ttnn.CoreCoord(0, 0), advanced_options=m2.SemaphoreAdvancedOptions(max_value=4))
     assert semaphore.advanced_options.max_value == 4
@@ -319,13 +463,44 @@ def test_advanced_options():
     spec = m2.ProgramSpec(advanced_options=m2.ProgramAdvancedOptions(prefetcher_pipe_parameters=[pipe]))
     assert spec.advanced_options.prefetcher_pipe_parameters[0].unique_id == "pipe"
 
+    run_args = m2.ProgramRunArgs()
+    assert run_args.prefetcher_pipe_names == []
+    assert callable(run_args.set_prefetcher_pipe)  # a PrefetcherPipe needs a device; the setter is exercised in PR 2
 
-def test_container_properties_are_copies():
-    spec = m2.ProgramSpec()
+
+def test_properties_return_copies_and_never_dangle():
+    spec = m2.ProgramSpec(
+        kernels=[
+            m2.KernelSpec("original_kernel_name_long_enough_to_heap_allocate", "/tmp/k.cpp", m2.ComputeHardwareConfig())
+        ]
+    )
+    first = spec.kernels[0]
+    spec.kernels = []  # the C++ vector is destroyed; `first` must not point into it
+    spec.kernels = [m2.KernelSpec(f"k{i}", "/tmp/k.cpp", m2.ComputeHardwareConfig()) for i in range(64)]
+    assert first.unique_id == "original_kernel_name_long_enough_to_heap_allocate"
+
+    spec.kernels[0].num_threads = 7
+    assert spec.kernels[0].num_threads == 1, "an element read from a property is a copy"
     spec.kernels.append(m2.KernelSpec("k", "/tmp/k.cpp", m2.ComputeHardwareConfig()))
-    assert spec.kernels == [], "container properties return copies; assign a new list instead"
-    spec.kernels = [m2.KernelSpec("k", "/tmp/k.cpp", m2.ComputeHardwareConfig())]
-    assert [k.unique_id for k in spec.kernels] == ["k"]
+    assert len(spec.kernels) == 64, "the list read from a property is a copy"
+    kernel = spec.kernels[0]
+    kernel.compile_time_args["wt"] = 8
+    assert kernel.compile_time_args == {}, "a dict read from a property is a copy"
+
+    dm = m2.create_reader_dm_config()
+    config = dm.config_1xx
+    dm.config_1xx = None
+    assert config.processor == ttnn.DataMovementProcessor.RISCV_1
+
+    kernel = m2.KernelSpec("k", "/tmp/k.cpp", m2.ComputeHardwareConfig(unpack_modes={"a": m2.UnpackMode.UnpackToDest}))
+    hw = kernel.hw_config
+    kernel.hw_config = m2.create_reader_dm_config()
+    assert hw.unpack_modes == {"a": m2.UnpackMode.UnpackToDest}
+
+    args = m2.AdvancedKernelRunArgs(runtime_varargs={ttnn.CoreCoord(0, 0): [1, 2]})
+    varargs = args.runtime_varargs
+    args.runtime_varargs = {}
+    assert list(varargs[ttnn.CoreCoord(0, 0)]) == [1, 2]
 
 
 def test_full_program_spec_assembly():
@@ -381,6 +556,12 @@ def test_full_program_spec_assembly():
     assert spec.kernels[1].hw_config.fpu_math_fidelity == ttnn.MathFidelity.LoFi
     assert [b.accessor_name for b in spec.kernels[1].dfb_bindings] == ["in_a", "in_b", "out"]
 
+    # A spec is a usable template: deep copies are independent.
+    variant = copy.deepcopy(spec)
+    variant.name = "toy_spec_mul_v2"
+    assert spec.name == "toy_spec_mul"
+    assert _plain(variant.kernels) == _plain(spec.kernels)
+
     c00, c10 = ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)
     per_core = {"num_tiles": {c00: 1, c10: 1}, "start_id": {c00: 0, c10: 1}}
     run_args = m2.ProgramRunArgs(
@@ -395,3 +576,7 @@ def test_full_program_spec_assembly():
     assert run_args.kernel_run_args[0].runtime_arg_values["start_id"][c10] == 1
     assert run_args.dfb_run_overrides[0].num_entries == 4
     assert run_args.dfb_run_overrides[0].entry_size is None
+    override = run_args.dfb_run_overrides[0]
+    override.entry_size = 4096
+    override.entry_size = None
+    assert override.entry_size is None

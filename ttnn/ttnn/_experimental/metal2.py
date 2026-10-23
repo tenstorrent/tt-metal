@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -24,13 +24,18 @@ Typical use::
     spec = m2.ProgramSpec(name="my_op", kernels=[reader, ...], ...)
     run_args = m2.ProgramRunArgs(kernel_run_args=[m2.KernelRunArgs(kernel="reader", runtime_arg_values={...})])
 
-Container properties (``spec.kernels``, ``kernel.dfb_bindings``, ...) return copies; assign a new
-list rather than appending to the returned one.
+Every property returns a copy (``spec.kernels``, ``kernel.compile_time_args``,
+``kernel.hw_config``, ...): mutating the returned list, dict or object changes nothing, so assign
+a new value to change a field. ``copy.deepcopy`` works, so a spec can serve as a template.
 """
 
 import ttnn
 
 _program_spec = ttnn._ttnn.program_spec
+
+# The kernel optimisation level is registered with the fabric mux bindings; re-exported here so a
+# Metal 2.0 user does not have to import it from a fabric module.
+KernelBuildOptLevel = ttnn._ttnn.operations.experimental.fabric_mux.KernelBuildOptLevel
 
 # enums
 UnpackMode = _program_spec.UnpackMode
@@ -92,6 +97,7 @@ DFBRunOverrides = _program_spec.DFBRunOverrides
 ProgramRunArgs = _program_spec.ProgramRunArgs
 
 __all__ = [
+    "KernelBuildOptLevel",
     "UnpackMode",
     "Precision",
     "DFBEndpointType",

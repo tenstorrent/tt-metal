@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/detail/nb_dict.h>
+#include <nanobind/stl/string.h>
 
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
@@ -21,10 +22,47 @@
 namespace nanobind::detail {
 
 // Table<K, V> <-> dict. Table exposes clear()/emplace(k, v) and iterates as
-// pair<const K, V>, which is what dict_caster needs.
+// pair<const K, V>, which is what dict_caster needs. from_python is re-implemented rather than
+// inherited because dict_caster ignores the bool that emplace() returns: two Python keys that
+// are distinct objects but equal after conversion (a (0, 0) tuple and ttnn.CoreCoord(0, 0))
+// would silently drop one entry. Here that is a conversion failure.
 template <typename K, typename V>
 struct type_caster<tt::tt_metal::experimental::Table<K, V>>
-    : dict_caster<tt::tt_metal::experimental::Table<K, V>, K, V> {};
+    : dict_caster<tt::tt_metal::experimental::Table<K, V>, K, V> {
+    using Table = tt::tt_metal::experimental::Table<K, V>;
+    using Base = dict_caster<Table, K, V>;
+
+    bool from_python(handle src, uint8_t flags, cleanup_list* cleanup) noexcept {
+        this->value.clear();
+        if (!isinstance<dict>(src)) {
+            return false;
+        }
+        PyObject* items = PyMapping_Items(src.ptr());
+        if (items == nullptr) {
+            PyErr_Clear();
+            return false;
+        }
+        const Py_ssize_t size = NB_LIST_GET_SIZE(items);
+        bool success = size >= 0;
+        const uint8_t flags_key = flags_for_local_caster<K>(flags);
+        const uint8_t flags_val = flags_for_local_caster<V>(flags);
+        make_caster<K> key_caster;
+        make_caster<V> val_caster;
+        for (Py_ssize_t i = 0; i < size && success; ++i) {
+            PyObject* item = NB_LIST_GET_ITEM(items, i);
+            PyObject* key = NB_TUPLE_GET_ITEM(item, 0);
+            PyObject* val = NB_TUPLE_GET_ITEM(item, 1);
+            if (!key_caster.from_python(key, flags_key, cleanup) || !key_caster.template can_cast<K>() ||
+                !val_caster.from_python(val, flags_val, cleanup) || !val_caster.template can_cast<V>()) {
+                success = false;
+                break;
+            }
+            success = this->value.emplace(key_caster.operator cast_t<K>(), val_caster.operator cast_t<V>()).second;
+        }
+        Py_DECREF(items);
+        return success;
+    }
+};
 
 // The Metal 2.0 spec names are string StrongTypes; expose them as plain Python strings.
 // Specialized one type at a time rather than for StrongType<T, Tag> generally: a catch-all
