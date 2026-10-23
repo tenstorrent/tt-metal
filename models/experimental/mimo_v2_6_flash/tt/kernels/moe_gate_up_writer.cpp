@@ -6,6 +6,7 @@
 // tiles, the down matmul's in0; tiny tile = this core's bank).
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/kernel_profiler.hpp"
 #include "moe_stream_common.hpp"
 #include "moe_route_select.hpp"
 
@@ -48,6 +49,7 @@ void kernel_main() {
     }
     noc_async_read_barrier();
     cb_push_back(cb_x, kt);
+    DeviceTimestampedData("GUW", 1);
 
     // The reader needs these selections only when its stream reaches the first of these users' pairs.
     uint32_t stage = 0;
@@ -72,6 +74,7 @@ void kernel_main() {
         }
     }
     cb_push_back(cb_sel, 1);
+    DeviceTimestampedData("GUW", 2);
 
     constexpr uint32_t tiny_tile_bytes = 2 * tiny_face_bytes;
     const InterleavedAddrGen<false> out_gen = {
@@ -89,4 +92,5 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(cb_h, 1);
     }
+    DeviceTimestampedData("GUW", 3);
 }

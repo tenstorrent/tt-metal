@@ -7,6 +7,7 @@
 // the user rows; moe_expand_rows.cpp puts them back into rows 0-3 of the [32, hidden] result).
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/kernel_profiler.hpp"
 #include "moe_stream_common.hpp"
 
 void kernel_main() {
@@ -40,6 +41,7 @@ void kernel_main() {
     }
     noc_async_read_barrier();
     cb_push_back(cb_h, num_pairs * kt);
+    DeviceTimestampedData("DNW", 1);
 
     const InterleavedAddrGen<true> out_gen = {.bank_base_address = out_addr, .page_size = bf16_tile_bytes};
     for (uint32_t g = 0; g < groups; g++) {
@@ -60,6 +62,7 @@ void kernel_main() {
     }
     noc_async_write_barrier();
     cb_pop_front(cb_out, groups * ct);
+    DeviceTimestampedData("DNW", 2);
     if constexpr (signal_args_at > 0) {
         const uint32_t n = get_arg_val<uint32_t>(signal_args_at);
         for (uint32_t i = 0; i < n; i++) {

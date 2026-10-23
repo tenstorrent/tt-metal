@@ -9,6 +9,7 @@
 // kt reads of ct tiles, landing as [kt][ct] for custom_mm.
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_w = get_compile_time_arg_val(0);
@@ -31,6 +32,7 @@ void kernel_main() {
     const uint32_t ids_addr = get_arg_val<uint32_t>(3);
 
     // Expert ids: row-major uint16 [1, 1, 1, pairs], one page in bank 0.
+    DeviceTimestampedData("DNR", 0);
     const uint32_t ids_l1 = get_write_ptr(cb_ids);
     noc_async_read(get_noc_addr_from_bank_id<true>(0, ids_addr), ids_l1, ids_bytes);
     noc_async_read_barrier();
@@ -39,6 +41,7 @@ void kernel_main() {
     for (uint32_t p = 0; p < num_pairs; p++) {
         offsets[p] = static_cast<uint32_t>(ids[p]) * expert_bytes;
     }
+    DeviceTimestampedData("DNR", 1);
 
     // Stream: block i goes to CB slot i % num_buffers with trid (i % num_buffers) + 1; at most in_flight blocks
     // are issued but not pushed, and each reserve covers them plus the new block.
@@ -77,4 +80,5 @@ void kernel_main() {
         oldest++;
         issued--;
     }
+    DeviceTimestampedData("DNR", 2);
 }

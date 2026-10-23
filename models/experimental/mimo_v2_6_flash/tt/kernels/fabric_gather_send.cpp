@@ -10,6 +10,7 @@
 // reduce core waits for `chips` increments.
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/kernel_profiler.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
@@ -46,9 +47,11 @@ void kernel_main() {
 
     auto connection = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg);
     connection.open_start();
+    DeviceTimestampedData("FGS", 0);
     if constexpr (wait_count > 0) {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(wait_sem)), wait_count);
     }
+    DeviceTimestampedData("FGS", 1);
 
     // This chip's compact tiles, core-major (core i's tiles at scratch + i * core_bytes).
     cb_reserve_back(cb_scratch, cores * tiles_per_core);
@@ -65,6 +68,7 @@ void kernel_main() {
     }
     connection.open_finish();
     noc_async_read_barrier();
+    DeviceTimestampedData("FGS", 2);
 
     // Slot (tile j, chip c) of a core's gather buffer: gather_addr + (j * chips + c) * tile_bytes.
     for (uint32_t i = 0; i < cores; i++) {
@@ -98,6 +102,7 @@ void kernel_main() {
         noc_async_atomic_barrier();
     }
 
+    DeviceTimestampedData("FGS", 3);
     connection.close();
     noc_async_full_barrier();
     cb_push_back(cb_scratch, cores * tiles_per_core);

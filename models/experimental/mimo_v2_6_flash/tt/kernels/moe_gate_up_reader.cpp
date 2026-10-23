@@ -8,6 +8,7 @@
 // column b and up column b of every expert, contiguous per expert as [kt][gate, up] (one ct = 2 matmul block).
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/kernel_profiler.hpp"
 #include "moe_route_select.hpp"
 
 void kernel_main() {
@@ -42,10 +43,12 @@ void kernel_main() {
     const uint32_t ids_addr = get_arg_val<uint32_t>(6);
 
     using Stage = mimo_moe::RouteStage<expert_tiles>;
+    DeviceTimestampedData("GUR", 0);
     cb_reserve_back(cb_stage, stage_pages);
     const uint32_t stage = get_write_ptr(cb_stage);
     mimo_moe::stage_route_rows<expert_tiles, has_mask>(biased_addr, scores_addr, mask_addr, stage);
     noc_async_read_barrier();
+    DeviceTimestampedData("GUR", 1);
 
     // Route pages (fp32 weight bits for compute): page 0 holds the local pairs [0, local_pairs), page 1 the writer's
     // pairs. Page 0 is published before streaming; page 1 when the stream reaches the first remote pair.
@@ -69,10 +72,12 @@ void kernel_main() {
             stick[p] = static_cast<uint16_t>(ids[i]);
         }
     }
+    DeviceTimestampedData("GUR", 2);
     cb_push_back(cb_route, 1);
 
     // The writer's users: [remote ids | remote weight bits]; taken just before the first remote block is issued.
     auto take_remote = [&]() {
+        DeviceTimestampedData("GUR", 3);
         cb_wait_front(cb_sel, 1);
         volatile tt_l1_ptr uint32_t* sel = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_sel));
         for (uint32_t j = 0; j < remote_pairs; j++) {
@@ -125,6 +130,7 @@ void kernel_main() {
         oldest++;
         issued--;
     }
+    DeviceTimestampedData("GUR", 4);
     if constexpr (local_blocks >= total_blocks) {
         take_remote();  // no remote pairs: still consume cb_sel and publish page 1
     }
@@ -134,4 +140,5 @@ void kernel_main() {
         noc_async_write(stage + Stage::stick, get_noc_addr_from_bank_id<true>(0, ids_addr), num_pairs * 2);
         noc_async_write_barrier();
     }
+    DeviceTimestampedData("GUR", 5);
 }

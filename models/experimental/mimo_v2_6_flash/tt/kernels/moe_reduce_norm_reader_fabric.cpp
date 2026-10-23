@@ -8,6 +8,7 @@
 // reset and the copies are handed to compute in place.
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/kernel_profiler.hpp"
 #include "moe_stream_common.hpp"
 
 void kernel_main() {
@@ -66,7 +67,9 @@ void kernel_main() {
     cb_push_back(cb_const, 2);
 
     volatile tt_l1_ptr uint32_t* gather_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gather_sem_addr);
+    DeviceTimestampedData("RNR", 1);
     noc_semaphore_wait(gather_sem, chips);
+    DeviceTimestampedData("RNR", 2);
     noc_semaphore_set(gather_sem, 0);
     cb_reserve_back(cb_in, tiles * chips);
     cb_push_back(cb_in, tiles * chips);
@@ -75,7 +78,9 @@ void kernel_main() {
     // increments this core's semaphore.
     cb_reserve_back(cb_gather, 1);
     volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
+    DeviceTimestampedData("RNR", 3);
     noc_semaphore_wait(sem, cores);
     noc_semaphore_set(sem, 0);
     cb_push_back(cb_gather, 1);
+    DeviceTimestampedData("RNR", 4);
 }
