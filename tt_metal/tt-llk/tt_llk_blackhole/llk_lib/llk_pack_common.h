@@ -46,6 +46,32 @@ inline void _llk_packer_set_math_semaphore_()
     t6_semaphore_get<WaitRes>(semaphore::MATH_PACK); // Indicate that packer is done and header is written into L1
 }
 
+#ifndef LLK_PACK_SECTION_WORDS
+#define LLK_PACK_SECTION_WORDS 0
+#endif
+
+// One SyncHalf release with the half known at compile time: the ZEROACC and WRCFG words are fixed, so the RISC computes none.
+template <bool is_fp32_dest_acc_en, bool clear_dest, std::uint32_t half, bool offset_nops>
+inline void _llk_pack_dest_half_done_()
+{
+    if constexpr (clear_dest)
+    {
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK);
+        TTI_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, half);
+        _llk_packer_set_math_semaphore_<p_stall::NONE>();
+    }
+    else
+    {
+        _llk_packer_set_math_semaphore_<p_stall::PACK>();
+    }
+    TTI_WRCFG(half ? p_gpr_pack::DEST_OFFSET_LO : p_gpr_pack::DEST_OFFSET_HI, p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+    if constexpr (offset_nops)
+    {
+        TTI_DMANOP;
+        TTI_DMANOP;
+    }
+}
+
 /**
  * @brief Finish a destination-register section: wait for pack, optionally clear dest, and release math.
  *
@@ -61,36 +87,71 @@ inline void _llk_packer_set_math_semaphore_()
 // Wait for all writes to complete in L1 (header + data)
 // Tell math it can write again
 // Clear dest only when clear_dest is true
-template <DstSync Dst, bool is_fp32_dest_acc_en, bool clear_dest = true>
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool clear_dest = true, std::uint32_t words = LLK_PACK_SECTION_WORDS>
 inline void _llk_pack_dest_section_done_()
 {
-    if constexpr (clear_dest)
+    constexpr bool offset_nops = (words & 1) == 0;
+    constexpr bool by_branch   = (words & 2) != 0;
+    if constexpr (Dst == DstSync::SyncHalf && (by_branch || !offset_nops))
     {
-        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK); // wait for pack to finish
-
-        if constexpr (Dst == DstSync::SyncFull)
+        if constexpr (by_branch)
         {
-            TTI_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_1, 0);
+            if (dest_offset_id == 0)
+            {
+                _llk_pack_dest_half_done_<is_fp32_dest_acc_en, clear_dest, 0, offset_nops>();
+            }
+            else
+            {
+                _llk_pack_dest_half_done_<is_fp32_dest_acc_en, clear_dest, 1, offset_nops>();
+            }
+            flip_packer_dest_offset_id();
         }
         else
         {
-            static_assert(Dst == DstSync::SyncHalf);
-            TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, dest_offset_id % 2);
+            if constexpr (clear_dest)
+            {
+                TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK);
+                TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, dest_offset_id % 2);
+                _llk_packer_set_math_semaphore_<p_stall::NONE>();
+            }
+            else
+            {
+                _llk_packer_set_math_semaphore_<p_stall::PACK>();
+            }
+            flip_packer_dest_offset_id();
+            TT_WRCFG(get_packer_dest_offset_index(), p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
         }
-
-        // Tell math that it can write again
-        _llk_packer_set_math_semaphore_<p_stall::NONE>();
     }
     else
     {
-        // Without ZEROACC, block SEMGET itself until PACK has finished reading DST.
-        _llk_packer_set_math_semaphore_<p_stall::PACK>();
-    }
+        if constexpr (clear_dest)
+        {
+            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK); // wait for pack to finish
 
-    if constexpr (Dst == DstSync::SyncHalf)
-    {
-        flip_packer_dest_offset_id();
-        select_packer_dest_registers<Dst>();
+            if constexpr (Dst == DstSync::SyncFull)
+            {
+                TTI_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_1, 0);
+            }
+            else
+            {
+                static_assert(Dst == DstSync::SyncHalf);
+                TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, dest_offset_id % 2);
+            }
+
+            // Tell math that it can write again
+            _llk_packer_set_math_semaphore_<p_stall::NONE>();
+        }
+        else
+        {
+            // Without ZEROACC, block SEMGET itself until PACK has finished reading DST.
+            _llk_packer_set_math_semaphore_<p_stall::PACK>();
+        }
+
+        if constexpr (Dst == DstSync::SyncHalf)
+        {
+            flip_packer_dest_offset_id();
+            select_packer_dest_registers<Dst>();
+        }
     }
 }
 
