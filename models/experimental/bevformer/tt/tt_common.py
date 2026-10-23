@@ -196,6 +196,55 @@ class TTConv2D:
             )
             self.linear_weight = ttnn.to_device(self.weight, self.device)
             self.linear_bias = None if self.bias is None else ttnn.to_device(self.bias, self.device)
+            self.linear_program_config = self._linear_program_config(grid, fp32_dest_acc_en)
+
+    # A linear at least this many tile rows per core takes _linear_program_config's split.
+    LINEAR_SPLIT_MIN_ROWS_PER_CORE = 16
+
+    def _linear_program_config(self, grid, fp32_dest_acc_en):
+        """The pointwise linear's program config for a tall activation, None for ttnn.linear's own.
+        Its own splits the layer1/layer2 activations badly. A narrow output (up to 4 tiles) splits
+        the rows over every core with the weights multicast; a wider one also splits the output
+        columns over up to 8 grid columns, which keeps a write-heavy linear off a few cores."""
+        num_cores = grid.x * grid.y
+        rows_t = math.ceil(self.batch_size * self.input_height * self.input_width / ttnn.TILE_SIZE)
+        if rows_t < num_cores * self.LINEAR_SPLIT_MIN_ROWS_PER_CORE:
+            return None
+        in_t, out_t = self.in_channels // ttnn.TILE_SIZE, self.out_channels // ttnn.TILE_SIZE
+        max_subblock = 4 if fp32_dest_acc_en else 8
+        relu = None if self.linear_activation is None else ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+        if out_t <= 4:
+            block_h = 4
+            return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(grid.x, grid.y),
+                in0_block_w=in_t,
+                out_subblock_h=1,
+                out_subblock_w=out_t,
+                out_block_h=block_h,
+                out_block_w=out_t,
+                per_core_M=math.ceil(math.ceil(rows_t / num_cores) / block_h) * block_h,
+                per_core_N=out_t,
+                fuse_batch=True,
+                fused_activation=relu,
+                mcast_in0=False,
+            )
+        cols = max(c for c in range(1, min(grid.x, 8) + 1) if out_t % c == 0)
+        per_core_n = out_t // cols
+        block_h = 16
+        subblock_w = max(w for w in range(1, max_subblock + 1) if per_core_n % w == 0)
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(cols, grid.y),
+            in0_block_w=max(w for w in range(1, 5) if in_t % w == 0),
+            out_subblock_h=2 if 2 * subblock_w <= max_subblock else 1,
+            out_subblock_w=subblock_w,
+            out_block_h=block_h,
+            out_block_w=per_core_n,
+            per_core_M=math.ceil(math.ceil(rows_t / grid.y) / block_h) * block_h,
+            per_core_N=per_core_n,
+            transpose_mcast=False,
+            fused_activation=relu,
+            fuse_batch=True,
+        )
 
     def _prepare_conv_weights(self):
         # conv2d lays its weights out for the input it sees and prepares them on the host on
@@ -226,6 +275,16 @@ class TTConv2D:
         x = ttnn.reshape(x, (1, 1, rows, x.shape[-1]))
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        if self.linear_program_config is not None:
+            return ttnn.linear(
+                x,
+                self.linear_weight,
+                bias=self.linear_bias,
+                dtype=self.output_dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=self.linear_program_config,
+                compute_kernel_config=self.compute_config,
+            )
         return ttnn.linear(
             x,
             self.linear_weight,
