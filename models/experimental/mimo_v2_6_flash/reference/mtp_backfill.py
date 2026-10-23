@@ -11,7 +11,9 @@ the prompt's too. The history closes the gap:
 
 * every decode slot that may speculate (SPEC_SLOTS per lane) keeps a ring of HISTORY_ROWS entries, indexed by
   position % HISTORY_ROWS: the target's final normed hidden at that position (the row the step's final norm wrote,
-  bf16), the position, and the token the step took there (its input: committed);
+  bf16), the position, and the token the step took there (its input: committed). HISTORY_ROWS = MTP_WINDOW +
+  SPEC_SLOTS (``history_rows``): a backfill right after a verify pass at a reads the window before a while the pass's
+  rows a .. a + SPEC_SLOTS - 1 are in the ring too;
 * every plain decode step writes its slots' rows (``decode_writes``, in the decode trace), every verify pass the rows
   of its slots into their requests' rings (``verify_writes``, in the verify trace; the chain row carries each slot's
   request slot): a verify's rows past the committed ones are wrong, but the next step starts at the first of them and
@@ -21,14 +23,18 @@ the prompt's too. The history closes the gap:
 
 Before the first draft that does not continue the rings (the lane's rings last ran another request, or rows they
 never drafted: after a prompt, after the lane served several requests), the adapter runs the backfill trace: every
-MTP layer over the history of the window before the draft's first row. Layer i's entry at q takes h_q and x[q + i + 1]
-(the committed tokens the history holds, x[a] the step's own input at a). The plan (``backfill_plan``) writes the
-whole ring, BACKFILL_ROWS = MTP_RING_TOKENS positions from a block boundary S0, so that one fill per layer covers it
-(paged_fill_cache, no read-modify-write): row r at position S0 + r is real when the history holds q (and its token,
-<= a) inside the window [a - HISTORY_ROWS + 1, a - 1]; the other rows write garbage at positions no query reads
-before a draft rewrites them (below the window, or at a and past it). With every layer, layer i's last i rows before
-a take drafts (unknown yet): the plan stashes the rows a - 2, a - 1 (their hidden from the history, their layer-0
-tokens, positions) so that the draft right after re-runs them in every layer (plan_mtp_layers' re-prefill).
+MTP layer over the history of the window before the draft's first row a (a plain step's position, or the column-0
+position of the verify the draft follows). Layer i's entry at q takes h_q and x[q + i + 1]. The plan
+(``backfill_plan``) writes the whole ring, BACKFILL_ROWS = MTP_RING_TOKENS positions from a block boundary S0, so that
+one fill per layer covers it (paged_fill_cache, no read-modify-write): row r at position S0 + r is real when the
+history holds q inside the window [a - MTP_WINDOW + 1, a - 1], and layer i takes the token the history holds at
+q + i + 1 (0 when it holds none); the other rows write garbage at positions no query reads before a draft rewrites
+them (below the window, or at a and past it). The draft commits x[a + 1 .. a + m] (m = 1 after a plain step) and,
+with every layer, re-runs the max(0, layers - m) rows before a in every layer (plan_mtp_layers' re-prefill, from the
+stash): the plan stashes the rows a - 2, a - 1 (their hidden from the history, their layer-0 tokens, positions). Every
+row it does not re-run takes tokens at positions <= a + m - 1, which the history holds committed: the rows before a,
+and after a verify at a the pass's rows a .. a + m - 1 (its later rows hold rejected drafts, which only rows the draft
+re-runs take, as does the bonus x[a + m]). The commit itself is not needed: the plan reads the history alone.
 
 Layouts (int32, one page each):
 
@@ -46,7 +52,16 @@ import torch
 
 from .spec_decode import MTP_RING_TOKENS, SPEC_SLOTS
 
-HISTORY_ROWS = 128  # the MTP layers' SWA window
+MTP_WINDOW = 128  # the MTP layers' SWA window
+
+
+def history_rows(window):
+    """A history slot's ring for MTP layers of SWA ``window``: the window before a verify pass's first row, the pass's
+    SPEC_SLOTS rows and one spare."""
+    return window + SPEC_SLOTS
+
+
+HISTORY_ROWS = history_rows(MTP_WINDOW)
 BLOCK = 64  # the ring cache's block size (the vLLM block size)
 BACKFILL_ROWS = MTP_RING_TOKENS
 RING_BLOCKS = MTP_RING_TOKENS // BLOCK
@@ -55,6 +70,8 @@ TABLE_WORDS = 2 * RING_BLOCKS  # the fill's page table row: as wide as the cache
 HIST_POSITIONS, HIST_TOKENS = 0, SPEC_SLOTS * HISTORY_ROWS
 HIST_WORDS = 2 * SPEC_SLOTS * HISTORY_ROWS
 BACKFILL_DRAFTING, BACKFILL_SLOT, BACKFILL_A = 0, 1, 2
+# S0 is at most a block below the window's start, and BACKFILL_ROWS rows from it reach a - 1.
+assert MTP_WINDOW + BLOCK <= BACKFILL_ROWS
 
 
 def entry(slot, q, rows=HISTORY_ROWS):
@@ -140,18 +157,19 @@ def backfill_row(max_batch, slot=None, a=None):
     return row
 
 
-def backfill_start(a, rows=HISTORY_ROWS):
-    """S0: the block the window [a - rows + 1, a - 1] starts in."""
-    return max(0, a - rows + 1) // BLOCK * BLOCK
+def backfill_start(a, window=MTP_WINDOW):
+    """S0: the block the window [a - window + 1, a - 1] starts in."""
+    return max(0, a - window + 1) // BLOCK * BLOCK
 
 
-def backfill_plan(upload, history_page, layers, stash, rows=HISTORY_ROWS):
+def backfill_plan(upload, history_page, layers, stash, rows=HISTORY_ROWS, window=MTP_WINDOW):
     """The backfill's plan step (kernels/mtp_history.cpp mode 3): ``upload`` the backfill upload, ``history_page``
-    the history page, ``layers`` the MTP layers, ``stash`` the draft's stash page (every layer; None with one).
-    Returns ({"hidden": history rows [BACKFILL_ROWS], "rope": RoPE indices [BACKFILL_ROWS], "tokens": per layer
-    [BACKFILL_ROWS], "table": the fill's page table row [TABLE_WORDS] (the ring's blocks, then scratch blocks),
-    "stash_rows": (stash slot, history entry) to copy}, the new stash page). Row r writes position S0 + r. An idle
-    upload fills the scratch blocks and leaves the stash."""
+    the history page (``rows`` per slot), ``layers`` the MTP layers (SWA ``window``), ``stash`` the draft's stash
+    page (every layer; None with one). Returns ({"hidden": history rows [BACKFILL_ROWS], "rope": RoPE indices
+    [BACKFILL_ROWS], "tokens": per layer [BACKFILL_ROWS], "table": the fill's page table row [TABLE_WORDS] (the
+    ring's blocks, then scratch blocks), "stash_rows": (stash slot, history entry) to copy}, the new stash page). Row
+    r writes position S0 + r. An idle upload fills the scratch blocks and leaves the stash."""
+    assert window + SPEC_SLOTS - 1 <= rows and window + BLOCK <= BACKFILL_ROWS
     n = SPEC_SLOTS * rows
     out = {
         "hidden": [0] * BACKFILL_ROWS,
@@ -163,10 +181,10 @@ def backfill_plan(upload, history_page, layers, stash, rows=HISTORY_ROWS):
     if upload[BACKFILL_DRAFTING] == 0:
         return out, stash
     slot, a = upload[BACKFILL_SLOT], upload[BACKFILL_A]
-    lo, s0 = max(0, a - rows + 1), backfill_start(a, rows)
+    lo, s0 = max(0, a - window + 1), backfill_start(a, window)
 
-    def held(q, last):  # the history holds position q, and q is committed (<= last)
-        return 0 <= q <= last and history_page[entry(slot, q, rows)] == q
+    def held(q):  # the history holds position q
+        return q >= 0 and history_page[entry(slot, q, rows)] == q
 
     def token(q):
         return history_page[n + entry(slot, q, rows)]
@@ -175,10 +193,10 @@ def backfill_plan(upload, history_page, layers, stash, rows=HISTORY_ROWS):
     for r in range(BACKFILL_ROWS):
         q = s0 + r
         out["rope"][r] = min(q, a)  # the garbage rows past a stay inside the RoPE tables
-        if lo <= q and held(q, a - 1):
+        if lo <= q <= a - 1 and held(q):
             out["hidden"][r] = entry(slot, q, rows)
             for i in range(layers):
-                if held(q + i + 1, a):
+                if held(q + i + 1):
                     out["tokens"][i][r] = token(q + i + 1)
     if stash is None:
         return out, stash
@@ -188,7 +206,7 @@ def backfill_plan(upload, history_page, layers, stash, rows=HISTORY_ROWS):
     for k in range(SPEC_SLOTS):
         new[STASH_POSITIONS + k], new[STASH_TOKENS + k] = -1, 0
     for k, q in ((SPEC_SLOTS - 2, a - 2), (SPEC_SLOTS - 1, a - 1)):
-        if held(q, a - 1) and held(q + 1, a):
+        if held(q) and held(q + 1):
             new[STASH_POSITIONS + k], new[STASH_TOKENS + k] = q, token(q + 1)
             out["stash_rows"].append((k, entry(slot, q, rows)))
     return out, new

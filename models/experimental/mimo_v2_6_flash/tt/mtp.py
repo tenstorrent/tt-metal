@@ -58,6 +58,7 @@ import torch
 import ttnn
 
 from ..reference.mtp import load_mtp_weights
+from ..reference.mtp_backfill import MTP_WINDOW
 from ..reference.spec_chain import stash_page
 from ..reference.spec_decode import MAX_DRAFTS, SPEC_SLOTS, mtp_table_row
 from ..reference.spec_inputs import pack_mtp_layers
@@ -194,6 +195,8 @@ class TtMiMoMTP:
             assert m.norm_buffers is not None and m.norm_buffers[0].shape[-2] == TILE == m.max_batch
             self.inputs = make_layer_inputs(self.plan, m.max_batch, self.cfg.hidden_size)
         if self.backfill and m.rope_tables is not None:
+            # The history's ring and the backfill's window are sized for the MTP layers' window.
+            assert self.cfg.sliding_window == MTP_WINDOW, f"MTP window {self.cfg.sliding_window} != {MTP_WINDOW}"
             self.history = MtpHistory(
                 self.plan, m.max_batch, self.cfg.hidden_size, len(self.layers), m.rope_table_tails
             )
@@ -439,8 +442,8 @@ class TtMiMoMTP:
 
     def enqueue_backfill(self, slot, a):
         """Fill every layer's ring from the history of the request in lane ``slot`` before a draft whose first row is
-        at ``a`` (non-blocking; enqueue the draft right after it): the window a - HISTORY_ROWS + 1 .. a - 1, and with
-        every layer the stash rows a - 2, a - 1 the draft then re-runs."""
+        at ``a`` (non-blocking; enqueue the draft right after it): the window a - MTP_WINDOW + 1 .. a - 1, and with
+        every layer the stash rows a - 2, a - 1 the draft then re-runs (those of them its commit leaves stale)."""
         assert self.backfill_trace is not None and 0 <= slot < SPEC_SLOTS
         self.history.upload_backfill(slot, a)
         ttnn.execute_trace(self.model.mesh_device, self.backfill_trace, cq_id=0, blocking=False)

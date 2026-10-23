@@ -77,6 +77,7 @@ from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
     plan_verify_passes,
 )
 from models.experimental.mimo_v2_6_flash.reference.mtp_backfill import (
+    MTP_WINDOW,
     History,
     backfill_plan,
     backfill_row,
@@ -560,7 +561,8 @@ def test_mtp_history_tp8(mesh_device, layers):
     replay = replayed(mesh, run)
     for slot in range(SPEC_SLOTS):
         for a in (5, 130, 300, 4000):
-            for q in range(max(0, a - 127), a + 1):
+            # The window before a and a verify pass's rows at a .. a + 3 (the plan's tokens past a).
+            for q in range(max(0, a - MTP_WINDOW + 1), a + SPEC_SLOTS):
                 if rng.random() < 0.9:
                     e = entry(slot, q)
                     mirror.page[e], mirror.page[len(mirror.page) // 2 + e] = q, rng.randrange(152576)

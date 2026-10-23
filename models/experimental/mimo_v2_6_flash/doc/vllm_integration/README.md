@@ -399,40 +399,47 @@ first ~128 drafts attend a window with missing or stale entries. `MIMO_MTP_BACKF
 RoPE tables; `tt/mtp_backfill.py`, `kernels/mtp_history.cpp`, host mirror `reference/mtp_backfill.py`) closes both
 with one mechanism, for 1 and 3 MTP layers:
 
-- **History.** Each decode slot that may speculate (4 per lane) keeps a ring of 128 rows (the MTP window), indexed
-  by position % 128: the target's final normed hidden (bf16, from the final norm's persistent buffer), the position
-  and the token the step took there. Every plain decode step writes its slots' rows (in the decode trace: a copy of
-  the step's input tokens at its start, an untilize of the final norm tile and one one-core kernel at its end); every
-  verify pass writes its slots' rows into their requests' rings (in the verify trace; the chain row carries each
-  slot's request slot), rows past the committed ones being rewritten by the next step, which starts there; every
-  prefill chunk writes the final norm of its last 128 rows (eager chunks, and the traced first-chunk batches through
-  a persistent write list) and invalidates the slot's other entries unless it continues its request.
+- **History.** Each decode slot that may speculate (4 per lane) keeps a ring of 132 rows (the MTP window and a
+  verify pass: a backfill right after a verify at A reads A - 127 .. A - 1 while the pass's rows A .. A + 3 are in
+  the ring), indexed by position % 132: the target's final normed hidden (bf16, from the final norm's persistent
+  buffer), the position and the token the step took there. Every plain decode step writes its slots' rows (in the
+  decode trace: a copy of the step's input tokens at its start, an untilize of the final norm tile and one one-core
+  kernel at its end); every verify pass writes its slots' rows into their requests' rings (in the verify trace; the
+  chain row carries each slot's request slot), rows past the committed ones being rewritten by the next step, which
+  starts there; every prefill chunk writes the final norm of its last 132 rows (eager chunks, and the traced
+  first-chunk batches through a persistent write list) and invalidates the slot's other entries unless it continues
+  its request.
 - **Backfill.** Before a host-planned draft whose request's rows the rings do not continue (`mtp_ring`: the lane's
   rings hold that slot's rows up to A - 1; after a prompt, after steps without drafts) the adapter replays the
   backfill trace: a plan step (the rows of the whole ring, 256 positions from the block holding A - 127, real where
-  the history holds h_q and the token x[q + i + 1] <= A), one gather of the history rows and their cos / sin, then per
-  MTP layer its input over the 256 rows (enorm / hnorm, eh_proj, the block's input norm) and its K / V written into
-  the whole ring by one `paged_fill_cache` (`TtMiMoAttention.fill_kv_rows`: no attention, MLP or LM head). The other
-  rows write garbage where no query reads before a draft rewrites them (below the window, at A and past it). With 3
-  layers, layer i's last i rows before A need drafts: the plan stashes rows A - 2, A - 1 (hidden, layer-0 token,
-  position) and the draft right after re-runs them in every layer. A draft chained behind a verify the host built
-  checks the rings the same way (the backfill then runs between the accept trace and the draft: a prompt over a
-  deferred verify resets the rings while the request goes on); one chained behind a relayed verify continues the
-  draft before it. Under async scheduling the ring a chained draft left is known once its page is read
+  the history holds h_q, layer i taking the token the history holds at q + i + 1), one gather of the history rows and
+  their cos / sin, then per MTP layer its input over the 256 rows (enorm / hnorm, eh_proj, the block's input norm)
+  and its K / V written into the whole ring by one `paged_fill_cache` (`TtMiMoAttention.fill_kv_rows`: no attention,
+  MLP or LM head). The other rows write garbage where no query reads before a draft rewrites them (below the window,
+  at A and past it). With 3 layers the draft right after commits m tokens x[A + 1 .. A + m] and re-runs the
+  max(0, 3 - m) rows before A in every layer, from the stash, where the plan puts rows A - 2, A - 1 (hidden, layer-0
+  token, position); every other row takes tokens at positions <= A + m - 1, which the history holds committed (after
+  a verify at A, its rows A .. A + m - 1), so the plan needs nothing of the commit. A draft chained behind a verify
+  the host built checks the rings the same way (the backfill then runs between the accept trace and the draft: a
+  prompt over a deferred verify resets the rings while the request goes on); one chained behind a relayed verify
+  continues the draft before it. Under async scheduling the ring a chained draft left is known once its page is read
   (`mtp_ring` holds the verify's handle until then), and a propose the plugin made stale drafts nothing, so the
   backfill comes with the propose that does.
 - **Exactness** (host, `tests/test_mtp_backfill_host.py`): a lane serving request X (its prompt in chunks, a plain
   step, speculative steps with every accepted count), then X beside a second request for 3, 12 or 40 plain steps
   (its prompt resets the rings), then X alone again: every draft equals the drafts of an MTP that saw every position
-  (a recomputation over X's whole sequence), for 1 and 3 layers; without the backfill the first drafts differ.
+  (a recomputation over X's whole sequence), for 1 and 3 layers; without the backfill the first drafts differ. A
+  backfill right after a verify (a prompt reset the rings while X speculates) leaves every layer's K / V over the
+  window the draft reads equal to that recomputation's, for m = 1 .. 4 and 1 and 3 layers, with the history sized as
+  production sizes it (`history_rows`: the window and a verify pass).
   `tests/test_spec_inputs_tp8.py` `test_mtp_history_tp8` checks the kernel's four modes bit for bit on a Galaxy row;
   `tests/test_spec_decode_tp8_dp4.py` runs with and without it.
 - **Cost.** Per decode step ~10-20 us (one copy, one untilize of [32, 4096], one kernel moving 4 rows of 8 KB and a
   4 KB page) against a ~13 ms step; per verify pass one kernel; per prefill chunk a final norm and untilize of its
   rows and one kernel; per backfill (once per transition: a new request's first draft, a lane back to one request)
-  up to 128 real rows x 1 or 3 layers, as 256-row passes: about 1 ms on device (to measure). Memory per chip: 4 MB
-  of history rows (4 slots x 128 x 4096 bf16), a 4 KB page, ~6 KB of backfill inputs (and 2 x 256 x 128 bf16 cos / sin
-  tails with compact RoPE tables).
+  up to 127 real rows x 1 or 3 layers, as 256-row passes: about 1 ms on device (to measure). Memory per chip: 4.3 MB
+  of history rows (4 slots x 132 x 4096 bf16), a 4 KB page, ~6 KB of backfill inputs (and 2 x 256 x 128 bf16 cos /
+  sin tails with compact RoPE tables).
 
 ## Not done
 
