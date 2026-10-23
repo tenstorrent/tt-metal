@@ -17,6 +17,7 @@
 // .tt.BUF_RW notes. Expected outcome per binding (see test_op_to_op_hazards.cpp's
 // BufRwCoversEveryTransferPathAndEndpoint for the actual assertions):
 //   view, iter, shard_iter, shard   -- noc.async_read via PageView/iterator pages/ShardView      -> READ only
+//   shard_once_r / shard_once_w     -- ShardView::Shard (a shard looked up once): read / write    -> READ / WRITE only
 //   bank_r, bank_state              -- BankView: noc.async_read; set_async_read_state + async_read_with_state
 //                                       -> READ only
 //   bank_w                          -- BankView: noc.async_write                                  -> WRITE only
@@ -49,7 +50,13 @@ void kernel_main() {
     }
     TensorAccessor shard(tensor::shard);
     noc.async_read(ShardView(shard), pad, size, {.shard_id = 0}, {});
+    // Each of these tensors is one shard of the transfer's size, so the write stays inside the tensor.
+    TensorAccessor shard_once_r(tensor::shard_once_r);
+    noc.async_read(ShardView(shard_once_r).shard(0, noc.get_noc_id()), pad, size, {.offset_bytes = 0}, {});
     noc.async_read_barrier();
+    TensorAccessor shard_once_w(tensor::shard_once_w);
+    noc.async_write(pad, ShardView(shard_once_w).shard(0, noc.get_noc_id()), size, {}, {.offset_bytes = 0});
+    noc.async_write_barrier();
 
     // BankView, plain and stateful -> READ; a write through it -> WRITE. Each tensor is one page in bank 0, the
     // same size as the transfer, so these stay inside the tensor.

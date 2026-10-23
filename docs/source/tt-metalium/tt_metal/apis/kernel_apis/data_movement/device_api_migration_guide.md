@@ -14,6 +14,7 @@ This guide helps developers migrate from legacy data movement APIs to the new De
    - [Semaphore Operations](#semaphore-operations)
    - [Memory Access](#memory-access)
      - [Local-to-Local Copies (NoC Loopback)](#local-to-local-copies-noc-loopback)
+     - [Addressing a Tensor by Page or Shard](#addressing-a-tensor-by-page-or-shard)
      - [Addressing a Tensor by Bank](#addressing-a-tensor-by-bank)
    - [Zeroing Memory](#zeroing-memory)
 5. [Complete Migration Examples](#complete-migration-examples)
@@ -98,7 +99,9 @@ Endpoints are used as sources or destinations for the `Noc` interface. Depending
 
 - `UnicastEndpoint` - For unicast NoC addresses
 - `MulticastEndpoint` - For multicast NoC addresses
-- `PageView(accessor)` / `ShardView(accessor)` - For a tensor by page id / shard id
+- `TensorAccessor` / `PageView(accessor)` - For a tensor by page id: `{.page_id, .offset_bytes}`. The default for tensor transfers
+- `ShardView(accessor)` - For a sharded tensor by shard id: `{.shard_id, .offset_bytes}`
+- `ShardView::Shard` (from `ShardView(accessor).shard(shard_id, noc)`) - One shard of a tensor, looked up once: `{.offset_bytes}`. See [Addressing a Tensor by Page or Shard](#addressing-a-tensor-by-page-or-shard) for when to use each
 - `BankView(accessor)` - For a tensor by allocator bank: `{.bank_id, .offset_bytes}`; see [Addressing a Tensor by Bank](#addressing-a-tensor-by-bank)
 - `AllocatorBank<AllocatorBankType>` - Legacy raw bank addressing (`{.bank_id, .addr}` with an absolute bank address), for buffers not bound as a tensor. Prefer `BankView`.
 
@@ -549,6 +552,47 @@ Scratchpad<uint32_t> pad(scratch::my_pad);
 noc.async_read(pad, dfb, size_bytes, {.offset_bytes = off}, {});          // pad -> DFB entry
 noc.async_write(dfb, pad, size_bytes, {}, {.offset_bytes = off});         // DFB entry -> pad
 noc.async_read(pad, CoreLocalMem<uint32_t>(dst_addr), size_bytes, {}, {}); // pad -> any local region
+```
+
+#### Addressing a Tensor by Page or Shard
+
+Pass the tensor's accessor (or a view of it) as the NoC side of a transfer, rather than a NoC address built from
+core coordinates and the tensor's base address. The accessor knows where each page and shard lives, and the transfer is
+recorded for op-to-op R/W inference. Pick the form by how the kernel's work is organized:
+
+| Endpoint | Transfer args | Use when |
+|---|---|---|
+| `accessor` or `PageView(accessor)` | `{.page_id, .offset_bytes}` | The kernel works in pages. This is the default: the same kernel works for interleaved and sharded tensors. A transfer stays inside one page. |
+| `ShardView(accessor)` | `{.shard_id, .offset_bytes}` | The kernel is built around shard ownership: it gathers from or scatters to the cores that own the tensor's shards, and moves byte ranges within a shard that are not whole pages (part of a page, or a run of pages in one transfer, which is valid because a shard is contiguous on its core). Each transfer typically names a different shard. Sharded tensors only. |
+| `ShardView::Shard`, from `ShardView(accessor).shard(shard_id, noc)` | `{.offset_bytes}` | As for `ShardView`, but the kernel makes many transfers into the same shard. The shard is looked up once, when the kernel moves onto it, and each transfer only adds its offset. |
+
+- `offset_bytes` must stay inside the page (`PageView`) or the shard (`ShardView`, `ShardView::Shard`).
+- A `ShardView::Shard` is valid only on the NoC it was looked up for, can only be the NoC side of a transfer, and does
+  not expose its address.
+- When each transfer names a different shard, use `ShardView` rather than a `ShardView::Shard` per transfer: on Quasar,
+  `ShardView` lookups can be served by the hardware address generator.
+
+**Legacy API** (host sends each shard core's coordinates; the kernel adds the tensor's base address):
+```cpp
+uint64_t src = get_noc_addr(shard_x[s], shard_y[s], in_base_addr + offset);
+noc_async_read(src, l1_dst_addr, size_bytes);
+```
+
+**New API**, one transfer per shard:
+```cpp
+const auto in = TensorAccessor(tensor::in);
+const ShardView in_shards(in);
+noc.async_read(in_shards, dst, size_bytes, {.shard_id = s, .offset_bytes = offset}, {});
+```
+
+**New API**, many transfers into each shard:
+```cpp
+const auto in = TensorAccessor(tensor::in);
+const ShardView in_shards(in);
+const auto shard = in_shards.shard(s, noc.get_noc_id());  // looked up once
+for (uint32_t i = 0; i < n; ++i) {
+    noc.async_read(shard, dst[i], size_bytes, {.offset_bytes = offset + i * stride}, {});
+}
 ```
 
 #### Addressing a Tensor by Bank
