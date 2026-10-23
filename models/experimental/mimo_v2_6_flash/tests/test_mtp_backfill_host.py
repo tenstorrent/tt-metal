@@ -11,7 +11,11 @@ again. The history is written as the decode, verify and prefill programs write i
 prompt and after Y leaves the lane runs the backfill. Every draft must equal the drafts of an MTP that saw every
 position: a recomputation of every layer over X's whole sequence (one layer: its fill over the whole sequence, then
 its two steps on its own output). Without the backfill they differ (the test's power), and with a history shorter
-than the window or after a gap the backfill reaches, it still drafts what the reference drafts.
+than the window or after a gap the backfill reaches, it still drafts what the reference drafts. A backfill right
+before the draft behind a verify, which it plans without that verify's commit, leaves every layer's ring over the
+window the draft reads equal to the recomputation's, for every accepted count.
+
+The history is sized as production sizes it for its MTP window (history_rows), here for the tiny model's window.
 """
 
 import pytest
@@ -33,6 +37,7 @@ from models.experimental.mimo_v2_6_flash.reference.mtp_backfill import (
     backfill_start,
     decode_writes,
     entry,
+    history_rows,
     pack_writes,
     prefill_writes,
     verify_writes,
@@ -55,7 +60,8 @@ from models.experimental.mimo_v2_6_flash.tests.test_spec_decode_host import (
 )
 
 B = 32
-ROWS = 16  # history rows per slot (>= the tiny model's window of 8)
+WINDOW = tiny_config().sliding_window  # the tiny model's MTP window (8)
+ROWS = history_rows(WINDOW)  # history rows per slot
 X, Y = 1, 2  # the requests' lane slots
 
 
@@ -169,6 +175,21 @@ def want_drafts(lane, reference, seq):
     return recompute_drafts(lane.target, reference.mtps, seq, 0)[0]
 
 
+def recompute_rings(lane, seq, drafts):
+    """Each of the lane's MTP layers over every row q of the committed ``seq`` (the last at B) but B, row q taking h_q
+    and x~[q + i + 1] (``seq`` then ``drafts``; one layer: x[q + 1]): the K / V of an MTP that saw every position,
+    one PositionalHistory per layer."""
+    b = len(seq) - 1
+    hidden = lane.target.hidden(seq)[:b]
+    caches = []
+    for i, mtp in enumerate(lane.mtps):
+        window = list(seq) + list(drafts[:i])
+        cache = PositionalHistory()
+        mtp(hidden, lane.target.embedding[torch.tensor([window[q + i + 1] for q in range(b)])], torch.arange(b), cache)
+        caches.append(cache)
+    return caches
+
+
 def serve(target, reference, layers, backfill=True, prompt_len=40, chunk=16, gap=12, accepts=(3, 0, 1, 2, 3, 1)):
     """X's prompt, a plain step, speculative steps, Y joins for ``gap`` plain steps, Y leaves, X speculates again.
     Yields (step name, X's drafts, the drafts of an MTP that saw every position)."""
@@ -239,6 +260,44 @@ def test_short_prompts(tiny, layers, prompt_len, chunk):
 
 
 @pytest.mark.parametrize("layers", [MAX_DRAFTS, 1])
+@pytest.mark.parametrize("accept", range(MAX_DRAFTS + 1))
+def test_a_backfill_right_after_a_verify_fills_the_rings_of_an_mtp_that_saw_every_position(tiny, layers, accept):
+    """X speculates, a prompt resets the lane's rings (another request's, over X's deferred verify), and X's next
+    verify at A commits m = accept + 1 tokens: the draft behind it backfills first, enqueued behind the verify before
+    its commit is known, from a history that also holds the verify's rows A .. A + 3. After the draft, every layer's
+    K / V at A - WINDOW + 1 .. B - 1 (the windows its rows read, B the last committed position) equals a
+    recomputation's over X's whole sequence, and so do the drafts and (every layer) the layers' outputs."""
+    target, reference = tiny
+    g = torch.Generator().manual_seed(11)
+    lane = Lane(target, reference, layers)
+    x = torch.randint(0, target.cfg.vocab_size, (40,), generator=g).tolist()
+    lane.prefill(X, x, 16)
+    x.append(target.greedy(x)[0])
+    rows = lane.plain({X: x})
+    drafts = lane.draft(DraftSource(row=4 + X, slots=[X]), [x[-1]], [len(x) - 1, -1, -1, -1], 1, rows)
+    for k in range(5):
+        committed, source, positions, rows = lane.verify(x, drafts, (3, 0, 1, 2, 3)[k])
+        x += committed
+        drafts = lane.draft(source, committed, positions, len(committed), rows)
+    lane.reset()
+    a = len(x) - 1
+    committed, source, positions, rows = lane.verify(x, drafts, accept)
+    assert len(committed) == accept + 1 and positions[0] - 1 == a
+    x += committed
+    drafts = lane.draft(source, committed, positions, len(committed), rows)
+    assert lane.backfills == 2, "after the prompt, after the reset"
+    assert drafts == want_drafts(lane, reference, x)
+    if layers > 1:
+        for got, want in zip(lane.program.outputs, recompute_drafts(target, reference.mtps, x, 0)[1]):
+            torch.testing.assert_close(got, want, atol=1e-5, rtol=1e-5)
+    rings = lane.drafter.histories if layers == 1 else lane.program.histories
+    for i, (got, want) in enumerate(zip(rings, recompute_rings(lane, x, drafts))):
+        for q in range(max(0, a - WINDOW + 1), len(x) - 1):
+            for t, w in zip(got.entries[q], want.entries[q]):
+                torch.testing.assert_close(t, w, atol=1e-5, rtol=1e-5, msg=f"layer {i} position {q}")
+
+
+@pytest.mark.parametrize("layers", [MAX_DRAFTS, 1])
 def test_without_the_backfill_the_first_drafts_differ(tiny, layers):
     target, reference = tiny
     differ = [name for name, got, want in serve(target, reference, layers, backfill=False) if got != want]
@@ -278,28 +337,30 @@ def test_verify_writes_go_to_each_slots_request():
 @pytest.mark.parametrize("a", [0, 1, 2, 5, 15, 16, 17, 63, 64, 200, 255, 256, 300, 1 << 20])
 def test_backfill_plan(a):
     """The plan fills the whole ring from S0 (a block boundary, the window's start in it), real rows exactly where the
-    history holds the row and its token (<= a), and stashes rows a - 2, a - 1."""
+    history holds the row, each layer's token wherever the history holds its position (past a, a verify pass's
+    rows), and stashes rows a - 2, a - 1. The ring holds the window and the verify pass at a together."""
     hist = History(4, ROWS)
-    held = [q for q in range(max(0, a - ROWS + 1), a + 1) if q % 5 != 3]  # holes
+    held = [q for q in range(max(0, a - WINDOW + 1), a + 1) if q % 5 != 3]  # holes
     hist.apply([(0, entry(X, q, ROWS), q, 1000 + q) for q in held], torch.zeros(1, 4))
-    stale = a + 1  # a rejected verify row past a: never used (it replaces the oldest entry, a + 1 - ROWS)
-    hist.apply([(0, entry(X, stale, ROWS), stale, 7)], torch.zeros(1, 4))
-    held = [q for q in held if hist.position(X, q) == q]
+    verified = list(range(a + 1, a + SPEC_SLOTS))  # the rows of a verify pass at a past a (rejected or committed)
+    hist.apply([(0, entry(X, q, ROWS), q, 2000 + q) for q in verified], torch.zeros(1, 4))
+    assert all(hist.position(X, q) == q for q in held + verified)
     for layers in (1, MAX_DRAFTS):
         stash = stash_page(B, [3, 4, 5, 6], [1, 2, 3, 4]) if layers > 1 else None
-        plan, new = backfill_plan(backfill_row(B, X, a), hist.page, layers, stash, ROWS)
-        s0 = backfill_start(a, ROWS)
-        assert s0 % 64 == 0 and s0 <= max(0, a - ROWS + 1) < s0 + 64
+        plan, new = backfill_plan(backfill_row(B, X, a), hist.page, layers, stash, ROWS, WINDOW)
+        s0 = backfill_start(a, WINDOW)
+        assert s0 % 64 == 0 and s0 <= max(0, a - WINDOW + 1) < s0 + 64
         assert plan["table"][:RING_BLOCKS] == [(s0 // 64 + k) % RING_BLOCKS for k in range(RING_BLOCKS)]
         assert plan["table"][RING_BLOCKS:] == [SCRATCH_BLOCK + k for k in range(RING_BLOCKS)]
         for r in range(BACKFILL_ROWS):
             q = s0 + r
-            real = max(0, a - ROWS + 1) <= q <= a - 1 and q in held
+            real = max(0, a - WINDOW + 1) <= q <= a - 1 and q in held
             assert plan["hidden"][r] == (entry(X, q, ROWS) if real else 0)
             assert plan["rope"][r] == min(q, a)
             for i in range(layers):
-                ok = real and q + i + 1 <= a and q + i + 1 in held
-                assert plan["tokens"][i][r] == (1000 + q + i + 1 if ok else 0), (q, i)
+                x = q + i + 1
+                want = (1000 + x if x in held else 2000 + x if x in verified else 0) if real else 0
+                assert plan["tokens"][i][r] == want, (q, i)
         if layers > 1:
             positions = [-1, -1] + [q if q in held and q + 1 in held and q <= a - 1 else -1 for q in (a - 2, a - 1)]
             assert new == stash_page(
@@ -308,6 +369,6 @@ def test_backfill_plan(a):
             assert plan["stash_rows"] == [
                 (2 + k, entry(X, q, ROWS)) for k, q in enumerate((a - 2, a - 1)) if positions[2 + k] >= 0
             ]
-    idle, same = backfill_plan(backfill_row(B), hist.page, MAX_DRAFTS, [9] * B, ROWS)
+    idle, same = backfill_plan(backfill_row(B), hist.page, MAX_DRAFTS, [9] * B, ROWS, WINDOW)
     assert idle["table"] == [SCRATCH_BLOCK + k % RING_BLOCKS for k in range(2 * RING_BLOCKS)] and same == [9] * B
     assert pack_writes([(1, 2, 3, 4)], 2) == [1, 2, 3, 4, -2, 0, -1, 0]

@@ -12,8 +12,9 @@ verify upload and control page the host would have built after reading the page 
 bonus and the drafts), for every count of the step it chains onto and every number of drafts verified, around the
 ring's wrap and at the context limit, from a provisional layout above the real position, leaving every other slot
 alone, and idle the pass when the page drafted nothing; with either drafter (one MTP layer, or every layer: the
-description, the plan step on the stash, the anchor in the last slot). test_spec_inputs_tp8.py runs the kernel
-against the same mirror on a Galaxy row."""
+description, the plan step on the stash, the anchor in the last slot). SpecChain.warm, at every decode trace capture,
+must run its steps on idle uploads, so that the stash a prompt emptied stays empty. test_spec_inputs_tp8.py runs the
+kernel against the same mirror on a Galaxy row."""
 
 import random
 from types import SimpleNamespace
@@ -596,6 +597,34 @@ def test_an_idle_description_leaves_the_stash():
         got, new = plan_step(mtp, page, B)
         assert new == page and got["pos"] == [-1] * B and got["hidden"] == [B + j for j in range(B)]
         assert got["tokens0"] == [0] * B and got["rope"] == [0] * B
+
+
+def test_warm_leaves_the_stash_a_prompt_emptied():
+    """tt/spec_chain.SpecChain.warm with its steps on the mirrors: a recapture after a prompt (the prompt emptied the
+    stash, TtMiMoMTP.reset) finds the last served chained verify and its accept page in the uploads; warm idles them
+    (SpecInputs.reset) before its steps, so the plan step leaves the stash empty instead of re-planning that commit."""
+    from models.experimental.mimo_v2_6_flash.tt.spec_chain import SpecChain
+
+    rng = random.Random(9)
+    vp = one_row_pass(300, MAX_DRAFTS, rng)
+    accept = accept_page([(2, [rng.randrange(VOCAB) for _ in range(2)])])
+    live = SimpleNamespace(verify=upload(vp, chain_row(B, draft_source([vp]), MAX_SEQ_LEN - MAX_DRAFTS)), mtp=None)
+    live.stash = stash_page(B)
+    mtp, _ = chain_step(live.verify, accept, [0] * B, layers=MAX_DRAFTS)
+    assert plan_step(mtp, live.stash, B)[1] != live.stash, "the live uploads' commit fills the stash"
+
+    def reset():
+        live.verify = pack_verify(torch.zeros(B, dtype=torch.int32), torch.full((B,), -1, dtype=torch.int32)).tolist()
+        live.mtp = pack_mtp(B).tolist()
+
+    chain = SpecChain.__new__(SpecChain)
+    chain.spec_inputs, chain.layer_inputs = SimpleNamespace(reset=reset), object()
+    chain.relay = lambda ctrl: setattr(live, "verify", relay_step(live.verify, [0] * RESULT_WORDS, ctrl)[0])
+    chain.chain = lambda: setattr(live, "mtp", chain_step(live.verify, accept, [0] * B, layers=MAX_DRAFTS)[0])
+    chain.drafts = chain.tokens = lambda *args: None
+    chain.plan_layers = lambda: setattr(live, "stash", plan_step(live.mtp, live.stash, B)[1])
+    chain.warm(control_words([]))
+    assert live.stash == stash_page(B) and live.mtp == pack_mtp_layers(B).tolist()
 
 
 @pytest.mark.parametrize("rows", range(1, SPEC_SLOTS + 1))

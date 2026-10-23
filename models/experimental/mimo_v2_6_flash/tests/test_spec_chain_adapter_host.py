@@ -30,7 +30,7 @@ from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     unpack_result,
 )
 from models.experimental.mimo_v2_6_flash.reference.spec_decode import MAX_DRAFTS, SPEC_SLOTS, DraftSource
-from models.experimental.mimo_v2_6_flash.reference.spec_inputs import MTP_ROWS, pack_mtp, pack_mtp_layers, pack_verify
+from models.experimental.mimo_v2_6_flash.reference.spec_inputs import pack_mtp, pack_mtp_layers, pack_verify
 from models.experimental.mimo_v2_6_flash.tt import generator_vllm
 from models.experimental.mimo_v2_6_flash.tt.generator_vllm import MiMoV2ForCausalLM
 
