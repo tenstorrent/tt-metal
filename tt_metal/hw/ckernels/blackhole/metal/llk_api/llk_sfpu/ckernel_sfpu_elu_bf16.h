@@ -45,7 +45,7 @@ inline bool bf16_dest_elu() {
 #endif
 }
 template <int ITERATIONS = 32>
-inline void calculate_elu_bf16() {
+__attribute__((noinline)) inline void calculate_elu_bf16() {
     ckernel::sfpu::bf16::elu::calculate_dense_polynomial<ckernel::sfpu::EluBf16Config, ITERATIONS>();
 }
 
