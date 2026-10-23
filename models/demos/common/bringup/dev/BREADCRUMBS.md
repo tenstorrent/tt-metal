@@ -1930,3 +1930,17 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   once per pick (45 min each).
 - core/stamps.py Store.get falls back to `*#<test>` records with the same stamp id (record marked _from); restore
   copies the outputs from that unit's dir. Selftest test_the_store_finds_the_same_test_filed_by_another_task.
+
+## F178: the warm full prefill times a gapped subset; never a silent skip (2026-10-23)
+- DeepSeek-V4.1 X.3 set BRINGUP_FULL_PREFILL=1 but its layers (0-3, 14, 20, 21, 24) are not a prefix, so
+  testing/profile.py full_prefill returned None and the gate passed without the number (no silent fallback, F138).
+- full_prefill now runs a gapped subset back to back (prefill_gapped = 1) when every layer's state sources are in it,
+  and raises otherwise. Selftest in test_device_side.py (full prefill).
+
+## F179: a fork call's signature leaves out volatile arguments (2026-10-23)
+- DeepSeek-V4.1 O.1: one flat_routed_expert call passes extra_key (a program-cache key built from buffer addresses);
+  its value changed between the agent's capture and the gate's, so the signature changed and no case could match it;
+  two agent attempts were spent on it.
+- testing/fork_capture.py: VOLATILE_KWARGS (extra_key) are recorded but left out of `sig`; the pre-F179 signature is kept
+  as `sig_full`, and testing/fork_cases.py counts a call covered by either, so existing cases still match. Selftest
+  test_a_volatile_cache_key_does_not_change_a_calls_signature.
