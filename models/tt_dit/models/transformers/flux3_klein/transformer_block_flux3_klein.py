@@ -145,6 +145,13 @@ class Flux3KleinTransformerBlock(Module):
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
+        # The softmax exponential of the ring SDPA uses the SFPU's approximate exp (the shared default is the precise
+        # one). Measured 2026-10-21 (bin/probes/probe_sdpa_modes.py, eager, 16 steps): 4096x4096 step 1.87 -> 0.72 s
+        # (end to end 31.9 -> 14.4 s), 2048x2048 0.182 -> 0.139 s; the kernel is bound by that exp and the fp32
+        # destination accumulation, not by matmul fidelity (LoFi changes nothing). Exactness: man_dog 1024 with the
+        # recorded text 31.45 dB vs the CPU golden (precise exp 32.86 dB); the images were inspected and accepted by
+        # the user (the fp32 accumulation and HiFi2 stay; bf16 accumulation, 30.27 dB, was rejected).
+        self.attn.ring_sdpa_exp_approx = True
         # fp32 accumulation enlarges the ring SDPA's intermediate circular buffers: with the shared (4, 8) table's
         # (256, 512) fallback chunks the kernel's static CBs measured 1 645 760 B against the 1 572 864 B L1 for
         # L = 80 / 320 / 4496 (the swept 4096 entry, (128, 256), and the (2, 2) table's (128, 512) fit). This

@@ -73,6 +73,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -418,7 +419,22 @@ def transformer_cache_key(variant: str, snapshot: Path, model: Flux3KleinTransfo
     """The M3 convention (``tests/models/flux3_klein/test_transformer_flux3_klein.py::load_real_weights``)."""
     model_name = f"flux3_klein_{variant}_{snapshot.name}"
     subfolder = f"transformer_D{model.depth}_S{model.depth_single}{'_flowmap' if model.flow_map else ''}"
+    if _dit_weight_override()[0] is not None:  # measurement profile: its own cache, the bf16 cache stays intact
+        subfolder += f"_{os.environ['FLUX3_KLEIN_DIT_WEIGHTS'].replace(',', '_')}"
     return model_name, subfolder
+
+
+def _dit_weight_override():
+    """``FLUX3_KLEIN_DIT_WEIGHTS=bfp8[,lofi]`` (MEASUREMENT ONLY, 2026-10-22: the GPU's fp8 column has no exact-profile
+    counterpart): the DiT's linears take bfloat8_b weights (and LoFi matmuls with ``,lofi``); attention stays bf16 /
+    HiFi2 with the approximate exp. Returns (dtype, fidelity) or (None, None)."""
+    spec = os.environ.get("FLUX3_KLEIN_DIT_WEIGHTS", "")
+    if not spec:
+        return None, None
+    parts = [p.strip() for p in spec.split(",")]
+    dtype = {"bfp8": ttnn.bfloat8_b, "bf16": ttnn.bfloat16}[parts[0]]
+    fidelity = {"lofi": ttnn.MathFidelity.LoFi, "hifi2": ttnn.MathFidelity.HiFi2}[parts[1]] if len(parts) > 1 else None
+    return dtype, fidelity
 
 
 def load_dit_torch_state(snapshot: Path) -> dict[str, torch.Tensor]:
@@ -493,8 +509,8 @@ class Flux3KleinPipeline:
         *,
         snapshots: dict[str, Path],
         resident: tuple[str, ...] = ("base", "distilled"),
-        sp_axis: int = 0,
-        tp_axis: int = 1,
+        sp_axis: int = 1,
+        tp_axis: int = 0,
         topology=ttnn.Topology.Ring,
         num_links: int = 2,
         vae_tp_axis: int | None = 0,
@@ -702,9 +718,17 @@ class Flux3KleinPipeline:
         denoisers: dict[str, Flux3KleinDenoiser] = {}
         for variant in self._resident:
             t0 = time.time()
-            model = Flux3KleinTransformer(
-                flow_map=variant == "distilled", device=self._device, ccl_manager=ccl, parallel_config=parallel
-            )
+            from ...layers import linear as _linear
+
+            _linear.DTYPE_OVERRIDE, _linear.FIDELITY_OVERRIDE = _dit_weight_override()
+            if _linear.DTYPE_OVERRIDE is not None:
+                logger.warning(f"MEASUREMENT PROFILE: DiT linears {_linear.DTYPE_OVERRIDE} fidelity {_linear.FIDELITY_OVERRIDE} (FLUX3_KLEIN_DIT_WEIGHTS)")
+            try:
+                model = Flux3KleinTransformer(
+                    flow_map=variant == "distilled", device=self._device, ccl_manager=ccl, parallel_config=parallel
+                )
+            finally:
+                _linear.DTYPE_OVERRIDE = _linear.FIDELITY_OVERRIDE = None
             load_flux3_klein_transformer_weights(
                 model, variant, self._snapshots[variant], parallel_config=parallel, mesh_device=self._device
             )
