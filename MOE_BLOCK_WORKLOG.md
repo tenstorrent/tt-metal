@@ -1620,3 +1620,6 @@ Structural (not fixed here):
   clamped SiLU) run the ops head (correct, slower).
 - More than 64 experts a chip (the flat op): the router fold proxy (K3 on the LoudBox).
 - Packed routings (zipf packed, ties): the planner's rows_cap overflow - the token-dropping policy is pending.
+- Ring of 4, routings at 640 rows (packed skipped on the fused head): K3 zipf spread / one hot / empty experts /
+  zero-row chip .9961 - .9962; GLM-5.3-Flash .9869 / .9865 / .9847 / .9866. Ring soak K3 640: 10k replays clean
+  (PCC min .9962).
