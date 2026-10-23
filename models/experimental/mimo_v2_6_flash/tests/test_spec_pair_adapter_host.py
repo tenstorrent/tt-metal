@@ -140,6 +140,8 @@ class Plugin:
         out = self.model.decode_forward(tokens, positions, FULL_TABLE, None, spec_mode=mode, num_valid_drafts=valid)
         if mode == "fused_sample":
             accepted, counts = out.accepted_token_ids, out.accepted_counts
+        elif mode == "logits":
+            accepted, counts = accept_greedy_drafts(out.logits.argmax(-1).to(torch.int32), tokens[:, 1:], valid)
         else:
             accepted, counts = accept_greedy_drafts(out.argmax_ids, tokens[:, 1:], valid)
         first = positions[:, 0].unsqueeze(1).to(torch.int64)
@@ -151,10 +153,14 @@ class Plugin:
 SCHEDULE = [("join", (0,)), 6, ("join", (1,)), 6, ("leave", (1,)), 6, ("join", (1, 2)), 4, ("leave", (0,)), 6]
 
 
-@pytest.mark.parametrize("mode", ["argmax_ids", "fused_sample"])
-def test_lane_transitions_follow_the_oracle(adapter, mode):
+@pytest.mark.parametrize("check", [False, True], ids=["", "chain_check"])
+@pytest.mark.parametrize("mode", ["argmax_ids", "fused_sample", "logits"])
+def test_lane_transitions_follow_the_oracle(adapter, mode, check):
     """1 -> 2 -> 1 -> 3 -> 2 requests, synchronous: every request commits the oracle's tokens; one request drafts
-    three (from its ring), a pair one each (from theirs, the pair draft chained behind each verify), three none."""
+    three (from its ring), a pair one each (from theirs, the pair draft chained behind each verify, or after a logits
+    verify drafted from the host plan), three none. MIMO_SPEC_CHAIN_CHECK drafts every chained draft again from the
+    host plan, pairs with the pair draft: no difference."""
+    adapter.chain_check = check
     plugin, lane = Plugin(adapter), adapter.models[LANE]
     for item in SCHEDULE:
         if isinstance(item, tuple):
@@ -166,8 +172,11 @@ def test_lane_transitions_follow_the_oracle(adapter, mode):
     assert populations == [1] * 6 + [2] * 6 + [1] * 6 + [3] * 4 + [2] * 6
     counts = {c for n, cs in plugin.steps if n == 2 for c in cs.values()}
     assert counts == {1, 2}, "pair drafts accepted and rejected"
-    assert lane.mtp.pair_runs >= 8 and lane.mtp.chained >= 20
+    assert lane.mtp.pair_runs >= 8
+    assert lane.mtp.chained >= 20 if mode != "logits" else lane.mtp.chained == 0 and lane.mtp.planned >= 20
     assert adapter.models[0].mtp.chained == adapter.models[0].mtp.planned == 0
+    stats = adapter.chain_stats
+    assert stats["mismatched"] == 0 and (stats["checked"] > 0) == (check and mode != "logits")
 
 
 def test_lane_transitions_with_the_pair_draft_off(adapter, monkeypatch):
@@ -260,9 +269,12 @@ class AsyncPlugin(Plugin):
         self.pending = (out.handle, valid, {s: list(v) for s, v in self.reqs.items()})
 
 
-def test_lane_transitions_chained_follow_the_synchronous_path(adapter, defer):
+@pytest.mark.parametrize("check", [False, True], ids=["", "chain_check"])
+def test_lane_transitions_chained_follow_the_synchronous_path(adapter, defer, check):
     """The same schedule under async scheduling, chained where the plugin chains: the oracle's tokens, the drafts of
-    each population, and the same counts step for step as the synchronous path."""
+    each population, and the same counts step for step as the synchronous path. MIMO_SPEC_CHAIN_CHECK redrafts every
+    deferred verify's drafts (a pair's with the pair draft) right after its enqueue: no difference."""
+    adapter.chain_check = check
     plugin, lane = AsyncPlugin(adapter), adapter.models[LANE]
     for item in SCHEDULE:
         if isinstance(item, tuple):
@@ -274,7 +286,9 @@ def test_lane_transitions_chained_follow_the_synchronous_path(adapter, defer):
     plugin.flush()
     assert [n for n, _ in plugin.steps] == [1] * 6 + [2] * 6 + [1] * 6 + [3] * 4 + [2] * 6
     assert plugin.chained >= 15, "single and pair verifies chained"
-    assert lane.mtp.planned == 0, "every draft drafted on device behind its verify"
+    assert (lane.mtp.planned == 0) == (not check), "every draft drafted on device behind its verify"
+    assert adapter.chain_stats["mismatched"] == 0 and (adapter.chain_stats["checked"] > 0) == check
+    adapter.chain_check = False
     sync = MiMoV2ForCausalLM(adapter.gen, adapter.max_seq_len)
     sync.layer_groups = [0]
     for lane_model in adapter.models:
