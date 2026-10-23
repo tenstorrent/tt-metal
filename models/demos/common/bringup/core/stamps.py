@@ -312,7 +312,17 @@ class Store:
             return {}
 
     def get(self, unit: str, sid: str) -> dict | None:
-        return self.records(unit).get(sid)
+        """The unit's record for this stamp; F177: else the same test's record filed by another task (a unit is
+        `<task>#<test>`: the identical command on the identical code, e.g. four picks sharing one frozen test set)."""
+        rec = self.records(unit).get(sid)
+        if rec is not None or "#" not in unit:
+            return rec
+        label = unit.split("#", 1)[1]
+        for idx in sorted(self.dir.glob(f"*#{label}.json")) if self.dir.is_dir() else []:
+            other = idx.stem
+            if other != unit and sid in self.records(other):
+                return dict(self.records(other)[sid], _from=other)
+        return None
 
     def put(self, unit: str, sid: str, rec: dict, outputs: list[Path], record_tid: str) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -334,7 +344,7 @@ class Store:
 
     def restore(self, unit: str, sid: str, rec: dict, results_dir: Path, record_tid: str) -> None:
         for name in rec.get("outputs") or []:
-            src = self.dir / unit / sid / name
+            src = self.dir / rec.get("_from", unit) / sid / name
             if src.exists():
                 shutil.copy2(src, results_dir / (f"{record_tid}{name}" if name.startswith("_") else name))
 
