@@ -321,8 +321,16 @@ def current_config_rows():
     return rows
 
 
-# The proposed best rows (filled from the sweeps' RESULT best lines; empty until then, no default changes).
-DECODE_MM_TABLE = {}
+# The proposed best rows from the sweeps' RESULT best lines (no model default changes; the model keeps its own
+# configs until the resolver moves into tt/decode_matmul.py). lm_head (2026-10-23, tp4, chips 6 / 7): today's 1D
+# config with the K block 8 -> 2 (31B) / 3 (12B) and HiFi2 instead of LoFi: 1737 -> 1688 us (31B), 1298 -> 1288 us
+# (12B), fp32 golden PCC 0.99985 -> 0.99992; every program config sits at 1.21-1.30x of the DRAM roofline.
+DECODE_MM_TABLE = {
+    ("31B", "lm_head", 4, 1): DecodeMMConfig("1d", "full", 2, None, 6, "hifi2", False),
+    ("31B", "lm_head", 4, 32): DecodeMMConfig("1d", "full", 2, None, 6, "hifi2", False),
+    ("12B", "lm_head", 4, 1): DecodeMMConfig("1d", "full", 3, None, 6, "hifi2", False),
+    ("12B", "lm_head", 4, 32): DecodeMMConfig("1d", "full", 3, None, 6, "hifi2", False),
+}
 
 
 class KnobSpace:
