@@ -31,6 +31,7 @@
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "common_tensor_test_utils.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -273,6 +274,67 @@ INSTANTIATE_TEST_SUITE_P(
     BlockFloatVectorConversionTest,
     BlockFloatVectorConversionTest,
     ::testing::Values(DataType::BFLOAT4_B, DataType::BFLOAT8_B));
+
+// A ramp can't round-trip through the narrow MX formats (an MXINT2 element is -1, 0 or +1 times the block
+// scale), so cycle through 0, 1 and -1: every MX format holds those exactly whatever block scale the packer
+// picks, and the pattern still catches misplaced elements.
+std::vector<float> make_mx_exact_data(size_t count) {
+    constexpr float kValues[] = {0.0f, 1.0f, -1.0f};
+    std::vector<float> data(count);
+    for (size_t i = 0; i < count; ++i) {
+        data[i] = kValues[i % 3];
+    }
+    return data;
+}
+
+class MxVectorConversionTest : public ::testing::TestWithParam<DataType> {};
+
+TEST_P(MxVectorConversionTest, InvalidLayout) {
+    Shape shape{32, 32};
+    // MX types are only supported in TILE layout.
+    EXPECT_ANY_THROW((void)HostTensor::from_vector(
+        std::vector<float>(shape.volume()), get_tensor_spec(shape, GetParam(), Layout::ROW_MAJOR)));
+}
+
+TEST_P(MxVectorConversionTest, Roundtrip) {
+    Shape shape{32, 32};
+    std::vector<float> input = make_mx_exact_data(shape.volume());
+
+    auto tensor = HostTensor::from_vector(input, get_tensor_spec(shape, GetParam(), Layout::TILE));
+
+    EXPECT_THAT(tensor.logical_shape(), Eq(shape));
+    EXPECT_THAT(tensor.dtype(), Eq(GetParam()));
+    EXPECT_THAT(tensor.to_vector<float>(), Pointwise(Eq(), input));
+}
+
+TEST_P(MxVectorConversionTest, RoundtripWithPadding) {
+    Shape shape{14, 47};
+    std::vector<float> input = make_mx_exact_data(shape.volume());
+
+    auto tensor = HostTensor::from_vector(input, get_tensor_spec(shape, GetParam(), Layout::TILE));
+
+    EXPECT_THAT(tensor.logical_shape(), ShapeIs(14, 47));
+    EXPECT_THAT(tensor.padded_shape(), ShapeIs(32, 64));
+    EXPECT_THAT(tensor.to_vector<float>(), Pointwise(Eq(), input));
+}
+
+TEST_P(MxVectorConversionTest, RoundtripWithPaddingAndCustomTile) {
+    Shape shape{14, 47};
+    std::vector<float> input = make_mx_exact_data(shape.volume());
+
+    TensorSpec spec(shape, TensorLayout(GetParam(), PageConfig(Layout::TILE, Tile({16, 16})), MemoryConfig{}));
+    auto tensor = HostTensor::from_vector(input, spec);
+
+    EXPECT_THAT(tensor.logical_shape(), ShapeIs(14, 47));
+    EXPECT_THAT(tensor.padded_shape(), ShapeIs(16, 48));
+    EXPECT_THAT(tensor.to_vector<float>(), Pointwise(Eq(), input));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MxVectorConversionTest,
+    MxVectorConversionTest,
+    ::testing::ValuesIn(::test_utils::kMxDataTypes),
+    ::test_utils::dtype_param_name);
 
 using DeviceVectorConversionTest = MeshDevice1x1Fixture;
 
