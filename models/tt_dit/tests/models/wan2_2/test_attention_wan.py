@@ -13,6 +13,7 @@ from ....models.transformers.wan2_2.attention_wan import WanAttention
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
+from ....utils.checkpoint import resolve_checkpoint
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch
@@ -86,7 +87,10 @@ def test_wan_attention(
 
     # Load Wan2.2-T2V-14B model from HuggingFace
     parent_torch_model = WanTransformer3DModel.from_pretrained(
-        "Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="transformer", torch_dtype=torch_dtype, trust_remote_code=True
+        resolve_checkpoint("Wan-AI/Wan2.2-T2V-A14B-Diffusers"),
+        subfolder="transformer",
+        torch_dtype=torch_dtype,
+        trust_remote_code=True,
     )
     parent_torch_model.eval()
 

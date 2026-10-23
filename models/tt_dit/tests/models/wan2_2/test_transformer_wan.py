@@ -15,6 +15,7 @@ from ....models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
+from ....utils.checkpoint import local_revision, resolve_checkpoint
 from ....utils.golden import load_golden, save_golden
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.padding import pad_vision_seq_parallel
@@ -24,7 +25,7 @@ from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_
 # ---------------------------------------------------------------------------
 # Wan2.2-T2V-14B model configuration
 # ---------------------------------------------------------------------------
-MODEL_NAME = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+MODEL_NAME = resolve_checkpoint("Wan-AI/Wan2.2-T2V-A14B-Diffusers")
 DIM = 5120
 FFN_DIM = 13824
 NUM_HEADS = 40
@@ -52,6 +53,7 @@ def _load_model_and_golden(test_name, param_id):
     _, commit_hash = TorchWanTransformer3DModel.load_config(
         MODEL_NAME, subfolder="transformer", return_commit_hash=True
     )
+    commit_hash = commit_hash or local_revision(MODEL_NAME)
     logger.info(f"Loaded {MODEL_NAME} (subfolder=transformer) at commit: {commit_hash}")
 
     golden = load_golden(commit_hash, test_name, param_id)

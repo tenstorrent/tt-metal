@@ -27,6 +27,7 @@ from models.tt_dit.pipelines.wan.dbcache import ExpertCacheRunner, WanDBCacheCon
 from models.tt_dit.pipelines.wan.text_encoder import TextEncoder
 from models.tt_dit.solvers import solver_for_scheduler
 from models.tt_dit.utils import tensor
+from models.tt_dit.utils.checkpoint import resolve_checkpoint
 from models.tt_dit.utils.conv3d import conv3d_configs
 from models.tt_dit.utils.dbcache import DBCacheConfig
 from models.tt_dit.utils.tensor import float32_tensor
@@ -269,7 +270,7 @@ class WanPipelineConfig:
             num_frames=num_frames,
             cfg_enabled=cfg_enabled,
             max_sequence_length=max_sequence_length,
-            checkpoint_name=checkpoint_name,
+            checkpoint_name=resolve_checkpoint(checkpoint_name),
             cache_config=WanDBCacheConfig.coerce(cache_config) if cache_config is not None else None,
         )
 
