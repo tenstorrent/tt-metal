@@ -14,14 +14,19 @@
 // So it is a per-row softmax over the 16 columns of face 0, with the row maximum
 // supplied by the caller in rows 8-11 rather than computed here.
 //
-// Padding: the sequence sets a condition code from |even-column value| before
-// subtracting the max, and only calls SFPENCC after the exponential, so lanes
-// whose EVEN column holds exactly 0.0 skip both the subtract and the exp and stay
-// 0. Padding therefore has to be exact 0.0, and it predicates the even/odd column
-// PAIR (the odd lane inherits its even partner's condition code). That is why odd
-// k needs `_zero_paired_odd_tail_lane_`: for odd k the tail column k is odd and
-// its even partner k-1 is a valid non-zero lane, so it would otherwise be
-// exponentiated. Valid inputs must be non-zero.
+// Padding, 16-bit DEST: the sequence sets a condition code from |even-column
+// value| before subtracting the max and only calls SFPENCC after the exponential,
+// so lanes whose EVEN column holds exactly 0.0 skip both the subtract and the exp
+// and stay 0. Padding therefore has to be exact 0.0 and valid inputs must be
+// non-zero there, and the predicate covers the even/odd column PAIR (the odd lane
+// inherits its even partner's condition code), so for odd k the odd tail column k
+// (even partner k-1 valid) is exponentiated and `_zero_padding_columns_` clears
+// that one instance afterwards.
+// Padding, 32-bit DEST: no condition code is set (the sfpi fp32 exp re-enables all
+// lanes before it stores, so none could survive it); every column of both blocks
+// goes through subtract + exp and `_zero_padding_columns_` re-zeroes every column
+// >= k by SFPU-instance index. Neither the exact-0.0 padding nor the non-zero
+// input requirement applies on that width; a valid 0.0 logit is a legal input.
 //
 // ckernel_sfpu_softmax_k.h self-includes its exp/reduce prerequisites and declares
 // SFPCONFIG_TARGET_LREG11 / SFPCONFIG_MOD_SET_LREG11 itself, so this driver needs no
@@ -31,8 +36,9 @@
 // tt-llk test build has to put that directory on the include path -- see
 // setup_compilation_options in helpers/test_config.py.
 //
-// Both even and odd k are swept. Odd k is what exercises
-// `_zero_paired_odd_tail_lane_` and its 1u << (k - 1) tail mask.
+// k = 1..16 is swept, with both DEST widths. Odd k is what exercises the 16-bit
+// tail-lane mask (1u << (k - 1)); dest_acc=Yes exercises the full by-index
+// clearing of both column blocks.
 
 #include <cstdint>
 
@@ -91,7 +97,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    static_assert(SOFTMAX_K >= 2 && SOFTMAX_K <= 16, "softmax_k operates on the 16 columns of one face");
+    static_assert(SOFTMAX_K >= 1 && SOFTMAX_K <= 16, "softmax_k operates on the 16 columns of one face");
 
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
