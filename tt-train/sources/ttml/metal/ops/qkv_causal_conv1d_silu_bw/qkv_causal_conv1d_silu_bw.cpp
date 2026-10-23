@@ -125,7 +125,8 @@ qkv_causal_conv1d_silu_bw(
     uint32_t v_width,
     uint32_t channel_chunk_size,
     uint32_t row_splits,
-    bool compute_tap_grads) {
+    bool compute_tap_grads,
+    const std::optional<ttnn::Tensor>& preallocated_grad_input) {
     TT_FATAL(
         input.storage_type() == ttnn::StorageType::DEVICE && input.logical_shape().rank() == 3,
         "qkv_causal_conv1d_silu_bw: input must be a [1,T,Q+K+V] device tensor");
@@ -146,7 +147,7 @@ qkv_causal_conv1d_silu_bw(
         .output_mem_config = ttnn::DRAM_MEMORY_CONFIG};
 
     auto outputs = ttnn::prim::ttml_qkv_causal_conv1d_silu_bw(
-        grad_q, grad_k, grad_v, input, history, tap0, tap1, tap2, tap3, params);
+        grad_q, grad_k, grad_v, input, history, tap0, tap1, tap2, tap3, params, preallocated_grad_input);
     if (!compute_tap_grads) {
         return {outputs[0], std::nullopt, std::nullopt, std::nullopt, std::nullopt};
     }

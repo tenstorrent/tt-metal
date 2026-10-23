@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal::ops::qkv_causal_conv1d_silu_bw::device {
@@ -31,6 +33,7 @@ struct QkvCausalConv1dSiluBackwardInputs {
     Tensor tap1;
     Tensor tap2;
     Tensor tap3;
+    std::optional<Tensor> preallocated_grad_input = std::nullopt;
 };
 
 }  // namespace ttml::metal::ops::qkv_causal_conv1d_silu_bw::device

@@ -41,6 +41,7 @@ std::vector<ttnn::Tensor> ttml_qkv_causal_conv1d_silu_bw(
     const ttnn::Tensor& tap1,
     const ttnn::Tensor& tap2,
     const ttnn::Tensor& tap3,
-    const ttml::metal::ops::qkv_causal_conv1d_silu_bw::device::QkvCausalConv1dSiluBackwardParams& params);
+    const ttml::metal::ops::qkv_causal_conv1d_silu_bw::device::QkvCausalConv1dSiluBackwardParams& params,
+    const std::optional<ttnn::Tensor>& preallocated_grad_input = std::nullopt);
 
 }  // namespace ttnn::prim

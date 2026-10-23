@@ -87,6 +87,13 @@ void QkvCausalConv1dSiluBackwardOperation::validate_on_program_cache_miss(
         in.grad_k.logical_shape() == Shape({1, attrs.row_count, attrs.k_width}), "{}: grad_k must be [1,T,K]", op_name);
     TT_FATAL(
         in.grad_v.logical_shape() == Shape({1, attrs.row_count, attrs.v_width}), "{}: grad_v must be [1,T,V]", op_name);
+    if (in.preallocated_grad_input.has_value()) {
+        check(*in.preallocated_grad_input, "preallocated_grad_input");
+        TT_FATAL(
+            in.preallocated_grad_input->logical_shape() == Shape({1, attrs.row_count, static_cast<uint32_t>(c)}),
+            "{}: preallocated_grad_input must be [1,T,Q+K+V]",
+            op_name);
+    }
 
     const auto* mesh = in.input.device();
     const uint64_t available_l1_bytes =
@@ -103,11 +110,14 @@ void QkvCausalConv1dSiluBackwardOperation::validate_on_program_cache_miss(
 }
 
 QkvCausalConv1dSiluBackwardOperation::spec_return_value_t QkvCausalConv1dSiluBackwardOperation::compute_output_specs(
-    const operation_attributes_t& attrs, const tensor_args_t&) {
+    const operation_attributes_t& attrs, const tensor_args_t& in) {
     const auto c = static_cast<uint32_t>(channels(attrs));
-    spec_return_value_t specs{TensorSpec(
-        Shape({1, attrs.row_count, c}),
-        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), attrs.output_mem_config))};
+    spec_return_value_t specs{
+        in.preallocated_grad_input.has_value()
+            ? in.preallocated_grad_input->tensor_spec()
+            : TensorSpec(
+                  Shape({1, attrs.row_count, c}),
+                  TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), attrs.output_mem_config))};
     if (attrs.compute_tap_grads) {
         specs.emplace_back(
             Shape({qkv_conv_bw_tap_count, attrs.row_splits * tt::constants::TILE_HEIGHT, c}),
@@ -118,9 +128,12 @@ QkvCausalConv1dSiluBackwardOperation::spec_return_value_t QkvCausalConv1dSiluBac
 
 QkvCausalConv1dSiluBackwardOperation::tensor_return_value_t QkvCausalConv1dSiluBackwardOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
-    tensor_return_value_t outputs;
-    for (const auto& spec : compute_output_specs(attrs, in)) {
-        outputs.push_back(ttnn::create_device_tensor(spec, in.input.device()));
+    const auto specs = compute_output_specs(attrs, in);
+    tensor_return_value_t outputs{
+        in.preallocated_grad_input.has_value() ? *in.preallocated_grad_input
+                                               : ttnn::create_device_tensor(specs[0], in.input.device())};
+    for (size_t i = 1; i < specs.size(); ++i) {
+        outputs.push_back(ttnn::create_device_tensor(specs[i], in.input.device()));
     }
     return outputs;
 }
@@ -139,7 +152,8 @@ std::vector<ttnn::Tensor> ttml_qkv_causal_conv1d_silu_bw(
     const ttnn::Tensor& tap1,
     const ttnn::Tensor& tap2,
     const ttnn::Tensor& tap3,
-    const ttml::metal::ops::qkv_causal_conv1d_silu_bw::device::QkvCausalConv1dSiluBackwardParams& params) {
+    const ttml::metal::ops::qkv_causal_conv1d_silu_bw::device::QkvCausalConv1dSiluBackwardParams& params,
+    const std::optional<ttnn::Tensor>& preallocated_grad_input) {
     using namespace ttml::metal::ops::qkv_causal_conv1d_silu_bw::device;
     return ttnn::device_operation::launch<QkvCausalConv1dSiluBackwardOperation>(
         params,
@@ -152,7 +166,8 @@ std::vector<ttnn::Tensor> ttml_qkv_causal_conv1d_silu_bw(
             .tap0 = tap0,
             .tap1 = tap1,
             .tap2 = tap2,
-            .tap3 = tap3});
+            .tap3 = tap3,
+            .preallocated_grad_input = preallocated_grad_input});
 }
 
 }  // namespace ttnn::prim

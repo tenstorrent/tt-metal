@@ -62,6 +62,7 @@ qkv_causal_conv1d_silu_bw(
     uint32_t v_width,
     uint32_t channel_chunk_size = 0,
     uint32_t row_splits = 0,
-    bool compute_tap_grads = true);
+    bool compute_tap_grads = true,
+    const std::optional<ttnn::Tensor>& preallocated_grad_input = std::nullopt);
 
 }  // namespace ttml::metal

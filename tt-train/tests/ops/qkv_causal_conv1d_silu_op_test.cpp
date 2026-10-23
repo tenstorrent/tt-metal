@@ -320,6 +320,45 @@ TEST_P(QkvCausalConv1dSiluOpTest, MatchesReference) {
 
 INSTANTIATE_TEST_SUITE_P(ChannelChunk, QkvCausalConv1dSiluOpTest, ::testing::Values(0U, 32U, 64U, 192U));
 
+// A preallocated grad_input is written in place.
+TEST_F(QkvCausalConv1dSiluTest, PreallocatedGradInput) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const Shape s{64, 96, 64, 32};
+    const auto p = random_problem(s, 5);
+    const auto ref = reference(s, p);
+    auto input = core::from_xtensor(p.x, device, ttnn::Layout::ROW_MAJOR);
+    auto history = core::from_xtensor(p.h, device, ttnn::Layout::ROW_MAJOR);
+    std::array<ttnn::Tensor, 4> taps;
+    for (size_t j = 0; j < 4; ++j) {
+        taps[j] = core::from_xtensor(p.taps[j], device);
+    }
+    auto grad_q = core::from_xtensor(slice_cols(p.grad_y, 0, s.Q), device);
+    auto grad_k = core::from_xtensor(slice_cols(p.grad_y, s.Q, s.Q + s.K), device);
+    auto grad_v = core::from_xtensor(slice_cols(p.grad_y, s.Q + s.K, s.C()), device);
+    auto preallocated = core::zeros_like(input);
+    preallocated = ttnn::to_layout(preallocated, ttnn::Layout::TILE);
+    const auto [grad_input, g0, g1, g2, g3] = metal::qkv_causal_conv1d_silu_bw(
+        grad_q,
+        grad_k,
+        grad_v,
+        input,
+        history,
+        taps[0],
+        taps[1],
+        taps[2],
+        taps[3],
+        s.Q,
+        s.K,
+        s.V,
+        0,
+        0,
+        true,
+        preallocated);
+    EXPECT_EQ(grad_input.buffer()->address(), preallocated.buffer()->address());
+    expect_close(ref.grad_input, core::to_xtensor(preallocated), "grad_input");
+}
+
 // Frozen taps: no tap gradient is produced, through the op and through the autograd wrapper.
 TEST_F(QkvCausalConv1dSiluTest, FrozenTaps) {
     using namespace ttml;
