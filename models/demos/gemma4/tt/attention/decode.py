@@ -38,20 +38,21 @@ from .weights import AttentionWeights
 _Q_SHARDED_MEM_CACHE: dict = {}
 
 # GEMMA4_QKV_NORM_ROPE_FUSED=1: the per-head q/k/v norms and the q/k RoPE as one generic op on the height-sharded
-# head tensors (custom_ops/qkv_norm_rope); the TILE [1, 1, 1, head_dim] gamma rows it takes are built once per
-# layer from the ROW_MAJOR norm weights (keyed by the q weight's id; the weights live as long as the model).
-_GAMMA_TILES: dict = {}
+# head tensors (custom_ops/qkv_norm_rope). The TILE [1, 1, 1, head_dim] gamma rows it takes are built with the
+# attention weights (AttentionWeights.q_norm_tile / k_norm_tile, tt/attention/weights.py). The earlier module-level
+# cache keyed by id(weights.q_norm_weight) handed a layer the tiles of a freed, same-id tensor from an earlier
+# attention instance (dead device memory: the attention unit test failed by cache length, i.e. by allocation
+# layout) -- never key device tensors by Python id.
 
 
 def _gamma_tiles(weights: AttentionWeights, head_dim: int):
-    key = id(weights.q_norm_weight)
-    if key not in _GAMMA_TILES:
+    if weights.q_norm_tile is not None and weights.k_norm_tile is not None:
+        return weights.q_norm_tile, weights.k_norm_tile
 
-        def _tile(w):
-            return ttnn.to_layout(ttnn.reshape(w, (1, 1, 1, head_dim)), ttnn.TILE_LAYOUT)
+    def _tile(w):
+        return ttnn.to_layout(ttnn.reshape(w, (1, 1, 1, head_dim)), ttnn.TILE_LAYOUT)
 
-        _GAMMA_TILES[key] = (_tile(weights.q_norm_weight), _tile(weights.k_norm_weight))
-    return _GAMMA_TILES[key]
+    return _tile(weights.q_norm_weight), _tile(weights.k_norm_weight)
 
 
 def _sdpa_max_cores_per_head_kwargs() -> dict:
@@ -154,7 +155,13 @@ def decode_forward(
         nq, nk, nv = QkvNormRope.op(tt_q, tt_k, tt_v, gq, gk, cos_cache, sin_cache, config.rms_norm_eps)
         for t in (tt_q, tt_k, tt_v):
             t.deallocate(True)
-        tt_q, tt_k, tt_v = nq, nk, nv
+        # The decode SDPA given the height-sharded q deviates from its interleaved-q result (attention output PCC
+        # 0.9985-0.9993 on identical q, per head down to 0.97: tests/unit/test_attention_qkv_stages.py), which
+        # broke the 64-position decode gate (top-1 51 -> 12 of 64); it takes the DRAM form, as the composite path
+        # hands it. k / v stay sharded for the paged cache update (their written rows match the composite's).
+        tt_q = ttnn.to_memory_config(nq, ttnn.DRAM_MEMORY_CONFIG)
+        nq.deallocate(True)
+        tt_k, tt_v = nk, nv
     else:
         tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
         tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)

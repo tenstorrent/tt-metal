@@ -46,6 +46,10 @@ class AttentionWeights:
     k_norm_weight: ttnn.Tensor  # Replicated across devices
     is_global: bool  # Controls K=V tying and partial RoPE
     kv_replicated: bool = False  # True when KV heads are replicated (not split) across TP devices
+    # The q / k norm gammas as TILE [1, 1, 1, head_dim] rows (the form custom_ops/qkv_norm_rope reads), built once
+    # here from the ROW_MAJOR weights above and owned by this container for the model's lifetime.
+    q_norm_tile: ttnn.Tensor = None
+    k_norm_tile: ttnn.Tensor = None
 
 
 def load_attention_weights(
@@ -246,6 +250,9 @@ def load_attention_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    def _norm_tile(w):
+        return ttnn.to_layout(ttnn.reshape(w, (1, 1, 1, config.head_dim)), ttnn.TILE_LAYOUT)
+
     return AttentionWeights(
         wqkv=wqkv,
         o_proj=o_proj,
@@ -253,4 +260,6 @@ def load_attention_weights(
         k_norm_weight=k_norm_weight,
         is_global=is_global,
         kv_replicated=kv_replicated,
+        q_norm_tile=_norm_tile(q_norm_weight),
+        k_norm_tile=_norm_tile(k_norm_weight),
     )
