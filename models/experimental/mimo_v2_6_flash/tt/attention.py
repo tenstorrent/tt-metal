@@ -54,6 +54,24 @@ from .rope import permute_heads_for_rope
 # that keyword key the program on the scalar start, which compiles a program for every new start.
 MLA_RUNTIME_START = "chunk_start_idx_tensor" in (ttnn.transformer.chunked_flash_mla_prefill.__doc__ or "")
 
+# A global layer's later prefill chunks stream the whole cached context once per (head group, Q chunk) unit. With
+# grouped heads (SDPAProgramConfig.q_heads_per_unit: G heads share each K/V chunk read) and a K split (k_splits: each
+# unit's keys over S work items, merged after the program) on the full grid, the K / V reads drop by G and every core
+# gets the same share; at 1M one layer's chunk goes 203 -> 139 ms per chip. The split's merge costs a few ms, so it
+# only pays from about 64K of context (MIMO_GLOBAL_SDPA_MIN_START). MIMO_GLOBAL_SDPA="gGsS" picks G and S; "legacy"
+# keeps the 8x8, one head per unit program everywhere.
+GLOBAL_SDPA = os.environ.get("MIMO_GLOBAL_SDPA", "g2s15")
+GLOBAL_SDPA_MIN_START = int(os.environ.get("MIMO_GLOBAL_SDPA_MIN_START", "65536"))
+GROUPED_SDPA = hasattr(ttnn.SDPAProgramConfig, "q_heads_per_unit")
+
+
+def global_sdpa_split():
+    """(G, S) for a global layer's later chunks, or None for the legacy program."""
+    if not GROUPED_SDPA or GLOBAL_SDPA == "legacy":
+        return None
+    g, s = GLOBAL_SDPA.lstrip("g").split("s")
+    return int(g), int(s)
+
 
 def page_table_width(blocks):
     """Width in blocks of a page table that covers ``blocks``: padded to whole SwaDecodeQkv.TABLE_READ pieces (int32
@@ -666,11 +684,24 @@ class TtMiMoAttention:
             compute_kernel_config=self.mm_config,
         )
 
-    def _prefill_sdpa_program(self, seq_len, start_pos=0):
-        """Q / K chunk sizes that divide ``seq_len`` (and ``start_pos``: chunked SDPA needs that)."""
+    def _prefill_sdpa_program(self, seq_len, start_pos=0, later_chunk=False):
+        """Q / K chunk sizes that divide ``seq_len`` (and ``start_pos``: chunked SDPA needs that). ``later_chunk``: a
+        global layer's chunk after the first, which takes the grouped / K split program (global_sdpa_split)."""
         chunk = 256 if seq_len >= 2048 else (128 if seq_len >= 128 else 32)
         while seq_len % chunk or start_pos % chunk:
             chunk //= 2
+        split = global_sdpa_split() if later_chunk and start_pos >= GLOBAL_SDPA_MIN_START else None
+        fp32_acc = os.environ.get("MIMO_SDPA_FP32_ACC", "0") == "1"  # the grouped program needs bf16 dest
+        if split is not None and chunk == 256 and not fp32_acc:
+            heads, splits = split
+            return ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.plan.mesh_device.compute_with_storage_grid_size(),
+                q_chunk_size=chunk,
+                k_chunk_size=chunk,
+                exp_approx_mode=False,
+                q_heads_per_unit=heads,
+                k_splits=splits,
+            )
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
             q_chunk_size=chunk,
@@ -855,7 +886,7 @@ class TtMiMoAttention:
             tables.context,
             **start,
             scale=self.scale,
-            program_config=self._prefill_sdpa_program(seq_len, start_pos),
+            program_config=self._prefill_sdpa_program(seq_len, start_pos, later_chunk=True),
             compute_kernel_config=self.sdpa_config,
             input_tensor_v=v_cache,
         )  # [1, 8, S, 128]
@@ -915,7 +946,7 @@ class TtMiMoAttention:
             tables.context,
             **start,
             scale=self.scale,
-            program_config=self._prefill_sdpa_program(seq_len, start_pos),
+            program_config=self._prefill_sdpa_program(seq_len, start_pos, later_chunk=True),
             compute_kernel_config=self.sdpa_config,
             input_tensor_v=v_cache,
         )  # [1, 16, S, 128]

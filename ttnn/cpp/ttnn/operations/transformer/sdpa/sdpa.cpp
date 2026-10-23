@@ -8,6 +8,11 @@
 #include "ttnn/operations/transformer/sdpa/sdpa.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
@@ -29,6 +34,47 @@ std::optional<ttnn::Tensor> drop_if_empty(const std::optional<ttnn::Tensor>& t) 
         return std::nullopt;
     }
     return t;
+}
+
+// Chunked prefill with a K split (SDPAProgramConfig::k_splits > 1): the program writes each piece's normalized
+// output with its row max (column 0 of a tile, raw scores) and row sum (spread over a tile's 32 columns) as
+// [pieces * B, NQH, Sq, DV + 64]. Reweight the pieces to one softmax: w_s = exp(scale * (m_s - max_s m_s)) * l_s,
+// out = sum_s w_s * O_s / sum_s w_s. An empty or unused plane carries zero sum and a -1e30 max: no weight.
+ttnn::Tensor chunked_ksplit_merge(
+    const ttnn::Tensor& raw, uint32_t batch, uint32_t head_dim_v, float scale, const MemoryConfig& memory_config) {
+    const auto& shape = raw.logical_shape();
+    const int32_t B = static_cast<int32_t>(batch);
+    const int32_t S = static_cast<int32_t>(shape[0]) / B;
+    const int32_t H = static_cast<int32_t>(shape[1]) * B;
+    const int32_t Sq = static_cast<int32_t>(shape[2]);
+    const int32_t DV = static_cast<int32_t>(head_dim_v);
+    const ttnn::Tensor parts =
+        B == 1
+            ? raw
+            : ttnn::reshape(raw, ttnn::Shape({static_cast<uint32_t>(S), static_cast<uint32_t>(H), shape[2], shape[3]}));
+    const ttsl::SmallVector<int32_t> step = {1, 1, 1, 1};
+    const auto cols = [&](int32_t lo, int32_t hi) {
+        return ttnn::slice(
+            parts, ttsl::SmallVector<int32_t>{0, 0, 0, lo}, ttsl::SmallVector<int32_t>{S, H, Sq, hi}, step);
+    };
+    const ttnn::Tensor out_parts = cols(0, DV);
+    // The weights in fp32: a bf16 exponent argument would put percent errors on them.
+    const ttnn::Tensor row_max = ttnn::typecast(cols(DV, DV + 1), DataType::FLOAT32);
+    const ttnn::Tensor row_sum = ttnn::sum(ttnn::typecast(cols(DV + 32, DV + 64), DataType::FLOAT32), -1, true);
+    const ttnn::Tensor global_max = ttnn::max(row_max, 0, /*keepdim=*/true);
+    const ttnn::Tensor weight =
+        ttnn::multiply(ttnn::exp(ttnn::multiply(ttnn::subtract(row_max, global_max), scale)), row_sum);
+    const ttnn::Tensor norm_weight =
+        ttnn::typecast(ttnn::divide(weight, ttnn::sum(weight, 0, /*keepdim=*/true)), raw.dtype());
+    ttnn::Tensor out = ttnn::sum(ttnn::multiply(out_parts, norm_weight), 0, /*keepdim=*/true, memory_config);
+    if (B != 1) {
+        out = ttnn::reshape(out, ttnn::Shape({static_cast<uint32_t>(B), shape[1], shape[2], head_dim_v}));
+    }
+    return out;
+}
+
+uint32_t chunked_k_splits(const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config) {
+    return program_config.has_value() ? program_config->k_splits : 1;
 }
 }  // namespace
 
@@ -117,8 +163,11 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& attention_sink) {
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
+    const uint32_t k_splits = chunked_k_splits(program_config);
+    const MemoryConfig out_memory_config =
+        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-    return ttnn::prim::sdpa(
+    auto out = ttnn::prim::sdpa(
         input_tensor_q,
         input_tensor_k,
         input_tensor_v,
@@ -132,13 +181,24 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         std::nullopt,  // chunk_start_idx_tensor
         false,         // use_mla
         std::nullopt,  // head_dim_v
-        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+        out_memory_config,
         std::move(program_config),
         kernel_config_val,
         std::nullopt,  // cu_window_seqlens
         0,             // windowed_q_token_offset (windowed mode only)
         std::nullopt,  // windowed_q_token_offset_tensor
         paged_cache_geometry);
+    if (k_splits > 1) {
+        const float effective_scale =
+            scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1])));
+        out = chunked_ksplit_merge(
+            out,
+            input_tensor_q.logical_shape()[0],
+            input_tensor_q.logical_shape()[-1],
+            effective_scale,
+            out_memory_config);
+    }
+    return out;
 }
 
 // Flexible: chunk_start_idx in device tensor [1]; read at runtime (for tracing).
@@ -157,8 +217,11 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& attention_sink) {
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
+    const uint32_t k_splits = chunked_k_splits(program_config);
+    const MemoryConfig out_memory_config =
+        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-    return ttnn::prim::sdpa(
+    auto out = ttnn::prim::sdpa(
         input_tensor_q,
         input_tensor_k,
         input_tensor_v,
@@ -172,13 +235,24 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         chunk_start_idx_tensor,
         false,         // use_mla
         std::nullopt,  // head_dim_v
-        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+        out_memory_config,
         std::move(program_config),
         kernel_config_val,
         std::nullopt,  // cu_window_seqlens
         0,             // windowed_q_token_offset (windowed mode only)
         std::nullopt,  // windowed_q_token_offset_tensor
         paged_cache_geometry);
+    if (k_splits > 1) {
+        const float effective_scale =
+            scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1])));
+        out = chunked_ksplit_merge(
+            out,
+            input_tensor_q.logical_shape()[0],
+            input_tensor_q.logical_shape()[-1],
+            effective_scale,
+            out_memory_config);
+    }
+    return out;
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
@@ -513,8 +587,11 @@ ttnn::Tensor chunked_flash_mla_prefill(
         chunk_start_idx_tensor.has_value());
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
+    const uint32_t k_splits = chunked_k_splits(program_config);
+    const MemoryConfig out_memory_config =
+        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-    return ttnn::prim::sdpa(
+    auto out = ttnn::prim::sdpa(
         input_tensor_q,
         input_tensor_k,
         input_tensor_v,     // empty: V is the first head_dim_v columns of K (MLA); else a paged V cache
@@ -528,9 +605,16 @@ ttnn::Tensor chunked_flash_mla_prefill(
         chunk_start_idx_tensor,
         true,  // use_mla
         head_dim_v,
-        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+        out_memory_config,
         std::move(program_config),
         kernel_config_val);
+    if (k_splits > 1) {
+        const float effective_scale =
+            scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1])));
+        out = chunked_ksplit_merge(
+            out, input_tensor_q.logical_shape()[0], head_dim_v, effective_scale, out_memory_config);
+    }
+    return out;
 }
 
 ttnn::Tensor ring_distributed_scaled_dot_product_attention(

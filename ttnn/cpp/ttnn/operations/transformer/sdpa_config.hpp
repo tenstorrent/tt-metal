@@ -29,6 +29,11 @@ struct SDPAProgramConfig {
     // so no bf16 running sum spans the whole prefix. Refused with a K split, a sliding window, or several Q chunks
     // per core (raise q_chunk_size).
     bool segmented_accumulation = false;
+    // Chunked (paged) prefill on the streaming compute path only: query heads that share one K/V head and are
+    // processed as one unit, so each K/V chunk read serves this many heads. 1 keeps one head per unit. On that
+    // path k_splits also applies: each unit's keys are split over this many work items whose partial results
+    // are merged after the program.
+    uint32_t q_heads_per_unit = 1;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

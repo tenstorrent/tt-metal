@@ -45,7 +45,7 @@ def fabric_router_config(packet_bytes):
     return config
 
 
-def build(mesh, max_seq_len, replicate_global_kv=False):
+def build(mesh, max_seq_len, replicate_global_kv=False, users=4):
     cfg = MiMoConfig.from_model_path(common.MODEL_PATH)
     gen = MiMoGalaxyGenerator(
         mesh,
@@ -53,7 +53,7 @@ def build(mesh, max_seq_len, replicate_global_kv=False):
         MiMoCheckpoint(common.MODEL_PATH, cfg),
         os.path.join(common.CACHE_ROOT, "model_bfp4experts"),
         dp=4,
-        users_per_replica=4,
+        users_per_replica=users,
         max_seq_len=max_seq_len,
         replicate_global_kv=replicate_global_kv,
     )
@@ -152,6 +152,9 @@ def main():
     )
     parser.add_argument("--ttft", action="store_true", help="time whole prompts instead (no profiler)")
     parser.add_argument("--contexts", default="4096,32768,131072", help="--ttft: prompt lengths")
+    parser.add_argument(
+        "--users", type=int, default=4, help="users per replica the caches are sized for (1 lets a 1M prompt fit)"
+    )
     args = parser.parse_args()
     contexts = [int(c) for c in args.contexts.split(",")]
     assert args.ttft or profiling.ENABLED, "set MIMO_PROFILE_ZONES=1 (or pass --ttft)"
@@ -169,7 +172,7 @@ def main():
     )
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(4, 8), l1_small_size=65536)
     try:
-        models, tokens = build(mesh, max(contexts) if args.ttft else args.context, args.replicate_global_kv)
+        models, tokens = build(mesh, max(contexts) if args.ttft else args.context, args.replicate_global_kv, args.users)
         if args.ttft:
             ttft(models[0], tokens, contexts, args.chunk)
         else:
