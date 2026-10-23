@@ -157,7 +157,7 @@ def verify(
     batch: bool = False,
     force: bool = False,
 ) -> dict:
-    led = Ledger(spec.bringup_dir)
+    led = Ledger(spec.ledger_dir)
     tids = selected(led, patterns, status)
     out = Path(out or spec.run_dir(run_name(led)) / "verify" / time.strftime("%Y%m%dT%H%M%S"))
     (out / "results").mkdir(parents=True, exist_ok=True)

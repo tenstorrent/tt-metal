@@ -473,7 +473,7 @@ def ready(spec, ops: list[str], sources: list[Path], bringup_ops: Path | None = 
     from models.demos.common.bringup.core.ledger import Ledger
     from models.demos.common.bringup.core.runs import rerun_from
 
-    led = Ledger(spec.bringup_dir)
+    led = Ledger(spec.ledger_dir)
     bops = Path(bringup_ops) if bringup_ops else spec.repo / BRINGUP_OPS
     plan = []
     for op in ops:  # check everything before changing anything

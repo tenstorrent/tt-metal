@@ -55,7 +55,7 @@ def load(a) -> tuple[Spec, Ledger]:
     if not path:
         sys.exit("no spec: pass --spec or set BRINGUP_SPEC")
     spec = Spec.load(path)
-    return spec, Ledger(spec.bringup_dir)
+    return spec, Ledger(spec.ledger_dir)
 
 
 @command("status", "print the ledger")
@@ -198,7 +198,7 @@ def cmd_compare(a):
     from models.demos.common.bringup.core.runs import compare
 
     spec, led = load(a)
-    other = Ledger(Spec.load(a.other).bringup_dir)
+    other = Ledger(Spec.load(a.other).ledger_dir)
     print(f"{'task':8} {'status':15} {'attempts':9} {'debug':6} {'wall s':14} changes")
     for r in compare(led, other):
         dur = "/".join("-" if d is None else f"{d:.0f}" for d in r["duration_s"])
@@ -233,7 +233,7 @@ def cmd_approve(a):
         from models.demos.common.bringup.plan.approvals import approve_shared
 
         tid = a.task.split(":", 1)[1]
-        rec = approve_shared(spec, Ledger(spec.bringup_dir).task(tid), note=a.note or "")
+        rec = approve_shared(spec, Ledger(spec.ledger_dir).task(tid), note=a.note or "")
         print(f"approved shared-code changes of {tid} by {rec['by']} at {rec['at']}: " + ", ".join(rec["paths"]))
         return 0
     rec = approve(spec, a.task, note=a.note or "")

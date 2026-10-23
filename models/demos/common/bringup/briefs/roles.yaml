@@ -131,3 +131,10 @@ assemble: |
   op-gen (listed below, if any) stay on the CPU: the device model calls each through `CpuBridge`
   (`models/demos/common/bringup/testing/cpu_bridge.py`) with the mesh placements of its inputs and output; nothing
   else in the forward path may touch the host. $details
+port: |
+  Role: port (F185). This run is grown from a finished bring-up of the same model, the seed (`$seed_spec`, mesh
+  $seed_mesh): the same `$model_dir/tt`, hooks, CPU reference, plan and forks, now on $mesh ($chips chips) at this run's
+  size. Extend the seed's modules in place; never copy them. The seed box must keep working: every size, share, group
+  size, topology, link count and payload constant comes from the mesh and the checkpoint config, never from a box
+  name or a literal of this box. Settings stay in `$model_dir/tt/settings.py` with the seed's shipped defaults (the
+  owner's picks); a change of a default for this box is an owner decision, so leave it and say so. $details

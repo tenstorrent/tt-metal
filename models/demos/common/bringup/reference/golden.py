@@ -46,7 +46,9 @@ def rung_dir(spec: Spec, rung: dict) -> Path:
     return spec.golden_root / rung_dirname(src["seq"], src["chunk"])
 
 
-DERIVED = ("manifest.json", "drift.json", "official_floor.json")  # written after the golden; not in content_hash
+# written after the golden; not in content_hash. files.json (F186): every file's sha256, so a partial copy verifies
+DERIVED = ("manifest.json", "drift.json", "official_floor.json", "files.json")
+INDEX = "files.json"
 
 
 def derived(name: str) -> bool:
@@ -89,11 +91,48 @@ def reference_at(spec: Spec, numerics: str, *, layers=None, dtype=torch.float32)
     return fn(spec, layers=layers, dtype=dtype)
 
 
-def content_hash(d: Path) -> str:
+def file_hashes(d: Path) -> dict[str, str]:
+    """{relative path: sha256} of every golden file (not the derived ones), sorted by path."""
+    return {
+        str(f.relative_to(d)): sha256_file(f)
+        for f in sorted(p for p in d.rglob("*") if p.is_file() and not derived(p.name))
+    }
+
+
+def hash_of(files: dict[str, str]) -> str:
     h = hashlib.sha256()
-    for f in sorted(p for p in d.rglob("*") if p.is_file() and not derived(p.name)):
-        h.update(f"{f.relative_to(d)}\0{sha256_file(f)}\n".encode())
+    for rel, sha in sorted(files.items()):
+        h.update(f"{rel}\0{sha}\n".encode())
     return h.hexdigest()
+
+
+def content_hash(d: Path) -> str:
+    return hash_of(file_hashes(d))
+
+
+def write_index(d: Path) -> dict:
+    """F186: files.json beside the manifest, written where the golden is complete, so a copy that leaves files out
+    (only what a run's tests read) still verifies: the index reproduces the content_hash, each copied file its line."""
+    d = Path(d)
+    files = file_hashes(d)
+    want = json.loads((d / "manifest.json").read_text()).get("content_hash")
+    if hash_of(files) != want:
+        raise ValueError(f"{d}: the files do not give the manifest's content_hash; no index for a broken golden")
+    (d / INDEX).write_text(json.dumps(files, indent=0, sort_keys=True))
+    return files
+
+
+def verify_copy(d: Path) -> tuple[bool, list[str]]:
+    """F186: (intact, missing files) of a golden that may be a partial copy: the index gives the manifest's
+    content_hash and every file present matches its index line; files left out are listed, never guessed."""
+    d = Path(d)
+    if not (d / INDEX).exists():
+        return Golden(d).verify(), []
+    index = json.loads((d / INDEX).read_text())
+    have = file_hashes(d)
+    ok = hash_of(index) == json.loads((d / "manifest.json").read_text()).get("content_hash")
+    ok = ok and all(index.get(rel) == sha for rel, sha in have.items())
+    return ok, sorted(set(index) - set(have))
 
 
 class Golden:

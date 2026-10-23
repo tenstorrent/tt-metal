@@ -88,12 +88,11 @@ def fixed_accuracy(task: dict, conds: dict | None = None) -> list[str]:
 
 
 class Ledger:
-    def __init__(self, bringup_dir: Path):
-        self.dir = Path(bringup_dir)
+    def __init__(self, ledger_dir: Path):
+        self.dir = Path(ledger_dir)
         self.tasks_path = self.dir / "tasks.yaml"
         self.state_path = self.dir / "state.json"
         self.results_dir = self.dir / "results"
-        self.breadcrumbs = self.dir / "BREADCRUMBS.md"
 
     # ---- tasks
     def load_spec(self) -> dict:
