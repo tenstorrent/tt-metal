@@ -30,17 +30,16 @@ enum class DumpTensorMode : std::uint8_t {
 // 4. Shards that the tensor topology labels as replicas of each other (mesh coordinates that differ only along
 //    Replicate axes) are written once, and every record in the group points at that copy. The label is checked
 //    against the data first: replicas must have the same size and, unless `ttnn::CONFIG`'s
-//    `verify_replicated_shards_on_dump` is false, the same bytes. Every coordinate the label lists must hold a
-//    shard (or be remote to this host), and every populated local shard must be covered by the label. A tensor that
-//    fails any of these checks throws before the output file is created, so a rejected dump leaves no file behind.
-//    The checks are `verify_shards_match_topology` (ttnn/tensor/topology_check.hpp); a caller that keeps one copy per
-//    replica group itself can run them on a host tensor.
-//    In DISTRIBUTED_GATHER mode every rank runs these checks on the gathered tensor (every rank holds every shard
-//    after the gather), so a rejected tensor throws on all ranks; a failed write on rank 0 still leaves the other
-//    ranks in the final barrier.
-//    Known gap: `DistributedHostBuffer::transform` rebuilds its container with every unpopulated shard marked
-//    remote, so after a host-side layout or dtype conversion a partial tensor's missing local coordinates read as
-//    remote and pass the exemption above. That is a missed rejection, never a false one.
+//    `verify_replicated_shards_on_dump` is false, the same values (padding bytes are not compared). Every coordinate
+//    the label lists must hold a shard (or be remote to this host), and every populated local shard must be covered by
+//    the label. A tensor that fails any of these checks throws before the output file is created, so a rejected dump
+//    leaves no file behind. The checks are `verify_shards_match_topology` (ttnn/tensor/topology_check.hpp); a caller
+//    that keeps one copy per replica group itself can run them on a host tensor. In DISTRIBUTED_GATHER mode every rank
+//    runs these checks on the gathered tensor (every rank holds every shard after the gather), so a rejected tensor
+//    throws on all ranks; a failed write on rank 0 still leaves the other ranks in the final barrier. Known gap:
+//    `DistributedHostBuffer::transform` rebuilds its container with every unpopulated shard marked remote, so after a
+//    host-side layout or dtype conversion a partial tensor's missing local coordinates read as remote and pass the
+//    exemption above. That is a missed rejection, never a false one.
 // 5. The header opens with the file identifier "TTNB" (file bytes [12, 16)) and records a schema version,
 //    `kTensorFileSchemaVersion` at the time of writing. Files written before either existed carry neither and still
 //    load; a file with a newer version than this build understands is rejected. On load the recorded topology is
