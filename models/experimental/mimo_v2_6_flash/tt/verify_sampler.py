@@ -14,7 +14,9 @@ capture_verify_trace):
    one page: per request the committed count and tokens, and whether its candidates were truncated.
 
 The algorithm, its layouts and its exactness are in reference/sample_verify.py, which mirrors the kernel on the host.
-The host reads 128 bytes per pass instead of 4 slots x 152k fp32 logits, and walks nothing.
+The host reads 128 bytes per pass instead of 4 slots x 152k fp32 logits, and walks nothing. In the vLLM adapter the
+accept trace goes on with the chain step (tt/spec_chain.py), which copies this page into the pass's result page and
+derives the MTP draft from it; an ``argmax_ids`` step runs it too, every request greedy.
 """
 
 import numpy as np
@@ -60,7 +62,8 @@ class VerifySampler:
         self.params = persistent(self._param_words({}))
         self.ctrl = persistent(control_words([]))
         self.out = persistent([0] * (GROUPS * OUT_WORDS))
-        self.groups = 0  # requests accepted, and how many of them on truncated candidates (``read``)
+        self.staged = {}  # the sampled slots ``params`` holds (``stage``; None: unknown)
+        self.groups = 0  # requests accepted, and how many of them on truncated candidates (``tally``)
         self.truncated = 0
 
     # ------------------------------------------------------------------ host side
@@ -90,14 +93,34 @@ class VerifySampler:
         """Copies a pass's parameters and control page, in queue order with the work already enqueued."""
         ttnn.copy_host_to_device_tensor(hosts[0], self.params)
         ttnn.copy_host_to_device_tensor(hosts[1], self.ctrl)
+        self.staged = None
+
+    def stage(self, slots, groups):
+        """``set_inputs(host_inputs(slots, groups))``, without the parameters when ``params`` already holds them: a
+        pass's parameters are those of its sampled slots, the same for every all-greedy pass and for a sampled
+        request's passes in a row, so a step usually copies the control page only."""
+        rep = self.plan.replicate()
+        if slots != self.staged:
+            words = _words(self._param_words(slots))
+            host = ttnn.from_torch(words, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep)
+            ttnn.copy_host_to_device_tensor(host, self.params)
+            self.staged = dict(slots)
+        host = ttnn.from_torch(
+            _words(control_words(groups)), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep
+        )
+        ttnn.copy_host_to_device_tensor(host, self.ctrl)
+
+    def tally(self, out):
+        """Counts a fused pass's accepted requests and those accepted on truncated candidates (``out``: unpack_out)."""
+        used = [g for g in out if g[0] > 0]
+        self.groups += len(used)
+        self.truncated += sum(g[2] for g in used)
 
     def read(self):
         """The last pass's [(count, committed tokens, truncated)] per group (blocks); counts the groups."""
         words = ttnn.to_torch(ttnn.get_device_tensors(self.out)[0]).reshape(-1).to(torch.int64) & 0xFFFFFFFF
         out = unpack_out(words.tolist())
-        used = [g for g in out if g[0] > 0]
-        self.groups += len(used)
-        self.truncated += sum(g[2] for g in used)
+        self.tally(out)
         return out
 
     # ------------------------------------------------------------------ device side (trace-capturable)
