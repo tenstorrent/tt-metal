@@ -215,14 +215,11 @@ def test_mean_multi_axis_bf16(device):
         ((1, 2, 32, 64), ttnn.TILE_LAYOUT),
         ((1, 2, 32, 64), ttnn.ROW_MAJOR_LAYOUT),
         ((1, 2, 32, 2048), ttnn.TILE_LAYOUT),
-        # W = 2048 spans eight W chunks of the row-major reduce kernel. The chunk accumulator is
-        # read back wrongly whenever it is fp32 (a same-format fp32 row-major sum over W > 256 is
-        # off by a few percent on main as well), so the fp32-intermediate chain hits it here.
         pytest.param(
             (1, 2, 32, 2048),
             ttnn.ROW_MAJOR_LAYOUT,
             marks=pytest.mark.xfail(
-                reason="row-major W reduce misreads its fp32 chunk accumulator for W > 256", strict=True
+                reason="#62259: fp32-Dest row reduce leaks column 16 into the chunk accumulator", strict=True
             ),
         ),
     ],
