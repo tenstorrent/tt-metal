@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <tuple>
 #include <variant>
 
@@ -12,6 +13,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt_stl/overloaded.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -39,9 +41,22 @@ struct operation_attributes_t {
     const SpecProgram& spec_program() const { return std::get<SpecProgram>(program); }
 
     // Descriptors and specs are both too large for reflection inline storage; keying is done by
-    // GenericOpDeviceOperation::compute_program_hash.
-    static constexpr auto attribute_names = std::forward_as_tuple("program_kind");
-    auto attribute_values() const { return std::make_tuple(program.index()); }
+    // GenericOpDeviceOperation::compute_program_hash. These two attributes only label the op in
+    // debug logs, allocation contexts and graph captures.
+    static constexpr auto attribute_names = std::forward_as_tuple("program_kind", "program");
+    std::tuple<std::string, std::string> attribute_values() const {
+        return std::visit(
+            ttsl::overloaded{
+                [](const tt::tt_metal::experimental::MeshProgramDescriptor& descriptor) {
+                    return std::make_tuple(
+                        std::string("mesh_program_descriptor"),
+                        "mesh[" + std::to_string(descriptor.mesh_programs.size()) + "]");
+                },
+                [](const SpecProgram& spec_program) {
+                    return std::make_tuple(std::string("program_spec"), spec_program.spec.name);
+                }},
+            program);
+    }
 };
 
 using tensor_return_value_t = Tensor;

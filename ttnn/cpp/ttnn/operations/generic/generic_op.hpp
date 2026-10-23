@@ -32,11 +32,18 @@ Tensor generic_op(
 // Convenience entry point for single ProgramDescriptor (SPMD mode)
 Tensor generic_op(const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor);
 
-// Metal 2.0 entry point: a ProgramSpec + ProgramRunArgs instead of a ProgramDescriptor.
+// Metal 2.0 entry point: a ProgramSpec + ProgramRunArgs instead of a ProgramDescriptor. SPMD only:
+// the one spec is replicated to every device of the mesh (there is no per-device form like
+// MeshProgramDescriptor).
 //
 // tensor_args maps each TensorParameter name to an index into io_tensors. The op builds the real
 // TensorArgument table from it, so the pointer-identity requirement on TensorArguments is
-// satisfied by construction.
+// satisfied by construction. Each parameter takes its own io_tensors entry: to bind one tensor to
+// several parameters, list it once per parameter (io_tensors = {a, a, out}). run_args must carry
+// every kernel's complete runtime args on every call, a cache hit included, and leave tensor_args
+// empty. Per-core allocated tensors are rejected: a ProgramSpec binds a tensor by one address.
+// The program cache keys on the spec's structure (compute_program_spec_hash) plus each bound
+// tensor's spec under its parameter's relaxations.
 Tensor generic_op(
     const std::vector<Tensor>& io_tensors,
     const tt::tt_metal::experimental::ProgramSpec& spec,

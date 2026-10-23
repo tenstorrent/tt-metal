@@ -41,10 +41,13 @@ void bind_generic_operation(nb::module_& mod) {
                 parameters. Use ProgramDescriptor for SPMD mode (same program on all devices) or
                 MeshProgramDescriptor for explicit per-device control.
 
-            Alternatively, the Metal 2.0 form takes:
-            spec (ttnn.ProgramSpec): kernels, dataflow buffers, tensor parameters, work units.
-            run_args (ttnn.ProgramRunArgs): per-dispatch runtime argument values.
-            tensor_args (dict[str, int]): TensorParameter name -> index into io_tensors.
+            Alternatively, the Metal 2.0 form (SPMD only: the one spec runs on every device of the mesh) takes:
+            spec (ttnn.experimental.metal2.ProgramSpec): kernels, dataflow buffers, tensor parameters, work units.
+            run_args (ttnn.experimental.metal2.ProgramRunArgs): this call's complete runtime argument values for
+                every kernel, on a cache hit as much as on a miss; ``tensor_args`` on it stays empty.
+            tensor_args (dict[str, int]): TensorParameter name -> index into io_tensors. Each parameter takes its
+                own entry: to bind one tensor to several parameters, list it once per parameter in io_tensors.
+                Per-core allocated tensors are not supported by this form.
 
         Returns:
             ttnn.Tensor: Handle to the output tensor.
@@ -99,8 +102,9 @@ void bind_generic_operation(nb::module_& mod) {
         &compute_program_spec_hash,
         nb::arg("spec"),
         R"pbdoc(
-            Structural hash of a ProgramSpec: the program cache key the spec path uses.
-            Excludes runtime argument values and tensor addresses.
+            Structural hash of a ProgramSpec, the spec part of the program cache key (the key also covers the
+            bound tensors' specs under each parameter's relaxations). Excludes runtime argument values, tensor
+            addresses and the debug-only ProgramSpec and WorkUnitSpec names.
         )pbdoc");
 }
 
