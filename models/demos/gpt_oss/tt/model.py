@@ -90,6 +90,51 @@ def create_rope_setup(
     return rope_setup
 
 
+def last_tile_rows(rows, tile_start, cluster_axis=None):
+    """The 32 rows tile_start .. tile_start + 31 (tile_start a multiple of 32) of rows [1, 1, S, H] (replicated) or, with
+    cluster_axis, of the sequence-parallel rows [1, 1, S / N, H] (device d holding rows d * S / N onward) -> [1, 1, 32, H].
+
+    A one-hot selection matmul (exact, as batched_prefill.last_token_rows) whose position is data, not a ttnn.slice whose
+    start is a program attribute: a slice compiles a new program for every prompt-end tile, and a program first built
+    after a trace is captured gets its kernel binaries allocated where that trace's replay can overwrite them (garbage
+    output from the vLLM server; flagged by TT_METAL_TRACE_ALLOC_TRACKING=1)."""
+    mesh_device = rows.device()
+    local = rows.shape[-2]
+    assert tile_start % ttnn.TILE_SIZE == 0 and local % ttnn.TILE_SIZE == 0, f"tile_start {tile_start}, rows {local}"
+    num_dev = 1 if cluster_axis is None else mesh_device.shape[cluster_axis]
+    d, off = divmod(tile_start, local)
+    sel = torch.zeros(num_dev, 1, ttnn.TILE_SIZE, local, dtype=torch.float32)
+    sel[d, 0, torch.arange(ttnn.TILE_SIZE), off + torch.arange(ttnn.TILE_SIZE)] = 1.0
+    sel_tt = ttnn.from_torch(
+        sel,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)
+        if num_dev > 1
+        else ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    picked = ttnn.matmul(
+        sel_tt,
+        rows,
+        dtype=rows.dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+        ),
+    )
+    sel_tt.deallocate(True)
+    if num_dev == 1:
+        return picked
+    # Only device d selects non-zero rows: the sum over the sequence-parallel devices is its tile.
+    out = ttnn.all_reduce(
+        picked, topology=ttnn.Topology.Ring, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    picked.deallocate(True)
+    return out
+
+
 class Model:
     """
     GPT-OSS TTNN Model Implementation
@@ -527,9 +572,7 @@ class Model:
                 for t in tiles:
                     t.deallocate(True)
             else:
-                logits_sliced = ttnn.slice(
-                    logits, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, logits.shape[-1])
-                )
+                logits_sliced = last_tile_rows(logits, get_last_token)
                 logits.deallocate(True)
                 logits = logits_sliced
             hidden_states = logits
@@ -622,24 +665,13 @@ class Model:
     def _gather_prefill_rows(rows, get_last_token, cluster_axis):
         """End of a sequence-parallel prefill: rows is this device's [1, 1, S / N, H] share of the final residual
         (device d: rows d * S / N onward). get_last_token == -1: all-gather all S rows. Otherwise return the 32-row tile
-        at get_last_token (tile-aligned): every device slices its local rows at get_last_token % (S / N), an all-gather
-        of those tiles gives [1, 1, 32 N, H], and the tile of device get_last_token // (S / N) is the one."""
+        at get_last_token (tile-aligned), [1, 1, 32, H] on every device (last_tile_rows)."""
         if get_last_token == -1:
             full = ttnn.all_gather(rows, 2, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             rows.deallocate(True)
             return full
-        local = rows.shape[-2]
-        assert get_last_token % 32 == 0 and local % 32 == 0, f"get_last_token {get_last_token}, rows {local}"
-        off = get_last_token % local
-        # A slice covering the whole tensor (one tile of rows per device) aliases its input: no slice then.
-        tile = rows if local == 32 else ttnn.slice(rows, (0, 0, off, 0), (1, 1, off + 32, rows.shape[-1]))
-        tiles = ttnn.all_gather(tile, 2, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        if tile is not rows:
-            tile.deallocate(True)
+        out = last_tile_rows(rows, get_last_token, cluster_axis)
         rows.deallocate(True)
-        d = get_last_token // local
-        out = ttnn.slice(tiles, (0, 0, 32 * d, 0), (1, 1, 32 * d + 32, tiles.shape[-1]))
-        tiles.deallocate(True)
         return out
 
     def _page_table_mesh_mapper(self, B):
