@@ -1,0 +1,21 @@
+2026-10-23 19:32:17.616 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+2026-10-23 19:32:19.084 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 19:32:19.084 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 19:32:19.084 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 19:32:19.084 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 19:32:19.095 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 19:32:19.095 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 19:32:19.173 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 19:32:19.173 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 19:32:19.173 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 19:32:19.173 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 19:32:19.175 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 19:32:19.435 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 19:32:19.498 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 19:32:19.498 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 19:32:19.498 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 19:32:19.499 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 19:32:19.543 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+baseline PREFILL_DONE
+2026-10-23 19:32:26.531 | critical |          Always | TT_FATAL: Cannot load new binaries during trace capture.This program is not yet in program cache. Warm up before capturing a trace.See the operation's hash signature for arguments that must match. (assert.hpp:104)

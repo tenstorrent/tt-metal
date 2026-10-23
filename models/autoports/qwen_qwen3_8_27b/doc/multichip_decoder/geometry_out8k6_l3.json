@@ -1,0 +1,97 @@
+{
+  "layer_type": "full_attention",
+  "seq": 33,
+  "batch": 1,
+  "steps": 8,
+  "layout": "replicated",
+  "fused": null,
+  "stack": false,
+  "policy": {
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 16
+    }
+  },
+  "provenance": {
+    "tests/run_multichip_decoder.py": "066daf8fbd4c81cea4ebf33dc568c57e154bf47aad5b0c201d5d42112f47e491",
+    "tt/multichip_decoder.py": "aad99b1ffdfa55a9ebc73c0136ac13d99b5d8bd945847dccbd9df74ad13b3d24",
+    "tt/optimized_decoder.py": "ff85733835d1d972fb9bb1bdc47cdc761c1a814412d534681834b66d8f05d31a"
+  },
+  "baseline": {
+    "page_remap_exact": false,
+    "ragged_positions": false,
+    "last_decode_host_us": 661.2979341298342,
+    "prefill_host_us": 1439.539948478341,
+    "restored_replays_bitwise": 3,
+    "replica_equality": false,
+    "runtime_fallback_audit": true,
+    "memory": {
+      "before_weights": {
+        "allocated_bytes": 0,
+        "capacity_bytes": 34178731008
+      },
+      "after_weights": {
+        "allocated_bytes": 311394304,
+        "capacity_bytes": 34178731008
+      },
+      "after_trace": {
+        "allocated_bytes": 320553984,
+        "capacity_bytes": 34178731008
+      }
+    }
+  },
+  "multichip": {
+    "page_remap_exact": false,
+    "ragged_positions": false,
+    "last_decode_host_us": 425.17506517469883,
+    "prefill_host_us": 611.0321264714003,
+    "restored_replays_bitwise": 3,
+    "replica_equality": true,
+    "runtime_fallback_audit": true,
+    "memory": {
+      "before_weights": {
+        "allocated_bytes": 0,
+        "capacity_bytes": 34178731008
+      },
+      "after_weights": {
+        "allocated_bytes": 80887808,
+        "capacity_bytes": 34178731008
+      },
+      "after_trace": {
+        "allocated_bytes": 89571328,
+        "capacity_bytes": 34178731008
+      }
+    }
+  },
+  "prefill_pcc": 0.9999780845938631,
+  "decode_pcc": [
+    0.999998270220717,
+    0.9999992456395287,
+    0.999998891099981,
+    0.9999989943572185,
+    0.9999993309479038,
+    0.999999090054231,
+    0.9999983366645703,
+    0.9999988279482257
+  ],
+  "state_pcc": {
+    "key": 1.0,
+    "value": 1.0
+  },
+  "state_shapes": {
+    "key": [
+      8,
+      4,
+      32,
+      256
+    ],
+    "value": [
+      8,
+      4,
+      32,
+      256
+    ]
+  }
+}

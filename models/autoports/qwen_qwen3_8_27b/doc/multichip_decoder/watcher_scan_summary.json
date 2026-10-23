@@ -1,0 +1,22 @@
+{
+  "watcher_b32_l3.watcher.txt": {
+    "dump_count": 55,
+    "interval": "100ms",
+    "no_error_assert_corruption": true
+  },
+  "watcher_l0.watcher.txt": {
+    "dump_count": 53,
+    "interval": "100ms",
+    "no_error_assert_corruption": true
+  },
+  "watcher_b32_l0.watcher.txt": {
+    "dump_count": 59,
+    "interval": "100ms",
+    "no_error_assert_corruption": true
+  },
+  "watcher_l3.watcher.txt": {
+    "dump_count": 53,
+    "interval": "100ms",
+    "no_error_assert_corruption": true
+  }
+}

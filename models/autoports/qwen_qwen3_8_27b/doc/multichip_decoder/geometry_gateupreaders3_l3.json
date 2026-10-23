@@ -1,0 +1,119 @@
+{
+  "layer_type": "full_attention",
+  "seq": 33,
+  "batch": 1,
+  "steps": 8,
+  "layout": "replicated",
+  "fused": null,
+  "stack": false,
+  "policy": {
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 3,
+      "prefill_block": 10
+    }
+  },
+  "provenance": {
+    "tests/run_multichip_decoder.py": "1748a3c5de582085bcc5731da29e2baa7db5fe17aadcc9da0eae4a8f61a6706e",
+    "tt/multichip_decoder.py": "aad99b1ffdfa55a9ebc73c0136ac13d99b5d8bd945847dccbd9df74ad13b3d24",
+    "tt/optimized_decoder.py": "ff85733835d1d972fb9bb1bdc47cdc761c1a814412d534681834b66d8f05d31a"
+  },
+  "baseline": {
+    "page_remap_exact": false,
+    "ragged_positions": false,
+    "last_decode_host_us": 659.3738216906786,
+    "decode_host_us": [
+      671.7068608850241,
+      657.560070976615,
+      662.4599918723106,
+      660.9871052205563,
+      660.416204482317,
+      659.5740560442209,
+      655.2960257977247,
+      659.3738216906786
+    ],
+    "median_decode_host_us": 660.416204482317,
+    "prefill_host_us": 1437.9960484802723,
+    "restored_replays_bitwise": 3,
+    "replica_equality": false,
+    "runtime_fallback_audit": true,
+    "memory": {
+      "before_weights": {
+        "allocated_bytes": 0,
+        "capacity_bytes": 34178731008
+      },
+      "after_weights": {
+        "allocated_bytes": 311394304,
+        "capacity_bytes": 34178731008
+      },
+      "after_trace": {
+        "allocated_bytes": 320553984,
+        "capacity_bytes": 34178731008
+      }
+    }
+  },
+  "multichip": {
+    "page_remap_exact": false,
+    "ragged_positions": false,
+    "last_decode_host_us": 432.8398499637842,
+    "decode_host_us": [
+      445.4439040273428,
+      436.4261403679848,
+      432.98001401126385,
+      435.0540693849325,
+      433.11016634106636,
+      433.38118121027946,
+      432.4789624661207,
+      432.8398499637842
+    ],
+    "median_decode_host_us": 433.38118121027946,
+    "prefill_host_us": 611.7229349911213,
+    "restored_replays_bitwise": 3,
+    "replica_equality": true,
+    "runtime_fallback_audit": true,
+    "memory": {
+      "before_weights": {
+        "allocated_bytes": 0,
+        "capacity_bytes": 34178731008
+      },
+      "after_weights": {
+        "allocated_bytes": 82362368,
+        "capacity_bytes": 34178731008
+      },
+      "after_trace": {
+        "allocated_bytes": 91062272,
+        "capacity_bytes": 34178731008
+      }
+    }
+  },
+  "prefill_pcc": 0.9999780845938631,
+  "decode_pcc": [
+    0.9999981641448161,
+    0.9999992228944428,
+    0.9999989011661431,
+    0.9999990882462815,
+    0.9999993743228913,
+    0.9999991629988372,
+    0.9999980861738337,
+    0.9999987973211703
+  ],
+  "state_pcc": {
+    "key": 1.0,
+    "value": 1.0
+  },
+  "state_shapes": {
+    "key": [
+      8,
+      4,
+      32,
+      256
+    ],
+    "value": [
+      8,
+      4,
+      32,
+      256
+    ]
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "source": "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/tracy/profile_l0/reports/2026_10_23_18_57_19/ops_perf_results_2026_10_23_18_57_19.csv",
+  "device_header": "ARCH: blackhole, CHIP_FREQ[MHz]: 1350, Max Compute Cores: 120",
+  "clock_mhz": 1350.0,
+  "time_basis": "Maximum complete per-device whole-layer firmware envelope, all ops and gaps included. Per-chip cycles / MHz = us; never subtract unsynchronized clocks across ASICs.",
+  "phases": {
+    "prefill": {
+      "device_us": 9251.548148148147,
+      "per_device": {
+        "0": {
+          "first_cycle": 94821770153,
+          "last_cycle": 94834182946,
+          "device_us": 9194.661481481482
+        },
+        "1": {
+          "first_cycle": 94870250938,
+          "last_cycle": 94882719352,
+          "device_us": 9235.862222222222
+        },
+        "2": {
+          "first_cycle": 94755145898,
+          "last_cycle": 94767635488,
+          "device_us": 9251.548148148147
+        },
+        "3": {
+          "first_cycle": 94790273473,
+          "last_cycle": 94802747176,
+          "device_us": 9239.78
+        }
+      },
+      "device_ops": 660,
+      "summed_kernel_us": 36361.702,
+      "trace_ids": [
+        "0"
+      ],
+      "trace_replay_sessions": [
+        "1"
+      ]
+    },
+    "decode": {
+      "device_us": 530.54,
+      "per_device": {
+        "0": {
+          "first_cycle": 125729672715,
+          "last_cycle": 125730388944,
+          "device_us": 530.54
+        },
+        "1": {
+          "first_cycle": 125778133238,
+          "last_cycle": 125778847834,
+          "device_us": 529.3303703703704
+        },
+        "2": {
+          "first_cycle": 125663148581,
+          "last_cycle": 125663862848,
+          "device_us": 529.0866666666667
+        },
+        "3": {
+          "first_cycle": 125698206408,
+          "last_cycle": 125698920274,
+          "device_us": 528.7896296296296
+        }
+      },
+      "device_ops": 292,
+      "summed_kernel_us": 1895.149,
+      "trace_ids": [
+        "1"
+      ],
+      "trace_replay_sessions": [
+        "128"
+      ]
+    }
+  },
+  "ops_csv_sha256": "8813d5e33f6a36682453e8585d45dec5630524e17da1a54c02a3613315209a77"
+}

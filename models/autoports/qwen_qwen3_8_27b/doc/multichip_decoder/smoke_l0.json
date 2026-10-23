@@ -1,0 +1,18 @@
+{
+  "layer_type": "linear_attention",
+  "seq": 33,
+  "batch": 1,
+  "steps": 2,
+  "layout": "replicated",
+  "baseline": {
+    "last_decode_host_us": 795.5750916153193
+  },
+  "multichip": {
+    "last_decode_host_us": 514.8269701749086
+  },
+  "prefill_pcc": 0.9999550973769828,
+  "decode_pcc": [
+    0.9999961276007703,
+    0.9999954553801176
+  ]
+}

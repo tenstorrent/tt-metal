@@ -1,0 +1,42 @@
+{
+  "prefill_control": {},
+  "prefill_hidden_k20": {
+    "prefill_block": 20
+  },
+  "prefill_mix_k40": {
+    "mix": {
+      "cores": 40,
+      "block": 4,
+      "readers": 2,
+      "prefill_block": 40
+    }
+  },
+  "prefill_out_k24": {
+    "out": {
+      "cores": 16,
+      "block": 3,
+      "readers": 2,
+      "prefill_block": 24
+    }
+  },
+  "prefill_down_k34": {
+    "down": {
+      "cores": 17,
+      "block": 8,
+      "readers": 2,
+      "prefill_block": 34
+    }
+  },
+  "prefill_grid11x8": {
+    "prefill_grid": [
+      11,
+      8
+    ]
+  },
+  "prefill_grid8x8": {
+    "prefill_grid": [
+      8,
+      8
+    ]
+  }
+}

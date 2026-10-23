@@ -1,0 +1,113 @@
+{
+  "layer_type": "full_attention",
+  "seq": 129,
+  "batch": 1,
+  "steps": 8,
+  "layout": "phase_specific",
+  "fused": null,
+  "stack": false,
+  "split_prefill": 128,
+  "policy": {},
+  "provenance": {
+    "tests/run_multichip_decoder.py": "7f7387f49cb16361219c969fadc42dea8db9e12badcab5291e3234a95e9190ff",
+    "tt/multichip_decoder.py": "ba29d2dcacbc40a05aab1757c8658abc7b818f48ec98363853b522fadcd9f1af",
+    "tt/optimized_decoder.py": "ff85733835d1d972fb9bb1bdc47cdc761c1a814412d534681834b66d8f05d31a"
+  },
+  "baseline": {
+    "page_remap_exact": false,
+    "ragged_positions": false,
+    "last_decode_host_us": 659.1998971998692,
+    "decode_host_us": [
+      670.6721615046263,
+      664.8509297519922,
+      663.2979493588209,
+      656.5840449184179,
+      660.7929244637489,
+      659.1291166841984,
+      659.7109604626894,
+      659.1998971998692
+    ],
+    "median_decode_host_us": 660.7929244637489,
+    "prefill_host_us": 2375.8909665048122,
+    "restored_replays_bitwise": 3,
+    "replica_equality": false,
+    "runtime_fallback_audit": true,
+    "memory": {
+      "before_weights": {
+        "allocated_bytes": 0,
+        "capacity_bytes": 34178731008
+      },
+      "after_weights": {
+        "allocated_bytes": 311394304,
+        "capacity_bytes": 34178731008
+      },
+      "after_trace": {
+        "allocated_bytes": 325862400,
+        "capacity_bytes": 34178731008
+      }
+    }
+  },
+  "multichip": {
+    "page_remap_exact": false,
+    "ragged_positions": false,
+    "last_decode_host_us": 393.7920555472374,
+    "decode_host_us": [
+      408.12999941408634,
+      395.36599069833755,
+      393.9031157642603,
+      391.7391877621412,
+      393.21184158325195,
+      391.93988777697086,
+      393.53291504085064,
+      393.7920555472374
+    ],
+    "median_decode_host_us": 393.7920555472374,
+    "prefill_host_us": 1324.411015957594,
+    "restored_replays_bitwise": 3,
+    "replica_equality": true,
+    "runtime_fallback_audit": true,
+    "memory": {
+      "before_weights": {
+        "allocated_bytes": 0,
+        "capacity_bytes": 34178731008
+      },
+      "after_weights": {
+        "allocated_bytes": 80887808,
+        "capacity_bytes": 34178731008
+      },
+      "after_trace": {
+        "allocated_bytes": 89931776,
+        "capacity_bytes": 34178731008
+      }
+    }
+  },
+  "prefill_pcc": 0.9999718349441109,
+  "decode_pcc": [
+    0.9999975556277872,
+    0.9999980670867629,
+    0.9999981527918551,
+    0.999998597014793,
+    0.9999984479015964,
+    0.9999986448399136,
+    0.9999980281357975,
+    0.9999968308036857
+  ],
+  "state_pcc": {
+    "key": 0.9999267533557933,
+    "value": 0.9999248567547242
+  },
+  "state_shapes": {
+    "key": [
+      8,
+      4,
+      32,
+      256
+    ],
+    "value": [
+      8,
+      4,
+      32,
+      256
+    ]
+  }
+}

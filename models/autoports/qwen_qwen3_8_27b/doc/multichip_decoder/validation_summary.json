@@ -1,0 +1,272 @@
+{
+  "decoder_sha256": "4b8b89ab05452f6c9194049ed6baa155265a3d1d1288d7043f8fe25c731eca90",
+  "suites": {
+    "batch": {
+      "passed_cases": 6,
+      "cases": [
+        {
+          "case": "batch32_l0",
+          "minimum_output_pcc": 0.9999636019308678,
+          "minimum_state_pcc": 0.9998714779425879
+        },
+        {
+          "case": "batch32_l3",
+          "minimum_output_pcc": 0.9999782385639823,
+          "minimum_state_pcc": 0.999929412882849
+        },
+        {
+          "case": "batch16_l0",
+          "minimum_output_pcc": 0.9999634662767817,
+          "minimum_state_pcc": 0.9998712848723582
+        },
+        {
+          "case": "batch16_l3",
+          "minimum_output_pcc": 0.9999764328241503,
+          "minimum_state_pcc": 0.9999292708463751
+        },
+        {
+          "case": "batch8_l0",
+          "minimum_output_pcc": 0.9999603158777036,
+          "minimum_state_pcc": 0.9998717699681093
+        },
+        {
+          "case": "batch8_l3",
+          "minimum_output_pcc": 0.9999777887528263,
+          "minimum_state_pcc": 0.9999292002219223
+        }
+      ]
+    },
+    "boundary": {
+      "passed_cases": 25,
+      "cases": [
+        {
+          "case": "boundary1_l0",
+          "minimum_output_pcc": 0.9999800307007092,
+          "minimum_state_pcc": 0.9998373364365928
+        },
+        {
+          "case": "boundary2_l0",
+          "minimum_output_pcc": 0.9999770241014859,
+          "minimum_state_pcc": 0.999897129168367
+        },
+        {
+          "case": "boundary3_l0",
+          "minimum_output_pcc": 0.9999777449562911,
+          "minimum_state_pcc": 0.9998310971880947
+        },
+        {
+          "case": "boundary31_l0",
+          "minimum_output_pcc": 0.9999593836258103,
+          "minimum_state_pcc": 0.9999255633897111
+        },
+        {
+          "case": "boundary32_l0",
+          "minimum_output_pcc": 0.9999574330614326,
+          "minimum_state_pcc": 0.999927712170517
+        },
+        {
+          "case": "boundary33_l0",
+          "minimum_output_pcc": 0.9999581458917496,
+          "minimum_state_pcc": 0.999930266249658
+        },
+        {
+          "case": "boundary129_l0",
+          "minimum_output_pcc": 0.9999608877644395,
+          "minimum_state_pcc": 0.9999247790309087
+        },
+        {
+          "case": "boundary1279_l0",
+          "minimum_output_pcc": 0.9999615973258871,
+          "minimum_state_pcc": 0.9998971125647405
+        },
+        {
+          "case": "boundary1280_l0",
+          "minimum_output_pcc": 0.9999616095995727,
+          "minimum_state_pcc": 0.9998906902923267
+        },
+        {
+          "case": "boundary1281_l0",
+          "minimum_output_pcc": 0.9999616220498233,
+          "minimum_state_pcc": 0.9998888513978912
+        },
+        {
+          "case": "boundary1_l3",
+          "minimum_output_pcc": 0.9999903338536367,
+          "minimum_state_pcc": 0.9998824453831561
+        },
+        {
+          "case": "boundary2_l3",
+          "minimum_output_pcc": 0.9999514611297105,
+          "minimum_state_pcc": 0.9998964497826985
+        },
+        {
+          "case": "boundary3_l3",
+          "minimum_output_pcc": 0.9999594347400531,
+          "minimum_state_pcc": 0.9998972381008686
+        },
+        {
+          "case": "boundary31_l3",
+          "minimum_output_pcc": 0.9999742113762438,
+          "minimum_state_pcc": 0.9999240917321377
+        },
+        {
+          "case": "boundary32_l3",
+          "minimum_output_pcc": 0.9999748896558338,
+          "minimum_state_pcc": 0.9999239640969738
+        },
+        {
+          "case": "boundary33_l3",
+          "minimum_output_pcc": 0.999975159444888,
+          "minimum_state_pcc": 0.9999243872112865
+        },
+        {
+          "case": "boundary129_l3",
+          "minimum_output_pcc": 0.9999711975534407,
+          "minimum_state_pcc": 0.9999267800640844
+        },
+        {
+          "case": "boundary1023_l3",
+          "minimum_output_pcc": 0.9999743878109444,
+          "minimum_state_pcc": 0.9999271449850408
+        },
+        {
+          "case": "boundary1024_l3",
+          "minimum_output_pcc": 0.9999744194625658,
+          "minimum_state_pcc": 0.9999271355993758
+        },
+        {
+          "case": "boundary1025_l3",
+          "minimum_output_pcc": 0.9999744345885178,
+          "minimum_state_pcc": 0.9999271420325712
+        },
+        {
+          "case": "odd_batch3_426_l0",
+          "minimum_output_pcc": 0.9999627370785816,
+          "minimum_state_pcc": 0.999903680768217
+        },
+        {
+          "case": "odd_batch3_427_l0",
+          "minimum_output_pcc": 0.9999637352100031,
+          "minimum_state_pcc": 0.9999069155314849
+        },
+        {
+          "case": "odd_batch3_341_l3",
+          "minimum_output_pcc": 0.9999742857810535,
+          "minimum_state_pcc": 0.9999270036299807
+        },
+        {
+          "case": "odd_batch3_342_l3",
+          "minimum_output_pcc": 0.9999766024616378,
+          "minimum_state_pcc": 0.9999311629139196
+        },
+        {
+          "case": "ragged_pages_b8_l3",
+          "minimum_output_pcc": 0.999973352510335,
+          "minimum_state_pcc": 0.9999296382988802
+        }
+      ]
+    },
+    "continuation": {
+      "passed_cases": 4,
+      "cases": [
+        {
+          "case": "continuation129_l0",
+          "minimum_output_pcc": 0.9999614433968731,
+          "minimum_state_pcc": 0.9999181563553851
+        },
+        {
+          "case": "continuation257_l0",
+          "minimum_output_pcc": 0.9999605170991988,
+          "minimum_state_pcc": 0.9999046296738858
+        },
+        {
+          "case": "continuation129_l3",
+          "minimum_output_pcc": 0.9999718349441109,
+          "minimum_state_pcc": 0.9999248567547242
+        },
+        {
+          "case": "continuation257_l3",
+          "minimum_output_pcc": 0.9999716010603459,
+          "minimum_state_pcc": 0.9999260170027001
+        }
+      ]
+    },
+    "stack": {
+      "passed_cases": 2,
+      "cases": [
+        {
+          "case": "stack_l0",
+          "minimum_output_pcc": 0.9999554430759157,
+          "minimum_state_pcc": null
+        },
+        {
+          "case": "stack_l3",
+          "minimum_output_pcc": 0.9999053587855758,
+          "minimum_state_pcc": null
+        }
+      ]
+    },
+    "context": {
+      "passed_cases": 2,
+      "cases": [
+        {
+          "case": "context262142_l0",
+          "minimum_output_pcc": 0.9999626030948866,
+          "minimum_state_pcc": 0.9998227069192349
+        },
+        {
+          "case": "context262142_l3",
+          "minimum_output_pcc": 0.9999774459550694,
+          "minimum_state_pcc": 0.9999274474322454
+        }
+      ]
+    },
+    "watcher": {
+      "passed_cases": 4,
+      "cases": [
+        {
+          "case": "watcher_l0",
+          "minimum_output_pcc": 0.9999618666878674,
+          "minimum_state_pcc": 0.9998668591879223
+        },
+        {
+          "case": "watcher_b32_l0",
+          "minimum_output_pcc": 0.9999547092241575,
+          "minimum_state_pcc": 0.9999190469992674
+        },
+        {
+          "case": "watcher_l3",
+          "minimum_output_pcc": 0.9999755888467804,
+          "minimum_state_pcc": 0.999926077673804
+        },
+        {
+          "case": "watcher_b32_l3",
+          "minimum_output_pcc": 0.9999753407831253,
+          "minimum_state_pcc": 0.999921895404648
+        }
+      ]
+    }
+  },
+  "layer_types": {
+    "linear_attention": {
+      "prefill_pcc": 0.9999618666878674,
+      "minimum_decode_pcc": 0.9999662360482622,
+      "completed_decode_steps": 128,
+      "state_pcc": {
+        "conv": 0.9999384100490198,
+        "recurrent": 0.9998668591879223
+      },
+      "evidence": "watcher_l0.json"
+    },
+    "full_attention": {
+      "prefill_pcc": 0.9999755888467804,
+      "minimum_decode_pcc": 0.9999918393178835,
+      "completed_decode_steps": 128,
+      "state_pcc": {
+        "key": 0.9999380141514285,
+        "value": 0.999926077673804
+      },
+      "evidence": "watcher_l3.json"
+    }
+  }
+}

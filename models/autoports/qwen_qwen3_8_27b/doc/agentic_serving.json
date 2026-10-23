@@ -1,5 +1,5 @@
 {
-  "stage": "03-optimized-decoder",
+  "stage": "04-multichip-decoder",
   "workload": {
     "target_concurrency": 32,
     "working_set_tokens": 32768,
@@ -18,47 +18,29 @@
     16,
     32
   ],
-  "stage_scope": "Single optimized decoder layer, no serving scheduler/full-model pool.",
+  "status": "multichip_decoder_clean-pass",
+  "stage_scope": "TP4 decoder only; no full-model or serving execution",
+  "memory_evidence": [
+    "multichip_decoder/memory_capacity_plan.json"
+  ],
+  "performance_status": "complete",
   "batch_evidence": {
     "1": [
-      "optimized_decoder/final_accepted_l0.json",
-      "optimized_decoder/final_accepted_l3.json"
+      "multichip_decoder/watcher_l0.json",
+      "multichip_decoder/watcher_l3.json"
     ],
     "8": [
-      "optimized_decoder/workload_b8_l0.json",
-      "optimized_decoder/workload_b8_l3.json"
+      "multichip_decoder/batch8_l0.json",
+      "multichip_decoder/batch8_l3.json"
     ],
     "16": [
-      "optimized_decoder/workload_b16_l0.json",
-      "optimized_decoder/workload_b16_l3.json"
+      "multichip_decoder/batch16_l0.json",
+      "multichip_decoder/batch16_l3.json"
     ],
     "32": [
-      "optimized_decoder/workload_b32_l0.json",
-      "optimized_decoder/workload_b32_l3.json"
+      "multichip_decoder/batch32_l0.json",
+      "multichip_decoder/batch32_l3.json"
     ]
-  },
-  "performance_evidence": "optimized_decoder/performance.json",
-  "prefix_contract_evidence": "optimized_decoder/README.md",
-  "memory_evidence": [
-    "optimized_decoder/final_accepted_l0.json:memory",
-    "optimized_decoder/final_accepted_l3.json:memory"
-  ],
-  "status": "optimized_decoder_clean-pass",
-  "performance_status": "complete",
-  "trace_allocation_evidence": [
-    "optimized_decoder/final_validation.log",
-    "optimized_decoder/validation_summary.json"
-  ],
-  "performance_note": "B1 device envelopes; B8/B16/B32 are4096+128 host-wall traced workloads. Host time is never substituted for device rooflines.",
-  "state_memory": {
-    "linear_bytes_per_request": 3207168,
-    "full_kv_bytes_per_token": 2176,
-    "trace_region_size": 0,
-    "trace_allocation_mode": "dynamic DRAM",
-    "actual_trace_bytes": null,
-    "trace_memory_missing_reason": "Setup-only snapshots precede capture; zero is configured reservation, not actual trace allocation.",
-    "weight_representations": "One attention/output/down copy; separate and packed gate/up copies for phase-specific latency.",
-    "scope": "Single layer, not a full-model serving pool."
   },
   "previous_stages": {
     "01-functional-decoder": {
@@ -177,6 +159,86 @@
         "trace_region_size": 0,
         "scope": "Layer state, not a full-model serving memory ledger."
       }
+    },
+    "03-optimized-decoder": {
+      "stage": "03-optimized-decoder",
+      "workload": {
+        "target_concurrency": 32,
+        "working_set_tokens": 32768,
+        "typical_context_tokens": 4096,
+        "source": "planning estimate; default batch set and agent long-prefix workload, not measured"
+      },
+      "batch_sizes": [
+        1,
+        8,
+        16,
+        32
+      ],
+      "tested_batch_sizes": [
+        1,
+        8,
+        16,
+        32
+      ],
+      "stage_scope": "Single optimized decoder layer, no serving scheduler/full-model pool.",
+      "batch_evidence": {
+        "1": [
+          "optimized_decoder/final_accepted_l0.json",
+          "optimized_decoder/final_accepted_l3.json"
+        ],
+        "8": [
+          "optimized_decoder/workload_b8_l0.json",
+          "optimized_decoder/workload_b8_l3.json"
+        ],
+        "16": [
+          "optimized_decoder/workload_b16_l0.json",
+          "optimized_decoder/workload_b16_l3.json"
+        ],
+        "32": [
+          "optimized_decoder/workload_b32_l0.json",
+          "optimized_decoder/workload_b32_l3.json"
+        ]
+      },
+      "performance_evidence": "optimized_decoder/performance.json",
+      "prefix_contract_evidence": "optimized_decoder/README.md",
+      "memory_evidence": [
+        "optimized_decoder/final_accepted_l0.json:memory",
+        "optimized_decoder/final_accepted_l3.json:memory"
+      ],
+      "status": "optimized_decoder_clean-pass",
+      "performance_status": "complete",
+      "trace_allocation_evidence": [
+        "optimized_decoder/final_validation.log",
+        "optimized_decoder/validation_summary.json"
+      ],
+      "performance_note": "B1 device envelopes; B8/B16/B32 are4096+128 host-wall traced workloads. Host time is never substituted for device rooflines.",
+      "state_memory": {
+        "linear_bytes_per_request": 3207168,
+        "full_kv_bytes_per_token": 2176,
+        "trace_region_size": 0,
+        "trace_allocation_mode": "dynamic DRAM",
+        "actual_trace_bytes": null,
+        "trace_memory_missing_reason": "Setup-only snapshots precede capture; zero is configured reservation, not actual trace allocation.",
+        "weight_representations": "One attention/output/down copy; separate and packed gate/up copies for phase-specific latency.",
+        "scope": "Single layer, not a full-model serving pool."
+      }
     }
-  }
+  },
+  "performance_note": "B1 whole-layer device profiles at4096+128. B8/B16/B32 are supplied-hidden-input layer workloads with separate host-wall timing. No host time is used for device rooflines.",
+  "state_memory": {
+    "linear_bytes_per_request_per_device": 801792,
+    "full_kv_bytes_per_token_per_device": 544,
+    "weight_representations": "Single packed gate/up shared across phases; one attention/output/down copy.",
+    "trace_region_size": 0,
+    "trace_allocation_mode": "dynamic DRAM",
+    "actual_trace_bytes": null,
+    "trace_memory_missing_reason": "Allocator snapshots include live tensors and test backups; no isolated full-stack trace peak measured.",
+    "scope": "TP4 layer measured; all-stack memory is a feasibility ledger."
+  },
+  "trace_allocation_evidence": [
+    "multichip_decoder/validation_summary.json",
+    "multichip_decoder/final_validation.log"
+  ],
+  "performance_evidence": "multichip_decoder/performance.json",
+  "review_evidence": "multichip_decoder/stage_review.md"
 }

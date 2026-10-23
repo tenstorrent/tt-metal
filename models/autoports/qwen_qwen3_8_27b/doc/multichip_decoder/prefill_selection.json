@@ -1,0 +1,39 @@
+{
+  "selected": "unchanged K10/outK16/downK8,grid11x10",
+  "precision": "BFP4/LoFi for all candidates",
+  "linear_control_us": 8290.844969451427,
+  "full_confirmation": {
+    "control": {
+      "replays": 20,
+      "median_us": 10707.72996172309,
+      "mean_us": 10718.051681760699,
+      "stdev_us": 74.66635975824869,
+      "min_us": 10596.66182845831,
+      "max_us": 10852.91407071054,
+      "evidence": "prefill_confirm_control_l3.json"
+    },
+    "k20": {
+      "replays": 20,
+      "median_us": 10725.689469836652,
+      "mean_us": 10753.874899819493,
+      "stdev_us": 150.1892162047842,
+      "min_us": 10556.00494146347,
+      "max_us": 11108.032893389463,
+      "evidence": "prefill_confirm_k20_l3.json"
+    },
+    "k20_mix40": {
+      "replays": 20,
+      "median_us": 10731.585556641221,
+      "mean_us": 10778.186772949994,
+      "stdev_us": 189.88863906922396,
+      "min_us": 10543.340118601918,
+      "max_us": 11237.741215154529,
+      "evidence": "prefill_confirm_k20_mix40_l3.json"
+    }
+  },
+  "basis": "Larger legal K blocks and smaller grids did not yield a reproducible complete-layer prefill win. Full K20 first five-sample improvement did not reproduce over20 warmed replays. Statistics here use the arithmetic median of the two middle samples; older runner fields use the upper middle sample.",
+  "evidence": [
+    "prefill_geometry_results.json",
+    "prefill_confirm_validation.json"
+  ]
+}

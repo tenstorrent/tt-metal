@@ -1,0 +1,95 @@
+{
+  "layer_type": "full_attention",
+  "seq": 341,
+  "batch": 3,
+  "steps": 2,
+  "layout": "phase_specific",
+  "fused": null,
+  "stack": false,
+  "split_prefill": 0,
+  "policy": {},
+  "provenance": {
+    "tests/run_multichip_decoder.py": "7f7387f49cb16361219c969fadc42dea8db9e12badcab5291e3234a95e9190ff",
+    "tt/multichip_decoder.py": "ba29d2dcacbc40a05aab1757c8658abc7b818f48ec98363853b522fadcd9f1af",
+    "tt/optimized_decoder.py": "ff85733835d1d972fb9bb1bdc47cdc761c1a814412d534681834b66d8f05d31a"
+  },
+  "baseline": {
+    "page_remap_exact": false,
+    "ragged_positions": false,
+    "last_decode_host_us": 864.5420894026756,
+    "decode_host_us": [
+      872.7079257369041,
+      864.5420894026756
+    ],
+    "median_decode_host_us": 872.7079257369041,
+    "prefill_host_us": 7236.984791234136,
+    "restored_replays_bitwise": 3,
+    "replica_equality": false,
+    "runtime_fallback_audit": true,
+    "memory": {
+      "before_weights": {
+        "allocated_bytes": 0,
+        "capacity_bytes": 34178731008
+      },
+      "after_weights": {
+        "allocated_bytes": 311394304,
+        "capacity_bytes": 34178731008
+      },
+      "after_trace": {
+        "allocated_bytes": 378218496,
+        "capacity_bytes": 34178731008
+      }
+    }
+  },
+  "multichip": {
+    "page_remap_exact": false,
+    "ragged_positions": false,
+    "last_decode_host_us": 579.687999561429,
+    "decode_host_us": [
+      594.7169847786427,
+      579.687999561429
+    ],
+    "median_decode_host_us": 594.7169847786427,
+    "prefill_host_us": 2738.1619438529015,
+    "restored_replays_bitwise": 3,
+    "replica_equality": true,
+    "runtime_fallback_audit": true,
+    "memory": {
+      "before_weights": {
+        "allocated_bytes": 0,
+        "capacity_bytes": 34178731008
+      },
+      "after_weights": {
+        "allocated_bytes": 80887808,
+        "capacity_bytes": 34178731008
+      },
+      "after_trace": {
+        "allocated_bytes": 99783680,
+        "capacity_bytes": 34178731008
+      }
+    }
+  },
+  "prefill_pcc": 0.9999742857810535,
+  "decode_pcc": [
+    0.9999978554449092,
+    0.9999981135288137
+  ],
+  "state_pcc": {
+    "key": 0.9999332226599867,
+    "value": 0.9999270036299807
+  },
+  "state_shapes": {
+    "key": [
+      48,
+      4,
+      32,
+      256
+    ],
+    "value": [
+      48,
+      4,
+      32,
+      256
+    ]
+  }
+}

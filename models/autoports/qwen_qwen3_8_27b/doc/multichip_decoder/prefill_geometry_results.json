@@ -1,0 +1,432 @@
+[
+  {
+    "layer": 0,
+    "candidate": "prefill_control",
+    "policy": {},
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "4096",
+      "--steps",
+      "8",
+      "--prefill-repeats",
+      "5",
+      "--policy",
+      "{}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_prefill_control_l0.json"
+    ],
+    "prefill_host_us": 8290.844969451427,
+    "host_us": 491.2011791020632,
+    "minimum_pcc": 0.9999618666878674
+  },
+  {
+    "layer": 0,
+    "candidate": "prefill_hidden_k20",
+    "policy": {
+      "prefill_block": 20
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "4096",
+      "--steps",
+      "8",
+      "--prefill-repeats",
+      "5",
+      "--policy",
+      "{\"prefill_block\": 20}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_prefill_hidden_k20_l0.json"
+    ],
+    "prefill_host_us": 8358.153980225325,
+    "host_us": 491.8419290333986,
+    "minimum_pcc": 0.9999619998506287
+  },
+  {
+    "layer": 0,
+    "candidate": "prefill_mix_k40",
+    "policy": {
+      "mix": {
+        "cores": 40,
+        "block": 4,
+        "readers": 2,
+        "prefill_block": 40
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "4096",
+      "--steps",
+      "8",
+      "--prefill-repeats",
+      "5",
+      "--policy",
+      "{\"mix\": {\"cores\": 40, \"block\": 4, \"readers\": 2, \"prefill_block\": 40}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_prefill_mix_k40_l0.json"
+    ],
+    "prefill_host_us": 8292.93904826045,
+    "host_us": 497.0729351043701,
+    "minimum_pcc": 0.9999558512452043
+  },
+  {
+    "layer": 0,
+    "candidate": "prefill_out_k24",
+    "policy": {
+      "out": {
+        "cores": 16,
+        "block": 3,
+        "readers": 2,
+        "prefill_block": 24
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "4096",
+      "--steps",
+      "8",
+      "--prefill-repeats",
+      "5",
+      "--policy",
+      "{\"out\": {\"cores\": 16, \"block\": 3, \"readers\": 2, \"prefill_block\": 24}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_prefill_out_k24_l0.json"
+    ],
+    "prefill_host_us": 8371.650008484721,
+    "host_us": 489.39697444438934,
+    "minimum_pcc": 0.9999632503118127
+  },
+  {
+    "layer": 0,
+    "candidate": "prefill_down_k34",
+    "policy": {
+      "down": {
+        "cores": 17,
+        "block": 8,
+        "readers": 2,
+        "prefill_block": 34
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "4096",
+      "--steps",
+      "8",
+      "--prefill-repeats",
+      "5",
+      "--policy",
+      "{\"down\": {\"cores\": 17, \"block\": 8, \"readers\": 2, \"prefill_block\": 34}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_prefill_down_k34_l0.json"
+    ],
+    "prefill_host_us": 8423.128863796592,
+    "host_us": 490.9911658614874,
+    "minimum_pcc": 0.9999635430217614
+  },
+  {
+    "layer": 0,
+    "candidate": "prefill_grid11x8",
+    "policy": {
+      "prefill_grid": [
+        11,
+        8
+      ]
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "4096",
+      "--steps",
+      "8",
+      "--prefill-repeats",
+      "5",
+      "--policy",
+      "{\"prefill_grid\": [11, 8]}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_prefill_grid11x8_l0.json"
+    ],
+    "prefill_host_us": 8764.993865042925,
+    "host_us": 491.6118923574686,
+    "minimum_pcc": 0.9999618666878674
+  },
+  {
+    "layer": 0,
+    "candidate": "prefill_grid8x8",
+    "policy": {
+      "prefill_grid": [
+        8,
+        8
+      ]
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "4096",
+      "--steps",
+      "8",
+      "--prefill-repeats",
+      "5",
+      "--policy",
+      "{\"prefill_grid\": [8, 8]}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_prefill_grid8x8_l0.json"
+    ],
+    "prefill_host_us": 9448.562981560826,
+    "host_us": 492.8950220346451,
+    "minimum_pcc": 0.9999618666878674
+  },
+  {
+    "layer": 3,
+    "candidate": "prefill_control",
+    "policy": {},
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--seq",
+      "4096",
+      "--steps",
+      "8",
+      "--prefill-repeats",
+      "5",
+      "--policy",
+      "{}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_prefill_control_l3.json"
+    ],
+    "prefill_host_us": 10753.101902082562,
+    "host_us": 408.95305573940277,
+    "minimum_pcc": 0.9999755888467804
+  },
+  {
+    "layer": 3,
+    "candidate": "prefill_hidden_k20",
+    "policy": {
+      "prefill_block": 20
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--seq",
+      "4096",
+      "--steps",
+      "8",
+      "--prefill-repeats",
+      "5",
+      "--policy",
+      "{\"prefill_block\": 20}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_prefill_hidden_k20_l3.json"
+    ],
+    "prefill_host_us": 10591.914178803563,
+    "host_us": 415.15612974762917,
+    "minimum_pcc": 0.9999740123864128
+  },
+  {
+    "layer": 3,
+    "candidate": "prefill_mix_k40",
+    "policy": {
+      "mix": {
+        "cores": 40,
+        "block": 4,
+        "readers": 2,
+        "prefill_block": 40
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--seq",
+      "4096",
+      "--steps",
+      "8",
+      "--prefill-repeats",
+      "5",
+      "--policy",
+      "{\"mix\": {\"cores\": 40, \"block\": 4, \"readers\": 2, \"prefill_block\": 40}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_prefill_mix_k40_l3.json"
+    ],
+    "prefill_host_us": 10638.001142069697,
+    "host_us": 412.29999624192715,
+    "minimum_pcc": 0.999971869704313
+  },
+  {
+    "layer": 3,
+    "candidate": "prefill_out_k24",
+    "policy": {
+      "out": {
+        "cores": 16,
+        "block": 3,
+        "readers": 2,
+        "prefill_block": 24
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--seq",
+      "4096",
+      "--steps",
+      "8",
+      "--prefill-repeats",
+      "5",
+      "--policy",
+      "{\"out\": {\"cores\": 16, \"block\": 3, \"readers\": 2, \"prefill_block\": 24}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_prefill_out_k24_l3.json"
+    ],
+    "prefill_host_us": 10816.392954438925,
+    "host_us": 410.40685027837753,
+    "minimum_pcc": 0.9999759268824097
+  },
+  {
+    "layer": 3,
+    "candidate": "prefill_down_k34",
+    "policy": {
+      "down": {
+        "cores": 17,
+        "block": 8,
+        "readers": 2,
+        "prefill_block": 34
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--seq",
+      "4096",
+      "--steps",
+      "8",
+      "--prefill-repeats",
+      "5",
+      "--policy",
+      "{\"down\": {\"cores\": 17, \"block\": 8, \"readers\": 2, \"prefill_block\": 34}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_prefill_down_k34_l3.json"
+    ],
+    "prefill_host_us": 10817.55617633462,
+    "host_us": 411.9288641959429,
+    "minimum_pcc": 0.9999759246633277
+  },
+  {
+    "layer": 3,
+    "candidate": "prefill_grid11x8",
+    "policy": {
+      "prefill_grid": [
+        11,
+        8
+      ]
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--seq",
+      "4096",
+      "--steps",
+      "8",
+      "--prefill-repeats",
+      "5",
+      "--policy",
+      "{\"prefill_grid\": [11, 8]}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_prefill_grid11x8_l3.json"
+    ],
+    "prefill_host_us": 10830.039158463478,
+    "host_us": 413.0220040678978,
+    "minimum_pcc": 0.9999755888467804
+  },
+  {
+    "layer": 3,
+    "candidate": "prefill_grid8x8",
+    "policy": {
+      "prefill_grid": [
+        8,
+        8
+      ]
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--seq",
+      "4096",
+      "--steps",
+      "8",
+      "--prefill-repeats",
+      "5",
+      "--policy",
+      "{\"prefill_grid\": [8, 8]}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_prefill_grid8x8_l3.json"
+    ],
+    "prefill_host_us": 11114.215012639761,
+    "host_us": 410.9470173716545,
+    "minimum_pcc": 0.9999755888467804
+  }
+]

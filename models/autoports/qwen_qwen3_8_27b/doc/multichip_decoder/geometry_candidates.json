@@ -1,0 +1,87 @@
+{
+  "control": {},
+  "mix40k4": {
+    "mix": {
+      "cores": 40,
+      "block": 4,
+      "readers": 2
+    }
+  },
+  "mix16k10": {
+    "mix": {
+      "cores": 16,
+      "block": 10,
+      "readers": 2
+    }
+  },
+  "gateup40k4": {
+    "gateup": {
+      "cores": 40,
+      "block": 4,
+      "readers": 2
+    }
+  },
+  "gateup16k10": {
+    "gateup": {
+      "cores": 16,
+      "block": 10,
+      "readers": 2
+    }
+  },
+  "out8k6": {
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 16
+    }
+  },
+  "out24k2": {
+    "out": {
+      "cores": 24,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 16
+    }
+  },
+  "down8k17": {
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 2,
+      "prefill_block": 8
+    }
+  },
+  "down34k4": {
+    "down": {
+      "cores": 34,
+      "block": 4,
+      "readers": 2,
+      "prefill_block": 8
+    }
+  },
+  "readers1": {
+    "mix": {
+      "cores": 80,
+      "block": 2,
+      "readers": 1
+    },
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 1
+    },
+    "out": {
+      "cores": 16,
+      "block": 3,
+      "readers": 1,
+      "prefill_block": 16
+    },
+    "down": {
+      "cores": 17,
+      "block": 8,
+      "readers": 1,
+      "prefill_block": 8
+    }
+  }
+}

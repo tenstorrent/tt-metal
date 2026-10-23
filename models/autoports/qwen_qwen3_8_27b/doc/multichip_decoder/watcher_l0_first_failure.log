@@ -1,0 +1,111 @@
+2026-10-23 19:40:35.488 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+2026-10-23 19:40:36.998 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 19:40:36.998 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 19:40:36.999 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 19:40:36.999 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 19:40:37.010 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 19:40:37.010 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 19:40:37.088 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 19:40:37.088 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 19:40:37.088 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 19:40:37.088 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 19:40:37.090 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 19:40:37.095 | warning  |             UMD | AICLK settled at 1337 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (blackhole_device_firmware.cpp:251)
+2026-10-23 19:40:37.246 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-23 19:40:37.313 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 19:40:37.313 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 19:40:37.313 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 19:40:37.314 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 19:40:37.375 | info     |       LLRuntime | Watcher log file: /workspace/generated/watcher/watcher.log (watcher_server.cpp:313)
+2026-10-23 19:40:37.375 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:631)
+2026-10-23 19:40:37.375 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+baseline PREFILL_DONE
+baseline DECODE_DONE 5802.297033369541
+2026-10-23 19:40:44.929 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:423)
+2026-10-23 19:40:44.929 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 19:40:44.929 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 19:40:44.930 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 19:40:44.931 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:679)
+2026-10-23 19:40:45.000 | info     |       LLRuntime | Watcher log file: /workspace/generated/watcher/watcher.log (watcher_server.cpp:313)
+2026-10-23 19:40:45.000 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:631)
+2026-10-23 19:40:45.007 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-10-23 19:40:48.643 | critical |          Always | TT_FATAL: Program size (29264) too large for kernel config buffer (26624) on ACTIVE_ETH, 2640 B over:
+  runtime args                 320 B
+  semaphores                   0 B
+  circular buffers             0 B
+  dataflow buffers             0 B
+  kernel text                  28944 B
+    active_erisc               15108 B
+    subordinate_active_erisc   13820 B
+    text-sizing group, cores   {[0-2 - 0-2]}
+    text-sizing group, kernels fabric_erisc_router (assert.hpp:104)
+Traceback (most recent call last):
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/run_multichip_decoder.py", line 242, in <module>
+    if __name__=='__main__': main()
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/run_multichip_decoder.py", line 82, in main
+    mesh=ttnn.open_mesh_device(ttnn.MeshShape(1,n),physical_device_ids=[0] if n==1 else [],trace_region_size=0)
+  File "/workspace/ttnn/ttnn/distributed/distributed.py", line 674, in open_mesh_device
+    return ttnn._ttnn.multi_device.open_mesh_device(
+RuntimeError: TT_FATAL @ /workspace/tt_metal/impl/program/program.cpp:3759: state.offset <= max_size
+info:
+Program size (29264) too large for kernel config buffer (26624) on ACTIVE_ETH, 2640 B over:
+  runtime args                 320 B
+  semaphores                   0 B
+  circular buffers             0 B
+  dataflow buffers             0 B
+  kernel text                  28944 B
+    active_erisc               15108 B
+    subordinate_active_erisc   13820 B
+    text-sizing group, cores   {[0-2 - 0-2]}
+    text-sizing group, kernels fabric_erisc_router
+backtrace:
+ --- /workspace/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xad9aed) [0x7be5d7ed9aed]
+ --- /workspace/ttnn/ttnn/../../build/lib/libtt_metal.so(_ZN2tt8tt_metal6detail11ProgramImpl24finalize_program_offsetsEN4ttsl10StrongTypeIiNS0_12ContextIdTagEEEPNS0_7IDeviceERKSt8functionIFRSt13unordered_mapIjSt10shared_ptrINS0_6KernelEESt4hashIjESt8equal_toIjESaISt4pairIKjSD_EEEjEERKS9_IFRSt6vectorISB_INS0_11KernelGroupEESaISU_EEjEERKS9_IFRKSS_INS0_9SemaphoreESaIS12_EEvEESt4spanIPS2_Lm18446744073709551615EE+0xec1) [0x7be5d7ecd0a1]
+ --- tt::tt_metal::detail::ProgramImpl::finalize_offsets(tt::tt_metal::IDevice*)
+ --- tt::tt_metal::Device::configure_fabric()
+ --- tt::tt_metal::FabricFirmwareInitializer::compile_and_configure_fabric()
+ --- tt::tt_metal::FabricFirmwareInitializer::init(std::vector<tt::tt_metal::Device*, std::allocator<tt::tt_metal::Device*> > const&, std::unordered_set<tt::tt_metal::InitializerKey, std::hash<tt::tt_metal::InitializerKey>, std::equal_to<tt::tt_metal::InitializerKey>, std::allocator<tt::tt_metal::InitializerKey> > const&)
+ --- tt::tt_metal::DeviceManager::initialize_fabric_and_dispatch_fw()
+ --- tt::tt_metal::distributed::MeshDeviceImpl::create(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, tt::tt_metal::distributed::MeshDeviceConfig const&, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+ --- tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig const&, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+ --- ttnn::distributed::open_mesh_device(unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::optional<tt::tt_metal::distributed::MeshShape> const&, std::optional<tt::tt_metal::distributed::MeshCoordinate> const&, std::vector<int, std::allocator<int> > const&, unsigned long)
+ --- /workspace/ttnn/ttnn/_ttnn.so(+0x417d15) [0x7be5dc217d15]
+ --- /workspace/ttnn/ttnn/_ttnn.so(+0x3ca99d) [0x7be5dc1ca99d]
+ --- /opt/venv/bin/python(+0x3010ec) [0x5c14741470ec]
+ --- /opt/venv/bin/python(_PyEval_EvalFrameDefault+0x1cfe8) [0x5c147412eab8]
+ --- /opt/venv/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5c14740b7373]
+ --- /opt/venv/bin/python(+0x3010ec) [0x5c14741470ec]
+ --- /opt/venv/bin/python(_PyEval_EvalFrameDefault+0x1cfe8) [0x5c147412eab8]
+ --- /opt/venv/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5c14740b7373]
+ --- /opt/venv/bin/python(+0x3010ec) [0x5c14741470ec]
+ --- /opt/venv/bin/python(_PyEval_EvalFrameDefault+0x1bcc5) [0x5c147412d795]
+ --- /opt/venv/bin/python(+0x3ee472) [0x5c1474234472]
+ --- /opt/venv/bin/python(+0x3ec365) [0x5c1474232365]
+ --- /opt/venv/bin/python(+0x294312) [0x5c14740da312]
+ --- /opt/venv/bin/python(+0x3010ec) [0x5c14741470ec]
+ --- /opt/venv/bin/python(_PyEval_EvalFrameDefault+0x1bcc5) [0x5c147412d795]
+ --- /opt/venv/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5c14740b7373]
+ --- /opt/venv/bin/python(+0x3010ec) [0x5c14741470ec]
+ --- /opt/venv/bin/python(_PyEval_EvalFrameDefault+0x1bcc5) [0x5c147412d795]
+ --- /opt/venv/bin/python(_PyFunction_Vectorcall+0x2e3) [0x5c14740b7373]
+ --- /opt/venv/bin/python(+0x431c2a) [0x5c1474277c2a]
+ --- /opt/venv/bin/python(Py_RunMain+0x173) [0x5c1474277443]
+ --- /opt/venv/bin/python(+0x431fb2) [0x5c1474277fb2]
+ --- /opt/venv/bin/python(+0x35847c) [0x5c147419e47c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7be62013bd90]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7be62013be40]
+ --- /opt/venv/bin/python(+0x35838d) [0x5c147419e38d]
+
+2026-10-23 19:40:49.499 | info     |    BuildKernels | JIT cache stats: 351/410 hits (85.6%) [351 cached, 180 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 19:40:49.499 | info     |    BuildKernels | JIT telemetry: 45 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 19:40:49.936 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:679)
+2026-10-23 19:40:49.950 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 19:40:49.950 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 19:40:50.089 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 19:40:50.090 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 19:40:50.090 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

@@ -64,6 +64,36 @@
       },
       "memory_effect": "BFP4 weights, BFP8 KV; two gate/up representations for phase-specific matmuls, adding100270080 bytes versus packed-only. Decode MLP packs users in tile rows to avoid per-user padding. No context reduction.",
       "scope": "Single-layer capacity at B1; B8/B16/B32 measured at4096+128. Long fixtures repeat recorded HF activations and compare final128 prefill outputs using the whole prefix, plus two final-position decodes."
+    },
+    "04-multichip-decoder": {
+      "status": "validated_clean_pass_no_capability_reduction",
+      "target_mesh": [
+        1,
+        4
+      ],
+      "hardware": "4 Blackhole p300c ASICs, two links per ring edge",
+      "capability_reduction": null,
+      "full_attention_kv_bytes_per_token_per_device": 544,
+      "full_attention_kv_bytes_at_max_context_per_device": 142606336,
+      "all_full_layers_kv_bytes_at_max_context_per_device": 2281701376,
+      "linear_state_bytes_per_request_per_device": 801792,
+      "all_linear_layers_state_bytes_per_request_per_device": 38486016,
+      "weight_bytes_per_device": 4886388736,
+      "reserved_trace_activation_bytes": 3221225472,
+      "plan_evidence": "multichip_decoder/mesh_plan.md",
+      "weight_accounting_scope": "Conservative all-layer setup plus untied BF16 embedding/head estimate; includes non-weight setup.",
+      "memory_evidence": "multichip_decoder/memory_capacity_plan.json",
+      "supported_context": 262144,
+      "largest_tested_prefill_context": 262142,
+      "largest_tested_decode_context": 262144,
+      "full_attention_kv_dtype": "BFP8",
+      "linear_state_layout_per_device": "BF16 row-major [B,3,2560]; FP32 tiled [B,12,128,128]",
+      "context_evidence": [
+        "multichip_decoder/context262142_l0.json",
+        "multichip_decoder/context262142_l3.json"
+      ],
+      "comparison_scope": "All 262142 prefill outputs, both final-position decodes and reconstructed local states compared directly to single-chip optimized TTNN. B1 native context; B8/B16/B32 separately measured at4096+128. Full-model memory is a feasibility ledger, not an allocation measurement.",
+      "review_evidence": "multichip_decoder/stage_review.md"
     }
   }
 }

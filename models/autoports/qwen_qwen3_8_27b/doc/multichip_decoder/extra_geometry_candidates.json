@@ -1,0 +1,80 @@
+{
+  "control_extra": {},
+  "mix32k5": {
+    "mix": {
+      "cores": 32,
+      "block": 5,
+      "readers": 2
+    }
+  },
+  "mix20k8": {
+    "mix": {
+      "cores": 20,
+      "block": 8,
+      "readers": 2
+    }
+  },
+  "mix8k20": {
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2
+    }
+  },
+  "out4k12": {
+    "out": {
+      "cores": 4,
+      "block": 12,
+      "readers": 2,
+      "prefill_block": 16
+    }
+  },
+  "out1k48": {
+    "out": {
+      "cores": 1,
+      "block": 48,
+      "readers": 2,
+      "prefill_block": 16
+    }
+  },
+  "down4k34": {
+    "down": {
+      "cores": 4,
+      "block": 34,
+      "readers": 2,
+      "prefill_block": 8
+    }
+  },
+  "mixreaders3": {
+    "mix": {
+      "cores": 80,
+      "block": 2,
+      "readers": 3,
+      "prefill_block": 10
+    }
+  },
+  "gateupreaders3": {
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 3,
+      "prefill_block": 10
+    }
+  },
+  "outreaders3": {
+    "out": {
+      "cores": 16,
+      "block": 3,
+      "readers": 3,
+      "prefill_block": 16
+    }
+  },
+  "downreaders3": {
+    "down": {
+      "cores": 17,
+      "block": 8,
+      "readers": 3,
+      "prefill_block": 8
+    }
+  }
+}

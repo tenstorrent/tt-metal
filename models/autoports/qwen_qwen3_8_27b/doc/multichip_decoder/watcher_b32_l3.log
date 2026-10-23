@@ -1,0 +1,53 @@
+2026-10-23 20:06:33.989 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+2026-10-23 20:06:35.455 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-23 20:06:35.456 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-23 20:06:35.456 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-23 20:06:35.456 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-23 20:06:35.467 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-23 20:06:35.467 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-23 20:06:35.545 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-23 20:06:35.545 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-23 20:06:35.545 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-23 20:06:35.545 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-23 20:06:35.547 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-23 20:06:35.731 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+--------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.1e2af8be78d0.4123.fcfa0000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  1e2af8be78d0
+  Space Requested: 16777216 B
+  Space Available: 17596416 B
+--------------------------------------------------------------------------
+2026-10-23 20:06:35.794 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 20:06:35.794 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 20:06:35.794 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-23 20:06:35.795 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 20:06:35.857 | info     |       LLRuntime | Watcher log file: /workspace/generated/watcher/watcher.log (watcher_server.cpp:313)
+2026-10-23 20:06:35.857 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:631)
+2026-10-23 20:06:35.857 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:264)
+baseline PREFILL_DONE
+baseline DECODE_DONE 16261.248150840402
+2026-10-23 20:06:42.157 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:423)
+2026-10-23 20:06:42.157 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-23 20:06:42.157 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-23 20:06:42.158 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-23 20:06:42.159 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:679)
+2026-10-23 20:06:42.231 | info     |       LLRuntime | Watcher log file: /workspace/generated/watcher/watcher.log (watcher_server.cpp:313)
+2026-10-23 20:06:42.231 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:631)
+2026-10-23 20:06:42.234 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-10-23 20:06:42.264 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:466)
+2026-10-23 20:06:42.264 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:336)
+multichip PREFILL_DONE
+multichip DECODE_DONE 22603.05010713637
+{'layer_type': 'full_attention', 'seq': 33, 'batch': 32, 'steps': 8, 'layout': 'phase_specific', 'fused': None, 'stack': False, 'split_prefill': 0, 'policy': {}, 'provenance': {'tests/run_multichip_decoder.py': '866d77e6c20b8cde8c7f1cd4b778d4bc976ad3b50e1d1f1021952876ea7fe949', 'tt/multichip_decoder.py': '4b8b89ab05452f6c9194049ed6baa155265a3d1d1288d7043f8fe25c731eca90', 'tt/optimized_decoder.py': 'ff85733835d1d972fb9bb1bdc47cdc761c1a814412d534681834b66d8f05d31a'}, 'baseline': {'page_remap_exact': False, 'ragged_positions': False, 'last_decode_host_us': 16261.248150840402, 'decode_host_us': [16273.592133074999, 16210.45102365315, 16198.057914152741, 16208.617016673088, 16212.835907936096, 16195.822972804308, 16187.577974051237, 16261.248150840402], 'median_decode_host_us': 16210.45102365315, 'prefill_host_us': 1170954.5240737498, 'prefill_host_times_us': [1170954.5240737498], 'restored_replays_bitwise': 3, 'replica_equality': False, 'runtime_fallback_audit': True, 'memory': {'before_weights': {'allocated_bytes': 0, 'capacity_bytes': 34178731008}, 'after_weights': {'allocated_bytes': 311394304, 'capacity_bytes': 34178731008}, 'after_trace': {'allocated_bytes': 544648192, 'capacity_bytes': 34178731008}}}, 'multichip': {'page_remap_exact': False, 'ragged_positions': False, 'last_decode_host_us': 22603.05010713637, 'decode_host_us': [22617.55778454244, 22628.51898558438, 22585.086058825254, 22597.13807143271, 22590.304957702756, 22592.56993420422, 22610.033862292767, 22603.05010713637], 'median_decode_host_us': 22603.05010713637, 'prefill_host_us': 328270.28492465615, 'prefill_host_times_us': [328270.28492465615], 'restored_replays_bitwise': 3, 'replica_equality': True, 'runtime_fallback_audit': True, 'memory': {'before_weights': {'allocated_bytes': 0, 'capacity_bytes': 34178731008}, 'after_weights': {'allocated_bytes': 54362112, 'capacity_bytes': 34178731008}, 'after_trace': {'allocated_bytes': 198798336, 'capacity_bytes': 34178731008}}}, 'prefill_pcc': 0.9999753407831253, 'decode_pcc': [0.9999918048936877, 0.9999885304627577, 0.9999919488452279, 0.999992769248593, 0.9999915553114824, 0.9999943921759057, 0.9999924114687004, 0.9999934944497993], 'state_pcc': {'key': 0.9999282907733629, 'value': 0.999921895404648}, 'state_shapes': {'key': [256, 4, 32, 256], 'value': [256, 4, 32, 256]}}
+2026-10-23 20:06:48.897 | info     |    BuildKernels | JIT cache stats: 485/485 hits (100.0%) [485 cached, 1237 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-23 20:06:48.897 | info     |    BuildKernels | JIT telemetry: 32 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-23 20:06:48.898 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:679)
+2026-10-23 20:06:48.913 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-23 20:06:48.913 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-23 20:06:49.076 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-23 20:06:49.076 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-23 20:06:49.076 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

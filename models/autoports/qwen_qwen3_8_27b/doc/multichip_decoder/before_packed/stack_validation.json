@@ -1,0 +1,48 @@
+[
+  {
+    "case": "stack_l0",
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layout",
+      "phase_specific",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/stack_l0.json",
+      "--layer",
+      "0",
+      "--seq",
+      "129",
+      "--steps",
+      "8",
+      "--stack"
+    ],
+    "log": "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/stack_l0.log",
+    "prefill_pcc": 0.9999554430759157,
+    "minimum_decode_pcc": 0.9999824958948627
+  },
+  {
+    "case": "stack_l3",
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layout",
+      "phase_specific",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/stack_l3.json",
+      "--layer",
+      "3",
+      "--seq",
+      "129",
+      "--steps",
+      "8",
+      "--stack"
+    ],
+    "log": "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/stack_l3.log",
+    "prefill_pcc": 0.9999053587855758,
+    "minimum_decode_pcc": 0.9999445701362902
+  }
+]

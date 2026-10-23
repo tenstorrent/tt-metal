@@ -1,0 +1,95 @@
+{
+  "layer_type": "linear_attention",
+  "seq": 33,
+  "batch": 1,
+  "steps": 8,
+  "layout": "replicated",
+  "fused": null,
+  "stack": false,
+  "policy": {
+    "mix": {
+      "cores": 40,
+      "block": 4,
+      "readers": 2
+    }
+  },
+  "provenance": {
+    "tests/run_multichip_decoder.py": "066daf8fbd4c81cea4ebf33dc568c57e154bf47aad5b0c201d5d42112f47e491",
+    "tt/multichip_decoder.py": "aad99b1ffdfa55a9ebc73c0136ac13d99b5d8bd945847dccbd9df74ad13b3d24",
+    "tt/optimized_decoder.py": "ff85733835d1d972fb9bb1bdc47cdc761c1a814412d534681834b66d8f05d31a"
+  },
+  "baseline": {
+    "page_remap_exact": false,
+    "ragged_positions": false,
+    "last_decode_host_us": 793.4910245239735,
+    "prefill_host_us": 1659.661065787077,
+    "restored_replays_bitwise": 3,
+    "replica_equality": false,
+    "runtime_fallback_audit": true,
+    "memory": {
+      "before_weights": {
+        "allocated_bytes": 0,
+        "capacity_bytes": 34178731008
+      },
+      "after_weights": {
+        "allocated_bytes": 320553472,
+        "capacity_bytes": 34178731008
+      },
+      "after_trace": {
+        "allocated_bytes": 338406912,
+        "capacity_bytes": 34178731008
+      }
+    }
+  },
+  "multichip": {
+    "page_remap_exact": false,
+    "ragged_positions": false,
+    "last_decode_host_us": 490.06915651261806,
+    "prefill_host_us": 688.0590226501226,
+    "restored_replays_bitwise": 3,
+    "replica_equality": true,
+    "runtime_fallback_audit": true,
+    "memory": {
+      "before_weights": {
+        "allocated_bytes": 0,
+        "capacity_bytes": 34178731008
+      },
+      "after_weights": {
+        "allocated_bytes": 83739136,
+        "capacity_bytes": 34178731008
+      },
+      "after_trace": {
+        "allocated_bytes": 94712320,
+        "capacity_bytes": 34178731008
+      }
+    }
+  },
+  "prefill_pcc": 0.9999550973769828,
+  "decode_pcc": [
+    0.9999971451827918,
+    0.999993096599043,
+    0.9999982052743052,
+    0.9999977966191843,
+    0.9999972662138576,
+    0.999997742299301,
+    0.9999929817026102,
+    0.9999986556607494
+  ],
+  "state_pcc": {
+    "conv": 0.9999312026656241,
+    "recurrent": 0.9999353361578119
+  },
+  "state_shapes": {
+    "conv": [
+      1,
+      3,
+      10240
+    ],
+    "recurrent": [
+      1,
+      48,
+      128,
+      128
+    ]
+  }
+}

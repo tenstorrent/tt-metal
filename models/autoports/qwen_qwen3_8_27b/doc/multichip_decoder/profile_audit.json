@@ -1,0 +1,222 @@
+{
+  "linear_attention": {
+    "prefill": {
+      "category_mean_sum_kernel_us": {
+        "movement": 913.5710000000008,
+        "other": 2026.3262499999992,
+        "CCL": 2706.5379999999996,
+        "projection": 2431.462500000001
+      },
+      "top_operations_mean_sum_kernel_us": [
+        [
+          "MatmulDeviceOperation",
+          2431.462500000001
+        ],
+        [
+          "AllGatherAsyncDeviceOperation",
+          1367.8742500000003
+        ],
+        [
+          "ReduceScatterMinimalAsyncDeviceOperation",
+          1338.6637500000002
+        ],
+        [
+          "SliceDeviceOperation",
+          714.5895000000004
+        ],
+        [
+          "BinaryNgDeviceOperation",
+          574.4069999999999
+        ],
+        [
+          "ChunkGdnDeviceOperation",
+          502.43275000000006
+        ],
+        [
+          "LayerNormPostAllGatherDeviceOperation",
+          340.8225
+        ],
+        [
+          "QkvCausalConv1dSiluOperation",
+          241.49524999999997
+        ],
+        [
+          "SigmoidGatedRmsNormOperation",
+          172.90375000000003
+        ],
+        [
+          "LayerNormPreAllGatherDeviceOperation",
+          163.46050000000002
+        ]
+      ],
+      "projection_rows": 64,
+      "projection_policy": "BFP4/LoFi",
+      "whole_layer_device_us": 8326.15111111111,
+      "evidence": "tracy/final_profile_l0/prefill_ops.csv"
+    },
+    "decode": {
+      "category_mean_sum_kernel_us": {
+        "movement": 96.82150000000004,
+        "other": 114.17025000000002,
+        "projection": 175.75600000000003,
+        "CCL": 64.60249999999999
+      },
+      "top_operations_mean_sum_kernel_us": [
+        [
+          "MatmulDeviceOperation",
+          175.75600000000003
+        ],
+        [
+          "ReduceScatterMinimalAsyncDeviceOperation",
+          35.802249999999994
+        ],
+        [
+          "GenericOpDeviceOperation",
+          34.7185
+        ],
+        [
+          "LayerNormDeviceOperation",
+          30.9175
+        ],
+        [
+          "ReshapeViewDeviceOperation",
+          29.88775
+        ],
+        [
+          "AllGatherAsyncDeviceOperation",
+          28.800250000000002
+        ],
+        [
+          "BinaryNgDeviceOperation",
+          26.6065
+        ],
+        [
+          "SliceDeviceOperation",
+          16.232
+        ],
+        [
+          "QkvCausalConv1dSiluOperation",
+          12.0535
+        ],
+        [
+          "TransposeDeviceOperation",
+          11.53025
+        ]
+      ],
+      "projection_rows": 16,
+      "projection_policy": "BFP4/LoFi",
+      "whole_layer_device_us": 508.85333333333335,
+      "evidence": "tracy/final_profile_l0/decode_ops.csv"
+    }
+  },
+  "full_attention": {
+    "prefill": {
+      "category_mean_sum_kernel_us": {
+        "movement": 990.1352500000008,
+        "other": 4009.3655000000012,
+        "CCL": 2707.497999999999,
+        "projection": 2719.2462499999992
+      },
+      "top_operations_mean_sum_kernel_us": [
+        [
+          "MatmulDeviceOperation",
+          2719.2462499999992
+        ],
+        [
+          "SDPAOperation",
+          2566.6544999999996
+        ],
+        [
+          "ReduceScatterMinimalAsyncDeviceOperation",
+          1388.8715
+        ],
+        [
+          "AllGatherAsyncDeviceOperation",
+          1318.6264999999996
+        ],
+        [
+          "SliceDeviceOperation",
+          761.8412500000003
+        ],
+        [
+          "BinaryNgDeviceOperation",
+          623.84975
+        ],
+        [
+          "LayerNormPostAllGatherDeviceOperation",
+          334.31575
+        ],
+        [
+          "LayerNormPreAllGatherDeviceOperation",
+          163.94675
+        ],
+        [
+          "ConcatDeviceOperation",
+          136.54975
+        ],
+        [
+          "LayerNormDeviceOperation",
+          113.21149999999999
+        ]
+      ],
+      "projection_rows": 64,
+      "projection_policy": "BFP4/LoFi",
+      "whole_layer_device_us": 10628.844444444445,
+      "evidence": "tracy/final_profile_l3/prefill_ops.csv"
+    },
+    "decode": {
+      "category_mean_sum_kernel_us": {
+        "movement": 38.86250000000001,
+        "other": 106.3965,
+        "projection": 172.41649999999998,
+        "CCL": 64.93424999999999
+      },
+      "top_operations_mean_sum_kernel_us": [
+        [
+          "MatmulDeviceOperation",
+          172.41649999999998
+        ],
+        [
+          "ReduceScatterMinimalAsyncDeviceOperation",
+          34.296499999999995
+        ],
+        [
+          "SdpaDecodeDeviceOperation",
+          33.9745
+        ],
+        [
+          "AllGatherAsyncDeviceOperation",
+          30.63775
+        ],
+        [
+          "LayerNormDeviceOperation",
+          28.740000000000002
+        ],
+        [
+          "BinaryNgDeviceOperation",
+          17.19375
+        ],
+        [
+          "SliceDeviceOperation",
+          15.105999999999998
+        ],
+        [
+          "PermuteDeviceOperation",
+          9.7265
+        ],
+        [
+          "InterleavedToShardedDeviceOperation",
+          9.680250000000001
+        ],
+        [
+          "ShardedToInterleavedDeviceOperation",
+          8.841750000000001
+        ]
+      ],
+      "projection_rows": 16,
+      "projection_policy": "BFP4/LoFi",
+      "whole_layer_device_us": 424.10370370370373,
+      "evidence": "tracy/final_profile_l3/decode_ops.csv"
+    }
+  }
+}

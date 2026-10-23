@@ -1,0 +1,642 @@
+[
+  {
+    "layer": 0,
+    "candidate": "control_extra",
+    "policy": {},
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "33",
+      "--steps",
+      "8",
+      "--policy",
+      "{}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_control_extra_l0.json"
+    ],
+    "host_us": 518.4330511838198,
+    "minimum_pcc": 0.9999550973769828
+  },
+  {
+    "layer": 0,
+    "candidate": "mix32k5",
+    "policy": {
+      "mix": {
+        "cores": 32,
+        "block": 5,
+        "readers": 2
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "33",
+      "--steps",
+      "8",
+      "--policy",
+      "{\"mix\": {\"cores\": 32, \"block\": 5, \"readers\": 2}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_mix32k5_l0.json"
+    ],
+    "host_us": 493.63612197339535,
+    "minimum_pcc": 0.9999550973769828
+  },
+  {
+    "layer": 0,
+    "candidate": "mix20k8",
+    "policy": {
+      "mix": {
+        "cores": 20,
+        "block": 8,
+        "readers": 2
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "33",
+      "--steps",
+      "8",
+      "--policy",
+      "{\"mix\": {\"cores\": 20, \"block\": 8, \"readers\": 2}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_mix20k8_l0.json"
+    ],
+    "host_us": 499.8878575861454,
+    "minimum_pcc": 0.9999550973769828
+  },
+  {
+    "layer": 0,
+    "candidate": "mix8k20",
+    "policy": {
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 2
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "33",
+      "--steps",
+      "8",
+      "--policy",
+      "{\"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 2}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_mix8k20_l0.json"
+    ],
+    "host_us": 492.363004013896,
+    "minimum_pcc": 0.9999550973769828
+  },
+  {
+    "layer": 0,
+    "candidate": "out4k12",
+    "policy": {
+      "out": {
+        "cores": 4,
+        "block": 12,
+        "readers": 2,
+        "prefill_block": 16
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "33",
+      "--steps",
+      "8",
+      "--policy",
+      "{\"out\": {\"cores\": 4, \"block\": 12, \"readers\": 2, \"prefill_block\": 16}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_out4k12_l0.json"
+    ],
+    "host_us": 514.4160240888596,
+    "minimum_pcc": 0.9999550973769828
+  },
+  {
+    "layer": 0,
+    "candidate": "out1k48",
+    "policy": {
+      "out": {
+        "cores": 1,
+        "block": 48,
+        "readers": 2,
+        "prefill_block": 16
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "33",
+      "--steps",
+      "8",
+      "--policy",
+      "{\"out\": {\"cores\": 1, \"block\": 48, \"readers\": 2, \"prefill_block\": 16}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_out1k48_l0.json"
+    ],
+    "host_us": 523.3630072325468,
+    "minimum_pcc": 0.9999550973769828
+  },
+  {
+    "layer": 0,
+    "candidate": "down4k34",
+    "policy": {
+      "down": {
+        "cores": 4,
+        "block": 34,
+        "readers": 2,
+        "prefill_block": 8
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "33",
+      "--steps",
+      "8",
+      "--policy",
+      "{\"down\": {\"cores\": 4, \"block\": 34, \"readers\": 2, \"prefill_block\": 8}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_down4k34_l0.json"
+    ],
+    "host_us": 523.6540455371141,
+    "minimum_pcc": 0.9999550973769828
+  },
+  {
+    "layer": 0,
+    "candidate": "mixreaders3",
+    "policy": {
+      "mix": {
+        "cores": 80,
+        "block": 2,
+        "readers": 3,
+        "prefill_block": 10
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "33",
+      "--steps",
+      "8",
+      "--policy",
+      "{\"mix\": {\"cores\": 80, \"block\": 2, \"readers\": 3, \"prefill_block\": 10}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_mixreaders3_l0.json"
+    ],
+    "host_us": 1029.4229723513126,
+    "minimum_pcc": 0.9999550973769828
+  },
+  {
+    "layer": 0,
+    "candidate": "gateupreaders3",
+    "policy": {
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 3,
+        "prefill_block": 10
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "33",
+      "--steps",
+      "8",
+      "--policy",
+      "{\"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 3, \"prefill_block\": 10}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_gateupreaders3_l0.json"
+    ],
+    "host_us": 528.0119366943836,
+    "minimum_pcc": 0.9999550973769828
+  },
+  {
+    "layer": 0,
+    "candidate": "outreaders3",
+    "policy": {
+      "out": {
+        "cores": 16,
+        "block": 3,
+        "readers": 3,
+        "prefill_block": 16
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "33",
+      "--steps",
+      "8",
+      "--policy",
+      "{\"out\": {\"cores\": 16, \"block\": 3, \"readers\": 3, \"prefill_block\": 16}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_outreaders3_l0.json"
+    ],
+    "host_us": 518.4139590710402,
+    "minimum_pcc": 0.9999550973769828
+  },
+  {
+    "layer": 0,
+    "candidate": "downreaders3",
+    "policy": {
+      "down": {
+        "cores": 17,
+        "block": 8,
+        "readers": 3,
+        "prefill_block": 8
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--seq",
+      "33",
+      "--steps",
+      "8",
+      "--policy",
+      "{\"down\": {\"cores\": 17, \"block\": 8, \"readers\": 3, \"prefill_block\": 8}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_downreaders3_l0.json"
+    ],
+    "host_us": 517.3219833523035,
+    "minimum_pcc": 0.9999550973769828
+  },
+  {
+    "layer": 3,
+    "candidate": "control_extra",
+    "policy": {},
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--seq",
+      "33",
+      "--steps",
+      "8",
+      "--policy",
+      "{}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_control_extra_l3.json"
+    ],
+    "host_us": 423.7520042806864,
+    "minimum_pcc": 0.9999780845938631
+  },
+  {
+    "layer": 3,
+    "candidate": "mix32k5",
+    "policy": {
+      "mix": {
+        "cores": 32,
+        "block": 5,
+        "readers": 2
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--seq",
+      "33",
+      "--steps",
+      "8",
+      "--policy",
+      "{\"mix\": {\"cores\": 32, \"block\": 5, \"readers\": 2}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_mix32k5_l3.json"
+    ],
+    "host_us": 398.1529735028744,
+    "minimum_pcc": 0.9999780845938631
+  },
+  {
+    "layer": 3,
+    "candidate": "mix20k8",
+    "policy": {
+      "mix": {
+        "cores": 20,
+        "block": 8,
+        "readers": 2
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--seq",
+      "33",
+      "--steps",
+      "8",
+      "--policy",
+      "{\"mix\": {\"cores\": 20, \"block\": 8, \"readers\": 2}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_mix20k8_l3.json"
+    ],
+    "host_us": 408.90416130423546,
+    "minimum_pcc": 0.9999780845938631
+  },
+  {
+    "layer": 3,
+    "candidate": "mix8k20",
+    "policy": {
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 2
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--seq",
+      "33",
+      "--steps",
+      "8",
+      "--policy",
+      "{\"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 2}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_mix8k20_l3.json"
+    ],
+    "host_us": 398.14296178519726,
+    "minimum_pcc": 0.9999780845938631
+  },
+  {
+    "layer": 3,
+    "candidate": "out4k12",
+    "policy": {
+      "out": {
+        "cores": 4,
+        "block": 12,
+        "readers": 2,
+        "prefill_block": 16
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--seq",
+      "33",
+      "--steps",
+      "8",
+      "--policy",
+      "{\"out\": {\"cores\": 4, \"block\": 12, \"readers\": 2, \"prefill_block\": 16}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_out4k12_l3.json"
+    ],
+    "host_us": 426.78811587393284,
+    "minimum_pcc": 0.9999780845938631
+  },
+  {
+    "layer": 3,
+    "candidate": "out1k48",
+    "policy": {
+      "out": {
+        "cores": 1,
+        "block": 48,
+        "readers": 2,
+        "prefill_block": 16
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--seq",
+      "33",
+      "--steps",
+      "8",
+      "--policy",
+      "{\"out\": {\"cores\": 1, \"block\": 48, \"readers\": 2, \"prefill_block\": 16}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_out1k48_l3.json"
+    ],
+    "host_us": 432.1979358792305,
+    "minimum_pcc": 0.9999780845938631
+  },
+  {
+    "layer": 3,
+    "candidate": "down4k34",
+    "policy": {
+      "down": {
+        "cores": 4,
+        "block": 34,
+        "readers": 2,
+        "prefill_block": 8
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--seq",
+      "33",
+      "--steps",
+      "8",
+      "--policy",
+      "{\"down\": {\"cores\": 4, \"block\": 34, \"readers\": 2, \"prefill_block\": 8}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_down4k34_l3.json"
+    ],
+    "host_us": 426.13688856363297,
+    "minimum_pcc": 0.9999780845938631
+  },
+  {
+    "layer": 3,
+    "candidate": "mixreaders3",
+    "policy": {
+      "mix": {
+        "cores": 80,
+        "block": 2,
+        "readers": 3,
+        "prefill_block": 10
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--seq",
+      "33",
+      "--steps",
+      "8",
+      "--policy",
+      "{\"mix\": {\"cores\": 80, \"block\": 2, \"readers\": 3, \"prefill_block\": 10}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_mixreaders3_l3.json"
+    ],
+    "host_us": 432.16790072619915,
+    "minimum_pcc": 0.9999780845938631
+  },
+  {
+    "layer": 3,
+    "candidate": "gateupreaders3",
+    "policy": {
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 3,
+        "prefill_block": 10
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--seq",
+      "33",
+      "--steps",
+      "8",
+      "--policy",
+      "{\"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 3, \"prefill_block\": 10}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_gateupreaders3_l3.json"
+    ],
+    "host_us": 432.8398499637842,
+    "minimum_pcc": 0.9999780845938631
+  },
+  {
+    "layer": 3,
+    "candidate": "outreaders3",
+    "policy": {
+      "out": {
+        "cores": 16,
+        "block": 3,
+        "readers": 3,
+        "prefill_block": 16
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--seq",
+      "33",
+      "--steps",
+      "8",
+      "--policy",
+      "{\"out\": {\"cores\": 16, \"block\": 3, \"readers\": 3, \"prefill_block\": 16}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_outreaders3_l3.json"
+    ],
+    "host_us": 431.43704533576965,
+    "minimum_pcc": 0.9999780845938631
+  },
+  {
+    "layer": 3,
+    "candidate": "downreaders3",
+    "policy": {
+      "down": {
+        "cores": 17,
+        "block": 8,
+        "readers": 3,
+        "prefill_block": 8
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--seq",
+      "33",
+      "--steps",
+      "8",
+      "--policy",
+      "{\"down\": {\"cores\": 17, \"block\": 8, \"readers\": 3, \"prefill_block\": 8}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/multichip_decoder/geometry_downreaders3_l3.json"
+    ],
+    "host_us": 427.4190869182348,
+    "minimum_pcc": 0.9999780845938631
+  }
+]

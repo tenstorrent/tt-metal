@@ -1,0 +1,26 @@
+{
+  "layer_type": "linear_attention",
+  "seq": 33,
+  "batch": 1,
+  "steps": 2,
+  "layout": "sharded",
+  "baseline": {
+    "last_decode_host_us": 801.3760671019554,
+    "prefill_host_us": 1653.1490255147219,
+    "restored_replays_bitwise": 3,
+    "replica_equality": false,
+    "runtime_fallback_audit": true
+  },
+  "multichip": {
+    "last_decode_host_us": 629.9579981714487,
+    "prefill_host_us": 763.3729837834835,
+    "restored_replays_bitwise": 3,
+    "replica_equality": false,
+    "runtime_fallback_audit": true
+  },
+  "prefill_pcc": 0.9999581458917496,
+  "decode_pcc": [
+    0.9999973209579117,
+    0.9999933684281671
+  ]
+}

@@ -1,0 +1,23 @@
+# Raw captures are preserved locally; compact tables, CSVs and provenance are committed.
+tracy/*/.logs/
+tracy/*/reports/
+*.tracy
+# Isolated-agent transcript is local, with compact diagnosis retained.
+autodebug_launcher_retry.log
+
+# Full-run op rows remain local; measured-window CSVs are committed.
+tracy/*/ops.csv*
+# Override repository-wide CSV ignore for compact review artifacts.
+!tracy/*/*_perf_report.csv
+!tracy/*/prefill_ops.csv
+!tracy/*/decode_ops.csv
+# Compact validation/provenance and watcher logs are part of the checkpoint.
+!*validation*.log
+!watcher*.log
+!final_profile*.log
+!*_first_failure.log
+!reset_after_stack.log
+!health_after_stack.log
+!tracy/*/*console.log
+!reset_*.log
+!health_*.log

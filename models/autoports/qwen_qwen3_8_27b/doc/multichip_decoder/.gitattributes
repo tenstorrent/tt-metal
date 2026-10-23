@@ -1,0 +1,4 @@
+# Preserve generated evidence verbatim, including CSV CRLF and table padding.
+*.csv -whitespace
+*.log -whitespace
+*.txt -whitespace

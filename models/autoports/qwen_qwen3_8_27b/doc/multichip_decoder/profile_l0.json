@@ -1,0 +1,37 @@
+{
+  "layer_type": "linear_attention",
+  "seq": 4096,
+  "batch": 1,
+  "steps": 128,
+  "layout": "replicated",
+  "fused": null,
+  "stack": false,
+  "provenance": {
+    "tests/run_multichip_decoder.py": "71bd4757cdc6df7786e88da06ca0b670929c5886824aa6da8be9ecc8fd7326b6",
+    "tt/multichip_decoder.py": "aad99b1ffdfa55a9ebc73c0136ac13d99b5d8bd945847dccbd9df74ad13b3d24",
+    "tt/optimized_decoder.py": "ff85733835d1d972fb9bb1bdc47cdc761c1a814412d534681834b66d8f05d31a"
+  },
+  "multichip": {
+    "page_remap_exact": false,
+    "ragged_positions": false,
+    "last_decode_host_us": 546.9981115311384,
+    "prefill_host_us": 9408.175013959408,
+    "restored_replays_bitwise": 3,
+    "replica_equality": true,
+    "runtime_fallback_audit": false,
+    "memory": {
+      "before_weights": {
+        "allocated_bytes": 0,
+        "capacity_bytes": 30377131008
+      },
+      "after_weights": {
+        "allocated_bytes": 83739136,
+        "capacity_bytes": 30377131008
+      },
+      "after_trace": {
+        "allocated_bytes": 263483904,
+        "capacity_bytes": 30377131008
+      }
+    }
+  }
+}

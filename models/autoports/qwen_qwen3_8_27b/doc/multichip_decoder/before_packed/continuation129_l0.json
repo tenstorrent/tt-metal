@@ -1,0 +1,112 @@
+{
+  "layer_type": "linear_attention",
+  "seq": 129,
+  "batch": 1,
+  "steps": 8,
+  "layout": "phase_specific",
+  "fused": null,
+  "stack": false,
+  "split_prefill": 128,
+  "policy": {},
+  "provenance": {
+    "tests/run_multichip_decoder.py": "7f7387f49cb16361219c969fadc42dea8db9e12badcab5291e3234a95e9190ff",
+    "tt/multichip_decoder.py": "ba29d2dcacbc40a05aab1757c8658abc7b818f48ec98363853b522fadcd9f1af",
+    "tt/optimized_decoder.py": "ff85733835d1d972fb9bb1bdc47cdc761c1a814412d534681834b66d8f05d31a"
+  },
+  "baseline": {
+    "page_remap_exact": false,
+    "ragged_positions": false,
+    "last_decode_host_us": 795.4100146889687,
+    "decode_host_us": [
+      805.6601509451866,
+      796.1208466440439,
+      796.251930296421,
+      793.8069757074118,
+      790.9410633146763,
+      795.7410998642445,
+      793.5469038784504,
+      795.4100146889687
+    ],
+    "median_decode_host_us": 795.7410998642445,
+    "prefill_host_us": 2519.384026527405,
+    "restored_replays_bitwise": 3,
+    "replica_equality": false,
+    "runtime_fallback_audit": true,
+    "memory": {
+      "before_weights": {
+        "allocated_bytes": 0,
+        "capacity_bytes": 34178731008
+      },
+      "after_weights": {
+        "allocated_bytes": 320553472,
+        "capacity_bytes": 34178731008
+      },
+      "after_trace": {
+        "allocated_bytes": 343174656,
+        "capacity_bytes": 34178731008
+      }
+    }
+  },
+  "multichip": {
+    "page_remap_exact": false,
+    "ragged_positions": false,
+    "last_decode_host_us": 490.36694690585136,
+    "decode_host_us": [
+      516.6172049939632,
+      492.6808178424835,
+      488.18299546837807,
+      488.60302194952965,
+      487.7320025116205,
+      498.12206998467445,
+      493.6228506267071,
+      490.36694690585136
+    ],
+    "median_decode_host_us": 492.6808178424835,
+    "prefill_host_us": 1450.1619152724743,
+    "restored_replays_bitwise": 3,
+    "replica_equality": true,
+    "runtime_fallback_audit": true,
+    "memory": {
+      "before_weights": {
+        "allocated_bytes": 0,
+        "capacity_bytes": 34178731008
+      },
+      "after_weights": {
+        "allocated_bytes": 83739136,
+        "capacity_bytes": 34178731008
+      },
+      "after_trace": {
+        "allocated_bytes": 94548480,
+        "capacity_bytes": 34178731008
+      }
+    }
+  },
+  "prefill_pcc": 0.9999614433968731,
+  "decode_pcc": [
+    0.9999961421240894,
+    0.9999958284183333,
+    0.9999975736348573,
+    0.9999967327470162,
+    0.9999976762120761,
+    0.9999692103097968,
+    0.999999097367037,
+    0.9999961772117603
+  ],
+  "state_pcc": {
+    "conv": 0.9999282724872189,
+    "recurrent": 0.9999181563553851
+  },
+  "state_shapes": {
+    "conv": [
+      1,
+      3,
+      10240
+    ],
+    "recurrent": [
+      1,
+      48,
+      128,
+      128
+    ]
+  }
+}
