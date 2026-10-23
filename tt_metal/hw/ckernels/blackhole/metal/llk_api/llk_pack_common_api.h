@@ -119,13 +119,14 @@ inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_();
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @tparam math_clears_dest    Release without clearing; the math thread clears the section when it acquires it.
+ * @tparam words               Release word form (LLK_PACK_SECTION_WORDS in llk_pack_common.h); 0 is the full sequence.
  */
-template <bool is_fp32_dest_acc_en, bool math_clears_dest = false>
+template <bool is_fp32_dest_acc_en, bool math_clears_dest = false, std::uint32_t words = LLK_PACK_SECTION_WORDS>
 inline void llk_pack_dest_section_done() {
     static_assert(
         !math_clears_dest || !llk_unpack_may_write_dest(),
         "math_clears_dest needs the math thread as DEST's only writer: no 32-bit unpack source in the kernel");
-    _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en, !math_clears_dest>();
+    _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en, !math_clears_dest, words>();
 }
 
 /**
