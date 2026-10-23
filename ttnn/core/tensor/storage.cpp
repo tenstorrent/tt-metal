@@ -140,12 +140,14 @@ DeviceStorage::DeviceStorage(
     const DeviceStorage& other, std::vector<tt::tt_metal::distributed::MeshCoordinate> coords) :
     DeviceStorage(other.mesh_tensor_holder_, std::move(coords), other.root_mesh_tensor_holder_) {}
 
-DeviceStorage::DeviceStorage(
-    const DeviceStorage& other,
-    std::vector<tt::tt_metal::distributed::MeshCoordinate> coords,
-    TensorTopology tensor_topology) :
-    DeviceStorage(other, std::move(coords)) {
-    tensor_topology_ = std::move(tensor_topology);
+DeviceStorage DeviceStorage::single_shard(
+    const DeviceStorage& other, const tt::tt_metal::distributed::MeshCoordinate& coord) {
+    DeviceStorage shard(other, std::vector<tt::tt_metal::distributed::MeshCoordinate>{coord});
+    shard.tensor_topology_ = TensorTopology(
+        tt::tt_metal::distributed::MeshShape(1),
+        {tt::tt_metal::distributed::MeshMapperConfig::Replicate{}},
+        std::vector<tt::tt_metal::distributed::MeshCoordinate>{coord});
+    return shard;
 }
 
 DeviceStorage::DeviceStorage(const DeviceStorage& owning_storage, MeshTensor reinterpreted_mesh_tensor) :
