@@ -20,6 +20,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSe
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
+from models.demos.deepseek_v3_d_p.tests.chunk_params import with_sp4_depth
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     torus_x_device_params,
@@ -39,19 +40,21 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 @pytest.mark.parametrize(
     "batch_seq_len, emb_dim, hidden_dim, activation",
-    [
-        (PREFILL_CHUNK_TOKENS_PER_CHIP, EMB_DIM, HIDDEN_DIM, ACTIVATION_SILU),
-        # Kimi-K3's layer-0 dense FFN: 33792 wide, on the checkpoint's SiTU-GLU (#53625). Both the
-        # width and the activation are new here — 33792 is 1.8x DSv3's 18432, and it is far past
-        # ttnn.situ_glu's 3072 L1 cutoff, so every intermediate is a full-size DRAM tensor.
-        (PREFILL_CHUNK_TOKENS_PER_CHIP, EMB_DIM, KimiK3Config.INTERMEDIATE_SIZE, ACTIVATION_SITU),
-        # TtFfn's clamped branch at the DeepSeek default width. No shipped config selects it --
-        # V4, the only clamped model, is MoE on every layer -- so this is its only coverage.
-        (PREFILL_CHUNK_TOKENS_PER_CHIP, EMB_DIM, HIDDEN_DIM, ACTIVATION_CLAMPED_SILU_GLU),
-        # GLM-5.3's dense layers 0-2: 6144 -> 12288, SiLU-GLU.
-        (PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.INTERMEDIATE_SIZE, ACTIVATION_SILU),
-    ],
-    ids=["isl_5k", "isl_5k-k3-33792-situ", "isl_5k-v4-18432-clamped", "isl_5k-glm-12288"],
+    with_sp4_depth(
+        [
+            (PREFILL_CHUNK_TOKENS_PER_CHIP, EMB_DIM, HIDDEN_DIM, ACTIVATION_SILU),
+            # Kimi-K3's layer-0 dense FFN: 33792 wide, on the checkpoint's SiTU-GLU (#53625). Both the
+            # width and the activation are new here — 33792 is 1.8x DSv3's 18432, and it is far past
+            # ttnn.situ_glu's 3072 L1 cutoff, so every intermediate is a full-size DRAM tensor.
+            (PREFILL_CHUNK_TOKENS_PER_CHIP, EMB_DIM, KimiK3Config.INTERMEDIATE_SIZE, ACTIVATION_SITU),
+            # TtFfn's clamped branch at the DeepSeek default width. No shipped config selects it --
+            # V4, the only clamped model, is MoE on every layer -- so this is its only coverage.
+            (PREFILL_CHUNK_TOKENS_PER_CHIP, EMB_DIM, HIDDEN_DIM, ACTIVATION_CLAMPED_SILU_GLU),
+            # GLM-5.3's dense layers 0-2: 6144 -> 12288, SiLU-GLU.
+            (PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.INTERMEDIATE_SIZE, ACTIVATION_SILU),
+        ],
+        ids=["isl_5k", "isl_5k-k3-33792-situ", "isl_5k-v4-18432-clamped", "isl_5k-glm-12288"],
+    ),
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, tp_axis",
