@@ -1363,7 +1363,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "test_name_aliases": {"perf_pack_untilize_quasar": "perf_pack_untilize_quasar"},
     },
     "perf_reduce_quasar": {
-        "version": 6,
+        "version": 5,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -1380,7 +1380,6 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.sfpu_dst",
             "full_ct_dim",
             "full_rt_dim",
-            "is_reduce_to_one",
             "loop_factor",
             "marker",
             "math_fidelity",
