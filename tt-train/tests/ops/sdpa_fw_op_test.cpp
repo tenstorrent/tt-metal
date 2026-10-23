@@ -1456,9 +1456,9 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal) {
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal_GQA_ManySeqs) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // 128 sequences, GQA: enough pairs for the balanced split on any grid, even at q=128.
+    // 144 sequences, GQA: more pairs than any grid has cores, so q=128 still takes the paired split.
     run_chunk_knob_sweep(SDPATestConfig{
-        .batch_size = 8U,
+        .batch_size = 9U,
         .sequence_length = 256U,
         .query_dim = 1024U,     // 16 heads * 64
         .key_value_dim = 256U,  // 4 kv heads * 64
