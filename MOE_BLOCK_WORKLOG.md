@@ -1354,3 +1354,37 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - Parts test 1024 rows, full head (RS, router, latent, routing exchange + planner, prep), eager a call: GLM 431.4 us,
   K3 886.7 us; plan / route words / dispatch rows bit-exact vs the host model; routing picks GLM 99.66%, K3 99.76%.
   Soaks 1000 calls each, fresh inputs.
+
+### Chunked head, stage 3: block integration, router placement, protocol model
+- MoEBlock: FusedHead at planned rows - head_layouts(rows, TP) lists (GY, MT, NCH) (whole owner blocks a chunk, MT <=
+  2, fewest chunks, most core rows, the router cores' cells), HeadSE3 takes the first whose arena fits (an allocator
+  OOM counts as a non-fit). chunk 2048 picks GY 8 x MT 2 x 2 chunks, head "auto" = fused (and K3's tail). The block
+  logs the resolved head (engine cores, MT, chunks, router placement).
+- Typed MoEOptions.router: auto | engine | router_cores -> RouterSpec.on_engine. auto = router_placement: the head
+  ends at max(SE path, chain); router cores: 2 x 32 G tokens x E x H / G FLOP a core at 1.3 TFLOP/s (the Galaxy's K3
+  E 896: 316 us) + 150 us of chain; engine: ~3 x its FLOPs on the SE path, the chain from there. K3 E 448 at 640 ->
+  router cores (389 vs 423 us est.), K3 E 896 at 640 -> engine (440 vs 466), GLM -> engine, K3 at 1024 -> router
+  cores (the SE path binds). auto takes the engine only at the preferred layout, else the router cores.
+- K3 router on the engine now builds: the logits rounds past two reuse their two buffers behind receiver acks (+1 on
+  the row's x lead / the column's W lead once the compute popped the round), K chunk the largest whose region fits
+  past the RS zones (K3 E 896: 7 tiles, 8 rounds); DEST row groups (ETC x a group's rows <= 8). Not at 1024 rows
+  on the engine: the ports' logits sub-blocks for 4 router cores a link (1.34 MB) - the engine writes them itself.
+- Router cores at E 896 and 1024 rows: the ports' logits sub-blocks a window (NS slots a unit; core i's slot i % NS,
+  the port +1s core i + NS's word once i's left) - the words per (direction, unit): one per unit only (the first try)
+  let a bwd unit's credit satisfy a fwd one - a hang, fixed.
+- LoudBox parts (no routing exchange, eager): K3 E 896 head 552.9 us at 640 (router cores) / 570.3 (engine); 1024:
+  958 (router cores); E 448: 494.6 / 860.4. Soak 300 at E 896 1024. Mock Galaxy (8 x 4 torus): GLM 5120 / 8192
+  auto (engine), K3 (896) 5120 auto (engine) / engine / router cores, 8192 auto (8 router cores) - 6 pass.
+- Traced device time (timing="device", LoudBox 2x4, programs of a replay, slowest chip, median):
+  K3 2048 fully fused: head 915 | dispatch 204 | experts 2298 | tail 218 = 3546-3550 us device, 3563 b2b (ops head +
+  fused tail was 4412 / 4219). GLM 2048: head 408 | dispatch 200 | experts 1244 | 11.5 | 20.5 | tail 55.6 = 1904,
+  1928 b2b (ops 2286). At 1280: K3 2974 / 2996, GLM 1672 / 1695 (unchanged).
+- Protocol model (test_rs_protocol_model._run_chunks): NCH 2 / 3, line + ring, G 2 / 4 / 8, the zone and FINB
+  credits, values tagged with their chunk. It found a real race: every core with an arrivals list signalled zone-free,
+  but a core with only "nothing comes" slots runs ahead (its compute does not wait) - two of its signals counted for
+  a slower core's one, a credit early, a zone slot overwritten before read (ring of 4, rows scattered, NCH 3). Now only
+  a core something lands on signals (kernel: nfmax / nbmax; ports: zneed / zexp count those) - with that, a credit m
+  needs every receiver's m signals (each is bounded by the credits so far). Negative tests: no zone credit, no FINB
+  credit - caught. 1000 + 1000 soak calls after the fix.
+- Open: the K3 NOC1 wedge with the prep op in every chunk (worklog above) - root cause not pinned; a traffic-only
+  probe later.

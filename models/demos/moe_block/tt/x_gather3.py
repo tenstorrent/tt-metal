@@ -840,11 +840,13 @@ class XGather3:
         # (chunks: zone credits - my chip's cores taking arrivals from the peer this port faces (opposite direction)
         # signal here a chunk; the peer's port facing me (direction opposite) sends me its cores' signals)
         opp = "bwd" if d == "fwd" else "fwd"
-        zneed = sum(1 for cx, cy in plan.port_cores(v) if plan.arrivals(p, cx, cy)[opp]) if e.NCH > 1 else 0
+        # (the cores something lands on - a core with only "nothing comes" slots does not signal)
+        lands = lambda q_, cx, cy, d_: any(t for _, _, t in plan.arrivals(q_, cx, cy)[d_])  # noqa: E731
+        zneed = sum(1 for cx, cy in plan.port_cores(v) if lands(p, cx, cy, opp)) if e.NCH > 1 else 0
         zexp = 0
         q = plan.down(p, d)
         if e.NCH > 1 and q is not None:
-            zexp = e.NCH - 1 if any(plan.arrivals(q, cx, cy)[d] for cx, cy in plan.port_cores(v)) else 0
+            zexp = e.NCH - 1 if any(lands(q, cx, cy, d) for cx, cy in plan.port_cores(v)) else 0
         return (
             out
             + plan.entries(p)

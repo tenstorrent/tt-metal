@@ -205,3 +205,238 @@ def test_rs_model_catches_bad_threshold():
 def test_logits_protocol(ring, seed):
     """The router logits' reduce-scatter (5 router cores, one owner row tile each, fp32) on the same protocol."""
     _run(LogitsPlan(G=4, ring=ring, RB=5, ET=14, nv=2), seed)
+
+
+# ---- row chunks (NCH > 1): the chunk loop around the same protocol (se_engine3 / x_gather3) ----
+def _run_chunks(plan, seed, nch, zone_credit=True, finb_credit=True):
+    """The chunked RS: every chunk the same programs; counters count up (thresholds m x a chunk's count + the chunk's);
+    a core's arrival zones reused behind zone credits (its NCRISC, at chunk m + 1's first slot, once the compute read
+    chunk m - +1 on the port facing that upstream; the port forwards one credit a chunk to the upstream's port, which
+    sends chunk m once it has m), its FINB behind the ports' read credits (a port +1s each core it read, after a chunk;
+    the compute starts chunk m's RS at m x its readers). Values carry their chunk: a stale or overwritten one fails."""
+    rnd = random.Random(seed)
+    G, GX, GY = plan.G, plan.GX, plan.GY
+    cores = [(cx, cy) for cy in range(GY) for cx in range(GX)]
+    opp = {"fwd": "bwd", "bwd": "fwd"}
+    prog = {(p, c): plan.ops(p, *c) for p in range(G) for c in cores}
+    arr = {(p, c): plan.arrivals(p, *c) for p in range(G) for c in cores}
+    amax = {(p, c, d): max([t for _, _, t in arr[(p, c)][d]] or [0]) for p in range(G) for c in cores for d in DIRS}
+    readers = {(p, c): len(plan.finb_readers(p, *c)) for p in range(G) for c in cores}
+    finb = {}  # (p, c, e) -> (chunk, set): the exchanged sub-block (start / relay)
+    zone = {}  # (p, c, d, slot) -> [chunk, set, read]
+    ctr = {(p, c, d): 0 for p in range(G) for c in cores for d in DIRS}
+    fin = {}
+    mbox = {(p, d, l, c): 0 for p in range(G) for d in DIRS for l in range(plan.nv) for c in cores}
+    ch = {k: 0 for k in prog}  # (the compute's chunk)
+    pc = {k: 0 for k in prog}
+    hand_q = {k: [] for k in prog}
+    cred = {(p, c, d): 0 for p in range(G) for c in cores for d in DIRS}  # (NCRISC: slots pushed, all chunks)
+    zsig = {(p, c, d): 0 for p in range(G) for c in cores for d in DIRS}
+    ffree = {k: 0 for k in prog}
+    zfree = {(p, d, l): 0 for p in range(G) for d in DIRS for l in range(plan.nv)}
+    zcred = {(p, d, l): 0 for p in range(G) for d in DIRS for l in range(plan.nv)}
+    zfw = {(p, d, l): 0 for p in range(G) for d in DIRS for l in range(plan.nv)}
+    zneed = {
+        (p, d, l): sum(1 for c in plan.port_cores(l) if amax[(p, c, opp[d])])
+        for p in range(G)
+        for d in DIRS
+        for l in range(plan.nv)
+    }
+    ports = {}
+    for p in range(G):
+        for d in DIRS:
+            units = plan.port_units(p, d) if plan.down(p, d) is not None else []
+            for l in range(plan.nv):
+                ports[(p, d, l)] = dict(units=units, m=0, u=0, i=0, seen={c: 0 for c in cores}, read=set())
+
+    def compute_step(p, c):
+        k_ = (p, c)
+        m = ch[k_]
+        if m >= nch:
+            return False
+        ops = prog[k_]
+        if pc[k_] == 0 and m > 0 and finb_credit and ffree[k_] < m * readers[k_]:
+            return False  # (the ports still read the last chunk's FINB)
+        if pc[k_] >= len(ops):  # (chunk end: the zones popped)
+            ch[k_] += 1
+            pc[k_] = 0
+            return True
+        kind, i = ops[pc[k_]]
+        h = plan.half(plan.k(*c))
+        ents = plan.entries(p, h)
+        if kind == "pass":
+            for e, b in enumerate(ents):
+                d, start = plan.role(p, b, h)
+                if d != "fin" and start:
+                    finb[(p, c, e)] = (m, frozenset([p]))
+            pc[k_] += 1
+            return True
+        e = i
+        b = ents[e]
+        d, start = plan.role(p, b, h)
+        if kind == "hand":
+            hand_q[k_].append((m, e))
+            pc[k_] += 1
+            return True
+        need = [(dd, slot) for dd in DIRS for (ee, slot, _) in arr[k_][dd] if ee == e]
+        for dd, slot in need:
+            idx = [s_ for (_, s_, _) in arr[k_][dd]].index(slot)
+            if cred[(p, c, dd)] <= m * len(arr[k_][dd]) + idx:
+                return False
+        s = frozenset([p])
+        for dd, slot in need:
+            z = zone[(p, c, dd, slot)]
+            assert z[0] == m, ("a zone slot of another chunk", p, c, dd, slot, z[0], m)
+            assert not (s & z[1]), ("double count", p, c, e)
+            s = s | z[1]
+            z[2] = True
+        if d == "fin":
+            assert (m, p, c) not in fin
+            fin[(m, p, c)] = s
+        else:
+            finb[(p, c, e)] = (m, s)
+            hand_q[k_].append((m, e))
+        pc[k_] += 1
+        return True
+
+    def brisc_step(p, c):
+        if not hand_q[(p, c)]:
+            return False
+        m, e = hand_q[(p, c)].pop(0)
+        k = plan.k(*c)
+        b = plan.entries(p, plan.half(k))[e]
+        d, _ = plan.role(p, b, plan.half(k))
+        mbox[(p, d, plan.link(k), c)] += 1
+        return True
+
+    def ncrisc_step(p, c):
+        moved = False
+        for d in DIRS:
+            lst = arr[(p, c)][d]
+            n = cred[(p, c, d)]
+            if not lst or n >= nch * len(lst):
+                continue
+            mc, sl = divmod(n, len(lst))
+            if sl == 0 and mc > zsig[(p, c, d)]:  # (chunk mc's first slot: chunk mc - 1's zone read first)
+                if ch[(p, c)] >= mc:
+                    if amax[(p, c, d)]:  # (only a core something lands on signals)
+                        zfree[(p, opp[d], plan.link(plan.k(*c)))] += 1
+                    zsig[(p, c, d)] += 1
+                    moved = True
+                continue
+            _, slot, thr = lst[sl]
+            if thr == 0 or ctr[(p, c, d)] >= mc * amax[(p, c, d)] + thr:
+                cred[(p, c, d)] += 1
+                moved = True
+        return moved
+
+    def port_step(p, d, l):
+        st = ports[(p, d, l)]
+        moved = False
+        q = plan.down(p, d)
+        if q is not None and zfw[(p, d, l)] < nch - 1 and zneed[(p, d, l)]:  # (forward my cores' zone-free signals)
+            if zfree[(p, d, l)] >= (zfw[(p, d, l)] + 1) * zneed[(p, d, l)]:
+                zcred[(q, opp[d], l)] += 1
+                zfw[(p, d, l)] += 1
+                moved = True
+        units = st["units"]
+        pcs = plan.port_cores(l)
+        while st["m"] < nch:
+            m = st["m"]
+            if st["u"] >= len(units):  # (chunk m sent: my reads of it done - FINB-free to each core read)
+                for c in st["read"]:
+                    ffree[(p, c)] += 1 if m + 1 < nch else 0
+                st.update(m=m + 1, u=0, i=0, read=set())
+                return True
+            if m > 0 and zone_credit and zcred[(p, d, l)] < m:
+                return moved
+            e, b, mask, s0, s1 = units[st["u"]]
+            while st["i"] < len(pcs):
+                c = pcs[st["i"]]
+                h = plan.half(plan.k(*c))
+                if not (mask >> h) & 1 or plan.count(*c, b) == 0:
+                    st["i"] += 1
+                    continue
+                if mbox[(p, d, l, c)] < st["seen"][c] + 1:
+                    return moved
+                st["seen"][c] += 1
+                st["read"].add(c)
+                v = finb[(p, c, e)]
+                assert v[0] == m, ("FINB of another chunk read", p, c, e, v[0], m)
+                key = (q, c, d, s1 if h else s0)
+                old = zone.get(key)
+                assert old is None or (old[2] and old[0] < m), ("a zone slot overwritten before it was read", key)
+                zone[key] = [m, v[1], False]
+                ctr[(q, c, d)] += 1
+                st["i"] += 1
+                return True
+            st["u"] += 1
+            st["i"] = 0
+        return moved
+
+    actors = (
+        [("c", p, c) for p in range(G) for c in cores]
+        + [("b", p, c) for p in range(G) for c in cores]
+        + [("n", p, c) for p in range(G) for c in cores]
+        + [("port",) + k for k in ports]
+    )
+    step = {
+        "c": lambda a: compute_step(a[1], a[2]),
+        "b": lambda a: brisc_step(a[1], a[2]),
+        "n": lambda a: ncrisc_step(a[1], a[2]),
+        "port": lambda a: port_step(a[1], a[2], a[3]),
+    }
+    while True:
+        rnd.shuffle(actors)
+        if not any(step[a[0]](a) for a in actors):
+            break
+    stuck = [k for k in prog if ch[k] < nch]
+    assert not stuck, f"deadlock: {len(stuck)} cores stuck, e.g. {stuck[:3]} (chunk {[ch[k] for k in stuck[:3]]})"
+    full = frozenset(range(G))
+    for m in range(nch):
+        for p in range(G):
+            for c in cores:
+                if plan.count(*c, p) > 0:
+                    assert fin[(m, p) + (c,)] == full, (m, p, c)
+    for st in ports.values():
+        assert st["m"] == nch
+    for k, v in zfw.items():  # (every credit forwarded; the counters at a call's count: re-armable)
+        assert v == (nch - 1 if zneed[k] and plan.down(k[0], k[1]) is not None else 0), (k, v)
+    for (p, c, d), n in ctr.items():
+        assert n == nch * amax[(p, c, d)], (p, c, d, n)
+
+
+CHUNK_CASES = [
+    # (G, ring, GX, GY, MT, NTH, scatter, nv): 1024 rows = 2 chunks of GY 8 x MT 2 (the LoudBox line, the Galaxy ring)
+    (4, False, 11, 8, 2, 224, -1, 2),
+    (4, False, 11, 8, 2, 128, -2, 2),
+    (4, True, 11, 8, 2, 224, -1, 2),
+    (4, True, 11, 8, 2, 128, -2, 2),
+    (2, False, 11, 8, 2, 128, -2, 2),
+    (8, True, 6, 4, 2, 64, -1, 2),  # (a ring of 8: small grid, the schedule's shape)
+    (8, False, 6, 4, 2, 64, -2, 2),
+]
+
+
+@pytest.mark.parametrize("nch", [2, 3])
+@pytest.mark.parametrize(
+    "case", CHUNK_CASES, ids=[f"G{c[0]}-{'ring' if c[1] else 'line'}-s{c[6]}" for c in CHUNK_CASES]
+)
+@pytest.mark.parametrize("seed", range(3))
+def test_rs_protocol_chunks(case, nch, seed):
+    G, ring, GX, GY, MT, NTH, sc, nv = case
+    _run_chunks(RsPlan(G=G, ring=ring, GX=GX, GY=GY, MT=MT, NTH=NTH, scatter=sc, nv=nv, pwmax=8 // MT), seed, nch)
+
+
+@pytest.mark.parametrize("what", ["zone", "finb"])
+def test_rs_chunks_model_catches_missing_credit(what):
+    """Without the zone credit (or the FINB credit) some interleaving overwrites a zone slot before it is read (or
+    reads the next chunk's FINB): the model must catch it (not vacuous)."""
+    # (a small ring of 4, rows scattered: cores with nothing landing run ahead of the slower ones - quick to expose)
+    plan = RsPlan(G=4, ring=True, GX=6, GY=4, MT=2, NTH=64, scatter=-2, nv=2, pwmax=4)
+    for seed in range(40):
+        try:
+            _run_chunks(plan, seed, 3, zone_credit=what != "zone", finb_credit=what != "finb")
+        except AssertionError:
+            return
+    raise AssertionError(f"the model accepted the chunks without the {what} credit")

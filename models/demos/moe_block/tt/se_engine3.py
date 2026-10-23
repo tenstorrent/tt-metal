@@ -564,7 +564,9 @@ void kernel_main() {
             if (NCH > 1 && sl == 0 && mc > zsf) {  // (chunk mc's first slot: chunk mc - 1's zone all read (popped) -
                 // +1 on the zone-free word of the port facing my fwd upstream: it credits the upstream's sends)
                 if (cb_pages_reservable_at_back(SE_ARRF, SE_ZSF * SE_P)) {
-                    noc_semaphore_inc(get_noc_addr(zpf & 0xFFFF, zpf >> 16, zfa), 1);
+                    // (only a core something lands on signals: one with only "nothing comes" slots runs ahead of
+                    // the credit - its signals would count for a slower one's)
+                    if (nfmax) noc_semaphore_inc(get_noc_addr(zpf & 0xFFFF, zpf >> 16, zfa), 1);
                     ++zsf;
                 }
             } else {
@@ -585,7 +587,7 @@ void kernel_main() {
             const uint32_t sl = ab % nab, mc = ab / nab;
             if (NCH > 1 && sl == 0 && mc > zsb) {
                 if (cb_pages_reservable_at_back(SE_ARRB, SE_ZSB * SE_P)) {
-                    noc_semaphore_inc(get_noc_addr(zpb & 0xFFFF, zpb >> 16, zfa), 1);
+                    if (nbmax) noc_semaphore_inc(get_noc_addr(zpb & 0xFFFF, zpb >> 16, zfa), 1);
                     ++zsb;
                 }
             } else {
