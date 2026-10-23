@@ -62,7 +62,8 @@ contract:
   pad_token: 4294967295    # 0xFFFFFFFF, what the engine sends past actual_end
 
 perf:
-  op_profile: false        # per-op breakdown (every layer on rt; representative layers on the device profiler)
+  op_profile: true         # F187: per-op rows in every real-time profile (every layer, same run); on the device
+                           # profiler only when a spec sets it (representative layers, a minute each)
   ab_mode: quick           # F122: a perf pick's A/B: quick (one process a side: the last chunk after the golden
                            # prefix, every layer vs the golden, clean wall); full (frozen tests, ladder rungs,
                            # profile). Quick picks' full gates run once, merged, before the final task (X.3)

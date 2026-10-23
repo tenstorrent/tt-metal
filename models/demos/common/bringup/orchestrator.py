@@ -1935,6 +1935,14 @@ class Orchestrator:
             return self._human(task, self.needs_human(task))
         return self._after(task) if satisfied(self.led.status(tid)) else STOPPED
 
+    def ran_final(self) -> bool:
+        """F188: the final measurement (a perf task without a role) has passed, so it will not run the quick-accepted
+        picks' full gates any more: the end of the run does."""
+        tasks = self.led.tasks()
+        return any(
+            t.get("step") == "perf" and not t.get("role") and self.led.status(i) == "PASS" for i, t in tasks.items()
+        )
+
     def pending_full_gates(self) -> int | None:
         """F122: every quick-accepted pick's full gate, once, on the tree as it is now; picks with the same gate
         command share one run. None when all pass (cleared), else the stop."""
@@ -2001,6 +2009,10 @@ class Orchestrator:
                 if stopped:
                     self.echo(f"stopped tasks: {stopped} (fix, then `resume`)")
                     return STOPPED
+                if not until and not only and self.ran_final():  # F188: a pick accepted after the final task passed
+                    stop = self.pending_full_gates()
+                    if stop is not None:
+                        return stop
                 self.echo("nothing left to run" + (f" before {until}" if until else ""))
                 deferred = self.led.deferred()
                 if deferred:
