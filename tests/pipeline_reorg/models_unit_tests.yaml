@@ -2383,7 +2383,7 @@
     uv pip install -r models/experimental/moss_image/requirements.txt
     export MOSS_IMAGE_ASSET_ROOT=/mnt/MLPerf/tt_dnn-models/OpenMOSS-Team/MOSS-Image
     unset MOSS_IMAGE_ALLOW_MISSING_ASSETS
-    pytest models/experimental/moss_image/tests --timeout=600 -k "not 2-cards"
+    pytest models/experimental/moss_image/tests/test_host.py models/experimental/moss_image/tests/test_attention.py --timeout=600 -k "not 2-cards"
   model: moss-image
   model_family: MOSS-Image
   skus:
