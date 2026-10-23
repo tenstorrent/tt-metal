@@ -268,6 +268,20 @@ _TRACE_PARAMS = [
     )
     for name, m in MODELS.items()
     for chunk in (1280, 2048)
+] + [
+    pytest.param(  # (the Galaxy: 8 x 4, both axes rings; chunk 5120 = 640 rows a mesh row; MOE_EXPERTS=896 for K3's)
+        (8, 4),
+        fabric2d_device_params(
+            fabric_payload_size=fabric_payload(m.routed_width),
+            l1_small_size=0,
+            trace_region_size=TRACE_REGION,
+            fabric_config=ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        ),
+        name,
+        5120,
+        id=f"{name}-5120-8x4",
+    )
+    for name, m in MODELS.items()
 ]
 
 
@@ -293,8 +307,8 @@ def test_moe_block_traced(mesh_device, device_params, model, chunk, timing):
     opts = MoEOptions(head=os.environ.get("MOE_HEAD", "auto"), tail=os.environ.get("MOE_TAIL", "auto"))
     block = MoEBlock(mesh_device, m, chunk, w, WeightCache(path=None, layer=0), options=opts)
     g = block.geometry
-    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(2, 3))
-    composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(R, C), dims=(2, 3))
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 3))
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 3))
     NX = 16
     xs = [torch.randn(T, H, generator=torch.Generator().manual_seed(2000 + k)).to(torch.bfloat16) for k in range(NX)]
     hx = [
