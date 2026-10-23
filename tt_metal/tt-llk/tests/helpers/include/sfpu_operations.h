@@ -70,7 +70,6 @@
 #include "llk_sfpu/ckernel_sfpu_logaddexp2.h"
 #include "llk_sfpu/ckernel_sfpu_logical_not.h"
 #include "llk_sfpu/ckernel_sfpu_logsigmoid.h"
-#include "llk_sfpu/ckernel_sfpu_mask.h"
 #include "llk_sfpu/ckernel_sfpu_mish.h"
 #include "llk_sfpu/ckernel_sfpu_mul_int32.h"
 #include "llk_sfpu/ckernel_sfpu_negative.h"
@@ -113,9 +112,9 @@
 #include "sfpu/ckernel_sfpu_rounding_ops.h"
 #include "sfpu/ckernel_sfpu_sub_int.h"
 #include "sfpu/ckernel_sfpu_threshold.h"
+#include "sfpu/macro/mask.h"
 
-// Test-only SFPU loop/adapter wrappers (calculate_sqrt_custom, calculate_expm1_cw,
-// calculate_mask_binary) used by the dispatch below.
+// Test-only SFPU loop wrappers (calculate_sqrt_custom, calculate_expm1_cw) used by the dispatch below.
 #include "sfpu_test_helpers.h"
 
 namespace ckernel::sfpu
@@ -2233,20 +2232,10 @@ void call_binary_sfpu_operation(
     }
     else if constexpr (BINOP == BinaryOp::MASK || BINOP == BinaryOp::MASK_POSINF)
     {
-        // float mask: out = (mask != 0) ? data : fill, with data at in0 and mask at in1; the
-        // fill is 0 for MASK and +inf for MASK_POSINF. Driven through the test-only adapter
-        // since calculate_mask / calculate_mask_posinf use fixed dst offsets rather than the
-        // forwarded indices.
-        constexpr bool POSINF = (BINOP == BinaryOp::MASK_POSINF);
-        SFPU_BINARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_mask_binary,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, POSINF),
-            dst_index_in0,
-            dst_index_in1,
-            dst_index_out,
-            vector_mode);
+        // float mask: out = (mask == 0) ? fill : data, with data at in0 and mask at in1; the fill is 0 for MASK
+        // and +inf for MASK_POSINF. Mask walks the whole tile itself, so vector_mode does not apply.
+        constexpr auto FILL = (BINOP == BinaryOp::MASK_POSINF) ? llk::sfpu::MaskFill::FloatPosInf : llk::sfpu::MaskFill::Zero;
+        llk::sfpu::Mask::execute<ckernel::DEFAULT_TENSOR_SHAPE, FILL, DataFormat::Float16_b>(dst_index_out, dst_index_in0, dst_index_in1);
     }
     else if constexpr (BINOP == BinaryOp::ATAN2)
     {
