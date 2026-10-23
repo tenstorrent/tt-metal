@@ -10,10 +10,6 @@
 // so that header stays byte-for-byte the DRAM profiler's own. The two backends are mutually exclusive at run
 // time (TT_METAL_DEVICE_PROFILER vs TT_METAL_STREAMING_PROFILER, see llrt/rtoptions.cpp), and the device
 // producer for this backend is internal/profiler/kernel_profiler_streaming.hpp, selected by -DPROFILE_STREAMING.
-//
-// Consumers: the SPSC producer (kernel_profiler_streaming.hpp), the DRISC relay kernel
-// (impl/streaming_profiler/kernels/drisc_relay.cpp) and the host receiver
-// (impl/streaming_profiler/receiver.cpp, spsc_marker_decode.hpp).
 
 #include <cstdint>
 
@@ -21,6 +17,23 @@
 #include "hostdev/profiler_zone_id.h"
 
 namespace kernel_profiler {
+
+template <typename T>
+constexpr std::uint32_t word_of(const T& value) {
+    static_assert(sizeof(T) == sizeof(std::uint32_t));
+    return __builtin_bit_cast(std::uint32_t, value);
+}
+template <typename T>
+constexpr T word_as(std::uint32_t word) {
+    static_assert(sizeof(T) == sizeof(std::uint32_t));
+    return __builtin_bit_cast(T, word);
+}
+constexpr std::uint64_t join_words(std::uint32_t hi, std::uint32_t lo) { return std::uint64_t{hi} << 32 | lo; }
+
+struct NocXy {
+    std::uint32_t x : 16;
+    std::uint32_t y : 16;
+};
 
 // ---- SPSC / drainer backend control-word layout ------------------------------------------------------
 // The drainer backend overlays its OWN layout on the same profiler control vector. It deliberately does not
@@ -49,18 +62,17 @@ enum SpscControlBuffer {
     SPSC_RING_HEAD_0 = 0,
     // [PROFILER_SPSC_MAX_RISC, 2*): ring tail per RISC, producer-written, monotonic word count.
     SPSC_RING_TAIL_0 = PROFILER_SPSC_MAX_RISC,
-    // Per Tensix RISC, the timer high word and runtime id in effect at the published tail, for a decoder reseeding a
-    // lane after a loss. The producer stores its tail, fences, then the state, so a reader that observes the state
-    // no later than the tail never sees a value the frame's words do not already carry inline. They live in the
-    // tails' 64 B block (words 16..31), in the words no Tensix RISC owns -- heads 16..23 and tails 29..30 -- so the
-    // relay's one 64 B read takes state and tails in a single L1 access. Runtime ids: spsc_state_prog_word.
+    // For each Tensix RISC, the wall clock's high word and the runtime id in effect at its published tail. After a lost
+    // frame, the decoder restarts the lane from these. The producer writes its tail, fences, then writes these, so a
+    // reader that sees them no later than the tail never gets a value the frame doesn't already carry. They sit in the
+    // words of the tails' 64 B block (words 16 to 31) that no Tensix RISC's head or tail uses, so the relay's single
+    // 64 B read gets them together with the tails. spsc_state_prog_word gives each RISC's runtime id word.
     SPSC_STATE_TIMER_0 = 16,
     SPSC_STATE_PROG_0 = 21,
-    // Host->kernel arm: while set a producer blocks on a full ring, because a relay is draining this core; while
-    // clear it proceeds and overwrites. The host clears it on every Tensix core of the device at session start
-    // (this backend does not touch the firmware) and sets it only on the cores its relays serve, so a core nobody
-    // drains (dispatch cores, whose rings fill one launch at a time across processes) can never park in the stall
-    // path and wedge wait_until_cores_done() at device close.
+    // While this is set, a producer waits when its ring is full. While it is clear, the producer overwrites old data
+    // instead. The host clears it on every Tensix core when a capture starts and sets it only on the cores its relays
+    // serve. A core nobody drains, such as a dispatch core, then overwrites its ring instead of waiting on it, which
+    // would hang wait_until_cores_done() at device close.
     PROFILER_ARMED = 2 * PROFILER_SPSC_MAX_RISC,
     // Reserved; the core's NoC coordinate reaches the wire from the host's core list via the relay (SPSC_PREFIX_XY).
     SPSC_CORE_XY = 2 * PROFILER_SPSC_MAX_RISC + 1,
@@ -69,7 +81,16 @@ enum SpscControlBuffer {
     // the BroadcastRing. 8 slots so SPSC_CONTROL_END stays inside the 64-word vector.
     SPSC_STALL_COUNT_0 = 2 * PROFILER_SPSC_MAX_RISC + 2,
     SPSC_STALL_COUNT_MAX = 8,
-    SPSC_CONTROL_END = SPSC_STALL_COUNT_0 + SPSC_STALL_COUNT_MAX,  // first unused word; grow the layout here
+    // An active eth core that runs a link sync port writes the port's stamp records to a ring in L1, separate from the
+    // core's profiler rings. That ring's tail is word 31, in the same 64 B block (words 16 to 31) as the profiler
+    // rings' tails, so that the eth relay's one read of that block gets all of them.
+    SPSC_LINK_SYNC_TAIL = 31,
+    SPSC_LINK_SYNC_HEAD = SPSC_STALL_COUNT_0 + SPSC_STALL_COUNT_MAX,  // how far the eth relay has read that ring
+    // The host starts and stops the port by writing a LinkSyncCtl here, and the port writes kResidentDoneWord to the
+    // done word once it has stopped.
+    SPSC_LINK_SYNC_CTL,
+    SPSC_LINK_SYNC_DONE,
+    SPSC_CONTROL_END,  // first unused word; grow the layout here
 };
 // Runtime-id slot of Tensix RISC `risc`: 21..23, then 29..30 past the tails.
 constexpr std::uint32_t spsc_state_prog_word(std::uint32_t risc) {
@@ -86,19 +107,35 @@ static_assert(
 static_assert(
     PROFILER_SPSC_TENSIX_RISC == 5 && SPSC_STATE_TIMER_0 >= PROFILER_SPSC_TENSIX_RISC &&
         SPSC_STATE_TIMER_0 + PROFILER_SPSC_TENSIX_RISC <= SPSC_STATE_PROG_0 &&
-        SPSC_STATE_PROG_0 + 3 == SPSC_RING_TAIL_0 && spsc_state_prog_word(PROFILER_SPSC_TENSIX_RISC - 1) < 32,
-    "lane state must fill the unowned words of the tails' 64 B block");
+        SPSC_STATE_PROG_0 + 3 == SPSC_RING_TAIL_0 &&
+        spsc_state_prog_word(PROFILER_SPSC_TENSIX_RISC - 1) < SPSC_LINK_SYNC_TAIL && SPSC_LINK_SYNC_TAIL < 32,
+    "lane state and the link sync tail must fit the unowned words of the tails' 64 B block");
 
-// Host->relay stop word: quiesce drains everything with every wait still holding, then the relay exits.
-static constexpr std::uint32_t kRelayStopQuiesce = 1;
-// Relay->host completion words; the host matches the high half. Drained: the relay's last page is out and the host
-// may return every credit. Done follows the socket barrier.
-static constexpr std::uint32_t kRelayDrainedWord = 0xD09D0000u;
-static constexpr std::uint32_t kRelayDoneWord = 0xD09E0000u;
-static constexpr std::uint32_t kRelayDoneMask = 0xFFFF0000u;
-// Each relay control word owns a 64 B pad, so the words that share it (the sync rendezvous triple behind
-// the stop word, the heartbeat behind done) travel in one host write.
-static constexpr std::uint32_t kRelayCtrlWordStride = 64;
+// The host writes this to a resident core's stop word. The core then finishes its queued work and exits.
+constexpr std::uint32_t kResidentStopQuiesce = 1;
+// A relay writes this to its done word when everything is shipped and only the host's acks are outstanding.
+constexpr std::uint32_t kResidentAwaitingAcksWord = 0xD09D0000u;
+constexpr std::uint32_t kResidentDoneWord = 0xD09E0000u;
+// The control block at each resident core's ctrl address. The resident cores are the relays, the wall-clock core and
+// the check core. The DRISC relay increments heartbeat every sweep, and the other cores increment it until the host
+// writes go. Each core writes done when it finishes. The host writes stop, and on the eth cores also go.
+struct ResidentCtrl {
+    std::uint32_t done;
+    std::uint32_t heartbeat;
+    std::uint32_t go;
+    // Only the wall-clock and check cores use these. tail and head are the cursors of the ring of clock sync records
+    // that the core fills and the eth relay drains, and dropped counts the records the core dropped on a full ring.
+    struct {
+        std::uint32_t tail;
+        std::uint32_t head;
+        std::uint32_t dropped;
+    } sync;
+    std::uint32_t stop;
+};
+// Each core a DRISC relay drains has a record of this many bytes in the relay's L1 scratch. It is a power of two so the
+// relay indexes records with a shift.
+constexpr std::uint32_t kRelayCoreRecordBytes = 128;
+constexpr std::uint32_t kEthRelayMaxDrained = 16;  // eth cores the eth relay drains besides the wall-clock core
 
 // STICKY_META (SPSC/drainer backend, legacy / synthetic bench path only): an 8B context packet whose high
 // word carries (core_x, core_y, risc) + this type and whose low word is a 32-bit host-side ID. The host
@@ -170,11 +207,13 @@ constexpr static std::uint32_t SPSC_NOTIFY_CAP_BYTES = 128u * 1024u;
 enum SpscWireCtrl : std::uint32_t {
     SPSC_WIRE_TIMER_0 = SPSC_STATE_TIMER_0 - SPSC_WIRE_CV_BASE,  // 0..4
     SPSC_WIRE_TAIL_0 = SPSC_RING_TAIL_0 - SPSC_WIRE_CV_BASE,     // 8..12
+    SPSC_WIRE_LINK_SYNC_TAIL = SPSC_LINK_SYNC_TAIL - SPSC_WIRE_CV_BASE,
 };
 constexpr std::uint32_t spsc_wire_prog_word(std::uint32_t risc) {  // 5..7, 13..14
     return spsc_state_prog_word(risc) - SPSC_WIRE_CV_BASE;
 }
 enum SpscWirePrefix : std::uint32_t {
+    SPSC_PREFIX_PAYLOAD_WORDS = 1,
     SPSC_PREFIX_HEAD_0 = 2,  // ..6
     SPSC_PREFIX_XY = 7,
 };
@@ -182,6 +221,7 @@ static_assert(
     SPSC_WIRE_CV_BASE % 16 == 0 && SPSC_STATE_TIMER_0 >= SPSC_WIRE_CV_BASE &&
         SPSC_WIRE_TAIL_0 + PROFILER_SPSC_TENSIX_RISC <= SPSC_SPAN_WIRE_CTRL_WORDS &&
         spsc_wire_prog_word(PROFILER_SPSC_TENSIX_RISC - 1) < SPSC_SPAN_WIRE_CTRL_WORDS &&
+        SPSC_WIRE_LINK_SYNC_TAIL < SPSC_SPAN_WIRE_CTRL_WORDS &&
         SPSC_PREFIX_HEAD_0 + PROFILER_SPSC_TENSIX_RISC == SPSC_PREFIX_XY && SPSC_PREFIX_XY < SPSC_SPAN_PREFIX_WORDS,
     "the control block is one 64 B window of the control vector; heads and XY fit the prefix");
 
@@ -230,5 +270,166 @@ constexpr std::uint32_t spsc_span_frame_words(std::uint32_t payload_words) {
     const std::uint32_t n = SPSC_SPAN_PREFIX_WORDS + payload_words;
     return (n + SPSC_SPAN_PAGE_WORDS - 1u) & ~(SPSC_SPAN_PAGE_WORDS - 1u);
 }
+
+// ---- Clock sync: records, the sample ring, link ports and tile clock offsets ----------------------------------------
+
+constexpr std::uint32_t kEthRefclkHz = 50'000'000u;
+static_assert(1'000'000'000u % kEthRefclkHz == 0);
+constexpr std::uint32_t kNsPerRefclkTick = 1'000'000'000u / kEthRefclkHz;
+// The refclk register shows a new count once every this many ticks.
+constexpr std::uint32_t kRefclkTicksPerUpdate = 4;
+
+enum class SyncKind : std::uint8_t { WallClock, Link, Check };
+// Which stamps a link record averages. In each round, forward frames go from the transmitter to the receiver and return
+// frames come back. The receiver records the forward frames' egress and ingress stamps, and the transmitter records the
+// return frames'.
+enum class SyncRole : std::uint8_t { ForwardEgress, ForwardIngress, ReturnEgress, ReturnIngress };
+
+struct SyncMeta {
+    std::uint8_t count : 2;  // point count, in WallClock and Check records
+    std::uint8_t dense : 1;  // in Check records, set when the record holds every refclk update around an AICLK change
+    SyncRole role : 2;       // in Link records
+    SyncKind kind : 2;
+    std::uint8_t pad : 1;
+};
+static_assert(sizeof(SyncMeta) == 1);
+
+constexpr std::uint32_t kSyncWallClockPoints = 3;
+static_assert(kSyncWallClockPoints < 4, "SyncMeta::count holds a record's point count in 2 bits");
+// The clock sync keeps wall clocks in eighths of a tick, as fixed-point counts with this many fraction bits.
+constexpr std::uint32_t kWallEighthBits = 3;
+// A clock point pairs a refclk count with the wall clock at the same moment. It stores only the low word of each. The
+// host can widen them back exactly, since a point's refclk is within 2^31 ticks (43 s) of its chip's previous point and
+// its wall clock within 2^31 eighths of its record's first point.
+struct SyncWallClockPoint {
+    std::uint32_t refclk_lo;
+    std::uint32_t wall_eighths_lo;
+};
+struct SyncWallClockRecord {
+    SyncMeta meta;
+    // Each point's wall ticks per refclk tick, in eighths, or 0 for a check reading or for an average of samples taken
+    // while AICLK was changing. Blackhole's AICLK moves in 6.25 MHz PLL steps, an eighth of the 50 MHz refclk, so the
+    // wall clock gains a whole number of eighths of a tick per refclk tick.
+    std::uint8_t wall_per_refclk_eighths[kSyncWallClockPoints];
+    std::uint32_t first_wall_eighths_hi;
+    SyncWallClockPoint points[kSyncWallClockPoints];
+};
+
+// One port's stamps of one role in one round, kept as a sum. Their average is first_ns + sum_from_first_ns / count.
+struct SyncLinkRecord {
+    SyncMeta meta;
+    std::uint32_t round;
+    std::uint64_t first_ns;  // the first stamp in ns of PTP time, which is the refclk count times 20 ns
+    std::uint64_t sum_from_first_ns;
+    std::uint32_t count;
+    std::uint32_t pad;
+};
+
+struct SyncHeader {
+    SyncMeta meta;
+};
+// One record of a sync frame. A sync frame is the SPSC prefix followed by its records, and the kind in header.meta says
+// which member each record is.
+union SyncRecord {
+    SyncHeader header;
+    SyncWallClockRecord wall_clock;
+    SyncLinkRecord link;
+};
+static_assert(sizeof(SyncRecord) == 32 && alignof(SyncRecord) == 8);
+constexpr std::uint32_t kSyncRecordWords = sizeof(SyncRecord) / sizeof(std::uint32_t);
+
+constexpr std::uint32_t kSyncRingRecords = 512;
+constexpr std::uint32_t kSyncFrameRecords = 32;
+
+// The wall-clock core is the idle eth core on each chip that measures the chip's wall clock against its refclk. On it,
+// the sampler on ERISC0 fills the SyncSampleRing and the model on ERISC1 empties it. The model publishes how far it has
+// read as the ring's head, and the sampler rereads the head only once its tail is a full ring ahead of the head it last
+// read. To stop the sampler, the model publishes its position plus kSyncHeadStop, so the sampler's next reload sees the
+// head ahead of its tail and returns. Stopping therefore adds no check to the sampling loop.
+constexpr std::uint32_t kSyncSampleRingSamples = 32768;
+constexpr std::uint32_t kSyncHeadStop = 1u << 31;
+// A sample taken at a refclk update. It holds the refclk's new low word and the wall clock's low word at that moment,
+// in eighths.
+struct SyncSample {
+    std::uint32_t refclk, wall_eighths;
+};
+struct SyncSampleRing {
+    std::uint32_t tail;
+    std::uint32_t done;
+    // The full wall clock (in eighths), read once before the first sample. The model rebuilds each sample's full wall
+    // clock from it and the sample's low word.
+    std::uint64_t wall_eighths;
+    std::uint32_t head;
+    alignas(64) SyncSample samples[kSyncSampleRingSamples];
+};
+
+// Away from clock changes, the check core keeps one update in this many, and the host weights each kept update by this
+// number.
+constexpr std::uint32_t kSyncCheckKeepEvery = 8;
+
+// The link sync measures a link in rounds, one every 10 ms. A round is one exchange of timestamped frames over the
+// link.
+constexpr std::uint32_t kLinkSyncRoundTicks = kEthRefclkHz / 100;
+// With the sync check on, a link runs a round every 1 ms instead. The host solves the clock sync from every
+// kLinkSyncCheckSolveEvery-th round, as often as without the check, and the sync check measures the sync's accuracy
+// against the other rounds.
+constexpr std::uint32_t kLinkSyncCheckRoundTicks = kEthRefclkHz / 1000;
+constexpr std::uint32_t kLinkSyncCheckSolveEvery = kLinkSyncRoundTicks / kLinkSyncCheckRoundTicks;
+// Each round a port records the egress stamps its received frames carry and its own ingress stamps of them.
+constexpr std::uint32_t kLinkSyncRecordsPerRound = 2;
+enum class LinkSyncCtl : std::uint32_t { Idle, Run, Stop };
+enum class LinkSyncRole : std::uint32_t { None, Transmitter, Receiver };
+constexpr std::uint32_t kLinkSyncSlotWords = 32;  // room for one burst of the port's frames
+constexpr std::uint32_t kLinkSyncRingRecords = 8;
+static_assert(
+    (kSyncRingRecords & (kSyncRingRecords - 1)) == 0 && (kSyncSampleRingSamples & (kSyncSampleRingSamples - 1)) == 0 &&
+    (kLinkSyncRingRecords & (kLinkSyncRingRecords - 1)) == 0);
+static_assert(kLinkSyncRingRecords <= kSyncFrameRecords);
+
+// A link sync port's L1 region. It sits at the top of the active eth core's unreserved region, at the same address on
+// both ports.
+struct LinkSyncL1 {
+    std::uint32_t slots[kLinkSyncSlotWords];
+    alignas(32) SyncRecord ring[kLinkSyncRingRecords];
+};
+
+// The most tiles whose wall clocks one tile reads. The idle eth tile that reads its row's eth tiles over both NoCs
+// reads the most. It reads its row (13 eth tiles and up to 2 DRAM tiles) and its column (10 Tensix tiles), then the
+// row's 13 eth tiles again over the other NoC.
+constexpr std::uint32_t kTileSyncMaxPartners = 38;
+// The number of bins in the histogram a tile uses to find the median of its readings of one partner. Readings are kept
+// doubled, so each bin is half a tick wide. The bins are centred on the median of the warm-up readings. The median
+// stays exact as long as fewer than half the readings fall outside the bins, because a reading clamped into an edge bin
+// still counts toward its rank.
+constexpr std::uint32_t kTileSyncBins = 128;
+enum class TileSyncGo : std::uint32_t { Wait, Measure, Exit };
+// The progress a tile's kernel reports in TileSyncTable::ready. It writes Up once it is waiting for go, and Done once
+// its readings are in the table. Launched must be 0, because the host zeroes the table before launch.
+enum class TileSyncReady : std::uint32_t { Launched, Up, Done };
+
+struct TileSyncRead {
+    std::uint32_t x : 16;
+    std::uint32_t y : 15;
+    std::uint32_t noc : 1;
+};
+struct TileSyncPartner {
+    std::int64_t whole_difference;  // the partner's whole wall clock minus this tile's
+    // Twice the median, over all reps, of the partner's wall clock minus the midpoint of this tile's reads of its own
+    // clock just before and after the request. It uses only the low words, and whole_difference supplies the rest.
+    std::int32_t doubled_median;
+    std::uint32_t pad;
+};
+struct TileSyncTable {
+    TileSyncGo go;
+    TileSyncReady ready;
+    TileSyncPartner partner[kTileSyncMaxPartners];
+};
+struct TileSyncScratch {
+    // A read from a DRAM tile must land at the same offset within 64 B as its source address, so the landing area spans
+    // 64 B and every read lands at its source's offset in it.
+    std::uint32_t landing[16];
+    TileSyncTable table;
+    std::uint32_t hist[kTileSyncBins];
+};
 
 }  // namespace kernel_profiler

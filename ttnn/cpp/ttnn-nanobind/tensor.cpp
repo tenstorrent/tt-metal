@@ -697,10 +697,12 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             &ttnn::verify_shards_match_topology,
             nb::arg("tensor"),
             nb::arg("compare_replica_contents") = true,
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Check that a host tensor's topology label describes its shards: every populated shard is labelled,
                 every labelled coordinate holds a shard, and shards the label calls replicas of each other have the
-                same size and, unless compare_replica_contents is False, the same bytes. Raises RuntimeError naming
+                same size and, unless compare_replica_contents is False, the same values (tile padding is not
+                compared). Raises RuntimeError naming
                 the coordinates and the label otherwise.
             )doc");
 

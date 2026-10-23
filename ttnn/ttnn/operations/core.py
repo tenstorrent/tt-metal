@@ -818,8 +818,9 @@ def verify_shards_match_topology(tensor: ttnn.Tensor, *, compare_replica_content
     Every populated shard must sit at a coordinate the label lists and every labelled coordinate must hold a shard
     (or be remote to this host); shards the label calls replicas of each other (mesh coordinates that differ only
     along ``Replicate`` axes) must have the same size and, unless ``compare_replica_contents`` is ``False``, the same
-    bytes. ``dump_tensor`` runs this check before it writes one copy per replica group; a caller that gathers a tensor
-    by its label (tt-train's checkpointing) runs it for the same reason.
+    values (tile padding is not compared). ``dump_tensor`` runs this check before it writes one copy per replica group; it is exposed so that any
+    other caller that keeps one copy per group, such as a checkpoint gather that composes a tensor by its label, can
+    run it for the same reason.
 
     Args:
         tensor (ttnn.Tensor): a host tensor (``tensor.cpu()``).

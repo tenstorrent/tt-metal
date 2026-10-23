@@ -29,7 +29,6 @@
 #include <vector>
 #include <cstdint>
 #include <optional>
-#include <string>
 #include <unordered_map>
 
 namespace ttnn {
@@ -167,11 +166,13 @@ tt::tt_metal::TensorTopology from_flatbuffer(const ttnn::flatbuffer::TensorTopol
     return tt::tt_metal::TensorTopology(dist_shape, placements, mesh_coords);
 }
 
-// Renders the topology for a diagnostic. Only evaluated on the failure path.
 }  // namespace
 
 flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
-    const Tensor& tensor, flatbuffers::FlatBufferBuilder& builder, std::vector<SerializedTensorBuffer>& buffers) {
+    const Tensor& tensor,
+    flatbuffers::FlatBufferBuilder& builder,
+    std::vector<SerializedTensorBuffer>& buffers,
+    bool verify_shards) {
     TT_FATAL(buffers.empty(), "Buffers vector must be empty");
     TT_FATAL(!is_device_tensor(tensor), "Device tensors are not supported in flatbuffer serialization");
 
@@ -183,20 +184,15 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
 
     // The topology is a label, and the file trusts it: shards it calls replicas of each other are written once and
     // every record in the group points at that one copy. The label is checked against the shards first, so a wrong
-    // Replicate cannot drop a shard silently (see verify_shards_match_topology).
-    verify_shards_match_topology(tensor, ttnn::CONFIG.get<"verify_replicated_shards_on_dump">());
-
-    // Replica groups: coordinates that differ only along Replicate dimensions share one group, keyed by the
-    // coordinates at the sharded dimensions. Each group remembers the index into `buffers` of the copy written for it.
-    const auto& placements = topology.placements();
-    const auto& mesh_shape = topology.distribution_shape();
-    size_t unique_keys = 1;
-    for (size_t dim = 0; dim < placements.size(); ++dim) {
-        if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[dim])) {
-            unique_keys *= mesh_shape[dim];
-        }
+    // Replicate cannot drop a shard silently (see verify_shards_match_topology), unless the caller has checked it.
+    if (verify_shards) {
+        verify_shards_match_topology(tensor, ttnn::CONFIG.get<"verify_replicated_shards_on_dump">());
     }
-    std::vector<std::optional<size_t>> group_buffer_index(unique_keys);
+
+    // Replica groups (replica_group_key): coordinates that differ only along Replicate dimensions share one group.
+    // Each group remembers the index into `buffers` of the copy written for it.
+    const auto& mesh_shape = topology.distribution_shape();
+    std::vector<std::optional<size_t>> group_buffer_index(num_replica_groups(topology));
 
     std::vector<flatbuffers::Offset<ttnn::flatbuffer::TensorShard>> shards_vector;
     shards_vector.reserve(mesh_shape.mesh_size());
@@ -222,22 +218,18 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
         const auto* buffer_address = buffer->view_bytes().data();
         const std::size_t buffer_size = buffer->view_bytes().size();
 
-        size_t key = 0;
-        for (size_t dim = 0; dim < placements.size(); ++dim) {
-            if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[dim])) {
-                key = key * mesh_shape[dim] + dist_coord[dim];
-            }
-        }
+        const size_t key = replica_group_key(topology, dist_coord);
 
         // Same address and same length: the same bytes, so the same copy. Otherwise the group's copy stands for this
-        // shard, or this shard starts its group.
+        // shard, or this shard starts its group. An address is recorded only for the buffer written from it, so a
+        // shard folded into its group's copy never lends that copy to another group that aliases its buffer.
         std::optional<size_t> buffer_index;
         if (auto it = buffer_to_index.find(buffer_address);
             it != buffer_to_index.end() && buffers[it->second].buffer.view_bytes().size() == buffer_size) {
             buffer_index = it->second;
         }
         if (auto& group = group_buffer_index[key]; group.has_value()) {
-            buffer_index = *group;
+            buffer_index = group;
         } else {
             if (!buffer_index.has_value()) {
                 // Start every distinct buffer on `kTensorDataAlignment` so a reader can DMA out of the mapped
@@ -246,10 +238,10 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
                 next_buffer_offset = aligned_offset + buffer_size;
                 buffers.push_back(SerializedTensorBuffer{.buffer = *buffer, .offset = aligned_offset});
                 buffer_index = buffers.size() - 1;
+                buffer_to_index.emplace(buffer_address, *buffer_index);
             }
-            group = *buffer_index;
+            group = buffer_index;
         }
-        buffer_to_index.emplace(buffer_address, *buffer_index);
         const uint64_t shard_buffer_offset = buffers[*buffer_index].offset;
 
         auto inline_storage = ttnn::flatbuffer::InlineFileStorage(shard_buffer_offset, buffer_size);

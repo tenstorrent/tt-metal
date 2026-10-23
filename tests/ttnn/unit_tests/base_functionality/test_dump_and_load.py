@@ -113,9 +113,8 @@ def _load_shards(file_name):
 
 
 def test_dump_mislabelled_replicate_raises(tmp_path, expect_error):
-    """Negative control for the write-side replica check: before it, this dump succeeded and the loaded
-    tensor's second shard read back as a copy of the first. The tensor dumps once relabelled correctly.
-    """
+    """A collapsed Replicate label over two shards that differ is rejected by the write-side replica check and
+    leaves no file behind; the tensor dumps once relabelled correctly."""
     tensor, true_label, shards = _mislabelled_replicate_tensor()
     file_name = tmp_path / "mislabelled.tensorbin"
 
@@ -129,8 +128,8 @@ def test_dump_mislabelled_replicate_raises(tmp_path, expect_error):
 
 
 def test_dump_mislabelled_replicate_config_opt_out(tmp_path):
-    """With `verify_replicated_shards_on_dump` off, the label is trusted as it was before the check: one
-    copy, taken from the first replica, stands for the whole group."""
+    """With `verify_replicated_shards_on_dump` off, the label is trusted: one copy, taken from the first
+    replica, stands for the whole group."""
     # The property is generated from `Config::attributes_t` by `reflect::for_each` in ttnn-nanobind/core.cpp.
     assert hasattr(ttnn.CONFIG, "verify_replicated_shards_on_dump")
     tensor, _, shards = _mislabelled_replicate_tensor()
@@ -148,6 +147,61 @@ def test_dump_mislabelled_replicate_config_opt_out(tmp_path):
     first_replica = shards[:, :32]
     torch.testing.assert_close(loaded[0], first_replica, rtol=0, atol=0)
     torch.testing.assert_close(loaded[1], first_replica, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("mesh_device", [2], indirect=True)
+def test_dump_device_shard(tmp_path, mesh_device):
+    """A shard taken out of a distributed tensor with get_device_tensors is the one-device tensor it holds and is
+    labelled as such, so it dumps and loads on its own; the tensor it was taken from keeps its label."""
+    torch_tensor = torch.arange(2 * 32 * 32, dtype=torch.float32).reshape(2, 32, 32)
+    tensor = ttnn.from_torch(
+        torch_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        device=mesh_device,
+    )
+    label = tensor.tensor_topology()
+
+    shards = ttnn.get_device_tensors(tensor)
+    assert [shard.tensor_topology() for shard in shards] == [
+        ttnn.TensorTopology(ttnn.MeshShape([1]), [ttnn.PlacementReplicate()], [ttnn.MeshCoordinate(0, i)])
+        for i in range(2)
+    ]
+    assert tensor.tensor_topology() == label
+
+    file_name = tmp_path / "shard.tensorbin"
+    ttnn.dump_tensor(file_name, shards[1])
+    loaded = _load_shards(file_name)
+    assert len(loaded) == 1
+    torch.testing.assert_close(loaded[0], torch_tensor[1:2], rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("mesh_device", [2], indirect=True)
+def test_dump_tensor_allocated_on_host(tmp_path, mesh_device):
+    """allocate_tensor_on_host labels its tensor over every device of the mesh, so it dumps as the tensor it holds
+    once a replicated device tensor has been read into it."""
+    torch_tensor = torch.rand(32, 32, dtype=torch.bfloat16)
+    device_tensor = ttnn.from_torch(
+        torch_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=mesh_device,
+    )
+    host_tensor = ttnn.allocate_tensor_on_host(device_tensor.spec, mesh_device)
+    assert host_tensor.tensor_topology() == ttnn.TensorTopology(
+        ttnn.MeshShape(1, 2),
+        [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()],
+        [ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 1)],
+    )
+    ttnn.verify_shards_match_topology(host_tensor, compare_replica_contents=False)
+
+    ttnn.copy_device_to_host_tensor(device_tensor, host_tensor)
+    file_name = tmp_path / "allocated_on_host.tensorbin"
+    ttnn.dump_tensor(file_name, host_tensor)
+    loaded = _load_shards(file_name)
+    assert len(loaded) == 2
+    for shard in loaded:
+        torch.testing.assert_close(shard, torch_tensor, rtol=0, atol=0)
 
 
 def test_verify_shards_match_topology(expect_error):

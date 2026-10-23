@@ -74,6 +74,7 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
             cluster_axis extent   even and at least 4.
             num_links             1 to 4, and the axis must have that many forwarding links.
             num_routed_experts    a multiple of 16.
+            num_experts_per_tok   1 to 16, the largest top-k validated, and at most num_routed_experts.
             metadata_len          3.
             input tensors         interleaved in DRAM.
             memory_config         interleaved DRAM.
