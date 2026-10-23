@@ -17,7 +17,7 @@ namespace sfpu {
 // sigmoid(x) = 1 / (1 + exp(-x)) with the exp's constants supplied by the caller. Each is a float (materialised
 // by SFPLOADI where used, exactly as a literal is), an sfpi::vFloat built once before a row loop, or a
 // vConstFloatPrgmN: one_ln2 is read by both exp arms, (c0, c1, c2) by the bf16 exp_21f arm and
-// (neg_ln2_hi, p0, p1) by the fp32 Juffa arm. Hoisting matters because sfpi (through 7.84.0) never lifts a
+// (neg_ln2_hi, p0, p1) by the fp32 Juffa arm. Hoisting matters because sfpi (through 7.89.0) never lifts a
 // literal out of a loop by itself, so each fp32 literal otherwise costs an SFPLOADI pair per row.
 // _sfpu_sigmoid_prgm_ and _sfpu_sigmoid_ below are thin wrappers over this one body.
 template <

@@ -20,7 +20,7 @@ inline void calculate_logsigmoid(
     const uint dst_index_out)  // Index for output
 {
     // The four highest polynomial coefficients, loaded once and kept in the four LRegs the row leaves free
-    // (sfpi (through 7.84.0) never lifts a literal out of a loop by itself, so each otherwise costs an SFPLOADI pair
+    // (sfpi (through 7.89.0) never lifts a literal out of a loop by itself, so each otherwise costs an SFPLOADI pair
     // per row). LRegs only, no programmable constants: ttnn's logsigmoid_tile_init is the bare binary
     // init, and the fast exp that produces exp(-x) right before this op owns the Prgm registers.
     sfpi::vFloat c5 = -0.00028794066747650504f;

@@ -39,7 +39,7 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_mish() {
     constexpr float SAT_HI = 8.0f;
 
-    // The exp's constants, loaded once and kept in LRegs across the loop (sfpi (through 7.84.0) never hoists a literal
+    // The exp's constants, loaded once and kept in LRegs across the loop (sfpi (through 7.89.0) never hoists a literal
     // out of a loop by itself); 1/ln2 is vConstFloatPrgm1 from mish_init. Only the exact fp32 arm runs the
     // Juffa exp, and with x and u live it has LRegs for two of its three constants (p1 stays a per-row
     // literal); the other three arms run exp_21f.

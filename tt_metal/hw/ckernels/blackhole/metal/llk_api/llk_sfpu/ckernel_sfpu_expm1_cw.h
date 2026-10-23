@@ -39,7 +39,7 @@ constexpr float CW_EXPM1_H_TOP0 = 8.3751315251e-03f;
 
 // expm1_cw_clamped with its five loop-invariant fp32 constants supplied by the caller. Each may be a float
 // (materialised by SFPLOADI where used, exactly as the literal is in expm1_cw_clamped(x)) or an
-// sfpi::vFloat / vConstFloatPrgmN the caller holds across its row loop: sfpi (through 7.84.0) never hoists a literal
+// sfpi::vFloat / vConstFloatPrgmN the caller holds across its row loop: sfpi (through 7.89.0) never hoists a literal
 // out of a loop by itself, so in a row loop every fp32 literal otherwise costs an SFPLOADI pair per row.
 // Identical arithmetic either way. The constants are template-typed rather than sfpi::vFloat because a
 // vFloat parameter is built before the call and stays live through the body, which changes the
