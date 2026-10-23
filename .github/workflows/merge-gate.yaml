@@ -713,9 +713,11 @@ jobs:
   # its test list (tests/pipeline_reorg/ttsim_merge_gate_tests.yaml), so adding or
   # retiring a leg here is a change to that yaml alone. Its fetch-ttsim job downloads
   # libttsim_qsr.so and setup-ttsim installs it for the matrix's sim SKU.
+  # Disabled on merge_group: it was holding up the merge queue for too long. Still
+  # runs on PR gate and push-to-main.
   ttsim-quasar-merge-gate-tests:
     needs: [build, find-changes]
-    if: ${{ !cancelled() && needs.build.result == 'success' && (
+    if: ${{ !cancelled() && needs.build.result == 'success' && github.event_name != 'merge_group' && (
             github.ref_name == 'main' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
