@@ -29,12 +29,12 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.minimax_m3_vl.tt.block import M3VLBlock
-from models.demos.minimax_m3_vl.tt.common import mesh_mapper
-from models.demos.minimax_m3_vl.tt.layernorm import M3VLLayerNorm
-from models.demos.minimax_m3_vl.tt.patch_embed import M3VLPatchEmbed
-from models.demos.minimax_m3_vl.tt.projector import M3VLProjector
-from models.demos.minimax_m3_vl.tt.rope import rope_cos_sin_padded
+from models.demos.minimax_m3.tt.vision.block import M3VLBlock
+from models.demos.minimax_m3.tt.vision.common import mesh_mapper
+from models.demos.minimax_m3.tt.vision.layernorm import M3VLLayerNorm
+from models.demos.minimax_m3.tt.vision.patch_embed import M3VLPatchEmbed
+from models.demos.minimax_m3.tt.vision.projector import M3VLProjector
+from models.demos.minimax_m3.tt.vision.rope import rope_cos_sin_padded
 
 
 class M3VLVisionModel(LightweightModule):

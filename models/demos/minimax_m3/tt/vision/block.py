@@ -23,9 +23,9 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.minimax_m3_vl.tt.attention import M3VLAttention
-from models.demos.minimax_m3_vl.tt.layernorm import M3VLLayerNorm
-from models.demos.minimax_m3_vl.tt.mlp import M3VLMLP
+from models.demos.minimax_m3.tt.vision.attention import M3VLAttention
+from models.demos.minimax_m3.tt.vision.layernorm import M3VLLayerNorm
+from models.demos.minimax_m3.tt.vision.mlp import M3VLMLP
 
 
 class M3VLBlock(LightweightModule):
