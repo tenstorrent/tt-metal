@@ -17,9 +17,8 @@ void kernel_main() {
     uint32_t value_address = get_arg_val<uint32_t>(runtime_args_counter++);  // value buffer address
     uint32_t mask_address = get_arg_val<uint32_t>(runtime_args_counter++);   // mask buffer address
     uint32_t gate_address = get_arg_val<uint32_t>(runtime_args_counter++);   // gate buffer address
-    // Work units handed to this core: Q chunks in standard mode, Q chunk pairs in balanced mode.
-    uint32_t num_units = get_arg_val<uint32_t>(runtime_args_counter++);
-    uint32_t start_unit = get_arg_val<uint32_t>(runtime_args_counter++);
+    // Then the core's work items (Q chunks): num_runs, (first_item, num_items) per run.
+    const uint32_t num_runs = get_arg_val<uint32_t>(runtime_args_counter++);
 
     constexpr uint32_t cb_query = tt::CBIndex::c_0;
     constexpr uint32_t cb_key = tt::CBIndex::c_1;
@@ -39,7 +38,6 @@ void kernel_main() {
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(5);       // K/V tiles per inner-loop step
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(6);       // query tile-rows per Q chunk
     constexpr uint32_t q_num_chunks = Ht / Sq_chunk_t;
-    [[maybe_unused]] constexpr uint32_t pairs_per_seq = q_num_chunks / 2;
     constexpr auto query_args = TensorAccessorArgs<7>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
@@ -82,7 +80,7 @@ void kernel_main() {
         const uint32_t key_offset = (batch_idx * num_of_groups + kv_group_idx) * qWt * Ht;
         const uint32_t value_offset = (batch_idx * num_of_groups + kv_group_idx) * vWt * Ht;
 
-#if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
+#ifdef CAUSAL_MASK
         const uint32_t num_kv_tiles_to_read = round_up(first_row_tile + Sq_chunk_t, Sk_chunk_t);
 #else
         const uint32_t num_kv_tiles_to_read = Ht;
@@ -125,19 +123,11 @@ void kernel_main() {
 #endif
     };
 
-#ifdef BALANCED_PARALLELISM
-    // Balanced: pairs of Q chunks, heavy first.
-    for (uint32_t p = 0; p < num_units; ++p) {
-        const uint32_t global_pair_idx = start_unit + p;
-        const uint32_t seq_idx = global_pair_idx / pairs_per_seq;
-        const uint32_t pair_in_seq = global_pair_idx % pairs_per_seq;
-        read_q_chunk(seq_idx * q_num_chunks + (q_num_chunks - 1U - pair_in_seq));
-        read_q_chunk(seq_idx * q_num_chunks + pair_in_seq);
+    for (uint32_t run = 0; run < num_runs; ++run) {
+        const uint32_t first_item = get_arg_val<uint32_t>(runtime_args_counter++);
+        const uint32_t num_items = get_arg_val<uint32_t>(runtime_args_counter++);
+        for (uint32_t item = first_item; item < first_item + num_items; ++item) {
+            read_q_chunk(item);
+        }
     }
-#else
-    // Standard mode: consecutive Q chunks.
-    for (uint32_t i = 0; i < num_units; ++i) {
-        read_q_chunk(start_unit + i);
-    }
-#endif
 }
