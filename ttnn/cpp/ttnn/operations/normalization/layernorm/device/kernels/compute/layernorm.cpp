@@ -17,7 +17,7 @@
 #ifdef UNTILIZE_OUT
 #include "api/compute/pack_untilize.h"
 #endif
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
