@@ -16,6 +16,8 @@ A compute kernel must start with no Tensix operation in flight and no register o
 
 SFPU lane predication (SFPENCC) must be disabled at kernel entry and whenever a thread waits on another thread. SFPU code that enables it must disable it before such a wait. The compiler relies on this and does not check it. Breaking it is undefined behavior.
 
+A Tensix instruction that reads a GPR an earlier RDCFG filled (a WRCFG, or a Scalar Unit instruction such as ADDDMAREG) must find the GPR already holding the configuration word as it was at the RDCFG. Code that overwrites the word between the two must not depend on seeing the new value. The compiler relies on this and does not check it. Breaking it is undefined behavior.
+
 Synchronization
 ---------------
 .. toctree::
