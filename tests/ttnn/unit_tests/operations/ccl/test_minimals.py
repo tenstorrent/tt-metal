@@ -9,7 +9,7 @@ import ttnn
 import os
 from tracy import signpost
 
-from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
+from tt_py_test_utils_common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 
 
 from conftest import is_6u
@@ -32,7 +32,7 @@ from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.concat_fuse_test impor
     run_concat_fuse_impl,
 )
 
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from tt_py_test_utils_common.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from conftest import is_6u
 
 

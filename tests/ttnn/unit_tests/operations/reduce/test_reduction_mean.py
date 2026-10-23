@@ -10,7 +10,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_allclose, assert_numeric_metrics, assert_with_ulp
-from models.common.utility_functions import torch_random
+from tt_py_test_utils_common.utility_functions import torch_random
 
 TEST_PADDING_VALUE = -42
 
@@ -206,3 +206,16 @@ def test_mean_multi_axis_bf16(device):
     output_tensor = ttnn.mean(input_tensor, dim=[1, 3], keepdim=True, compute_kernel_config=compute_kernel_config)
 
     assert torch.equal(ttnn.to_torch(output_tensor), torch_output)
+
+
+@pytest.mark.parametrize("dim", [None, [0, 1, 2, 3]])
+def test_mean_full_tensor_bf16(device, dim):
+    torch_input = torch.full((1, 2, 32, 64), 1024.0, dtype=torch.bfloat16)
+    torch_input[0, 1] = -1024.0
+    torch_input[0, 1, :, 0] = -1020.0
+    torch_output = torch.mean(torch_input.double()).to(torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.mean(input_tensor, dim=dim)
+
+    assert torch.equal(ttnn.to_torch(output_tensor).flatten(), torch_output.flatten())

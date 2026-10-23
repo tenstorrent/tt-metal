@@ -22,7 +22,6 @@ namespace ttnn::experimental::prim {
 
 struct LlamaAllGatherMatmulAsyncParams {
     ttnn::prim::MatmulParams matmul_struct;
-    std::vector<IDevice*> devices;
     uint32_t dim{};
     uint32_t num_links{};
     uint32_t ring_size{};
@@ -35,7 +34,6 @@ struct LlamaAllGatherMatmulAsyncParams {
     // Constructor required because GlobalSemaphore is not default constructible
     LlamaAllGatherMatmulAsyncParams(
         ttnn::prim::MatmulParams matmul_struct,
-        std::vector<IDevice*> devices,
         uint32_t dim,
         uint32_t num_links,
         uint32_t ring_size,
@@ -45,7 +43,6 @@ struct LlamaAllGatherMatmulAsyncParams {
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         std::optional<uint32_t> cluster_axis) :
         matmul_struct(std::move(matmul_struct)),
-        devices(std::move(devices)),
         dim(dim),
         num_links(num_links),
         ring_size(ring_size),
@@ -58,8 +55,7 @@ struct LlamaAllGatherMatmulAsyncParams {
     auto attributes() const {
         using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.reserve(9);
-        attrs.emplace_back("devices", devices);
+        attrs.reserve(8);
         attrs.emplace_back("dim", dim);
         attrs.emplace_back("num_links", num_links);
         attrs.emplace_back("ring_size", ring_size);

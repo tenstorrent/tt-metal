@@ -14,7 +14,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_w
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range_dtype,
 )
-from models.common.utility_functions import torch_random, is_wormhole_b0, is_blackhole
+from tt_py_test_utils_common.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 
 
 def create_full_range_tensor(input_shapes, dtype):
