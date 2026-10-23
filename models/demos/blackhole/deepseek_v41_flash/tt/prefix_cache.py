@@ -633,7 +633,16 @@ class PrefixCache:
             self.enabled = False
             self.log(f"prefix caching disabled: {e}")
             return
-        self.store.put(snap)
+        ev0 = self.store.evictions
+        stored = self.store.put(snap)
+        if not stored and snap.nbytes > self.store.budget:
+            self.log(
+                f"prefix cache: snapshot at {B} tokens REFUSED ({snap.nbytes / 2**20:.0f} MiB > host budget {self.store.budget / 2**20:.0f} MiB; DSV41_APC_GB)"
+            )
+        if self.store.evictions > ev0:
+            self.log(
+                f"prefix cache: {self.store.evictions - ev0} older snapshot(s) EVICTED to make room for {B} tokens (store {self.store.bytes / 2**20:.0f} MiB of {self.store.budget / 2**20:.0f} MiB, {self.store.evictions} evictions so far)"
+            )
         self.stats["snapshots"] += 1
         self.stats["snap_s"] += snap.seconds
         self.log(
