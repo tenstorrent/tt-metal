@@ -33,8 +33,15 @@ DEVICE_PARAMS = {"trace_region_size": 150000000}
 
 # VBench quality gate (RUN_VBENCH=1): every (prompt, seed) clip is rendered after the timed runs, and
 # each prompt's mean over the seeds must clear that prompt's floors (models/tt_dit/utils/vbench_bundle.py).
-# Indices into the test's prompt list: the boxing cats and the cyberpunk alley, both strongly dynamic.
+# T2V: indices into the test's prompt list, the boxing cats and the cyberpunk alley, both strongly dynamic.
 VBENCH_PROMPTS = [0, 2]
+# I2V: prompts that animate the fractal conditioning image itself. The T2V prompts ask for content the
+# image doesn't contain, which drags subject consistency to ~0.62 (bh_sc4, 2026-10-23) and gates on the
+# mismatch rather than on the pipeline.
+VBENCH_I2V_PROMPTS = [
+    "A slow, smooth camera push into a glowing fractal pattern, its intricate spiral edges and colors drifting gently.",
+    "The colorful fractal pattern slowly rotates and ripples like liquid, its fine detail shimmering as the light shifts.",
+]
 VBENCH_SEEDS = [42, 43, 44, 45]
 
 
@@ -44,7 +51,8 @@ def vbench_thresholds(model_type: str, height: int) -> dict:
     # binary per clip, so 0.75 requires three of the four seeds to move.
     if model_type == "i2v":
         # The I2V conditioning image is a fractal: dynamic_degree and imaging_quality are meaningless
-        # on it, so only intra-video consistency is gated (see test_pipeline_wan.py).
+        # on it, so only intra-video consistency is gated (see test_pipeline_wan.py). Placeholders from
+        # the single-clip test until VBENCH_I2V_PROMPTS are measured.
         return {"subject_consistency": 0.70, "background_consistency": 0.80 if height == 720 else 0.82}
     return {
         "subject_consistency": 0.8,
@@ -271,9 +279,9 @@ def test_pipeline_performance(
     gate_prompts = []
     gate_timings = []
     if run_vbench:
+        gate_texts = VBENCH_I2V_PROMPTS if model_type == "i2v" else [prompts[i] for i in VBENCH_PROMPTS]
         gate_prompts = [
-            {"text": prompts[i], "thresholds": vbench_thresholds(model_type, height), "timing": limits}
-            for i in VBENCH_PROMPTS
+            {"text": text, "thresholds": vbench_thresholds(model_type, height), "timing": limits} for text in gate_texts
         ]
         gate_profiler = BenchmarkProfiler()
         if is_global_rank_zero():
