@@ -1504,3 +1504,15 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - Tail lever 1 (each pair's steps ordered by when its rows land - per-chip step tables in the engine and ports,
   own rows first; bwd rows walked last first): traced 640 114-118 / 1024 194-198 us; without the reversal 123-125 /
   175. The base is 117-120 / 172-179: no consistent win. Not kept (moe_block_runs/tail_arrival_order.patch).
+
+### K3 block on the ring of 4 (k3_ring4, chunk 640: the Galaxy's per-chip load), traced
+- test_moe_block_traced[k3_ring4-640-device]: 48 replays checked (PCC min 0.99612). Per program, slowest chip,
+  median: head 455-457 | dispatch 57-59 | experts + combine 1189-1191 | tail 113-114 us; replay span 1808-1813 us,
+  back to back 1832 us wall. Galaxy budget: head 650-655 | dispatch 188 | experts 1421 | tail 151-154.
+- The SP 1 hang is intermittent, not structural. Line (p150_x4_line_1x4): HANG in the eager wall loop twice (DRISC
+  readers and Tensix readers, tail fused or ops) and once in the b2b replays after 48 checked replays; then the same
+  config passed end to end. The wall loop's first call reuses eager call 0's x - same routing as a passing call.
+  Triage at each hang: one chip still in the experts program with its flat kernels running (TRISC1 in matmuls,
+  packers waiting for free tiles, y writers issuing), the others' flat kernels done, their combine kernels waiting.
+  Standalone flat + combine (scratch_flat_combine_rf closeout, K3 Galaxy load) passes on both the line and the ring,
+  traced 100 replays (fused 1182-1184 us).
