@@ -25,6 +25,7 @@ import ttnn
 from ....models.transformers.minimax_h3.length_classes import length_class
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, resolve_canvas_size
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import (
+    _DIT_FSDP_ENV,
     _DYNAMIC_LENGTH_ENV,
     _PRESETS_BH,
     _PRESETS_WH,
@@ -34,6 +35,7 @@ from ....pipelines.minimax_h3.pipeline_minimax_h3 import (
     _requested_dynamic_length,
     _resolve_audio_t_shard,
     _resolve_denoise_path,
+    _resolve_dit_fsdp,
     validate_bucket_ladder,
 )
 from ....pipelines.minimax_h3.policy import align_num_frames, get_num_frames
@@ -201,6 +203,31 @@ def test_resolve_denoise_path_quad_and_wormhole(monkeypatch, expect_error):
     with expect_error(ValueError, "eager-only"):
         _denoise_path(quad)
     assert _denoise_path(wormhole) == (False, False, True)
+
+
+def test_resolve_dit_fsdp(monkeypatch, expect_error):
+    monkeypatch.delenv(_DIT_FSDP_ENV, raising=False)
+    bh, quad, wormhole = _PRESETS_BH[(4, 8)], _PRESETS_BH[(4, 32)], _PRESETS_WH[(4, 8)]
+    assert "dit_fsdp" not in bh and "dit_fsdp" not in quad
+    env = f"from {_DIT_FSDP_ENV}"
+    # dynamic ref2va shards the DiT; bucketed ref2va and dynamic t2va stay unsharded
+    assert _resolve_dit_fsdp(bh, dit_fsdp=None, task="ref2va", dynamic_length=True) == (True, "dynamic ref2va")
+    assert _resolve_dit_fsdp(bh, dit_fsdp=None, task="ref2va", dynamic_length=False) == (False, "default")
+    assert _resolve_dit_fsdp(bh, dit_fsdp=None, task="t2va", dynamic_length=True) == (False, "default")
+    assert _resolve_dit_fsdp(quad, dit_fsdp=None, task="ref2va", dynamic_length=False) == (False, "default")
+    # the kwarg and a preset key both win over the rule
+    assert _resolve_dit_fsdp(bh, dit_fsdp=False, task="ref2va", dynamic_length=True) == (False, "kwarg")
+    assert _resolve_dit_fsdp(bh, dit_fsdp=True, task="t2va", dynamic_length=False) == (True, "kwarg")
+    assert _resolve_dit_fsdp(wormhole, dit_fsdp=None, task="t2va", dynamic_length=False) == (True, "preset")
+    # the env overrides all of them
+    monkeypatch.setenv(_DIT_FSDP_ENV, "0")
+    assert _resolve_dit_fsdp(bh, dit_fsdp=None, task="ref2va", dynamic_length=True) == (False, env)
+    assert _resolve_dit_fsdp(wormhole, dit_fsdp=True, task="ref2va", dynamic_length=False) == (False, env)
+    monkeypatch.setenv(_DIT_FSDP_ENV, "1")
+    assert _resolve_dit_fsdp(bh, dit_fsdp=False, task="t2va", dynamic_length=False) == (True, env)
+    monkeypatch.setenv(_DIT_FSDP_ENV, "yes")
+    with expect_error(ValueError, _DIT_FSDP_ENV):
+        _resolve_dit_fsdp(bh, dit_fsdp=None, task="t2va", dynamic_length=False)
 
 
 # Pure (no-device) coverage for the per-mesh bucket ladders.

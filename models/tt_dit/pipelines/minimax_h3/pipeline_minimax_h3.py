@@ -233,6 +233,26 @@ def _resolve_denoise_path(
     return _DenoisePath(bool(trace), bool(trace or (bucket and not dynamic)), dynamic, from_env)
 
 
+_DIT_FSDP_ENV = "MINIMAX_H3_DIT_FSDP"
+
+
+def _resolve_dit_fsdp(preset: Mapping, *, dit_fsdp: bool | None, task: str, dynamic_length: bool) -> tuple[bool, str]:
+    """MINIMAX_H3_DIT_FSDP=0|1 > kwarg > preset; else on for dynamic-length ref2va only, whose cap-sized gather
+    pair does not fit beside unsharded weights on a 4x8. Returns (dit_fsdp, source) for the construction log."""
+    raw = os.environ.get(_DIT_FSDP_ENV)
+    if raw is not None:
+        if raw not in ("0", "1"):
+            raise ValueError(f"{_DIT_FSDP_ENV} must be '0' or '1'")
+        return raw == "1", f"from {_DIT_FSDP_ENV}"
+    if dit_fsdp is not None:
+        return bool(dit_fsdp), "kwarg"
+    if "dit_fsdp" in preset:
+        return bool(preset["dit_fsdp"]), "preset"
+    if dynamic_length and task == "ref2va":
+        return True, "dynamic ref2va"
+    return False, "default"
+
+
 def _resolve_audio_t_shard(
     requested_factor: int, mesh_shape: tuple[int, ...], tp_axis: int, sp_axis: int
 ) -> tuple[int, int | None]:
@@ -605,8 +625,12 @@ class MiniMaxH3Pipeline:
         self.trace_denoise = path.trace_denoise
         self.bucket_denoise = path.bucket_denoise
         self.dynamic_length = path.dynamic_length
+        self.dit_fsdp, fsdp_source = _resolve_dit_fsdp(
+            preset, dit_fsdp=dit_fsdp, task=task, dynamic_length=self.dynamic_length
+        )
         source = f" (from {_DYNAMIC_LENGTH_ENV})" if path.dynamic_from_env else ""
-        self._host_log(f"denoise path: {path.name}{source}")
+        fsdp = "on" if self.dit_fsdp else "off"
+        self._host_log(f"denoise path: {path.name}{source}; dit_fsdp: {fsdp} ({fsdp_source})")
         self.use_persistent_ccl_buffers = (
             preset.get("use_persistent_ccl_buffers", True)
             if use_persistent_ccl_buffers is None
@@ -748,14 +772,6 @@ class MiniMaxH3Pipeline:
         self._vision_config = None
         self._audio_decoder = None
         self._audio_encoder = None
-        # `None` takes the preset (Wormhole's 12 GB/chip needs the DiT sharded above 5 s; Blackhole does
-        # not), and MINIMAX_H3_DIT_FSDP=0/1 overrides both, like MINIMAX_H3_AUDIO_T_SHARD above.
-        self.dit_fsdp = preset.get("dit_fsdp", False) if dit_fsdp is None else dit_fsdp
-        env_dit_fsdp = os.environ.get("MINIMAX_H3_DIT_FSDP")
-        if env_dit_fsdp is not None:
-            if env_dit_fsdp not in ("0", "1"):
-                raise ValueError("MINIMAX_H3_DIT_FSDP must be '0' or '1'")
-            self.dit_fsdp = env_dit_fsdp == "1"
         self.last_seq_len: SeqLen | None = None
         self.last_program_cache_misses: dict[str, int] = {}
 
@@ -851,7 +867,8 @@ class MiniMaxH3Pipeline:
         `trace_denoise`, `bucket_denoise`, `use_persistent_ccl_buffers` and `bucket_ladder` default to the mesh preset;
         `arena_caps` and `adaln_slot_roles` default to the task's envelope. `dynamic_length` (the Blackhole 4x8
         preset's default; kwarg > MINIMAX_H3_DYNAMIC_LENGTH=0|1 > preset) replaces the bucket ladder by the live
-        padded length up to `max_sequence_length`; passing any bucketed kwarg instead keeps that path.
+        padded length up to `max_sequence_length`; passing any bucketed kwarg instead keeps that path. `dit_fsdp`
+        (MINIMAX_H3_DIT_FSDP=0|1 > kwarg > preset) is on by default for dynamic-length ref2va, see `_resolve_dit_fsdp`.
         """
         transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
         weights_dir = resolve_weights_dir(

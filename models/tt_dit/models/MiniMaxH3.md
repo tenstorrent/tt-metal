@@ -376,6 +376,12 @@ alignment (256 rows), and the DiT ops that used to key a program on the padded l
 instead; the norms' worker split (`row_capacity`) and the ring attention's K/V gather pair are sized once
 at `max_sequence_length / 8` rows per device. Eager only: a trace freezes the length, so the quad preset
 stays bucketed and traced, and the Wormhole 4x8 preset stays bucketed (dynamic length is unmeasured there).
+A dynamic-length `task="ref2va"` pipeline also defaults to `dit_fsdp=True` when its preset has no `dit_fsdp`
+key (the Blackhole 4x8): that gather pair is sized at the ref2va cap (326656 rows against t2va's 120320), and
+beside unsharded resident weights the 880 MB allocation does not fit at construction, while bucketed ref2va and
+dynamic t2va stay unsharded; `dit_fsdp=False` or `MINIMAX_H3_DIT_FSDP=0` turns it off. The measured ref2va
+numbers were taken with FSDP on (`test_performance_minimax_h3.py` passes `dit_fsdp=True`), and the construction
+log records the choice (`dit_fsdp: on (dynamic ref2va)`).
 
 **Backup.** The 4x8 ladder path is kept behind a flag for a few weeks and then removed. It is selected by
 `create_pipeline(..., dynamic_length=False)`, by `MINIMAX_H3_DYNAMIC_LENGTH=0` in the environment, or by
