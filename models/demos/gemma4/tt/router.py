@@ -112,6 +112,7 @@ class Gemma4Router:
             self.per_expert_scale = None
         self._fused = None  # (pes ROW_MAJOR, base tensor) of the fused router tail, built on first use
         self._packed = None  # (pes ROW_MAJOR, zero base) of the packed router tail (kernel rows), built on first use
+        self._dense = None  # pes ROW_MAJOR of the DENSE (prefill rows) router tail, built on first use
 
     def _norm_scale(self, hidden_states):
         """Steps 1-2: ``norm(x) * scale * hidden**-0.5`` (the folded one-program form on decode rows when
@@ -127,6 +128,35 @@ class Gemma4Router:
         scaled = ttnn.mul(normed, self.scale)
         normed.deallocate(True)
         return ttnn.mul(scaled, self.scalar_root_size)
+
+    def _dense_fused_ok(self, logits) -> bool:
+        """The DENSE router program's contract: opt-in, bf16 TILE [1, 1, S, E] with S a multiple of 32 (prefill rows;
+        decode rows keep their own fused path), E <= 256 a multiple of 32, k <= 32."""
+        from models.demos.gemma4.custom_ops.router_topk import RouterTopk
+
+        if not RouterTopk.dense_enabled() or logits.layout != ttnn.TILE_LAYOUT or logits.dtype != ttnn.bfloat16:
+            return False
+        shape = [int(v) for v in logits.shape]
+        if len(shape) != 4 or shape[0] != 1 or shape[1] != 1 or shape[2] % 32 or shape[2] <= 32:
+            return False
+        return shape[3] % 32 == 0 and shape[3] <= 256 and self.top_k <= 32
+
+    def _dense_pes(self):
+        """The per-expert scale as the ROW_MAJOR [1, 1, 1, E] row the DENSE program reads (ones without a scale)."""
+        if self._dense is None:
+            if self.per_expert_scale is not None:
+                self._dense = ttnn.to_layout(self.per_expert_scale, ttnn.ROW_MAJOR_LAYOUT)
+            else:
+                self._dense = ttnn.from_torch(
+                    torch.ones(1, 1, 1, self.num_experts),
+                    device=self.mesh_device,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=ttnn.bfloat16,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device)
+                    if hasattr(self.mesh_device, "shape")
+                    else None,
+                )
+        return self._dense
 
     def fused_routing(self, hidden_states, expert_weights, mesh_config, prenormed=False):
         """GEMMA4_MOE_FUSED=1 decode rows: norm, scale and projection as before, then ``custom_ops/router_topk``
@@ -210,6 +240,15 @@ class Gemma4Router:
         # 3. Linear projection → [1, 1, seq_len, num_experts] — on device
         expert_scores = self.proj(scaled)
         scaled.deallocate(True)
+
+        if not sparse and self._dense_fused_ok(expert_scores):
+            # GEMMA4_ROUTER_DENSE_FUSED=1: steps 4-8 (softmax, top-k, sum-normalize, scatter, per-expert scale) as one
+            # program on the prefill rows (custom_ops/router_topk DENSE mode); same arithmetic as the chain below
+            from models.demos.gemma4.custom_ops.router_topk import RouterTopk
+
+            dense = RouterTopk.op_dense(expert_scores, self._dense_pes(), self.top_k)
+            expert_scores.deallocate(True)
+            return dense
 
         # 4. Softmax over all experts — on device
         router_probs = ttnn.softmax(expert_scores, dim=-1)

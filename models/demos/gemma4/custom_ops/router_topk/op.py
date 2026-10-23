@@ -29,6 +29,7 @@ ROW_MAJOR tensor (columns ``[0, k)`` = sum-normalized top-k weights times ``per_
 (+fillpad), div`` (10 programs) and feeds ``custom_ops/moe_frame_prep`` / the lane gather as one tensor.
 """
 
+import os
 from pathlib import Path
 
 import torch
@@ -106,6 +107,74 @@ class RouterTopk:
     @classmethod
     def op(cls, logits: ttnn.Tensor, pes: ttnn.Tensor, base: ttnn.Tensor, e_loc: int, k: int):
         return cls._run(logits, pes, base, e_loc=e_loc, k=k, packed=False)
+
+    @staticmethod
+    def golden_dense(logits: torch.Tensor, pes: torch.Tensor, k: int):
+        """torch reference of the DENSE (prefill) form: logits [1,1,S,E], pes [E] -> [1,1,S,E] float (the
+        normalized top-k weights times the per-expert scale at the selected columns, zeros elsewhere)."""
+        S, E = logits.shape[2], logits.shape[3]
+        probs = torch.softmax(logits.float().reshape(S, E), dim=-1)
+        v, i = torch.topk(probs, k, dim=-1)
+        wk = v / v.sum(dim=-1, keepdim=True) * pes.float()[i]
+        return torch.zeros(S, E).scatter(1, i, wk).reshape(1, 1, S, E)
+
+    @staticmethod
+    def dense_enabled() -> bool:
+        """``GEMMA4_ROUTER_DENSE_FUSED=1``: the prefill router tail (softmax, top-k, sum-normalize, scatter, per-expert
+        scale) as one program (opt-in)."""
+        return os.environ.get("GEMMA4_ROUTER_DENSE_FUSED", "0") == "1"
+
+    @classmethod
+    def op_dense(cls, logits: ttnn.Tensor, pes: ttnn.Tensor, k: int, core_grid=None) -> ttnn.Tensor:
+        """DENSE mode on prefill rows: ``logits`` [1, 1, S, E] (bf16 TILE, S a multiple of 32, E <= 256 a multiple
+        of 32), ``pes`` [1, 1, 1, E] bf16 ROW_MAJOR -> the dense routing matrix [1, 1, S, E] bf16 TILE DRAM. One
+        token row per core per pass over min(grid, S) cores (kernels/router_topk_dense.cpp)."""
+        assert logits.layout == ttnn.TILE_LAYOUT and logits.dtype == ttnn.bfloat16, "logits must be bf16 TILE"
+        _, _, S, E = (int(v) for v in logits.shape)
+        assert S % TILE == 0 and logits.padded_shape[-2] == S, f"rows {S} must be tile-aligned"
+        assert E % TILE == 0 and E <= 256, f"experts {E} must be a multiple of 32 (<= 256)"
+        assert pes.layout == ttnn.ROW_MAJOR_LAYOUT and tuple(int(v) for v in pes.shape) == (1, 1, 1, E), "pes RM"
+        assert 1 <= k <= 32, k
+        device = logits.device()
+        out = ttnn.allocate_tensor_on_device(
+            logits.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+        )
+        grid = core_grid or device.compute_with_storage_grid_size()
+        n_cores = min(grid.x * grid.y, S)
+        cores = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(n_cores)]
+        core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+        tile_bytes = TILE * TILE * 2
+        cols_t = E // TILE
+        scratch_bytes = 512 + 512
+
+        def cb(idx, total, page):
+            return ttnn.CBDescriptor(
+                total_size=total,
+                core_ranges=core_set,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(buffer_index=idx, data_format=ttnn.bfloat16, page_size=page)
+                ],
+            )
+
+        cbs = [cb(cls.CB_LOGITS, cols_t * tile_bytes, tile_bytes), cb(cls.CB_SCRATCH, scratch_bytes, scratch_bytes)]
+        ct = [cls.CB_LOGITS, cls.CB_SCRATCH, cols_t, E, k, pes.buffer_page_size(), n_cores]
+        for t in (logits, pes, out):
+            ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        rt = ttnn.RuntimeArgs()
+        for c, core in enumerate(cores):
+            rt[core.x][core.y] = [logits.buffer_address(), pes.buffer_address(), out.buffer_address(), c, S]
+        kernels = [
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "router_topk_dense.cpp"),
+                core_ranges=core_set,
+                compile_time_args=ct,
+                runtime_args=rt,
+                config=ttnn.ReaderConfigDescriptor(),
+            )
+        ]
+        program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+        ttnn.generic_op([logits, pes, out], program)
+        return out
 
     @classmethod
     def _run(cls, logits: ttnn.Tensor, pes: ttnn.Tensor, base: ttnn.Tensor, e_loc: int, k: int, packed: bool):
