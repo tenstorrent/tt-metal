@@ -145,6 +145,14 @@ ALWI void sigmoid_tile(uint32_t idst) {
 #endif
 }
 
+ALWI void silu_tile_init() {
+#ifdef ARCH_QUASAR
+    MATH(SFPU_UNARY_INIT(silu));
+#else
+    MATH(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX)));
+#endif
+}
+
 // clang-format off
 /**
  * Performs SILU (same as Swish) operation on each element of a tile
@@ -162,6 +170,7 @@ ALWI void sigmoid_tile(uint32_t idst) {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void silu_tile(uint32_t idst) {
+    silu_tile_init();
 #ifdef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_silu, (8 /*ITERATIONS*/), idst, ::ckernel::VectorMode::RC));
@@ -173,14 +182,6 @@ ALWI void silu_tile(uint32_t idst) {
         (is_fp32_dest_acc_en, 8 /* ITERATIONS */),
         idst,
         VectorMode::RC));
-#endif
-}
-
-ALWI void silu_tile_init() {
-#ifdef ARCH_QUASAR
-    MATH(SFPU_UNARY_INIT(silu));
-#else
-    MATH(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX)));
 #endif
 }
 
