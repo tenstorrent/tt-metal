@@ -144,6 +144,8 @@ class PrefillModelAdapter(ABC):
     # model declares no drafter of its own; DFLASH_HF_MODEL / PREFILL_DFLASH_GOLDEN_KV_DIR override.
     dflash_model_default: str = ""
     dflash_golden_default: str = ""
+    # Stored drafter K layout used when comparing against half-split HF goldens.
+    dflash_rope_convention: str = "interleaved"
     supports_mtp: bool = False
     supports_tp_shard_kv: bool = False
     tp_shard_kv_default: bool = False

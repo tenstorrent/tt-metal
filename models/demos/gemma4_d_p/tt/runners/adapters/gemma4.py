@@ -52,6 +52,7 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
     pipeline_activation_emb_tp_sharded = False
     supports_dflash = True
     dflash_model_default = DEFAULT_DFLASH_MODEL
+    dflash_rope_convention = "half_split"
 
     @property
     def hf_model_id(self):
