@@ -7,7 +7,6 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
-    MathOperation,
     PerfRunType,
     ReducePool,
 )
@@ -21,6 +20,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
+from test_sfpu_reduce import get_supported_reduce_axioms
 
 
 @pytest.mark.perf
@@ -32,13 +32,8 @@ from helpers.test_variant_parameters import (
     ),
     dest_acc=[DestAccumulation.Yes],
     reduce_pool=[ReducePool.Max, ReducePool.Sum, ReducePool.Average],
-    # Integer row AVG is not supported (integer AVG is column-only).
-    mathop=lambda formats, reduce_pool: (
-        [MathOperation.ReduceColumn]
-        if reduce_pool == ReducePool.Average
-        and formats.input_format == DataFormat.Int32
-        else [MathOperation.ReduceRow, MathOperation.ReduceColumn]
-    ),
+    # The same axes as the correctness sweep: integer row AVG is not supported (integer AVG is column-only).
+    mathop=get_supported_reduce_axioms,
     loop_factor=list(range(10, 201, 10)),
 )
 def test_perf_sfpu_reduce(
