@@ -51,6 +51,28 @@ def test_experts_dispatch(seq_len, mesh_device, reset_seeds, request, monkeypatc
     run_experts(1, seq_len, mesh_device, request)
 
 
+# GEMMA4_MOE_DISPATCH_FIT_CHUNK=1: a call shorter than the 4096-token chunk runs on a chunk of its own length (128
+# tokens on 128 rows instead of 4096 padded rows; 2065 on a 2176-row chunk with the sentinel-marked padding; 4224 as
+# 4096 + a 128 remainder). ``sparse``: the router's (values, indices) pair instead of the dense routing matrix
+# (GEMMA4_MOE_DISPATCH_SPARSE_ROUTING=1 in the model: no dense scatter, no second top-k).
+@skip_if_not_moe
+@pytest.mark.skipif(
+    not is_blackhole(), reason="token-dispatch prefill runs the Blackhole-only unified_routed_expert_ffn"
+)
+@parametrize_mesh_with_fabric(mesh_shapes=[(4, 1), (2, 4), (8, 4)])
+@pytest.mark.parametrize(
+    "seq_len, sparse",
+    [(128, False), (128, True), (1024, True), (2065, True), (4096 + 128, True)],
+    ids=["fit_dense_128", "fit_sparse_128", "fit_sparse_1024", "fit_sparse_2065", "fit_sparse_4224"],
+)
+def test_experts_dispatch_fit(seq_len, sparse, mesh_device, reset_seeds, request, monkeypatch):
+    """Token-dispatch prefill on a chunk fitted to the call (and the sparse routing input) vs the HF reference."""
+    monkeypatch.setenv("GEMMA4_MOE_DISPATCH_PREFILL", "1")
+    monkeypatch.setenv("GEMMA4_MOE_DISPATCH_MIN_TOKENS", "128")
+    monkeypatch.setenv("GEMMA4_MOE_DISPATCH_FIT_CHUNK", "1")
+    run_experts(1, seq_len, mesh_device, request, sparse_routing=sparse)
+
+
 # single-row meshes (the 4-chip and 8-chip entries) dispatch along their columns over the hop-forwarding
 # dispatch_fabric2d / combine_fabric2d pair, which needs the axis wrap-wired (FABRIC_1D_RING)
 @skip_if_not_moe
@@ -88,11 +110,13 @@ def test_experts_decode_kernel(seq_len, mesh_device, reset_seeds, request, monke
     run_experts(1, seq_len, mesh_device, request, pcc_threshold=0.97)
 
 
-def run_experts(batch_size, seq_len, mesh_device, request, pcc_threshold=None):
+def run_experts(batch_size, seq_len, mesh_device, request, pcc_threshold=None, sparse_routing=False):
     """Test MoE experts against HF reference.
 
     1x1: Uses reduced experts (8) and bfloat16 weights for fast single-card test.
     1x8: Uses real model dimensions with TP-sharded bfloat8_b weights.
+    ``sparse_routing``: hand the experts the router's sparse ``(values, indices)`` pair (the dense matrix's top-k,
+    bf16 / uint16 TILE) instead of the dense routing matrix (the token-dispatch prefill takes both).
     """
     from models.demos.gemma4.config import MeshConfig, ModeConfig
 
@@ -185,9 +209,29 @@ def run_experts(batch_size, seq_len, mesh_device, request, pcc_threshold=None):
     # TT forward
     replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
     x_tt = ttnn.from_torch(x, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate)
-    routing_tt = ttnn.from_torch(
-        routing, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
-    )
+    if sparse_routing:
+        # the router's sparse form: the dense matrix's top-k values and expert ids ([1,1,S,K] bf16 / uint16)
+        values, indices = routing.float().topk(top_k, dim=-1)
+        routing_tt = (
+            ttnn.from_torch(
+                values.to(torch.bfloat16),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=replicate,
+            ),
+            ttnn.from_torch(
+                indices.to(torch.int16),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.uint16,
+                mesh_mapper=replicate,
+            ),
+        )
+    else:
+        routing_tt = ttnn.from_torch(
+            routing, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
+        )
     tt_output = tt_experts(x_tt, routing_tt)
 
     tt_out_torch = (

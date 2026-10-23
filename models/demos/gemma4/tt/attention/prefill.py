@@ -165,6 +165,30 @@ def _left_pad_kv_to_hist(tt_k, tt_v, hist, head_dim, *, deallocate_inputs=False)
     return k_out, v_out
 
 
+def _zero_fill_ring(config, k_cache, v_cache, nkv_local, fill_page_table, user_id, block_size, paged_modulo_kwargs):
+    """Write a whole window of zeros into the user's bounded ring (both caches) from a persistent zero buffer kept on
+    ``config`` (allocated on the first, eager, call: a trace capture only records the fills)."""
+    modulo = int(paged_modulo_kwargs.get("cache_position_modulo") or 0)
+    if modulo <= 0:
+        return
+    key = (int(nkv_local), modulo, int(config.head_dim), k_cache.dtype)
+    cached = getattr(config, "_g4_ring_zero_fill", None)
+    if cached is None or cached[0] != key:
+        zeros = ttnn.zeros(
+            [1, int(nkv_local), modulo, int(config.head_dim)],
+            dtype=k_cache.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=k_cache.device(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        config._g4_ring_zero_fill = (key, zeros)
+        cached = config._g4_ring_zero_fill
+    for cache in (k_cache, v_cache):
+        _paged_fill_cache(
+            cache, cached[1], fill_page_table, batch_idx=user_id, block_size=block_size, **paged_modulo_kwargs
+        )
+
+
 def _copy_sliding_tail_into_persistent(config, k_tail_out, v_tail_out, head_dim):
     """Copy a (possibly short) sliding-tail stash into the persistent ring buffers.
 
@@ -354,6 +378,93 @@ def _read_sliding_tail_from_paged_cache(
         return (k_tail, v_tail)
     except Exception as e:
         logger.warning("Gemma4 sliding prefill: paged tail reconstruction failed: {}", e)
+        return None
+
+
+def _bounded_ring_tail_blocks(row, chunk_offset, sliding_window, modulo, block_size):
+    """Ring-local block ids, in position order, covering the prior window ``[chunk_offset - take, chunk_offset)`` of a
+    bounded ring whose fill wrote position p to slot ``p % modulo`` (``take`` = min(window, offset, modulo)), with the
+    window's first row inside that run: ``(blocks, first_row, take)``, or None when the ring table cannot hold it.
+    Block 0 is a legal ring block (the remapped sliding table's slot 0 starts at 0). Pure host logic (unit-tested)."""
+    chunk_offset, modulo, block_size = int(chunk_offset), int(modulo), int(block_size)
+    if chunk_offset <= 0 or modulo <= 0 or block_size <= 0 or modulo % block_size:
+        return None
+    take = min(int(sliding_window), chunk_offset, modulo)
+    if take <= 0:
+        return None
+    start = chunk_offset - take
+    p0 = (start // block_size) * block_size
+    blocks = []
+    for p in range(p0, chunk_offset, block_size):
+        b = (p % modulo) // block_size
+        if b >= int(row.shape[-1]):
+            return None
+        blocks.append(int(row[b]))
+    if not blocks or any(b < 0 for b in blocks):
+        return None
+    return blocks, start - p0, take
+
+
+def _read_sliding_tail_from_bounded_ring(
+    k_cache,
+    v_cache,
+    page_table,
+    user_id,
+    chunk_offset,
+    sliding_window,
+    modulo,
+    head_dim,
+    out_dtype,
+    kv_local,
+    lane_device_index=0,
+):
+    """Rebuild a sliding-window continuation's prior-window K/V tail from the bounded ring (a request whose first
+    chunk replayed the traced short bucket carries no stash: that graph records none). Returns the last
+    ``min(sliding_window, chunk_offset, modulo)`` positions in the activations' dtype, or None (warned)."""
+    if page_table is None or chunk_offset is None or chunk_offset <= 0:
+        return None
+    cache_kv, block_size, cache_hd = (int(k_cache.padded_shape[i]) for i in (1, 2, 3))
+    if cache_kv != int(kv_local) or cache_hd != int(head_dim):
+        raise ValueError(
+            f"bounded ring tail reconstruction needs the layer's own KV view ({kv_local}x{head_dim}); "
+            f"the pool is allocated as {tuple(k_cache.padded_shape)}"
+        )
+    try:
+        row = page_table
+        if isinstance(row, ttnn.Tensor):
+            shards = ttnn.get_device_tensors(row)
+            row = ttnn.to_torch(shards[min(int(lane_device_index), len(shards) - 1)])
+        if row.dim() > 1:
+            row = row[user_id]
+        plan = _bounded_ring_tail_blocks(row, chunk_offset, sliding_window, modulo, block_size)
+        pool_blocks = int(k_cache.padded_shape[0])
+        if plan is None or any(b >= pool_blocks for b in plan[0]):
+            logger.warning(
+                "Gemma4 sliding prefill: no usable ring tail at chunk_start={} (ring row {}, pool {} blocks)",
+                chunk_offset,
+                [int(b) for b in row[: min(int(row.shape[-1]), 16)]],
+                pool_blocks,
+            )
+            return None
+        blocks, first_row, take = plan
+        tails = []
+        for cache in (k_cache, v_cache):
+            parts = [ttnn.slice(cache, [b, 0, 0, 0], [b + 1, cache_kv, block_size, cache_hd]) for b in blocks]
+            run = ttnn.concat(parts, dim=2) if len(parts) > 1 else parts[0]
+            for part in parts:
+                if part is not run:
+                    part.deallocate(True)
+            tail = ttnn.slice(run, [0, 0, first_row, 0], [1, cache_kv, first_row + take, cache_hd])
+            if tail is not run:
+                run.deallocate(True)
+            if out_dtype is not None and tail.dtype != out_dtype:
+                cast = ttnn.typecast(tail, out_dtype)
+                tail.deallocate(True)
+                tail = cast
+            tails.append(tail)
+        return tuple(tails)
+    except Exception as e:  # noqa: BLE001 - a failed rebuild degrades to the (warned) no-tail path
+        logger.warning("Gemma4 sliding prefill: bounded ring tail reconstruction failed: {}", e)
         return None
 
 
@@ -583,8 +694,15 @@ def _prefill_forward_single(
     sliding_tail_in=None,
     sliding_tail_end=None,
     mm_attn_mask=None,
+    traced_short_bucket=False,
 ):
     """Single-user prefill — matches arg/gemma4_optimizations.
+
+    ``traced_short_bucket`` (the traced short single-user bucket under bounded sliding, see
+    ``generator_trace.short_prefill_stash_skipped``): the kernel-capped ring fill first zeroes the whole ring from a
+    persistent buffer (ring hygiene the eager path gets from its zero-extended deferred fill), and the cross-chunk
+    sliding-tail stash after the SDPA is skipped: a replay never runs the Python that keys the stash to a request,
+    and the stash's left pad is a host write the capture cannot record.
 
     Generator-level multi-chunk prefill (``chunk_page_table`` not None): the
     current chunk's K/V is written at its absolute blocks via ``chunk_page_table``.
@@ -704,6 +822,37 @@ def _prefill_forward_single(
     if shared_kv is None:
         tt_k = apply_rope(tt_k, cos_cache, sin_cache, memory_config=act_mc)
 
+    # A sliding-window continuation on the bounded substrate without a stash (the request's first chunk replayed the
+    # traced short bucket, which records none): rebuild the prior window from the ring before the fill stash below
+    # (its padding restore) and the SDPA read it.
+    if (
+        sliding_tail_in is None
+        and sliding_chunked
+        and not isinstance(chunk_start_idx, ttnn.Tensor)
+        and chunk_offset is not None
+        and chunk_offset > 0
+        and config.cache_position_modulo is not None
+        and kv_cache is not None
+        and shared_kv is None
+        and page_table is not None
+    ):
+        _ring_k, _ring_v = kv_cache
+        sliding_tail_in = _read_sliding_tail_from_bounded_ring(
+            _ring_k,
+            _ring_v,
+            page_table,
+            user_id,
+            chunk_offset,
+            config.sliding_window,
+            int(config.cache_position_modulo),
+            config.head_dim,
+            tt_k.dtype,
+            kv_local=1 if weights.kv_replicated else config.num_key_value_heads // tp,
+            lane_device_index=_owner_lane_device_index(mesh_config),
+        )
+        if sliding_tail_in is not None and sliding_tail_end is None:
+            sliding_tail_end = chunk_offset
+
     if kv_cache is not None and shared_kv is None:
         k_cache, v_cache = kv_cache
         if page_table is not None:
@@ -796,6 +945,21 @@ def _prefill_forward_single(
                     valid_dev = _resolve_valid_seq_len_tensor(config, valid_seq_len, tt_k.shape[-2], k_cache.device())
                     if valid_dev is not None:
                         fill_kwargs["valid_seq_len_tensor"] = valid_dev
+                    if traced_short_bucket:
+                        # Ring hygiene for the replayed short bucket: the capped fill leaves the slots past the
+                        # prompt holding a previous occupant's K/V, which the ring-window SDPA attends (the eager
+                        # path zero-extends its deferred fill, flush_deferred_bounded_fills). Fill the whole window
+                        # from a persistent zero buffer first; the capture records it as a plain fill.
+                        _zero_fill_ring(
+                            config,
+                            k_cache,
+                            v_cache,
+                            int(tt_k.shape[1]),
+                            fill_page_table,
+                            user_id,
+                            eff_bs,
+                            paged_modulo_kwargs,
+                        )
                     _paged_fill_cache(
                         k_cache,
                         k_fill,
@@ -1116,6 +1280,7 @@ def _prefill_forward_single(
     # stash alive after traced 4k grants (see ``_DEFAULT_TRACE_PREFILL_SEQ_LENS``).
     if (
         sliding_tail_out is None
+        and not traced_short_bucket
         and config.is_sliding
         and sliding_window is not None
         and tt_k is not None
@@ -1176,6 +1341,7 @@ def prefill_forward(
     sliding_tail_in=None,
     sliding_tail_end=None,
     mm_attn_mask=None,
+    traced_short_bucket=False,
 ):
     """
     Multi-token prefill attention, fully on device.
@@ -1218,6 +1384,7 @@ def prefill_forward(
             sliding_tail_in=sliding_tail_in,
             sliding_tail_end=sliding_tail_end,
             mm_attn_mask=mm_attn_mask,
+            traced_short_bucket=traced_short_bucket,
         )
 
     tp = mesh_config.tp if mesh_config else 1

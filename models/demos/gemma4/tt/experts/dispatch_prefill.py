@@ -37,6 +37,33 @@ from models.demos.minimax_m3.tt.moe.tt_reduce import TtMiniMaxReduce
 
 # tokens per dispatch chunk across the whole mesh (rows * seq_len_per_chip); every chip holds the chunk
 CHUNK_TOKENS = int(os.environ.get("GEMMA4_MOE_DISPATCH_CHUNK", "4096"))
+# GEMMA4_MOE_DISPATCH_FIT_CHUNK=1: a call (or its last chunk) shorter than CHUNK_TOKENS runs on a dispatch chunk of
+# its own tile-aligned length instead of padding to CHUNK_TOKENS, so a 128-token prompt no longer pays for 4096
+# rows (the top-k, histogram, dispatch, combine and reduce run on 32 rows per chip instead of 1024). Every distinct
+# chunk size gets its own dispatch / combine modules and GeGLU op instance over the same weights
+# (``_DispatchChunkPlan``); the prefill buckets are powers of two, so a handful of plans per layer.
+FIT_CHUNK_ENV = "GEMMA4_MOE_DISPATCH_FIT_CHUNK"
+# per-chip rows of a chunk must split over masked_bincount's fixed 8x8 core grid (its validation: tokens % 64 == 0),
+# which also keeps every chip's slice tile-aligned
+MIN_ROWS_PER_CHIP = 64
+
+
+def fit_chunk_enabled() -> bool:
+    return os.environ.get(FIT_CHUNK_ENV, "0") == "1"
+
+
+def fit_chunk_tokens(rows: int, dispatch_group_size: int, max_chunk: int = None, *, fit: bool = None) -> int:
+    """Dispatch chunk (tokens across the mesh) for a call of ``rows`` tokens: ``max_chunk`` (CHUNK_TOKENS) unless
+    the fit knob is on and ``rows`` is shorter, then the smallest multiple of ``dispatch_group_size *
+    MIN_ROWS_PER_CHIP`` that holds ``rows`` (a 128-token prompt on the 4-chip group runs a 256-row chunk: 64 rows
+    per chip, the histogram op's grid). Pure host logic (unit-tested)."""
+    max_chunk = CHUNK_TOKENS if max_chunk is None else int(max_chunk)
+    fit = fit_chunk_enabled() if fit is None else bool(fit)
+    rows = int(rows)
+    if not fit or rows >= max_chunk:
+        return max_chunk
+    unit = int(dispatch_group_size) * MIN_ROWS_PER_CHIP
+    return max(unit, -(-rows // unit) * unit)
 
 
 def dispatch_prefill_enabled(mesh_shape=None):
@@ -94,6 +121,75 @@ class _RoutingSetupOnAxis(TtMoERoutingSetup):
         )
 
 
+class _DispatchChunkPlan:
+    """The chunk-size-dependent half of the dispatch stack for one chunk size: per-chip rows, the dispatch buffer
+    bounds, the dispatch / combine modules sized for them and the GeGLU op bound to those buffers. The routing
+    setup, dispatch table, expert weights and the reduce are shared by every plan of a layer (``owner``)."""
+
+    def __init__(self, owner, chunk_tokens: int):
+        dgs = owner.dgs
+        assert (
+            chunk_tokens % (dgs * ttnn.TILE_SIZE) == 0
+        ), f"chunk {chunk_tokens} must split into {dgs} tile-aligned rows"
+        self.chunk_tokens = int(chunk_tokens)
+        self.seq_per_chip = self.chunk_tokens // dgs
+        experts_per_chip, self.metadata_len, self.max_buf, self.max_tok = compute_constants(
+            self.seq_per_chip, owner.num_experts, owner.top_k, owner.rows * owner.cols, dgs, owner.top_k
+        )
+        assert experts_per_chip == owner.experts_per_chip
+        assert self.max_buf >= dgs * self.seq_per_chip * owner.top_k, "dispatch buffer below the drop-free worst case"
+        self.padding_cache: dict = {}  # n_tokens -> per-device [real, pad_side] (Gemma4DispatchExperts._padding_config)
+        if owner.ring:
+            self.dispatch = None  # ttnn.experimental.deepseek_prefill.dispatch_fabric2d, called in _chunk
+            self.combine = TtCombine2dModule(
+                mesh_device=owner.mesh_device,
+                experts_per_chip=experts_per_chip,
+                num_experts_per_tok=owner.top_k,
+                seq_len_per_chip=self.seq_per_chip,
+                cluster_axis=owner.dispatch_axis,
+                num_links=owner.num_links,
+                topology=ttnn.Topology.Ring,
+            )
+        else:
+            self.dispatch = TtDispatchModule(
+                mesh_device=owner.mesh_device,
+                dispatch_group_size=dgs,
+                experts_per_chip=experts_per_chip,
+                num_routed_experts=owner.num_experts,
+                num_experts_per_tok=owner.top_k,
+                metadata_len=self.metadata_len,
+                max_dispatch_buffer_token_size=self.max_buf,
+                seq_len_per_chip=self.seq_per_chip,
+                emb_dim=owner.hidden,
+                cluster_axis=owner.dispatch_axis,
+                num_links=owner.num_links,
+                topology=owner.topology,
+                subdevice_id=None,
+            )
+            self.combine = TtCombineModule(
+                mesh_device=owner.mesh_device,
+                dispatch_group_size=dgs,
+                num_dispatch_groups=owner.ndg,
+                experts_per_chip=experts_per_chip,
+                num_experts_per_tok=owner.top_k,
+                seq_len_per_chip=self.seq_per_chip,
+                cluster_axis=owner.dispatch_axis,
+                num_links=owner.num_links,
+                topology=owner.topology,
+                init_zeros=False,
+            )
+        # The Gemma 4 model-local GeGLU routed-expert op (custom_ops/geglu_routed_expert) on TtRoutedExpert's
+        # ND-sharded bf4 weights and index table, bound to this chunk's token budget.
+        self.geglu_op = GegluRoutedExpert(
+            owner.mesh_device,
+            owner.routed_expert.gate_projs,
+            owner.routed_expert.up_projs,
+            owner.routed_expert.down_projs,
+            owner.global_idx,
+            max_tokens=self.max_tok,
+        )
+
+
 class Gemma4DispatchExperts:
     """Routed experts for prefill via dispatch -> fused GeGLU experts -> combine -> reduce."""
 
@@ -131,18 +227,12 @@ class Gemma4DispatchExperts:
         assert (
             CHUNK_TOKENS % (dgs * ttnn.TILE_SIZE) == 0
         ), f"chunk {CHUNK_TOKENS} must split into {dgs} tile-aligned rows"
-        self.seq_per_chip = CHUNK_TOKENS // dgs
-        topology = ttnn.Topology.Linear
+        self.topology = ttnn.Topology.Linear
         # Ring transport (dispatch_fabric2d / combine_fabric2d): the only dispatch/combine pair that runs along
         # mesh axis 1, so the single-row 4-chip and 8-chip entries need it; the axis must be a fabric ring.
         self.ring = os.environ.get("GEMMA4_MOE_DISPATCH_RING", "0") == "1"
         self.num_links = num_links
-        experts_per_chip, metadata_len, max_buf, max_tok = compute_constants(
-            self.seq_per_chip, self.num_experts, self.top_k, rows * cols, dgs, self.top_k
-        )
-        assert experts_per_chip == self.experts_per_chip
-        assert max_buf >= dgs * self.seq_per_chip * self.top_k, "dispatch buffer below the drop-free worst case"
-        self.metadata_len, self.max_buf = metadata_len, max_buf
+        experts_per_chip = self.experts_per_chip
         assert self.ring or self.dispatch_axis == 0, (
             "the direct dispatch/combine ops only run along mesh axis 0: a single-row mesh needs "
             "GEMMA4_MOE_DISPATCH_RING=1 (dispatch_fabric2d / combine_fabric2d on a FABRIC_1D_RING mesh)"
@@ -154,45 +244,6 @@ class Gemma4DispatchExperts:
         self.tt_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(
             mesh_device, table, dispatch_axis=self.dispatch_axis
         )
-        if self.ring:
-            self.dispatch = None  # ttnn.experimental.deepseek_prefill.dispatch_fabric2d, called in _chunk
-            self.combine = TtCombine2dModule(
-                mesh_device=mesh_device,
-                experts_per_chip=experts_per_chip,
-                num_experts_per_tok=self.top_k,
-                seq_len_per_chip=self.seq_per_chip,
-                cluster_axis=self.dispatch_axis,
-                num_links=num_links,
-                topology=ttnn.Topology.Ring,
-            )
-        else:
-            self.dispatch = TtDispatchModule(
-                mesh_device=mesh_device,
-                dispatch_group_size=dgs,
-                experts_per_chip=experts_per_chip,
-                num_routed_experts=self.num_experts,
-                num_experts_per_tok=self.top_k,
-                metadata_len=metadata_len,
-                max_dispatch_buffer_token_size=max_buf,
-                seq_len_per_chip=self.seq_per_chip,
-                emb_dim=self.hidden,
-                cluster_axis=self.dispatch_axis,
-                num_links=num_links,
-                topology=topology,
-                subdevice_id=None,
-            )
-            self.combine = TtCombineModule(
-                mesh_device=mesh_device,
-                dispatch_group_size=dgs,
-                num_dispatch_groups=ndg,
-                experts_per_chip=experts_per_chip,
-                num_experts_per_tok=self.top_k,
-                seq_len_per_chip=self.seq_per_chip,
-                cluster_axis=self.dispatch_axis,
-                num_links=num_links,
-                topology=topology,
-                init_zeros=False,
-            )
         # global expert index table [groups, chips-in-group, ...]: dim 1 over the dispatch axis, dim 0 over the other
         idx_dims = (1, 0) if self.dispatch_axis == 0 else (0, 1)
         global_idx = ttnn.from_torch(
@@ -204,14 +255,18 @@ class Gemma4DispatchExperts:
             device=mesh_device,
             dtype=ttnn.uint32,
         )
-        global_idx = ttnn.squeeze(ttnn.squeeze(global_idx, 0), 0)
+        self.global_idx = ttnn.squeeze(ttnn.squeeze(global_idx, 0), 0)
+        # the weight loader's own buffer bound: the full chunk's worst case (its fused op never runs here)
+        _, _, _, max_tok_full = compute_constants(
+            CHUNK_TOKENS // dgs, self.num_experts, self.top_k, rows * cols, dgs, self.top_k
+        )
         self.routed_expert = TtRoutedExpert(
             mesh_device=mesh_device,
             experts_per_chip=experts_per_chip,
-            global_expert_idx_table=global_idx,
+            global_expert_idx_table=self.global_idx,
             emb_dim=self.hidden,
             hidden_dim=self.inter,
-            max_tokens=max_tok,
+            max_tokens=max_tok_full,
             torch_weights=expert_weights,
             activations_dtype=ttnn.bfloat8_b,
             weights_dtype=weights_dtype,
@@ -222,24 +277,29 @@ class Gemma4DispatchExperts:
             activation=ttnn.RoutedExpertActivation.Silu,
             hybrid_token_threshold=None,
         )
-        # The Gemma 4 model-local GeGLU routed-expert op (custom_ops/geglu_routed_expert) on TtRoutedExpert's
-        # ND-sharded bf4 weights and index table.
-        self.geglu_op = GegluRoutedExpert(
-            mesh_device,
-            self.routed_expert.gate_projs,
-            self.routed_expert.up_projs,
-            self.routed_expert.down_projs,
-            global_idx,
-            max_tokens=max_tok,
-        )
         self.reduce = TtMiniMaxReduce(
-            mesh_device=mesh_device, topk_dim=3, cluster_axis=self.rep_axis, num_links=num_links, topology=topology
+            mesh_device=mesh_device, topk_dim=3, cluster_axis=self.rep_axis, num_links=num_links, topology=self.topology
         )
+        # Chunk-size-dependent half of the stack (dispatch / combine modules, GeGLU op bound to the chunk's
+        # buffers): one plan per distinct chunk size, the full chunk's plan built here, shorter ones on demand
+        # (fit_chunk_tokens). The full plan's members keep their historical attribute names.
+        self._plans: dict = {}
+        plan = self._plan(CHUNK_TOKENS)
+        self.seq_per_chip, self.metadata_len, self.max_buf = plan.seq_per_chip, plan.metadata_len, plan.max_buf
+        self.dispatch, self.combine, self.geglu_op = plan.dispatch, plan.combine, plan.geglu_op
         logger.info(
             f"Gemma4DispatchExperts: mesh {rows}x{cols} axis {self.dispatch_axis} {'ring' if self.ring else 'direct'}, "
             f"{experts_per_chip} experts/chip, chunk {CHUNK_TOKENS} "
-            f"({self.seq_per_chip}/chip), dispatch buffer {max_buf} rows, max {max_tok} tokens/expert"
+            f"({self.seq_per_chip}/chip, fit {'on' if fit_chunk_enabled() else 'off'}), dispatch buffer "
+            f"{self.max_buf} rows, max {plan.max_tok} tokens/expert"
         )
+
+    def _plan(self, chunk_tokens: int):
+        """The ``_DispatchChunkPlan`` for ``chunk_tokens`` (built on first use)."""
+        plan = self._plans.get(chunk_tokens)
+        if plan is None:
+            plan = self._plans[chunk_tokens] = _DispatchChunkPlan(self, chunk_tokens)
+        return plan
 
     @staticmethod
     def hf_expert_list(gate_up_proj, down_proj):
@@ -263,17 +323,22 @@ class Gemma4DispatchExperts:
     # [local_real_tokens, pad_side] config that bounds its token loop, exactly as the DeepSeek gate does.
     PADDING_ENABLED = os.environ.get("GEMMA4_DISPATCH_PADDING", "1") != "0"
 
-    def _padding_config(self, n_tokens):
+    def _padding_config(self, n_tokens, plan=None):
         """Per-device ``[local_real_tokens, 0]`` (right padding) for a chunk with ``n_tokens`` real rows, or
         None when every row is real. mesh_partition hands dispatch-axis chip r the rows [r*S, (r+1)*S)."""
-        S = self.seq_per_chip
-        if not self.PADDING_ENABLED or n_tokens >= CHUNK_TOKENS:
+        plan = self._plans[CHUNK_TOKENS] if plan is None else plan
+        S = plan.seq_per_chip
+        if not self.PADDING_ENABLED or n_tokens >= plan.chunk_tokens:
             return None
-        if n_tokens not in self._padding_cache:
+        if plan.chunk_tokens < CHUNK_TOKENS:
+            # A fitted chunk pads at most dgs * MIN_ROWS_PER_CHIP - 1 rows; the sentinel machinery (slice, layout,
+            # typecast, compare, select: five programs) would cost more than routing those zero-weight rows.
+            return None
+        if n_tokens not in plan.padding_cache:
             rows = [[min(S, max(0, n_tokens - r * S)), 0] for r in range(self.dgs)]
             mesh_shape = tuple(self.mesh_device.shape)
             dims = (0, None) if self.dispatch_axis == 0 else (None, 0)
-            self._padding_cache[n_tokens] = ttnn.from_torch(
+            plan.padding_cache[n_tokens] = ttnn.from_torch(
                 torch.tensor(rows, dtype=torch.int32),
                 device=self.mesh_device,
                 dtype=ttnn.uint32,
@@ -281,7 +346,7 @@ class Gemma4DispatchExperts:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=mesh_shape),
             )
-        return self._padding_cache[n_tokens]
+        return plan.padding_cache[n_tokens]
 
     def _sentinel_padded_rows(self, indices, padding_config):
         """Set the padded rows' expert ids (TILE, [S, K]) to the ``num_experts`` sentinel so the routing setup
@@ -310,17 +375,28 @@ class Gemma4DispatchExperts:
             ttnn.deallocate(t)
         return out
 
-    def _chunk(self, hidden, routing, n_tokens):
-        """One dispatch chunk. hidden [1,1,T,H] and routing [1,1,T,E] replicated on every chip, T = CHUNK_TOKENS
-        (rows beyond n_tokens are zero padding). Returns [1,1,T,H] replicated (full top-k sum)."""
+    def _chunk(self, hidden, routing, n_tokens, plan=None):
+        """One dispatch chunk. hidden [1,1,T,H] replicated on every chip, T = ``plan.chunk_tokens`` (rows beyond
+        n_tokens are zero padding); routing is the dense [1,1,T,E] matrix or the router's sparse
+        ``(values [1,1,T,K] bf16, indices [1,1,T,K] uint16)`` pair (both TILE). Returns [1,1,T,H] replicated
+        (full top-k sum)."""
+        plan = self._plans[CHUNK_TOKENS] if plan is None else plan
+        S = plan.seq_per_chip
         # each chip of the dispatch group takes its slice of the chunk (tokens [r*S, (r+1)*S)); the other axis
         # keeps the same slice
         x = ttnn.mesh_partition(hidden, dim=2, cluster_axis=self.dispatch_axis)  # [1,1,S,H] per chip
-        r = ttnn.mesh_partition(routing, dim=2, cluster_axis=self.dispatch_axis)  # [1,1,S,E]
-        weights, indices = ttnn.topk(r, k=self.top_k, dim=-1)  # [1,1,S,K] bf16 / uint16, TILE
-        ttnn.deallocate(r)
-        indices = ttnn.reshape(indices, (self.seq_per_chip, self.top_k))
-        padding_config = self._padding_config(n_tokens)
+        if isinstance(routing, tuple):
+            # sparse routing (router sparse=True): the top-k values and ids as the router ranked them, no dense
+            # scatter upstream and no second top-k here
+            values, ids = routing
+            weights = ttnn.mesh_partition(values, dim=2, cluster_axis=self.dispatch_axis)  # [1,1,S,K] bf16
+            indices = ttnn.mesh_partition(ids, dim=2, cluster_axis=self.dispatch_axis)  # [1,1,S,K] uint16
+        else:
+            r = ttnn.mesh_partition(routing, dim=2, cluster_axis=self.dispatch_axis)  # [1,1,S,E]
+            weights, indices = ttnn.topk(r, k=self.top_k, dim=-1)  # [1,1,S,K] bf16 / uint16, TILE
+            ttnn.deallocate(r)
+        indices = ttnn.reshape(indices, (S, self.top_k))
+        padding_config = self._padding_config(n_tokens, plan)
         if padding_config is not None:
             indices = self._sentinel_padded_rows(indices, padding_config)
         offsets, counts, region_offsets, _, all_offsets = self.routing_setup(
@@ -328,11 +404,11 @@ class Gemma4DispatchExperts:
             num_routed_experts=self.num_experts,
             num_experts_per_tok=self.top_k,
         )
-        indices_rm = ttnn.to_layout(ttnn.reshape(indices, (1, self.seq_per_chip, self.top_k)), ttnn.ROW_MAJOR_LAYOUT)
-        weights_rm = ttnn.to_layout(ttnn.reshape(weights, (1, self.seq_per_chip, self.top_k)), ttnn.ROW_MAJOR_LAYOUT)
+        indices_rm = ttnn.to_layout(ttnn.reshape(indices, (1, S, self.top_k)), ttnn.ROW_MAJOR_LAYOUT)
+        weights_rm = ttnn.to_layout(ttnn.reshape(weights, (1, S, self.top_k)), ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(indices)
         ttnn.deallocate(weights)
-        x_rm = ttnn.to_layout(ttnn.reshape(x, (1, self.seq_per_chip, self.hidden)), ttnn.ROW_MAJOR_LAYOUT)
+        x_rm = ttnn.to_layout(ttnn.reshape(x, (1, S, self.hidden)), ttnn.ROW_MAJOR_LAYOUT)
         if x_rm.dtype != ttnn.bfloat16:
             x_rm = ttnn.typecast(x_rm, ttnn.bfloat16)
         ttnn.deallocate(x)
@@ -350,27 +426,27 @@ class Gemma4DispatchExperts:
                 experts_per_chip=self.experts_per_chip,
                 num_routed_experts=self.num_experts,
                 num_experts_per_tok=self.top_k,
-                metadata_len=self.metadata_len,
-                max_dispatch_buffer_token_size=self.max_buf,
-                seq_len_per_chip=self.seq_per_chip,
+                metadata_len=plan.metadata_len,
+                max_dispatch_buffer_token_size=plan.max_buf,
+                seq_len_per_chip=S,
                 cluster_axis=self.dispatch_axis,
                 num_links=self.num_links,
                 topology=ttnn.Topology.Ring,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
-            buffer, metadata = self.dispatch(
+            buffer, metadata = plan.dispatch(
                 x_rm, weights_rm, indices_rm, offsets, self.tt_dispatch_table, padding_config=padding_config
             )
         ttnn.deallocate(x_rm)
         ttnn.deallocate(offsets)
-        expert_out = self.geglu_op(ttnn.reshape(buffer, (self.max_buf, self.hidden)), counts, region_offsets)
+        expert_out = plan.geglu_op(ttnn.reshape(buffer, (plan.max_buf, self.hidden)), counts, region_offsets)
         ttnn.deallocate(buffer)
         expert_out = ttnn.unsqueeze(ttnn.unsqueeze(expert_out, dim=0), dim=0)
         if self.ring:
-            combined = self.combine(expert_out, metadata, counts, region_offsets, all_offsets)  # [1,1,S,K,H]
+            combined = plan.combine(expert_out, metadata, counts, region_offsets, all_offsets)  # [1,1,S,K,H]
         else:
-            combined = self.combine(expert_out, metadata, counts, region_offsets)  # [1,1,S,K,H] row-major
+            combined = plan.combine(expert_out, metadata, counts, region_offsets)  # [1,1,S,K,H] row-major
         ttnn.deallocate(all_offsets)
         ttnn.deallocate(expert_out)
         ttnn.deallocate(metadata)
@@ -385,7 +461,7 @@ class Gemma4DispatchExperts:
         ttnn.deallocate(combined)
         ttnn.deallocate(weights_rm)
         ttnn.deallocate(indices_rm)
-        part = ttnn.reshape(part, (1, 1, self.seq_per_chip, self.hidden // self.ndg))
+        part = ttnn.reshape(part, (1, 1, S, self.hidden // self.ndg))
         if self.ndg > 1:
             full = ttnn.all_gather(part, dim=3, cluster_axis=self.rep_axis, topology=ttnn.Topology.Linear)  # [1,1,S,H]
             ttnn.deallocate(part)
@@ -395,25 +471,42 @@ class Gemma4DispatchExperts:
         ttnn.deallocate(full)
         return out
 
+    @staticmethod
+    def _rows(t, start, end, width):
+        """``t[:, :, start:end, :width]`` as a fresh tensor, or ``t`` itself when the range is the whole tensor."""
+        if start == 0 and end == int(t.shape[2]):
+            return t
+        return ttnn.slice(t, [0, 0, start, 0], [1, 1, end, width])
+
+    @staticmethod
+    def _pad_rows(t, pad):
+        return ttnn.pad(t, [(0, 0), (0, 0), (0, pad), (0, 0)], 0.0)
+
     def forward(self, hidden, routing):
-        """hidden [1,1,N,H] and routing [1,1,N,E] (final per-expert weights, zeros off the top-k), both replicated on
-        every chip. Returns [1,1,N,H] replicated: sum over the top-k experts of weight * expert(hidden)."""
-        n = hidden.shape[2]
+        """hidden [1,1,N,H] replicated on every chip; routing the dense [1,1,N,E] matrix (final per-expert weights,
+        zeros off the top-k) or the router's sparse ``(values, indices)`` pair ([1,1,N,K] bf16 / uint16), replicated
+        too. Returns [1,1,N,H] replicated: sum over the top-k experts of weight * expert(hidden)."""
+        n = int(hidden.shape[2])
+        sparse = isinstance(routing, tuple)
         outs = []
-        for start in range(0, n, CHUNK_TOKENS):
+        start = 0
+        while start < n:
             end = min(start + CHUNK_TOKENS, n)
-            h = hidden if (start == 0 and end == n) else ttnn.slice(hidden, [0, 0, start, 0], [1, 1, end, self.hidden])
-            r = (
-                routing
-                if (start == 0 and end == n)
-                else ttnn.slice(routing, [0, 0, start, 0], [1, 1, end, self.num_experts])
-            )
-            if end - start < CHUNK_TOKENS:
-                pad = CHUNK_TOKENS - (end - start)
-                h = ttnn.pad(h, [(0, 0), (0, 0), (0, pad), (0, 0)], 0.0)
-                r = ttnn.pad(r, [(0, 0), (0, 0), (0, pad), (0, 0)], 0.0)
-            o = self._chunk(h, r, end - start)
-            if end - start < CHUNK_TOKENS:
+            plan = self._plan(fit_chunk_tokens(end - start, self.dgs))
+            T = plan.chunk_tokens
+            h = self._rows(hidden, start, end, self.hidden)
+            if sparse:
+                r = tuple(self._rows(t, start, end, self.top_k) for t in routing)
+            else:
+                r = self._rows(routing, start, end, self.num_experts)
+            if end - start < T:
+                pad = T - (end - start)
+                h = self._pad_rows(h, pad)
+                # padded rows: zero weights, ids the sentinel mask overwrites (_sentinel_padded_rows)
+                r = tuple(self._pad_rows(t, pad) for t in r) if sparse else self._pad_rows(r, pad)
+            o = self._chunk(h, r, end - start, plan)
+            if end - start < T:
                 o = ttnn.slice(o, [0, 0, 0, 0], [1, 1, end - start, self.hidden])
             outs.append(o)
+            start = end
         return outs[0] if len(outs) == 1 else ttnn.concat(outs, dim=2)

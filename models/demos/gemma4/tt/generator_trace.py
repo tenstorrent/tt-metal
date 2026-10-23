@@ -44,6 +44,15 @@ def trace_short_prefill_opt_in(prefill_seq_len=None, batch_size: int = 1) -> boo
     return int(get_padded_prefill_len(int(prefill_seq_len))) <= trace_short_prefill_max()
 
 
+def short_prefill_stash_skipped(seq_len, batch_size, *, bounded: bool, trace_mode: bool) -> bool:
+    """True when a prefill forward must not stash the cross-chunk sliding-window tail: the traced short
+    single-user bucket under bounded sliding (the GEMMA4_TRACE_SHORT_PREFILL graph). A replay never runs the
+    Python that keys the stash to a request (the pool copy would bake one slot into the trace), and the short
+    tail's left pad is a host write the capture cannot record (TT_FATAL !trace_id_.has_value(), 2026-10-23).
+    Every eager call -- continuations included -- keeps the stash; ``seq_len`` is the padded kernel length."""
+    return bool(trace_mode) and bool(bounded) and int(batch_size) == 1 and int(seq_len) <= trace_short_prefill_max()
+
+
 # Kernel sequence lengths that may capture/replay prefill device traces (MoE only).
 #
 # Each bucket is captured as a *separate resident prefill trace* at warmup, and

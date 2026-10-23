@@ -25,6 +25,7 @@ import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.demos.gemma4.config import gemma4_kv_bfp8_enabled
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
+from models.demos.gemma4.tt.generator_trace import short_prefill_stash_skipped
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
@@ -984,6 +985,15 @@ class Gemma4Model:
         seq_len = hidden_states.shape[2]
         rope_seq_len = seq_len // batch_size if (not is_decode and batch_size > 1) else seq_len
         caches = kv_caches or self.tt_kv_cache
+        # The traced short single-user bucket under bounded sliding (generator_trace.short_prefill_stash_skipped):
+        # the attention zeroes the ring before its capped fill and records no cross-chunk sliding-tail stash;
+        # every eager prefill keeps the stash.
+        traced_short_bucket = (not is_decode) and short_prefill_stash_skipped(
+            seq_len,
+            batch_size,
+            bounded=bool(getattr(self, "bounded_sliding_kv_cache", False)),
+            trace_mode=bool(getattr(self, "_prefill_trace_mode", False)),
+        )
 
         # Real (unpadded) prefill length for KV fill cap. Scalar from
         # ``get_last_token`` (B=1 / uniform), or per-slot list for batched
@@ -1173,6 +1183,7 @@ class Gemma4Model:
                 chunk_start_idx=chunk_start_idx,
                 chunk_page_table=chunk_page_table,
                 mm_attn_mask=(mm_attn_masks or {}).get(self.hf_config.layer_types[i]),
+                traced_short_bucket=traced_short_bucket,
             )
 
             # For KV source layers during prefill, capture the K/V from the attention

@@ -140,7 +140,7 @@ class Gemma4Experts:
             return False
         if self.moe_decode is None:
             # the local routed prefill takes the router's (values, indices) too: no dense scatter, no second top-k
-            return self._use_local_routed(hidden_states)
+            return self._use_local_routed(hidden_states) or self._use_dispatch_sparse_routing(hidden_states)
         rows = int(hidden_states.shape[2])
         lane_sharded = bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False))
         if lane_sharded and self.ep > 1:
@@ -301,9 +301,10 @@ class Gemma4Experts:
             if self.mesh_config is not None and self.mesh_config.tp > 1:
                 out = ccl_allreduce(out, self.mesh_config, self.ccl_manager)
             return out
-        assert not isinstance(dense_routing, tuple), "sparse routing only feeds the decode MoE kernel"
         if self._use_dispatch(hidden_states):
+            # dense matrix, or the router's (values, indices) with GEMMA4_MOE_DISPATCH_SPARSE_ROUTING=1
             return self.dispatch_experts.forward(hidden_states, dense_routing)
+        assert not isinstance(dense_routing, tuple), "sparse routing only feeds the decode MoE kernel"
         return self._forward(hidden_states, dense_routing, combine=True)
 
     def _use_decode_kernel(self, hidden_states):
@@ -319,6 +320,16 @@ class Gemma4Experts:
 
     def _use_dispatch(self, hidden_states):
         return self.dispatch_experts is not None and int(hidden_states.shape[2]) >= self.dispatch_min_tokens
+
+    def _use_dispatch_sparse_routing(self, hidden_states):
+        """GEMMA4_MOE_DISPATCH_SPARSE_ROUTING=1: a dispatch-prefill call takes the router's (values, indices)
+        straight from its top-k (no dense [S, E] scatter in the router, no second top-k in the dispatch chunk);
+        the lane paths keep the dense matrix (their gathers and owner slices are written for it)."""
+        if os.environ.get("GEMMA4_MOE_DISPATCH_SPARSE_ROUTING", "0") != "1":
+            return False
+        if bool(self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False)):
+            return False
+        return self._use_dispatch(hidden_states)
 
     def _forward(self, hidden_states, dense_routing, combine=True):
         """

@@ -58,6 +58,13 @@ MIN_AGREE = float(os.environ.get("PACKED_PREFILL_MIN_AGREE", "0.75"))
 # wrong token); the shape-dependent drift carried into the K/V leaves one user in 32 at ~0.72 (2026-10-23).
 MIN_DEC_PCC = float(os.environ.get("PACKED_PREFILL_MIN_DEC_PCC", "0.70"))
 TAP_PCC = float(os.environ.get("PACKED_PREFILL_TAP_PCC", "0.995"))
+# Structural bar on the first PACKED_PREFILL_EARLY_LAYERS (3) layers: a per-segment attention mask, RoPE position or
+# K/V placement fault shows at layer 0 as a PCC far below 0.99 for the affected users, while the shape-dependent MoE
+# routing drift (the loop at the 1024 bucket vs the 128 bucket drifts the same way) only accumulates deeper: measured
+# 2026-10-23 on (1,4), every user's first tap below 0.995 was at layers 4-8 and always the MoE / attention output,
+# layers 0-3 >= 0.995 for all 32 users.
+EARLY_LAYERS = int(os.environ.get("PACKED_PREFILL_EARLY_LAYERS", "3"))
+EARLY_PCC = float(os.environ.get("PACKED_PREFILL_EARLY_PCC", "0.99"))
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -349,6 +356,7 @@ def test_packed_prefill(mesh_device, monkeypatch):
         logger.info(f"taps: {n_layers} layers, {len(packed_taps)} packed records, {len(loop_taps[0])} per loop user")
         first_div = {}
         worst = {}
+        tap_pcc = {}  # (user, layer, module) -> PCC packed vs loop
         for u in range(B):
             for layer in range(n_layers):
                 for mod in ("attention", "shared_mlp", "moe", "layer"):
@@ -364,6 +372,7 @@ def test_packed_prefill(mesh_device, monkeypatch):
                         )
                         continue
                     pcc = _pcc(pk, lp)
+                    tap_pcc[(u, layer, mod)] = pcc
                     worst[(u, mod)] = min(worst.get((u, mod), 1.0), pcc)
                     if pcc < TAP_PCC and u not in first_div:
                         first_div[u] = (layer, mod, pcc)
@@ -377,6 +386,20 @@ def test_packed_prefill(mesh_device, monkeypatch):
         for mod in ("attention", "shared_mlp", "moe", "layer"):
             vals = [worst.get((u, mod), 1.0) for u in range(B)]
             logger.info(f"TAPS {mod}: min PCC over layers per user: " + " ".join(f"{v:.3f}" for v in vals))
+        early = {(u, layer, mod): v for (u, layer, mod), v in tap_pcc.items() if layer < EARLY_LAYERS}
+        if early:
+            for mod in ("attention", "shared_mlp", "moe", "layer"):
+                per_layer = [
+                    min((v for (u, l, m), v in early.items() if l == layer and m == mod), default=1.0)
+                    for layer in range(EARLY_LAYERS)
+                ]
+                logger.info(f"TAPS_EARLY {mod}: min PCC over users at layers 0..{EARLY_LAYERS - 1}: {per_layer}")
+            (u_w, l_w, m_w), v_w = min(early.items(), key=lambda kv: kv[1])
+            logger.info(f"TAPS_EARLY worst: u{u_w:02d} layer {l_w} {m_w} pcc={v_w:.4f} (bar {EARLY_PCC})")
+            assert v_w >= EARLY_PCC, (
+                f"packed segment structure: u{u_w} layer {l_w} {m_w} pcc={v_w:.4f} < {EARLY_PCC} "
+                "(a per-segment mask / position / K-V placement fault, not routing drift)"
+            )
     need = int(MIN_AGREE * B + 0.999)
     assert (
         p_pcc >= MIN_PCC and p_mean >= MEAN_PCC

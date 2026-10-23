@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from loguru import logger
 
 import ttnn
-from models.demos.gemma4.demo.text_demo import _resolve_bounded_sliding
+from models.demos.gemma4.demo.text_demo import _install_hybrid_page_tables, _resolve_bounded_sliding
 from models.demos.gemma4.tt.generator import Gemma4Generator
 from models.demos.gemma4.tt.generator_trace import skip_gemma4_full_prefill_warmup
 from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES
@@ -95,6 +95,15 @@ def load_prefill_trace_generator(mesh_device, model_path, fixtures):
         paged_attention_config=fixtures["paged_cfg"],
         bounded_sliding_kv_cache=bounded,
     )
+    if bounded:
+        # the served bounded configuration: ring-local page tables for the sliding layers (hybrid KV groups)
+        _install_hybrid_page_tables(
+            generator.model[0],
+            generator.model_args[0],
+            batch_size=fixtures["max_batch_size"],
+            block_size=int(fixtures["paged_cfg"].block_size),
+            max_seq_len=fixtures["max_seq_len"],
+        )
     logger.info(f"prefill trace generator: bounded_sliding={bounded}")
     model_args = generator.model_args[0]
     kernel_len = fixtures["kernel_len"]

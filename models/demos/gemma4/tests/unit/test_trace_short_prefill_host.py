@@ -58,3 +58,16 @@ def test_bounded_policy_with_and_without_opt_in(monkeypatch):
     assert not _resolve(True, 128, batch_size=2, can_batch=True)  # batched prefills stay eager
     assert not _resolve(False, 128)  # caller disabled
     assert _resolve(True, 128, bounded=False)  # unbounded: the usual policy
+
+
+def test_short_prefill_stash_skipped_only_in_the_traced_bounded_short_bucket(monkeypatch):
+    # the traced short single-user bucket under bounded sliding records no sliding-tail stash ...
+    assert gt.short_prefill_stash_skipped(128, 1, bounded=True, trace_mode=True)
+    assert gt.short_prefill_stash_skipped(64, 1, bounded=True, trace_mode=True)
+    # ... every eager call keeps it (continuations are eager), as do unbounded, batched and long traced buckets
+    assert not gt.short_prefill_stash_skipped(128, 1, bounded=True, trace_mode=False)
+    assert not gt.short_prefill_stash_skipped(128, 1, bounded=False, trace_mode=True)
+    assert not gt.short_prefill_stash_skipped(128, 2, bounded=True, trace_mode=True)
+    assert not gt.short_prefill_stash_skipped(1024, 1, bounded=True, trace_mode=True)
+    monkeypatch.setenv("GEMMA4_TRACE_SHORT_PREFILL_MAX", "1024")
+    assert gt.short_prefill_stash_skipped(1024, 1, bounded=True, trace_mode=True)
