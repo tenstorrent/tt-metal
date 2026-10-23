@@ -142,18 +142,16 @@ class SamplingGenerator:
         self._penalties_active = False
 
         # Allocate before the model captures any traces. Sampling flags and bucket
-        # keys can share these outputs: callers consume each result before the next
-        # sampling operation that writes it. Keep argmax's rank-3 return shape.
+        # keys can share this output: callers consume each result before the next
+        # sampling operation that writes it. One rank-4 buffer serves every mode:
+        # ttnn.sampling requires rank 4, argmax accepts any page-compatible output,
+        # and callers may bind one prepared buffer to all sampling configs.
         batch_size = self.tt_sampling.max_batch_size
-        output_shapes = {False: (1, 1, 1, batch_size)}
-        if self.tt_sampling._allow_force_argmax_sampling:
-            output_shapes[True] = (1, 1, batch_size)
-        self._trace_token_outputs = {
-            force_argmax: ttnn.allocate_tensor_on_device(
-                ttnn.Shape(shape), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
-            )
-            for force_argmax, shape in output_shapes.items()
-        }
+        token_output = ttnn.allocate_tensor_on_device(
+            ttnn.Shape((1, 1, 1, batch_size)), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
+        )
+        modes = (False, True) if self.tt_sampling._allow_force_argmax_sampling else (False,)
+        self._trace_token_outputs = {force_argmax: token_output for force_argmax in modes}
 
         self._trace_states: dict[_TraceKey, dict] = {}
         self._active_trace_bucket = None
