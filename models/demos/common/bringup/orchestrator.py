@@ -1927,8 +1927,10 @@ class Orchestrator:
         """F122: every quick-accepted pick's full gate, once, on the tree as it is now; picks with the same gate
         command share one run. None when all pass (cleared), else the stop."""
         pending = [tid for tid, e in self.led.state().items() if isinstance(e, dict) and e.get("full_pending")]
-        done = {}
-        for tid in sorted(pending):
+        order = list(self.led.tasks())  # F175: the newest pick first: its own gate units already passed on this code
+        pending.sort(key=lambda t: -order.index(t) if t in order else 0)  # (its agent's gate --check), so the shared
+        done = {}  # gate runs only the delta; the older picks with the same command take its result
+        for tid in pending:
             cmd = gate_command(self.led.task(tid))
             if cmd in done:
                 src, metrics = done[cmd]
