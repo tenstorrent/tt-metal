@@ -296,12 +296,7 @@ class Gemma4Model:
         # The 4-chip Blackhole MoE build runs the fused decode step by default (tt/mesh_orientation.py, every
         # GEMMA4_* flag still an override); recorded before the layers are built since the weight loaders and
         # the norm modules read the switches at construction.
-        _text_cfg = getattr(hf_config, "text_config", hf_config)
-        set_decode_fusion_profile(
-            tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1),
-            blackhole=is_blackhole(),
-            moe=bool(getattr(_text_cfg, "enable_moe_block", False)),
-        )
+        set_decode_fusion_profile(tuple(mesh_device.shape), blackhole=is_blackhole(), moe=hf_config.enable_moe_block)
         # Keep prompt-dependent slice bounds in persistent buffers. Literal
         # offsets compile a new program after prefill traces are already live.
         self._tail_slice_start = ttnn.from_torch(
