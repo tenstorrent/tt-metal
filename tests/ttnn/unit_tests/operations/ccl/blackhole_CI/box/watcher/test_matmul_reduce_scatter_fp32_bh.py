@@ -43,8 +43,13 @@ def test_fused_matmul_reduce_scatter_atomic_barrier(mesh_device, M):
     rs_dtype = ttnn.float32
 
     crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid[0] - 1, grid[1] - 1))})
-    rs_sems = [ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(3)]
-    barrier_sem = ttnn.create_global_semaphore(mesh_device, crs, 0)
+    # The RS workers sit below the matmul grid, so the semaphores must cover the whole grid.
+    grid_size = mesh_device.compute_with_storage_grid_size()
+    sem_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+    )
+    rs_sems = [ttnn.create_global_semaphore(mesh_device, sem_crs, 0) for _ in range(3)]
+    barrier_sem = ttnn.create_global_semaphore(mesh_device, sem_crs, 0)
 
     interm = ttnn.from_torch(
         torch.zeros(1, 1, M, N),
