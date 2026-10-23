@@ -618,7 +618,8 @@ void kernel_main() {
     constexpr uint32_t cb_k_stage = get_named_compile_time_arg_val("cb_k_stage");
     constexpr uint32_t cb_v_stage = get_named_compile_time_arg_val("cb_v_stage");
     constexpr uint32_t sol_blocks_per_page = get_named_compile_time_arg_val("sol_blocks_per_page");
-    // K/V CB depth in chunks (factory kv_cb_pages, default 2); only the end-of-iteration phase alignment needs it.
+    // K/V CB depth in chunks (factory kv_cb_pages, default 2); the end-of-iteration phase alignment and the M11 grant
+    // lookahead use it.
     constexpr uint32_t kv_cb_pages = get_named_compile_time_arg_val("kv_cb_pages");
     constexpr uint32_t kSolBlockTiles = 2;  // 64-token blocks
     constexpr uint32_t sol_bias_tile_bytes = get_tile_size(cb_sol_bias);
@@ -1692,11 +1693,19 @@ void kernel_main() {
             // and forward on credits; every forward takes the next credit in the same order the downstream
             // granted it. The page a chunk lands in is the write pointer at its push (pointer lockstep: the upstream
             // wrote to the same offset in its own CB).
+            // A pushed page this core still has to forward is busy even after compute pops it (an empty piece pops
+            // at once): granting it would let the upstream overwrite the chunk before the forward reads it. The
+            // CB's free count does not see that either. That page is the one just behind the write pointer, so a
+            // grant lands on it exactly when it would be the CB's last page (ahead + 1 == kv_cb_pages); while a
+            // forward is pending (k_fwd_pending / v_fwd_pending, set at the push, cleared once forward_credited()
+            // returns) the lookahead stops one page short.
             uint32_t n_pieces = 0;
             uint32_t g_piece = 0;
             uint32_t g_phase = 0;  // 0: next grant is a K page, 1: a V page
             uint32_t k_ahead = 0;  // K pages reserved and granted, not yet pushed
             uint32_t v_ahead = 0;
+            uint32_t k_fwd_pending = 0;  // K pages pushed, not yet forwarded
+            uint32_t v_fwd_pending = 0;
             const bool chain_member = k_chain.should_receive(head_cfg.head) && v_chain.should_receive(head_cfg.head);
             const auto try_grant = [&](bool blocking) -> bool {
                 if (g_piece >= n_pieces) {
@@ -1705,7 +1714,8 @@ void kernel_main() {
                 if (g_phase == 0) {
                     CircularBuffer cb_k(cb_k_in);
                     const uint32_t tiles = k_chunk_tiles * (k_ahead + 1);
-                    if (!blocking && !cb_k.pages_reservable_at_back(tiles)) {
+                    if (!blocking &&
+                        (k_ahead + 1 + k_fwd_pending > kv_cb_pages || !cb_k.pages_reservable_at_back(tiles))) {
                         return false;
                     }
                     cb_k.reserve_back(tiles);
@@ -1715,7 +1725,8 @@ void kernel_main() {
                 } else {
                     CircularBuffer cb_v(cb_v_in);
                     const uint32_t tiles = v_cb_entry_tiles * (v_ahead + 1);
-                    if (!blocking && !cb_v.pages_reservable_at_back(tiles)) {
+                    if (!blocking &&
+                        (v_ahead + 1 + v_fwd_pending > kv_cb_pages || !cb_v.pages_reservable_at_back(tiles))) {
                         return false;
                     }
                     cb_v.reserve_back(tiles);
@@ -1745,7 +1756,7 @@ void kernel_main() {
                 if (chain_member) {
                     if (k_ahead == 0) {
                         // This piece's K grant has not gone out (its page was not free when the cursor reached it).
-                        ASSERT(g_phase == 0);
+                        ASSERT(g_phase == 0 && k_fwd_pending == 0);
                         try_grant(true);
                     }
                     SOL_ZONE("RD_CHAIN_RX");  // the wait for the upstream write (the credit went out earlier)
@@ -1763,10 +1774,13 @@ void kernel_main() {
                     }
                 }
                 // Push before the forward: the forward only reads the page, its NoC write is flushed inside
-                // forward_credited(), and the page is not reused before its grant two pieces on. Both pushes go
-                // before either forward: a forward blocks on the downstream's credit, and compute must not sit on
-                // a V that is already in L1 while the reader waits on a slow neighbour.
+                // forward_credited(), and the page is not granted again until that returns (k_fwd_pending). Both
+                // pushes go before either forward: a forward blocks on the downstream's credit, and compute must
+                // not sit on a V that is already in L1 while the reader waits on a slow neighbour.
+                const bool k_forwards = k_chain.should_forward(k_head, 0);
+                const bool v_forwards = v_chain.should_forward(nv, 0);
                 cb_k.push_back(k_chunk_tiles);
+                k_fwd_pending = k_forwards ? 1 : 0;
                 if (chain_member) {
                     --k_ahead;
                     grant_ahead();
@@ -1775,7 +1789,7 @@ void kernel_main() {
                 CircularBuffer cb_v(cb_v_in);
                 if (chain_member) {
                     if (v_ahead == 0) {
-                        ASSERT(g_phase == 1);
+                        ASSERT(g_phase == 1 && v_fwd_pending == 0);
                         try_grant(true);
                     }
                     v_chain.wait_arrival();
@@ -1791,16 +1805,22 @@ void kernel_main() {
                     }
                 }
                 cb_v.push_back(v_cb_entry_tiles);
+                v_fwd_pending = v_forwards ? 1 : 0;
                 if (chain_member) {
                     --v_ahead;
                     grant_ahead();
                 }
-                if (k_chain.should_forward(k_head, 0)) {
+                if (k_forwards) {
                     SOL_ZONE("RD_CHAIN_TX");  // the waits for the downstream credits, then the two writes
                     k_chain.forward_credited(noc, k_addr, k_chunk_tiles, k_tile_bytes);
+                    k_fwd_pending = 0;
                 }
-                if (v_chain.should_forward(nv, 0)) {
+                if (v_forwards) {
                     v_chain.forward_credited(noc, v_addr);
+                    v_fwd_pending = 0;
+                }
+                if (chain_member) {
+                    grant_ahead();  // the pages the two forwards just released
                 }
                 KV_chunks_processed_in_iter++;
             };

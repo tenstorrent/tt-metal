@@ -604,6 +604,46 @@ if want m11ab; then
     [ -f generated/watcher/watcher.log ] && cp generated/watcher/watcher.log "log_val_m11ab_watcher.log" 2>/dev/null
 fi
 
+# M11 race fix (2026-10-23). m11ab: credits off passed at 2 and 3 pages, credits on failed at 3 pages (0.973) and
+# worse at 2 (0.938). Cause: a member granted the page of a chunk it had pushed but not yet forwarded (compute pops
+# an empty piece at once), so the upstream overwrote the chunk before the forward read it; the reserve now also
+# counts the pages pending a forward. Run at 180 W; every timing compares only against this job's own runs (the
+# m11 / m11ab runs were on a 130 W machine). Correctness first, and the job stops there on any failure:
+#   check / r1184     512 / 1024 / 1184-row resident vs compact (credits, 3 pages)
+#   par_kv3 / par_kv2 5 s parity, credits on at 3 and 2 pages: >= 0.9996 on every call means the race was the bug
+# Then traced tau 1 (6 replays): dense (the 2x denominator), the M8 handshake at 2 pages (the baseline), credits at
+# 2 and 3 pages; tau 2 / 3 for credits at 2 pages; one profile, credits at 2 pages (chain idle per core against the
+# M9 profile's ~1.0 ms).
+if want m11fix; then
+    P="4x8 and resident_call_parity and r4736"
+    ok=1
+    run m11fix_check 900 pytest "$T" -s -k "4x8sp1tp0nl2 and resident_matches_compact and (r512 or r1024)" || ok=0
+    run m11fix_r1184 900 pytest "$T" -s -k "4x8sp1tp0nl2 and resident_matches_compact and r1184k512" || ok=0
+    run m11fix_par_kv3 600 env TT_SOL_KV_PAGES=3 pytest "$T" -s -k "$P" || ok=0
+    run m11fix_par_kv2 600 env TT_SOL_KV_PAGES=2 pytest "$T" -s -k "$P" || ok=0
+    if [ "$ok" != 1 ]; then
+        echo "    m11fix: a correctness run failed; skipping the timings"
+    elif ! python -c "import diffusers.models.transformers.transformer_minimax_h3" > /dev/null 2>&1; then
+        echo "    m11fix: diffusers lacks transformer_minimax_h3 (the MiniMax-H3 patch); re-apply it, then run m11fix_t"
+    else
+        ONLY=m11fix_t
+    fi
+fi
+if want m11fix_t; then
+    S="4x8 and nl2 and 768p_5s and not dense and not agather"
+    TR="SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 SOL_BENCH_MODE=resident SOL_BENCH_PREFIX=off"
+    run m11fix_trace_dense 900 env SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 pytest "$B" -s -k "4x8 and nl2 and 768p_5s and dense"
+    run m11fix_trace_m8_tau1.0 900 env $TR SOL_TAU=1.0 TT_SOL_CHAIN_CREDITS=0 pytest "$B" -s -k "$S"
+    run m11fix_trace_kv2_tau1.0 900 env $TR SOL_TAU=1.0 TT_SOL_KV_PAGES=2 pytest "$B" -s -k "$S"
+    run m11fix_trace_kv3_tau1.0 900 env $TR SOL_TAU=1.0 TT_SOL_KV_PAGES=3 pytest "$B" -s -k "$S"
+    for tau in 2.0 3.0; do
+        run "m11fix_trace_kv2_tau${tau}" 900 env $TR SOL_TAU=$tau TT_SOL_KV_PAGES=2 pytest "$B" -s -k "$S"
+    done
+    run m11fix_profile 900 env TT_METAL_DEVICE_PROFILER=1 TT_SOL_STEP_PROFILE=1 SOL_BENCH_PROFILE=1 SOL_BENCH_REPS=1 \
+        SOL_BENCH_MODE=resident SOL_BENCH_PREFIX=off SOL_TAU=1.0 TT_SOL_KV_PAGES=2 pytest "$B" -s -k "$S"
+    [ -d generated/profiler/.logs ] && cp -r generated/profiler/.logs "profile_m11fix_logs" 2>/dev/null
+fi
+
 # M10 timing only (2026-10-23): the first M10 build passed the correctness set but the 5 s runs overflowed the kernel
 # config buffer (73424 > 70656); outlining the S1/S5 flushes and the P@V issue left it 336 B over (70992), so the
 # resident build now compiles the compute kernel at O2 (factory; ~30 % smaller TRISC binaries, the level every
