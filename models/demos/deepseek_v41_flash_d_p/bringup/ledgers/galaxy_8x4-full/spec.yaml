@@ -305,7 +305,7 @@ agents:
     bf16 precision model). Never trade speed for exactness (kernels that emulate the CPU''s summation order, split matmuls,
     piecewise attention) without the owner''s decision; the fast path is the default.'
   - 'Owner (2026-10-23): everything tuned on the 2x2 seed is tuned for ITS core grid (11x10 per chip) and its per-chip shapes;
-    the Galaxy chips have a 12x10 or 13x10 grid and 640 rows / 1280 hidden columns per chip. Re-sweep on the Galaxy before
+    the Galaxy chips give the model a 12x10 grid (one row of 13 is fast dispatch) and 640 rows / 1280 hidden columns per chip. Re-sweep on the Galaxy before
     trusting any tuned constant: the matmul program configs (tt/mm_configs.py, picks P.23 / P.24; harness tests/perf/test_matmul_sweep.py:
     capture the calls, sweep, check the rule), and likewise the other per-box choices (collective link counts and topology,
     fabric payload sizes, core grids hard-coded in fork options). The matmul rule falls back to the stock config for a shape
