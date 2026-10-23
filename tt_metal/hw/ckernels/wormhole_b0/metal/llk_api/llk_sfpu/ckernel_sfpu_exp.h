@@ -462,20 +462,24 @@ sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(sfpi::vFloat val, const std
     return result;
 }
 
-constexpr float EXP_APPROX_OVERFLOW_IN = 89.0f;
-
-sfpi_inline void _exp_approx_overflow_in_(const int d) {
-    sfpi::vInt xi = sfpi::as<sfpi::vInt>(sfpi::vFloat(sfpi::dst_reg[d]));
-    v_if(xi >= 0 && xi > __builtin_bit_cast(int, EXP_APPROX_OVERFLOW_IN) && xi <= 0x7f800000) {
-        sfpi::dst_reg[d] = EXP_APPROX_OVERFLOW_IN;
+template <int ITERATIONS>
+inline void _calculate_exponential_approx_saturate_() {
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
+        TTI_SFPSWAP(0, p_sfpu::LREG14, p_sfpu::LREG0, 9);
+        TTI_SFPNOP;
+        TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG1, 0);
+        TTI_SFPNOP;
+        TTI_SFP_STOCH_RND(0, 0, p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+        TTI_SFPSHFT(15, p_sfpu::LREG1, p_sfpu::LREG1, 1);
+        TTI_SFP_STOCH_RND(0, 0, p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16A);
+        TTI_SFPNOP;
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 9);
+        TTI_SFPNOP;
+        TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, 0);
+        sfpi::dst_reg++;
     }
-    v_endif;
-}
-
-sfpi_inline void _exp_approx_overflow_out_(const int d) {
-    sfpi::vInt yi = sfpi::as<sfpi::vInt>(sfpi::vFloat(sfpi::dst_reg[d]));
-    v_if(yi > 0x7f800000 && yi < 0x7fff0000) { sfpi::dst_reg[d] = std::numeric_limits<float>::infinity(); }
-    v_endif;
 }
 
 template <
@@ -500,14 +504,9 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
         }
     } else if constexpr (APPROXIMATION_MODE && CLAMP_NEGATIVE) {
         static_assert(!(SATURATE_POSITIVE && SCALE_EN), "SATURATE_POSITIVE assumes the unscaled A and B - C");
-        constexpr bool saturate = SATURATE_POSITIVE && is_fp32_dest_acc_en;
-        if constexpr (saturate) {
-#pragma GCC unroll 8
-            for (int d = 0; d < ITERATIONS; d++) {
-                _exp_approx_overflow_in_(d);
-            }
-            TTI_SFPNOP;
-        }
+        if constexpr (SATURATE_POSITIVE && is_fp32_dest_acc_en) {
+            _calculate_exponential_approx_saturate_<ITERATIONS>();
+        } else {
 #ifdef DISABLE_SFPLOADMACRO
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
@@ -516,10 +515,6 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
             TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
             TTI_SFPSHFT(15, p_sfpu::LREG0, p_sfpu::LREG0, 1);
             TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
-            if constexpr (saturate) {
-                TTI_SFPNOP;
-                _exp_approx_overflow_out_(0);
-            }
             sfpi::dst_reg++;
         }
 #else
@@ -635,16 +630,8 @@ void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::k
         TTI_SFPNOP;
         // TTI_SFPNOP;
         // TTI_SFPNOP;
-        if constexpr (saturate) {
-            static_assert(ITERATIONS == 8, "the macro path above covers 8 rows");
-            TTI_SFPNOP;
-            TTI_SFPNOP;
-#pragma GCC unroll 8
-            for (int d = 0; d < 8; d++) {
-                _exp_approx_overflow_out_(d);
-            }
-        }
 #endif
+        }
     }
 #ifdef DISABLE_SFPLOADMACRO
     else if constexpr (APPROXIMATION_MODE) {
