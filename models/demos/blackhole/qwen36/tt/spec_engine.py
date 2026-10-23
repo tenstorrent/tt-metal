@@ -811,6 +811,17 @@ class _ProposePlan:
         self.__dict__.update(kw)
 
 
+def _chunk_prog_of(eng):
+    """engine row -> (e, digest of prompt[:e], page-table signature): see MTPSpecEngine._chunk_prog."""
+    return eng.__dict__.setdefault("_chunk_progress", {})
+
+
+def chunk_exact_resume_enabled():
+    """QWEN36_SPEC_CHUNK_EXACT_RESUME (default 1): chunked prefill resumes exactly at the previous chunk end (Option B);
+    0 = Option A (snapshot at e-128, recompute [e-128, e))."""
+    return os.environ.get("QWEN36_SPEC_CHUNK_EXACT_RESUME", "1") == "1"
+
+
 class MTPSpecEngine:
     """MTP speculative decode engine over B users (see module docstring)."""
 
@@ -2286,6 +2297,7 @@ class MTPSpecEngine:
         self._fresh.pop(slot, None)
         self._parked.pop(slot, None)
         self._prompts.pop(slot, None)
+        _chunk_prog_of(self).pop(slot, None)  # a released row's chunk-resume entry (Option B) is void
         _row_vision_of(self).pop(slot, None)
         _record_row_delta(self, slot, None)  # the row's M-RoPE delta goes with its request (text rows are 0)
         self._fresh_dirty.discard(slot)
@@ -2323,6 +2335,7 @@ class MTPSpecEngine:
         self._parked = {new_of[u]: v for u, v in self._parked.items()}
         self._finishing = {new_of[u] for u in self.__dict__.get("_finishing", ())}
         self._prompts = {new_of[u]: v for u, v in self._prompts.items()}
+        self.__dict__["_chunk_progress"] = {new_of[u]: v for u, v in _chunk_prog_of(self).items()}
         self._fresh_dirty = {new_of[u] for u in self._fresh_dirty}
         self._active = {new_of[u] for u in self._active}
         self._offered = {new_of[u] for u in self._offered}
@@ -2348,7 +2361,11 @@ class MTPSpecEngine:
         ``final`` False (QWEN36_SPEC_CHUNKED_PREFILL: a non-final chunk [start_pos, e) of a longer prompt, e = len(prompt_ids), a
         multiple of 128): the chunk is prefilled (KV + drafter KV, GDN snapshot at e-128 into the prefix cache) but the row is
         not registered (no _prompts / _fresh / _active, no GDN slot write, no last-row capture, no host logits read) and a
-        zero row is returned. The next chunk (start_pos = e) resumes from the e-128 snapshot. Text rows only."""
+        zero row is returned. Text rows only.
+        Option A (QWEN36_SPEC_CHUNK_EXACT_RESUME=0): the snapshot is at e-128 and the next chunk (start_pos = e) resumes
+        there, recomputing [e-128, e). Option B (default): the snapshot is at the chunk end e and the target hidden row of
+        slot e-1 is captured into _last_hidden[slot]; the next chunk (start_pos = e, same prompt prefix and page table, see
+        _chunk_prog) resumes exactly at e and first warms the drafter slot e-1 with (that row, token e)."""
         assert final or vision_tokens is None, "a multimodal prompt cannot be prefilled in non-final chunks"
         assert 0 <= slot < self.B, f"slot {slot} out of range [0,{self.B})"
         if getattr(self, "_ch_g", None) is not None:  # QWEN36_SPEC_CHAIN
@@ -2376,6 +2393,7 @@ class MTPSpecEngine:
         """``prefill`` of engine row ``slot`` (``final`` False: a non-final chunk, see ``prefill``)."""
         reset_draft_skip(self, slot)
         self._parked.pop(slot, None)
+        prog = _chunk_prog_of(self).pop(slot, None)  # consumed by every prefill of the row (see _chunk_exact_resume)
         self.__dict__.setdefault("_finishing", set()).discard(slot)  # a prefill gives the slot a new request
         self._fresh_dirty.discard(slot)
         model = self.model
@@ -2414,22 +2432,39 @@ class MTPSpecEngine:
         # A non-final chunk also snapshots the GDN state at e-128 (e = Tp): the next chunk (start_pos = e) resumes there
         # (spec_resume_cap(e, L) = e-128) and recomputes [e-128, e), which also warms the drafter slot e-1.
         force = ()
+        exact_mode = chunk_exact_resume_enabled()
+        save_end = (not final) and exact_mode  # Option B: snapshot the chunk end + capture the hidden row of slot e-1
         if not final:
             if self.B <= 1 or getattr(model, "_prefix_cache", None) is None:
                 raise RuntimeError("non-final prefill chunk needs the batched spec engine and the GDN prefix cache")
-            if Tp - 128 > int(start_pos):
+            if save_end:
+                pass
+            elif Tp - 128 > int(start_pos):
                 force = (Tp - 128,)
             else:
                 logger.info(
                     f"[spec_engine] chunked prefill: chunk [{start_pos}, {Tp}) is <= 128 tokens: no e-128 snapshot"
                 )
+        exact = self._chunk_exact_resume(prog, prompt_list, start_pos, Tp, pt_row, vision_tokens, exact_mode)
+        plan_kw = {}
+        if force:
+            plan_kw["force_points"] = force
+        if exact is not None:
+            plan_kw["exact_resume"] = exact
+        if save_end:
+            plan_kw["nonfinal"] = True
         plan = (
-            model.plan_spec_prefix(prompt[0], Tp, start_pos, **(dict(force_points=force) if force else {}))
+            model.plan_spec_prefix(prompt[0], Tp, start_pos, **plan_kw)
             if start_pos is not None and self.B > 1 and vision_tokens is None
             else None
         )
-        if not final and plan is None and force:
-            raise RuntimeError(f"non-final chunk [{start_pos}, {Tp}): no prefix plan (forced save point {force[0]})")
+        if not final and plan is None and (force or save_end):
+            raise RuntimeError(f"non-final chunk [{start_pos}, {Tp}): no prefix plan (forced save point {force[:1]})")
+        if exact is not None and (plan is None or int(plan[0]) != exact):
+            # the snapshot at e is gone (evicted): the plan fell back to the normal cap; the hidden row of e-1 is unusable
+            exact = None
+            self.chunk_exact_misses = getattr(self, "chunk_exact_misses", 0) + 1
+            logger.warning(f"[spec_engine] chunk exact resume: snapshot at {start_pos} evicted, Option A resume")
         self._note_resume_fallback(prompt_list, start_pos, Tp, plan, final)
         vis_kw = {} if vision_tokens is None else dict(vision_tokens=vision_tokens)  # text: the calls are unchanged
         # The prompt the drafter fuses its next-token column from. A non-final fast-prefill segment [a, b) narrows it
@@ -2440,18 +2475,24 @@ class MTPSpecEngine:
             # Never frees `hidden` (the caller does, or it is the trace's persistent output).
             feed = model.spec_feed_rows(hidden)
             self._warm_mtp_chunk(feed, chunk_start, valid_len, mtp_prompt[0], pt_row)
-            if final and chunk_start + valid_len >= Tp:  # the chunk holding slot Tp-1
+            if (final or save_end) and chunk_start + valid_len >= Tp:  # the chunk holding slot Tp-1
                 self._capture_last_row(feed, Tp - 1 - chunk_start, slot)
                 captured_row[0] = True
             if feed is not hidden:
                 ttnn.deallocate(feed)
 
+        if exact is not None:
+            # Drafter slot e-1 (unwarmed after the previous chunk): (target hidden row of e-1, token e), through THIS
+            # request's page table. Slots >= e are warmed by the segments below.
+            self._warm_resume_slot(slot, prompt_list[exact], exact - 1, pt_row)
+            self.chunk_exact_resumes = getattr(self, "chunk_exact_resumes", 0) + 1
         logits_dev = None
         if self.fast_prefill and self.prefill_recorded and self.recorded_prefill:
             fast_kw = {} if plan is None else dict(plan=plan, mtp_prompt=mtp_prompt)
             fast_kw.update(vis_kw)
             if not final:
                 fast_kw["final_row"] = False
+                fast_kw["save_end"] = save_end
             logits_dev = self._prefill_fast(slot, prompt_list, prompt, pt_row, Tp, _on_chunk, captured_row, **fast_kw)
         if logits_dev is None and self.B == 1 and self.prefill_recorded and self.recorded_prefill:
             pt_rec = model._fit_spec_page_table(pt_row, self.nb_prefill)  # MTP chunk fill keeps the nb-wide pt_row
@@ -2462,9 +2503,15 @@ class MTPSpecEngine:
             elif final:
                 logits_dev = model.prefill_for_spec(prompt, pt_row, Tp, _on_chunk, slot=slot, plan=plan)
             else:
-                model.prefill_for_spec(prompt, pt_row, Tp, _on_chunk, slot=slot, plan=plan, final=False)
+                model.prefill_for_spec(
+                    prompt, pt_row, Tp, _on_chunk, slot=slot, plan=plan, final=False, save_end=save_end
+                )
         if not final:
-            # nothing is registered for the row: the next chunk (or the final one) prefills it again from the e-128 snapshot
+            # nothing is registered for the row. Option A: the next chunk prefills again from the e-128 snapshot.
+            # Option B: the next chunk resumes at e from the snapshot at e and the row captured into _last_hidden[slot].
+            if save_end:
+                assert captured_row[0], f"non-final chunk never delivered the chunk holding slot {Tp - 1}"
+                _chunk_prog_of(self)[slot] = (Tp, self._chunk_digest(prompt_list, Tp), self._chunk_pt_sig(pt_row, Tp))
             return torch.zeros(self.vocab)
         assert captured_row[0], f"prefill never delivered the chunk holding slot {Tp - 1}"
         if isinstance(logits_dev, torch.Tensor):
@@ -2492,6 +2539,7 @@ class MTPSpecEngine:
         mtp_prompt=None,
         vision_tokens=None,
         final_row=True,
+        save_end=False,
     ):
         """QWEN36_SPEC_FAST_PREFILL=1 body of _prefill_row: traced prefill of one prompt on the GDN binding the traces
         were captured against (the B=1 scratch at B > 1, the decode buffers at B == 1), then the scratch -> slot write.
@@ -2510,7 +2558,8 @@ class MTPSpecEngine:
         _fast_segment.
 
         ``final_row`` False (non-final chunk): the scratch is not written to the row's GDN slot and no host logits are read
-        (the returned value is meaningless)."""
+        (the returned value is meaningless). ``save_end`` (with final_row False; Option B): the state after tokens[:Tp]
+        is also snapshotted into the prefix cache (no extra segment: Tp is the last segment's end)."""
         model = self.model
         batched = self.B > 1
         if plan is None:
@@ -2554,6 +2603,10 @@ class MTPSpecEngine:
                     model._prefix_cache.save(prompt[0], b)  # the bound scratch = the state after tokens[:b]
                     saved.append(b)
                 a = b
+            if save_end:
+                assert plan is not None
+                model._prefix_cache.save(prompt[0], Tp)  # the bound scratch = the state after tokens[:Tp]
+                saved.append(Tp)
             if plan is not None:
                 model._prefix_cache.log(Tp, -1, s0, saved)
         finally:
@@ -2793,6 +2846,64 @@ class MTPSpecEngine:
             f"[spec_engine] prefix resume fallback #{self.resume_fallbacks}: start_pos={start_pos} Tp={Tp} "
             f"({'final' if final else 'non-final'}) resumes at {s}, wanted {cap} (snapshot evicted?)"
         )
+
+    # --- Option B (QWEN36_SPEC_CHUNK_EXACT_RESUME): exact resume of a chunked prefill at the previous chunk end ---
+    def _chunk_prog(self):
+        """engine row -> (e, digest of prompt[:e], page-table signature) of a row whose last prefill was a non-final chunk
+        [., e) run by THIS engine in Option B mode (its snapshot at e and _last_hidden[row] = target hidden row of slot e-1).
+        Set by a non-final chunk, consumed (popped) by the next prefill of the row, dropped on release."""
+        return _chunk_prog_of(self)
+
+    @staticmethod
+    def _chunk_digest(prompt_list, e):
+        import hashlib
+
+        import numpy as np
+
+        return hashlib.blake2b(np.asarray(prompt_list[:e], dtype=np.int32).tobytes(), digest_size=16).digest()
+
+    def _chunk_pt_sig(self, pt_row, e):
+        """The page-table blocks holding positions [0, e): the KV (and drafter KV) the exact resume relies on."""
+        n = -(-int(e) // int(self.block_size))
+        return tuple(int(x) for x in torch.as_tensor(pt_row).reshape(-1)[:n].tolist())
+
+    def _chunk_exact_resume(self, prog, prompt_list, start_pos, Tp, pt_row, vision_tokens, exact_mode):
+        """e when this prefill may resume exactly at e = start_pos (see _chunk_prog), else None (normal resume path:
+        Option A). Checked: Option B on, text row, B > 1, the previous chunk was run here for this row and ended at e,
+        same prompt tokens [0, e) and same page-table blocks, >= 3 tokens left (the short-tail floor of the plans)."""
+        if not exact_mode or prog is None or start_pos is None or vision_tokens is not None or self.B <= 1:
+            return None
+        e0, dig, sig = prog
+        ok = (
+            int(start_pos) == e0
+            and Tp - e0 >= 3
+            and self._chunk_digest(prompt_list, e0) == dig
+            and self._chunk_pt_sig(pt_row, e0) == sig
+        )
+        if not ok:
+            self.chunk_exact_misses = getattr(self, "chunk_exact_misses", 0) + 1
+            logger.warning(
+                f"[spec_engine] chunk exact resume refused: start_pos={start_pos} progress end={e0} Tp={Tp} "
+                "(prompt / page table / length mismatch): Option A resume"
+            )
+            return None
+        return e0
+
+    def _warm_resume_slot(self, slot, token, pos, pt_row):
+        """Write the drafter KV of slot ``pos`` (= e-1) from (_last_hidden[slot], ``token`` = prompt[e]) through the
+        request's own page table ``pt_row`` ([1, nb] host int32). The one-row drafter decode that warms slot Tp-1 today
+        (_warm_mtp_last); text rows: M-RoPE delta 0."""
+        pt_tt = ttnn.from_torch(
+            torch.as_tensor(pt_row).to(torch.int32).reshape(1, -1).contiguous(),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        try:
+            self._warm_mtp_last(self._last_hidden[slot], int(token), int(pos), pt_tt)
+        finally:
+            ttnn.deallocate(pt_tt)
 
     def _reprefill(self, slot):
         """Re-run a fresh slot's prefill (a seed overwrote its prefill GDN state while it was left out)."""

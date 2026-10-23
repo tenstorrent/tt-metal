@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""CPU tests (no device) for chunked prefill on the MTP spec class (QWEN36_SPEC_CHUNKED_PREFILL=1, Option A of
-work/notes/84): a non-final chunk [s, e) snapshots the GDN state at e-128 and registers nothing; the next chunk
-(start_pos = e) resumes from that snapshot. Real MTPSpecEngine._prefill_row / _prefill_fast / Qwen36Model.plan_spec_prefix /
+"""CPU tests (no device) for chunked prefill on the MTP spec class (QWEN36_SPEC_CHUNKED_PREFILL=1, work/notes/84).
+Option A (QWEN36_SPEC_CHUNK_EXACT_RESUME=0; the tests without "exact" in their name): a non-final chunk [s, e) snapshots the
+GDN state at e-128 and registers nothing; the next chunk (start_pos = e) resumes from that snapshot. Option B (default;
+tests named *exact*): the snapshot is at e, the hidden row of slot e-1 is kept, the next chunk resumes exactly at e. Real MTPSpecEngine._prefill_row / _prefill_fast / Qwen36Model.plan_spec_prefix /
 GdnPrefixStateCache.save over the fakes of test_spec_fastprefill_host.py and test_spec_prefix_fast_host.py.
 
 Run (worktree first on PYTHONPATH, ttnn from the built checkout):
@@ -23,6 +24,14 @@ from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36MTPContractForCau
 from models.demos.blackhole.qwen36.tt.spec_engine import MTPSpecEngine
 
 __all__ = ["fake_ttnn"]  # fixture re-export
+
+
+@pytest.fixture(autouse=True)
+def _resume_mode(request, monkeypatch):
+    """Tests with "exact" in their name run Option B (the default); all others pin Option A."""
+    if "exact" not in request.node.name:
+        monkeypatch.setenv("QWEN36_SPEC_CHUNK_EXACT_RESUME", "0")
+
 
 NB = 160  # page-table blocks of 64 tokens (10240 tokens)
 SLOT = 3
@@ -55,8 +64,17 @@ def _setup(calls, cache, B=8, trace_lengths=(128, 40, 768, 1920)):
     model.plan_spec_prefix = lambda toks, L, start, **kw: Qwen36Model.plan_spec_prefix(model, toks, L, start, **kw)
     e = _engine(B, model=model, nb=NB, nb_prefill=NB)
     e._warm_mtp_chunk = lambda *a, **k: calls.append(("warm_mtp",))
-    e._capture_last_row = lambda *a, **k: calls.append(("capture_last_row",))
+    e._capture_last_row = lambda *a, **k: calls.append(("capture_last_row", a[1]))
+    e._warm_mtp_last = lambda hid, tok, pos, pt, **k: calls.append(("warm_last", hid, tok, pos, pt.clone()))
     return e
+
+
+@pytest.fixture
+def fake_pt(monkeypatch):
+    import ttnn
+
+    monkeypatch.setattr(ttnn, "from_torch", lambda t, **k: t)
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh: "rep", raising=False)
 
 
 def _run(e, tokens, e_end, start, final):
@@ -315,3 +333,176 @@ def test_serving_conflict_chunked_allowed_only_with_env(monkeypatch):
     # APC off: the prefix-caching conflict still wins, and chunking is off again
     monkeypatch.setenv("QWEN36_SPEC_PREFIX_CACHE", "0")
     assert "prefix caching" in Qwen36MTPContractForCausalLM._serving_conflict(vc)
+
+
+# --------------------------------------------------------------------------- #
+# Option B: exact resume at the chunk end (QWEN36_SPEC_CHUNK_EXACT_RESUME=1, default)
+# --------------------------------------------------------------------------- #
+def _segments(calls):
+    """(start, length) of every segment run: short-trace replays + chunk-trace runs (start, n chunks * 2048 as a span)."""
+    out = []
+    for c in calls:
+        if c[0] == "replay":
+            out.append((c[5], c[3]))
+        elif c[0] == "chunks":
+            out.append((c[3], c[1] * 2048 + c[2]))  # (start, num_full * chunk + tail)
+    return out
+
+
+def test_exact_first_chunk_saves_at_chunk_end_only(fake_ttnn, fake_pt):
+    tokens, cache, calls = _prompt(9000), _cache(), []
+    e = _setup(calls, cache)
+    out = _run(e, tokens, 4096, 0, final=False)
+    assert not bool(out.any())
+    assert cache._positions == [4096]  # the chunk end, no e-128
+    assert cache.lookup(torch.tensor(tokens), 4096)[0] == 4096
+    assert e._prompts == {} and e._fresh == {} and e._active == set()
+    assert not any(c[0] == "slot_write" for c in calls)
+    assert fake_ttnn["to_torch"] == []
+    assert getattr(e, "_skip_logits_read", False) is False
+    # the hidden row of slot e-1 is kept in _last_hidden[row]; progress recorded
+    assert e._chunk_prog()[SLOT][0] == 4096
+    assert not any(c[0] == "warm_last" for c in calls)  # nothing to warm yet
+
+
+def test_exact_continuation_segments_are_exactly_the_chunk(fake_ttnn, fake_pt):
+    tokens, cache, calls = _prompt(9000), _cache(), []
+    e = _setup(calls, cache)
+    _run(e, tokens, 4096, 0, final=False)
+    calls.clear()
+    fake_ttnn["copy"].clear()
+    out = _run(e, tokens, 8192, 4096, final=False)
+    assert not bool(out.any())
+    # one segment [4096, 8192): chunk replays from 4096 (2 x 2048), no 128 recompute, no e-128 split, no learn split
+    assert _segments(calls) == [(4096, 4096)]
+    restores = [d for _, d in fake_ttnn["copy"] if d in ("bound_rec", "bound_carry")]
+    assert restores == ["bound_rec", "bound_carry"]  # snapshot at 4096 restored
+    assert cache._positions == [4096, 8192]  # 8064 / 3968 never saved
+    assert e._chunk_prog()[SLOT][0] == 8192 and e.chunk_exact_resumes == 1
+    assert getattr(e, "resume_fallbacks", 0) == 0
+
+
+def test_exact_warms_drafter_slot_e_minus_1_once_with_token_e(fake_ttnn, fake_pt):
+    tokens, cache, calls = _prompt(9000), _cache(), []
+    e = _setup(calls, cache)
+    _run(e, tokens, 4096, 0, final=False)
+    calls.clear()
+    _run(e, tokens, 8192, 4096, final=False)
+    warms = [c for c in calls if c[0] == "warm_last"]
+    assert len(warms) == 1
+    _, hid, tok, pos, pt = warms[0]
+    assert hid == f"last_hidden[{SLOT}]" and tok == tokens[4096] and pos == 4095
+    assert torch.equal(pt, _row(NB))  # this request's page table, not a stale _mtp_pt_rows entry
+    # warm happens before the first segment
+    assert [c[0] for c in calls].index("warm_last") < min(
+        i for i, c in enumerate(calls) if c[0] in ("replay", "chunks")
+    )
+
+
+def test_exact_final_chunk_resumes_at_e_then_registers(fake_ttnn, fake_pt):
+    tokens, cache, calls = _prompt(9000), _cache(), []
+    e = _setup(calls, cache)
+    _run(e, tokens, 4096, 0, final=False)
+    _run(e, tokens, 8192, 4096, final=False)
+    calls.clear()
+    out = _run(e, tokens, 9000, 8192, final=True)
+    assert out.shape == (VOCAB,) and bool(out.any())
+    assert e._fresh == {SLOT: 9000} and e._active == {SLOT}
+    assert e._prompts[SLOT][2] == 8192
+    assert ("slot_write", SLOT) in calls
+    assert [c[1:4] for c in calls if c[0] == "warm_last"] == [(f"last_hidden[{SLOT}]", tokens[8192], 8191)]
+    assert _segments(calls)[0][0] == 8192  # starts at e, not e-128
+    assert ("capture_last_row", 8999 - 8192) in calls or any(c[0] == "replay" for c in calls)
+    assert SLOT not in e._chunk_prog()  # consumed
+    assert len(fake_ttnn["to_torch"]) >= 1
+
+
+def test_exact_middle_chunk_takes_stride_saves_but_no_end_split(fake_ttnn, fake_pt, monkeypatch):
+    """A non-final chunk spanning a stride point keeps that save; the chunk end itself is the last segment end."""
+    monkeypatch.setenv("QWEN36_PREFIX_SNAPSHOT_STRIDE", "2048")
+    tokens, cache, calls = _prompt(9000), _cache(), []
+    e = _setup(calls, cache)
+    _run(e, tokens, 4096, 0, final=False)
+    calls.clear()
+    _run(e, tokens, 8192, 4096, final=False)  # stride 2048 from s=4096 -> 6144 splits; the end 8192 is the last end
+    assert cache._positions == [2048, 4096, 6144, 8192]  # stride save of the first chunk too; no 8064 (e-128)
+    assert _segments(calls) == [(4096, 2048), (6144, 2048)]
+
+
+@pytest.mark.parametrize("breakage", ["missing", "digest", "pt", "start", "evicted"])
+def test_exact_falls_back_to_option_a_resume(fake_ttnn, fake_pt, breakage):
+    tokens, cache, calls = _prompt(9000), _cache(), []
+    e = _setup(calls, cache)
+    _run(e, tokens, 4096, 0, final=False)
+    row = _row(NB)
+    run_tokens, start = tokens, 4096
+    if breakage == "missing":
+        e._chunk_prog().clear()
+    elif breakage == "digest":
+        run_tokens = list(tokens)
+        run_tokens[10] += 1
+    elif breakage == "start":
+        start = 4224
+    elif breakage == "evicted":
+        cache._lru.clear(), cache._by_pos.clear(), cache._positions.clear()
+        cache._free = list(range(cache.num_slots))
+    calls.clear()
+    pt = row.clone() if breakage != "pt" else row.flip(1).contiguous()
+    MTPSpecEngine._prefill_row(e, SLOT, run_tokens[:8192], pt, None, start_pos=start, final=False)
+    assert not any(c[0] == "warm_last" for c in calls)  # no exact-resume warm
+    assert getattr(e, "chunk_exact_resumes", 0) == 0
+    assert getattr(e, "chunk_exact_misses", 0) == (0 if breakage in ("missing",) else 1)
+    # normal path: resumes at spec_resume_cap (3968 / 4096-ish) or earlier, never at 4096 from the exact snapshot
+    if breakage in ("digest", "pt", "start", "missing"):
+        assert getattr(e, "resume_fallbacks", 0) >= 0
+    assert _segments(calls)  # still runs correctly
+    first = _segments(calls)[0][0]
+    assert first < 4096 if breakage != "start" else first <= 4224
+
+
+def test_exact_progress_cleared_on_release_and_reprefill(fake_ttnn, fake_pt):
+    tokens, cache, calls = _prompt(9000), _cache(), []
+    e = _setup(calls, cache)
+    e._row_gens = lambda: [0] * 8
+    e._no_draft, e._withheld_streak = set(), {}
+    _run(e, tokens, 4096, 0, final=False)
+    assert SLOT in e._chunk_prog()
+    MTPSpecEngine.release(e, SLOT)
+    assert SLOT not in e._chunk_prog()
+    # a later chunk after the release must not take the exact path
+    calls.clear()
+    _run(e, tokens, 8192, 4096, final=False)
+    assert not any(c[0] == "warm_last" for c in calls)
+
+
+def test_exact_progress_follows_device_slot_remap_and_prefill_consumes_it(fake_ttnn, fake_pt):
+    e = _setup([], _cache())
+    e._chunk_prog()[2] = ("x",)
+    e._chunk_prog()[5] = ("y",)
+    # the permuting remap path rebuilds per-row dicts: mimic the line the engine runs
+    idx = [1, 0, 5, 3, 4, 2, 6, 7]
+    new_of = {old: new for new, old in enumerate(idx)}
+    e.__dict__["_chunk_progress"] = {new_of[u]: v for u, v in e._chunk_prog().items()}
+    assert e._chunk_prog() == {5: ("x",), 2: ("y",)}
+
+
+def test_exact_env_zero_gives_option_a_segments(fake_ttnn, fake_pt, monkeypatch):
+    monkeypatch.setenv("QWEN36_SPEC_CHUNK_EXACT_RESUME", "0")
+    tokens, cache, calls = _prompt(9000), _cache(), []
+    e = _setup(calls, cache)
+    _run(e, tokens, 4096, 0, final=False)
+    assert cache._positions == [3968] and e._chunk_prog() == {}
+    calls.clear()
+    _run(e, tokens, 8192, 4096, final=False)
+    assert _replays(calls)[0] == (3968, 128) and _replays(calls)[-1] == (8064, 128)
+    assert not any(c[0] == "warm_last" for c in calls)
+
+
+def test_exact_short_tail_final_chunk_uses_normal_resume(fake_ttnn, fake_pt):
+    """Final chunk with < 3 tokens left cannot resume at e (plan floor): normal path, no exact warm."""
+    tokens, cache, calls = _prompt(4097), _cache(), []
+    e = _setup(calls, cache)
+    _run(e, tokens, 4096, 0, final=False)
+    calls.clear()
+    _run(e, tokens, 4097, 4096, final=True)
+    assert not any(c[0] == "warm_last" for c in calls)

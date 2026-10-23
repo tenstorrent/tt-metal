@@ -82,14 +82,20 @@ def spec_learn_positions(start_pos, prompt_len, align=SPEC_PREFIX_ALIGN, min_tai
     return out
 
 
-def spec_save_points(prompt_len, s, learn, chunk=2048, min_len=8192, stride=8192, align=SPEC_PREFIX_ALIGN):
+def spec_save_points(
+    prompt_len, s, learn, chunk=2048, min_len=8192, stride=8192, align=SPEC_PREFIX_ALIGN, end_point=True
+):
     """Sorted segment split positions (snapshot after tokens[:p]) for a spec prefill resuming at s, p in (s, L-3]:
     the learn positions, the end-of-prompt position for L >= min_len, else the last full-chunk boundary, and every
     `stride` tokens from s (chunk-aligned strides only). Same policy as the plain O path (model._plan_prefix_prefill).
+    ``end_point`` False (a non-final chunked-prefill chunk resumed exactly, Option B): no end-of-prompt / last-full-chunk
+    point (the caller snapshots the chunk end itself); learn positions and strides stay.
     """
     pts = {p for p in learn if s < p <= prompt_len - 3}
     b_end = ((prompt_len - 3) // align) * align
-    if prompt_len >= min_len:
+    if not end_point:
+        pass
+    elif prompt_len >= min_len:
         if b_end > max(s, max(pts, default=0)):
             pts.add(b_end)
     elif not pts:
