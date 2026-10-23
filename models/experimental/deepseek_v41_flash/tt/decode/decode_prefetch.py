@@ -11,7 +11,8 @@ V4.1 adds its own private rings next to it:
 * kv on 16 receivers (``[5120, 32]`` slabs), streamed in 32-tile pages.
 * o_b, and separately the shared expert's down, on 80 receivers each (``N = 5120`` over
   64-column slabs).
-* Engram's wkv (replicated, bf8) on 80 receivers of ``[6144, 320]`` slabs, streamed in 30-tile pages.
+* Engram's wkv (bf8, row-parallel under TP) on 80 receivers of ``[6144 / TP, 320]`` slabs, streamed in
+  30-tile pages.
 
 The router gate (12 cores) and the shared expert's gate/up (36 cores, 9 per rank at TP4) do not
 divide the 8 DRAM banks a ring spreads over, so they stay on the per-step DRAM -> L1 copy.
@@ -59,6 +60,7 @@ def prefetch_rings(tp_size: int = 1) -> dict:
 
     o_b = ATTENTION_LAYOUTS["o_b_proj"]
     down = MOE_LAYOUTS["shared_down_proj"]
+    wkv = ENGRAM_LAYOUTS["wkv"]
     shared = tuple(decode_gcb_group_specs())
     return {
         "q_a_proj": PrefetchRing(Q_A_GCB, (ATTENTION_LAYOUTS["q_a_proj"], _Q_A_PAGE_PIN), Q_A_GCB_PAGES),
@@ -69,5 +71,7 @@ def prefetch_rings(tp_size: int = 1) -> dict:
         "shared_down_proj": PrefetchRing(
             SHARED_DOWN_GCB, ({"K": down["K"] // tp_size, "N": down["N"]},), SHARED_DOWN_GCB_PAGES
         ),
-        "engram.wkv": PrefetchRing(ENGRAM_WKV_GCB, (ENGRAM_LAYOUTS["wkv"], _ENGRAM_WKV_PAGE_PIN), ENGRAM_WKV_GCB_PAGES),
+        "engram.wkv": PrefetchRing(
+            ENGRAM_WKV_GCB, ({**wkv, "K": wkv["K"] // tp_size}, _ENGRAM_WKV_PAGE_PIN), ENGRAM_WKV_GCB_PAGES
+        ),
     }

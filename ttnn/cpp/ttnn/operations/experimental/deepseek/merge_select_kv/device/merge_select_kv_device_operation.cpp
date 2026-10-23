@@ -27,13 +27,49 @@ void MergeSelectKvDeviceOperation::validate_on_program_cache_miss(
         candidates.dtype() == DataType::INT32 && candidates.layout() == Layout::ROW_MAJOR &&
             candidates.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "merge_select_kv: candidates must be INT32 row-major interleaved");
+    const bool is_candidate_source = args.candidate_topk_blocks > 0;
+    TT_FATAL(
+        is_candidate_source == (args.candidate_block_size > 0),
+        "merge_select_kv: candidate_topk_blocks ({}) and candidate_block_size ({}) must be given together",
+        args.candidate_topk_blocks,
+        args.candidate_block_size);
+    const uint32_t cand_width = 2 * args.k + 16 + 2 * args.candidate_topk_blocks;
     const auto& cand_shape = candidates.logical_shape();
     TT_FATAL(
-        cand_shape.rank() == 4 && cand_shape[0] == 1 && cand_shape[1] == 1 && cand_shape[-1] == 2 * args.k + 16,
-        "merge_select_kv: candidates must be [1, 1, num_parts, {}] for k = {}, got {}",
-        2 * args.k + 16,
+        cand_shape.rank() == 4 && cand_shape[0] == 1 && cand_shape[1] == 1 && cand_shape[-1] == cand_width,
+        "merge_select_kv: candidates must be [1, 1, num_parts, {}] for k = {} and {} candidate blocks, got {}",
+        cand_width,
         args.k,
+        args.candidate_topk_blocks,
         cand_shape);
+    TT_FATAL(
+        is_candidate_source == tensor_args.candidate_blocks_output.has_value() &&
+            is_candidate_source == tensor_args.pool_count_output.has_value(),
+        "merge_select_kv: candidate_blocks_output and pool_count_output are given exactly in candidate source mode");
+    // The merge cores read the candidates in 64 B aligned runs of 16 entries.
+    TT_FATAL(args.k % 16 == 0, "merge_select_kv: k must be a multiple of 16, got {}", args.k);
+    if (is_candidate_source) {
+        TT_FATAL(
+            args.candidate_topk_blocks % 16 == 0,
+            "merge_select_kv: candidate_topk_blocks must be a multiple of 16, got {}",
+            args.candidate_topk_blocks);
+        const auto require_int32_rm = [](const Tensor& t, const ttnn::Shape& shape, const char* name) {
+            TT_FATAL(
+                t.storage_type() == StorageType::DEVICE && t.dtype() == DataType::INT32 &&
+                    t.layout() == Layout::ROW_MAJOR &&
+                    t.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED && t.logical_shape() == shape,
+                "merge_select_kv: {} must be an INT32 row-major interleaved {} device tensor, got {} {}",
+                name,
+                shape,
+                t.dtype(),
+                t.logical_shape());
+        };
+        require_int32_rm(
+            tensor_args.candidate_blocks_output.value(),
+            ttnn::Shape({1, args.candidate_topk_blocks}),
+            "candidate_blocks_output");
+        require_int32_rm(tensor_args.pool_count_output.value(), ttnn::Shape({1}), "pool_count_output");
+    }
 
     const auto& kv_cache = tensor_args.kv_cache;
     TT_FATAL(
@@ -107,11 +143,17 @@ ttnn::Tensor merge_select_kv(
     uint32_t k,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& output_tensor,
-    uint32_t output_row_offset) {
+    uint32_t output_row_offset,
+    uint32_t candidate_topk_blocks,
+    uint32_t candidate_block_size,
+    const std::optional<ttnn::Tensor>& candidate_blocks_output,
+    const std::optional<ttnn::Tensor>& pool_count_output) {
     using OperationType = ttnn::operations::experimental::deepseek::merge_select_kv::MergeSelectKvDeviceOperation;
     auto attrs = OperationType::operation_attributes_t{
         .k = k,
         .output_row_offset = output_row_offset,
+        .candidate_topk_blocks = candidate_topk_blocks,
+        .candidate_block_size = candidate_block_size,
         // SDPA reads the gathered rows next, so they stay in L1 by default.
         .output_mem_config = memory_config.value_or(
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1}),
@@ -120,6 +162,8 @@ ttnn::Tensor merge_select_kv(
         .candidates = candidates,
         .kv_cache = kv_cache,
         .output_tensor = output_tensor,
+        .candidate_blocks_output = candidate_blocks_output,
+        .pool_count_output = pool_count_output,
     };
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }

@@ -82,6 +82,7 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
                 prefetch_buffers,
                 cache=cache.sub("engram"),
                 sockets=engram_sockets,
+                tp_size=tp_size,
             )
             if layer_idx in config.engram_layer_ids
             else None

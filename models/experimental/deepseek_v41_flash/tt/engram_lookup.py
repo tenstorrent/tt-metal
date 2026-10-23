@@ -37,9 +37,12 @@ def tensor_region(path, name: str) -> tuple[int, list]:
     return 8 + header_len + meta["data_offsets"][0], meta["shape"]
 
 
-def read_into_memory(path, offset: int, shape, dtype: torch.dtype, threads: int = 16, chunk: int = 1 << 30):
+def read_into_memory(
+    path, offset: int, shape, dtype: torch.dtype, threads: int = 16, chunk: int = 1 << 30, progress=None
+):
     """The tensor at ``offset`` in ``path`` copied into process memory, read in ``chunk``-sized pieces by
-    ``threads`` readers (a single reader takes minutes for a 100 GB table)."""
+    ``threads`` readers (a single reader takes minutes for a 100 GB table). ``progress(n)``, if given, is called
+    from the readers with each piece's byte count as it lands."""
     nbytes = math.prod(shape) * dtype.itemsize
     buf = torch.empty(nbytes, dtype=torch.uint8)
     view = memoryview(buf.numpy())
@@ -52,6 +55,8 @@ def read_into_memory(path, offset: int, shape, dtype: torch.dtype, threads: int 
                 n = f.readinto(view[begin:end])
                 assert n, f"short read of {path} at {offset + begin}"
                 begin += n
+                if progress is not None:
+                    progress(n)
 
     with ThreadPoolExecutor(threads) as pool:
         list(pool.map(read, range(0, nbytes, chunk)))
@@ -68,14 +73,16 @@ def engram_table_nbytes(loader: DeepseekV4WeightLoader, layer_idx: int) -> int:
     return total
 
 
-def load_engram_table(loader: DeepseekV4WeightLoader, layer_idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+def load_engram_table(
+    loader: DeepseekV4WeightLoader, layer_idx: int, progress=None
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Layer ``layer_idx``'s table in host RAM, as stored: ``weight`` ``[rows, head_dim]`` fp8 E4M3 and
-    ``scale`` ``[rows, head_dim / 32]`` E8M0 (~101 GB together)."""
+    ``scale`` ``[rows, head_dim / 32]`` E8M0 (~101 GB together). ``progress`` as :func:`read_into_memory`'s."""
     tensors = []
     for part, dtype in (("weight", torch.float8_e4m3fn), ("scale", torch.float8_e8m0fnu)):
         name = f"layers.{layer_idx}.engram.embed.{part}"
         path = loader.shard_of(name, translate=False)
-        tensors.append(read_into_memory(path, *tensor_region(path, name), dtype))
+        tensors.append(read_into_memory(path, *tensor_region(path, name), dtype, progress=progress))
     return tuple(tensors)
 
 

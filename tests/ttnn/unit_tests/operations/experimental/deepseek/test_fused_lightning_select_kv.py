@@ -866,9 +866,11 @@ def _tp_submesh(mesh_device):
     return mesh_device.create_submesh(ttnn.MeshShape(1, TP_SIZE), ttnn.MeshCoordinate(0, 0))
 
 
-def _split_select(submesh, query, key_tt, weights, kv_tt, page_table_tt, cur_pos_tt, k, **kwargs) -> ttnn.Tensor:
+def _split_select(
+    submesh, query, key_tt, weights, kv_tt, page_table_tt, cur_pos_tt, k, merge_kwargs=None, **kwargs
+) -> ttnn.Tensor:
     """Key-split select over the submesh's devices: each scores its part, then the candidates are
-    all-gathered and merged on every device."""
+    all-gathered and merged on every device. ``kwargs`` go to the select, ``merge_kwargs`` to the merge."""
     part_index = _rm(
         torch.arange(TP_SIZE, dtype=torch.int32),
         submesh,
@@ -888,7 +890,7 @@ def _split_select(submesh, query, key_tt, weights, kv_tt, page_table_tt, cur_pos
         **kwargs,
     )
     gathered = ttnn.all_gather(candidates, dim=2, cluster_axis=1)
-    return ttnn.experimental.deepseek.merge_select_kv(gathered, kv_tt, k)
+    return ttnn.experimental.deepseek.merge_select_kv(gathered, kv_tt, k, **(merge_kwargs or {}))
 
 
 def _per_device(t: ttnn.Tensor, submesh) -> list[torch.Tensor]:
@@ -935,6 +937,74 @@ def test_key_split_matches_single_device(mesh_device, length, num_keys) -> None:
         assert torch.equal(
             rows[..., :num_selected, :], expected[device_id][..., :num_selected, :]
         ), f"device {device_id}: the key split gathered different rows than the unsplit op"
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [PARENT_MESH], indirect=True, ids=["8x4"])
+@pytest.mark.parametrize(
+    "length, num_keys, topk_blocks",
+    [(2048, 100, 2048), (2048, 1001, 2048), (2048, 2045, 64), (128 * 1024, 128 * 1024 - 3, 2048)],
+    ids=["parts_without_keys", "all_blocks", "few_blocks", "v41_128k"],
+)
+def test_key_split_candidate_source_matches_single_device(mesh_device, length, num_keys, topk_blocks) -> None:
+    """A candidate source split over 4 devices, then all_gather + ``merge_select_kv`` in candidate
+    source mode, gathers the unsplit op's rows and writes its candidate blocks and pool count, on
+    every device.
+
+    ``parts_without_keys`` leaves two devices without keys; ``few_blocks`` keeps fewer blocks than
+    any one part holds, so every part's own cut matters.
+    """
+    submesh = _tp_submesh(mesh_device)
+    replicate = ttnn.ReplicateTensorToMesh(submesh)
+    torch.manual_seed(0)
+    heads, dim, page_block_size, candidate_block_size = V4_INDEX_HEADS, V4_INDEX_HEAD_DIM, 64, 8
+    k = V4_INDEX_TOPK
+    query = _replicated_rm_hs(torch.randn(1, heads, 1, dim), submesh, mesh_mapper=replicate)
+    weights = _replicated_rm_hs(torch.randn(1, 1, 1, heads) * dim**-0.5, submesh, mesh_mapper=replicate)
+    kv_cache, page_table = _paged_inputs(1, length, page_block_size, V4_KV_HEADS, V4_HEAD_DIM, seed=10)
+    key_tt = _tile(torch.randn(page_table.numel(), 1, page_block_size, dim), submesh, mesh_mapper=replicate)
+    kv_tt = _rm(kv_cache, submesh, ttnn.bfloat16, mesh_mapper=replicate)
+    page_table_tt = _rm(page_table, submesh, ttnn.int32, mesh_mapper=replicate)
+    cur_pos_tt = _rm(
+        torch.tensor([num_keys * COMPRESS_RATE - 1], dtype=torch.int32), submesh, ttnn.int32, mesh_mapper=replicate
+    )
+    source_mode = dict(candidate_topk_blocks=topk_blocks, candidate_block_size=candidate_block_size)
+
+    expected_rows, _, expected_blocks, expected_count = ttnn.experimental.deepseek.fused_lightning_select_kv(
+        query, key_tt, weights, kv_tt, page_table_tt, cur_pos_tt, k, **source_mode
+    )
+
+    blocks = _rm(torch.full((1, topk_blocks), -1, dtype=torch.int32), submesh, ttnn.int32, mesh_mapper=replicate)
+    pool_count = _rm(torch.full((1,), -1, dtype=torch.int32), submesh, ttnn.int32, mesh_mapper=replicate)
+    rows = _split_select(
+        submesh,
+        query,
+        key_tt,
+        weights,
+        kv_tt,
+        page_table_tt,
+        cur_pos_tt,
+        k,
+        merge_kwargs=dict(candidate_blocks_output=blocks, pool_count_output=pool_count, **source_mode),
+        **source_mode,
+    )
+
+    num_selected = min(k, num_keys)
+    expected = zip(
+        _per_device(expected_rows, submesh),
+        _per_device(expected_blocks, submesh),
+        _per_device(expected_count, submesh),
+    )
+    got = zip(_per_device(rows, submesh), _per_device(blocks, submesh), _per_device(pool_count, submesh))
+    for device_id, ((want_rows, want_blocks, want_count), (got_rows, got_blocks, got_count)) in enumerate(
+        zip(expected, got)
+    ):
+        assert torch.equal(
+            got_rows[..., :num_selected, :], want_rows[..., :num_selected, :]
+        ), f"device {device_id}: the split candidate source gathered different rows than the unsplit op"
+        assert torch.equal(got_blocks, want_blocks), f"device {device_id}: the merged candidate blocks differ"
+        assert torch.equal(got_count, want_count), f"device {device_id}: pool_count {got_count}, expected {want_count}"
+    logger.info(f"split candidate source: pool_count {int(got_count.reshape(-1)[0])}")
 
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY}], indirect=True)

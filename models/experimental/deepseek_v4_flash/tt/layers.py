@@ -13,6 +13,7 @@ rank under TP); ``Bc``/``Nc`` :class:`BatchedLinearDecode`'s per-core batch and 
 tensor is TILE unless its docstring says otherwise.
 """
 
+import itertools
 import math
 from typing import Callable, Optional
 
@@ -28,13 +29,12 @@ from ttnn._experimental.tensor_prefetcher_matmul_decode import make_matmul_decod
 # How every GCB built here was made, keyed by ``id(gcb)``, so a model can drop its GCBs (freeing their L1)
 # and build identical ones later (see :meth:`~.model.DeepSeekV4Model.release_prefetch_buffers`).
 _GCB_RECIPES: dict[int, tuple] = {}
-_GCB_SERIAL = [0]
+_GCB_SERIAL = itertools.count(1)  # next() is atomic: stages build their GCBs on parallel threads
 
 
 def _recorded_gcb(build: Callable, *args, **kwargs):
     gcb = build(*args, **kwargs)
-    _GCB_SERIAL[0] += 1
-    _GCB_RECIPES[id(gcb)] = (_GCB_SERIAL[0], build, args, kwargs)
+    _GCB_RECIPES[id(gcb)] = (next(_GCB_SERIAL), build, args, kwargs)
     return gcb
 
 

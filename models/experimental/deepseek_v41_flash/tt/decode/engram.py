@@ -22,6 +22,12 @@ call (fp32 inside), on ROW_MAJOR WIDTH_SHARDED streams / kv.
 :mod:`.decode_prefetch`) and whose A is a ROW_MAJOR HEIGHT_SHARDED replica of the rows on every receiver,
 so ``kv`` comes out ROW_MAJOR WIDTH_SHARDED. The layer needs the prefetcher: split over 80 cores the
 weight is ~2 MB a core, more L1 than a per-call copy into the matmul's own buffer has.
+
+Under TP ``wkv`` is row-parallel: each rank holds ``kin / TP`` rows of it and multiplies its own slice
+of the rows, and ``width_sharded_all_reduce`` sums the ``[B, (hc + 1) * D]`` partials, so ``engram_gate``
+still sees the whole ``kv`` on every rank. A trace runs one program on every rank, so the rank picks its
+slice by position: :meth:`DeepSeekV41Engram.write_rows` rotates each device's rows so that device's slice
+leads, and :meth:`DeepSeekV41Engram.forward` slices the leading ``kin / TP`` columns.
 """
 
 from typing import Optional
@@ -30,7 +36,7 @@ import torch
 import ttnn
 
 from models.experimental.deepseek_v4_flash.tt.common import DeepSeekV4Module, width_sharded_l1_config
-from models.experimental.deepseek_v4_flash.tt.decode.attention import _decode_activation
+from models.experimental.deepseek_v4_flash.tt.decode.attention import _decode_activation, _tp_cluster_axis
 from models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch import ring_prefetch
 from models.experimental.deepseek_v4_flash.tt.decode.hyperconnection import _HC_COLLAPSE_CORES
 from models.experimental.deepseek_v4_flash.tt.layers import LinearDecode
@@ -99,24 +105,30 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         fifo_pages: int = 2,
         socket_core: tuple = ROWS_SOCKET_CORE,
         sockets: Optional[list] = None,
+        tp_size: int = 1,
     ):
         """``weights`` is :func:`~models.experimental.deepseek_v41_flash.tt.config.engram_weights` (tensors or
         thunks). One socket page is one user's rows, and a socket's L1 FIFO on ``socket_core`` holds
         ``fifo_pages`` of them. A socket feeds a single device, so each device of the ``device`` mesh gets its
-        own and the layer runs replicated (a TP stage's streams are). The sockets allocate L1, so build the
+        own; the streams and ``kv`` are replicated (a TP stage's streams are). The sockets allocate L1, so build the
         layer before any trace capture on ``device``. ``sockets`` takes ones already opened by
         :func:`open_rows_sockets` (then ``fifo_pages`` / ``socket_core`` are unused) instead.
 
         ``wkv`` streams through the ``engram.wkv`` ring of ``prefetch_buffers``, the per-device mapping
         every other layer on ``device`` shares; call ``wkv.fetch_weights()`` ahead of each :meth:`forward`.
+        ``tp_size > 1`` needs ``device`` to be a 1xTP mesh with fabric; ``wkv`` is then row-parallel over it.
         """
         cache = _as_cache(cache)
         self.layer_idx = layer_idx
         self.device = device
         self.batch = batch
+        self.tp_size = tp_size
         self.hc, self.dim, self.eps = config.hc_mult, config.hidden_size, config.rms_norm_eps
         self.kin = (config.engram_max_ngram_size - 1) * config.engram_n_heads * config.engram_head_dim
         hc, d = self.hc, self.dim
+        if self.kin % tp_size:
+            raise ValueError(f"Engram's kin {self.kin} does not split over TP{tp_size}")
+        self.local_kin = self.kin // tp_size
 
         if prefetch_buffers is None:
             raise ValueError("Engram's wkv needs the prefetcher: pass the device's shared prefetch_buffers")
@@ -125,10 +137,13 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         self.wkv = LinearDecode(
             weights["wkv.weight"],
             device,
-            cache.file("wkv"),
+            cache.file(f"wkv.tp{tp_size}" if tp_size > 1 else "wkv"),
             dtype=weight_dtype,
-            **layout,
-            **ring_prefetch(prefetch_rings(), "engram.wkv", prefetch_buffers, device, weight_dtype),
+            K=self.local_kin,
+            N=layout["N"],
+            n_blocks=layout["n_blocks"],
+            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=-2) if tp_size > 1 else None,
+            **ring_prefetch(prefetch_rings(tp_size), "engram.wkv", prefetch_buffers, device, weight_dtype),
             use_rm_hs=True,
         )
         # engram_gate takes the gate weight as one fp32 tile row: row i is the weight of copy i % hc.
@@ -180,10 +195,12 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         would wait forever on rows sent after it. A write blocks while the FIFO is full, until the device
         drains a page an earlier, already dispatched step consumes.
         """
-        rows = rows.reshape(self.batch, self.kin).to(torch.bfloat16).contiguous()
-        for socket in self.sockets:
+        rows = rows.reshape(self.batch, self.kin).to(torch.bfloat16)
+        for rank, socket in enumerate(self.sockets):
+            # Under TP the sockets are in rank order along the 1xTP mesh, the order ShardTensorToMesh cuts wkv in.
+            ranked = torch.roll(rows, -rank * self.local_kin, dims=-1) if self.tp_size > 1 else rows
             # The socket copies raw bytes; an integer view keeps bf16 out of the DLPack dtype check.
-            socket.write_tensor(rows.view(torch.int16))
+            socket.write_tensor(ranked.contiguous().view(torch.int16))
 
     def forward(self, streams: ttnn.Tensor) -> ttnn.Tensor:
         """``streams`` ``[B, 1, hc, D]`` bf16 ROW_MAJOR in :attr:`streams_memory_config` -> the same shape and
@@ -194,10 +211,21 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         assert streams.memory_config() == self.streams_memory_config, streams.memory_config()
         for socket in self.sockets:
             ttnn.experimental.recv_async_h2d(self.rows, socket)
+        local_rows = self.rows
+        if self.tp_size > 1:
+            local_rows = ttnn.slice(self.rows, [0, 0, 0, 0], [1, 1, b, self.local_kin])
         # ROW_MAJOR A, so kv comes out ROW_MAJOR WIDTH_SHARDED over the ring's receivers.
-        rows = _decode_activation(self.wkv, self.rows)
+        rows = _decode_activation(self.wkv, local_rows)
         kv = self.wkv(rows)
         ttnn.deallocate(rows)
+        if local_rows is not self.rows:
+            ttnn.deallocate(local_rows)
+        if self.tp_size > 1:
+            partial = kv
+            kv = ttnn.experimental.deepseek.width_sharded_all_reduce(
+                partial, cluster_axis=_tp_cluster_axis(self.device), num_links=2, topology=ttnn.Topology.Ring
+            )
+            ttnn.deallocate(partial)
 
         out = ttnn.experimental.deepseek.engram_gate(streams, kv, self.gate_weight, self.eps)
         ttnn.deallocate(kv)
