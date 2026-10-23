@@ -25,22 +25,8 @@ constexpr uint32_t batch_size(uint32_t base) {
     return limit - base < dst_tiles ? limit - base : dst_tiles;
 }
 
-// mul_tiles_bcast_rows without the DST clear: in fp32 DST mode ELWMUL adds its product onto the DST tile, and the LLK
-// ignores clear_fp32_dst_acc when no dest-reuse is involved (it is passed as false only because the Blackhole overload
-// has no default). The conv relies on DST tiles being zero when acquired (the packer zeroes every tile it packs), so
-// the first tap writes and the remaining taps accumulate.
-FORCE_INLINE void mul_bcast_rows_accumulate(
-    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    MATH((llk_math_eltwise_binary<
-          EltwiseBinaryType::ELWMUL,
-          BroadcastType::ROW,
-          DST_ACCUM_MODE,
-          MATH_FIDELITY,
-          EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, /*clear_fp32_dst_acc=*/false)));
-    UNPACK((llk_unpack_AB<BroadcastType::ROW>(icb0, icb1, itile0, itile1, 0)));
-}
-
-// out = sum_tap weights[w] * copy_tap, w = tap (preact) or 3 - tap (grad_input), summed in DST.
+// out = sum_tap weights[w] * copy_tap, w = tap (preact) or 3 - tap (grad_input). ELWMUL accumulates into DST, and tap 0
+// lands on the half the previous tile_regs_release left zeroed.
 template <uint32_t channel_tiles_per_block>
 void conv(uint32_t shifted_cb, bool reversed, DataflowBuffer& out, uint32_t out_cb) {
     out.reserve_back(channel_tiles_per_block);
@@ -53,7 +39,7 @@ void conv(uint32_t shifted_cb, bool reversed, DataflowBuffer& out, uint32_t out_
         for (uint32_t tap = 0; tap < tap_count; ++tap) {
             const uint32_t w = reversed ? tap_count - 1 - tap : tap;
             for (uint32_t i = 0; i < n; ++i) {
-                mul_bcast_rows_accumulate(
+                mul_tiles_bcast_rows(
                     shifted_cb,
                     dfb::weights,
                     tap * channel_tiles_per_block + base + i,
