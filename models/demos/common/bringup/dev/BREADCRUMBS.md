@@ -1923,3 +1923,10 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - F173 changed the under-test key's formula, which made every earlier record stale on an identical tree. The key now
   comes as (semantic, bytes); a record matching either is kept; new records carry the semantic one. Selftests
   test_a_record_made_under_the_byte_key_stays_valid_on_an_identical_tree, the F122 test (newest first).
+
+## F177: the stamp store finds the same test filed by another task (2026-10-23)
+- DeepSeek-V4.1 X.3: four quick-accepted picks share one 18-unit frozen test set; units are `<task>#<test>` and the
+  store looked a unit up only under its own name, so the identical command on the identical code (same stamp id) ran
+  once per pick (45 min each).
+- core/stamps.py Store.get falls back to `*#<test>` records with the same stamp id (record marked _from); restore
+  copies the outputs from that unit's dir. Selftest test_the_store_finds_the_same_test_filed_by_another_task.
