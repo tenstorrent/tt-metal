@@ -23,8 +23,7 @@
 #include "internal/risc_attribs.h"
 
 #if defined(GLOBAL_SEMAPHORE_WITH_FABRIC)
-// Off-chip targets for the fabric overloads below. The fabric topology the kernel is built for picks
-// the addressing: hop counts on a 1D line or ring, device and mesh ids on a 2D mesh.
+// Target chips for the fabric calls below: hop counts on a 1D line or ring, device and mesh ids on a 2D mesh.
 #if defined(FABRIC_2D)
 struct ToChip {
     uint8_t dst_dev_id;
@@ -66,22 +65,18 @@ namespace fabric_api = tt::tt_fabric::linear::experimental;
 #endif
 
 /**
- * @brief A semaphore that lives across programs, and across chips.
+ * @brief A semaphore shared by kernels across programs and chips.
  *
- * Construct from a GlobalSemaphoreBindingToken: `GlobalSemaphore s(token);`. The constructor reads the
- * semaphore's address from the common runtime arg word the token names. The semaphore has the same address on
- * every core and device it is allocated on, so the class fills it in for NoC and fabric targets alike.
+ * Construct it from a GlobalSemaphoreBindingToken: `GlobalSemaphore s(token);`. The constructor reads the
+ * semaphore's address from the common runtime arg the token names. The address is the same on every core and
+ * chip, so the remote calls below only need the target core.
  *
- * up() and down() go through the NoC-atomic path, so a word incremented by other cores, or other chips, is
- * never updated with a plain read-modify-write. value() and wait() are plain loads and set() is a plain store;
- * none of them is atomic with respect to in-flight increments.
+ * up() and down() are atomic. value(), wait() and set() are plain loads and stores.
  *
- * Rules:
- *  - down() is single-consumer: the consumer runs on the core that owns the semaphore, and remote cores only up().
- *  - A semaphore's protocol uses either down() or wait() + set(0), never both: set() is a plain store and can
- *    overwrite increments still in flight.
+ * Only the core that waits on the semaphore should call down(); other cores only call up(). Don't mix down()
+ * with wait() + set(0) on the same semaphore, because set() can overwrite an increment that is still in flight.
  *
- * The off-chip (fabric) overloads are available when the kernel includes api/dataflow/global_semaphore_fabric.h.
+ * To signal other chips, include api/dataflow/global_semaphore_fabric.h instead of this header.
  */
 class GlobalSemaphore {
 public:
@@ -90,22 +85,22 @@ public:
 
     // ---- This core's copy ----
 
-    // Fresh read. For polling loops and stop flags.
+    // Reads the current value from L1 (not cached), so it can be polled.
     FORCE_INLINE uint32_t value() const { return semaphore_detail::load(l1_addr_, SCOPE); }
 
-    // Block until value == v.
+    // Waits until the value equals v.
     FORCE_INLINE void wait(uint32_t v) const { semaphore_detail::wait<CORE_TYPE>(l1_addr_, SCOPE, v); }
 
-    // Block until value >= v.
+    // Waits until the value is at least v.
     FORCE_INLINE void wait_min(uint32_t v) const { semaphore_detail::wait_min<CORE_TYPE>(l1_addr_, SCOPE, v); }
 
-    // Plain store: reset to 0, sentinels, run counters.
+    // Writes v. Not atomic.
     FORCE_INLINE void set(uint32_t v) { semaphore_detail::set<CORE_TYPE>(l1_addr_, SCOPE, v); }
 
-    // Atomic increment.
+    // Adds v atomically.
     FORCE_INLINE void up(uint32_t v = 1) { semaphore_detail::up<CORE_TYPE>(l1_addr_, SCOPE, v); }
 
-    // Single consumer: wait until value >= v, then atomic subtract.
+    // Waits until the value is at least v, then subtracts v atomically.
     FORCE_INLINE void down(uint32_t v = 1) { semaphore_detail::down<CORE_TYPE>(l1_addr_, SCOPE, v); }
 
     // ---- Another core on the same chip (NoC) ----
@@ -119,8 +114,8 @@ public:
 
     // ---- A rectangle of cores on the same chip (NoC multicast) ----
 
-    // Copies this core's current value to every core in the rectangle (set() it first).
-    // NocOptions::MCAST_INCL_SRC includes the sender.
+    // Copies this core's value to every core in the rectangle, so call set() first.
+    // Pass NocOptions::MCAST_INCL_SRC if this core is in the rectangle.
     template <NocOptions opts = NocOptions::DEFAULT>
     FORCE_INLINE void set_multicast(
         const Noc& noc,
@@ -146,10 +141,8 @@ public:
 
 #if defined(GLOBAL_SEMAPHORE_WITH_FABRIC)
     // ---- Another chip (fabric) ----
-    // Same names as the NoC calls above; the parameters pick on-chip vs off-chip. These overloads only accept
-    // fabric sender types (or a connection manager), so a NoC call can never resolve to them by mistake.
-    // ChipTarget picks unicast (ToChip, one chip) or multicast (ToChips, many chips); on every target chip the
-    // same core (noc_x, noc_y) is incremented. noc: which NoC the destination core uses.
+    // Same as the NoC up(), but for core (noc_x, noc_y) on another chip. Pass ToChip for one chip or ToChips
+    // for several. noc is the NoC the destination core uses.
 
     template <
         typename FabricSender,
@@ -220,9 +213,9 @@ public:
     }
 #endif
 
-    // One packet: write size_bytes from src (a local L1 object, e.g. a CoreLocalMem or Scratchpad) to dst on the
-    // target chip, then increment this semaphore on core (noc_x, noc_y) there; the data lands first. src and dst
-    // take the same endpoint types and args as Noc::async_write. noc: which NoC the destination core uses.
+    // Writes size_bytes from src to dst on the target chip, then increments the semaphore on core (noc_x, noc_y)
+    // there, in one packet. The data lands before the increment. src and dst take the same types and args as
+    // Noc::async_write (for example a CoreLocalMem or Scratchpad as src).
     template <
         typename FabricSender,
         typename ChipTarget,
@@ -270,8 +263,8 @@ public:
 #endif
     }
 
-    // Fast path for hot loops that signal many times: set up the packet header once, then each send only
-    // submits it. Same as the fabric *_set_state / *_with_state calls, but the class fills in the address.
+    // For loops that signal many times: set up the packet header once here, then send it with up_with_state().
+    // Wraps the fabric *_set_state / *_with_state calls.
     template <typename ChipTarget, typename = std::enable_if_t<global_semaphore_detail::is_chip_target_v<ChipTarget>>>
     FORCE_INLINE void up_set_state(
         volatile PACKET_HEADER_TYPE* hdr,
