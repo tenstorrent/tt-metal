@@ -23,14 +23,8 @@
 // Renamed from copy_block to avoid an ambiguous overload with ckernel::copy_block (added to
 // api/compute/tile_move_copy.h in #49070), which has the identical (uint32_t, uint32_t, uint32_t,
 // uint32_t) signature and is in scope here via `using namespace ckernel`. See tt-metal#50386.
-void copy_and_pack_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+ALWI void copy_and_pack_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     CircularBuffer cb_out(out_cb);
-    // Data formats must be reconfigured before the op init: llk_unpack_A_init asserts that the
-    // unpacker is already configured for in_cb (see #55052), and the preceding matmul left it
-    // configured for its own operands.
-    reconfig_data_format_srca(in_cb);
-    pack_reconfig_data_format(out_cb);
-    copy_init(in_cb);
     uint32_t fused_act_dst_id = 0;
 
     uint32_t tile_id = 0;
@@ -63,14 +57,8 @@ void copy_and_pack_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles
 // and added via row-broadcast before silu/mul: out = silu(gate + bias_gate) * (up + bias_up).
 //
 // N_block_tiles must be even (enforced host-side).
-void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+ALWI void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     CircularBuffer cb_out(out_cb);
-#ifdef FUSE_BIAS
-    reconfig_data_format(in_cb, bias_cb);
-#else
-    reconfig_data_format_srca(in_cb);
-#endif
-    pack_reconfig_data_format(out_cb);
 
     constexpr uint32_t GATE_DST = 0;
     constexpr uint32_t UP_DST = 1;
@@ -86,11 +74,9 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
 
             tile_regs_acquire();
 #ifdef FUSE_BIAS
-            add_bcast_rows_init(in_cb, bias_cb);
-            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, gate_tile_id, gate_n, GATE_DST);
-            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, up_tile_id, up_n, UP_DST);
+            add_tiles_bcast_rows(in_cb, bias_cb, gate_tile_id, gate_n, GATE_DST);
+            add_tiles_bcast_rows(in_cb, bias_cb, up_tile_id, up_n, UP_DST);
 #else
-            copy_init(in_cb);
             copy_tile(in_cb, gate_tile_id, GATE_DST);
             copy_tile(in_cb, up_tile_id, UP_DST);
 #endif
@@ -118,11 +104,8 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
  *   - true: Pushes tiles one row at a time (for intermediate output to next stage)
  *   - false: Pushes all tiles at end (for final output)
  */
-void add_bias_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+ALWI void add_bias_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     CircularBuffer cb_out(out_cb);
-    reconfig_data_format(in_cb, bias_cb);
-    pack_reconfig_data_format(out_cb);
-    add_bcast_rows_init(in_cb, bias_cb);
     uint32_t fused_act_dst_id = 0;
 
     uint32_t tile_id = 0;
@@ -130,7 +113,7 @@ void add_bias_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t 
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             tile_regs_acquire();
             tile_regs_wait();
-            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, tile_id, n, fused_act_dst_id /*dst*/);
+            add_tiles_bcast_rows(in_cb, bias_cb, tile_id, n, fused_act_dst_id /*dst*/);
 #ifdef SFPU_OP_INIT_ACTIVATION
             SFPU_OP_FUNC_ACTIVATION
 #endif
@@ -143,7 +126,7 @@ void add_bias_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t 
     }
 }
 
-void add_bias_and_addcmul_block(
+ALWI void add_bias_and_addcmul_block(
     uint32_t intermediate_cb,
     uint32_t bias_cb,
     uint32_t ternary_a_cb,
@@ -171,10 +154,6 @@ void add_bias_and_addcmul_block(
     // Read from intermediate_cb and write back to intermediate_cb
     // ============================================
 
-    reconfig_data_format(intermediate_cb, bias_cb);
-    pack_reconfig_data_format(intermediate_cb);
-    add_bcast_rows_init(intermediate_cb, bias_cb);
-
     // Wait for ALL input data ONCE at the beginning
     cb_bias.wait_front(N_block_tiles);
 
@@ -186,7 +165,7 @@ void add_bias_and_addcmul_block(
             uint32_t tile_id = m * N_block_tiles + n;
 
             tile_regs_acquire();
-            add_tiles_bcast<BroadcastType::ROW>(intermediate_cb, bias_cb, tile_id, n, DST_ID);
+            add_tiles_bcast_rows(intermediate_cb, bias_cb, tile_id, n, DST_ID);
 
             tile_regs_commit();
             tile_regs_wait();
@@ -219,11 +198,7 @@ void add_bias_and_addcmul_block(
         // === BROADCAST: single row, wait/pop once ===
         cb_ternary_b.wait_front(N_block_tiles);
 
-        reconfig_data_format(intermediate_cb, ternary_b_cb);
-        pack_reconfig_data_format(intermediate_cb);
-#ifndef TERNARY_B_IS_FLOAT32
-        mul_bcast_rows_init(intermediate_cb, ternary_b_cb);
-#else
+#ifdef TERNARY_B_IS_FLOAT32
         // Full re-arm (hw_configure + pack_dest/math_pack_sync), matching the pre-cleanup
         // 2-arg unary_bcast_init(ternary_b_cb, intermediate_cb); this runs after matmul_blocks
         // regardless of FUSE_BIAS, so a plain reconfig would drop the MATH<->PACK DST re-arm.
@@ -232,15 +207,13 @@ void add_bias_and_addcmul_block(
         unary_bcast_init<BroadcastType::ROW>(ternary_b_cb);
 #endif  // TERNARY_B_IS_FLOAT32
 
-        binop_with_scalar_tile_init();
-
         tile_id = 0;
         for (uint32_t m = 0; m < M_block_tiles; m++) {
             for (uint32_t n = 0; n < N_block_tiles; n++) {
                 tile_regs_acquire();
 
 #ifndef TERNARY_B_IS_FLOAT32
-                mul_tiles_bcast<BroadcastType::ROW>(intermediate_cb, ternary_b_cb, tile_id, n, DST_ID);
+                mul_tiles_bcast_rows(intermediate_cb, ternary_b_cb, tile_id, n, DST_ID);
 #else
                 constexpr uint32_t TERNARY_B_DST_ID = 1;
                 // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
@@ -248,8 +221,6 @@ void add_bias_and_addcmul_block(
                 unary_bcast_init<BroadcastType::ROW>(ternary_b_cb);
                 unary_bcast<BroadcastType::ROW>(ternary_b_cb, n, TERNARY_B_DST_ID);
 
-                reconfig_data_format_srca(intermediate_cb);
-                copy_init(intermediate_cb);
                 copy_tile(intermediate_cb, tile_id, DST_ID);
 
                 mul_binary_tile_init();
@@ -269,13 +240,6 @@ void add_bias_and_addcmul_block(
         cb_ternary_b.pop_front(N_block_tiles);
     } else {
         // === NO BROADCAST: row-by-row, wait/pop per M row ===
-        reconfig_data_format(intermediate_cb, ternary_b_cb);
-        pack_reconfig_data_format(intermediate_cb);
-#ifndef TERNARY_B_IS_FLOAT32
-        mul_init(intermediate_cb, ternary_b_cb);
-#endif
-        binop_with_scalar_tile_init();
-
         tile_id = 0;
         for (uint32_t m = 0; m < M_block_tiles; m++) {
             cb_ternary_b.wait_front(N_block_tiles);
@@ -286,12 +250,7 @@ void add_bias_and_addcmul_block(
                 mul_tiles(intermediate_cb, ternary_b_cb, tile_id, n, DST_ID);
 #else
                 constexpr uint32_t TERNARY_B_DST_ID = 1;
-                reconfig_data_format_srca(ternary_b_cb);
-                copy_init(ternary_b_cb);
                 copy_tile(ternary_b_cb, n, TERNARY_B_DST_ID);
-
-                reconfig_data_format_srca(intermediate_cb);
-                copy_init(intermediate_cb);
                 copy_tile(intermediate_cb, tile_id, DST_ID);
 
                 mul_binary_tile_init();
@@ -317,10 +276,6 @@ void add_bias_and_addcmul_block(
     cb_intermediate.push_back(out_block_num_tiles);
 
     cb_intermediate.wait_front(out_block_num_tiles);
-
-    reconfig_data_format(intermediate_cb, ternary_a_cb);
-    pack_reconfig_data_format(out_cb);
-    add_init(intermediate_cb, ternary_a_cb);
 
     tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
@@ -348,7 +303,7 @@ void add_bias_and_addcmul_block(
 }
 
 // Slightly modified from compute_common.hpp
-void matmul_blocks(
+ALWI void matmul_blocks(
     const uint32_t in0_cb,
     const uint32_t in1_cb,
     const uint32_t out_cb,
@@ -357,7 +312,8 @@ void matmul_blocks(
     const uint32_t full_N_block_tiles,
     const uint32_t K_block_tiles,
     const uint32_t subblock_h,
-    const uint32_t subblock_w) {
+    const uint32_t subblock_w,
+    const bool l1_acc) {
     uint32_t in0_index_offset = 0;
 
     for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
@@ -391,7 +347,7 @@ void matmul_blocks(
                 for (uint32_t w = 0; w < subblock_w; w++) {
                     uint32_t w_tile_id = N_start + w;
                     uint32_t out_tile_id = h_tile_id * full_N_block_tiles + w_tile_id;
-                    pack_tile<true>(write_dst_index, out_cb, out_tile_id);
+                    pack_tile<true>(write_dst_index, out_cb, out_tile_id, l1_acc);
                     write_dst_index++;
                     dst_index++;
                 }
@@ -451,8 +407,6 @@ void kernel_main() {
     SFPU_OP_INIT_ACTIVATION
 #endif
 
-    matmul_init(in0_cb, in1_cb);
-
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
@@ -479,17 +433,6 @@ void kernel_main() {
             current_N_block_tiles = n_tile_end - n_tile;
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
-            // Reconfig before init: on all but the first block the unpackers are still
-            // configured for the previous output stage's operands (see #55052).
-            reconfig_data_format(in1_cb, in0_cb);
-            pack_reconfig_data_format(intermediate_cb);
-            matmul_block_init(
-                in0_cb,
-                in1_cb,
-                false /*transpose*/,
-                current_subblock_w /*ct_dim*/,
-                current_subblock_h /*rt_dim*/,
-                K_block_tiles /*kt_dim*/);
             // Accumulation buffer
             cb_intermediate.reserve_back(out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
@@ -505,7 +448,8 @@ void kernel_main() {
                     N_block_tiles,
                     K_block_tiles,
                     current_subblock_h,
-                    current_subblock_w);
+                    current_subblock_w,
+                    k_block > 0);
 
                 if (k_block == K_num_blocks - 1) {
                     /**
@@ -522,13 +466,9 @@ void kernel_main() {
                 }
                 cb_in1.pop_front(in1_block_num_tiles);
                 reuse_in0_block = false;
-                if (k_block == 0) {
-                    PACK((llk_pack_reconfig_l1_acc(1)));
-                }
             }
 
             cb_intermediate.push_back(out_block_num_tiles);
-            PACK((llk_pack_reconfig_l1_acc(0)));
 
 #ifdef FUSE_SWIGLU
             // SwiGLU collapses the interleaved gate/up block to half its N width.

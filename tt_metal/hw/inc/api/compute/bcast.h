@@ -255,6 +255,10 @@ ALWI void mul_tiles_bcast_rows(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t bcast_row_idx = 0) {
 #ifdef ARCH_QUASAR
     LLK_ASSERT(bcast_row_idx == 0, "non-default bcast_row_idx not supported on Quasar");
+#else
+    reconfig_data_format(icb0, icb1);
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::ROW, MATH_FIDELITY>(icb0, icb1)));
+    UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1)));
 #endif
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWMUL,
