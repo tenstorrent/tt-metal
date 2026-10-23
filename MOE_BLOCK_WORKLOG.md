@@ -1098,3 +1098,7 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   The traced test now checks such a replay against its own routing's reference (picks may differ in <= 4 tokens).
 - Soak: eager 300 GLM / 100 K3, traced 600 GLM / 100 K3; mock Galaxy 2, protocol model 16. Traced replay unchanged
   within noise (GLM 1732 us, K3 3171).
+- Tried, not kept: a router-local sigmoid at the keys' precision (exp without the inf / NaN guards, 2 or 1 Newton
+  steps for the reciprocal): the fin after the last arrival 19.2 -> 18.1 / 17.5 us, picks unchanged - <= 1.7 us, inside
+  the projection's run-to-run spread (chain 161-163). What is left after the last arrival: the fin ~19 us (sigmoid ~11)
+  and the top-K ~21 (floor 14 for both).
