@@ -241,10 +241,19 @@ python3 -m tt_metal.fabric.debug.visualizer.decode.tests.check_manifest_routes g
 Last, the script runs `tests/check_decode.py` on every manifest it writes. The check decodes every struct in the
 manifest's types from zeros and from random bytes, and every tagged union under each value of its tag and under one that
 names no member, checking that the union picks the member it says. It then takes a snapshot through capture with a fake
-device that returns random bytes, and decodes it. It checks that the decoded file has a value for each area other than
-the routing table, which is in `routing_tables`, and for each region, stream reference and element reference of every
-router, has health with a sample per liveness round and one for the main pass, and matches the schema. Like capture's check, it needs `jsonschema`, and it deletes each snapshot and decoded
-file once checked:
+device that returns random bytes, except in a ring buffer, whose first slot is random and the rest zero, and decodes it.
+It checks that the decoded file:
+
+- has a value for each area other than the routing table, which is in `routing_tables`, and for each region, stream
+  reference and element reference of every router;
+- has health with a sample per liveness round and one for the main pass;
+- has each active channel's counts and a slot per ring slot, the first used and the rest empty, and no other channel;
+- names, for every router, a routing table copy of its chip holding it, one copy per router since random tables never
+  match, each 2D copy with a route toward every chip of its mesh;
+- matches the schema.
+
+Filling only each ring's first slot keeps the file small: with every slot random, an express rank decodes to over
+400 MB. Like capture's check, it needs `jsonschema`, and it deletes each snapshot and decoded file once checked:
 
 ```bash
 python3 -m tt_metal.fabric.debug.visualizer.decode.tests.check_decode generated/fabric

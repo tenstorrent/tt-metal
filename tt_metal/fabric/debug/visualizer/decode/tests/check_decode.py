@@ -11,9 +11,13 @@ Usage, from the repository root:
 For every fabric_manifest_rank_*.json under each directory PATH, or each file PATH:
 - every struct in the manifest's types decodes from zeros and from random bytes, and every tagged union decodes under
   each value of its tag, and under one that names no member, picking the member its union says;
-- a snapshot taken through capture with a device that returns random bytes decodes. The decoded file has one entry, with
-  a value, for each area, region, stream reference and element reference of every router. It has health for every
-  router, a sample per liveness round and the main pass, and matches fabric_decoded_schema.json.
+- a snapshot taken through capture with a device that returns random bytes decodes. Each ring buffer gets random bytes
+  in its first slot only, and zeros in the rest. The decoded file has one entry, with a value, for each area but the
+  routing table, region, stream reference and element reference of every router. It has health for every router, a
+  sample per liveness round and the main pass. Every active channel has its counts and a slot per ring slot, the first
+  used and the rest empty, and no other channel is listed. Every router names a routing table copy of its chip, every
+  copy holds one router, since random tables never match, and a 2D copy has a route toward each chip of its mesh. The
+  file matches fabric_decoded_schema.json.
 Each snapshot and decoded file is deleted once checked: express's snapshot is over 100 MB a rank. Fails when a check
 fails, or when it finds no manifests.
 """
@@ -44,20 +48,35 @@ SEED = 10
 
 
 class RandomDevice:
-    """A device whose bytes are random, the same for every run."""
+    """
+    A device whose bytes are random, the same for every run, except in a ring buffer: its first slot is random, and
+    the others are zero, as slots the router hasn't used since it started. Every channel's slot rules still meet random
+    bytes, but the decoded file stays small: with every slot random, an express rank's is over 400 MB.
+    """
 
     version = "check_decode"
 
-    def __init__(self):
+    def __init__(self, manifest: dict):
+        self.manifest = manifest
         self.opened = 0
         self.random = random.Random(SEED)
+        self.rings = {}  # each opened router's ring buffers' slot sizes, by address
 
     def open_router(self, router, arch):
+        node, where = get_router(self.manifest, router.path)
+        nodes = {leaf.path: leaf.node for leaf in walk_router(node, where)}
+        self.rings[self.opened] = {
+            read.address: nodes[path]["size_per_element"]
+            for path, read in router.regions.items()
+            if path.endswith("/ring_buffer")
+        }
         self.opened += 1
         return OpenedRouter(handle=self.opened - 1, ttexalens_id=self.opened - 1)
 
     def read(self, opened, address, size):
-        return self.random.randbytes(size)
+        data = self.random.randbytes(size)
+        slot_size = self.rings[opened.handle].get(address)
+        return data if slot_size is None else data[:slot_size] + bytes(size - slot_size)
 
 
 def find_manifests(args):
@@ -126,6 +145,66 @@ def check_router(manifest: dict, path: str, router: dict, problems: list):
         problems.append(f"{path}.health has {len(health['t_ns'])} samples, not {LIVENESS_ROUNDS + 1}")
     if list(health["eriscs"]) != list(node["eriscs"]):
         problems.append(f"{path}.health.eriscs is {list(health['eriscs'])}, not the router's {list(node['eriscs'])}")
+    check_channels(node, path, router, problems)
+
+
+def check_channels(node: dict, path: str, router: dict, problems: list):
+    """
+    Every active channel has its counts and one slot per ring slot: the first used, since RandomDevice fills it, and the
+    rest empty. No other channel is listed.
+    """
+    expected = {}
+    for kind in ("senders", "receivers"):
+        for vc, channels in node["channels"][kind].items():
+            for key, channel in channels.items():
+                if channel["status"] == "active":
+                    expected[f"channels/{kind}/{vc}/{key}"] = (
+                        kind[: -len("s")],
+                        channel["ring_buffer"]["num_elements"],
+                    )
+    if list(router["channels"]) != list(expected):
+        problems.append(
+            f"{path}.channels are {list(router['channels'])[:3]}..., not the active {list(expected)[:3]}..."
+        )
+        return
+    for channel_path, (kind, depth) in expected.items():
+        channel = router["channels"][channel_path]
+        where = f"{path}.{channel_path}"
+        if (channel["kind"], channel["depth"]) != (kind, depth):
+            problems.append(f"{where} is a {channel['kind']} of depth {channel['depth']}, not a {kind} of {depth}")
+        slots = channel["slots"]
+        if slots is None or len(slots) != depth:
+            problems.append(f"{where} has {None if slots is None else len(slots)} slots, not {depth}")
+            continue
+        if [slot["empty"] for slot in slots] != [False] + [True] * (depth - 1):
+            problems.append(f"{where}'s slots aren't used in slot 0 and empty after it, as RandomDevice wrote them")
+        if any((slot["header"] is None) != slot["empty"] for slot in slots):
+            problems.append(f"{where} has a used slot with no header, or an empty one with one")
+
+
+def check_routing_tables(manifest: dict, decoded: dict, problems: list):
+    """
+    Every router names a copy holding it, on its chip. RandomDevice gives every router different table bytes, so every
+    copy has one router. A 2D copy has a route toward every chip of its mesh.
+    """
+    is_2d = manifest["fabric_context"]["is_2d_routing"]
+    tables = decoded["routing_tables"]
+    for path, router in decoded["routers"].items():
+        key = None if router["routing"] is None else router["routing"]["table_key"]
+        table = tables.get(key)
+        if table is None or path not in table["routers"] or table["chip"] != path.rsplit("/", 1)[0]:
+            problems.append(f"{path}.routing names {key!r}, which isn't a copy of its chip holding it")
+    for key, table in tables.items():
+        if table["routers"] != [key]:
+            problems.append(f"routing_tables.{key} holds {table['routers']}; random tables never match, so just {key}")
+        mesh_key = key.split("/")[0]
+        chips = [f"{mesh_key}/{chip}" for chip in manifest["meshes"][mesh_key]["chips"]]
+        if is_2d and (table["route_table_2d"] is None or list(table["route_table_2d"]) != chips):
+            problems.append(
+                f"routing_tables.{key}.route_table_2d doesn't have a route toward each of {mesh_key}'s chips"
+            )
+        if not is_2d and table["path_table_1d"] is None:
+            problems.append(f"routing_tables.{key} has no path_table_1d")
 
 
 def check_manifest(manifest_path: pathlib.Path, validator) -> tuple:
@@ -137,7 +216,7 @@ def check_manifest(manifest_path: pathlib.Path, validator) -> tuple:
         taken = take_snapshot(
             manifest_path,
             pathlib.Path(out_dir),
-            RandomDevice(),
+            RandomDevice(manifest),
             host="check_decode",
             argv=[str(manifest_path)],
             liveness_rounds=LIVENESS_ROUNDS,
@@ -159,11 +238,15 @@ def check_manifest(manifest_path: pathlib.Path, validator) -> tuple:
         problems.append("the decoded routers aren't the snapshot's")
     for path, router in decoded["routers"].items():
         check_router(manifest, path, router, problems)
+    check_routing_tables(manifest, decoded, problems)
     routers = decoded["routers"].values()
     counts = ", ".join(
-        f"{sum(len(router[key]) for router in routers)} {key}" for key in ("regions", "streams", "elements")
+        f"{sum(len(router[key]) for router in routers)} {key}" for key in ("regions", "streams", "elements", "channels")
     )
-    description = f"{types}; {len(routers)} routers, {counts}; decoded in {seconds:.1f} s, {size:,} bytes"
+    description = (
+        f"{types}; {len(routers)} routers, {counts}, {len(decoded['routing_tables'])} routing tables; "
+        f"decoded in {seconds:.1f} s, {size:,} bytes"
+    )
     return problems, description
 
 
