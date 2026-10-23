@@ -5,7 +5,8 @@
 //
 // Block operations owned here (op_design.md §Block schedule / §Dataflow Strategy):
 //   load_gamma     — once, before the first output: this core's gamma slice into cb_gamma_tiles, row 0 of each
-//                    tile valid (consumed only through BroadcastDim::Row).
+//                    tile valid (consumed only through BroadcastDim::Row). Streamed (plan.gamma_streamed, sharded
+//                    R1 whose slice is too wide for resident gamma): one chunk per (block, chunk), two ahead.
 //                      RM gamma:   one DRAM read of the slice into cb_gamma_rm_stick, then per tile two local
 //                                  16-element face-row copies (face 0 row 0, face 1 row 0); one barrier.
 //                      TILE gamma: two DRAM reads per tile (row 0 of faces 0 and 1); one barrier.
@@ -61,7 +62,8 @@ void kernel_main() {
     constexpr bool gamma_is_block_float = get_compile_time_arg_val(23) != 0;
     constexpr uint32_t shard_stick_bytes = get_compile_time_arg_val(24);  // RM output shard: local stick stride
     constexpr uint32_t gamma_read_align = get_compile_time_arg_val(25);   // DRAM alignment (bytes)
-    constexpr auto out_args = TensorAccessorArgs<26>();
+    constexpr bool gamma_streamed = get_compile_time_arg_val(26) != 0;    // gamma per chunk (else resident)
+    constexpr auto out_args = TensorAccessorArgs<27>();
     constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto inv_mcast = dataflow_kernel_lib::McastArgs<
         get_named_compile_time_arg_val("inv_mcast_ct_offset"),
@@ -92,56 +94,93 @@ void kernel_main() {
     const auto out_accessor = TensorAccessor(out_args, out_addr);
 
     // ---------------- load_gamma ----------------
-    if constexpr (has_gamma) {
-        const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr);
-        constexpr uint32_t face_row_bytes = FACE_W * gamma_elem_bytes;
-        constexpr uint32_t face1_offset = FACE_W * FACE_W * gamma_elem_bytes;  // row 0 of face 1
-        cb_reserve_back(cb_gamma_tiles, row_stride_tiles);
-        const uint32_t gamma_base = get_write_ptr(cb_gamma_tiles);
-        const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_tiles);
-        if constexpr (gamma_is_rm) {
-            const uint32_t stage = get_write_ptr(cb_gamma_rm_stick);
-            const uint32_t src_offset = gamma_col0_elem * gamma_elem_bytes;
-            const uint32_t lead = src_offset & (gamma_read_align - 1);  // 0 unless a sharded RM slice starts mid-unit
-            noc_async_read(
-                gamma_accessor.get_noc_addr(0, src_offset - lead), stage, lead + slice_valid_elems * gamma_elem_bytes);
-            noc_async_read_barrier();
-            for (uint32_t j = 0; j < slice_w_tiles; ++j) {
-                const uint32_t src = stage + lead + j * TILE_W * gamma_elem_bytes;
-                const uint32_t dst = gamma_base + j * gamma_tile_bytes;
-                if ((src & 15) == 0) {
-                    noc_async_read(get_noc_addr(src), dst, face_row_bytes);
-                    noc_async_read(get_noc_addr(src + face_row_bytes), dst + face1_offset, face_row_bytes);
-                } else {
-                    // 2-byte granular source (fp32 RM shard of a bf16 gamma): 2 x 16 elements, RISC copy.
-                    auto* s16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src);
-                    auto* d0 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst);
-                    auto* d1 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst + face1_offset);
-                    for (uint32_t h = 0; h < face_row_bytes / 2; ++h) {
-                        d0[h] = s16[h];
-                        d1[h] = s16[face_row_bytes / 2 + h];
+    // One gamma load = tiles [tile0, tile0 + ntiles) of this core's slice into the next cb_gamma_tiles window:
+    // the whole slice once (resident), or one chunk per (block, chunk) in compute's consumption order (streamed).
+    constexpr uint32_t gamma_push_tiles = gamma_streamed ? chunk_w_tiles : row_stride_tiles;
+    auto load_gamma = [&](uint32_t tile0, uint32_t ntiles) {
+        if constexpr (has_gamma) {
+            const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr);
+            constexpr uint32_t face_row_bytes = FACE_W * gamma_elem_bytes;
+            constexpr uint32_t face1_offset = FACE_W * FACE_W * gamma_elem_bytes;  // row 0 of face 1
+            cb_reserve_back(cb_gamma_tiles, gamma_push_tiles);
+            const uint32_t gamma_base = get_write_ptr(cb_gamma_tiles);
+            const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_tiles);
+            if constexpr (gamma_is_rm) {
+                if (ntiles > 0) {
+                    const uint32_t stage = get_write_ptr(cb_gamma_rm_stick);
+                    const uint32_t elems_left = slice_valid_elems - tile0 * TILE_W;
+                    const uint32_t valid_elems = ntiles * TILE_W < elems_left ? ntiles * TILE_W : elems_left;
+                    const uint32_t src_offset = (gamma_col0_elem + tile0 * TILE_W) * gamma_elem_bytes;
+                    const uint32_t lead = src_offset & (gamma_read_align - 1);  // 0 unless a sharded RM slice starts
+                                                                                // mid alignment unit
+                    noc_async_read(
+                        gamma_accessor.get_noc_addr(0, src_offset - lead),
+                        stage,
+                        lead + valid_elems * gamma_elem_bytes);
+                    noc_async_read_barrier();
+                    for (uint32_t j = 0; j < ntiles; ++j) {
+                        const uint32_t src = stage + lead + j * TILE_W * gamma_elem_bytes;
+                        const uint32_t dst = gamma_base + j * gamma_tile_bytes;
+                        if ((src & 15) == 0) {
+                            noc_async_read(get_noc_addr(src), dst, face_row_bytes);
+                            noc_async_read(get_noc_addr(src + face_row_bytes), dst + face1_offset, face_row_bytes);
+                        } else {
+                            // 2-byte granular source (fp32 RM shard of a bf16 gamma): 2 x 16 elements, RISC copy.
+                            auto* s16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src);
+                            auto* d0 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst);
+                            auto* d1 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst + face1_offset);
+                            for (uint32_t h = 0; h < face_row_bytes / 2; ++h) {
+                                d0[h] = s16[h];
+                                d1[h] = s16[face_row_bytes / 2 + h];
+                            }
+                        }
                     }
                 }
+            } else if constexpr (gamma_is_block_float) {
+                for (uint32_t j = 0; j < ntiles; ++j) {
+                    noc_async_read_page(
+                        slice_start_tile + tile0 + j, gamma_accessor, gamma_base + j * gamma_tile_bytes);
+                }
+            } else {
+                for (uint32_t j = 0; j < ntiles; ++j) {
+                    const uint32_t page = slice_start_tile + tile0 + j;
+                    const uint32_t dst = gamma_base + j * gamma_tile_bytes;
+                    noc_async_read(gamma_accessor.get_noc_addr(page, 0), dst, gamma_face_row_read_bytes);
+                    noc_async_read(
+                        gamma_accessor.get_noc_addr(page, face1_offset), dst + face1_offset, gamma_face_row_read_bytes);
+                }
             }
-        } else if constexpr (gamma_is_block_float) {
-            for (uint32_t j = 0; j < slice_w_tiles; ++j) {
-                noc_async_read_page(slice_start_tile + j, gamma_accessor, gamma_base + j * gamma_tile_bytes);
-            }
-        } else {
-            for (uint32_t j = 0; j < slice_w_tiles; ++j) {
-                const uint32_t page = slice_start_tile + j;
-                const uint32_t dst = gamma_base + j * gamma_tile_bytes;
-                noc_async_read(gamma_accessor.get_noc_addr(page, 0), dst, gamma_face_row_read_bytes);
-                noc_async_read(
-                    gamma_accessor.get_noc_addr(page, face1_offset), dst + face1_offset, gamma_face_row_read_bytes);
-            }
+            noc_async_read_barrier();
+            cb_push_back(cb_gamma_tiles, gamma_push_tiles);
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_gamma_tiles, row_stride_tiles);
+    };
+
+    const uint32_t num_blocks = (core_rows_tiles + block_rows - 1) / block_rows;
+    // Streamed gamma: chunk loads in consumption order, kept two ahead of the output (cb_gamma_tiles = 2 chunks;
+    // compute pops chunk j before it produces output chunk j, so the third reserve never waits on the writer).
+    const uint32_t gamma_loads_total = gamma_streamed ? num_blocks * chunks_per_row : 1;
+    uint32_t gamma_loads_issued = 0;
+    auto load_next_gamma = [&]() {
+        if (gamma_loads_issued < gamma_loads_total) {
+            if constexpr (gamma_streamed) {
+                const uint32_t tile0 = (gamma_loads_issued % chunks_per_row) * chunk_w_tiles;
+                const uint32_t ntiles =
+                    tile0 >= slice_w_tiles
+                        ? 0
+                        : (slice_w_tiles - tile0 < chunk_w_tiles ? slice_w_tiles - tile0 : chunk_w_tiles);
+                load_gamma(tile0, ntiles);
+            } else {
+                load_gamma(0, slice_w_tiles);
+            }
+            ++gamma_loads_issued;
+        }
+    };
+    load_next_gamma();
+    if constexpr (gamma_streamed) {
+        load_next_gamma();
     }
 
     Noc noc;
-    const uint32_t num_blocks = (core_rows_tiles + block_rows - 1) / block_rows;
     const uint32_t sem_gather_addr = get_semaphore(sem_gather_id);
 
     // RM per-chunk valid element count of this core's slice (same as the reader's).
@@ -206,21 +245,19 @@ void kernel_main() {
                         ? 0
                         : (slice_w_tiles - chunk_col0 < chunk_w_tiles ? slice_w_tiles - chunk_col0 : chunk_w_tiles);
                 cb_wait_front(cb_out_tiles, chunk_tiles);
-                if constexpr (out_sharded) {  // compute packed straight into the output shard
-                    cb_pop_front(cb_out_tiles, chunk_tiles);
-                    continue;
-                }
-                const uint32_t l1_base = get_read_ptr(cb_out_tiles);
-                const uint32_t tile_bytes = get_tile_size(cb_out_tiles);
-                for (uint32_t r = 0; r < valid_rows; ++r) {
-                    const uint32_t page_row = (tile_row_start + block_row0 + r) * tensor_w_tiles;
-                    uint32_t l1_addr = l1_base + r * chunk_w_tiles * tile_bytes;
-                    for (uint32_t col = 0; col < chunk_valid; ++col) {
-                        noc_async_write_page(page_row + slice_start_tile + chunk_col0 + col, out_accessor, l1_addr);
-                        l1_addr += tile_bytes;
+                if constexpr (!out_sharded) {  // sharded: compute packed straight into the output shard
+                    const uint32_t l1_base = get_read_ptr(cb_out_tiles);
+                    const uint32_t tile_bytes = get_tile_size(cb_out_tiles);
+                    for (uint32_t r = 0; r < valid_rows; ++r) {
+                        const uint32_t page_row = (tile_row_start + block_row0 + r) * tensor_w_tiles;
+                        uint32_t l1_addr = l1_base + r * chunk_w_tiles * tile_bytes;
+                        for (uint32_t col = 0; col < chunk_valid; ++col) {
+                            noc_async_write_page(page_row + slice_start_tile + chunk_col0 + col, out_accessor, l1_addr);
+                            l1_addr += tile_bytes;
+                        }
                     }
+                    noc_async_writes_flushed();
                 }
-                noc_async_writes_flushed();
                 cb_pop_front(cb_out_tiles, chunk_tiles);
             } else {
                 const uint32_t valid_bytes = chunk_valid_elems(ci) * out_elem_bytes;
@@ -250,6 +287,9 @@ void kernel_main() {
                 }
                 noc_async_writes_flushed();
                 cb_pop_front(cb_out_rm_sticks, chunk_tiles);
+            }
+            if constexpr (gamma_streamed) {
+                load_next_gamma();
             }
         }
     }

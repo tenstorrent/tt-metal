@@ -53,6 +53,9 @@ void kernel_main() {
     constexpr uint32_t chunks_per_row = get_compile_time_arg_val(17);
     constexpr uint32_t xg_lookahead_chunks = get_compile_time_arg_val(18);
     constexpr uint32_t w_group_size = get_compile_time_arg_val(19);
+    // Gamma residency (plan.gamma_streamed): false = whole slice resident in cb_gamma_tiles, addressed at the chunk
+    // offset; true = one chunk per (block, chunk) streamed by the writer, waited / popped around each x*gamma pass.
+    constexpr bool gamma_streamed = get_compile_time_arg_val(20) != 0;
 
     constexpr uint32_t row_stride_tiles = chunks_per_row * chunk_w_tiles;
 
@@ -83,14 +86,19 @@ void kernel_main() {
     const uint32_t cols_per_row = slice_w_tiles > 1 ? 2 : 1;
     constexpr auto partial = ReducePartialScaler::with_partial();
 
-    if constexpr (has_gamma) {
+    if constexpr (has_gamma && !gamma_streamed) {
         cb_wait_front(cb_gamma_tiles, row_stride_tiles);  // resident for the whole kernel
     }
 
     // scale_gamma_block for one chunk: x chunk is the FIFO front (earlier chunks already popped; M5),
-    // gamma is addressed at the chunk's column offset.
+    // gamma is addressed at the chunk's column offset (resident) or is the streamed chunk at the FIFO front.
+    // The chain's gamma input is WaitPolicy::None / PopPolicy::None, so its lifecycle is this kernel's.
     auto scale_gamma_chunk = [](uint32_t chunk_idx) {
         if constexpr (has_gamma) {
+            const uint32_t gamma_offset = gamma_streamed ? 0u : chunk_idx * chunk_w_tiles;
+            if constexpr (gamma_streamed) {
+                cb_wait_front(cb_gamma_tiles, chunk_w_tiles);
+            }
             eltwise_chain(
                 IterationShape::grid(block_rows, chunk_w_tiles),
                 BinaryFpu<
@@ -103,8 +111,11 @@ void kernel_main() {
                         PopPolicy::None,
                         InputTileMapping::Row,
                         DataFormatReconfig::Enabled,
-                        TileAddressing::Offset)>{0u, chunk_idx * chunk_w_tiles},
+                        TileAddressing::Offset)>{0u, gamma_offset},
                 PackTile<output(cb_x_gamma)>{});
+            if constexpr (gamma_streamed) {
+                cb_pop_front(cb_gamma_tiles, chunk_w_tiles);
+            }
         }
     };
 
@@ -263,7 +274,7 @@ void kernel_main() {
         cb_pop_front(cb_inv_rms, block_rows);
     }
 
-    if constexpr (has_gamma) {
+    if constexpr (has_gamma && !gamma_streamed) {
         cb_pop_front(cb_gamma_tiles, row_stride_tiles);
     }
     cb_wait_front(cb_reduce_scaler, 2);

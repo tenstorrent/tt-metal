@@ -240,3 +240,22 @@ def test_rejects_rm_sharded_tile_gamma(device, expect_error):
     )
     with expect_error(ExcludedCell, "unsupported combination"):
         rms_norm(tx, gamma=tg)
+
+
+# --------------------------------------------------------------------------- streamed gamma (sharded R1, wide W)
+
+
+@pytest.mark.parametrize(
+    "layout,gamma_layout",
+    [
+        (ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=["tile_tg", "tile_rmg", "rm_rmg"],
+)
+@pytest.mark.parametrize("shape", [(1, 1, 160, 11008), (1, 1, 32, 8192)], ids=lambda s: "x".join(map(str, s)))
+def test_height_wide_streamed_gamma(device, shape, layout, gamma_layout):
+    # A HEIGHT shard pins the whole W row on one core; the resident gamma slice no longer fits next to the shards
+    # (TILE) / the resident x block (RM), so gamma streams per chunk.
+    _run(device, shape, ML.HEIGHT_SHARDED, layout=layout, gamma_layout=gamma_layout, fp32_acc=False)

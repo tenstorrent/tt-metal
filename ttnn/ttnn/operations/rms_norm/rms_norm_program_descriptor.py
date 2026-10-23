@@ -100,6 +100,10 @@ class BlockingPlan:
     chunks_per_row: int  # k
     xg_lookahead_chunks: int  # L
     x_depth_blocks: int = X_DEPTH_BLOCKS
+    # Gamma residency: False = the core's whole gamma slice is resident in cb_gamma_tiles (read once per kernel);
+    # True = gamma streams one chunk at a time, double-buffered (re-read once per block). Sharded R1 only: the
+    # shard pins the W slice, so a slice too wide for resident gamma has no wider W-group to fall back to.
+    gamma_streamed: bool = False
 
     @property
     def row_stride_tiles(self):  # s = k * c
@@ -125,7 +129,7 @@ _FMT_IN, _FMT_OUT, _FMT_GAMMA, _FMT_SCALER, _FMT_INTERM = "in", "out", "gamma", 
 _BACK_IN, _BACK_OUT = "input_shard", "output_shard"
 
 
-def _cb_specs(geo: Geometry, b, n, c, k, L, gw, x_depth):
+def _cb_specs(geo: Geometry, b, n, c, k, L, gw, x_depth, gamma_streamed=False):
     """THE single definition of every CB: [(index, num_pages, page_bytes, format_role, backing)].
 
     Both the L1 solve (_footprint) and the allocation (_build_cbs) read this list, so a block / chunk / depth knob
@@ -140,13 +144,15 @@ def _cb_specs(geo: Geometry, b, n, c, k, L, gw, x_depth):
     if geo.is_rm:
         specs.append((CB_X_RM_STICKS, stream_depth * c, geo.in_tile_bytes, _FMT_IN, None))
     specs.append((CB_X_TILES, x_depth * b * s, geo.in_tile_bytes, _FMT_IN, x_backing))
+    gamma_window_tiles = c if gamma_streamed else n  # tiles landed per gamma load
     if geo.has_gamma and geo.gamma_is_rm:
         # + one alignment unit: a sharded RM slice may start mid-alignment-unit of the gamma stick (read aligned down)
         align = ttnn.get_dram_alignment()
-        stick_bytes = _round_up(n * TILE * geo.gamma_elem_bytes, align) + align
+        stick_bytes = _round_up(gamma_window_tiles * TILE * geo.gamma_elem_bytes, align) + align
         specs.append((CB_GAMMA_RM_STICK, 1, stick_bytes, _FMT_GAMMA, None))
     if geo.has_gamma:
-        specs.append((CB_GAMMA_TILES, s, geo.gamma_tile_bytes, _FMT_GAMMA, None))
+        gamma_pages = stream_depth * c if gamma_streamed else s
+        specs.append((CB_GAMMA_TILES, gamma_pages, geo.gamma_tile_bytes, _FMT_GAMMA, None))
     specs.append((CB_REDUCE_SCALER, 2, SCALER_TILE_BYTES, _FMT_SCALER, None))
     specs.append((CB_SUMSQ, 2 * b, geo.interm_tile_bytes, _FMT_INTERM, None))
     if gw >= 2:
@@ -162,11 +168,11 @@ def _cb_specs(geo: Geometry, b, n, c, k, L, gw, x_depth):
     return specs
 
 
-def _footprint(geo: Geometry, b, n, c, k, L, gw, x_depth=X_DEPTH_BLOCKS):
+def _footprint(geo: Geometry, b, n, c, k, L, gw, x_depth=X_DEPTH_BLOCKS, gamma_streamed=False):
     """Per-core CB bytes — the closed form of l1_ledger.md §Footprint, summed from _cb_specs."""
     return sum(
         pages * page_bytes
-        for _, pages, page_bytes, _, backing in _cb_specs(geo, b, n, c, k, L, gw, x_depth)
+        for _, pages, page_bytes, _, backing in _cb_specs(geo, b, n, c, k, L, gw, x_depth, gamma_streamed)
         if backing is None
     )
 
@@ -184,28 +190,33 @@ def _fit_block(geo: Geometry, gw, n, gr, rows_hi, l1_budget_bytes):
     else:
         # largest balanced chunk first, down to the chunk floor (k <= n: beyond it the chunk stops shrinking)
         chunk_candidates = [(-(-n // k), k) for k in range(1, n + 1) if -(-n // k) >= min(n, CHUNK_FLOOR_TILES)]
-    for chunk, k in chunk_candidates:
-        for L in [k, 1] if gw >= 2 else [1]:  # R2: whole-block x*gamma lookahead first (stall fill S1)
-            if _footprint(geo, 1, n, chunk, k, L, gw) > l1_budget_bytes:
-                continue
-            block_rows = 1  # k > 1 => 1 (M5: a chunk of a multi-row block is not FIFO-contiguous)
-            if k == 1:
-                for b in range(rows_hi, 0, -1):
-                    if geo.zero_copy_tiles and rows_hi % b != 0:
-                        continue
-                    if _footprint(geo, b, n, chunk, k, L, gw) <= l1_budget_bytes:
-                        block_rows = b
-                        break
-            return BlockingPlan(
-                w_group_size=gw,
-                core_w_tiles=n,
-                num_row_groups=gr,
-                rows_hi=rows_hi,
-                block_rows=block_rows,
-                chunk_w_tiles=chunk,
-                chunks_per_row=k,
-                xg_lookahead_chunks=L,
-            )
+    # Resident gamma first at every chunk; streamed gamma (sharded R1 only) only if no resident fit exists.
+    gamma_modes = [False, True] if (geo.sharded and geo.has_gamma and gw == 1) else [False]
+    for gamma_streamed in gamma_modes:
+        for chunk, k in chunk_candidates:
+            for L in [k, 1] if gw >= 2 else [1]:  # R2: whole-block x*gamma lookahead first (stall fill S1)
+                fp = lambda b: _footprint(geo, b, n, chunk, k, L, gw, gamma_streamed=gamma_streamed)  # noqa: E731
+                if fp(1) > l1_budget_bytes:
+                    continue
+                block_rows = 1  # k > 1 => 1 (M5: a chunk of a multi-row block is not FIFO-contiguous)
+                if k == 1:
+                    for b in range(rows_hi, 0, -1):
+                        if geo.zero_copy_tiles and rows_hi % b != 0:
+                            continue
+                        if fp(b) <= l1_budget_bytes:
+                            block_rows = b
+                            break
+                return BlockingPlan(
+                    w_group_size=gw,
+                    core_w_tiles=n,
+                    num_row_groups=gr,
+                    rows_hi=rows_hi,
+                    block_rows=block_rows,
+                    chunk_w_tiles=chunk,
+                    chunks_per_row=k,
+                    xg_lookahead_chunks=L,
+                    gamma_streamed=gamma_streamed,
+                )
     return None
 
 
@@ -426,6 +437,7 @@ def _build_cbs(geo: Geometry, plan: BlockingPlan, cores, input_tensor, output_te
         plan.xg_lookahead_chunks,
         plan.w_group_size,
         plan.x_depth_blocks,
+        plan.gamma_streamed,
     )
     cbs = []
     for index, pages, page_bytes, role, backing in specs:
@@ -617,6 +629,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, gamma, epsilon, co
         int(geo.gamma_is_block_float),
         shard_stick_bytes_out,
         ttnn.get_dram_alignment(),
+        int(plan.gamma_streamed),
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct.extend(
@@ -647,6 +660,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, gamma, epsilon, co
         plan.chunks_per_row,
         plan.xg_lookahead_chunks,
         gw,
+        int(plan.gamma_streamed),
     ]
 
     inv_w_bits = _f32_bits(1.0 / geo.tensor_w_elems)
