@@ -131,7 +131,7 @@ TIMING = os.environ.get("MIMO_VLLM_TIMING") == "1"
 # step's logit rows and the row's uniform (DeviceSampler.check) and logs the counts every 64 steps.
 SAMPLER_CHECK = os.environ.get("MIMO_SAMPLER_CHECK") == "1"
 # MIMO_PREFILL_BATCH=0: prefill every row on its own (TtMiMoModel.prefill_enqueue_batch is not used).
-PREFILL_BATCH = os.environ.get("MIMO_PREFILL_BATCH", "1") == "1"
+PREFILL_BATCH = os.environ.get("MIMO_PREFILL_BATCH", "1") == "1" and os.environ.get("MIMO_SPEC_DECODE") != "dflash"
 # MIMO_PREFILL_TRACE=0: run prefill batches eagerly instead of replaying their traces.
 PREFILL_TRACE = os.environ.get("MIMO_PREFILL_TRACE", "1") == "1"
 # Decode, verify and MTP draft steps read their RoPE cos / sin from device tables of every position
@@ -144,7 +144,11 @@ ROPE_TABLE_FULL_WIDTH_MAX_LEN = 131072
 # MIMO_MTP_LAYERS=3 (default): draft i + 1 from MTP layer i (vLLM 0.31's MultiModuleMTPSpeculator, which the GPU
 # references run with the num_nextn_predict_layers patch; needs the decode RoPE tables); 1: MTP layer MIMO_MTP_LAYER
 # (default 0) drafts every token, feeding itself its own output (vLLM's MTP proposer, upstream vLLM for MiMo).
+# MIMO_SPEC_DECODE=dflash: the checkpoint's DFlash draft model (``dflash/``, tt/dflash.py) drafts instead, from the
+# target layers' outputs the decode and verify steps keep; every draft is host-planned after the plugin's walk (no
+# chain), and prompts prefill one row at a time (each chunk writes its last rows into the lane's DFlash context ring).
 SPEC_DECODE = os.environ.get("MIMO_SPEC_DECODE", "")
+DFLASH = SPEC_DECODE == "dflash"
 MTP_LAYERS = int(os.environ.get("MIMO_MTP_LAYERS", "3"))
 MTP_LAYER = int(os.environ.get("MIMO_MTP_LAYER", "0"))
 # MIMO_MTP_BACKFILL=0: no target-hidden history, no ring backfill (the rings start empty for each prompt and keep the
@@ -152,7 +156,7 @@ MTP_LAYER = int(os.environ.get("MIMO_MTP_LAYER", "0"))
 MTP_BACKFILL = os.environ.get("MIMO_MTP_BACKFILL", "1") == "1"
 # MIMO_SPEC_CHAIN=0: no draft chained behind a verify (every draft host-planned after the plugin's walk, and an
 # argmax_ids verify reads its greedy tokens without an accept step), the flow before tt/spec_chain.py, for comparison.
-SPEC_CHAIN = os.environ.get("MIMO_SPEC_CHAIN", "1") == "1"
+SPEC_CHAIN = os.environ.get("MIMO_SPEC_CHAIN", "1") == "1" and not DFLASH
 # MIMO_SPEC_CHAIN_CHECK=1 (debug): a draft chained behind a verify is drafted again from the host plan of the commit it
 # drafted from (the same MTP inputs, rewriting the same ring entries) and compared; mismatches are logged
 # (``chain_stats``). A synchronous verify's chained draft is checked at its propose when the plugin committed what the
@@ -393,6 +397,10 @@ class MiMoV2ForCausalLM:
         # B - 1), None after a prompt reset them; (lane slot, VerifyHandle) after a draft chained behind a verify, whose
         # row the handle's page gives (``_ring``). A draft for another request, or past a gap, backfills first.
         self.mtp_ring = [None] * self.dp
+        # Per lane: (lane slot, last position) of the request whose context the DFlash ring holds up to that position,
+        # None when it holds none (tt/dflash.py); a draft or prefill chunk that does not continue it resets it.
+        self.dflash_ring = [None] * self.dp
+        self.chain_stats["dflash_resets"] = 0
         # Per lane and slot: where the slot's last prefill chunk ended (a chunk starting there continues its request).
         self.prefill_ends = [{} for _ in range(self.dp)]
 
@@ -418,15 +426,20 @@ class MiMoV2ForCausalLM:
         num_layers = hf_config.num_hidden_layers
         if num_layers > cfg.num_hidden_layers:
             raise ValueError(f"num_hidden_layers {num_layers} > the checkpoint's {cfg.num_hidden_layers}")
-        mtp_layers = None
+        mtp_layers = dflash_path = None
         if SPEC_DECODE:
-            if SPEC_DECODE != "mtp":
-                raise ValueError(f"MIMO_SPEC_DECODE={SPEC_DECODE!r}: MiMo drafts with its MTP layer (mtp)")
+            if SPEC_DECODE not in ("mtp", "dflash"):
+                raise ValueError(f"MIMO_SPEC_DECODE={SPEC_DECODE!r}: MiMo drafts with its MTP layers (mtp) or DFlash")
             if max_batch_size // dp < SPEC_SLOTS:
                 raise ValueError(
                     f"a verify runs one request in {SPEC_SLOTS} decode slots: launch with --max-num-seqs >= "
                     f"{SPEC_SLOTS} per lane (got {max_batch_size // dp})"
                 )
+        if DFLASH:
+            if not os.path.exists(os.path.join(path, "dflash", "config.json")):
+                raise ValueError(f"MIMO_SPEC_DECODE=dflash: no DFlash draft model in {path}/dflash")
+            dflash_path = path
+        elif SPEC_DECODE:
             if MTP_LAYERS not in (1, MAX_DRAFTS):
                 raise ValueError(f"MIMO_MTP_LAYERS={MTP_LAYERS}: 1, or {MAX_DRAFTS} (one MTP layer per draft)")
             if MTP_LAYERS > cfg.num_nextn_predict_layers:
@@ -450,6 +463,7 @@ class MiMoV2ForCausalLM:
             setup_kv=False,
             mtp_layers=mtp_layers,
             mtp_backfill=MTP_BACKFILL and DEVICE_ROPE,
+            dflash_path=dflash_path,
         )
         return cls(generator, max_seq_len)
 
@@ -459,9 +473,10 @@ class MiMoV2ForCausalLM:
         that captures no decode traces serves no draft length (``_untraced_decode``)."""
         from vllm_tt_plugin.spec_decode import SpecPlan, SpecReject
 
-        if SPEC_DECODE != "mtp":
+        if SPEC_DECODE not in ("mtp", "dflash"):
             return SpecReject(
-                reason="MiMo drafts with its MTP layer: launch with MIMO_SPEC_DECODE=mtp", supported_k=(MAX_DRAFTS,)
+                reason="MiMo drafts with its MTP layers or DFlash: launch with MIMO_SPEC_DECODE=mtp or dflash",
+                supported_k=(MAX_DRAFTS,),
             )
         untraced = _untraced_decode(vllm_config)
         if untraced is not None:
@@ -576,6 +591,8 @@ class MiMoV2ForCausalLM:
                 model.setup_decode_rope_tables(compact_rope, rope_host)
             if model.mtp is not None:
                 model.mtp.setup_cache()  # after the RoPE tables: the backfill reads them
+            if model.dflash is not None:
+                model.dflash.setup_cache()
             self.kv_caches.append(caches)
         logger.info(
             f"MiMo vLLM KV: {num_blocks} blocks of {block_size} per lane, {len(buffers)} buffers per replica, "
@@ -715,6 +732,7 @@ class MiMoV2ForCausalLM:
                 handle = self.models[lane].prefill_enqueue_batch(chunks)
             else:
                 (chunk, slot, _), start = chunks[0], rows_of_pass[0][3]
+                self._dflash_continue(lane, slot, start, start + chunk.numel() - 1)
                 handle = self.models[lane].prefill_enqueue(
                     chunk, slot, start_pos=start, history_continues=continues[rows_of_pass[0][0]]
                 )
@@ -753,7 +771,7 @@ class MiMoV2ForCausalLM:
             model.release_spec_traces()
             model.release_decode_trace()
             model.capture_decode_trace()
-            if model.mtp is not None:
+            if model.mtp is not None or model.dflash is not None:
                 model.capture_spec_traces()
             self.decode_recaptures += 1
             logger.info(
@@ -1320,7 +1338,8 @@ class MiMoV2ForCausalLM:
         jobs, inputs_s, hits, kept = [], 0.0, 0, set()
         for lane, source in enumerate(self.spec_sources):
             mtp, chained = self.models[lane].mtp, self.chained[lane]
-            if source is None or mtp is None or source.row >= rows or not 1 <= num_drafts <= MAX_DRAFTS:
+            drafter = mtp if mtp is not None else self.models[lane].dflash
+            if source is None or drafter is None or source.row >= rows or not 1 <= num_drafts <= MAX_DRAFTS:
                 continue
             r, m = source.row, int(counts[source.row])
             # A row whose request is gone has position -1; the next verify writes the bonus token and the drafts at
@@ -1343,15 +1362,22 @@ class MiMoV2ForCausalLM:
                 hits += 1
                 if not self.chain_check:
                     continue
-            anchor = self._enqueue_host_draft(
-                lane, source, committed_tokens[r].tolist(), committed_positions[r].tolist(), m
-            )
-            inputs_s += mtp.last_inputs_s
+            if mtp is None:
+                anchor = self._enqueue_dflash(
+                    lane, source, committed_tokens[r].tolist(), committed_positions[r].tolist(), m
+                )
+            else:
+                anchor = self._enqueue_host_draft(
+                    lane, source, committed_tokens[r].tolist(), committed_positions[r].tolist(), m
+                )
+            inputs_s += drafter.last_inputs_s
             jobs.append((lane, r, anchor, hit))
         waited = 0.0
         for lane, r, anchor, hit in jobs:
             t = time.perf_counter()
-            host = torch.tensor(self.models[lane].mtp.read_drafts(anchor)[:num_drafts], dtype=torch.int32)
+            model = self.models[lane]
+            got = model.mtp.read_drafts(anchor) if model.mtp is not None else model.dflash.read_drafts()
+            host = torch.tensor(got[:num_drafts], dtype=torch.int32)
             waited += time.perf_counter() - t
             if hit:
                 self._check_chained(lane, drafts[r], host)
@@ -1387,6 +1413,31 @@ class MiMoV2ForCausalLM:
             slot_tokens[source.slots[c]] = int(tokens[c])
         mtp.enqueue(slot_tokens, plan)
         return plan.anchor
+
+    def _dflash_continue(self, lane, slot, first, last):
+        """Before DFlash context rows ``first`` .. ``last`` of the request in lane ``slot`` (a prefill chunk, or a
+        draft's committed rows): reset the lane's ring unless it holds that request's rows up to ``first`` - 1 (a new
+        request, another request's rows, or a gap the lane did not draft), then record it up to ``last``."""
+        dflash = self.models[lane].dflash
+        if dflash is None:
+            return
+        ring = self.dflash_ring[lane]
+        if ring is None or ring[0] != slot or ring[1] < first - 1:
+            dflash.reset()
+            self.chain_stats["dflash_resets"] += 1
+        self.dflash_ring[lane] = (slot, max(last, ring[1]) if ring is not None and ring[0] == slot else last)
+
+    def _enqueue_dflash(self, lane, source, tokens, positions, m):
+        """The DFlash draft for the commit of ``m`` tokens ``tokens`` at ``positions`` of the lane's DraftSource
+        (non-blocking): the committed columns' slots of the last step hold the target layers' outputs at positions
+        ``positions[c] - 1``, which become the ring's context; the anchor is the last committed token. It reads the
+        taps that step left, which must still be its own. Returns None (read_drafts takes no anchor)."""
+        slot = source.row - lane * self.per_lane
+        first, last = int(positions[0]) - 1, int(positions[m - 1]) - 1
+        self._dflash_continue(lane, slot, first, last)
+        context = [(source.slots[c], int(positions[c]) - 1) for c in range(m)]
+        self.models[lane].dflash.enqueue(context, int(tokens[m - 1]), int(positions[m - 1]))
+        return None
 
     def _check_deferred(self, handle):
         """MIMO_SPEC_CHAIN_CHECK on a deferred verify, right after its enqueue: waits for its pages, then drafts each
@@ -1783,9 +1834,9 @@ class MiMoV2ForCausalLM:
                     model.capture_prefill_batch_trace(users, padded)
                 if pending:
                     logger.info(f"MiMo vLLM: replica {lane} prefill traces captured for (users, length) {pending}")
-                if model.mtp is not None and model.verify_trace is None:
+                if (model.mtp is not None or model.dflash is not None) and model.verify_trace is None:
                     model.capture_spec_traces()
-                    logger.info(f"MiMo vLLM: replica {lane} verify and MTP draft traces captured")
+                    logger.info(f"MiMo vLLM: replica {lane} verify and draft traces captured")
             else:
                 idle = torch.full((model.max_batch,), -1, dtype=torch.int32)
                 model.decode_read(model.decode_enqueue(torch.zeros(model.max_batch, dtype=torch.int32), idle))

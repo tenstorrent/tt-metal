@@ -39,6 +39,7 @@ from .moe import expert_quant
 from .moe_stream import zero_output
 from .mtp import TtMiMoMTP
 from .rope import MiMoRotarySetup, partial_rope_table
+from .dflash import TtDFlash
 from .spec_inputs import SpecInputs
 from .verify_sampler import VerifySampler
 
@@ -223,7 +224,8 @@ class TtMiMoModel:
         self.decode_trace = None
         self.verify_trace = None  # speculative verify step (capture_verify_trace)
         self.mtp = None  # the MTP drafter (setup_mtp)
-        self.spec_inputs = None  # the packed verify / draft uploads (setup_mtp, tt/spec_inputs.py)
+        self.dflash = None  # the DFlash drafter (setup_dflash, tt/dflash.py)
+        self.spec_inputs = None  # the packed verify / draft uploads (setup_mtp / setup_dflash, tt/spec_inputs.py)
         self.greedy_head = None
         self.sampler = None  # vLLM mode: temperature / top-k / top-p decode sampling (setup_vllm_kv_cache)
         self.verify_sampler = None  # vLLM mode with MTP: a verify's acceptance on device (setup_vllm_kv_cache)
@@ -336,7 +338,7 @@ class TtMiMoModel:
         # before any capture.
         self.greedy_head = GreedyHead(self.plan, self.vocab_local, self.decode_users, self.max_batch)
         self.sampler = DeviceSampler(self.plan, self.vocab_local, self.decode_users, self.max_batch)
-        if self.mtp is not None:
+        if self.mtp is not None or self.dflash is not None:
             # A verify's acceptance on device (the plugin's fused_sample, capture_verify_trace): its persistent
             # inputs and output, like the samplers' buffers, before any capture.
             self.verify_sampler = VerifySampler(self.sampler, self.cfg.vocab_size)
@@ -545,7 +547,8 @@ class TtMiMoModel:
     def _prefill_chunk(self, tokens, slot, start_pos, hidden, layers=None):
         """One chunk (``tokens`` 1D torch) at ``start_pos`` through the layers ``layers`` (indices, default all);
         returns the last one's output [1, 1, padded, hidden] and appends (copy, real rows) of every layer's output to
-        ``hidden`` when given."""
+        ``hidden`` when given. With the DFlash drafter the chunk's last rows also go into its context ring
+        (TtDFlash.prefill_context; a warm-up through a subset of the layers runs the same programs)."""
         n = tokens.numel()
         padded = prefill_padded_len(n)
         assert start_pos + n <= self.max_seq_len, f"chunk ends at {start_pos + n} > {self.max_seq_len}"
@@ -557,6 +560,7 @@ class TtMiMoModel:
         for setup in self.rope_setups.values():
             setup.begin_prefill_chunk()
         x = self._embed(torch.nn.functional.pad(tokens.to(torch.int32), (0, padded - n)))
+        dflash_acc = None
         with self._prefill_reduce(padded):
             for k, i in enumerate(layers):
                 y = self.layers[i].forward_prefill(
@@ -570,8 +574,14 @@ class TtMiMoModel:
                 )
                 x.deallocate(True)
                 x = y
+                if self.dflash is not None:
+                    dflash_acc = self.dflash.prefill_tap(i, x, dflash_acc)
                 if hidden is not None:
                     hidden[k].append((ttnn.clone(x), n))
+        if self.dflash is not None:
+            if dflash_acc is None:
+                dflash_acc = self.dflash.prefill_tap(self.dflash.tap_layers[0], x, None)
+            self.dflash.prefill_context(dflash_acc, start_pos, n)
         # Enqueued: freeing them now is ordered with the work that reads them.
         for setup in self.rope_setups.values():
             setup.end_prefill_chunk()
@@ -1039,6 +1049,8 @@ class TtMiMoModel:
             )
             x.deallocate(True)
             x = y
+            if self.dflash is not None:
+                self.dflash.tap(i, y)  # DFlash's context: the target layers' outputs it reads (tt/dflash.py)
         logits = self._logits(x, h)
         x.deallocate(True)
         for t in (*rot_mats[True][:2], *rot_mats[False], *made, *sdpa_tables.values()):
@@ -1209,6 +1221,15 @@ class TtMiMoModel:
         kv_rep = kv_lib.kv_replication(self.plan.tp, self.cfg.num_key_value_heads)
         self.spec_inputs = SpecInputs(self.plan, self.max_batch, kv_rep)
 
+    def setup_dflash(self, model_path, cache_dir, load=True):
+        """Load the DFlash draft model (``model_path``/dflash, tt/dflash.py) as the speculative drafter (its buffers
+        and trace: TtDFlash.setup_cache, capture_spec_traces), and make the verify's packed upload (persistent: before
+        any capture). ``load``: read the checkpoint (False: a later replica, from the tensor cache)."""
+        assert self.mtp is None and self.dflash is None and self.decode_trace is None
+        self.dflash = TtDFlash(self, model_path, cache_dir, load=load)
+        kv_rep = kv_lib.kv_replication(self.plan.tp, self.cfg.num_key_value_heads)
+        self.spec_inputs = SpecInputs(self.plan, self.max_batch, kv_rep)
+
     def capture_verify_trace(self):
         """Compile, then capture the verify step: the decode step with every layer's K / V written one slot at a time
         and no feed-back (a verify always reloads its inputs). Every slot idle while capturing: no K / V written.
@@ -1280,9 +1301,13 @@ class TtMiMoModel:
         return output
 
     def capture_spec_traces(self):
-        """The verify step and the MTP draft program, after the decode trace (persistent buffers already exist)."""
+        """The verify step and the drafter's program (MTP or DFlash), after the decode trace (persistent buffers
+        already exist)."""
         self.capture_verify_trace()
-        self.mtp.capture_trace()
+        if self.mtp is not None:
+            self.mtp.capture_trace()
+        if self.dflash is not None:
+            self.dflash.capture_trace()
 
     def release_spec_traces(self):
         if self.verify_trace is not None:
@@ -1292,6 +1317,8 @@ class TtMiMoModel:
             self.verify_trace = None
         if self.mtp is not None:
             self.mtp.release_trace()
+        if self.dflash is not None:
+            self.dflash.release_trace()
 
     def verify_enqueue(self, tokens, positions, chain=None, accept=None):
         """A verify step (tokens, positions: torch [max_batch], -1 an idle slot). Non-blocking; returns the verify
