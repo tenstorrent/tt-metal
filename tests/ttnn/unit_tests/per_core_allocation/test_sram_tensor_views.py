@@ -216,7 +216,8 @@ def test_view_preserves_selected_device_coverage(mesh_device):
 def test_view_device_order_is_independent_of_span_insertion(mesh_device):
     """Keep tensor topology and reference addresses stable for unordered span maps."""
     mesh, core = mesh_device, ttnn.CoreCoord(0, 0)
-    coords = list(ttnn.MeshCoordinateRange(mesh.shape))[:2]
+    # Copy iterator values because the native range iterator reuses its coordinate object.
+    coords = [ttnn.MeshCoordinate(list(coord)) for coord in ttnn.MeshCoordinateRange(mesh.shape)][:2]
     assert len(coords) == 2
     owner = _owner(mesh, core)
     entries = [(coord, core, _address(owner, coord, core), 256) for coord in coords]
