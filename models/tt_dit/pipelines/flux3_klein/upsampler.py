@@ -96,6 +96,10 @@ PUP_SYSTEM_KEYS = ("t2i", "i2i", "t2i_bbox", "i2i_bbox")
 PUP_MESH_SHAPE = (1, 1)
 PUP_L1_SMALL_SIZE = 24576  # qwen36 GDN_CONV1D_L1_SMALL_SIZE: the prefill depthwise conv needs it
 PUP_TRACE_REGION_SIZE = 256 * 1024 * 1024  # vision_demo.py: prefill chunk trace + decode trace
+_DIAG_SYNC = os.environ.get("PUP_DIAG_SYNC") == "1"
+_DEVICE_SAMPLING = os.environ.get("PUP_DEVICE_SAMPLING") == "1"  # greedy + presence penalty on device (the common
+# sampler's in-trace argmax with its output-token counts); the host reads ONE token per step instead of the 248K-wide
+# logit row (the row readback was 20 ms of the 30 ms step, PUP_DIAG_SYNC job 143697). Audited vs the CPU oracle.  # _decode_step: split 'wait' into device + readback (diagnostic)
 PUP_DEVICE_PARAMS = {
     "l1_small_size": PUP_L1_SMALL_SIZE,
     "num_command_queues": 2,
@@ -509,8 +513,12 @@ class Flux3KleinUpsampler:
 
     def _load(self, ttnn) -> None:
         """The init steps after the mesh exists (model, tokenizer, prompts, stop ids, KV cache)."""
-        if tuple(int(s) for s in self._device.shape) != PUP_MESH_SHAPE:
-            raise ValueError(f"the upsampler runs on a {PUP_MESH_SHAPE} mesh, got {tuple(self._device.shape)}")
+        shape = tuple(int(s) for s in self._device.shape)
+        if shape[0] != 1 or shape[1] not in (1, 4, 8):
+            # (1,1) = the shipped one-chip pup; (1,4) / (1,8) = qwen36's tensor-parallel row (TP over axis 1; the
+            # text model's 16 heads / 4 KV heads, the GDN's 16 / 32 heads and the vision tower's 16 heads all divide).
+            raise ValueError(f"the upsampler runs on a (1,1), (1,4) or (1,8) mesh, got {shape}")
+        self.tp = shape[1]
         try:
             self._device.enable_program_cache()
         except Exception:  # already enabled by the owner
@@ -525,11 +533,18 @@ class Flux3KleinUpsampler:
         self.stop_ids = stop_ids
         # 128 blocks of 64 = the whole 8192 context: the KV cache of the longest admitted prompt plus its tail.
         self.num_blocks = blocks_for(PUP_MAX_PROMPT, FLUX3_KLEIN_PUP_MAX_NEW_TOKENS, self.max_seq_len)
-        self._kv_shape = [self.num_blocks, int(self.args.n_kv_heads), PUP_BLOCK_SIZE, int(self.args.head_dim)]
+        # Per-device KV heads: the 4 KV heads on one chip; under TP each device holds its GQA-assigned head(s)
+        # (``n_local_kv_heads``, 1 at TP=8 with KV replication), and the TP allocator replicates whatever shape it is
+        # handed, so the full count here would silently allocate 4x the cache and the wrong per-device head count.
+        local_kv_heads = int(getattr(self.args, "n_local_kv_heads", self.args.n_kv_heads)) if self.tp > 1 else int(self.args.n_kv_heads)
+        if self.tp > 1:
+            assert local_kv_heads == max(1, int(self.args.n_kv_heads) // self.tp), (local_kv_heads, self.args.n_kv_heads, self.tp)
+        self._kv_shape = [self.num_blocks, local_kv_heads, PUP_BLOCK_SIZE, int(self.args.head_dim)]
         self.page_table = torch.arange(self.num_blocks, dtype=torch.int32).unsqueeze(0)
         self.model.allocate_kv_caches(self._kv_shape, ttnn.bfloat16, batch_size=1)
         self._generator = None
         self._prefill_trace_captured = False
+        self._sampling_params = None
         self._vision_patch_rows: set[int] = set()
 
     # --- accessors ---------------------------------------------------------------------------------------------------------
@@ -578,7 +593,10 @@ class Flux3KleinUpsampler:
         for pixels, grid in split_images(inputs.pixel_values, grids):
             parts.append(self.model.get_image_features(pixels, grid))
         ttnn.synchronize_device(self._device)
-        rows = torch.cat([ttnn.to_torch(part) for part in parts], dim=0)
+        # Under TP the tower's rows are hidden-fractured over the mesh: gather the shards along the hidden dim on the
+        # host and re-shard the concatenated rows the same way (one chip: plain read / upload, as before).
+        composer = ttnn.ConcatMeshToTensor(self._device, dim=-1) if self.tp > 1 else None
+        rows = torch.cat([ttnn.to_torch(part, mesh_composer=composer) for part in parts], dim=0)
         dtype, layout = parts[0].dtype, parts[0].layout
         for part in parts:
             ttnn.deallocate(part)
@@ -587,7 +605,12 @@ class Flux3KleinUpsampler:
                 f"vision tower gave {int(rows.shape[0])} rows for {inputs.num_image_tokens} image tokens"
             )
         tokens = ttnn.from_torch(
-            rows, dtype=dtype, layout=layout, device=self._device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            rows,
+            dtype=dtype,
+            layout=layout,
+            device=self._device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **(dict(mesh_mapper=ttnn.ShardTensorToMesh(self._device, dim=-1)) if self.tp > 1 else {}),
         )
         self.model._req_image_grid_thw = grids
         self.model._req_video_grid_thw = None
@@ -630,7 +653,9 @@ class Flux3KleinUpsampler:
         import ttnn
         from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch
 
-        if self.use_trace and not self._prefill_trace_captured:
+        if self.use_trace and self.tp == 1 and not self._prefill_trace_captured:
+            # One chip: the chunked prefill trace. TP: the prefill stays EAGER (0.2 s warm at TP=8; the traced chunked
+            # prefill is single-device code) and only the decode step is traced (``_start_decode`` / ``_decode_step``).
             t0 = time.time()
             self.model.capture_prefill_trace_chunked(
                 self._device, self.page_table, chunk_size=PUP_PREFILL_CHUNK, warmup_masked_buckets=True
@@ -639,27 +664,72 @@ class Flux3KleinUpsampler:
             timings.trace_captured = True
             logger.info(f"RECORD pup prefill trace captured in {time.time() - t0:.1f}s; {_dram_per_bank(self._device)}")
         t0 = time.time()
-        logits = prefill_dispatch(
-            self.model,
-            inputs.input_ids,
-            self.page_table,
-            torch.tensor([inputs.prompt_tokens]),
-            self.use_trace,
-            vision_tokens=vision_tokens,
-        )
+        if self.tp > 1:
+            # The TP paged prefill (eager, ``_prefill_paged_tp``) runs the fused chunk GDN kernel, whose flat-v path
+            # needs T to be a multiple of its 32-row chunk; ``prefill_dispatch`` clips the ids to the real length, so
+            # call the model directly with the ids right-padded to the GDN chunk (128) and the real ``valid_len``
+            # (the masked-bucket contract: GDN masks past ``valid_len``, the last logit is read at ``valid_len - 1``,
+            # decode overwrites the padded KV rows position by position). One chip keeps the shipped dispatch.
+            ids = inputs.input_ids
+            T = int(inputs.prompt_tokens)
+            ids = ids[:, :T]
+            chunk = int(getattr(self.args, "gdn_chunk_size", 128))
+            pad = (-T) % chunk
+            if pad:
+                pad_id = int(self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0)
+                ids = torch.nn.functional.pad(ids, (0, pad), value=pad_id)
+            logits = self.model.prefill_paged(ids, self.page_table, valid_len=T, vision_tokens=vision_tokens)
+        else:
+            logits = prefill_dispatch(
+                self.model,
+                inputs.input_ids,
+                self.page_table,
+                torch.tensor([inputs.prompt_tokens]),
+                self.use_trace,
+                vision_tokens=vision_tokens,
+            )
         ttnn.synchronize_device(self._device)
-        row = ttnn.to_torch(logits).reshape(-1).float()
+        # TP: the lm_head all-gathers the vocab row, so every chip holds the full row; read ONE replica (the way
+        # ``process_output_decode`` does for decode) instead of composing the 8 identical shards.
+        logits_host = ttnn.get_device_tensors(logits)[0] if self.tp > 1 else logits
+        row = ttnn.to_torch(logits_host).reshape(-1).float()
         timings.prefill_s = time.time() - t0
         if torch.isnan(row).any():
             raise RuntimeError("NaN in the prefill logits")
         return row
 
-    def _decode_step(self, token: int, position: int, phases: dict[str, float] | None = None) -> torch.Tensor:
+    def _decode_step(self, token: int, position: int, phases: dict[str, float] | None = None, first: bool = False, sample: bool = False):
         """One decode step in three timed phases (R1 of docs/UPSAMPLER_PERF_RESEARCH.md): ``submit`` = host input
         build + H2D copies + the (non-blocking) trace enqueue, ``wait`` = the device step as seen by the blocking
         logit readback (device time + D2H of the 248K-wide row), ``convert`` = the host reshape / fp32 / NaN check.
         ``phases`` accumulates seconds per phase."""
         t0 = time.perf_counter()
+        if sample and self._sampling_params is not None:
+            # device sampling: the sampler's in-trace argmax with the presence penalty from its own output-token
+            # counts (seeded with ``token`` on the first step, counted on device after that); ONE token comes back.
+            tokens = torch.tensor([[token]], dtype=torch.long)
+            out_tok, _ = self._generator.decode_forward(
+                tokens,
+                torch.tensor([position]),
+                page_table=self.page_table,
+                kv_cache=None,
+                enable_trace=self.use_trace,
+                read_from_device=True,
+                sampling_params=self._sampling_params,
+                prompt_tokens=tokens,  # only the repetition penalty (1.0 here) reads the prompt mask; the sampler needs a tensor on reset
+                output_tokens=tokens,
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=bool(first),
+                reset_sampling_state=bool(first),
+            )
+            t1 = time.perf_counter()
+            nxt = int(torch.as_tensor(out_tok).reshape(-1)[0].item())
+            if phases is not None:
+                phases["submit"] = phases.get("submit", 0.0) + (t1 - t0)
+                phases["wait"] = phases.get("wait", 0.0) + 0.0
+                phases["convert"] = phases.get("convert", 0.0) + (time.perf_counter() - t1)
+            return nxt
         tt_out = self._generator.decode_forward(
             torch.tensor([[token]], dtype=torch.long),
             torch.tensor([position]),
@@ -673,6 +743,15 @@ class Flux3KleinUpsampler:
             reset_sampling_state=False,
         )
         t1 = time.perf_counter()
+        if phases is not None and _DIAG_SYNC:
+            # diagnostic (PUP_DIAG_SYNC=1): split "wait" into the device step and the D2H readback by blocking on
+            # the device first; costs one extra sync per step, so never on in a timed run.
+            import ttnn
+
+            ttnn.synchronize_device(self._device)
+            t1d = time.perf_counter()
+            phases["device"] = phases.get("device", 0.0) + (t1d - t1)
+            t1 = t1d
         to_host = self._generator.read_decode_output(tt_out)
         out = self._generator.process_decode_output_host(to_host, is_tokens=False)
         t2 = time.perf_counter()
@@ -686,16 +765,24 @@ class Flux3KleinUpsampler:
             phases["convert"] = phases.get("convert", 0.0) + (t3 - t2)
         return row
 
-    def _start_decode(self, first_token: int, position: int) -> None:
+    def _start_decode(self, first_token: int, position: int, penalty: float = 0.0, sample: bool = False) -> None:
         """The ``Generator`` (once per process) and, on the traced path, ``prime_decode_trace`` once per request:
         the decode trace is captured / replayed at the real post-prefill position with the GDN recurrent state
-        snapshot and restored around it (the capture runs the forward twice; GDN state is not idempotent)."""
+        snapshot and restored around it (the capture runs the forward twice; GDN state is not idempotent).
+        With device sampling (``PUP_DEVICE_SAMPLING=1``) the prime runs with the sampler on, so the captured decode
+        trace is the sampling variant; the first real step then resets the sampler state with ``first_token``."""
         from models.demos.blackhole.qwen36.tt.generator_interface import prime_decode_trace
         from models.tt_transformers.tt.generator import Generator
 
         if self._generator is None:
             self._generator = Generator([self.model], [self.model.args], self._device)
-        if self.use_trace:
+        self._sampling_params = None
+        if _DEVICE_SAMPLING and sample:  # teacher forcing (the probes) keeps the host logits path
+            from models.common.sampling.sampling_params import SamplingParams
+
+            assert getattr(self.model, "sampling", None) is not None, "device sampling needs a (1,4)/(1,8) mesh"
+            self._sampling_params = SamplingParams(temperature=0.0, top_k=1, top_p=1.0, presence_penalty=float(penalty))
+        if self.use_trace and self._sampling_params is None:
             prime_decode_trace(
                 self._generator,
                 self.model,
@@ -703,6 +790,25 @@ class Flux3KleinUpsampler:
                 torch.tensor([position]),
                 self.page_table,
             )
+        elif self.use_trace:
+            tokens = torch.tensor([[first_token]], dtype=torch.long)
+            saved = self.model._save_deltanet_states()
+            self._generator.decode_forward(
+                tokens,
+                torch.tensor([position]),
+                page_table=self.page_table,
+                kv_cache=None,
+                enable_trace=True,
+                read_from_device=True,
+                sampling_params=self._sampling_params,
+                prompt_tokens=tokens,  # only the repetition penalty (1.0 here) reads the prompt mask; the sampler needs a tensor on reset
+                output_tokens=tokens,
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=True,
+                reset_sampling_state=True,
+            )
+            self.model._restore_deltanet_states(saved, self.model.mesh_device)
 
     # --- the request -----------------------------------------------------------------------------------------------------
 
@@ -731,17 +837,17 @@ class Flux3KleinUpsampler:
         timings.finish = "stop" if token in self.stop_ids else "length"
         if token not in self.stop_ids and max_new_tokens > 0:
             generated.append(token)
-            self._start_decode(token, position)
+            self._start_decode(token, position, penalty, sample=True)
             t_decode = time.time()
             phases: dict[str, float] = {}
             first_step: dict[str, float] | None = None
             while len(generated) < max_new_tokens:
                 t_step = time.time()
                 step_phases: dict[str, float] = {}
-                logits = self._decode_step(token, position, step_phases)
+                result = self._decode_step(token, position, step_phases, first=first_step is None, sample=True)
                 decode_times.append(time.time() - t_step)
                 t_s = time.perf_counter()
-                token = presence_greedy(logits, generated, penalty)
+                token = result if isinstance(result, int) else presence_greedy(result, generated, penalty)
                 step_phases["sample"] = time.perf_counter() - t_s
                 if first_step is None:
                     first_step = step_phases  # the first step is excluded from the steady-state means
@@ -762,6 +868,8 @@ class Flux3KleinUpsampler:
             n = len(decode_times) - 1
             timings.step_submit_ms = 1000.0 * phases.get("submit", 0.0) / n
             timings.step_wait_ms = 1000.0 * phases.get("wait", 0.0) / n
+            if "device" in phases:
+                logger.info(f"RECORD pup decode step diag (steady, {n} steps): device {1000.0 * phases['device'] / n:.1f} ms, readback {timings.step_wait_ms:.1f} ms (PUP_DIAG_SYNC)")
             timings.step_convert_ms = 1000.0 * phases.get("convert", 0.0) / n
             timings.step_sample_ms = 1000.0 * phases.get("sample", 0.0) / n
             logger.info(

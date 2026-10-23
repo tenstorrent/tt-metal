@@ -125,12 +125,28 @@ def load_oracle_model(snapshot: Path, *, threads: int = 40):
     return _MODELS[key]
 
 
-def _model_inputs(inputs: PupInputs) -> dict:
-    kwargs = {"input_ids": inputs.input_ids, "attention_mask": torch.ones_like(inputs.input_ids)}
+def _model_inputs(inputs: PupInputs, ids: torch.Tensor | None = None, image_token_id: int | None = None) -> dict:
+    """``ids`` = the token ids to run (default the prompt); multimodal inputs also carry ``mm_token_type_ids`` (1 on the
+    image placeholder positions, 0 elsewhere), which transformers >= 5.12 requires for M-RoPE."""
+    ids = inputs.input_ids if ids is None else ids
+    kwargs = {"input_ids": ids, "attention_mask": torch.ones_like(ids)}
     if inputs.pixel_values is not None:
         kwargs["pixel_values"] = inputs.pixel_values
         kwargs["image_grid_thw"] = inputs.image_grid_thw
+        if image_token_id is not None:
+            kwargs["mm_token_type_ids"] = (ids == int(image_token_id)).to(torch.int64)
     return kwargs
+
+
+def _image_token_id(model) -> int | None:
+    cfg = model.config
+    for name in ("image_token_id",):
+        v = getattr(cfg, name, None)
+        if v is None:
+            v = getattr(getattr(cfg, "text_config", None), name, None)
+        if v is not None:
+            return int(v)
+    return None
 
 
 def teacher_forced_gaps(model, inputs: PupInputs, target_ids: Sequence[int]) -> list[tuple[int, int, int, float]]:
@@ -138,9 +154,7 @@ def teacher_forced_gaps(model, inputs: PupInputs, target_ids: Sequence[int]) -> 
     the target prefix applied before the argmax (the device's ``teacher_forced`` computes the same quantity)."""
     targets = [int(t) for t in target_ids]
     ids = torch.cat([inputs.input_ids, torch.tensor([targets[:-1]], dtype=torch.int64)], dim=1)
-    kwargs = _model_inputs(inputs)
-    kwargs["input_ids"] = ids
-    kwargs["attention_mask"] = torch.ones_like(ids)
+    kwargs = _model_inputs(inputs, ids=ids, image_token_id=_image_token_id(model))
     with torch.inference_mode():
         logits = model(**kwargs, use_cache=False).logits[0, inputs.prompt_tokens - 1 :].float()
     out = []
@@ -175,7 +189,7 @@ def run_oracle(
     t0 = time.time()
     with torch.inference_mode():
         out = model.generate(
-            **_model_inputs(inputs),
+            **_model_inputs(inputs, image_token_id=_image_token_id(model)),
             do_sample=False,
             num_beams=1,
             max_new_tokens=int(max_new_tokens),
