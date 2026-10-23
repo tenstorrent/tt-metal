@@ -415,9 +415,12 @@ with one mechanism, for 1 and 3 MTP layers:
   the whole ring by one `paged_fill_cache` (`TtMiMoAttention.fill_kv_rows`: no attention, MLP or LM head). The other
   rows write garbage where no query reads before a draft rewrites them (below the window, at A and past it). With 3
   layers, layer i's last i rows before A need drafts: the plan stashes rows A - 2, A - 1 (hidden, layer-0 token,
-  position) and the draft right after re-runs them in every layer. Chained drafts continue the rings. Under async
-  scheduling the ring a chained draft left is known once its page is read (`mtp_ring` holds the verify's handle until
-  then), and a propose the plugin made stale drafts nothing, so the backfill comes with the propose that does.
+  position) and the draft right after re-runs them in every layer. A draft chained behind a verify the host built
+  checks the rings the same way (the backfill then runs between the accept trace and the draft: a prompt over a
+  deferred verify resets the rings while the request goes on); one chained behind a relayed verify continues the
+  draft before it. Under async scheduling the ring a chained draft left is known once its page is read
+  (`mtp_ring` holds the verify's handle until then), and a propose the plugin made stale drafts nothing, so the
+  backfill comes with the propose that does.
 - **Exactness** (host, `tests/test_mtp_backfill_host.py`): a lane serving request X (its prompt in chunks, a plain
   step, speculative steps with every accepted count), then X beside a second request for 3, 12 or 40 plain steps
   (its prompt resets the rings), then X alone again: every draft equals the drafts of an MTP that saw every position

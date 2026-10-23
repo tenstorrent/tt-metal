@@ -1044,6 +1044,11 @@ class MiMoV2ForCausalLM:
                     if TIMING:
                         handle.timing_events[lane] = ttnn.record_event(model.mesh_device, 0)
                     source, slot = sources[lane], sources[lane].row - lane * self.per_lane
+                    if not chains[lane][2]:
+                        # A pass the host built: its draft's first row is its column 0's position, and the rings may
+                        # not hold the rows before it (a prompt over the deferred verify before it reset them). A
+                        # relayed pass continues the draft chained behind the step it chained onto.
+                        self._backfill(lane, slot, int(p[k].positions[source.slots[0]]))
                     model.mtp.enqueue_chained()
                     # The rings now hold the request's rows up to the bonus - 1, which the page gives (``_ring``).
                     self.mtp_ring[lane] = (slot, handle)

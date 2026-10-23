@@ -17,7 +17,8 @@ Every test runs with both drafters (MIMO_MTP_LAYERS): one MTP layer (the lanes' 
 and every layer (``OracleLayersMTP``: the draft trace's kernel steps' mirrors, the plan step on the lane's stash, the
 tokens and drafts steps with the anchor in slot 3, on the commit's description whoever wrote it, the chain step or the
 host; the oracle's tokens as each pass's head). With every layer the chained flow must plan every draft exactly as
-the synchronous one (the same rows, positions, tokens and stash hits)."""
+the synchronous one (the same rows, positions, tokens and stash hits). The ring backfill's bookkeeping under async
+scheduling (``mtp_ring``) is checked on the one-layer lanes with a history."""
 
 import threading
 from types import SimpleNamespace
@@ -682,3 +683,111 @@ def test_a_prefill_over_a_deferred_verify(adapter, defer, monkeypatch):
     assert out.draft_token_ids[SPEC_ROW].tolist() == [draft_of(500 + m, k) for k in range(MAX_DRAFTS)]
     with pytest.raises(ValueError, match="chain_tip"):
         chained(adapter, pending.tip_id, 500 + 1 + MAX_DRAFTS)
+
+
+# ---------------------------------------------------------------------- the ring backfill under async scheduling
+def with_history(lane):
+    """Give the lane's drafter a history (tt/mtp_backfill.py): its backfills recorded as (slot, a, the drafts it had
+    enqueued before), so that a backfill is seen to precede the draft it serves."""
+    lane.mtp.history = object()
+    lane.mtp.enqueue_backfill = lambda slot, a: lane.mtp.backfills.append(
+        (slot, a, lane.mtp.planned + lane.mtp.chained)
+    )
+
+
+def test_the_backfill_comes_with_the_first_fresh_propose_after_a_lane_drops_to_one_request(adapter, defer):
+    """Lane 1 serves two requests (no drafts), then one: the proposes the plugin makes for older steps are stale
+    (placeholders, nothing enqueued, no backfill); the first fresh one backfills the rings from the history, then
+    drafts. Deferred and chained verifies after it continue the rings (no backfill); a plain step right after them
+    continues them too, once the handle's page tells where the chained draft ended; a plain step whose propose went
+    stale leaves a gap the next draft backfills."""
+    lane = adapter.models[1]
+    with_history(lane)
+    two = {SPEC_ROW: 300, SPEC_ROW + 1: 500}
+    out = submit(adapter, two)
+    for k in range(3):
+        nxt = submit(adapter, {row: q + k + 1 for row, q in two.items()}, reload=False)
+        drafts = propose_plain(adapter, read(adapter, out), {row: q + k for row, q in two.items()})
+        assert int(drafts.num_valid.sum()) == 0
+        out = nxt
+    # The second request finished: steps of the first alone, overlapped.
+    q = 303
+    pending = [(out, {row: p + 2 for row, p in two.items()})]
+    for k in range(2):
+        pending.append((submit(adapter, {SPEC_ROW: q + k}), {SPEC_ROW: q + k}))
+        step, live = pending.pop(0)
+        drafts = propose_plain(adapter, read(adapter, step), live)
+        assert int(drafts.num_valid[SPEC_ROW]) in (0, MAX_DRAFTS) and lane.mtp.planned == 0
+    assert lane.mtp.backfills == [] and adapter.chain_stats["stale"] >= 1
+    step, live = pending.pop(0)
+    drafts = propose_plain(adapter, read(adapter, step), live)
+    assert lane.mtp.planned == 1 and lane.mtp.backfills == [(0, q + 1, 0)], "the backfill, then the draft"
+    drafts = drafts.draft_token_ids[SPEC_ROW].tolist()
+    assert drafts == [draft_of(q + 2, j) for j in range(MAX_DRAFTS)]
+    # Deferred, then chained verifies: every draft continues the rings.
+    p = q + 2
+    first = deferred(adapter, *block(SEQ[p], p, drafts)).handle
+    newer = chained(adapter, first.tip_id, p + 1 + MAX_DRAFTS).handle
+    for h in (first, newer):
+        readout = read_on_thread(adapter, h)
+        adapter.propose_draft_tokens(MAX_DRAFTS, *commit(readout), hidden=h)
+    m = int(readout.accepted_counts[SPEC_ROW])
+    bonus = int(readout.p0[SPEC_ROW]) + m
+    assert len(lane.mtp.backfills) == 1 and lane.mtp.chained == 2
+    # A plain step at the bonus continues the rings the chained draft wrote (up to the bonus - 1).
+    drafts = propose_plain(adapter, read(adapter, submit(adapter, {SPEC_ROW: bonus})), {SPEC_ROW: bonus})
+    assert lane.mtp.planned == 2 and len(lane.mtp.backfills) == 1, "no backfill"
+    assert adapter.mtp_ring[1] == (0, bonus)
+    # Two overlapped plain steps: the older one's propose goes stale (no draft at bonus + 1), the next backfills.
+    older = submit(adapter, {SPEC_ROW: bonus + 1})
+    newest = submit(adapter, {SPEC_ROW: bonus + 2}, reload=False)
+    assert int(propose_plain(adapter, read(adapter, older), {SPEC_ROW: bonus + 1}).num_valid.sum()) == MAX_DRAFTS
+    assert lane.mtp.planned == 2, "stale: placeholders"
+    propose_plain(adapter, read(adapter, newest), {SPEC_ROW: bonus + 2})
+    assert lane.mtp.planned == 3 and lane.mtp.backfills[-1] == (0, bonus + 2, 2 + 2)
+    assert adapter.chain_stats["backfills"] == 2
+
+
+def test_a_verify_after_a_prompt_over_a_deferred_one_backfills_before_its_chained_draft(adapter, defer, monkeypatch):
+    """A prompt prefilled over a deferred verify resets the lane's rings; the request goes on alone with a verify the
+    host builds (nothing chains onto a verify a prefill followed): the backfill runs between its accept trace and the
+    draft chained behind it. A chained verify after that continues the rings."""
+    monkeypatch.setattr(generator_vllm, "PREFILL_BATCH", False)
+    lane = adapter.models[1]
+    with_history(lane)
+    drafts = start(adapter, 500)
+    assert lane.mtp.backfills == [(0, 499, 0)]
+    pending = deferred(adapter, *block(SEQ[500], 500, drafts)).handle
+    prompt = torch.tensor([SEQ[:40]], dtype=torch.int32)
+    adapter.prefill_forward(
+        prompt, torch.zeros(1, dtype=torch.int32), torch.tensor([40]), FULL_TABLE, None, empty_slots=[SPEC_ROW + 2]
+    )
+    assert adapter.mtp_ring[1] is None and lane.mtp_resets == 1
+    readout = read_on_thread(adapter, pending)
+    m = int(readout.accepted_counts[SPEC_ROW])
+    drafts = adapter.propose_draft_tokens(MAX_DRAFTS, *commit(readout), hidden=pending)
+    drafts = drafts.draft_token_ids[SPEC_ROW].tolist()
+    # The prompt's request finished at once: the first request alone again, in a verify the host built.
+    p = 500 + m
+    host = deferred(adapter, *block(SEQ[p], p, drafts)).handle
+    assert lane.mtp.backfills[-1] == (0, p, 1 + 1), "after the two drafts before it, before the one behind it"
+    newer = chained(adapter, host.tip_id, p + 1 + MAX_DRAFTS).handle
+    assert len(lane.mtp.backfills) == 2, "a relayed pass continues the chained draft before it"
+    for h in (host, newer):
+        readout = read_on_thread(adapter, h)
+        assert readout.accepted_token_ids[SPEC_ROW, :1].tolist() == [SEQ[int(readout.p0[SPEC_ROW]) + 1]]
+        adapter.propose_draft_tokens(MAX_DRAFTS, *commit(readout), hidden=h)
+
+
+def test_a_declined_chained_draft_leaves_the_rings_unknown(adapter, defer):
+    """A draft the chain declined (the context limit) wrote nothing: the handle's page says so, and the ring is
+    unknown (the next draft would backfill)."""
+    lane = adapter.models[1]
+    with_history(lane)
+    p = MAX_SEQ_LEN - 1 - MAX_DRAFTS - 2
+    start(adapter, p)
+    drafts = [SEQ[p + 1 + k] for k in range(MAX_DRAFTS)]  # every draft accepted: the bonus reaches the limit
+    handle = deferred(adapter, *block(SEQ[p], p, drafts)).handle
+    assert adapter.mtp_ring[1] == (0, handle)
+    read_on_thread(adapter, handle)
+    assert adapter._ring(1) is None and adapter.mtp_ring[1] is None
