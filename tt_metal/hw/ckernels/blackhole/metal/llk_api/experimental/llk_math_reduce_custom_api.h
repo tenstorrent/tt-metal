@@ -27,9 +27,14 @@
  * This function should NOT be used as a substitute for the native llk_math_reduce_init LLK.
  * Use the standard llk_math_reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>() with multiple
  * llk_math_reduce() calls in a loop for general-purpose block reduction.
+ *
+ * operandA/operandB are unused; kept for signature parity with Quasar.
  */
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en>
-inline void llk_math_reduce_block_max_row_init(const ckernel::TensorShape& tensor_shape) {
+inline void llk_math_reduce_block_max_row_init(
+    [[maybe_unused]] std::uint32_t operandA,
+    [[maybe_unused]] std::uint32_t operandB,
+    const ckernel::TensorShape& tensor_shape) {
     SAN_HOOK(unsupported());
     _llk_math_reduce_block_max_row_init_<block_ct_dim, is_fp32_dest_acc_en>(tensor_shape);
 }

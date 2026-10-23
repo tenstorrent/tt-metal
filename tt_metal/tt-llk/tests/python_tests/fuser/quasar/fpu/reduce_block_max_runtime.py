@@ -11,6 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.fpu.reduce_block_max_row import reduce_block_max_row_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
+from fuser.quasar.fpu.common import configure_alu_cfg
 from helpers.llk_params import ReduceDimension
 
 
@@ -32,7 +33,10 @@ class ReduceBlockMaxRuntimeFpu(Fpu):
     ) -> str:
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         dest_acc = config.dest_acc.cpp_enum_value
-        return f"_llk_math_reduce_block_max_row_init_runtime_<{dest_acc}>({block.block_cols}, {tensor_shape});\n"
+        return configure_alu_cfg(config, cfg_type="AluCfgType::DEFAULT") + (
+            f"_llk_math_reduce_block_max_row_init_runtime_<{dest_acc}>"
+            f"({block.block_cols}, {tensor_shape});\n"
+        )
 
     def calculate(
         self,

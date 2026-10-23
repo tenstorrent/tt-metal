@@ -162,9 +162,10 @@ DataFormat get_single_unpack_dst_format(
         // MX formats unpack-expand to Float16_b in src regs — the op-agnostic default. The 2x-packed
         // MxFp4_2x_B src-register format is NOT decided here (this table can't see which op consumes
         // the operand): matmul and column-reduce select it kernel-side in their LLK op init by
-        // overriding the unpacker OUT_DATA_FORMAT and the ALU src-format, then restore this default
-        // on exit via mm_uninit / reduce_uninit. Keeping Float16_b here means plain MxFp4 consumed by
-        // any other op (datacopy/SFPU/eltwise/pack) still gets the correct bf16 expansion.
+        // overriding the unpacker OUT_DATA_FORMAT and the ALU src-format. Only the unpacker override
+        // is restored on exit (via mm_uninit / reduce_uninit); the ALU needs no restore because every
+        // math init programs its own src formats. Keeping Float16_b here means plain MxFp4 consumed
+        // by any other op (datacopy/SFPU/eltwise/pack) still gets the correct bf16 expansion.
         dst_format = DataFormat::Float16_b;
     }
 

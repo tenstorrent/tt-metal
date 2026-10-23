@@ -127,13 +127,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 // Datacopy and transpose_dest share bank 0's MOP, so each re-inits before running.
                 // EMA's bank-1 body, weights and carry survive both: no EMA re-init.
-                _configure_default_alu_data_format_state_<is_fp32_dest_acc_en>(src_format, src_format);
+                _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(src_format, src_format);
                 _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_rows, 1 /*num_matrices*/);
             }
             _llk_math_eltwise_unary_datacopy_(EMA_SECTION_IN_TILE);
             if constexpr (interleave_fpu)
             {
-                _configure_mov_ops_explicit_alu_data_format_state_<is_fp32_dest_acc_en>(src_format, src_format);
+                _configure_alu_cfg_<AluCfgType::MOV_OPS_EXPLICIT_FORMAT, is_fp32_dest_acc_en>(src_format, src_format);
                 _llk_math_transpose_dest_init_<true /*TRANSPOSE_OF_FACES*/, is_fp32_dest_acc_en>();
                 _llk_math_transpose_dest_(EMA_SECTION_IN_TILE);
             }

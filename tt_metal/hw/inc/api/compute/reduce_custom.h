@@ -56,21 +56,24 @@ namespace ckernel {
  * | Template   | block_ct_dim              | The number of tiles in the width dimension to process as a block                        | uint32_t  | 1 to 127                                       | True     |
  * | Template   | respect_trigger           | Triggers MOP split optimization                                                         | bool      | {true, false}                                  | False    |
  * | Function   | tensor_shape              | Shape of the operand tile (4 faces for 32x32, 2 faces for a 16x32 tiny tile)            | ckernel::TensorShape | N/A                                 | True     |
+ * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A                         | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | icb_scaler                | The identifier of the circular buffer (CB) containing the scaler                        | uint32_t  | 0 to 31                                        | True     |
  * | Function   | ocb                       | The identifier of the output circular buffer (CB)                                       | uint32_t  | 0 to 31                                        | True     |
  */
 // clang-format on
 template <std::uint32_t block_ct_dim, bool respect_trigger = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void reduce_block_max_row_init(const ckernel::TensorShape& tensor_shape, std::uint32_t ocb) {
+ALWI void reduce_block_max_row_init(
+    const ckernel::TensorShape& tensor_shape, std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t ocb) {
     UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, is_fp32_dest_acc_en, respect_trigger>(tensor_shape)));
-    MATH((llk_math_reduce_block_max_row_init<block_ct_dim, is_fp32_dest_acc_en>(tensor_shape)));
+    MATH((llk_math_reduce_block_max_row_init<block_ct_dim, is_fp32_dest_acc_en>(icb, icb_scaler, tensor_shape)));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
 
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
 template <std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4>
-ALWI void reduce_block_max_row_init(std::uint32_t ocb) {
+ALWI void reduce_block_max_row_init(std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t ocb) {
     reduce_block_max_row_init<block_ct_dim, respect_trigger>(
-        ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb);
+        ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), icb, icb_scaler, ocb);
 }
 
 // clang-format off
@@ -319,7 +322,7 @@ ALWI void reduce_block_max_row_init_runtime(
     UNPACK(
         (llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger, tensor_shape)));
 #endif
-    MATH((llk_math_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, tensor_shape)));
+    MATH((llk_math_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, icb, icb_scaler, tensor_shape)));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
 
