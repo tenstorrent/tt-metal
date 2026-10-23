@@ -1,0 +1,67 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+#include <cstdint>
+#include <limits>
+
+#include "ckernel.h"
+#include "ckernel_defs.h"
+#include "ckernel_sfpu_logsigmoid_bf16_abs_exp_correction_core.h"
+#include "ckernel_sfpu_logsigmoid_bf16_finite_reciprocal.h"
+#include "ckernel_sfpu_logsigmoid_bf16_min_max.h"
+#include "ckernel_sfpu_logsigmoid_bf16_mirrored_terminals.h"
+#include "ckernel_sfpu_logsigmoid_bf16_replay_window.h"
+#include "sfpi.h"
+
+namespace ckernel::sfpu::bf16::logsigmoid
+{
+template <typename Config, int Iterations = 32>
+inline void calculate_abs_exp_correction()
+{
+    static_assert(Iterations == 32, "parked correction coefficients require the complete tile");
+    {
+        ttpoly::logsigmoid::abs_exp_residual_pins<Config>();
+        constexpr std::uint32_t slots = 31u + (__builtin_bit_cast(std::uint32_t, Config::kNumerator[0]) == 0x3f800000u ? 0u : 1u);
+        constexpr std::uint32_t head  = ttpoly::logsigmoid::abs_exp_residual_core_head_slots<Config, ADDR_MOD_7, true>;
+        auto row_head                 = [&] { ttpoly::logsigmoid::abs_exp_residual_core_head<Config, ADDR_MOD_7, true>(); };
+        auto row_tail                 = [&] { ttpoly::logsigmoid::abs_exp_residual_core_tail<Config, ADDR_MOD_7, true>(); };
+        record_split<0, slots, head>(row_head, row_tail);
+        // Rows are addressed through ADDR_MOD_7 alone; the DEST counter steps one row after each store.
+        ttpoly::logsigmoid::abs_exp_residual_suffix<Config, ADDR_MOD_7>();
+        TTI_INCRWC(0, 2, 0, 0);
+#pragma GCC unroll 32
+        for (int row = 1; row < Iterations; ++row)
+        {
+            replay_split<0, slots, head>(row_head, row_tail);
+            ttpoly::logsigmoid::abs_exp_residual_suffix<Config, ADDR_MOD_7>();
+            TTI_INCRWC(0, 2, 0, 0);
+        }
+        return;
+    }
+    ttpoly::logsigmoid::abs_exp_park_coefficients<Config>();
+    auto exp = [](sfpi::vFloat x)
+    {
+        constexpr bool split_scale_bias = !Config::kSquareDecay;
+        x                               = sfpi::setsgn(x, 0);
+        return ttpoly::logsigmoid::correction_exp_leaf<Config::kExpDegree, false, false, false, false, true, split_scale_bias>(
+            x, Config::kMultiplier, 127.0f, Config::kExpCoefficients);
+    };
+    auto reciprocal = [](sfpi::vFloat x)
+    {
+        auto iteration = [](sfpi::vFloat v) { return sfpu_reciprocal_iter<1>(v); };
+        return ttpoly::logsigmoid::correction_finite_reciprocal<decltype(iteration), true>(x, iteration);
+    };
+    for (int row = 0; row < Iterations; ++row)
+    {
+        sfpi::vFloat raw = sfpi::dst_reg[row];
+        sfpi::vFloat result;
+        result = ttpoly::logsigmoid::abs_residual_correction<3, 0, Config>(raw, exp, reciprocal);
+        // A NaN of either sign stores +Inf; the affine part would keep the NaN's sign.
+        ttpoly::logsigmoid::nan_class_terminal<1>(sfpi::dst_reg[row].template mode<sfpi::DataLayout::U16>(), result);
+        result             = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg[row] = result;
+    }
+}
+} // namespace ckernel::sfpu::bf16::logsigmoid
