@@ -19,17 +19,18 @@ namespace {
 
 constexpr uint32_t max_chunk = 256;
 
-bool chunk_fits_l1(uint32_t chunk, uint64_t l1_bytes) {
+bool chunk_fits_l1(uint32_t chunk, uint64_t l1_bytes, bool compute_tap_grads) {
     constexpr auto bf16 = tt::DataFormat::Float16_b;
     return ops::qkv_causal_conv1d_silu_bw::device::qkv_conv_bw_l1_bytes(
-               chunk / tt::constants::TILE_WIDTH, bf16, sizeof(uint16_t)) <= l1_bytes;
+               chunk / tt::constants::TILE_WIDTH, bf16, sizeof(uint16_t), compute_tap_grads) <= l1_bytes;
 }
 
 // Tile-aligned divisors of channels that fit l1_bytes, from the widest down to min_chunk.
-std::vector<uint32_t> candidate_chunks(uint32_t channels, uint64_t l1_bytes, uint32_t min_chunk) {
+std::vector<uint32_t> candidate_chunks(
+    uint32_t channels, uint64_t l1_bytes, uint32_t min_chunk, bool compute_tap_grads = true) {
     std::vector<uint32_t> chunks;
     for (uint32_t chunk = std::min(channels, max_chunk); chunk >= min_chunk; chunk -= tt::constants::TILE_WIDTH) {
-        if (channels % chunk == 0 && chunk_fits_l1(chunk, l1_bytes)) {
+        if (channels % chunk == 0 && chunk_fits_l1(chunk, l1_bytes, compute_tap_grads)) {
             chunks.push_back(chunk);
         }
     }
@@ -50,7 +51,8 @@ QkvCausalConv1dSiluBackwardWorkSplit qkv_causal_conv1d_silu_bw_work_split(
     uint32_t cores,
     uint64_t l1_bytes,
     uint32_t channel_chunk_size,
-    uint32_t row_splits) {
+    uint32_t row_splits,
+    bool compute_tap_grads) {
     constexpr uint32_t tw = tt::constants::TILE_WIDTH;
     const uint32_t tile_rows = row_count / tt::constants::TILE_HEIGHT;
     // Cost of one (chunk, splits) choice, in tile units: passes over the core grid x (steps per item x cost of a
@@ -80,7 +82,7 @@ QkvCausalConv1dSiluBackwardWorkSplit qkv_causal_conv1d_silu_bw_work_split(
     } else {
         // Chunk 32 makes the reader issue 64-byte row reads and runs 1.5x slower than chunk 64 at the same
         // split, more than the model predicts, so it is only a fallback.
-        chunks = candidate_chunks(channels, l1_bytes, 2 * tw);
+        chunks = candidate_chunks(channels, l1_bytes, 2 * tw, compute_tap_grads);
         if (chunks.empty()) {
             chunks.push_back(tw);
         }
@@ -134,7 +136,13 @@ qkv_causal_conv1d_silu_bw(
     // One core gets channel_chunk_size channels x (row_count / row_splits) rows. Both default to auto.
     const auto grid = input.device()->compute_with_storage_grid_size();
     const auto work_split = qkv_causal_conv1d_silu_bw_work_split(
-        channels, row_count, grid.x * grid.y, available_l1_bytes(*input.device()), channel_chunk_size, row_splits);
+        channels,
+        row_count,
+        grid.x * grid.y,
+        available_l1_bytes(*input.device()),
+        channel_chunk_size,
+        row_splits,
+        compute_tap_grads);
     const ops::qkv_causal_conv1d_silu_bw::device::QkvCausalConv1dSiluBackwardParams params{
         .row_count = row_count,
         .q_width = q_width,

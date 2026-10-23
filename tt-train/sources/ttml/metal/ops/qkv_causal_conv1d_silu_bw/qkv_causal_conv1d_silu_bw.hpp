@@ -33,7 +33,8 @@ QkvCausalConv1dSiluBackwardWorkSplit qkv_causal_conv1d_silu_bw_work_split(
     uint32_t cores,
     uint64_t l1_bytes,
     uint32_t channel_chunk_size = 0,
-    uint32_t row_splits = 0);
+    uint32_t row_splits = 0,
+    bool compute_tap_grads = true);
 
 // input [1,T,Q+K+V] and history [1,3,Q+K+V] are ROW_MAJOR bf16; grad_q/k/v [1,T,.] and the taps are TILE bf16.
 // Returns (grad_input [1,T,Q+K+V] TILE, grad_tap0..3 shaped like the taps). History gets no gradient.

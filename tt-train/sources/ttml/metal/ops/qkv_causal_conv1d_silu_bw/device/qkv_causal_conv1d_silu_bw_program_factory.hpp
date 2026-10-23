@@ -67,9 +67,12 @@ inline uint64_t qkv_conv_bw_window_bytes(uint64_t channel_tiles_per_block, uint6
 
 // L1 per core: every dataflow buffer plus the input and grad_preact row windows.
 inline uint64_t qkv_conv_bw_l1_bytes(
-    uint32_t channel_tiles_per_block, tt::DataFormat input_format, uint64_t bytes_per_element) {
+    uint32_t channel_tiles_per_block,
+    tt::DataFormat input_format,
+    uint64_t bytes_per_element,
+    bool compute_tap_grads = true) {
     uint64_t bytes = 0;
-    for (const auto& buffer : qkv_conv_bw_dataflow_buffers(channel_tiles_per_block, input_format)) {
+    for (const auto& buffer : qkv_conv_bw_dataflow_buffers(channel_tiles_per_block, input_format, compute_tap_grads)) {
         bytes += static_cast<uint64_t>(buffer.tiles) * tt::tile_size(buffer.format);
     }
     return bytes + 2 * qkv_conv_bw_window_bytes(channel_tiles_per_block, bytes_per_element);
