@@ -1488,3 +1488,9 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
   SenderPipe send<_, ACK_AHEAD> with an atomic decrement of the acks, ReceiverPipe ack / wait_data, Counter
   data-ready, 4 XIN slots, arena 1369 KB): 479.5-490 us, x waits unchanged (patch in moe_block_runs/x_ack_ahead.patch).
   The ack -> send -> land chain is not what holds x back.
+- x rounds by hand, owners sending ahead (persistent count-up words: per-slot landed stamp set behind the data, per
+  (owner, slot) acks, 4 XIN slots; receivers ack as slots free, owners send their rounds in order once acked): 490-494
+  us traced, x waits down a little, W waits up - not kept (moe_block_runs/x_stream_send_ahead.patch).
+- The rounds' fixed cost: SE_PROBE=NOMATH,NOX,NOW,NOXWAIT (no matmul, no x / W data, no shard waits) still takes gate /
+  up 165 us (128 rounds, ~1.3 us a round of protocol and loop overhead); NOMATH alone 255, NOMATH,NOXWAIT 254-263,
+  NOMATH,NOX 237-255, NOMATH,NOW 230-266. The per-round machinery is the floor, not the data or the multiplies.
