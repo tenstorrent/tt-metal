@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import os
+import socket
 from pathlib import Path
 
 import torch
@@ -98,3 +100,28 @@ def stored_reference_path(root: str, checkpoint: str, layer_idx: int, **args) ->
 def load_reference(path: Path) -> dict:
     """The stored reference, memory-mapped: a case reads only the rows it slices."""
     return torch.load(path, mmap=True, weights_only=True)
+
+
+def prepare_store(path: Path) -> bool:
+    """Whether a new file can go at ``path``. A missing directory is created open to all: CI and people share it."""
+    try:
+        if not path.parent.is_dir():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.parent.chmod(0o777)
+        return os.access(path.parent, os.W_OK | os.X_OK)
+    except OSError:
+        return False
+
+
+def save_reference(ref: dict, path: Path) -> None:
+    """Write under a temporary name, then hard-link: a reader never sees a partial file, and a stored copy, which
+    other hosts may have mapped, is never replaced."""
+    tmp = path.with_name(f".{path.name}.{socket.gethostname()}.{os.getpid()}.tmp")
+    try:
+        torch.save(ref, tmp)
+        tmp.chmod(0o644)  # readable by all, whatever the writer's umask
+        os.link(tmp, path)
+    except FileExistsError:
+        pass  # another run stored it first
+    finally:
+        tmp.unlink(missing_ok=True)

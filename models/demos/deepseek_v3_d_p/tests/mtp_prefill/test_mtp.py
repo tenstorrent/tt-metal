@@ -34,6 +34,8 @@ from models.demos.deepseek_v3_d_p.tests.mtp_prefill.multiturn_reference import (
     compute_multiturn_reference,
     load_reference,
     multiturn_inputs,
+    prepare_store,
+    save_reference,
     stored_reference_path,
 )
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
@@ -593,8 +595,9 @@ _MULTITURN_REFERENCES: dict = {}
 def _multiturn_reference(
     config, mtp_sd, layer_sd, use_pretrained: bool, layer_idx: int, index_share: bool, levels: int
 ):
-    """The stored reference when this checkpoint has one, else computed once per process. Either has at least
-    ``levels`` levels, and levels 1..K of a longer run are the K-level run."""
+    """The stored reference when this checkpoint has one, else computed once per process: every level, and stored,
+    when ``$TT_GLM53_MTP_REF_CACHE`` is writable. Either has at least ``levels`` levels, and levels 1..K of a longer
+    run are the K-level run."""
     key = (use_pretrained, layer_idx, index_share)
     ref = _MULTITURN_REFERENCES.get(key)
     if ref is not None and ref["x"].shape[0] >= levels:
@@ -610,12 +613,22 @@ def _multiturn_reference(
         logger.info(f"[mtp multiturn] CPU reference stored at {path}")
         ref = load_reference(path)
     else:
-        if path is not None:
-            logger.warning(f"[mtp multiturn] no stored CPU reference at {path}, computing it")
+        store = path is not None and prepare_store(path)
+        if store:
+            logger.warning(f"[mtp multiturn] no stored CPU reference at {path}, computing every level to store it")
+            levels = MAX_LEVELS
+        elif path is not None:
+            logger.warning(f"[mtp multiturn] no stored CPU reference at {path}, and {path.parent} is not writable")
         logger.info(
             f"[mtp multiturn] CPU reference, {levels} level(s) over [0, {REFERENCE_LEN}) in {CHUNK}-token chunks"
         )
         ref = compute_multiturn_reference(config, mtp_sd, layer_sd, num_levels=levels, **args)
+        if store:
+            try:
+                save_reference(ref, path)
+                logger.info(f"[mtp multiturn] CPU reference stored at {path}")
+            except (OSError, RuntimeError) as e:  # torch.save raises RuntimeError when it cannot write
+                logger.warning(f"[mtp multiturn] could not store the CPU reference at {path}: {e}")
     _MULTITURN_REFERENCES.clear()
     _MULTITURN_REFERENCES[key] = ref
     return ref
