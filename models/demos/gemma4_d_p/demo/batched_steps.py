@@ -14,6 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.common.prefill.chunk_layout import rotated_chunk_positions
 from models.demos.gemma4_d_p.config import MeshConfig
 from models.demos.gemma4_d_p.demo.text_demo_prefill import _cp_or_replicate_mapper, _hf_model_id
 from models.demos.gemma4_d_p.tt.common import create_tt_model
@@ -85,11 +86,19 @@ class StepRunner:
         if len(layout) > 1:
             self.model.lane_vector_metadata(len(layout))
 
+    def _positions(self, start, width):
+        """A lane's positions in the order its rows land on the ranks: rotated for a lane that starts mid-chunk, as
+        the producer rotates its tokens (chunk_layout)."""
+        if start % width == 0:
+            return torch.arange(start, start + width)
+        cp = self.mesh_config.cp_degree
+        return torch.tensor([p for rows in rotated_chunk_positions(start, cp, width // cp) for p in rows])
+
     def stage(self, lanes):
         """Host refresh of everything a replay reads."""
         tokens, positions = self.inputs[sum(self.layout(lanes))]
-        ttnn.copy_host_to_device_tensor(self._host([t for _, _, t in lanes]), tokens)
-        starts = [torch.arange(start, start + len(t)) for _, start, t in lanes]
+        starts = [self._positions(start, len(t)) for _, start, t in lanes]
+        ttnn.copy_host_to_device_tensor(self._host([t[p - start] for (_, start, t), p in zip(lanes, starts)]), tokens)
         ttnn.copy_host_to_device_tensor(self._host(starts), positions)
         for metadata, (slot, start, _) in zip(self.model.lane_prefill_metadata(len(lanes)), lanes):
             metadata.update(slot_idx=slot, kv_actual_global=start)
