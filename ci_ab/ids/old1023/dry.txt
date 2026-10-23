@@ -1,0 +1,5 @@
+perf_math_matmul.py::test_perf_math_matmul[MathFidelity.LoFi-matmul_config0-0-1]
+perf_matmul.py::test_perf_matmul[combos:(InputOutputFormat[A:Float16_b,B:Float16_b,out:Float16_b], <DestAccumulation.No: False>, <DestSync.Half: 'SyncHalf'>, ([32, 32], [32, 32]))-math_fidelity:LoFi]
+perf_math_matmul_cov.py::test_perf_math_matmul_cov[MathFidelity.LoFi-matmul_config0-0-1]
+perf_matmul_dyn0.py::test_perf_matmul_dyn0[fmt0-DestSync.Half-dims0-MathFidelity.LoFi]
+perf_math_matmul.py::test_perf_math_matmul[MathFidelity.HiFi3-matmul_config19328-0-1]
