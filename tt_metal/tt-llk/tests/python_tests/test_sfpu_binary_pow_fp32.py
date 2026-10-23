@@ -1,29 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-FP32 accuracy and range coverage for the binary power kernel.
-
-Drives _sfpu_binary_power_<true> through calculate_rpow, with the same kernel source as
-test_sfpu_binary_pow_zero_base.py: the base is a compile-time scalar (SFPU_UNARY_SCALAR) and
-the exponent tile comes from DEST.
-
-    accuracy           bases 0.9, 1.1, 2.5 and 10 with |y * log2 x| up to 125. The kernel
-                       computes 2**(y * log2|x|), so an error in log2|x| reaches the result
-                       multiplied by |y|; for base 0.9 these exponents reach |y| ~ 820.
-                       Max 2 ULP against float64 pow rounded once to fp32.
-    huge exponents     |y| = 1e35 and FLT_MAX: pow(1, y) = 1, and every other base gives 0 or
-                       +inf (#55129).
-    underflow          results below the smallest normal give +0, not NaN (#57446),
-                       including pow(0.16287974, 48.508072), where y * log2 x sits just
-                       below -127.
-    infinite exponents y = +-inf and +-0 for a base other than 1: 0, +inf or 1 as IEEE 754 pow.
-                       inf - inf in the split of y used to leave a NaN whose sign picked the
-                       result (Wormhole 2**inf gave 0, both architectures 2**-inf gave inf).
-
-ULP is helpers.ulp's distance in representable fp32 values, so a wrong sign fails. Only finite
-normal results are counted in the accuracy test: subnormal results flush to zero on store.
-"""
+"""FP32 pow through calculate_rpow (compile-time base, exponents from DEST): accuracy,
+huge (#55129) and infinite exponents, and underflow to +0 (#57446)."""
 
 import math
 import struct
@@ -46,7 +25,7 @@ from helpers.test_variant_parameters import (
     VECTOR_MODE,
     generate_input_dim,
 )
-from helpers.ulp import within_ulp
+from helpers.utils import passed_test
 
 pytestmark = [skip_for_quasar]
 
@@ -130,10 +109,7 @@ def test_sfpu_binary_pow_fp32_ulp(formats, base):
 
     mask = torch.isfinite(golden) & (golden.abs() >= SMALLEST_NORMAL)
     assert int(mask.sum()) > ELEMENTS_PER_TILE // 2
-    ok, message = within_ulp(
-        golden, device, max_ulp=2, fmt=DataFormat.Float32, mask=mask
-    )
-    assert ok, f"pow({base}, y): {message}"
+    assert passed_test(golden, device, DataFormat.Float32, max_ulp=2, mask=mask)
 
 
 @parametrize(formats=FORMATS, base=[1.0, 0.5, 2.0])
