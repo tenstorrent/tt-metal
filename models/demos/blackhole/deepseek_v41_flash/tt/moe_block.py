@@ -216,7 +216,7 @@ class DSV41MoEBlock:
             bd["compute_tilize_drain_core"] = ttnn.experimental.get_moe_tilize_drain_core(
                 mesh_device,
                 cfg.compute.output_height_shard_dim,
-                auto_output_width_shard_dim(cfg.hidden_size, matmul_ring_size=effective_matmul_ring_size(mesh_device)),
+                auto_output_width_shard_dim(cfg.hidden_size),
                 cfg.hidden_size,
                 mux_core_range_set=cfg.compute.mux_core_range_set,
             )

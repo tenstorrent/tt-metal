@@ -85,10 +85,22 @@ struct WeightRuns {
 //     ch) mod NC.
 // The accessor is the decode tensor's own (HEIGHT_SHARDED over the DRAM banks, tile pages), so a page id is all that is
 // needed.
-template <uint32_t E, uint32_t G, uint32_t R, uint32_t GD, uint32_t RD, uint32_t NC, uint32_t CH>
+template <uint32_t E, uint32_t G, uint32_t R, uint32_t GD, uint32_t RD, uint32_t NC, uint32_t CH, uint32_t G_ODD = 0>
 struct RingWeights {
+    // G = ceil(per-core gate/up columns / 2). PER_CORE_N_GU is not a template argument: it follows from G and HALF.
+    static constexpr bool HALF = (G_ODD != 0);
+    static constexpr uint32_t FULL_G = HALF ? G - 1 : G;
+    // compact layout: odd column count, or fewer than 4 columns (moe_ring_common.h w0_w1_compact_for_shape)
+    static constexpr bool COMPACT = HALF || (G * 2 < 4);
+    static constexpr uint32_t HALF_ROWS = ((R / 7) * 7 == R ? ((R / 7 + 1) / 2) * 7 : 0);  // stored rows of the half column
+    static constexpr uint32_t PAGES_PER_CE = COMPACT ? (FULL_G * R + (HALF ? HALF_ROWS : 0)) * 4 : G * R * 4;
     // gate (is_up = 0) or up (is_up = 1) tiles of K row `row`, N columns [0, ncols) of column c, into l1_base + nl *
-    // page_bytes
+    // page_bytes.
+    // Layout of the w0_w1 tensor (moe_compute_utils.py, compact layout of the upstream op): one DRAM bank per ring core c,
+    // per expert e a contiguous slice of PAGES_PER_CE pages: FULL_G block-columns (4 tiles wide, R K rows each, as before),
+    // and, for an odd per-core column count, one HALF block-column (2 tiles wide: gate/up of one N column) stored
+    // 14 K rows per block, two consecutive K rows per stored row: page = ((row / 2) * 4) + 2 * (row % 2) + is_up.
+    // An even count of at least 4 keeps the old uniform layout (G groups of R rows).
     template <class Acc>
     static FORCE_INLINE void read_gu(
         const Noc& noc,
@@ -100,9 +112,10 @@ struct RingWeights {
         uint32_t ncols,
         uint32_t l1_base,
         uint32_t page_bytes) {
-        const uint32_t base = (c * E + e) * G;
-        for (uint32_t g = 0; g < G; ++g) {
-            const uint32_t page0 = ((base + g) * R + row) * 4 + is_up;
+        const uint32_t base = (c * E + e) * PAGES_PER_CE;
+#pragma GCC unroll 2
+        for (uint32_t g = 0; g < FULL_G; ++g) {
+            const uint32_t page0 = base + (g * R + row) * 4 + is_up;
 #pragma GCC unroll 2
             for (uint32_t i = 0; i < 2; ++i) {
                 const uint32_t nl = 2 * g + i;
@@ -114,6 +127,17 @@ struct RingWeights {
                         {.page_id = page0 + 2 * i},
                         {});
                 }
+            }
+        }
+        if constexpr (HALF) {
+            const uint32_t nl = 2 * FULL_G;
+            if (nl < ncols) {
+                noc.async_read(
+                    acc,
+                    CoreLocalMem<uint32_t>(l1_base + nl * page_bytes),
+                    page_bytes,
+                    {.page_id = base + FULL_G * R * 4 + (row >> 1) * 4 + 2 * (row & 1) + is_up},
+                    {});
             }
         }
     }

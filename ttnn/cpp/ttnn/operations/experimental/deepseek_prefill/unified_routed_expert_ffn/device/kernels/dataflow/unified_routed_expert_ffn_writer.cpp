@@ -151,7 +151,8 @@ void kernel_main() {
         per_core_N_d / 4,
         ((K_down_tiles + 6) / 7) * 7,
         (N_gate_tiles_full + per_core_N_gu - 1) / per_core_N_gu,
-        in0_block_w_d>;
+        in0_block_w_d,
+        per_core_N_gu % 2>;
 #endif
 
     // This core's weight tile-column window, clipped to the tensor's real N. Both weight reads

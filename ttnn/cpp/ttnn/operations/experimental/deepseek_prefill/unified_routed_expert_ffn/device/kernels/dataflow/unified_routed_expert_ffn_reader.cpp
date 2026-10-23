@@ -185,7 +185,8 @@ void kernel_main() {
         per_core_N_d / 4,
         ((K_down_tiles + 6) / 7) * 7,
         GRID_X_NOC,
-        in0_block_w_d>;
+        in0_block_w_d,
+        per_core_N_gu % 2>;
 #endif
 
     constexpr uint32_t x_accessor_offset = 36;

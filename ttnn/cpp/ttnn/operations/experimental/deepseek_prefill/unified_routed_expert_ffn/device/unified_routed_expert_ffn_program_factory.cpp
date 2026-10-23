@@ -178,21 +178,30 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // K-row count and whose per-core group count (2 N tiles per group) is the stored w0_w1 group count.
     uint32_t ring_n_tiles = 0;
     if (ring_weights) {
-        const uint32_t rd = down_shape[-2] / TILE, groups = gate_shape[-3];
+        const uint32_t rd = down_shape[-2] / TILE;
         for (uint32_t n = 8; n <= 8 * rd; n += 8) {
-            if (((n + 6) / 7) * 7 == rd && (n / 8 + 1) / 2 == groups) {
+            if (((n + 6) / 7) * 7 == rd) {
                 ring_n_tiles = n;
             }
         }
         TT_FATAL(
-            ring_n_tiles != 0,
-            "ring weights: cannot infer the intermediate size from w0_w1 {} / w2 {}",
-            gate_shape,
-            down_shape);
+            ring_n_tiles != 0, "ring weights: cannot infer the intermediate size from w2 {}", down_shape);
+        // w0_w1 per ring core / bank: the compact layout of the upstream op (odd column count or < 4 columns) stores
+        // blocks of 7 K tile rows; an even count of at least 4 keeps the uniform layout (groups of 2 columns, K padded
+        // to 7).
+        const uint32_t cols = ring_n_tiles / 8;
+        const uint32_t k_rows7 = (K_gate_tiles + 6) / 7;
+        const bool compact = (cols % 2 == 1) || cols < 4;
+        const uint32_t expected_blocks =
+            compact ? (cols / 2) * k_rows7 + (cols % 2) * ((K_gate_tiles + 13) / 14) : ((cols + 1) / 2) * k_rows7;
         TT_FATAL(
-            down_shape[-3] * 4 * 8 == K_gate_tiles && ((K_gate_tiles + 6) / 7) * 7 == gate_shape[-2] / TILE,
-            "ring weights: w2 hidden groups / w0_w1 K rows do not match x ({} tiles)",
-            K_gate_tiles);
+            down_shape[-3] * 4 * 8 == K_gate_tiles &&
+                gate_shape[-3] == (compact ? expected_blocks : (cols + 1) / 2) &&
+                gate_shape[-2] / TILE == (compact ? 7u : k_rows7 * 7),
+            "ring weights: w2 hidden groups / w0_w1 layout {} do not match x ({} tiles) and N ({} tiles)",
+            gate_shape,
+            K_gate_tiles,
+            ring_n_tiles);
     }
     const uint32_t N_gate_tiles_full = ring_weights ? ring_n_tiles : gate_shape[-1] / TILE;  // = hidden / TILE
     const uint32_t K_down_tiles = ring_weights ? ring_n_tiles : down_shape[-2] / TILE;       // = hidden / TILE
