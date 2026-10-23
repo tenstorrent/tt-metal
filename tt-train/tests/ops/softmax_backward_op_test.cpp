@@ -15,6 +15,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
 #include "tt-metalium/bfloat16.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -98,16 +99,25 @@ ttnn::Tensor to_device_tensor(
     }
 }
 
-void run_softmax_backward_case(
+// The op's inputs on device, with the reference computed from the values they hold there.
+struct SoftmaxBackwardDeviceInputs {
+    ttnn::Tensor softmax_output;
+    ttnn::Tensor grad;
+    xt::xarray<float> expected;
+};
+
+// Uploads the case's inputs, sharded when `input_memory_config` is set. A non-zero `data_salt` gives the same case
+// different values.
+SoftmaxBackwardDeviceInputs make_softmax_backward_inputs(
     const SoftmaxBackwardCase& test_case,
     const DTypeParam& dtype_param,
     ttnn::distributed::MeshDevice* device,
-    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids = std::nullopt,
-    std::optional<tt::tt_metal::MemoryConfig> input_memory_config = std::nullopt) {
+    const std::optional<tt::tt_metal::MemoryConfig>& input_memory_config,
+    uint32_t data_salt = 0U) {
     using namespace ttml;
 
-    const uint32_t logits_seed = make_case_seed(test_case, 0xA5A5A5A5U);
-    const uint32_t grad_seed = make_case_seed(test_case, 0x5A5A5A5AU);
+    const uint32_t logits_seed = make_case_seed(test_case, 0xA5A5A5A5U + data_salt);
+    const uint32_t grad_seed = make_case_seed(test_case, 0x5A5A5A5AU + data_salt);
     xt::xarray<float> logits_tensor = ttml::test_utils::make_uniform_xarray<float>(
         std::array<std::size_t, 4>{test_case.n, test_case.c, test_case.h, test_case.w}, -10.0F, 10.0F, logits_seed);
     const float grad_min = test_case.grad_min;
@@ -127,18 +137,109 @@ void run_softmax_backward_case(
         grad_tt = ttnn::interleaved_to_sharded(grad_tt, *input_memory_config);
     }
 
-    ttnn::Tensor result_tt = sub_core_grids.has_value()
-                                 ? ttml::metal::softmax_backward(y_tt, grad_tt, test_case.dim, *sub_core_grids)
-                                 : ttml::metal::softmax_backward(y_tt, grad_tt, test_case.dim);
-    // The output inherits the input's memory config, sharded included.
-    EXPECT_EQ(result_tt.memory_config().memory_layout(), y_tt.memory_config().memory_layout());
-    auto result_xtensor = core::to_xtensor(result_tt);
-
     auto expected = reference_softmax_backward(core::to_xtensor(y_tt), core::to_xtensor(grad_tt), dim_u32);
-    const auto max_abs_diff = xt::amax(xt::abs(result_xtensor - expected))();
-    EXPECT_TRUE(xt::allclose(result_xtensor, expected, test_case.rtol, test_case.atol))
+    return {std::move(y_tt), std::move(grad_tt), std::move(expected)};
+}
+
+ttnn::Tensor launch_softmax_backward(
+    const SoftmaxBackwardCase& test_case,
+    const SoftmaxBackwardDeviceInputs& inputs,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    return ttml::metal::softmax_backward(inputs.softmax_output, inputs.grad, test_case.dim, sub_core_grids);
+}
+
+// Checks `result` against the reference and returns the values it holds.
+xt::xarray<float> expect_matches_reference(
+    const SoftmaxBackwardCase& test_case, const SoftmaxBackwardDeviceInputs& inputs, const ttnn::Tensor& result) {
+    // The output inherits the input's memory config, sharded included.
+    EXPECT_EQ(result.memory_config().memory_layout(), inputs.softmax_output.memory_config().memory_layout());
+    auto result_xtensor = ttml::core::to_xtensor(result);
+
+    const auto max_abs_diff = xt::amax(xt::abs(result_xtensor - inputs.expected))();
+    EXPECT_TRUE(xt::allclose(result_xtensor, inputs.expected, test_case.rtol, test_case.atol))
         << "case=" << test_case.name << ", max_abs_diff=" << max_abs_diff << ", atol=" << test_case.atol
         << ", rtol=" << test_case.rtol;
+    return result_xtensor;
+}
+
+void run_softmax_backward_case(
+    const SoftmaxBackwardCase& test_case,
+    const DTypeParam& dtype_param,
+    ttnn::distributed::MeshDevice* device,
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids = std::nullopt,
+    std::optional<tt::tt_metal::MemoryConfig> input_memory_config = std::nullopt) {
+    const auto inputs = make_softmax_backward_inputs(test_case, dtype_param, device, input_memory_config);
+    expect_matches_reference(test_case, inputs, launch_softmax_backward(test_case, inputs, sub_core_grids));
+}
+
+// Where a launch runs. Unset fields mean DRAM-interleaved inputs and the full grid.
+struct LaunchConfig {
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
+    std::optional<tt::tt_metal::MemoryConfig> input_memory_config;
+};
+
+// Launches the case twice under `config` from an empty program cache. The first launch builds the program. The second
+// runs on fresh tensors while every tensor of the first stays alive, so all of its buffers are new: it must reuse the
+// program, compute its own result and leave the first result untouched. With `other_config`, a third launch then runs
+// the first launch's values under that config, which the program cache must key apart: it builds a second program.
+void run_softmax_backward_cache_hit_case(
+    const SoftmaxBackwardCase& test_case,
+    const DTypeParam& dtype_param,
+    ttnn::distributed::MeshDevice* device,
+    const LaunchConfig& config = {},
+    const std::optional<LaunchConfig>& other_config = std::nullopt) {
+    device->clear_program_cache();
+
+    const auto first = make_softmax_backward_inputs(test_case, dtype_param, device, config.input_memory_config);
+    const auto entries_before = device->num_program_cache_entries();
+    const auto first_result = launch_softmax_backward(test_case, first, config.sub_core_grids);
+    const auto entries_after_miss = device->num_program_cache_entries();
+    ASSERT_GT(entries_after_miss, entries_before) << "the first launch did not build a program";
+    const auto first_result_values = expect_matches_reference(test_case, first, first_result);
+
+    const auto second =
+        make_softmax_backward_inputs(test_case, dtype_param, device, config.input_memory_config, /*data_salt=*/1U);
+    const auto second_result = launch_softmax_backward(test_case, second, config.sub_core_grids);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_after_miss) << "the second launch did not hit";
+    EXPECT_NE(second.softmax_output.buffer()->address(), first.softmax_output.buffer()->address());
+    EXPECT_NE(second.grad.buffer()->address(), first.grad.buffer()->address());
+    EXPECT_NE(second_result.buffer()->address(), first_result.buffer()->address());
+    ASSERT_FALSE(xt::allclose(second.expected, first.expected, test_case.rtol, test_case.atol))
+        << "the launches must be told apart";
+    const auto second_result_values = expect_matches_reference(test_case, second, second_result);
+
+    if (other_config.has_value()) {
+        const auto third =
+            make_softmax_backward_inputs(test_case, dtype_param, device, other_config->input_memory_config);
+        const auto entries_before_third = device->num_program_cache_entries();
+        const auto third_result = launch_softmax_backward(test_case, third, other_config->sub_core_grids);
+        EXPECT_EQ(device->num_program_cache_entries(), entries_before_third + 1U)
+            << "the third launch reused the program of another config";
+        expect_matches_reference(test_case, third, third_result);
+        ttml::test_utils::expect_unchanged(second_result, second_result_values, "the second result");
+    }
+    ttml::test_utils::expect_unchanged(first_result, first_result_values, "the first result");
+}
+
+// 64 rows over two cores, one 32x64 shard each.
+tt::tt_metal::MemoryConfig two_core_height_sharded_l1() {
+    return tt::tt_metal::MemoryConfig{
+        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        tt::tt_metal::BufferType::L1,
+        tt::tt_metal::ShardSpec{
+            tt::tt_metal::CoreRangeSet{
+                tt::tt_metal::CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 1}}},
+            {32U, 64U},
+            tt::tt_metal::ShardOrientation::ROW_MAJOR}};
+}
+
+// Non-rectangular (L-shaped) sub-grid of 4 cores.
+tt::tt_metal::CoreRangeSet l_shaped_sub_core_grids() {
+    std::vector<tt::tt_metal::CoreRange> ranges = {
+        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(2, 0)),  // row y=0
+        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(2, 1), tt::tt_metal::CoreCoord(2, 1)),  // (2,1) only
+    };
+    return tt::tt_metal::CoreRangeSet(std::move(ranges));
 }
 
 }  // namespace
@@ -195,16 +296,7 @@ TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_HeightShardedInputs) {
         .grad_min = -10.0F,
         .grad_max = 10.0F,
     };
-    // 64 rows over two cores, one 32x64 shard each.
-    const tt::tt_metal::MemoryConfig height_sharded_l1{
-        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        tt::tt_metal::BufferType::L1,
-        tt::tt_metal::ShardSpec{
-            tt::tt_metal::CoreRangeSet{
-                tt::tt_metal::CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 1}}},
-            {32U, 64U},
-            tt::tt_metal::ShardOrientation::ROW_MAJOR}};
-    run_softmax_backward_case(test_case, GetParam(), s_device, std::nullopt, height_sharded_l1);
+    run_softmax_backward_case(test_case, GetParam(), s_device, std::nullopt, two_core_height_sharded_l1());
 }
 
 TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_SubCoreGrid_Rectangular) {
@@ -232,12 +324,6 @@ TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_SubCoreGrid_Rectangular) {
 }
 
 TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_SubCoreGrid_NonRectangular) {
-    // Non-rectangular (L-shaped) sub-grid
-    std::vector<tt::tt_metal::CoreRange> ranges = {
-        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(2, 0)),  // row y=0
-        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(2, 1), tt::tt_metal::CoreCoord(2, 1)),  // (0,1) only
-    };
-    const tt::tt_metal::CoreRangeSet sub_core_grids(std::move(ranges));
     constexpr SoftmaxBackwardCase test_case{
         .name = "sub_grid_L_shape",
         .n = 13,
@@ -250,7 +336,79 @@ TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_SubCoreGrid_NonRectangular) {
         .grad_min = -10.0F,
         .grad_max = 10.0F,
     };
-    run_softmax_backward_case(test_case, GetParam(), s_device, sub_core_grids);
+    run_softmax_backward_case(test_case, GetParam(), s_device, l_shaped_sub_core_grids());
+}
+
+// The op has one compute kernel for all cores and deals tile-rows out in contiguous chunks of ceil(rows / num_cores).
+// 2 * num_cores + 1 rows, or + 2 when that is a multiple of 3, give 3-row chunks, a shorter last chunk and idle cores
+// at the end of the grid, on any grid.
+TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_CacheHit_FreshTensors_UnevenRowChunks) {
+    uint32_t num_rows = 2U * ttml::test_utils::num_worker_cores() + 1U;
+    if (num_rows % 3U == 0U) {
+        ++num_rows;
+    }
+    // grad in [-1, 1] keeps the bf16 rounding of sum(y * grad) inside the tolerance on every one of these rows.
+    const SoftmaxBackwardCase test_case{
+        .name = "cache_hit_uneven_row_chunks",
+        .n = 1,
+        .c = 1,
+        .h = num_rows * 32U,
+        .w = 64,
+        .dim = 3,
+        .atol = 2e-2F,
+        .rtol = 2e-2F,
+        .grad_min = -1.0F,
+        .grad_max = 1.0F,
+    };
+    run_softmax_backward_cache_hit_case(test_case, GetParam(), s_device);
+}
+
+// The second launch's shards land at new L1 addresses, which the hit must patch into the common runtime args. The
+// same values as DRAM-interleaved inputs then need a program of their own: the memory config sets the kernels'
+// TensorAccessor args.
+TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_CacheHit_FreshTensors_HeightSharded) {
+    // grad in [-1, 1] for the same bf16 margin as the uneven-row-chunks case.
+    constexpr SoftmaxBackwardCase test_case{
+        .name = "cache_hit_height_sharded_l1",
+        .n = 1,
+        .c = 1,
+        .h = 64,
+        .w = 64,
+        .dim = 3,
+        .atol = 2e-2F,
+        .rtol = 2e-2F,
+        .grad_min = -1.0F,
+        .grad_max = 1.0F,
+    };
+    run_softmax_backward_cache_hit_case(
+        test_case,
+        GetParam(),
+        s_device,
+        LaunchConfig{.input_memory_config = two_core_height_sharded_l1()},
+        /*other_config=*/LaunchConfig{});
+}
+
+// 13 rows over the 4 cores of the L-shaped sub-grid: 4, 4, 4 and 1. The same values on the full grid then need a
+// program of their own.
+TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_CacheHit_FreshTensors_SubCoreGrid) {
+    constexpr SoftmaxBackwardCase test_case{
+        .name = "cache_hit_sub_grid_L_shape",
+        .n = 13,
+        .c = 1,
+        .h = 32,
+        .w = 512,
+        .dim = 3,
+        .atol = 5e-3F,
+        .rtol = 5e-3F,
+        .grad_min = -10.0F,
+        .grad_max = 10.0F,
+    };
+    run_softmax_backward_cache_hit_case(
+        test_case,
+        GetParam(),
+        s_device,
+        LaunchConfig{.sub_core_grids = l_shaped_sub_core_grids()},
+        /*other_config=*/LaunchConfig{});
 }
 
 TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_LongRows) {

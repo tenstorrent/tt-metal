@@ -6,12 +6,18 @@
 
 #include <gtest/gtest.h>
 
+#include <optional>
+#include <set>
+#include <string>
+#include <vector>
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/ops/swiglu_elemwise_bw/swiglu_elemwise_bw.hpp"
+#include "test_utils/program_cache.hpp"
+#include "test_utils/random_data.hpp"
 #include "test_utils/relative_l2.hpp"
 
 class SwiGLUForwardTest : public ::testing::Test {
@@ -490,4 +496,211 @@ TEST_F(SwiGLUBackwardTest, NIGHTLY_ElemwiseBw_NonAlignedH_4x1x96x128) {
 }
 TEST_F(SwiGLUBackwardTest, NIGHTLY_ElemwiseBw_VeryLarge_1x1x1024x1024) {
     CompareSwiGLUBackwardAgainstReference({1, 1, 1024, 1024}, 1024);
+}
+
+// ============================================================================
+// Section 5: metal::swiglu_elemwise_bw program-cache hits
+// ============================================================================
+// A launch whose specs match a cached program reuses it, and only the buffer addresses of the new
+// tensors are patched in. Each test clears the cache so that its first launch is the miss, and keeps
+// every tensor of the earlier launches alive so that a later launch cannot land on a freed address:
+// the hit must read and write the new buffers and leave the earlier ones untouched. Production runs the
+// op in place (dL_dlinear1 overwrites linear1, swiglu_op.cpp and moe_ffn_swiglu_op.cpp), so that pattern
+// is covered on its own, after launches that preallocate differently, and on a batched shape that leaves
+// most of the grid idle.
+// ============================================================================
+
+namespace {
+
+using ttml::test_utils::device_with_empty_program_cache;
+using ttml::test_utils::expect_unchanged;
+using ttml::test_utils::two_core_group_rows_shape;
+using ttml::test_utils::zeros_on_device;
+
+// The outputs a launch hands to the op instead of letting it allocate them.
+enum class ElemwiseBwOutputs { Allocated, InPlace, PreallocatedDLinear1, PreallocatedDGate, PreallocatedBoth };
+
+std::string to_string(ElemwiseBwOutputs outputs) {
+    switch (outputs) {
+        case ElemwiseBwOutputs::Allocated: return "allocated outputs";
+        case ElemwiseBwOutputs::InPlace: return "dL_dlinear1 in place over linear1";
+        case ElemwiseBwOutputs::PreallocatedDLinear1: return "preallocated dL_dlinear1";
+        case ElemwiseBwOutputs::PreallocatedDGate: return "preallocated dL_dgate";
+        case ElemwiseBwOutputs::PreallocatedBoth: return "both outputs preallocated";
+    }
+    return "unknown";
+}
+
+struct ElemwiseBwLaunch {
+    ElemwiseBwOutputs outputs = ElemwiseBwOutputs::Allocated;
+    ttnn::Tensor linear1;
+    ttnn::Tensor gate;
+    ttnn::Tensor dL_dprod;
+    xt::xarray<float> linear1_stored;  // what the kernels read: the values rounded to bf16
+    xt::xarray<float> gate_stored;
+    xt::xarray<float> dL_dprod_stored;
+    ttml::metal::SwigluElemwiseBwResult result;
+    xt::xarray<float> dL_dlinear1_result;  // read back right after the launch
+    xt::xarray<float> dL_dgate_result;
+    size_t entries_added = 0;  // program-cache entries the launch added
+};
+
+// Launches swiglu_elemwise_bw on fresh inputs of `shape`, handing it the `outputs` pattern, and checks
+// both outputs against the reference.
+ElemwiseBwLaunch launch_elemwise_bw(
+    const std::vector<uint32_t>& shape, uint32_t seed, ElemwiseBwOutputs outputs, const std::string& label) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+
+    ElemwiseBwLaunch launch;
+    launch.outputs = outputs;
+    launch.linear1 = core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, -3.0F, 3.0F, seed), device);
+    launch.gate = core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, -2.0F, 2.0F, seed + 1U), device);
+    launch.dL_dprod = core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed + 2U), device);
+    launch.linear1_stored = core::to_xtensor(launch.linear1);
+    launch.gate_stored = core::to_xtensor(launch.gate);
+    launch.dL_dprod_stored = core::to_xtensor(launch.dL_dprod);
+
+    std::optional<ttnn::Tensor> preallocated_dL_dlinear1;
+    std::optional<ttnn::Tensor> preallocated_dL_dgate;
+    if (outputs == ElemwiseBwOutputs::InPlace) {
+        preallocated_dL_dlinear1 = launch.linear1;
+    }
+    if (outputs == ElemwiseBwOutputs::PreallocatedDLinear1 || outputs == ElemwiseBwOutputs::PreallocatedBoth) {
+        preallocated_dL_dlinear1 = zeros_on_device(shape);
+    }
+    if (outputs == ElemwiseBwOutputs::PreallocatedDGate || outputs == ElemwiseBwOutputs::PreallocatedBoth) {
+        preallocated_dL_dgate = zeros_on_device(shape);
+    }
+
+    const auto entries_before = device->num_program_cache_entries();
+    launch.result = metal::swiglu_elemwise_bw(
+        launch.linear1, launch.gate, launch.dL_dprod, preallocated_dL_dlinear1, preallocated_dL_dgate);
+    launch.entries_added = device->num_program_cache_entries() - entries_before;
+
+    if (preallocated_dL_dlinear1.has_value()) {
+        EXPECT_EQ(launch.result.dL_dlinear1.buffer()->address(), preallocated_dL_dlinear1->buffer()->address())
+            << label << ": dL_dlinear1 must be the preallocated tensor";
+    }
+    if (preallocated_dL_dgate.has_value()) {
+        EXPECT_EQ(launch.result.dL_dgate.buffer()->address(), preallocated_dL_dgate->buffer()->address())
+            << label << ": dL_dgate must be the preallocated tensor";
+    }
+    launch.dL_dlinear1_result = core::to_xtensor(preallocated_dL_dlinear1.value_or(launch.result.dL_dlinear1));
+    launch.dL_dgate_result = core::to_xtensor(preallocated_dL_dgate.value_or(launch.result.dL_dgate));
+
+    const auto [expected_dL_dlinear1, expected_dL_dgate] =
+        swiglu_elemwise_bw_reference(launch.linear1_stored, launch.gate_stored, launch.dL_dprod_stored);
+    const float tol = 1e-2f;
+    EXPECT_LT(test_utils::relative_l2(launch.dL_dlinear1_result, expected_dL_dlinear1), tol)
+        << label << ": dL_dlinear1 mismatch";
+    EXPECT_LT(test_utils::relative_l2(launch.dL_dgate_result, expected_dL_dgate), tol)
+        << label << ": dL_dgate mismatch";
+    return launch;
+}
+
+// Every tensor of `launch` still holds what it held right after the launch.
+void expect_launch_unchanged(const ElemwiseBwLaunch& launch, const std::string& label) {
+    if (launch.outputs != ElemwiseBwOutputs::InPlace) {  // in place, linear1 is dL_dlinear1, checked below
+        expect_unchanged(launch.linear1, launch.linear1_stored, label + " linear1");
+    }
+    expect_unchanged(launch.gate, launch.gate_stored, label + " gate");
+    expect_unchanged(launch.dL_dprod, launch.dL_dprod_stored, label + " dL_dprod");
+    expect_unchanged(launch.result.dL_dlinear1, launch.dL_dlinear1_result, label + " dL_dlinear1");
+    expect_unchanged(launch.result.dL_dgate, launch.dL_dgate_result, label + " dL_dgate");
+}
+
+void expect_distinct_buffers(const ElemwiseBwLaunch& a, const ElemwiseBwLaunch& b) {
+    EXPECT_NE(b.linear1.buffer()->address(), a.linear1.buffer()->address());
+    EXPECT_NE(b.gate.buffer()->address(), a.gate.buffer()->address());
+    EXPECT_NE(b.dL_dprod.buffer()->address(), a.dL_dprod.buffer()->address());
+    EXPECT_NE(b.result.dL_dlinear1.buffer()->address(), a.result.dL_dlinear1.buffer()->address());
+    EXPECT_NE(b.result.dL_dgate.buffer()->address(), a.result.dL_dgate.buffer()->address());
+}
+
+// Launches the patterns in order on fresh inputs of the same specs, every launch alive until the end. A
+// pattern that already ran in this sequence must hit its cached program; a new pattern may or may not,
+// depending on whether the cache keys on which outputs are preallocated, and must write its own outputs
+// either way.
+void run_elemwise_bw_pattern_sequence(const std::vector<ElemwiseBwOutputs>& patterns, uint32_t seed) {
+    device_with_empty_program_cache();
+    const auto shape = two_core_group_rows_shape(32U);
+
+    std::vector<ElemwiseBwLaunch> launches;
+    std::set<ElemwiseBwOutputs> launched;
+    for (size_t i = 0; i < patterns.size(); ++i) {
+        const auto label = "launch " + std::to_string(i) + " (" + to_string(patterns[i]) + ")";
+        launches.push_back(launch_elemwise_bw(shape, seed + 10U * static_cast<uint32_t>(i), patterns[i], label));
+        if (i == 0U) {
+            ASSERT_GT(launches.back().entries_added, 0U) << "the first launch must compile a program";
+        } else {
+            expect_distinct_buffers(launches[i - 1U], launches[i]);
+            if (launched.contains(patterns[i])) {
+                EXPECT_EQ(launches.back().entries_added, 0U) << label << " must reuse the program of the same pattern";
+            }
+        }
+        launched.insert(patterns[i]);
+    }
+    for (size_t i = 0; i < launches.size(); ++i) {
+        expect_launch_unchanged(launches[i], "launch " + std::to_string(i));
+    }
+}
+
+// Launch A compiles the program of `outputs`; launch B, on new inputs of the same specs while launch A's tensors stay
+// alive, must reuse it.
+void run_hit_after_miss(
+    const std::vector<uint32_t>& shape, ElemwiseBwOutputs outputs, uint32_t seed_a, uint32_t seed_b) {
+    device_with_empty_program_cache();
+    const bool in_place = outputs == ElemwiseBwOutputs::InPlace;
+    const auto a = launch_elemwise_bw(shape, seed_a, outputs, in_place ? "launch A (in place)" : "launch A");
+    ASSERT_GT(a.entries_added, 0U) << "the first launch must compile a program";
+    const auto b = launch_elemwise_bw(
+        shape, seed_b, outputs, in_place ? "launch B (in place, cache hit)" : "launch B (cache hit)");
+    EXPECT_EQ(b.entries_added, 0U) << "launch B must reuse launch A's program";
+    expect_distinct_buffers(a, b);
+    expect_launch_unchanged(a, "launch A");
+}
+
+}  // namespace
+
+TEST_F(SwiGLUBackwardTest, ElemwiseBw_CacheHitReadsFreshBuffers_TwoCoreGroups) {
+    run_hit_after_miss(two_core_group_rows_shape(64U), ElemwiseBwOutputs::Allocated, 101U, 201U);
+}
+
+// The production call: dL_dlinear1 is written over linear1, so linear1's buffer appears twice among the
+// op's tensors.
+TEST_F(SwiGLUBackwardTest, ElemwiseBw_InPlaceCacheHit_TwoCoreGroups) {
+    run_hit_after_miss(two_core_group_rows_shape(64U), ElemwiseBwOutputs::InPlace, 301U, 401U);
+}
+
+// The production call on fewer tile-rows than any grid has cores: two batch entries of 71 rows pad to
+// 2 * 3 = 6 tile-rows, one per core. The hit must patch exactly those six cores; on the full-grid shapes
+// above, a walk over logical tile-rows (4 here), one batch entry (3) or tiles (12) patches the same cores.
+TEST_F(SwiGLUBackwardTest, ElemwiseBw_InPlaceCacheHit_BatchedPartialGrid) {
+    run_hit_after_miss({2U, 1U, 71U, 64U}, ElemwiseBwOutputs::InPlace, 701U, 801U);
+}
+
+// Allocated outputs first, then the production in-place call and every preallocation pattern. The last
+// two launches repeat the dL_dgate patterns, so that they hit the programs those patterns compiled when
+// the cache keys on which outputs are preallocated.
+TEST_F(SwiGLUBackwardTest, ElemwiseBw_PreallocatedOutputsAfterAllocatedOutputs_TwoCoreGroups) {
+    using enum ElemwiseBwOutputs;
+    run_elemwise_bw_pattern_sequence(
+        {Allocated,
+         InPlace,
+         InPlace,
+         PreallocatedDLinear1,
+         PreallocatedDGate,
+         PreallocatedBoth,
+         Allocated,
+         PreallocatedDGate,
+         PreallocatedBoth},
+        501U);
+}
+
+// A preallocated output first, then patterns that hand the op fewer or different tensors.
+TEST_F(SwiGLUBackwardTest, ElemwiseBw_AllocatedOutputsAfterPreallocatedOutputs_TwoCoreGroups) {
+    using enum ElemwiseBwOutputs;
+    run_elemwise_bw_pattern_sequence(
+        {PreallocatedDLinear1, Allocated, PreallocatedDGate, InPlace, PreallocatedDLinear1}, 601U);
 }
