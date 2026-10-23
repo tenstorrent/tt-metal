@@ -1763,15 +1763,13 @@ void kernel_main() {
                     }
                 }
                 // Push before the forward: the forward only reads the page, its NoC write is flushed inside
-                // forward_credited(), and the page is not reused before its grant two pieces on.
+                // forward_credited(), and the page is not reused before its grant two pieces on. Both pushes go
+                // before either forward: a forward blocks on the downstream's credit, and compute must not sit on
+                // a V that is already in L1 while the reader waits on a slow neighbour.
                 cb_k.push_back(k_chunk_tiles);
                 if (chain_member) {
                     --k_ahead;
                     grant_ahead();
-                }
-                if (k_chain.should_forward(k_head, 0)) {
-                    SOL_ZONE("RD_CHAIN_TX");  // the wait for the downstream credit, then the write
-                    k_chain.forward_credited(noc, k_addr, k_chunk_tiles, k_tile_bytes);
                 }
                 const Slice v_slice(src_batch, nv, row0, row0 + Sk_chunk_t, v_col_offset_t, v_col_offset_t + vDHt);
                 CircularBuffer cb_v(cb_v_in);
@@ -1796,6 +1794,10 @@ void kernel_main() {
                 if (chain_member) {
                     --v_ahead;
                     grant_ahead();
+                }
+                if (k_chain.should_forward(k_head, 0)) {
+                    SOL_ZONE("RD_CHAIN_TX");  // the waits for the downstream credits, then the two writes
+                    k_chain.forward_credited(noc, k_addr, k_chunk_tiles, k_tile_bytes);
                 }
                 if (v_chain.should_forward(nv, 0)) {
                     v_chain.forward_credited(noc, v_addr);
