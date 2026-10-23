@@ -17,6 +17,9 @@
 // .tt.BUF_RW notes. Expected outcome per binding (see test_op_to_op_hazards.cpp's
 // BufRwCoversEveryTransferPathAndEndpoint for the actual assertions):
 //   view, iter, shard_iter, shard   -- noc.async_read via PageView/iterator pages/ShardView      -> READ only
+//   bank_r, bank_state              -- BankView: noc.async_read; set_async_read_state + async_read_with_state
+//                                       -> READ only
+//   bank_w                          -- BankView: noc.async_write                                  -> WRITE only
 //   state, zero                     -- noc.async_write_with_state, noc.async_write_zeros         -> WRITE only
 //   legacy_r, legacy_w              -- pre-Noc-class free functions noc_async_read/write_page    -> READ/WRITE only
 //   wrap                            -- AbstractTensorAccessorWrapper (type-erased)                -> READ and WRITE
@@ -47,6 +50,18 @@ void kernel_main() {
     TensorAccessor shard(tensor::shard);
     noc.async_read(ShardView(shard), pad, size, {.shard_id = 0}, {});
     noc.async_read_barrier();
+
+    // BankView, plain and stateful -> READ; a write through it -> WRITE. Each tensor is one page in bank 0, the
+    // same size as the transfer, so these stay inside the tensor.
+    TensorAccessor bank_r(tensor::bank_r);
+    noc.async_read(BankView(bank_r), pad, size, {.bank_id = 0}, {});
+    TensorAccessor bank_state(tensor::bank_state);
+    noc.set_async_read_state(BankView(bank_state), size, {.bank_id = 0});
+    noc.async_read_with_state(BankView(bank_state), pad, size, {.bank_id = 0}, {});
+    noc.async_read_barrier();
+    TensorAccessor bank_w(tensor::bank_w);
+    noc.async_write(pad, BankView(bank_w), size, {}, {.bank_id = 0});
+    noc.async_write_barrier();
 
     // Typed Noc API, transfer paths other than plain async_write: stateful write, DRAM zero-fill -> WRITE.
     TensorAccessor state(tensor::state);

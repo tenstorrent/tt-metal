@@ -10,6 +10,7 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "reshard_writer.hpp"
 #include "api/tensor/noc_traits.h"
+#include "internal/tensor/transfer_noc_addr.h"
 #ifdef DO_COL_MASK
 #include "col_mask_dataflow.h"
 #endif
@@ -128,7 +129,8 @@ void kernel_main() {
     // The output tensor's shard sits at the same address on every core it is sharded across, so its
     // base address doubles as the destination address on each storage core. No data moves through a
     // buffer here: the writes go straight from this core's output buffer to the storage cores.
-    const uint32_t output_base_addr = TensorAccessor(tensor::dst).get_bank_base_address();
+    // Raw: same L1 address on the storage cores (no handle form yet).
+    const uint32_t output_base_addr = tensor_accessor::detail::TransferAccess::bank_base(TensorAccessor(tensor::dst));
     write_resharded_data(
         noc,
         dfb_out_obj,
