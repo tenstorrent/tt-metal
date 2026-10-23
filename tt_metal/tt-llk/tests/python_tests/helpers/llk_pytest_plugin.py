@@ -56,6 +56,8 @@ _SIMULATOR_PATH = os.environ.get("TT_METAL_SIMULATOR") or os.environ.get(
     "TT_UMD_SIMULATOR_PATH"
 )
 _IS_XDIST_WORKER = "PYTEST_XDIST_WORKER" in os.environ
+# Skips ttexalens after setup_build fills the paths, and the session-end perf combine.
+_HARDWARE_FREE = os.environ.get("LLK_HARDWARE_FREE") == "1"
 _SHOULD_RUN_SIMULATOR = _IS_XDIST_WORKER or (
     "--run-simulator" in sys.argv and "--compile-producer" not in sys.argv
 )
@@ -565,7 +567,7 @@ def pytest_configure(config):
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
-    if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+    if not _HARDWARE_FREE and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         if TestConfig.TEST_TARGET.run_simulator:
             if _SIMULATOR_PATH is None:
                 pytest.exit(
@@ -1190,6 +1192,8 @@ def pytest_testnodedown(node, error):
 def _finish_ulp_emit(session):
     """Under ``--ulp-emit``, write the whole session's measurements into the table once,
     after every cell of an op has been seen. A refusal fails the session."""
+    import yaml
+
     from . import ulp_sweep
 
     if not ulp_sweep.EMIT:
@@ -1215,8 +1219,11 @@ def _finish_ulp_emit(session):
             get_chip_architecture(),
             session.testsfailed,
             exitstatus=session.exitstatus,
-        )
-    except (RuntimeError, ValueError) as exc:
+        ).summary()
+    except (RuntimeError, ValueError, yaml.YAMLError) as exc:
+        # A ValueError or YAMLError can only come from the first read of the table,
+        # when the one on disk does not load and nothing was written; a rewrite that
+        # would not load is refused before the write, as an `EmitRefused`.
         message = f"--ulp-emit: {exc}"
         # Escalate only a clean session: a refusal *because* the run was interrupted, hit
         # an internal error or called pytest.exit(returncode=N) keeps that status, which a
@@ -1250,7 +1257,7 @@ def pytest_sessionfinish(session):
 
     _finish_ulp_emit(session)
 
-    if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+    if not _HARDWARE_FREE and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         combine_perf_reports()
 
         # This was set by pytest CLI argument in pytest_configure call

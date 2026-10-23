@@ -14,6 +14,42 @@ from this catalog.
 """
 
 PERF_TEST_SCHEMAS = {
+    "perf_bcast": {
+        "version": 1,
+        "columns": [
+            "broadcast_type",
+            "dest_acc",
+            "dest_sync",
+            "face_c_dim",
+            "face_r_dim",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
+            "input_num_blocks",
+            "input_num_tiles_in_block",
+            "loop_factor",
+            "marker",
+            "num_blocks",
+            "num_faces",
+            "num_faces_A",
+            "num_faces_B",
+            "num_faces_c_dim_A",
+            "num_faces_c_dim_B",
+            "num_faces_r_dim_A",
+            "num_faces_r_dim_B",
+            "num_tiles_in_block",
+            "output_num_blocks",
+            "output_num_tiles_in_block",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_bcast": "perf_bcast"},
+    },
     "perf_eltwise_bcast_col_custom": {
         "version": 3,
         "columns": [
@@ -1327,7 +1363,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "test_name_aliases": {"perf_pack_untilize_quasar": "perf_pack_untilize_quasar"},
     },
     "perf_reduce_quasar": {
-        "version": 5,
+        "version": 6,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -1344,6 +1380,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.sfpu_dst",
             "full_ct_dim",
             "full_rt_dim",
+            "is_reduce_to_one",
             "loop_factor",
             "marker",
             "math_fidelity",

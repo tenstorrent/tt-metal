@@ -66,6 +66,7 @@ def multi_scale_deformable_attn_fused(
     sampling_offsets,
     attention_weights,
     spatial_shapes,
+    num_valid_queries=None,
     *,
     value_memory: ValueMemory = "auto",
 ):
@@ -82,10 +83,12 @@ def multi_scale_deformable_attn_fused(
         value: (bs, num_keys, num_heads, head_dim) or packed (bs, num_keys, num_heads*head_dim)
         reference_points: (bs, num_queries, num_points_in_pillar, 2), normalized [0, 1]
         sampling_offsets: (bs, num_queries, num_heads, num_levels*num_points*2) ROW_MAJOR,
-            raw, in feature-map pixel units -- the op accounts for the per-level
-            ``/ [W_l, H_l]`` normalization itself.
+            raw, in feature-map pixel units. The SFPU applies the per-level scale.
         attention_weights: (bs, num_queries, num_heads, num_levels*num_points) ROW_MAJOR
         spatial_shapes: torch (num_levels, 2) of (H, W)
+        num_valid_queries: optional per-batch count of rows to compute. Rows past it are left
+            unwritten and may hold NaN or Inf, so the caller must drop them with a select
+            (``ttnn.where``), not by multiplying with a mask.
         value_memory: ``"auto"`` selects L1 only when value, output, and fused-op
             circular buffers fit safely, retries in DRAM if an L1 allocation still
             runs out of memory, and logs one warning per input shape when it falls
@@ -126,6 +129,8 @@ def multi_scale_deformable_attn_fused(
         if value_memory == "auto" and not l1_is_safe:
             _warn_dram_fallback(value, attention_weights, spatial_shapes, "value and output do not safely fit L1")
 
+    valid_queries = list(num_valid_queries) if num_valid_queries else None
+
     def run_with_memory_config(memory_config):
         staged_value = value
         owns_staged_value = False
@@ -145,6 +150,7 @@ def multi_scale_deformable_attn_fused(
                 _spatial_shapes_list(spatial_shapes),
                 reference_mode="pillar",
                 memory_config=memory_config,
+                num_valid_queries=valid_queries,
             )
         finally:
             if owns_staged_value:
@@ -237,6 +243,7 @@ class TTMSDeformableAttention:
         query_pos=None,
         key_padding_mask=None,
         reference_points=None,
+        num_valid_queries=None,
         **kwargs,
     ):
         """
@@ -249,6 +256,8 @@ class TTMSDeformableAttention:
             query_pos: [bs, num_queries, embed_dims] Query positional encoding
             key_padding_mask: [bs, num_keys] Padding mask for keys
             reference_points: [bs, num_queries, num_points_in_pillar, 2] Reference points
+            num_valid_queries: Optional per-batch count of rows to compute. Rows past it are left
+                unwritten and may hold NaN or Inf; drop them with ``ttnn.where``.
 
         Returns:
             output: [bs, num_queries, embed_dims]
@@ -337,6 +346,7 @@ class TTMSDeformableAttention:
             sampling_offsets=sampling_offsets,
             attention_weights=attention_weights,
             spatial_shapes=self.spatial_shapes,
+            num_valid_queries=num_valid_queries,
         )
 
         if ENABLE_LOGGING:

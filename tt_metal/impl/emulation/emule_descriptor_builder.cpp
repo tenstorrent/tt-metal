@@ -269,9 +269,14 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
     auto& metal_context = MetalContext::instance(impl.get_context_id());
     const auto& rtoptions = MetalEnvAccessor(metal_context.get_env()).impl().get_rtoptions();
     std::string quasar_arch_include;
-    if (metal_context.get_cluster().arch() == tt::ARCH::QUASAR && !rtoptions.get_quasar_variant().empty()) {
-        const std::string dir =
-            rtoptions.get_root_dir() + "tt_metal/tt-llk/tt_llk_quasar/arch/" + rtoptions.get_quasar_variant();
+    if (metal_context.get_cluster().arch() == tt::ARCH::QUASAR) {
+        auto variant = metal_context.get_cluster().get_quasar_ip_variant();
+        const std::string lower_variant = [&]() {
+            std::string result = std::string(enchantum::to_string(variant));
+            std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+            return result;
+        }();
+        const std::string dir = rtoptions.get_root_dir() + "tt_metal/tt-llk/tt_llk_quasar/arch/" + lower_variant;
         if (std::filesystem::is_directory(dir)) {
             quasar_arch_include = dir;
         }
