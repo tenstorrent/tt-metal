@@ -835,7 +835,10 @@ def test_asinh_bf16_unflushed_zero_and_subnormal_inputs(device):
 def test_asinh_bf16_bfloat8_b(device):
     """bfloat8_b in and out. The SFPU reads Bfp8_b data in DEST as BF16, so this runs the BF16 kernel, as the
     BF16 cases do. The result must correlate with torch's on the input as stored to PCC 0.999, as upstream's
-    bfloat8_b unary cases require.
+    bfloat8_b unary cases require. Over every finite BF16 exponent, each output must also be within one bfloat8_b
+    step of the BF16 call's for the same stored input, packed to bfloat8_b (two in a block that holds an infinity
+    or NaN), and of its class where that is infinity or NaN: the op packs DEST to Bfp8_b, and the typecast
+    rounds and sets a block's exponent its own way.
     """
     board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
     if board not in ("blackhole", "wormhole_b0"):
@@ -850,6 +853,39 @@ def test_asinh_bf16_bfloat8_b(device):
     golden = ttnn.get_golden_function(ttnn.asinh)(stored).to(torch.float64)
     pcc = torch.corrcoef(torch.stack([actual, golden]))[0, 1].item()
     assert pcc >= 0.999, f"PCC {pcc:.6f} against torch"
+    # Every finite BF16 exponent and +-0, one exponent to each 16-value face row, so Bfp8_b keeps each value
+    # to 7 bits under its own exponent.
+    words = torch.arange(1 << 16, dtype=torch.int32)
+    exponent = (words >> 7) & 0xFF
+    zeros = torch.tensor([0x0000] * 256 + [0x8000] * 256, dtype=torch.int32)
+    words = torch.cat([words[(exponent > 0) & (exponent < 0xFF)], zeros])
+    x = words.to(torch.int16).view(torch.bfloat16).reshape(1, 1, 256, 256)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    stored = ttnn.to_torch(tt_x).to(torch.bfloat16)
+    tt_stored = ttnn.from_torch(stored, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.asinh(tt_x)).to(torch.float32).flatten()
+    expected = ttnn.to_torch(ttnn.typecast(ttnn.asinh(tt_stored), ttnn.bfloat8_b)).to(torch.float32).flatten()
+    # One step of a Bfp8_b block: its 16 values share the largest one's exponent and keep 7 bits under it.
+    finite = torch.isfinite(actual) & torch.isfinite(expected)
+    magnitude = torch.where(finite, torch.maximum(actual.abs(), expected.abs()), torch.zeros_like(actual))
+    block = magnitude.reshape(-1, 16).amax(dim=1, keepdim=True).expand(-1, 16).reshape(-1)
+    step = torch.exp2(torch.floor(torch.log2(block.clamp_min(torch.finfo(torch.float32).tiny))) - 6)
+    # A block that also holds an infinity or NaN: the op's pack and the typecast set its exponent apart, and
+    # its finite values land up to two steps apart (polygamma's overflow binade, BH job 142644).
+    special = (~finite).reshape(-1, 16).any(dim=1, keepdim=True).expand(-1, 16).reshape(-1)
+    step = torch.where(special, 2 * step, step)
+    # Infinity and NaN keep their class exactly; a finite value, zero included, may round one step apart (a value
+    # under one step of its block packs to zero on one side and not the other: gelu at -8.625, BH job 142674).
+    same = (
+        (actual == expected)
+        | (torch.isnan(actual) & torch.isnan(expected))
+        | (finite & ((actual - expected).abs() <= step))
+    )
+    assert same.all(), (
+        f"{int((~same).sum())} bfloat8_b outputs are more than one bfloat8_b step from the BF16 call's on the same "
+        "stored input; first at "
+        f"{stored.flatten()[~same][0].item()!r}: {actual[~same][0].item()!r}, BF16 call {expected[~same][0].item()!r}"
+    )
 
 
 def test_asinh_bf16_exhaustive_inputs(device):
@@ -861,7 +897,9 @@ def test_asinh_bf16_exhaustive_inputs(device):
     {word: [(first input, last input), ...]} over the input bits. SKIP lists the inputs this case does
     not judge, which the LLK sweep checks against its own golden: where torch's float64 formula misses
     the exact result (a cancellation), where the kernel departs from torch by its spec, and NaN inputs
-    whose stock word varies with the payload.
+    whose stock word varies with the payload. MODEL holds every other normal input whose torch result is finite to the
+    kernel's own word: torch's, moved by MODEL's whole BF16 steps where MODEL lists the input, as
+    {steps: "first-last first ..."} (hex input words) for each board.
     """
     board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
     if board not in ("blackhole", "wormhole_b0"):
@@ -869,6 +907,56 @@ def test_asinh_bf16_exhaustive_inputs(device):
     STOCK = {}
     STEPS = 1
     SKIP = [(0x0002, 0x007F), (0x8002, 0x807F)]
+    MODEL = {
+        "blackhole": {
+            -1: (
+                "3E7B-3E7C 3E85-3E86 3E9E-3EA0 3EB1-3EB3 3EC2-3EC4 3ED0-3ED2 3EDC-3EDE 3EE8-3EEA 3EF3-3EF4 3EFD-3EFE "
+                "3F03-3F04 3F06 3F0E 3F16 3F1D 3F23 3F35 3FFB 4002 4009 "
+                "400F 4014 4019 401D 4021 4025 4028 402F 4032 4035 "
+                "4038 403B 4046 40A4 40AC 40AF 4104 4106 4108 4120 "
+                "4127 412F 413D 4140 4153 4173 418E 419C 41A1 41D2 "
+                "BDEA-BE00 BE13-BE19 BF6B BF76 BF82 BF87 BF96-BF97 BF9F BFA7 BFAC "
+                "BFB1 BFB8 BFBF BFC1 BFCA BFCC C05C C065 C067 C06A "
+                "C085 C087 C090 C0DD C0E4 C0E8 C0EB C0EF C0F3 C0F7 "
+                "C0FB C113 C115 C117 C11A C11C"
+            ),
+            1: (
+                "3DEA-3E00 3E13-3E19 3F6B 3F76 3F82 3F87 3F96-3F97 3F9F 3FA7 3FAC "
+                "3FB1 3FB8 3FBF 3FC1 3FCA 3FCC 405C 4065 4067 406A "
+                "4085 4087 4090 40DD 40E4 40E8 40EB 40EF 40F3 40F7 "
+                "40FB 4113 4115 4117 411A 411C BE7B-BE7C BE85-BE86 BE9E-BEA0 BEB1-BEB3 "
+                "BEC2-BEC4 BED0-BED2 BEDC-BEDE BEE8-BEEA BEF3-BEF4 BEFD-BEFE BF03-BF04 BF06 BF0E BF16 "
+                "BF1D BF23 BF35 BFFB C002 C009 C00F C014 C019 C01D "
+                "C021 C025 C028 C02F C032 C035 C038 C03B C046 C0A4 "
+                "C0AC C0AF C104 C106 C108 C120 C127 C12F C13D C140 "
+                "C153 C173 C18E C19C C1A1 C1D2"
+            ),
+        },
+        "wormhole_b0": {
+            -1: (
+                "3E7B-3E7C 3E85-3E86 3E9E-3EA0 3EB1-3EB3 3EC2-3EC4 3ED0-3ED2 3EDC-3EDE 3EE8-3EEA 3EF3-3EF4 3EFD-3EFE "
+                "3F03-3F04 3F06 3F0E 3F16 3F1D 3F23 3F35 3FFB 4002 4009 "
+                "400F 4014 4019 401D 4021 4025 4028 402F 4032 4035 "
+                "4038 403B 4046 40A4 40AC 40AF 4104 4106 4108 4120 "
+                "4127 412F 413D 4140 4153 4173 418E 419C 41A1 41D2 "
+                "BDEA-BE00 BE13-BE19 BF6B BF76 BF82 BF87 BF96-BF97 BF9F BFA7 BFAC "
+                "BFB1 BFB8 BFBF BFC1 BFCA BFCC C05C C065 C067 C06A "
+                "C085 C087 C090 C0DD C0E4 C0E8 C0EB C0EF C0F3 C0F7 "
+                "C0FB C113 C115 C117 C11A C11C"
+            ),
+            1: (
+                "3DEA-3E00 3E13-3E19 3F6B 3F76 3F82 3F87 3F96-3F97 3F9F 3FA7 3FAC "
+                "3FB1 3FB8 3FBF 3FC1 3FCA 3FCC 405C 4065 4067 406A "
+                "4085 4087 4090 40DD 40E4 40E8 40EB 40EF 40F3 40F7 "
+                "40FB 4113 4115 4117 411A 411C BE7B-BE7C BE85-BE86 BE9E-BEA0 BEB1-BEB3 "
+                "BEC2-BEC4 BED0-BED2 BEDC-BEDE BEE8-BEEA BEF3-BEF4 BEFD-BEFE BF03-BF04 BF06 BF0E BF16 "
+                "BF1D BF23 BF35 BFFB C002 C009 C00F C014 C019 C01D "
+                "C021 C025 C028 C02F C032 C035 C038 C03B C046 C0A4 "
+                "C0AC C0AF C104 C106 C108 C120 C127 C12F C13D C140 "
+                "C153 C173 C18E C19C C1A1 C1D2"
+            ),
+        },
+    }
     bits = torch.arange(1 << 16, dtype=torch.int32)
     x = bits.to(torch.int16).view(torch.bfloat16).reshape(1, 1, 256, 256)
     tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -893,12 +981,26 @@ def test_asinh_bf16_exhaustive_inputs(device):
     ok |= torch.isnan(reference) & (torch.isnan(actual) | torch.isinf(actual))
     # The SFPU flushes a result below the smallest normal, or within 2^-12 above it, to 0.
     ok |= (actual == 0) & (reference.abs() < tiny * (1 + 2.0**-12))
+    listed = torch.zeros_like(ok)
     for word, ranges in STOCK.get(board, {}).items():
         value = stored(torch.tensor([word], dtype=torch.int32).to(torch.int16).view(torch.bfloat16))
         for first, last in ranges:
-            ok |= (bits >= first) & (bits <= last) & ((actual == value) | (torch.isnan(actual) & torch.isnan(value)))
+            lanes = (bits >= first) & (bits <= last)
+            listed |= lanes
+            ok |= lanes & ((actual == value) | (torch.isnan(actual) & torch.isnan(value)))
     for first, last in SKIP:
+        listed |= (bits >= first) & (bits <= last)
         ok |= (bits >= first) & (bits <= last)
+    shift = torch.zeros_like(bits)
+    for offset, spans in MODEL.get(board, {}).items():
+        for span in spans.split():
+            first, _, last = span.partition("-")
+            shift[(bits >= int(first, 16)) & (bits <= int(last or first, 16))] = offset
+    moved = ordered(expected) + shift
+    word = torch.where(moved < 0, (-moved) | 0x8000, moved)
+    held = stored(word.to(torch.int16).view(torch.bfloat16))
+    normal = ((bits & 0x7F80) != 0) & ((bits & 0x7F80) != 0x7F80)
+    ok = torch.where(normal & ~listed & torch.isfinite(expected), actual == held, ok)
     assert ok.all(), (
         f"{(~ok).sum().item()} of {ok.numel()} inputs off torch and stock; first input 0x{bits[~ok][0].item():04x} "
         f"stored {actual[~ok][0].item()!r}, torch {reference[~ok][0].item()!r}"
