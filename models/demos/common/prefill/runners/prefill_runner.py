@@ -475,11 +475,12 @@ def _with_hang_timeout():
     if not CHUNK_TIMEOUT_SECONDS:
         yield
         return
+    saved = ttnn.device.GetOperationTimeoutSeconds()
     ttnn.device.SetOperationTimeoutSeconds(CHUNK_TIMEOUT_SECONDS)
     try:
         yield
     finally:
-        ttnn.device.SetOperationTimeoutSeconds(0)
+        ttnn.device.SetOperationTimeoutSeconds(saved)
 
 
 def _compute_and_send(

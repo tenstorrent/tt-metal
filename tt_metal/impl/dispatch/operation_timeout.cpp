@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <chrono>
-
 #include <tt-metalium/experimental/operation_timeout.hpp>
 
 #include "impl/context/metal_context.hpp"
@@ -11,12 +9,12 @@
 
 namespace tt::tt_metal::experimental {
 
-float GetOperationTimeoutSeconds() {
-    return MetalContext::instance().rtoptions().get_timeout_duration_for_operations().count();
+std::chrono::duration<float> GetOperationTimeout() {
+    return MetalContext::instance().rtoptions().get_timeout_duration_for_operations();
 }
 
-void SetOperationTimeoutSeconds(float seconds) {
-    MetalContext::instance().rtoptions().set_timeout_duration_for_operations(std::chrono::duration<float>(seconds));
+void SetOperationTimeout(std::chrono::duration<float> timeout) {
+    MetalContext::instance().rtoptions().set_timeout_duration_for_operations(timeout);
 }
 
 }  // namespace tt::tt_metal::experimental

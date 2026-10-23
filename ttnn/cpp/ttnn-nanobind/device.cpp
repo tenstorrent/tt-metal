@@ -463,7 +463,10 @@ void device_module(nb::module_& m_device) {
             >>> import ttnn
             >>> ttnn.device.ClearKernelCache()
     )doc");
-    m_device.def("GetOperationTimeoutSeconds", &tt::tt_metal::experimental::GetOperationTimeoutSeconds, R"doc(
+    m_device.def(
+        "GetOperationTimeoutSeconds",
+        [] { return tt::tt_metal::experimental::GetOperationTimeout().count(); },
+        R"doc(
         Get the operation timeout in seconds (0 = off), initialized from TT_METAL_OPERATION_TIMEOUT_SECONDS.
 
         A command queue wait that sees no dispatch progress for this long runs
@@ -475,7 +478,7 @@ void device_module(nb::module_& m_device) {
     )doc");
     m_device.def(
         "SetOperationTimeoutSeconds",
-        &tt::tt_metal::experimental::SetOperationTimeoutSeconds,
+        [](float seconds) { tt::tt_metal::experimental::SetOperationTimeout(std::chrono::duration<float>(seconds)); },
         nb::arg("seconds"),
         R"doc(
         Set the operation timeout in seconds (0 = off), overriding TT_METAL_OPERATION_TIMEOUT_SECONDS.
