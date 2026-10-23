@@ -252,7 +252,7 @@ ttsl::hash::hash_t AllToAllAsyncGenericDeviceOperation::compute_program_hash(
     const auto fabric_config = tt::tt_fabric::GetFabricConfig();
     const auto max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     // The cached program contains the fabric mux kernel and client ABI. Bump this whenever either changes.
-    constexpr uint32_t fabric_mux_implementation_version = 2;
+    constexpr uint32_t fabric_mux_implementation_version = 3;
     return tt::tt_metal::operation::hash_operation<AllToAllAsyncGenericDeviceOperation>(
         operation_attributes.in_dim,
         operation_attributes.out_dim,
