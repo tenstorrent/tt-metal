@@ -17,6 +17,27 @@ void check(const Tensor& t, const char* name, DataType dt) {
     TT_FATAL(t.dtype() == dt, "chunk_gdn: {} has wrong dtype", name);
     TT_FATAL(t.buffer() != nullptr, "chunk_gdn: {} must be on device", name);
 }
+
+// A gate, g or beta: the token-major [B, T, HV] tensor the model produces, fp32 or bf16, TILE, with B * HV heads and
+// num_chunks chunks of chunk_size tokens (the reader zeroes the rows past T).
+void check_gdn_gate(
+    const Tensor& t, const char* name, uint32_t BH, uint32_t HV, uint32_t num_chunks, uint32_t chunk_size) {
+    TT_FATAL(t.layout() == Layout::TILE, "chunk_gdn: {} must be TILE layout", name);
+    TT_FATAL(
+        t.dtype() == DataType::FLOAT32 || t.dtype() == DataType::BFLOAT16, "chunk_gdn: {} must be fp32 or bf16", name);
+    TT_FATAL(t.buffer() != nullptr, "chunk_gdn: {} must be on device", name);
+    const auto& s = t.logical_shape();
+    TT_FATAL(s.rank() == 3, "chunk_gdn: {} must be [B, T, HV] (got rank {})", name, s.rank());
+    TT_FATAL(HV > 0 && s[2] == HV, "chunk_gdn: {} has {} heads per row, expected HV = {}", name, s[2], HV);
+    TT_FATAL(s[0] * HV == BH, "chunk_gdn: {} is [{}, {}, {}], expected B * HV == BH = {}", name, s[0], s[1], s[2], BH);
+    TT_FATAL(
+        (s[1] + chunk_size - 1) / chunk_size == num_chunks,
+        "chunk_gdn: {} has T = {} tokens, expected {} chunks of {}",
+        name,
+        s[1],
+        num_chunks,
+        chunk_size);
+}
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -47,8 +68,14 @@ void ChunkGdnPrepOperation::validate_on_program_cache_miss(
             qsf[2] == attrs.Hk * attrs.key_dim, "qk_flat width {} != Hk*K ({}*{})", qsf[2], attrs.Hk, attrs.key_dim);
         TT_FATAL(attrs.qk_norm, "qk_flat requires qk_norm (flat q/k are unnormalized; norm is in-kernel)");
     }
-    check(in.g, "g", DataType::FLOAT32);
-    check(in.beta, "beta", DataType::FLOAT32);
+    check_gdn_gate(in.g, "g", attrs.BH, attrs.HV, attrs.num_chunks, attrs.chunk_size);
+    check_gdn_gate(in.beta, "beta", attrs.BH, attrs.HV, attrs.num_chunks, attrs.chunk_size);
+    // The factory reads both gates with g's T: a beta of the same chunk count but fewer tokens reads past its end.
+    TT_FATAL(
+        in.g.logical_shape()[1] == in.beta.logical_shape()[1],
+        "chunk_gdn: g has T = {} tokens and beta T = {}; the gates must have the same T",
+        in.g.logical_shape()[1],
+        in.beta.logical_shape()[1]);
     check(in.eye_c, "eye_c", DataType::FLOAT32);
     check(in.tril_c, "tril_c", DataType::FLOAT32);
     check(in.ones_c, "ones_c", DataType::FLOAT32);
@@ -114,7 +141,11 @@ std::vector<Tensor> chunk_gdn_prep(
     const auto& q_shape = q.logical_shape();  // [BH,NC,C,K] head-major, or flat [B,T,Hk*K] when qk_flat
     const auto& v_shape = v.logical_shape();  // [BH,NC,C,V] head-major, or flat [B,T,HV*V] when v_flat
     // Derive dims. Head-major q gives BH/NC/K directly; flat q [B,T,Hk*K] gives B/T, so BH=B*HV,
-    // NC=T/chunk (pad==0 required), K=flat_width/Hk. val_dim = v_shape[3] or v_flat width / HV.
+    // NC=T/chunk (pad==0 required), K=flat_width/Hk. val_dim = v_shape[3] or v_flat width / HV. HV, when the
+    // caller leaves it 0, is the gates' head count.
+    if (HV == 0) {
+        HV = g.logical_shape()[2];
+    }
     const uint32_t BH = qk_flat ? (q_shape[0] * HV) : q_shape[0];
     const uint32_t num_chunks = qk_flat ? (q_shape[1] / chunk_size) : q_shape[1];
     const uint32_t key_dim = qk_flat ? (q_shape[2] / Hk) : q_shape[3];

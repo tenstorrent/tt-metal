@@ -5,7 +5,7 @@
 #pragma once
 
 #include <stdint.h>
-#include <umd/device/types/arch.hpp>  // tt::ARCH
+#include <tt-umd/types/arch.hpp>  // tt::ARCH
 #include <vector>
 
 #include "core_coord.hpp"

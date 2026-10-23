@@ -9,6 +9,8 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
@@ -368,7 +370,19 @@ static Tensor std_var_impl(
 
     if (rank == 0 || reduced_volume == 1) {
         // If the input tensor is a rank 0 tensor (i.e. scalar), or reduction would produce a scalar,
-        // return NaN or 0.0, depending on correction. This matches PyTorch behavior.
+        // return NaN with correction. Without correction, return 0.0 for a finite element and NaN for inf or NaN.
+        // This matches PyTorch behavior.
+        if (!correction && is_floating_point(input_tensor_arg.dtype())) {
+            auto output_tensor = ttnn::where(
+                ttnn::isfinite(input_tensor_arg, memory_config),
+                0.0f,
+                std::numeric_limits<float>::quiet_NaN(),
+                memory_config);
+            if (output_tensor.layout() != Layout::TILE) {
+                output_tensor = ttnn::to_layout(output_tensor, Layout::TILE);
+            }
+            return adjust_shape(output_tensor, input_shape, keepdim, dim, non_height_width_dims);
+        }
         float fill_value = correction ? std::numeric_limits<float>::quiet_NaN() : 0.0f;
         // Create an output tensor with same shape and attributes as input tensor
         // Cannot use ttnn::full_like because it will not return a NaN tensor. Issue #40503
@@ -572,17 +586,23 @@ Tensor reduce(
     const ttnn::PadValue fill_pad_value = input_tensor_arg.dtype() == tt::tt_metal::DataType::INT32
                                               ? ttnn::PadValue{std::bit_cast<uint32_t>(pad_value)}
                                               : ttnn::PadValue{pad_value};
-    auto input_tensor =
-        is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, fill_pad_value) : input_tensor_arg;
+    auto input_tensor = input_tensor_arg;
+    if (is_tiled &&
+        (input_tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
+         input_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH != 0)) {
+        // fill_pad writes in place. A reduction must not rewrite its caller's tensor.
+        input_tensor = ttnn::clone(input_tensor, std::nullopt, std::nullopt, std::nullopt);
+        input_tensor = ttnn::fill_implicit_tile_padding(input_tensor, fill_pad_value);
+    }
 
     // bf16 multi-axis Sum/Mean precision chain: carry FP32 between stages and pack bf16
-    // only on the final stage. Skipped for full-tensor reductions (dim covers every
-    // axis) since torch's bf16 reference is itself accumulated in bf16, so the
-    // legacy path already matches it there.
+    // only on the final stage.
+    const auto& in_shape = input_tensor.logical_shape();
     const bool chain_active =
         (reduce_type == reduction_common::ReduceType::Sum || reduce_type == reduction_common::ReduceType::Mean) &&
         dim.size() > 1 && input_tensor.dtype() == DataType::BFLOAT16 &&
-        dim.size() < static_cast<size_t>(input_tensor.logical_shape().rank());
+        (dim.size() < static_cast<size_t>(in_shape.rank()) ||
+         input_tensor.logical_volume() > static_cast<uint64_t>(in_shape[-2]) * in_shape[-1]);
 
     // fast_reduce_nc ignores `scalar` so it can't be used when scalar != 1.0f.
     if (call_fast_nc<reduce_type>(input_tensor.dtype()) && scalar == 1.0f) {
