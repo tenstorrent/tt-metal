@@ -15,7 +15,9 @@ struct AllGatherCommonArgs {
     static constexpr uint32_t barrier = 2;
     static constexpr uint32_t semaphore_0 = 3;
     static constexpr uint32_t semaphore_1 = 4;
-    static constexpr uint32_t count = 5;
+    // Input rows in tiles: the one length word the workers derive their tile ranges from.
+    static constexpr uint32_t input_Ht = 5;
+    static constexpr uint32_t count = 6;
 };
 
 struct LlamaGatherReaderCommonArgs {
