@@ -74,6 +74,10 @@ def resolve_server_default(chunk, max_ctx):
         os.environ["DSV41_PF_SINGLE"] = "0"
         return False, why
     os.environ["DSV41_PF_SINGLE"] = "1"
+    # The decode key-slab export (Model._export_user_keys) of a 1M build: with the default DSV41_KEY_EXPORT_FILL_MAX (524288 rows) the warm-up export of the slab pieces beyond it takes the slice_write path (a
+    # 256 MiB row-major temporary, the slab re-allocated), which changes the DRAM layout the traces are captured in; with the single chunk trace in that layout the first prefill replays gave wrong / run-to-run
+    # different logits (needle 4817 lost at 8k / 16k, 4 identical prompts decoding differently). The demos / unit tests always ran with 2097152 (every piece is written in place by fill_cache).
+    os.environ.setdefault("DSV41_KEY_EXPORT_FILL_MAX", "2097152")
     return True, "read mode + bf16 pool + kv_len_tensor op available"
 
 

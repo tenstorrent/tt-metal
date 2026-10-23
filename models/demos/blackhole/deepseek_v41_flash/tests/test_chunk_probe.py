@@ -77,11 +77,40 @@ def test_chunk_probe(mesh_device):
         return orig_cap(C)
 
     pm.capture_dyn_trace = cap
+    if (
+        os.environ.get("PROBE_WARM") == "1"
+    ):  # the server's warm-up (allocate / compile everything, then capture the chunk trace and the decode traces) before any prefill
+        m.warm_serving(CHUNK, WMAX if MODE == "single" else 16384, [], [])
+        log("PROBE warm_serving done")
     g = torch.Generator().manual_seed(1234)
     toks = torch.randint(1000, 100000, (B, max(LENS)), generator=g, dtype=torch.int64)
+    if os.environ.get("PROBE_PROMPT"):  # real text (json list with a "prompt" field), the same for every user
+        from transformers import AutoTokenizer
+
+        tk = AutoTokenizer.from_pretrained(os.environ.get("DSV41_CKPT", "/mnt/tt-data/ssinghal/deepseek-v41-flash"))
+        import json
+
+        ids = tk(json.load(open(os.environ["PROBE_PROMPT"]))[0]["prompt"])["input_ids"]
+        assert len(ids) >= max(LENS), len(ids)
+        toks = torch.tensor(ids[: max(LENS)]).long().unsqueeze(0).repeat(B, 1)
+        os.environ["PROBE_SAME"] = "1"
+    if os.environ.get(
+        "PROBE_IDS"
+    ):  # a saved 1-D token tensor, the same prompt for every user (LENS must equal its length)
+        toks = torch.load(os.environ["PROBE_IDS"]).long().unsqueeze(0).repeat(B, 1)
+        os.environ["PROBE_SAME"] = "1"
+    SAME = os.environ.get("PROBE_SAME") == "1"  # every user gets the SAME prompt: their logits must agree
+    if SAME:
+        toks = toks[:1].expand(B, -1).contiguous()
     for E in LENS:
-        items = [(b, toks[b], 0, E) for b in range(B)]
+        USERS = [
+            int(x) for x in os.environ.get("PROBE_USERS", ",".join(str(b) for b in range(B))).split(",")
+        ]  # users in the call (the others stay idle: a lone request of the server)
+        items = [(b, toks[b], 0, E) for b in USERS]
         for rep in range(REPS):
+            if os.environ.get("PROBE_RELEASE") == "1":
+                for b_ in range(B):
+                    m.release_user(b_)
             rec.clear()
             c0 = ncap[0]
             t0 = time.perf_counter()
@@ -89,7 +118,7 @@ def test_chunk_probe(mesh_device):
                 items,
                 CHUNK,
                 s_pad_max=WMAX if MODE == "single" else None,
-                want_logits=bool(os.environ.get("PROBE_SAVE")),
+                want_logits=(bool(os.environ.get("PROBE_SAVE")) or SAME) and os.environ.get("PROBE_NOLOGITS") != "1",
             )
             wall = time.perf_counter() - t0
             n = len(rec)
@@ -99,11 +128,90 @@ def test_chunk_probe(mesh_device):
                 f"PROBE mode={MODE} E={E} rep={rep} S_pad={pm.dyn.S_pad} captures_this_call={ncap[0] - c0} captures_total={ncap[0]} replays={n} wall={wall:.2f}s "
                 f"replay_mean={sum(td) / n * 1e3:.1f}ms host_mean={sum(r[1] for r in rec) / n * 1e3:.1f}ms "
                 + " ".join(f"s0={rec[i][0]}:{td[i] * 1e3:.0f}ms" for i in pos)
-                + f" first={[int(res[b][0]) for b in range(B)]}"
+                + f" first={[int(res[b][0]) for b in USERS]}"
+            )
+        if os.environ.get(
+            "PROBE_SAVE_IDS"
+        ):  # translated pool rows of the last chunk (layer -> [C, 512]) of mesh device 0
+            out_ids = {}
+            for lid, pl in pm.layers:
+                sp_ = getattr(pl.pa, "sparse", None)
+                if sp_ is not None and getattr(sp_, "pids", None) is not None:
+                    out_ids[lid] = (
+                        ttnn.to_torch(ttnn.get_device_tensors(sp_.pids)[0]).reshape(-1, 512).long() & 0xFFFFFFFF
+                    )
+            torch.save(
+                out_ids, f"{os.environ['PROBE_SAVE_IDS']}.E{E}.{MODE}.single{os.environ.get('DSV41_PF_SINGLE', '0')}"
+            )
+        if os.environ.get(
+            "PROBE_SAVE_POOL"
+        ):  # pool latents of every kv-source layer present, user 0, entries [0, E / ratio)
+            from models.demos.blackhole.deepseek_v41_flash.tt import paged_ops as _P
+            from models.demos.blackhole.deepseek_v41_flash.tt import prefix_cache as _PC
+
+            pool_d = {src: _PC.read_pool_latents(m, 0, src, E // _P.SRC_RATIO[src]) for src in _PC._sources(m)}
+            torch.save(
+                pool_d, f"{os.environ['PROBE_SAVE_POOL']}.E{E}.{MODE}.single{os.environ.get('DSV41_PF_SINGLE', '0')}"
+            )
+        if os.environ.get(
+            "PROBE_SAVE_DEC"
+        ):  # decode state of user 0 after the prefill (hand-off): pool latents, ring rows, prev_cs, decode index keys
+            from models.demos.blackhole.deepseek_v41_flash.tt import paged_ops as _P
+            from models.demos.blackhole.deepseek_v41_flash.tt import prefix_cache as _PC
+
+            st_, cols_, U_ = {}, m.cols, m.U
+            full_ = _PC.read_shard(m.pool.pool, 0)[0, 0]
+            for src in _PC._sources(m):
+                st_[f"pool.lat{src}"] = full_[
+                    m.pool.phys_rows(0, src, torch.arange(E // _P.SRC_RATIO[src])).long()
+                ].clone()
+            for L_, d_ in m.index_owner.items():
+                rr_ = m.attns[L_].ratio
+                st_[f"idxkeys{L_}"] = (
+                    _PC.read_shard(d_.k_cache, 0).reshape(U_, d_.k_cache.shape[2], -1)[0, : E // rr_].clone()
+                )
+            for b_ in range(
+                1, B
+            ):  # the other users (mesh row b_): their decode index keys / pool latents must equal user 0's for identical prompts
+                full_b = _PC.read_shard(m.pool.pool, b_ * m.cols)[0, 0]
+                for src in _PC._sources(m):
+                    st_[f"u{b_}.pool.lat{src}"] = full_b[
+                        m.pool.phys_rows(b_, src, torch.arange(E // _P.SRC_RATIO[src])).long()
+                    ].clone()
+                for L_, d_ in m.index_owner.items():
+                    rr_ = m.attns[L_].ratio
+                    st_[f"u{b_}.idxkeys{L_}"] = (
+                        _PC.read_shard(d_.k_cache, b_ * m.cols)
+                        .reshape(U_, d_.k_cache.shape[2], -1)[0, : E // rr_]
+                        .clone()
+                    )
+            torch.save(
+                st_, f"{os.environ['PROBE_SAVE_DEC']}.E{E}.{MODE}.single{os.environ.get('DSV41_PF_SINGLE', '0')}"
+            )
+        if os.environ.get(
+            "PROBE_DECODE"
+        ):  # plain eager decode steps after the prefill: tokens / logits of the 4 users must agree (identical prompts)
+            nstep = int(os.environ["PROBE_DECODE"])
+            tok_ = torch.tensor([int(res[b][0]) for b in range(B)], dtype=torch.long)
+            for k_ in range(nstep):
+                pos_ = torch.full((B,), E + k_, dtype=torch.long)
+                out_ = m.decode_forward(tok_, pos_, enable_trace=False, reload_inputs=True)
+                lg_ = m.read_logits().float()
+                log(
+                    f"PROBE DECODE step {k_}: tokens {[int(x) for x in out_]} max |logit(user b) - logit(user 0)| {[float((lg_[b] - lg_[0]).abs().max()) for b in range(1, B)]}"
+                )
+                tok_ = out_.clone().long()
+        if SAME and os.environ.get("PROBE_NOLOGITS") != "1":
+            lg = torch.stack([res[b][1] for b in USERS]).float()
+            log(
+                f"PROBE TOP5 user0: {lg[0].topk(5).indices.tolist()} values {[round(v, 2) for v in lg[0].topk(5).values.tolist()]}"
+            )
+            log(
+                f"PROBE SAME E={E}: max |logit(user b) - logit(user 0)| = {[float((lg[b] - lg[0]).abs().max()) for b in range(1, len(USERS))]}"
             )
         if os.environ.get("PROBE_SAVE") and rep == REPS - 1:
             torch.save(
-                torch.stack([res[b][1] for b in range(B)]).float(),
+                torch.stack([res[b][1] for b in USERS]).float(),
                 f"{os.environ['PROBE_SAVE']}.E{E}.{MODE}.single{os.environ.get('DSV41_PF_SINGLE', '0')}",
             )
     log("PROBE DONE")
