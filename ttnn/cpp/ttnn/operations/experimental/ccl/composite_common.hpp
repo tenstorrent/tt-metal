@@ -60,7 +60,9 @@ ttnn::Tensor composite_all_gather(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis,
-    bool use_l1_small_for_semaphores = false);
+    bool use_l1_small_for_semaphores = false,
+    const std::optional<ttnn::Tensor>& persistent_output_tensor = std::nullopt,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grid = std::nullopt);
 
 ttnn::Tensor composite_all_to_all(
     ttnn::Tensor input_tensor,

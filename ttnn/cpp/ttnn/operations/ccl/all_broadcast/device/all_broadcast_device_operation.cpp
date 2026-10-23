@@ -86,7 +86,8 @@ std::vector<ttnn::Tensor> all_broadcast(
     const ttnn::MemoryConfig& output_mem_config,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
-    bool use_l1_small_for_semaphores) {
+    bool use_l1_small_for_semaphores,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     const auto& tensor_topology = input_tensor.tensor_topology();
     const auto& tensor_topology_shape = tensor_topology.distribution_shape();
 
@@ -115,7 +116,8 @@ std::vector<ttnn::Tensor> all_broadcast(
             .cluster_axis = cluster_axis,
             .sub_device_id = sub_device_id,
             .topology = topology,
-            .use_l1_small_for_semaphores = use_l1_small_for_semaphores},
+            .use_l1_small_for_semaphores = use_l1_small_for_semaphores,
+            .sub_core_grid = sub_core_grid},
         input_tensor);
 }
 }  // namespace ttnn::prim

@@ -77,7 +77,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         mesh_device,
         operation_attributes.sub_device_id,
         CoreCoord(0, 0),
-        std::nullopt);
+        operation_attributes.sub_core_grid);
 
     // Info for RM tensors
     uint32_t row_size = input_tensor.logical_shape()[-1] * input_tensor.element_size();

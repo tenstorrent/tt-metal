@@ -22,7 +22,8 @@ std::vector<ttnn::Tensor> all_broadcast(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<uint32_t> num_links,
     std::optional<ttnn::ccl::Topology> topology,
-    bool use_l1_small_for_semaphores) {
+    bool use_l1_small_for_semaphores,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     // Default values for num_links and topology
     if (cluster_axis == std::nullopt) {
         auto mesh_shape = input_tensor.device()->get_view().shape();
@@ -39,7 +40,14 @@ std::vector<ttnn::Tensor> all_broadcast(
                     auto tensor = std::move(tensors.front());
                     tensors.pop_front();
                     auto curr_tensors = ttnn::all_broadcast(
-                        tensor, axis, subdevice_id, memory_config, num_links, topology, use_l1_small_for_semaphores);
+                        tensor,
+                        axis,
+                        subdevice_id,
+                        memory_config,
+                        num_links,
+                        topology,
+                        use_l1_small_for_semaphores,
+                        sub_core_grid);
                     tensors.insert(tensors.end(), curr_tensors.begin(), curr_tensors.end());
                 }
             }
@@ -55,7 +63,14 @@ std::vector<ttnn::Tensor> all_broadcast(
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
 
     return ttnn::prim::all_broadcast(
-        input_tensor, cluster_axis, subdevice_id, memory_config_, num_links_, topology_, use_l1_small_for_semaphores);
+        input_tensor,
+        cluster_axis,
+        subdevice_id,
+        memory_config_,
+        num_links_,
+        topology_,
+        use_l1_small_for_semaphores,
+        sub_core_grid);
 }
 
 }  // namespace ttnn

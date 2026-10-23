@@ -2,10 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/operations/ccl/all_broadcast/all_broadcast.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_device_operation.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/split/split.hpp"
@@ -351,10 +356,25 @@ ttnn::Tensor composite_all_gather(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis,
-    bool use_l1_small_for_semaphores) {
+    bool use_l1_small_for_semaphores,
+    const std::optional<ttnn::Tensor>& persistent_output_tensor,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grid) {
+    // sub_core_grid reaches all_broadcast and, except for a last-dim gather that concat must massage (below), the
+    // concat. The to_memory_config / typecast steps (sharded or bfloat8_b inputs only) and the final copy pick their
+    // own cores.
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
+    // ttnn::concat builds its output with the default 32x32 tile and its kernels assume it, so any other tile
+    // comes back re-labelled and scrambled. Refuse rather than return wrong data.
+    TT_FATAL(
+        input_tensor.layout() != ttnn::Layout::TILE ||
+            (tile_height == tt::constants::TILE_HEIGHT && tile_width == tt::constants::TILE_WIDTH),
+        "composite all_gather supports only {}x{} tiles (ttnn::concat assumes them), got {}x{}",
+        tt::constants::TILE_HEIGHT,
+        tt::constants::TILE_WIDTH,
+        tile_height,
+        tile_width);
 
     auto input_shape = input_tensor.logical_shape();  // copied, not referenced (input_tensor is reassigned below)
     const int32_t rank = static_cast<int32_t>(input_shape.rank());
@@ -377,11 +397,16 @@ ttnn::Tensor composite_all_gather(
     bool convert_to_bfloat16_for_composite = is_tiled_and_not_tile_aligned && input_dtype == ttnn::DataType::BFLOAT8_B;
 
     auto input_memory_config = input_tensor.memory_config();
+    // A persistent output carries the output memory config when none is passed.
+    const std::optional<ttnn::MemoryConfig> requested_memory_config =
+        memory_config.has_value() || !persistent_output_tensor.has_value()
+            ? memory_config
+            : std::optional<ttnn::MemoryConfig>(persistent_output_tensor->memory_config());
     TT_FATAL(
-        !(input_memory_config.is_sharded() && !memory_config.has_value()),
+        !(input_memory_config.is_sharded() && !requested_memory_config.has_value()),
         "If input memory config is sharded, then output memory config must be provided. Defaulting the output memory "
         "config to the input sharded memory config will break the op as the input and output shapes are different.");
-    auto output_memory_config = memory_config.value_or(input_memory_config);
+    auto output_memory_config = requested_memory_config.value_or(input_memory_config);
 
     if (input_memory_config.is_sharded()) {
         /*
@@ -405,10 +430,53 @@ ttnn::Tensor composite_all_gather(
         input_tensor.memory_config(),
         num_links,
         topology,
-        use_l1_small_for_semaphores);
+        use_l1_small_for_semaphores,
+        sub_core_grid);
+
+    // With sub_core_grids, concat runs its device op directly and skips the untilize / transpose steps it otherwise
+    // takes for a tile concat dim with padding, or row-major rows misaligned for a last-dim concat; without them it
+    // returns wrong data or fails. Padded tile rows are untilized / retilized here, on the grid. For a last-dim
+    // gather no grid-aware equivalent exists, so concat runs on its own cores.
+    const ttnn::Tensor& piece = broadcasted_tensors.front();
+    const bool padded_on_gather_dim =
+        piece.layout() == ttnn::Layout::TILE && piece.logical_shape()[gather_dim] != piece.padded_shape()[gather_dim];
+    const bool misaligned_rows = piece.layout() == ttnn::Layout::ROW_MAJOR && gather_dim == rank - 1 &&
+                                 piece.padded_shape()[-1] * piece.element_size() % piece.buffer()->alignment() != 0;
+    const bool retilize_rows = sub_core_grid.has_value() && padded_on_gather_dim && gather_dim == rank - 2;
+    std::optional<tt::tt_metal::CoreRangeSet> concat_grid = sub_core_grid;
+    if (sub_core_grid.has_value() && !retilize_rows && (padded_on_gather_dim || misaligned_rows)) {
+        log_warning(
+            tt::LogOp,
+            "composite all_gather: concat on dim {} cannot run inside sub_core_grid; using its own cores",
+            dim);
+        concat_grid = std::nullopt;
+    }
+    if (retilize_rows) {
+        for (auto& tensor : broadcasted_tensors) {
+            ttsl::SmallVector<uint32_t> ends(tensor.logical_shape().cbegin(), tensor.logical_shape().cend());
+            std::transform(ends.begin(), ends.end(), ends.begin(), [](uint32_t extent) { return extent - 1; });
+            tensor = ttnn::untilize_with_unpadding(
+                tensor, ttnn::Shape(ends), std::nullopt, /*use_multicore=*/true, sub_core_grid);
+        }
+    }
 
     // Do the gather itself
-    ttnn::Tensor all_gather_output_tensor = ttnn::concat(broadcasted_tensors, gather_dim);
+    ttnn::Tensor all_gather_output_tensor =
+        ttnn::concat(broadcasted_tensors, gather_dim, std::nullopt, std::nullopt, 1, concat_grid);
+
+    if (retilize_rows) {
+        ttnn::Shape padded_shape = all_gather_output_tensor.logical_shape();
+        padded_shape[-2] = tt::round_up(padded_shape[-2], tile_height);
+        padded_shape[-1] = tt::round_up(padded_shape[-1], tile_width);
+        all_gather_output_tensor = ttnn::tilize_with_val_padding(
+            all_gather_output_tensor,
+            padded_shape,
+            0.0f,
+            all_gather_output_tensor.memory_config(),
+            std::nullopt,
+            /*use_multicore=*/true,
+            sub_core_grid);
+    }
 
     if (convert_to_bfloat16_for_composite) {
         all_gather_output_tensor = ttnn::typecast(all_gather_output_tensor, input_dtype);
@@ -416,6 +484,22 @@ ttnn::Tensor composite_all_gather(
 
     if (output_memory_config.is_sharded()) {
         all_gather_output_tensor = ttnn::to_memory_config(all_gather_output_tensor, output_memory_config);
+    }
+
+    // A persistent output is filled by one extra device copy.
+    if (persistent_output_tensor.has_value()) {
+        const auto& dst = *persistent_output_tensor;
+        TT_FATAL(
+            dst.dtype() == all_gather_output_tensor.dtype() && dst.layout() == all_gather_output_tensor.layout() &&
+                dst.logical_shape() == all_gather_output_tensor.logical_shape(),
+            "all_gather output_tensor is {} {} {}, but the gathered result is {} {} {}",
+            dst.logical_shape(),
+            dst.dtype(),
+            dst.layout(),
+            all_gather_output_tensor.logical_shape(),
+            all_gather_output_tensor.dtype(),
+            all_gather_output_tensor.layout());
+        all_gather_output_tensor = ttnn::copy(all_gather_output_tensor, dst);
     }
 
     // The concat / typecast / to_memory_config tail takes the union label of its inputs, which is the all_broadcast

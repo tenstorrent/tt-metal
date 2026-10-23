@@ -56,7 +56,23 @@ void bind_all_broadcast(nb::module_& mod) {
     ttnn::bind_function<"all_broadcast">(
         mod,
         doc,
-        &ttnn::all_broadcast,
+        // sub_core_grid stays C++ only.
+        +[](const ttnn::Tensor& input_tensor,
+            std::optional<uint32_t> cluster_axis,
+            const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+            const std::optional<ttnn::MemoryConfig>& memory_config,
+            std::optional<uint32_t> num_links,
+            std::optional<ttnn::ccl::Topology> topology,
+            bool use_l1_small_for_semaphores) {
+            return ttnn::all_broadcast(
+                input_tensor,
+                cluster_axis,
+                subdevice_id,
+                memory_config,
+                num_links,
+                topology,
+                use_l1_small_for_semaphores);
+        },
         nb::arg("input_tensor").noconvert(),
         nb::kw_only(),
         nb::arg("cluster_axis") = nb::none(),
