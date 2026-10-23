@@ -1,21 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Regression test: rand stores the whole tile even when another op's init last programmed the
-dest address-mode slot it stores under.
-
-The kernel seeds the PRNG once (as a host-set seed does), fills Dest with a sentinel, runs the
-topk init (slot 6 = dest incr 32) and then rand with no further rand init. Every element of the
-packed tile that can hold a draw must be one in the draw interval; a rand that depends on its own
-init for the address mode stores only the first row group of each face and leaves the sentinel
-elsewhere.
-
-rand stores FP32 datums. With a 32-bit Dest every element of the tile is a draw. With a 16-bit
-Dest a 32-bit store at row r lands its high half at 16-bit row 2 * (r & ~7) + (r & 7) and its low
-mantissa half eight rows below (the ISA's Dst32b-over-Dst16b mapping), so only the top half of the
-rows of each face of the packed tile carry draws and the bottom half hold opaque low halves; the
-checks cover the rows that carry draws. Wormhole and Blackhole both carry the metal rand kernel.
-"""
+"""Regression test: rand stores the whole tile even when another op's init (topk) last programmed
+the dest address-mode slot it stores under; with a 16-bit Dest only the top half of each face's rows
+carry draws (32-bit stores over a 16-bit Dest), so the checks cover those rows."""
 
 import struct
 
