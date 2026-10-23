@@ -284,3 +284,6 @@ Every intervention by the supervising session: time, task, trigger, classificati
 - 2026-10-22 16:05 | FIX.10 | indexer swap checks fail (order + bf16 tie flips) | waiver (owner-delegated format limit, to review) + framework F160 queued | aborted attempt 3 after its diagnosis; spec 2783d055547; F159 live 376869f7a0c; resumed gate-first | 2783d055547
 - 2026-10-22 17:45 | FIX.10 | STOPPED (infrastructure: pytest timeout 300 s) | box/CPU contention with golden generation | pinned golden to cores 16-31 nice 19; resumed | -
 - 2026-10-22 19:45 | FIX.10 | gate PASS | - | committed; P.20 started | bd42e1f2ecd
+- 2026-10-23 08:40 | approvals | owner approved: the indexer bf16 top-k waiver (2783d055547) and the knowledge curation (1ea5d276f3f) | approved | - | -
+
+- 2026-10-23 09:56 P.23 (owner): matmul program-config sweep only (dtypes, fidelity, compute kernel config, memory configs unchanged); top call sites from X.3 ops (matmul+linear 23.1 of 83.4 ms); setting MATMUL_CONFIG {auto, tuned}; gate = last swap test per block type + L.last + rt profile (device_ms_total < 83.1). Orchestrator resumed in tmux ds41p23; watch + heartbeat armed.
