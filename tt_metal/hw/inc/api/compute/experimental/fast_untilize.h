@@ -174,7 +174,8 @@ ALWI void fast_untilize_block(
     if constexpr (
         allow_face_passes && !four_tile_chunks &&
         fast_untilize_row_passes_32bit<full_ct_dim, is_fp32_dest_acc_en, block_float_input>()) {
-        // One unit of up to eight tiles fills a 32-bit DEST half with two face-pair passes; a row of one unit is one L1 stream per pass.
+        // One unit of up to eight tiles fills a 32-bit DEST half with two face-pair passes; a row of one unit is one L1
+        // stream per pass.
         constexpr std::uint32_t first_unit_dim = fast_untilize_next_pass_row_unit_32bit(full_ct_dim);
         [[maybe_unused]] std::uint32_t prev_unpack_unit_dim = first_unit_dim | FAST_UNTILIZE_PASS_MOP_KEY;
         [[maybe_unused]] std::uint32_t prev_pack_unit_dim = 0;
@@ -192,7 +193,11 @@ ALWI void fast_untilize_block(
                 PACK((llk_packer_wait_for_math_done()));
                 PACK((llk_pack_fast_untilize_pass_block<full_ct_dim, FAST_UNTILIZE_MAX_PASS_UNIT_DIM_32BIT>(
                     ocb, output_tile_index, tiles_done, unit_dim, pass, prev_pack_unit_dim)));
-                PACK((_llk_pack_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en, true, true>()));
+                PACK((_llk_pack_dest_section_done_<
+                      FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE,
+                      is_fp32_dest_acc_en,
+                      true,
+                      true>()));
             }
             tiles_done += unit_dim;
         }
@@ -234,7 +239,11 @@ ALWI void fast_untilize_block(
                 PACK((llk_packer_wait_for_math_done()));
                 PACK((llk_pack_fast_untilize_block_strided<FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST, full_ct_dim>(
                     ocb, output_tile_index, tiles_done, unit_dim, prev_pack_unit_dim)));
-                PACK((_llk_pack_dest_section_done_<FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE, is_fp32_dest_acc_en, true, true>()));
+                PACK((_llk_pack_dest_section_done_<
+                      FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE,
+                      is_fp32_dest_acc_en,
+                      true,
+                      true>()));
             }
             tiles_done += unit_dim;
         }
