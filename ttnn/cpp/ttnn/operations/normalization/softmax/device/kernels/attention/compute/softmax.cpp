@@ -23,7 +23,7 @@ constexpr bool softmax_pack_block(std::uint32_t dfb) {
     return true;
 #endif
 }
-#define CKL_ELTWISE_CHAIN_PACK_BLOCK_IF (softmax_pack_block(ElemT::dfb))
+#define CKL_ELTWISE_CHAIN_PACK_BLOCK_IF (!DST_ACCUM_MODE && softmax_pack_block(ElemT::dfb))
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"

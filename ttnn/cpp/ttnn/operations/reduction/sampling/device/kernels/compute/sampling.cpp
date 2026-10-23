@@ -285,20 +285,26 @@ void top_k() {
             // pack value tiles into cb_intermed0
             pack_reconfig_data_format(input_transposed_dfb_index);
 #ifdef ARCH_BLACKHOLE
-            pack_block_mop(0, input_transposed_dfb_index, 2);
-#else
-            pack_tile(0, input_transposed_dfb_index);
-            pack_tile(1, input_transposed_dfb_index);
+            if constexpr (!DST_ACCUM_MODE) {
+                pack_block_mop(0, input_transposed_dfb_index, 2);
+            } else
 #endif
+            {
+                pack_tile(0, input_transposed_dfb_index);
+                pack_tile(1, input_transposed_dfb_index);
+            }
 
             // pack index tiles into cb_intermed1
             pack_reconfig_data_format(index_transposed_dfb_index);
 #ifdef ARCH_BLACKHOLE
-            pack_block_mop(2, index_transposed_dfb_index, 2);
-#else
-            pack_tile(2, index_transposed_dfb_index);
-            pack_tile(3, index_transposed_dfb_index);
+            if constexpr (!DST_ACCUM_MODE) {
+                pack_block_mop(2, index_transposed_dfb_index, 2);
+            } else
 #endif
+            {
+                pack_tile(2, index_transposed_dfb_index);
+                pack_tile(3, index_transposed_dfb_index);
+            }
             tile_regs_release();
         }
 
