@@ -1,0 +1,3 @@
+doc/optimize/**/tracy/
+doc/optimize/**/ops_perf_results.csv
+doc/optimize/**/*.log

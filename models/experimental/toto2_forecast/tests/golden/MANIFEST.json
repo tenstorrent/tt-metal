@@ -1,0 +1,1823 @@
+{
+  "reference": {
+    "repo": "https://github.com/DataDog/toto",
+    "commit": "9213d2c86f716c43010a0a3b2b6a0e3f440e6743",
+    "package": "toto-2 2.0.0 (toto2/), dd-unit-scaling 0.1.0, unit-scaling 0.3.5",
+    "install": "toto-2 @ git+https://github.com/DataDog/toto.git@9213d2c86f716c43010a0a3b2b6a0e3f440e6743#subdirectory=toto2"
+  },
+  "environment": {
+    "venv": "/home/andy/bringup/venvs/toto2",
+    "python": "3.12.12",
+    "torch": "2.14.1+cpu",
+    "threads": 8,
+    "pip_freeze": [
+      "aiohappyeyeballs==2.7.1",
+      "aiohttp==3.14.5",
+      "aiosignal==1.4.0",
+      "annotated-types==0.8.0",
+      "anyio==4.15.1",
+      "attrs==26.1.0",
+      "click==8.5.0",
+      "contourpy==1.4.0",
+      "cycler==0.12.1",
+      "dd-unit-scaling==0.1.0",
+      "docstring_parser==0.18.0",
+      "einops==0.8.2",
+      "filelock==3.32.3",
+      "fonttools==4.67.0",
+      "frozenlist==1.8.0",
+      "fsspec==2026.7.0",
+      "gluonts==0.17.0",
+      "h11==0.16.0",
+      "hf-xet==1.7.0",
+      "httpcore2==2.16.0",
+      "httpx2==2.16.0",
+      "huggingface_hub==2.3.0",
+      "idna==3.20",
+      "jaxtyping==0.3.11",
+      "Jinja2==3.1.6",
+      "kiwisolver==1.5.1",
+      "lightning-utilities==0.15.3",
+      "lightning==2.6.6",
+      "MarkupSafe==3.0.3",
+      "matplotlib==3.11.2",
+      "mpmath==1.3.0",
+      "multidict==7.1.0",
+      "networkx==3.6.1",
+      "numpy==2.5.4",
+      "packaging==26.3",
+      "pandas==2.3.3",
+      "pillow==13.0.0",
+      "propcache==0.5.4",
+      "pydantic==2.14.1",
+      "pydantic_core==2.50.1",
+      "pyparsing==3.3.3",
+      "python-dateutil==3.0.0",
+      "pytorch-lightning==2.6.6",
+      "pytz==2026.5",
+      "PyYAML==6.0.3",
+      "safetensors==0.8.0",
+      "scipy==1.18.1",
+      "setuptools==78.1.0",
+      "six==1.17.0",
+      "sympy==1.14.0",
+      "tabulate==0.10.0",
+      "toolz==0.12.1",
+      "torch==2.14.1+cpu",
+      "torchmetrics==1.9.0",
+      "toto-2 @ git+https://github.com/DataDog/toto.git@9213d2c86f716c43010a0a3b2b6a0e3f440e6743#subdirectory=toto2",
+      "tqdm==4.70.1",
+      "truststore==0.10.5",
+      "typing-inspection==0.4.4",
+      "typing_extensions==4.16.0",
+      "tzdata==2026.5",
+      "unit-scaling==0.3.5",
+      "wadler_lindig==0.1.7",
+      "yarl==1.25.1"
+    ]
+  },
+  "calls": {
+    "load": "Toto2Model.from_pretrained(repo, revision=sha).eval(), HF_HUB_OFFLINE=1",
+    "forecast": {
+      "decode_block_size": null,
+      "has_missing_values": true,
+      "scaler_fallback_min_obs": 8,
+      "quantile_real_cap_k": 10000.0
+    }
+  },
+  "input_generator": "per row: level U(10,500) + trend U(-0.05,0.2)*t + amplitude U(1,30)*sin(2*pi*t/P + phase U(0,2pi)), P in {24,48,96,168}, + N(0, U(0.5,3)) noise; numpy default_rng(seed), rows drawn in (item, variate) order. pattern 'missing' (row r, r % 5): 0 clean; 1 ten scattered NaN; 2 NaN over t in [640,704) (two fully missing patches) plus scattered; 3 the first 90 steps NaN (backfill: patch 2 has 6 observations); 4 NaN in the last context patch [T-20,T-10) plus a fully missing patch at [1024,1056). NaN -> mask False, value 0.",
+  "golden_dir": "/home/andy/bringup/goldens/toto2",
+  "checkpoints": {
+    "4m": {
+      "repo": "Datadog/Toto-2.0-4m",
+      "revision": "8306a9801cf98c0f5ffe4b2dcc8f496e616d84d9",
+      "snapshot": "/home/andy/.cache/huggingface/hub/models--Datadog--Toto-2.0-4m/snapshots/8306a9801cf98c0f5ffe4b2dcc8f496e616d84d9",
+      "safetensors_sha256": "316660d5afb47943e531f39242e0b02ca0b8bb73be5709dfe07ca80dfce9805e",
+      "safetensors_size": 16582848
+    },
+    "2.5B-FT": {
+      "repo": "Datadog/Toto-2.0-2.5B-FT",
+      "revision": "b4f030fb09ba0fe3f61dd11cf730539bda568eb1",
+      "snapshot": "/home/andy/.cache/huggingface/hub/models--Datadog--Toto-2.0-2.5B-FT/snapshots/b4f030fb09ba0fe3f61dd11cf730539bda568eb1",
+      "safetensors_sha256": "217fb05da36f1c0c0eaf48c0d35abecaa040283afeff6072ccfdb297856e907e",
+      "safetensors_size": 9817176960
+    },
+    "22m": {
+      "repo": "Datadog/Toto-2.0-22m",
+      "revision": "685e4ae3e2be8d8998025e53dd98e7fdcb296a89",
+      "snapshot": "/home/andy/.cache/huggingface/hub/models--Datadog--Toto-2.0-22m/snapshots/685e4ae3e2be8d8998025e53dd98e7fdcb296a89",
+      "safetensors_sha256": "9cd503d82df3aa71747862688f47a31c1d0a4b80f898df6e046189016eaa21dd",
+      "safetensors_size": 87669368
+    },
+    "313m": {
+      "repo": "Datadog/Toto-2.0-313m",
+      "revision": "a7bab288f5e95f8606f8306f86659357e1c001ef",
+      "snapshot": "/home/andy/.cache/huggingface/hub/models--Datadog--Toto-2.0-313m/snapshots/a7bab288f5e95f8606f8306f86659357e1c001ef",
+      "safetensors_sha256": "5ee6066497963cb904bf1324ab850661c3201bbb3406052459f1f792386aa2f9",
+      "safetensors_size": 1250763568
+    }
+  },
+  "goldens": {
+    "4m/uni_4x2048.pt": {
+      "sha256": "6eec8b392a13a7be4903533abe5cb09e3017832d7cdb55abfe27cce5fcfbaa33",
+      "bytes": 1768245,
+      "case": {
+        "name": "uni_4x2048",
+        "batch": 4,
+        "variates": 1,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "all",
+        "seed": 0,
+        "chunk": 0
+      },
+      "cpu_s": 0.052914376836270094,
+      "shapes": {
+        "loc": [
+          4,
+          1,
+          66
+        ],
+        "scale": [
+          4,
+          1,
+          66
+        ],
+        "loc_bf": [
+          4,
+          1,
+          66
+        ],
+        "scale_bf": [
+          4,
+          1,
+          66
+        ],
+        "tokens_context": [
+          4,
+          1,
+          64,
+          64
+        ],
+        "embed_context": [
+          4,
+          1,
+          64,
+          256
+        ],
+        "tokens_horizon": [
+          4,
+          1,
+          2,
+          64
+        ],
+        "embed_horizon": [
+          4,
+          1,
+          2,
+          256
+        ],
+        "layer_0": [
+          4,
+          66,
+          256
+        ],
+        "layer_1": [
+          4,
+          66,
+          256
+        ],
+        "layer_2": [
+          4,
+          66,
+          256
+        ],
+        "layer_3": [
+          264,
+          1,
+          256
+        ],
+        "out_norm": [
+          4,
+          1,
+          66,
+          256
+        ],
+        "head_in": [
+          4,
+          1,
+          2,
+          256
+        ],
+        "head_out": [
+          9,
+          4,
+          1,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          4,
+          1,
+          64
+        ]
+      }
+    },
+    "4m/missing_5x2048.pt": {
+      "sha256": "5d4ec37a34dd0c21c0db054f9c3744f44bebc5989a4a8bb426eec74831f1ac05",
+      "bytes": 2208665,
+      "case": {
+        "name": "missing_5x2048",
+        "batch": 5,
+        "variates": 1,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "missing",
+        "series_ids": "shared",
+        "capture": "all",
+        "seed": 1,
+        "chunk": 0
+      },
+      "cpu_s": 0.052610171027481556,
+      "shapes": {
+        "loc": [
+          5,
+          1,
+          66
+        ],
+        "scale": [
+          5,
+          1,
+          66
+        ],
+        "loc_bf": [
+          5,
+          1,
+          66
+        ],
+        "scale_bf": [
+          5,
+          1,
+          66
+        ],
+        "tokens_context": [
+          5,
+          1,
+          64,
+          64
+        ],
+        "embed_context": [
+          5,
+          1,
+          64,
+          256
+        ],
+        "tokens_horizon": [
+          5,
+          1,
+          2,
+          64
+        ],
+        "embed_horizon": [
+          5,
+          1,
+          2,
+          256
+        ],
+        "layer_0": [
+          5,
+          66,
+          256
+        ],
+        "layer_1": [
+          5,
+          66,
+          256
+        ],
+        "layer_2": [
+          5,
+          66,
+          256
+        ],
+        "layer_3": [
+          330,
+          1,
+          256
+        ],
+        "out_norm": [
+          5,
+          1,
+          66,
+          256
+        ],
+        "head_in": [
+          5,
+          1,
+          2,
+          256
+        ],
+        "head_out": [
+          9,
+          5,
+          1,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          5,
+          1,
+          64
+        ]
+      }
+    },
+    "4m/mv_2x4x2048.pt": {
+      "sha256": "c6908bd865fba26e85c24e44ac5c139c88219fe6501a30502869b7c3ee180daa",
+      "bytes": 3529870,
+      "case": {
+        "name": "mv_2x4x2048",
+        "batch": 2,
+        "variates": 4,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "missing",
+        "series_ids": "mixed",
+        "capture": "all",
+        "seed": 2,
+        "chunk": 0
+      },
+      "cpu_s": 0.07312221731990576,
+      "shapes": {
+        "loc": [
+          2,
+          4,
+          66
+        ],
+        "scale": [
+          2,
+          4,
+          66
+        ],
+        "loc_bf": [
+          2,
+          4,
+          66
+        ],
+        "scale_bf": [
+          2,
+          4,
+          66
+        ],
+        "tokens_context": [
+          2,
+          4,
+          64,
+          64
+        ],
+        "embed_context": [
+          2,
+          4,
+          64,
+          256
+        ],
+        "tokens_horizon": [
+          2,
+          4,
+          2,
+          64
+        ],
+        "embed_horizon": [
+          2,
+          4,
+          2,
+          256
+        ],
+        "layer_0": [
+          8,
+          66,
+          256
+        ],
+        "layer_1": [
+          8,
+          66,
+          256
+        ],
+        "layer_2": [
+          8,
+          66,
+          256
+        ],
+        "layer_3": [
+          132,
+          4,
+          256
+        ],
+        "out_norm": [
+          2,
+          4,
+          66,
+          256
+        ],
+        "head_in": [
+          2,
+          4,
+          2,
+          256
+        ],
+        "head_out": [
+          9,
+          2,
+          4,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          2,
+          4,
+          64
+        ]
+      }
+    },
+    "4m/long_2x8192.pt": {
+      "sha256": "89a182848924e61824adce2ed1f5dd498ad8df9e14d8125509fbd844b1a685bc",
+      "bytes": 3997582,
+      "case": {
+        "name": "long_2x8192",
+        "batch": 2,
+        "variates": 1,
+        "context": 8192,
+        "horizon": 1024,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "all",
+        "seed": 3,
+        "chunk": 0
+      },
+      "cpu_s": 0.08566763112321496,
+      "shapes": {
+        "loc": [
+          2,
+          1,
+          288
+        ],
+        "scale": [
+          2,
+          1,
+          288
+        ],
+        "loc_bf": [
+          2,
+          1,
+          288
+        ],
+        "scale_bf": [
+          2,
+          1,
+          288
+        ],
+        "tokens_context": [
+          2,
+          1,
+          256,
+          64
+        ],
+        "embed_context": [
+          2,
+          1,
+          256,
+          256
+        ],
+        "tokens_horizon": [
+          2,
+          1,
+          32,
+          64
+        ],
+        "embed_horizon": [
+          2,
+          1,
+          32,
+          256
+        ],
+        "layer_0": [
+          2,
+          288,
+          256
+        ],
+        "layer_1": [
+          2,
+          288,
+          256
+        ],
+        "layer_2": [
+          2,
+          288,
+          256
+        ],
+        "layer_3": [
+          576,
+          1,
+          256
+        ],
+        "out_norm": [
+          2,
+          1,
+          288,
+          256
+        ],
+        "head_in": [
+          2,
+          1,
+          32,
+          256
+        ],
+        "head_out": [
+          9,
+          2,
+          1,
+          32,
+          32
+        ],
+        "q": [
+          9,
+          2,
+          1,
+          1024
+        ]
+      }
+    },
+    "2.5B-FT/uni_16x2048.pt": {
+      "sha256": "b908e76ab68ba0a7503720f2edd473c8a1a99429635faf6fdfdcf7fb774e124c",
+      "bytes": 61349647,
+      "case": {
+        "name": "uni_16x2048",
+        "batch": 16,
+        "variates": 1,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "some",
+        "seed": 10,
+        "chunk": 0
+      },
+      "cpu_s": 41.74615625385195,
+      "shapes": {
+        "loc": [
+          16,
+          1,
+          66
+        ],
+        "scale": [
+          16,
+          1,
+          66
+        ],
+        "loc_bf": [
+          16,
+          1,
+          66
+        ],
+        "scale_bf": [
+          16,
+          1,
+          66
+        ],
+        "tokens_context": [
+          16,
+          1,
+          64,
+          64
+        ],
+        "embed_context": [
+          16,
+          1,
+          64,
+          2048
+        ],
+        "tokens_horizon": [
+          16,
+          1,
+          2,
+          64
+        ],
+        "embed_horizon": [
+          16,
+          1,
+          2,
+          2048
+        ],
+        "layer_0": [
+          16,
+          66,
+          2048
+        ],
+        "layer_1": [
+          16,
+          66,
+          2048
+        ],
+        "layer_24": [
+          16,
+          66,
+          2048
+        ],
+        "layer_46": [
+          16,
+          66,
+          2048
+        ],
+        "layer_47": [
+          1056,
+          1,
+          2048
+        ],
+        "out_norm": [
+          16,
+          1,
+          66,
+          2048
+        ],
+        "head_in": [
+          16,
+          1,
+          2,
+          2048
+        ],
+        "head_out": [
+          9,
+          16,
+          1,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          16,
+          1,
+          64
+        ]
+      }
+    },
+    "2.5B-FT/mv_4x8x2048.pt": {
+      "sha256": "22231b7ddb1fb01774c59c6a4cdbe3c8f467c5dd4e6960687582c044276f1bca",
+      "bytes": 122691983,
+      "case": {
+        "name": "mv_4x8x2048",
+        "batch": 4,
+        "variates": 8,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "some",
+        "seed": 12,
+        "chunk": 0
+      },
+      "cpu_s": 80.76485144579783,
+      "shapes": {
+        "loc": [
+          4,
+          8,
+          66
+        ],
+        "scale": [
+          4,
+          8,
+          66
+        ],
+        "loc_bf": [
+          4,
+          8,
+          66
+        ],
+        "scale_bf": [
+          4,
+          8,
+          66
+        ],
+        "tokens_context": [
+          4,
+          8,
+          64,
+          64
+        ],
+        "embed_context": [
+          4,
+          8,
+          64,
+          2048
+        ],
+        "tokens_horizon": [
+          4,
+          8,
+          2,
+          64
+        ],
+        "embed_horizon": [
+          4,
+          8,
+          2,
+          2048
+        ],
+        "layer_0": [
+          32,
+          66,
+          2048
+        ],
+        "layer_1": [
+          32,
+          66,
+          2048
+        ],
+        "layer_24": [
+          32,
+          66,
+          2048
+        ],
+        "layer_46": [
+          32,
+          66,
+          2048
+        ],
+        "layer_47": [
+          264,
+          8,
+          2048
+        ],
+        "out_norm": [
+          4,
+          8,
+          66,
+          2048
+        ],
+        "head_in": [
+          4,
+          8,
+          2,
+          2048
+        ],
+        "head_out": [
+          9,
+          4,
+          8,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          4,
+          8,
+          64
+        ]
+      }
+    },
+    "2.5B-FT/missing_16x2048.pt": {
+      "sha256": "6c70f077f08516aa644c2c91168a1767c5df41b96ebff7c8530adcd38c286e01",
+      "bytes": 521285,
+      "case": {
+        "name": "missing_16x2048",
+        "batch": 16,
+        "variates": 1,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "missing",
+        "series_ids": "shared",
+        "capture": "head",
+        "seed": 11,
+        "chunk": 0
+      },
+      "cpu_s": 38.557638900354505,
+      "shapes": {
+        "loc": [
+          16,
+          1,
+          66
+        ],
+        "scale": [
+          16,
+          1,
+          66
+        ],
+        "loc_bf": [
+          16,
+          1,
+          66
+        ],
+        "scale_bf": [
+          16,
+          1,
+          66
+        ],
+        "head_in": [
+          16,
+          1,
+          2,
+          2048
+        ],
+        "head_out": [
+          9,
+          16,
+          1,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          16,
+          1,
+          64
+        ]
+      }
+    },
+    "22m/uni_4x2048.pt": {
+      "sha256": "68a6c6a2229629d21b6694bbfa29b83f64863e9ce6f0d8b7c4cc69da3040430c",
+      "bytes": 4480309,
+      "case": {
+        "name": "uni_4x2048",
+        "batch": 4,
+        "variates": 1,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "all",
+        "seed": 0,
+        "chunk": 0
+      },
+      "cpu_s": 0.12092836294323206,
+      "shapes": {
+        "loc": [
+          4,
+          1,
+          66
+        ],
+        "scale": [
+          4,
+          1,
+          66
+        ],
+        "loc_bf": [
+          4,
+          1,
+          66
+        ],
+        "scale_bf": [
+          4,
+          1,
+          66
+        ],
+        "tokens_context": [
+          4,
+          1,
+          64,
+          64
+        ],
+        "embed_context": [
+          4,
+          1,
+          64,
+          512
+        ],
+        "tokens_horizon": [
+          4,
+          1,
+          2,
+          64
+        ],
+        "embed_horizon": [
+          4,
+          1,
+          2,
+          512
+        ],
+        "layer_0": [
+          4,
+          66,
+          512
+        ],
+        "layer_1": [
+          4,
+          66,
+          512
+        ],
+        "layer_2": [
+          4,
+          66,
+          512
+        ],
+        "layer_3": [
+          4,
+          66,
+          512
+        ],
+        "layer_4": [
+          4,
+          66,
+          512
+        ],
+        "layer_5": [
+          264,
+          1,
+          512
+        ],
+        "out_norm": [
+          4,
+          1,
+          66,
+          512
+        ],
+        "head_in": [
+          4,
+          1,
+          2,
+          512
+        ],
+        "head_out": [
+          9,
+          4,
+          1,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          4,
+          1,
+          64
+        ]
+      }
+    },
+    "22m/missing_5x2048.pt": {
+      "sha256": "f42cd3f4dd2c5227cec761b4e90b157ed9ad9abb452d6f360bf20d0b6924096b",
+      "bytes": 5598689,
+      "case": {
+        "name": "missing_5x2048",
+        "batch": 5,
+        "variates": 1,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "missing",
+        "series_ids": "shared",
+        "capture": "all",
+        "seed": 1,
+        "chunk": 0
+      },
+      "cpu_s": 0.12736685201525688,
+      "shapes": {
+        "loc": [
+          5,
+          1,
+          66
+        ],
+        "scale": [
+          5,
+          1,
+          66
+        ],
+        "loc_bf": [
+          5,
+          1,
+          66
+        ],
+        "scale_bf": [
+          5,
+          1,
+          66
+        ],
+        "tokens_context": [
+          5,
+          1,
+          64,
+          64
+        ],
+        "embed_context": [
+          5,
+          1,
+          64,
+          512
+        ],
+        "tokens_horizon": [
+          5,
+          1,
+          2,
+          64
+        ],
+        "embed_horizon": [
+          5,
+          1,
+          2,
+          512
+        ],
+        "layer_0": [
+          5,
+          66,
+          512
+        ],
+        "layer_1": [
+          5,
+          66,
+          512
+        ],
+        "layer_2": [
+          5,
+          66,
+          512
+        ],
+        "layer_3": [
+          5,
+          66,
+          512
+        ],
+        "layer_4": [
+          5,
+          66,
+          512
+        ],
+        "layer_5": [
+          330,
+          1,
+          512
+        ],
+        "out_norm": [
+          5,
+          1,
+          66,
+          512
+        ],
+        "head_in": [
+          5,
+          1,
+          2,
+          512
+        ],
+        "head_out": [
+          9,
+          5,
+          1,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          5,
+          1,
+          64
+        ]
+      }
+    },
+    "22m/mv_2x4x2048.pt": {
+      "sha256": "df5dde057b17a4f91183964002651a16c62c48653faefdb241eeb28493493194",
+      "bytes": 8953552,
+      "case": {
+        "name": "mv_2x4x2048",
+        "batch": 2,
+        "variates": 4,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "missing",
+        "series_ids": "mixed",
+        "capture": "all",
+        "seed": 2,
+        "chunk": 0
+      },
+      "cpu_s": 0.15598174137994647,
+      "shapes": {
+        "loc": [
+          2,
+          4,
+          66
+        ],
+        "scale": [
+          2,
+          4,
+          66
+        ],
+        "loc_bf": [
+          2,
+          4,
+          66
+        ],
+        "scale_bf": [
+          2,
+          4,
+          66
+        ],
+        "tokens_context": [
+          2,
+          4,
+          64,
+          64
+        ],
+        "embed_context": [
+          2,
+          4,
+          64,
+          512
+        ],
+        "tokens_horizon": [
+          2,
+          4,
+          2,
+          64
+        ],
+        "embed_horizon": [
+          2,
+          4,
+          2,
+          512
+        ],
+        "layer_0": [
+          8,
+          66,
+          512
+        ],
+        "layer_1": [
+          8,
+          66,
+          512
+        ],
+        "layer_2": [
+          8,
+          66,
+          512
+        ],
+        "layer_3": [
+          8,
+          66,
+          512
+        ],
+        "layer_4": [
+          8,
+          66,
+          512
+        ],
+        "layer_5": [
+          132,
+          4,
+          512
+        ],
+        "out_norm": [
+          2,
+          4,
+          66,
+          512
+        ],
+        "head_in": [
+          2,
+          4,
+          2,
+          512
+        ],
+        "head_out": [
+          9,
+          2,
+          4,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          2,
+          4,
+          64
+        ]
+      }
+    },
+    "22m/long_2x8192.pt": {
+      "sha256": "b27a78ae772561c663ea9fedbcd136356f5122c3d3525edbe0cb1545e0423c88",
+      "bytes": 9961872,
+      "case": {
+        "name": "long_2x8192",
+        "batch": 2,
+        "variates": 1,
+        "context": 8192,
+        "horizon": 1024,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "all",
+        "seed": 3,
+        "chunk": 0
+      },
+      "cpu_s": 0.1745511400513351,
+      "shapes": {
+        "loc": [
+          2,
+          1,
+          288
+        ],
+        "scale": [
+          2,
+          1,
+          288
+        ],
+        "loc_bf": [
+          2,
+          1,
+          288
+        ],
+        "scale_bf": [
+          2,
+          1,
+          288
+        ],
+        "tokens_context": [
+          2,
+          1,
+          256,
+          64
+        ],
+        "embed_context": [
+          2,
+          1,
+          256,
+          512
+        ],
+        "tokens_horizon": [
+          2,
+          1,
+          32,
+          64
+        ],
+        "embed_horizon": [
+          2,
+          1,
+          32,
+          512
+        ],
+        "layer_0": [
+          2,
+          288,
+          512
+        ],
+        "layer_1": [
+          2,
+          288,
+          512
+        ],
+        "layer_2": [
+          2,
+          288,
+          512
+        ],
+        "layer_3": [
+          2,
+          288,
+          512
+        ],
+        "layer_4": [
+          2,
+          288,
+          512
+        ],
+        "layer_5": [
+          576,
+          1,
+          512
+        ],
+        "out_norm": [
+          2,
+          1,
+          288,
+          512
+        ],
+        "head_in": [
+          2,
+          1,
+          32,
+          512
+        ],
+        "head_out": [
+          9,
+          2,
+          1,
+          32,
+          32
+        ],
+        "q": [
+          9,
+          2,
+          1,
+          1024
+        ]
+      }
+    },
+    "313m/uni_16x2048.pt": {
+      "sha256": "541f89a17bbd2dc6a76506fec77c560273104dc0469f9a552215d184e7e53acd",
+      "bytes": 30940943,
+      "case": {
+        "name": "uni_16x2048",
+        "batch": 16,
+        "variates": 1,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "some",
+        "seed": 10,
+        "chunk": 0
+      },
+      "cpu_s": 4.327771528158337,
+      "shapes": {
+        "loc": [
+          16,
+          1,
+          66
+        ],
+        "scale": [
+          16,
+          1,
+          66
+        ],
+        "loc_bf": [
+          16,
+          1,
+          66
+        ],
+        "scale_bf": [
+          16,
+          1,
+          66
+        ],
+        "tokens_context": [
+          16,
+          1,
+          64,
+          64
+        ],
+        "embed_context": [
+          16,
+          1,
+          64,
+          1024
+        ],
+        "tokens_horizon": [
+          16,
+          1,
+          2,
+          64
+        ],
+        "embed_horizon": [
+          16,
+          1,
+          2,
+          1024
+        ],
+        "layer_0": [
+          16,
+          66,
+          1024
+        ],
+        "layer_1": [
+          16,
+          66,
+          1024
+        ],
+        "layer_12": [
+          16,
+          66,
+          1024
+        ],
+        "layer_22": [
+          16,
+          66,
+          1024
+        ],
+        "layer_23": [
+          1056,
+          1,
+          1024
+        ],
+        "out_norm": [
+          16,
+          1,
+          66,
+          1024
+        ],
+        "head_in": [
+          16,
+          1,
+          2,
+          1024
+        ],
+        "head_out": [
+          9,
+          16,
+          1,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          16,
+          1,
+          64
+        ]
+      }
+    },
+    "313m/missing_16x2048.pt": {
+      "sha256": "e448eff153c1dbadaae1e6047781bb3ad43b2adc0106e8ca380517da07e7ae18",
+      "bytes": 30941047,
+      "case": {
+        "name": "missing_16x2048",
+        "batch": 16,
+        "variates": 1,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "missing",
+        "series_ids": "shared",
+        "capture": "some",
+        "seed": 11,
+        "chunk": 0
+      },
+      "cpu_s": 5.456377179827541,
+      "shapes": {
+        "loc": [
+          16,
+          1,
+          66
+        ],
+        "scale": [
+          16,
+          1,
+          66
+        ],
+        "loc_bf": [
+          16,
+          1,
+          66
+        ],
+        "scale_bf": [
+          16,
+          1,
+          66
+        ],
+        "tokens_context": [
+          16,
+          1,
+          64,
+          64
+        ],
+        "embed_context": [
+          16,
+          1,
+          64,
+          1024
+        ],
+        "tokens_horizon": [
+          16,
+          1,
+          2,
+          64
+        ],
+        "embed_horizon": [
+          16,
+          1,
+          2,
+          1024
+        ],
+        "layer_0": [
+          16,
+          66,
+          1024
+        ],
+        "layer_1": [
+          16,
+          66,
+          1024
+        ],
+        "layer_12": [
+          16,
+          66,
+          1024
+        ],
+        "layer_22": [
+          16,
+          66,
+          1024
+        ],
+        "layer_23": [
+          1056,
+          1,
+          1024
+        ],
+        "out_norm": [
+          16,
+          1,
+          66,
+          1024
+        ],
+        "head_in": [
+          16,
+          1,
+          2,
+          1024
+        ],
+        "head_out": [
+          9,
+          16,
+          1,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          16,
+          1,
+          64
+        ]
+      }
+    },
+    "313m/mv_4x8x2048.pt": {
+      "sha256": "b7ee19dce649a25cbd09909f6c815be9852930e1cd2045f4510a163b7b39cfcf",
+      "bytes": 61874575,
+      "case": {
+        "name": "mv_4x8x2048",
+        "batch": 4,
+        "variates": 8,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "some",
+        "seed": 12,
+        "chunk": 0
+      },
+      "cpu_s": 10.221310558728874,
+      "shapes": {
+        "loc": [
+          4,
+          8,
+          66
+        ],
+        "scale": [
+          4,
+          8,
+          66
+        ],
+        "loc_bf": [
+          4,
+          8,
+          66
+        ],
+        "scale_bf": [
+          4,
+          8,
+          66
+        ],
+        "tokens_context": [
+          4,
+          8,
+          64,
+          64
+        ],
+        "embed_context": [
+          4,
+          8,
+          64,
+          1024
+        ],
+        "tokens_horizon": [
+          4,
+          8,
+          2,
+          64
+        ],
+        "embed_horizon": [
+          4,
+          8,
+          2,
+          1024
+        ],
+        "layer_0": [
+          32,
+          66,
+          1024
+        ],
+        "layer_1": [
+          32,
+          66,
+          1024
+        ],
+        "layer_12": [
+          32,
+          66,
+          1024
+        ],
+        "layer_22": [
+          32,
+          66,
+          1024
+        ],
+        "layer_23": [
+          264,
+          8,
+          1024
+        ],
+        "out_norm": [
+          4,
+          8,
+          66,
+          1024
+        ],
+        "head_in": [
+          4,
+          8,
+          2,
+          1024
+        ],
+        "head_out": [
+          9,
+          4,
+          8,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          4,
+          8,
+          64
+        ]
+      }
+    },
+    "313m/paper_1024x2048.pt": {
+      "sha256": "73a813d6dcc3fee274d58cb61fe158c82ec07fca9513746b5226f7d53b3ea752",
+      "bytes": 24687109,
+      "case": {
+        "name": "paper_1024x2048",
+        "batch": 1024,
+        "variates": 1,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "head",
+        "seed": 100,
+        "chunk": 64
+      },
+      "cpu_s": 355.74484746996313,
+      "shapes": {
+        "loc": [
+          1024,
+          1,
+          66
+        ],
+        "scale": [
+          1024,
+          1,
+          66
+        ],
+        "loc_bf": [
+          1024,
+          1,
+          66
+        ],
+        "scale_bf": [
+          1024,
+          1,
+          66
+        ],
+        "head_in": [
+          1024,
+          1,
+          2,
+          1024
+        ],
+        "head_out": [
+          9,
+          1024,
+          1,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          1024,
+          1,
+          64
+        ]
+      }
+    },
+    "2.5B-FT/paper_1024x2048.pt": {
+      "sha256": "ab21c83fc429197f84c77e8cd4f7e3bb55cf115e1d602aeb613c01f2b755108d",
+      "bytes": 33075717,
+      "case": {
+        "name": "paper_1024x2048",
+        "batch": 1024,
+        "variates": 1,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "head",
+        "seed": 100,
+        "chunk": 64
+      },
+      "cpu_s": 2351.81894311402,
+      "shapes": {
+        "loc": [
+          1024,
+          1,
+          66
+        ],
+        "scale": [
+          1024,
+          1,
+          66
+        ],
+        "loc_bf": [
+          1024,
+          1,
+          66
+        ],
+        "scale_bf": [
+          1024,
+          1,
+          66
+        ],
+        "head_in": [
+          1024,
+          1,
+          2,
+          2048
+        ],
+        "head_out": [
+          9,
+          1024,
+          1,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          1024,
+          1,
+          64
+        ]
+      }
+    },
+    "2.5B-FT/long_context_32x8192.pt": {
+      "sha256": "180e8c24c4109e17342f249c188d0cace92d2f8b2c2e564d3660318292474cad",
+      "bytes": 12211029,
+      "case": {
+        "name": "long_context_32x8192",
+        "batch": 32,
+        "variates": 1,
+        "context": 8192,
+        "horizon": 1024,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "head",
+        "seed": 101,
+        "chunk": 8
+      },
+      "cpu_s": 327.75846255989745,
+      "shapes": {
+        "loc": [
+          32,
+          1,
+          288
+        ],
+        "scale": [
+          32,
+          1,
+          288
+        ],
+        "loc_bf": [
+          32,
+          1,
+          288
+        ],
+        "scale_bf": [
+          32,
+          1,
+          288
+        ],
+        "head_in": [
+          32,
+          1,
+          32,
+          2048
+        ],
+        "head_out": [
+          9,
+          32,
+          1,
+          32,
+          32
+        ],
+        "q": [
+          9,
+          32,
+          1,
+          1024
+        ]
+      }
+    }
+  }
+}
