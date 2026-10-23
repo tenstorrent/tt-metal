@@ -38,6 +38,7 @@ from .moe import expert_quant
 from .moe_stream import zero_output
 from .mtp import TtMiMoMTP
 from .rope import MiMoRotarySetup, partial_rope_cos_sin
+from .verify_sampler import VerifySampler
 
 
 def prefill_padded_len(seq_len):
@@ -218,6 +219,7 @@ class TtMiMoModel:
         self.mtp = None  # the MTP drafter (setup_mtp)
         self.greedy_head = None
         self.sampler = None  # vLLM mode: temperature / top-k / top-p decode sampling (setup_vllm_kv_cache)
+        self.verify_sampler = None  # vLLM mode with MTP: a verify's acceptance on device (setup_vllm_kv_cache)
         self.prefill_traces = {}  # (users, padded length) -> traced prefill batch (setup_prefill_batch_trace)
         self.rope_tables = None  # decode cos / sin of every position (setup_decode_rope_tables)
         self.decode_users = None
@@ -325,6 +327,10 @@ class TtMiMoModel:
         # before any capture.
         self.greedy_head = GreedyHead(self.plan, self.vocab_local, self.decode_users, self.max_batch)
         self.sampler = DeviceSampler(self.plan, self.vocab_local, self.decode_users, self.max_batch)
+        if self.mtp is not None:
+            # A verify's acceptance on device (the plugin's fused_sample, capture_verify_trace): its persistent
+            # inputs and output, like the samplers' buffers, before any capture.
+            self.verify_sampler = VerifySampler(self.sampler, self.cfg.vocab_size)
         self.page_table_tt = {
             g: ttnn.from_torch(
                 empty,
@@ -1034,6 +1040,11 @@ class TtMiMoModel:
         for sample in variants:
             warm = self._decode_inputs(inputs, greedy_only=greedy_only, sample=sample)
             self._feed_back(inputs, warm, tokens_written=written)  # every slot is empty: positions stay -1
+            if sample and self.verify_sampler is not None:
+                # Compiles SampleVerify before any capture (its steps 1-2 are the sampled step's own programs, which
+                # key on nothing the verify changes), so the accept trace (capture_verify_trace) compiles nothing
+                # after the decode trace. It writes only its own output page.
+                self.verify_sampler(warm["logits"], warm["next_tokens"])
             # Keeps the persistent buffers: GreedyHead's and the sampler's tokens and the final norm's "hidden" (the
             # MTP drafter's input).
             self._release(warm)
@@ -1104,7 +1115,24 @@ class TtMiMoModel:
         ttnn.synchronize_device(self.mesh_device)
         # The MTP draft program reads the step's final hidden from the norm buffer it was captured on.
         assert output.get("hidden") is self.norm_buffers[0], "the final norm is not the persistent fused-norm buffer"
-        self.verify_trace = {"id": trace_id, "inputs": inputs, "output": output}
+        self.verify_trace = {"id": trace_id, "inputs": inputs, "output": output, "accept": None}
+        if self.verify_sampler is not None:
+            # The accept step (VerifySampler) in its own trace on the verify trace's output logits and greedy tokens,
+            # replayed after a verify only when the plugin asks for fused_sample, so argmax_ids and logits verifies
+            # replay exactly the trace they did before. Its programs compiled in capture_decode_trace; this eager run
+            # hits the program cache.
+            self.verify_sampler(output["logits"], output["next_tokens"])
+            ttnn.synchronize_device(self.mesh_device)
+            fabric = getattr(self.plan, "fabric_gather", None)
+            phase = fabric.phase if fabric is not None else None
+            accept_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            self.verify_sampler(output["logits"], output["next_tokens"])
+            ttnn.end_trace_capture(self.mesh_device, accept_id, cq_id=0)
+            # No fabric reduction in the accept step: replays leave the gather phases where the verify left them.
+            fabric = getattr(self.plan, "fabric_gather", None)
+            assert fabric is None or fabric.phase == (phase if phase is not None else 0), "fabric phase moved"
+            ttnn.synchronize_device(self.mesh_device)
+            self.verify_trace["accept"] = accept_id
 
     def capture_spec_traces(self):
         """The verify step and the MTP draft program, after the decode trace (persistent buffers already exist)."""
@@ -1114,6 +1142,8 @@ class TtMiMoModel:
     def release_spec_traces(self):
         if self.verify_trace is not None:
             ttnn.release_trace(self.mesh_device, self.verify_trace["id"])
+            if self.verify_trace["accept"] is not None:
+                ttnn.release_trace(self.mesh_device, self.verify_trace["accept"])
             self.verify_trace = None
         if self.mtp is not None:
             self.mtp.release_trace()
@@ -1126,6 +1156,13 @@ class TtMiMoModel:
             ttnn.copy_host_to_device_tensor(h, d)
         ttnn.execute_trace(self.mesh_device, self.verify_trace["id"], cq_id=0, blocking=False)
         return self.verify_trace["output"]
+
+    def verify_accept_enqueue(self, hosts):
+        """After ``verify_enqueue``: the pass's acceptance on device (VerifySampler) with its slots' parameters and
+        control page (``VerifySampler.host_inputs``). Non-blocking; ``verify_sampler.read`` returns its result."""
+        assert self.verify_trace is not None and self.verify_trace["accept"] is not None, "no accept trace captured"
+        self.verify_sampler.set_inputs(hosts)
+        ttnn.execute_trace(self.mesh_device, self.verify_trace["accept"], cq_id=0, blocking=False)
 
     def read_next_tokens(self, handle):
         """The greedy token of every slot of a decode or verify step, int64 [max_batch] (blocks)."""
