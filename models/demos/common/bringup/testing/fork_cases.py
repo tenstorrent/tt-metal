@@ -130,7 +130,7 @@ def check(capture: Path | list[Path], model: str) -> tuple[dict, dict[str, list[
     missing: dict[str, list[dict]] = {}
     for fork, cs in by_fork.items():
         have = {k["sig"] for k in cases(fork) if k.get("model") == model}
-        gap = [c for c in cs if c["sig"] not in have]
+        gap = [c for c in cs if c["sig"] not in have and c.get("sig_full") not in have]  # F179: old cases keep matching
         if gap:
             missing[fork] = gap
     stats = {

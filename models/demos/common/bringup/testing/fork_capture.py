@@ -96,6 +96,11 @@ def _device() -> None:
             pass
 
 
+# F179: arguments whose value is a run's identity, not the call's shape (a program-cache key built from buffer
+# addresses: DeepSeek-V4.1 flat_routed_expert extra_key changed between two runs, so no case could ever match it)
+VOLATILE_KWARGS = frozenset({"extra_key"})
+
+
 def record(op: str, args, kwargs) -> None:
     _device()
     call = {
@@ -103,12 +108,13 @@ def record(op: str, args, kwargs) -> None:
         "args": [_value(a) for a in args],
         "kwargs": {k: _value(v) for k, v in sorted(kwargs.items())},
     }
-    key = json.dumps(call, sort_keys=True)
-    sig = hashlib.sha1(key.encode()).hexdigest()[:10]
+    full = hashlib.sha1(json.dumps(call, sort_keys=True).encode()).hexdigest()[:10]  # the pre-F179 signature
+    stable = dict(call, kwargs={k: v for k, v in call["kwargs"].items() if k not in VOLATILE_KWARGS})
+    sig = hashlib.sha1(json.dumps(stable, sort_keys=True).encode()).hexdigest()[:10]
     if sig in _CALLS:
         _CALLS[sig]["count"] += 1
     else:
-        _CALLS[sig] = {"sig": sig, "count": 1, **call}
+        _CALLS[sig] = {"sig": sig, "sig_full": full, "count": 1, **call}
 
 
 def patch() -> None:
