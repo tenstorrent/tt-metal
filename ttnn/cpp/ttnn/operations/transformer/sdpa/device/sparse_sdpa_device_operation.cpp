@@ -65,18 +65,40 @@ void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& 
     // ROW_MAJOR layout and padding are not).
     TT_FATAL(kv.layout() == Layout::ROW_MAJOR, "sparse_sdpa KV cache must be ROW_MAJOR");
     TT_FATAL(kv.padded_shape() == kv.logical_shape(), "sparse_sdpa KV cache must not be padded");
-    TT_FATAL(kv.memory_config().buffer_type() == BufferType::DRAM, "sparse_sdpa KV cache must be in DRAM");
+    // An L1 kv is only a front: the pages past it come from a DRAM kv_spill.
+    TT_FATAL(
+        kv.memory_config().buffer_type() == BufferType::DRAM || t.kv_spill.has_value(),
+        "sparse_sdpa KV cache must be in DRAM (or an L1 front with a DRAM kv_spill)");
     const uint32_t K_DIM = q.logical_shape()[3];
     const auto kvs = kv.logical_shape();
     // kv is [B,1,T,K_DIM]: B == 1 normally; when indexed (cache_batch_idx set) B is the cache's batch slots
     // and cache_batch_idx selects one. q is always batch-1, so the selected slot serves the whole query.
     const uint32_t expected_kv_width =
         attrs.has_scaled_kv() ? ::sparse_sdpa::packed_kv_payload_bytes(K_DIM, attrs.v_dim) : K_DIM;
+    // A scaled kv may also come as a container of DRAM-aligned row pages (an L1 front: L1 pages are only 16 B
+    // aligned, but the kernels need the 64 B multiple stride DRAM pages have).
+    const uint32_t padded_kv_width = (expected_kv_width + 63) / 64 * 64;
     TT_FATAL(
-        kvs.rank() == 4 && kvs[1] == 1 && kvs[3] == expected_kv_width,
+        kvs.rank() == 4 && kvs[1] == 1 &&
+            (kvs[3] == expected_kv_width || (attrs.has_scaled_kv() && kvs[3] == padded_kv_width)),
         "kv must be [B,1,T,{}] (got {})",
         expected_kv_width,
         kvs);
+    if (t.kv_spill.has_value()) {
+        const auto& spill = *t.kv_spill;
+        TT_FATAL(
+            spill.memory_config().buffer_type() == BufferType::DRAM && !spill.memory_config().is_sharded() &&
+                spill.layout() == Layout::ROW_MAJOR && spill.dtype() == kv.dtype(),
+            "sparse_sdpa kv_spill must be a ROW_MAJOR interleaved DRAM tensor of kv's dtype");
+        TT_FATAL(
+            spill.buffer()->aligned_page_size() % kv.buffer()->aligned_page_size() == 0,
+            "sparse_sdpa kv_spill pages ({} B) must hold whole kv rows ({} B)",
+            spill.buffer()->aligned_page_size(),
+            kv.buffer()->aligned_page_size());
+        TT_FATAL(
+            !attrs.has_block_cyclic() && !attrs.cache_batch_idx.has_value(),
+            "sparse_sdpa kv_spill serves compact (pushed) buffers only");
+    }
     TT_FATAL(kvs[2] > 0, "kv T (cache length) must be > 0");
     const uint32_t B = kvs[0];
     if (attrs.cache_batch_idx.has_value()) {
@@ -278,6 +300,11 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         t.indices.logical_shape(),
         t.indices.dtype(),
         t.attention_sink,
+        t.kv_spill.has_value(),
+        t.kv_spill.has_value() ? t.kv_spill->memory_config() : tt::tt_metal::MemoryConfig{},
+        t.kv_spill.has_value() ? t.kv_spill->logical_shape() : ttnn::Shape{},
+        t.push_output_spill.has_value(),
+        t.push_output_spill.has_value() ? t.push_output_spill->logical_shape() : ttnn::Shape{},
         attrs.worker_core_grid,
         // Fused push: structure only; the pushed slot and semaphore addresses are runtime args.
         attrs.fused_push.has_value(),
@@ -316,7 +343,9 @@ Tensor sparse_sdpa(
     const std::optional<Tensor>& push_input,
     const std::optional<Tensor>& push_table,
     const std::optional<Tensor>& push_output,
-    const std::optional<Tensor>& push_batch_index_tensor) {
+    const std::optional<Tensor>& push_batch_index_tensor,
+    const std::optional<Tensor>& kv_spill,
+    const std::optional<Tensor>& push_output_spill) {
     using OperationType = ttnn::prim::SparseSDPAOperation;
     if (fused_push.has_value()) {
         TT_FATAL(
@@ -360,6 +389,8 @@ Tensor sparse_sdpa(
             .push_table = push_table,
             .push_output = push_output,
             .push_batch_index_tensor = push_batch_index_tensor,
+            .kv_spill = kv_spill,
+            .push_output_spill = push_output_spill,
         });
 }
 

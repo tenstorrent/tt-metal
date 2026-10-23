@@ -89,6 +89,10 @@ ttnn::Tensor sparse_sdpa(
     // push_batch_slot_layer_idx, read on device (push_batch_index is then ignored).
     const std::optional<ttnn::Tensor>& push_batch_index_tensor = std::nullopt,
     uint32_t push_batch_slot_num_layers = 1,
-    uint32_t push_batch_slot_layer_idx = 0);
+    uint32_t push_batch_slot_layer_idx = 0,
+    // Optional DRAM spills: `kv` (and `push_output`) then hold only their first rows, e.g. an L1 front, and the rows
+    // past them live in the spill, R consecutive rows per spill page (R = spill page / kv row page).
+    const std::optional<ttnn::Tensor>& kv_spill = std::nullopt,
+    const std::optional<ttnn::Tensor>& push_output_spill = std::nullopt);
 
 }  // namespace ttnn::transformer

@@ -54,7 +54,11 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
     const auto mux = sparse_push::mux_config(mesh_device);
     const auto defines = sparse_push::kernel_defines(mesh_device);
     const auto cfg = reader_config(operation_attributes, tensor_args, num_devices);
-    const uint32_t banks = mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
+    // Slot layout (must match the plan's): packets of consecutive slots into an L1 front with a spill, else
+    // spread over the DRAM banks.
+    const uint32_t banks = tensor_args.push_spill.has_value()
+                               ? 1u
+                               : mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
     const auto reader_ct = sparse_push::reader_compile_args(cfg, banks);
     const auto reader_common = sparse_push::reader_common_args(
         cfg,
@@ -89,7 +93,9 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
             kdir + "sparse_push_writer.cpp",
             layout.sender_range,
             tt::tt_metal::WriterDataMovementConfig(
-                sparse_push::writer_compile_args(output_tensor, num_devices, my_rank, layout, mux), defines));
+                sparse_push::writer_compile_args(
+                    output_tensor, tensor_args.push_spill, num_devices, my_rank, layout, mux),
+                defines));
         auto mux_kernel = tt::tt_metal::CreateKernel(
             program,
             "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
@@ -106,7 +112,8 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
             writer,
             {output_tensor.buffer()->address(),
              operation_attributes.ready_semaphore->address(),
-             operation_attributes.data_valid_semaphore->address()});
+             operation_attributes.data_valid_semaphore->address(),
+             tensor_args.push_spill.has_value() ? tensor_args.push_spill->buffer()->address() : 0u});
         for (uint32_t c = 0; c < layout.channels(); ++c) {
             tt::tt_metal::SetRuntimeArgs(
                 program,
@@ -153,6 +160,7 @@ void HighBwSparsePushFactory::override_runtime_arguments(
         writer[0] = output_tensor.buffer()->address();
         writer[1] = operation_attributes.ready_semaphore->address();
         writer[2] = operation_attributes.data_valid_semaphore->address();
+        writer[3] = tensor_args.push_spill.has_value() ? tensor_args.push_spill->buffer()->address() : 0u;
     }
 }
 

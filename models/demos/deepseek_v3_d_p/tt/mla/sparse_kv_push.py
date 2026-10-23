@@ -52,15 +52,27 @@ def _replicated(mesh_device, host, dtype, layout):
     )
 
 
+# L1 front of each compact buffer, per core: sparse_sdpa, bound by its row reads, reads these rows from L1 instead of
+# DRAM. Both parities stay allocated for the whole forward, so 2 x this must leave L1 for the largest GLM program's
+# circular buffers (on the Galaxy about 370 KB per core are free; 2 x 192 KB clashes).
+L1_FRONT_BYTES_PER_CORE = 160 * 1024
+
+
 class SparseKvPushPlanner:
     """Builds and caches the push plan for one set of injected indices; shared by all MLA layers of a mesh.
 
     Every buffer is allocated on first use, which the warm pass does before a trace capture."""
 
-    def __init__(self, mesh_device, links: int):
+    def __init__(self, mesh_device, links: int, l1_front_bytes_per_core: int | None = None):
         self.mesh_device = mesh_device
         self.links = links
-        self.banks = mesh_device.dram_grid_size().x
+        self.l1_front_bytes_per_core = (
+            L1_FRONT_BYTES_PER_CORE if l1_front_bytes_per_core is None else l1_front_bytes_per_core
+        )
+        # With an L1 front, each packet's rows are consecutive compact slots (one front shard or spill page); without
+        # one they are spread over the DRAM banks so a packet lands in one bank.
+        self.banks = 1 if self.l1_front_bytes_per_core else mesh_device.dram_grid_size().x
+        self._fronts = {}
         self._last: SparseKvPushPlan | None = None
         self._key = None
         self._tables = None  # all-gathered plan tables, allocated once
@@ -77,6 +89,50 @@ class SparseKvPushPlanner:
                 self.mesh_device, torch.zeros(1, 1, rows, like.shape[-1]), like.dtype, like.layout
             )
         return self._buffers[key]
+
+    def spill_buffer(self, parity, rows, like, page_bytes):
+        """DRAM spill behind an L1 front: pages of one push packet each (pages_per_packet rows of page_bytes), so a
+        packet lands in one write; compact row r is at page r // pages_per_packet."""
+        unit = self._pages_per_packet(page_bytes)
+        width = unit * page_bytes // (1 if like.dtype == ttnn.fp8_e4m3 else 2)
+        key = ("spill", parity, rows, width, like.dtype)
+        if key not in self._buffers:
+            self._buffers[key] = _replicated(
+                self.mesh_device, torch.zeros(1, 1, -(-rows // unit), width), like.dtype, like.layout
+            )
+        return self._buffers[key]
+
+    def front_buffer(self, parity, like, page_bytes):
+        """L1 front of the compact buffer of this parity: its first rows, with rows padded to DRAM-aligned pages.
+        Sharded one packet per shard, round-robin over every worker core, so consecutive packets (and the rows
+        sparse_sdpa reads) spread over all cores' L1 instead of crowding a few. None when disabled."""
+        if not self.l1_front_bytes_per_core:
+            return None
+        key = (parity, like.shape[-1], like.dtype)
+        if key not in self._fronts:
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            cores = grid.x * grid.y
+            unit = self._pages_per_packet(page_bytes)
+            rows_per_core = self.l1_front_bytes_per_core // page_bytes // unit * unit
+            width = page_bytes // (1 if like.dtype == ttnn.fp8_e4m3 else 2)
+            memory_config = ttnn.MemoryConfig(
+                ttnn.BufferType.L1,
+                ttnn.NdShardSpec(
+                    ttnn.Shape([1, 1, unit, width]),
+                    ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+                ),
+            )
+            # Uninitialized: the push writes every slot sparse_sdpa reads.
+            self._fronts[key] = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, rows_per_core * cores, width]),
+                like.dtype,
+                ttnn.ROW_MAJOR_LAYOUT,
+                self.mesh_device,
+                memory_config,
+            )
+        return self._fronts[key]
 
     def chunk_start(self, start: int):
         if start not in self._starts:

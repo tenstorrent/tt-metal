@@ -60,6 +60,14 @@ FORCE_INLINE void clear_scale_rows(uint32_t scale_tiles_l1, uint32_t row_begin, 
     }
 }
 
+// Where kv rows live when kv is only a front (e.g. in L1): rows >= front_pages are in a DRAM spill whose pages hold
+// `rows` consecutive rows each, `row_stride` bytes apart. front_pages = UINT32_MAX when kv holds every row.
+struct KvSpill {
+    uint32_t front_pages;
+    uint32_t rows;
+    uint32_t row_stride;
+};
+
 template <
     bool BlockCyclic,
     uint32_t ChunkLocal,
@@ -67,10 +75,13 @@ template <
     uint32_t ShardStrideGap,
     uint32_t SlabStrideGap,
     uint32_t RingDepth,
-    typename Accessor>
+    typename Accessor,
+    typename SpillAccessor>
 FORCE_INLINE void trid_ring_gather(
     Noc& noc,
     const Accessor& kv,
+    const SpillAccessor& spill,
+    const KvSpill& spill_rows,
     uint32_t dst_l1,
     volatile tt_l1_ptr uint32_t* idx_ptr,
     uint32_t base,
@@ -91,7 +102,18 @@ FORCE_INLINE void trid_ring_gather(
         const uint32_t page =
             tt::block_cyclic::logical_to_physical_page<BlockCyclic, ChunkLocal, Sp, ShardStrideGap, SlabStrideGap>(
                 idx_ptr[base + p]);
-        noc.async_read(kv, local_l1, k_row_bytes, {.page_id = page_offset + page}, {.addr = dst_l1 + p * k_row_bytes});
+        const uint32_t page_id = page_offset + page;
+        if (page_id < spill_rows.front_pages) {
+            noc.async_read(kv, local_l1, k_row_bytes, {.page_id = page_id}, {.addr = dst_l1 + p * k_row_bytes});
+        } else {
+            noc.async_read(
+                spill,
+                local_l1,
+                k_row_bytes,
+                {.page_id = page_id / spill_rows.rows,
+                 .offset_bytes = (page_id % spill_rows.rows) * spill_rows.row_stride},
+                {.addr = dst_l1 + p * k_row_bytes});
+        }
     }
     const uint32_t to_drain = (cnt < D) ? cnt : D;
     for (uint32_t d = 0; d < to_drain; ++d) {

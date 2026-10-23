@@ -214,8 +214,10 @@ inline std::vector<uint32_t> reader_runtime_args(const CoreLayout& layout, uint3
         layout.links};
 }
 
+// `spill`: optional DRAM spill of `output` (which then holds only its first pages, e.g. an L1 front).
 inline std::vector<uint32_t> writer_compile_args(
     const Tensor& output,
+    const std::optional<Tensor>& spill,
     uint32_t num_devices,
     uint32_t my_rank,
     const CoreLayout& layout,
@@ -229,6 +231,8 @@ inline std::vector<uint32_t> writer_compile_args(
         pages_per_packet(page_bytes) * page_bytes,
         layout.links};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(ct);
+    ct.push_back(spill.has_value() ? output.buffer()->num_pages() : 0xFFFFFFFFu);
+    tt::tt_metal::TensorAccessorArgs(spill.has_value() ? spill->buffer() : nullptr).append_to(ct);
     ttnn::ccl::fabric_mux_connection_ct_args(
         kSendersPerChannel, tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL, mux, ct);
     return ct;

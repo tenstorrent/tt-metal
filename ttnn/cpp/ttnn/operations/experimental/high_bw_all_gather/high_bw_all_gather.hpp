@@ -42,7 +42,8 @@ Tensor high_bw_all_gather(
     uint32_t push_stripe_chunk = 0,
     uint32_t push_max_rows = 0,
     // 0 = every needed row; 2 = only the rows from the chunk start on (the prefix was pushed by a fused sparse_sdpa).
-    uint32_t push_part = 0);
+    uint32_t push_part = 0,
+    const std::optional<Tensor>& push_spill = std::nullopt);
 
 // On-device plan for the sparse KV push: returns {plan table, indices rewritten to compact slots}
 // (see device/sparse_push_plan_device_operation.hpp).

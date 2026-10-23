@@ -224,6 +224,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     tt::tt_metal::TensorAccessorArgs(t.kv.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(t.indices.buffer()).append_to(reader_ct, reader_crt);
+    auto* spill_buf = t.kv_spill.has_value() ? t.kv_spill->buffer() : nullptr;
+    tt::tt_metal::TensorAccessorArgs(spill_buf).append_to(reader_ct, reader_crt);
     // The writer is the lighter dataflow kernel, so it builds the three persistent compute-input tiles.
     std::vector<uint32_t> writer_ct = {H, S, vDHt, cb_out_rm, cb_scale, cb_col_identity, cb_neginf, out_elem_bytes};
     writer_ct.insert(writer_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
@@ -240,6 +242,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         .append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(use_attention_sink ? t.attention_sink->buffer() : nullptr)
         .append_to(writer_ct, writer_crt);
+    tt::tt_metal::TensorAccessorArgs(spill_buf).append_to(writer_ct, writer_crt);
 
     std::vector<uint32_t> compute_ct = {H,
                                         DHt,
@@ -342,9 +345,22 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     // 0 when not indexed (single [1,1,T,K_DIM]).
     const uint32_t kv_T = t.kv.logical_shape()[2];
     const uint32_t kv_batch_page_offset = attrs.cache_batch_idx.value_or(0) * kv_T;
-    reader_desc.emplace_common_runtime_args({q_buf, kv_buf, idx_buf, kv_batch_page_offset});
+    // With a spill, kv holds only the first kv_front_pages pages (e.g. in L1); the rest are read from the spill.
+    // Each spill page holds kv_spill_rows consecutive rows (one push packet), kv-page-sized apart.
+    const uint32_t kv_front_pages = spill_buf != nullptr ? t.kv.buffer()->num_pages() : 0xFFFFFFFFu;
+    const uint32_t kv_spill_row_stride = t.kv.buffer()->aligned_page_size();
+    const uint32_t kv_spill_rows = spill_buf != nullptr ? spill_buf->aligned_page_size() / kv_spill_row_stride : 1u;
+    reader_desc.emplace_common_runtime_args(
+        {q_buf, kv_buf, idx_buf, kv_batch_page_offset, spill_buf, kv_front_pages, kv_spill_rows, kv_spill_row_stride});
     writer_desc.emplace_common_runtime_args(
-        {out_buf, kv_buf, kv_batch_page_offset, use_attention_sink ? t.attention_sink->buffer() : nullptr});
+        {out_buf,
+         kv_buf,
+         kv_batch_page_offset,
+         use_attention_sink ? t.attention_sink->buffer() : nullptr,
+         spill_buf,
+         kv_front_pages,
+         kv_spill_rows,
+         kv_spill_row_stride});
     TT_FATAL(
         reader_desc.common_runtime_args.size() == ::sparse_sdpa::reader_common_arg::END &&
             writer_desc.common_runtime_args.size() == ::sparse_sdpa::writer_common_arg::END,
@@ -389,6 +405,12 @@ void SparseSDPAOperation::SparseSDPAProgramFactory::override_runtime_arguments(
     writer_args[::sparse_sdpa::writer_common_arg::KV_BATCH_PAGE_OFFSET] = offset;
     writer_args[::sparse_sdpa::writer_common_arg::ATTENTION_SINK_ADDRESS] =
         t.attention_sink.has_value() ? t.attention_sink->buffer()->address() : 0u;
+    const uint32_t spill = t.kv_spill.has_value() ? t.kv_spill->buffer()->address() : 0u;
+    const uint32_t front = t.kv_spill.has_value() ? t.kv.buffer()->num_pages() : 0xFFFFFFFFu;
+    reader_args[::sparse_sdpa::reader_common_arg::KV_SPILL_ADDRESS] = spill;
+    reader_args[::sparse_sdpa::reader_common_arg::KV_FRONT_PAGES] = front;
+    writer_args[::sparse_sdpa::writer_common_arg::KV_SPILL_ADDRESS] = spill;
+    writer_args[::sparse_sdpa::writer_common_arg::KV_FRONT_PAGES] = front;
 }
 
 }  // namespace ttnn::prim

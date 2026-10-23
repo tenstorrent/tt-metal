@@ -70,9 +70,11 @@ def _clustered_indices(rng, n_dev, rows, topk, prefix):
     [(10240, 10240), (1044480, 1044480), (1044480, 61440), (1044480, "L14"), (1044480, "L58"), (1044480, "L62")],
     ids=["10k", "1M", "1M_cap_60k_prefix", "1M_real_L14", "1M_real_L58", "1M_real_L62"],
 )
-def test_sparse_push_plan_matches_reference(mesh_device, max_rows, prefix):
+# Slot layout: packets spread over the 8 DRAM banks, or on consecutive slots (the push's L1 front and its spill).
+@pytest.mark.parametrize("banks", [8, 1], ids=["dram_banks", "consecutive"])
+def test_sparse_push_plan_matches_reference(mesh_device, max_rows, prefix, banks):
     n_dev = mesh_device.get_num_devices()
-    rows, topk, sc, p, banks = 160, 2048, 160, 12, 8
+    rows, topk, sc, p = 160, 2048, 160, 12
     rng = np.random.default_rng(0)
     if isinstance(prefix, str):
         from safetensors.numpy import load_file

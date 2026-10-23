@@ -133,7 +133,8 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("push_table") = nb::none(),
         nb::arg("push_stripe_chunk") = 0,
         nb::arg("push_max_rows") = 0,
-        nb::arg("push_part") = 0);
+        nb::arg("push_part") = 0,
+        nb::arg("push_spill") = nb::none());
 
     ttnn::bind_function<"sparse_push_plan", "ttnn.experimental.">(
         mod,

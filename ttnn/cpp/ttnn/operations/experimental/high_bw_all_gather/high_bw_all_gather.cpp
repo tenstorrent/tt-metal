@@ -29,7 +29,8 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& push_table,
     uint32_t push_stripe_chunk,
     uint32_t push_max_rows,
-    uint32_t push_part) {
+    uint32_t push_part,
+    const std::optional<Tensor>& push_spill) {
     return ttnn::prim::high_bw_all_gather(
         input_tensor,
         output_tensor,
@@ -50,7 +51,8 @@ Tensor high_bw_all_gather(
         push_table,
         push_stripe_chunk,
         push_max_rows,
-        push_part);
+        push_part,
+        push_spill);
 }
 
 std::vector<Tensor> sparse_push_plan(

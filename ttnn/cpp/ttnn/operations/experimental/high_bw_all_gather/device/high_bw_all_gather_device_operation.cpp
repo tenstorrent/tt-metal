@@ -264,6 +264,12 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
             "the sparse KV push needs push_stripe_chunk and push_max_rows");
         TT_FATAL(args.push_part == 0 || args.push_part == 2, "push_part must be 0 (all rows) or 2 (remainder)");
         TT_FATAL(!tensor_args.has_gathered_prefix_metadata(), "push_table replaces the gathered extent controls");
+        if (tensor_args.push_spill.has_value()) {
+            const auto& spill = *tensor_args.push_spill;
+            TT_FATAL(
+                spill.memory_config().buffer_type() == BufferType::DRAM && !spill.memory_config().is_sharded(),
+                "push_spill must be an interleaved DRAM tensor");
+        }
     }
 
     // Constraints on input tensor
@@ -395,10 +401,12 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
             }
             expected_output_shape[0] = 1;
         }
-        // The sparse push's compact buffer pads each owner's stream to whole bank-lane units, so it may be taller.
-        if (tensor_args.has_push_table() && output_shape.rank() == expected_output_shape.rank() &&
-            output_shape[args.dim] >= expected_output_shape[args.dim]) {
+        // The sparse push writes a compact buffer, not the gathered shape: it may be taller (each owner's run is
+        // padded to whole packet units) or, as an L1 front with a DRAM push_spill, shorter and with its rows padded
+        // to DRAM-aligned pages. Only the row page size has to match (checked by the push factory).
+        if (tensor_args.has_push_table() && output_shape.rank() == expected_output_shape.rank()) {
             expected_output_shape[args.dim] = output_shape[args.dim];
+            expected_output_shape[-1] = output_shape[-1];
         }
         TT_FATAL(
             output_shape == expected_output_shape,
@@ -421,9 +429,11 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
+    // The sparse push may write an L1 front (spilling to DRAM); the gathers write interleaved DRAM.
     TT_FATAL(
-        args.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED &&
-            args.output_mem_config.buffer_type() == BufferType::DRAM,
+        (args.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+         args.output_mem_config.buffer_type() == BufferType::DRAM) ||
+            (tensor_args.has_push_table() && tensor_args.push_spill.has_value()),
         "high_bw_all_gather requires interleaved DRAM output");
 }
 
@@ -524,7 +534,8 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     const std::optional<Tensor>& push_table,
     uint32_t push_stripe_chunk,
     uint32_t push_max_rows,
-    uint32_t push_part) {
+    uint32_t push_part,
+    const std::optional<Tensor>& push_spill) {
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
     // so we include it in HighBwAllGatherParams.
@@ -632,7 +643,8 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .output_tensor = output_tensor,
             .input_batch_index_tensor = input_batch_index_tensor,
             .gathered_prefix_tensor = gathered_prefix_tensor,
-            .push_table = push_table}};
+            .push_table = push_table,
+            .push_spill = push_spill}};
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
@@ -659,7 +671,8 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& push_table,
     uint32_t push_stripe_chunk,
     uint32_t push_max_rows,
-    uint32_t push_part) {
+    uint32_t push_part,
+    const std::optional<Tensor>& push_spill) {
     auto [params, inputs] = ttnn::operations::experimental::high_bw_all_gather::high_bw_all_gather_build_operation_args(
         input_tensor,
         output_tensor,
@@ -680,7 +693,8 @@ Tensor high_bw_all_gather(
         push_table,
         push_stripe_chunk,
         push_max_rows,
-        push_part);
+        push_part,
+        push_spill);
     return ttnn::device_operation::launch<
         ttnn::operations::experimental::high_bw_all_gather::HighBwAllGatherDeviceOperation>(params, inputs);
 }

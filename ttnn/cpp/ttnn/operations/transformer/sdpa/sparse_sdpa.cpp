@@ -36,7 +36,9 @@ ttnn::Tensor sparse_sdpa(
     const std::optional<tt::tt_metal::CoreRangeSet>& push_core_grid,
     const std::optional<ttnn::Tensor>& push_batch_index_tensor,
     uint32_t push_batch_slot_num_layers,
-    uint32_t push_batch_slot_layer_idx) {
+    uint32_t push_batch_slot_layer_idx,
+    const std::optional<ttnn::Tensor>& kv_spill,
+    const std::optional<ttnn::Tensor>& push_output_spill) {
     const uint32_t k_dim = q.logical_shape()[3];  // head dim, from the tensor
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(k_dim)));
 
@@ -129,7 +131,9 @@ ttnn::Tensor sparse_sdpa(
         push_input,
         push_table,
         push_output,
-        push_batch_index_tensor);
+        push_batch_index_tensor,
+        kv_spill,
+        push_output_spill);
 }
 
 }  // namespace ttnn::transformer

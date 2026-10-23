@@ -102,6 +102,9 @@ struct HighBwAllGatherInputs {
     // Selects HighBwSparsePushFactory.
     std::optional<Tensor> push_table{std::nullopt};
     bool has_push_table() const { return push_table.has_value(); }
+    // Optional DRAM spill of the push's output: the output then holds only its first rows (an L1 front) and the rest
+    // land in push_spill, whose pages hold one packet (pages_per_packet rows) each: row r at page r / P.
+    std::optional<Tensor> push_spill{std::nullopt};
 };
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather

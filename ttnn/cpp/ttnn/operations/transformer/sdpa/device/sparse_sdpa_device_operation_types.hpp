@@ -63,6 +63,11 @@ struct SparseSDPAInputs {
     std::optional<Tensor> push_output;
     // 1-element uint32 user-slot tensor (the runner's metadata[0]); replaces input_batch_index when set.
     std::optional<Tensor> push_batch_index_tensor;
+    // Optional DRAM spill of kv: kv then holds only its first rows (an L1 front) and rows at or past its page count
+    // are read from kv_spill, whose pages hold a whole number R of kv rows each: row r at page r / R.
+    std::optional<Tensor> kv_spill;
+    // Optional DRAM spill of push_output, likewise.
+    std::optional<Tensor> push_output_spill;
 };
 
 }  // namespace ttnn::prim

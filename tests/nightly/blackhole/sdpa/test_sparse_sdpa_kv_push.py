@@ -195,10 +195,12 @@ _TRACE_1M_START = 1039360  # prompt position of the trace's first row (a whole n
 @pytest.mark.parametrize("device_params", [_TORUS_XY_GLM], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("layer", [14, 62], ids=["L14", "L62"])
-def test_sparse_kv_push_real_topk_matches_gather(mesh_device, layer):
+# Compact buffer placement: all DRAM; the model's L1 front (most rows in L1); a tiny front (most rows in the spill).
+@pytest.mark.parametrize("front_bytes", [0, None, 16 * 704], ids=["dram", "l1_front", "l1_front_spill"])
+def test_sparse_kv_push_real_topk_matches_gather(mesh_device, layer, front_bytes):
     from safetensors.numpy import load_file
 
-    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import _shard_over_mesh
+    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPlanner, _shard_over_mesh
 
     f = _TRACE_1M / "dsa" / f"dsa_topk_indices_layer_{layer}" / "rows_00000000_00005120.safetensors"
     if not f.exists():
@@ -211,7 +213,9 @@ def test_sparse_kv_push_real_topk_matches_gather(mesh_device, layer):
     n_dev = mesh_device.get_num_devices()
     stripe_chunk = s_local = chunk_global // n_dev
     cache_tokens = _TRACE_1M_START + chunk_global
-    pages_per_packet = max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // 704)
+    page_bytes = 704  # 656 B scaled FP8 rows in DRAM-aligned pages
+    planner = SparseKvPushPlanner(mesh_device, links, l1_front_bytes_per_core=front_bytes)
+    pages_per_packet = max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // page_bytes)
     buffer_rows = cache_tokens + n_dev * pages_per_packet * _DRAM_BANKS
 
     common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -244,7 +248,7 @@ def test_sparse_kv_push_real_topk_matches_gather(mesh_device, layer):
         stripe_chunk=stripe_chunk,
         max_rows=cache_tokens,
         pages_per_packet=pages_per_packet,
-        banks=_DRAM_BANKS,
+        banks=planner.banks,
         chunk_start=start,
     )
     _shard_over_mesh(table, mesh_device)
@@ -257,11 +261,19 @@ def test_sparse_kv_push_real_topk_matches_gather(mesh_device, layer):
     ttnn.experimental.high_bw_all_gather(table, dim=2, output_tensor=tables, cluster_axis=None, num_links=links)
     push_kw = dict(push_table=tables, push_stripe_chunk=stripe_chunk, push_max_rows=cache_tokens)
 
+    def compact_buffer(parity):
+        """(kv, spill): an L1 front and its DRAM spill, or one DRAM buffer and None."""
+        front = planner.front_buffer(parity, cache, page_bytes)
+        if front is None:
+            return _zero_kv_buffer(mesh_device, buffer_rows, kv_fmt), None
+        return front, planner.spill_buffer(parity, buffer_rows, cache, page_bytes)
+
     def push(buf, slot, part):
         return ttnn.experimental.high_bw_all_gather(
             cache,
             dim=2,
-            output_tensor=buf,
+            output_tensor=buf[0],
+            push_spill=buf[1],
             cluster_axis=None,
             num_links=links,
             input_batch_index=slot,
@@ -273,19 +285,21 @@ def test_sparse_kv_push_real_topk_matches_gather(mesh_device, layer):
 
     # Layer L's buffer by one push of every row; layer L + 1's by its prefix fused into layer L's attention, then its
     # remainder.
-    compact_l = push(_zero_kv_buffer(mesh_device, buffer_rows, kv_fmt), 0, 0)
-    compact_next = _zero_kv_buffer(mesh_device, buffer_rows, kv_fmt)
+    compact_l, compact_next = compact_buffer(0), compact_buffer(1)
+    push(compact_l, 0, 0)
     sdpa_kw = dict(kv_format=_KV_FORMATS[kv_fmt][0], scale=K_DIM**-0.5, k_chunk_size=128)
     ttnn.transformer.sparse_sdpa(
         q,
-        compact_l,
+        compact_l[0],
         compact_idx,
         V_DIM,
         **sdpa_kw,
+        kv_spill=compact_l[1],
         sub_core_grids=sdpa_grid,
         push_input=cache,
         push_table=tables,
-        push_output=compact_next,
+        push_output=compact_next[0],
+        push_output_spill=compact_next[1],
         push_stripe_chunk=stripe_chunk,
         push_max_rows=cache_tokens,
         push_batch_index=1,
@@ -305,7 +319,7 @@ def test_sparse_kv_push_real_topk_matches_gather(mesh_device, layer):
 
     host = lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
     for slot, buf in ((0, compact_l), (1, compact_next)):
-        got = host(ttnn.transformer.sparse_sdpa(q, buf, compact_idx, V_DIM, **sdpa_kw))
+        got = host(ttnn.transformer.sparse_sdpa(q, buf[0], compact_idx, V_DIM, **sdpa_kw, kv_spill=buf[1]))
         assert torch.equal(
             host(dense(slot)), got
         ), f"layer {layer} slot {slot}: push path differs from the dense gather"

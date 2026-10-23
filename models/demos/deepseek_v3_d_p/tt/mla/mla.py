@@ -2009,10 +2009,12 @@ class ttMLA:
         # When the previous layer's sparse_sdpa already pushed this plan's prefix rows (rows of earlier chunks), push
         # only the remainder: this chunk's own rows, just written above.
         prefetched = planner.prefetched.pop(self.layer_idx, None) is plan
+        front, spill = push_buffer
         compact = ttnn.experimental.high_bw_all_gather(
             storage,
             dim=2,
-            output_tensor=push_buffer,
+            output_tensor=front,
+            push_spill=spill,
             cluster_axis=None,
             num_links=self.ccl_num_links,
             **self._sparse_push_slot_kwargs(storage, cache_batch_idx, metadata),
@@ -2033,6 +2035,7 @@ class ttMLA:
             seq_len_local=seq_len_local,
             overlap=self._next_layer_prefetch(plan, kvpe_cache, cache_batch_idx, metadata=metadata),
             compact=True,
+            kv_spill=spill,
         )
 
     def _sparse_push_slot_kwargs(self, storage, cache_batch_idx, metadata, prefix=""):
@@ -2051,13 +2054,18 @@ class ttMLA:
         return {f"{prefix}batch_index": cache_batch_idx} if prefix else {"input_batch_index": cache_batch_idx}
 
     def _sparse_push_buffer(self, planner, kvpe_cache, layer_idx):
-        """The compact buffer of `layer_idx`'s parity and its DRAM-aligned row page size."""
+        """The compact buffer of `layer_idx`'s parity as (front, spill), and its DRAM-aligned row page size. With an
+        L1 front, `front` holds the first compact rows and `spill` (DRAM) the rest; without one, front is the DRAM
+        buffer and spill is None."""
         storage = kvpe_cache.storage
         row_bytes = storage.shape[-1] * (1 if storage.dtype == ttnn.fp8_e4m3 else 2)
         page_bytes = -(-row_bytes // 64) * 64
         dense = self._sparse_kv_gather_buffer
-        buffer = planner.push_buffer(layer_idx % 2, planner.buffer_rows(dense.shape[2], page_bytes), dense)
-        return buffer, page_bytes
+        rows = planner.buffer_rows(dense.shape[2], page_bytes)
+        front = planner.front_buffer(layer_idx % 2, dense, page_bytes)
+        if front is None:
+            return (planner.push_buffer(layer_idx % 2, rows, dense), None), page_bytes
+        return (front, planner.spill_buffer(layer_idx % 2, rows, dense, page_bytes)), page_bytes
 
     def _sparse_push_plan(self, indices, kvpe_cache, seq_len_local, kv_actual_isl, layer_idx, metadata=None):
         """The (cached) push plan for `indices` and the compact buffer of `layer_idx`'s parity."""
@@ -2081,7 +2089,7 @@ class ttMLA:
             return None
         planner = self.tt_ccl.get_sparse_kv_push(self.ccl_num_links)[0]
         nxt = self.layer_idx + 1
-        buffer, _ = self._sparse_push_buffer(planner, kvpe_cache, nxt)
+        (front, spill), _ = self._sparse_push_buffer(planner, kvpe_cache, nxt)
         planner.prefetched[nxt] = plan
         storage = kvpe_cache.storage
         # Attention runs on the overlap profile's top-k grid; the push senders and fabric muxes on its gather grid.
@@ -2089,7 +2097,8 @@ class ttMLA:
             sub_core_grids=resources.topk_core_grid,
             push_input=storage,
             push_table=plan.table,
-            push_output=buffer,
+            push_output=front,
+            push_output_spill=spill,
             push_stripe_chunk=plan.stripe_chunk,
             push_max_rows=plan.max_rows,
             # The next layer's slot: cache slots are user-major, so it is this slot + 1.
@@ -2153,6 +2162,7 @@ class ttMLA:
         compact=False,
         overlap=None,
         q_seq=None,
+        kv_spill=None,
     ):
         """Consume joined/finalized branch outputs on the restored default full-grid manager."""
         for value in tt_kvpe if isinstance(tt_kvpe, tuple) else (tt_kvpe,):
@@ -2169,6 +2179,7 @@ class ttMLA:
             compact=compact,
             overlap=overlap,
             q_seq=q_seq,
+            kv_spill=kv_spill,
         )
         # NOT deallocated: the full-mesh gather writes the model-owned persistent scratch, and freeing
         # that would take the buffer away from every later chunk and layer. (high_bw_all_gather returns a
@@ -2468,6 +2479,7 @@ class ttMLA:
         compact: bool = False,
         overlap=None,
         q_seq: Optional[ttnn.Tensor] = None,
+        kv_spill: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """Absorbed MQA over the top-k selected latents (FlashMLA sparse contract: no causal mask —
         ``indices`` already encode it via the 0xFFFFFFFF sentinel). Invoked SPMD on the SP×TP mesh:
@@ -2546,6 +2558,7 @@ class ttMLA:
                 )
             ),
             cache_batch_idx=cache_batch_idx,
+            kv_spill=kv_spill,
             **grid,
         )
         # `overlap`: the next layer's prefix push, fused into this sparse_sdpa program (see _next_layer_prefetch).

@@ -55,7 +55,11 @@ void kernel_main() {
     constexpr uint32_t packet_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t links = get_compile_time_arg_val(5);
     constexpr auto output_args = TensorAccessorArgs<6>();
-    constexpr uint32_t mux_ct = output_args.next_compile_time_args_offset();
+    // With a spill, `output` holds only the first front_pages compact rows (an L1 front); the rest go to the DRAM
+    // spill, whose pages are one packet (pages_per_packet rows) each: row r is at page r / P, offset r % P.
+    constexpr uint32_t front_pages = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
+    constexpr auto spill_args = TensorAccessorArgs<output_args.next_compile_time_args_offset() + 1>();
+    constexpr uint32_t mux_ct = spill_args.next_compile_time_args_offset();
     constexpr uint8_t mux_num_buffers = get_compile_time_arg_val(mux_ct + 0);
     constexpr size_t mux_buffer_bytes = get_compile_time_arg_val(mux_ct + 1);
     constexpr size_t mux_status_address = get_compile_time_arg_val(mux_ct + 2);
@@ -68,6 +72,7 @@ void kernel_main() {
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t ready_sem = get_common_arg_val<uint32_t>(1);
     const uint32_t done_sem = get_common_arg_val<uint32_t>(2);
+    const uint32_t spill_addr = get_common_arg_val<uint32_t>(3);
 
     size_t arg = 0;
     const uint32_t worker = get_arg_val<uint32_t>(arg++);
@@ -89,6 +94,8 @@ void kernel_main() {
     const uint32_t headers_l1 = get_write_ptr(kHeaders);
     auto* sem_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(headers_l1);
     const auto output = TensorAccessor(output_args, output_addr, page_bytes);
+    const auto spill = TensorAccessor(spill_args, spill_addr, packet_bytes);
+    constexpr uint32_t pages_per_packet = packet_bytes / page_bytes;
     auto* ready_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_sem);
     auto* done_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_sem);
 
@@ -148,8 +155,16 @@ void kernel_main() {
             }
             const uint32_t data_l1 = get_read_ptr(kData) + pending * packet_bytes;
             const uint32_t bytes = n * page_bytes;
+            // A packet never crosses a front / spill page boundary (owner runs and the front are whole packets),
+            // so it lands contiguously in either the front or one packet-sized spill page.
+            const bool to_spill = first_page >= front_pages;
+            const uint32_t spill_page = first_page / pages_per_packet;
+            const uint32_t spill_offset = (first_page % pages_per_packet) * page_bytes;
             if (dest == my_rank) {
-                noc_async_write(data_l1, output.get_noc_addr(first_page), bytes);
+                noc_async_write(
+                    data_l1,
+                    to_spill ? spill.get_noc_addr(spill_page, spill_offset) : output.get_noc_addr(first_page),
+                    bytes);
             } else {
                 auto* hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
                     headers_l1 + (1 + pending) * sizeof(PACKET_HEADER_TYPE));
@@ -157,7 +172,11 @@ void kernel_main() {
                 if (route_to(dest).flip_turn) {
                     sparse_push::flip_turn<MESH_ROWS, MESH_COLS>((volatile HybridMeshPacketHeader*)hdr, my_rank);
                 }
-                tt::tt_fabric::linear::to_noc_unicast_write(bytes, hdr, first_page, output);
+                if (to_spill) {
+                    tt::tt_fabric::linear::to_noc_unicast_write(bytes, hdr, spill_page, spill, spill_offset);
+                } else {
+                    tt::tt_fabric::linear::to_noc_unicast_write(bytes, hdr, first_page, output);
+                }
                 perform_payload_send<false, false>(conn, data_l1, bytes, hdr);
             }
             if (++pending == kBatch) {

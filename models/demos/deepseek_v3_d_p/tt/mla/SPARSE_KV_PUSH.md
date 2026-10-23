@@ -40,6 +40,13 @@ then pushes the remainder (`push_part=2`, its own chunk's rows) before its atten
 layer parity, so layer L reads its buffer while L+1's fills. Without an overlap profile, a shared layer pushes all
 its rows itself (`push_part=0`).
 
+**L1 front.** `sparse_sdpa` is bound by its row reads, so each compact buffer keeps its first rows in L1: a front of
+`L1_FRONT_BYTES_PER_CORE` (160 KB) per core per parity, sharded one push packet per shard and round-robin over all
+worker cores, with the remaining rows in a DRAM spill of one packet per page (row `r` at page `r / P`). A packet thus
+stays one contiguous write, and with a front the plan lays packets out on consecutive slots (`banks = 1`). Both
+parities stay allocated for the whole forward: 2 x 192 KB clashes with the circular buffers of the largest GLM
+program on the Galaxy. Scaled FP8 front rows are 704 B, the DRAM-aligned page of a 656 B row.
+
 ## Trace safety
 
 On the metadata path (`PREFILL_USE_TRACE=1`) nothing depends on a host value that changes per chunk or request:
@@ -55,5 +62,6 @@ On the metadata path (`PREFILL_USE_TRACE=1`) nothing depends on a host value tha
 - MLA level, push vs dense gather (bitwise; single and multi-chunk, padded chunks, prefetch chains, traced replay over
   user slots and chunk starts): `models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k kv_push`.
 - Plan op vs a host reference: `models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_sparse_push_plan.py`.
-- Op level with real 1M top-k (fused prefix + remainder, and the full push, vs the dense gather):
+- Op level with real 1M top-k (fused prefix + remainder, and the full push, vs the dense gather; all-DRAM, the
+  model's L1 front, and a tiny front that sends most rows to the spill):
   `tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py`.

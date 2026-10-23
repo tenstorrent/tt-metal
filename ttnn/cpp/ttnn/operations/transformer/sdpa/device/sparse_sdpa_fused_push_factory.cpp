@@ -84,8 +84,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAPushFusedFactory:
     reader.kernel_source = kdir + "sparse_push_table_reader.cpp";
     reader.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     reader.core_ranges = layout.sender_range;
-    reader.compile_time_args =
-        sparse_push::reader_compile_args(cfg, mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM));
+    reader.compile_time_args = sparse_push::reader_compile_args(
+        cfg,
+        t.push_output_spill.has_value() ? 1u : mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM));
     reader.defines = defines;
     reader.config = tt::tt_metal::ReaderConfigDescriptor{};
     // Same order as sparse_push::reader_common_args; buffers are bound so a cache hit re-patches them.
@@ -101,13 +102,15 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAPushFusedFactory:
     writer.kernel_source = kdir + "sparse_push_writer.cpp";
     writer.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = layout.sender_range;
-    writer.compile_time_args = sparse_push::writer_compile_args(*t.push_output, num_devices, my_rank, layout, mux);
+    writer.compile_time_args =
+        sparse_push::writer_compile_args(*t.push_output, t.push_output_spill, num_devices, my_rank, layout, mux);
     writer.defines = defines;
     writer.config = tt::tt_metal::WriterConfigDescriptor{};
     writer.emplace_common_runtime_args(
         {t.push_output->buffer(),
-         static_cast<uint32_t>(push.ready_semaphore->address()),  // smuggled-rta-ok: semaphore, re-patched on hits
-         static_cast<uint32_t>(push.data_valid_semaphore->address())});  // smuggled-rta-ok: semaphore, re-patched
+         static_cast<uint32_t>(push.ready_semaphore->address()),       // smuggled-rta-ok: semaphore, re-patched on hits
+         static_cast<uint32_t>(push.data_valid_semaphore->address()),  // smuggled-rta-ok: semaphore, re-patched
+         t.push_output_spill.has_value() ? t.push_output_spill->buffer() : nullptr});
 
     tt::tt_metal::KernelDescriptor mux_kernel;
     mux_kernel.kernel_source = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp";
@@ -159,6 +162,7 @@ void SparseSDPAOperation::SparseSDPAPushFusedFactory::override_runtime_arguments
     writer[0] = tensor_args.push_output->buffer()->address();
     writer[1] = push.ready_semaphore->address();
     writer[2] = push.data_valid_semaphore->address();
+    writer[3] = tensor_args.push_output_spill.has_value() ? tensor_args.push_output_spill->buffer()->address() : 0u;
 }
 
 }  // namespace ttnn::prim
