@@ -109,7 +109,6 @@ void kernel_main() {
 
                             tile_regs_acquire();  // acquire DST registers for MATH thread, resets DST to 0
                             if (reduce_output) {
-                                copy_init(cb_interm2_id);
                                 for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
                                     copy_tile(cb_interm2_id, tile_id, tile_id);  // load DST
                                 }
