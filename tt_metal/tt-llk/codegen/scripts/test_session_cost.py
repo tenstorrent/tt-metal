@@ -95,6 +95,26 @@ def test_actual_sonnet5_and_one_hour_cache_override_fallback_model(tmp_path):
     assert cost._tier("claude-sonnet-4-6") == "sonnet"
 
 
+def test_glm_is_priced_as_glm_not_opus(tmp_path):
+    root = tree(
+        tmp_path,
+        "root",
+        [
+            turn(
+                "m",
+                0,
+                model="zai-org/glm-5.3",
+                input_tokens=1_000_000,
+                output_tokens=1_000_000,
+                cache_read_input_tokens=1_000_000,
+            )
+        ],
+    )
+    totals = cost._aggregate_roots([root], None, "zai-org/glm-5.3", None, None)
+    assert cost._tier("zai-org/glm-5.3") == "glm"
+    assert totals["cost_usd"] == pytest.approx(0.60 + 2.50 + 0.10)
+
+
 def test_native_root_plus_transcript_child_is_added_once(tmp_path):
     root = tree(tmp_path, "root", [turn("root-msg", 100)])
     child = tree(tmp_path, "child", [turn("child-msg", 200)], "autodebug")

@@ -98,6 +98,15 @@ PRICING = {
         "cache_creation": 1.25,
         "cache_creation_1h": 2.00,
     },
+    # GLM-5.3 on Tenstorrent Galaxy through the LiteLLM proxy (zai-org/glm-5.3),
+    # prices as of 2026-10-23. No cache-write price is published; writes count as input.
+    "glm": {
+        "input": 0.60,
+        "output": 2.50,
+        "cache_read": 0.10,
+        "cache_creation": 0.60,
+        "cache_creation_1h": 0.60,
+    },
 }
 
 
@@ -113,6 +122,8 @@ def _tier(model_str: str | None) -> str:
         return "sonnet"
     if "haiku" in m:
         return "haiku"
+    if "glm" in m:
+        return "glm"
     return "opus"
 
 
