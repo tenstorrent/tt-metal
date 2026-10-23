@@ -35,7 +35,7 @@ void kernel_main() {
     CircularBuffer output(cb_output);
     input.reserve_back(input_tiles);
     input.push_back(input_tiles);
-    binary_op_init_common(cb_input, cb_input, cb_output);
+    compute_kernel_hw_startup(cb_input, cb_input, cb_output);
 
     for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
         input.wait_front(input_tiles);
@@ -89,7 +89,7 @@ void kernel_main() {
     CircularBuffer output(cb_output);
     input.reserve_back(input_tiles);
     input.push_back(input_tiles);
-    binary_op_init_common(cb_input, cb_input, cb_output);
+    compute_kernel_hw_startup(cb_input, cb_input, cb_output);
 
     for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
         input.wait_front(input_tiles);
@@ -108,7 +108,7 @@ void kernel_main() {
                 first_pair = 1;
             }
 
-            add_tiles_init(cb_input, cb_input, true);
+            add_init(cb_input, cb_input, true);
             for (uint32_t block = first_pair; block < num_blocks; block += 2) {
                 for (uint32_t tile = 0; tile < dst_tiles; ++tile) {
                     const uint32_t lhs = block * num_tiles + tile_base + tile;
