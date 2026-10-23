@@ -452,3 +452,55 @@ With the 12.2 ms rest of the step, 70 tok/s per user (14.3 ms) holds up to ~350K
 ~1000 / (12.2 + 7.1) = 52 tok/s, and the step is ~21-23 ms (43-48 tok/s) today. Prefill of a 1M prompt is the other
 limit: the chunked MLA prefill makes a 2048-token chunk at context C cost roughly 0.25 s + 12.5 ms x C / 1K, ~1 hour
 per 1M prompt.
+
+## Device sampling, 2026-10-21 (branch `mimo-v2.6/device-sampling`, MOPD)
+
+With greedy rows only, vLLM samples on device (GreedyHead in the decode trace, async steps). Any row with
+temperature > 0 sent the whole batch to host sampling: each step reloaded its inputs, read the users' fp32 logit rows
+(2.4 MB per lane) and sampled on the CPU, synchronously. Sampled c=16 decode was 7.5x slower than greedy.
+
+`tt/device_sampler.py` draws temperature / top-k / top-p tokens inside a second decode trace, which a lane replays
+while it holds a sampled row (greedy batches keep the GreedyHead trace and its speed):
+
+| Step | Cores per chip | What |
+|---|---|---|
+| SampleScan | 32 | Each core loads its range of the chip's vocab shard (fp32 tiles). The compute kernel sums exp((logit - the range's largest) / T) on the SFPU (fp32 unpacked straight to DST). The reader and the writer keep two users' 32 largest logits each (exact values, integer keys), and the writer adds up the sums |
+| SampleChipMerge | 1 per user | The chip's sorted top 32 and its normalizer, written to one page |
+| all_gather | | The row's 8 pages |
+| SampleMerge | 1 | Walks the merged candidates in descending order and draws, as vLLM's `apply_top_k_top_p`: softmax over the vocabulary (or over the top_k), the nucleus keeps a token while the mass ranked above it is below top_p, inverse CDF with a splitmix64 uniform whose state lives on device |
+
+The data movement cores have no FPU, so steps 2 and 3 run in fixed point: logits in Q24, probabilities relative to
+the largest in Q30, `exp2` from a 64-entry table and a cubic. The draw equals vLLM's whenever the nucleus has at
+most 32 tokens, or more but inside the row's 256 candidates (the 32 largest of every chip). Measured on GPQA reasoning
+at temperature 1 and top_p 0.95 (8848 decode rows, host sampler instrumented): the nucleus is 1 token at p50, 5 at p90,
+20 at p99; 99.7% of rows have at most 32, and 99.9% fit in 256.
+
+Routing (vllm-tt-plugin): the model declares `max_device_top_k` 256 and `supports_device_top_p_without_top_k` (a row
+with no top_k and top_p < 1 stays on device). Pure temperature sampling (no top_k, top_p 1), penalties, logprobs and
+structured output still sample on host. Seeded rows sample on device: a row's stream state at decode position p is
+mix(seed) + p * GAMMA (`stream_states`), so its draws depend only on (seed, position), whichever steps reload it.
+
+`tests/test_device_sampler_tp8.py`: 312 rows over 4 parameter sets, 3 logit shapes, eager and traced draws. All 168
+rows whose nucleus lies in the 32 most likely tokens match the exact full-vocabulary draw (same uniform, replayed
+from the seeds); greedy rows take the lowest id among tied maxima. Traced head: 0.164 ms per step (GreedyHead 0.08 ms).
+
+vLLM, DP=4 x 4, 64 x 128 / 128 (`--temperature 1.0 --top-p 0.95` for the sampled rows), one server per column:
+
+| | Before (host sampling) | ttnn-op sampler (first version) | Fused head (this branch) |
+|---|---|---|---|
+| Greedy c=16 | 993.9 tok/s, TPOT 13.3 ms | 1018.5 tok/s, TPOT 13.2 ms | 994.9 tok/s, TPOT 13.3 ms |
+| Sampled c=16 | 133.1 tok/s, TPOT 117.6 ms | 940.8 tok/s, TPOT 13.8 ms | **956.8 tok/s, TPOT 13.5 ms** |
+| Sampled c=1 | 25.6 tok/s, TPOT 37.7 ms | 66.8 tok/s, TPOT 13.3 ms | **68.3 tok/s, TPOT 13.1 ms** |
+
+The sampled rows' first token still samples on host after prefill (`sample_on_device_mode="decode_only"`); their TTFT
+is ~90 ms above greedy's at c=16 (423 vs 324 ms median), not yet explained by the host sampler (~3 ms for 16 rows).
+
+Validation in serving:
+- `MIMO_SAMPLER_CHECK=1` (debug: each sampled step blocks, reads the logit rows and the rows' stream states, and
+  recomputes vLLM's draw on the host): 5 minutes of GPQA reasoning at c=16, 14333 sampled rows on the model's own
+  logits, 14278 with the nucleus in the candidates, 0 mismatches.
+- GPQA Diamond, first 64 questions, c=16, temperature 1.0 / top_p 0.95, 64K context (`runs/speed/gpqa_device.sh`):
+  50/64 (53/64 counting 3 answers that end in the template's literal "Answer: $LETTER" after reasoning to the right
+  letter); 6 truncated at 64K; 0 failed requests, 0 decode-trace recaptures; 1046 tok/s while all 16 requests decode
+  (host sampling: ~133). On the 62 questions both runs answered, host sampling 56 and device sampling 52 (with the
+  reasoning fallback), within T=1 run-to-run spread.
