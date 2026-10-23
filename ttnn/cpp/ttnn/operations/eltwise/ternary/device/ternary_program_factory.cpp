@@ -52,50 +52,52 @@ void detect_broadcasts(
         pred_is_bcast = true_is_bcast = false_is_bcast = false;
     } else if (broadcast_type == TernaryBroadcastType::COL_BCAST) {
         // Column broadcast detection
-        auto pred_w = pred_shape[pred_shape.rank() - 1];
+        auto pred_w = pred_shape[-1];
 
         if (variant == TernaryVariant::TTS) {
             auto true_shape = value_true_tensor.value().logical_shape();
-            auto true_w = true_shape[true_shape.rank() - 1];
+            auto true_w = true_shape[-1];
             pred_is_bcast = (pred_w == 1 && true_w > 1);
             true_is_bcast = (true_w == 1 && pred_w > 1);
             false_is_bcast = false;  // False is scalar for TTS
         } else if (variant == TernaryVariant::TST) {
             auto false_shape = value_false_tensor.value().logical_shape();
-            auto false_w = false_shape[false_shape.rank() - 1];
+            auto false_w = false_shape[-1];
             pred_is_bcast = (pred_w == 1 && false_w > 1);
             false_is_bcast = (false_w == 1 && pred_w > 1);
             true_is_bcast = false;  // True is scalar for TST
         } else {                    // TTT
             auto true_shape = value_true_tensor.value().logical_shape();
             auto false_shape = value_false_tensor.value().logical_shape();
-            auto true_w = true_shape[true_shape.rank() - 1];
-            auto false_w = false_shape[false_shape.rank() - 1];
+            auto true_w = true_shape[-1];
+            auto false_w = false_shape[-1];
             pred_is_bcast = (pred_w == 1 && (true_w > 1 || false_w > 1));
             true_is_bcast = (true_w == 1 && (pred_w > 1 || false_w > 1));
             false_is_bcast = (false_w == 1 && (pred_w > 1 || true_w > 1));
         }
     } else if (broadcast_type == TernaryBroadcastType::ROW_BCAST) {
         // Row broadcast detection
-        auto pred_h = pred_shape[pred_shape.rank() - 2];
+        // Index from the end: for a rank-1 operand shape[-2] is 1 (ShapeBase pads the leading dims with 1), as in
+        // get_broadcast_type and compute_program_hash. shape[rank() - 2] would wrap to the width (rank() is size_t).
+        auto pred_h = pred_shape[-2];
 
         if (variant == TernaryVariant::TTS) {
             auto true_shape = value_true_tensor.value().logical_shape();
-            auto true_h = true_shape[true_shape.rank() - 2];
+            auto true_h = true_shape[-2];
             pred_is_bcast = (pred_h == 1 && true_h > 1);
             true_is_bcast = (true_h == 1 && pred_h > 1);
             false_is_bcast = false;  // False is scalar for TTS
         } else if (variant == TernaryVariant::TST) {
             auto false_shape = value_false_tensor.value().logical_shape();
-            auto false_h = false_shape[false_shape.rank() - 2];
+            auto false_h = false_shape[-2];
             pred_is_bcast = (pred_h == 1 && false_h > 1);
             true_is_bcast = false;  // True is scalar for TST
             false_is_bcast = (false_h == 1 && pred_h > 1);
         } else {  // TTT
             auto true_shape = value_true_tensor.value().logical_shape();
             auto false_shape = value_false_tensor.value().logical_shape();
-            auto true_h = true_shape[true_shape.rank() - 2];
-            auto false_h = false_shape[false_shape.rank() - 2];
+            auto true_h = true_shape[-2];
+            auto false_h = false_shape[-2];
             pred_is_bcast = (pred_h == 1 && (true_h > 1 || false_h > 1));
             true_is_bcast = (true_h == 1 && (pred_h > 1 || false_h > 1));
             false_is_bcast = (false_h == 1 && (pred_h > 1 || true_h > 1));
