@@ -12,7 +12,7 @@ These accumulate bf16 error across 32 layers, so the threshold is 0.95
 
 Run:
     MESH_DEVICE=N150 TT_METAL_LOGGER_LEVEL=FATAL \
-        pytest models/demos/minimax_m3_vl/tests/minimax_m3_vl/test_vision_tower.py -q
+        pytest models/demos/minimax_m3/tests/unit/test_vision_tower_vs_ref.py -q
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.demos.minimax_m3_vl.tt.model import M3VLVisionModel
+from models.demos.minimax_m3.tt.vision.model import M3VLVisionModel
 
 
 def _to_torch(out_tt, mesh_device, shape):

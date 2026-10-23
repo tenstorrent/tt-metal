@@ -29,7 +29,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.minimax_m3_vl.tt.common import as_linear_bias, as_linear_weight, hifi4_compute_config
+from models.demos.minimax_m3.tt.vision.common import as_linear_bias, as_linear_weight, hifi4_compute_config
 
 
 class M3VLMLP(LightweightModule):

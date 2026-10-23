@@ -8,7 +8,7 @@ parametrize it `indirect=True` with a `(rows, cols)` tuple — for the v1
 single-Blackhole prototype this is `(1, 1)` (MESH_DEVICE=N150).
 
 Fixtures here:
-  - `ensure_gc`: autouse GC sweep between tests.
+  - `vision_ensure_gc`: autouse GC sweep between tests.
   - `model_args`: MiniMaxM3VLModelArgs bound to the mesh device.
   - `reference`: the torch weight-module tree from `_m3_loader` (built from
     the checkpoint shards; main-env-safe, no transformers).
@@ -23,14 +23,14 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def ensure_gc():
+def vision_ensure_gc():
     gc.collect()
 
 
 @pytest.fixture(scope="function")
 def model_args(mesh_device):
     import ttnn
-    from models.demos.minimax_m3_vl.tt.model_config import MiniMaxM3VLModelArgs
+    from models.demos.minimax_m3.tt.vision.model_config import MiniMaxM3VLModelArgs
 
     return MiniMaxM3VLModelArgs(mesh_device=mesh_device, dtype=ttnn.bfloat16)
 
@@ -38,8 +38,8 @@ def model_args(mesh_device):
 @pytest.fixture(scope="session")
 def reference():
     """Torch reference-module tree holding the checkpoint vision weights."""
-    from models.demos.minimax_m3_vl.tt._m3_loader import build_reference
-    from models.demos.minimax_m3_vl.tt.model_config import MiniMaxM3VLModelArgs
+    from models.demos.minimax_m3.tt.vision.loader import build_reference
+    from models.demos.minimax_m3.tt.vision.model_config import MiniMaxM3VLModelArgs
 
     return build_reference(MiniMaxM3VLModelArgs())
 
@@ -49,7 +49,7 @@ def goldens():
     """Return load_golden(grid_tag) -> dict[str, torch.Tensor] from tests/goldens/."""
     from safetensors.torch import load_file
 
-    from models.demos.minimax_m3_vl.tt.model_config import MiniMaxM3VLModelArgs
+    from models.demos.minimax_m3.tt.vision.model_config import MiniMaxM3VLModelArgs
 
     gdir = MiniMaxM3VLModelArgs().goldens_dir
 
