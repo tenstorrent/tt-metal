@@ -23,10 +23,11 @@ from dataclasses import dataclass
 
 import ttnn
 
-# When set, the linear activations are narrowed to bf8 where they cross the fabric. SDPA runs its named
-# recipe (``sdpa_precision``) either way. More aggressive than the weight quant it rides on: weights are a
-# fixed, well-conditioned distribution, activations are not. On by default because the shipped 1080p tier
-# is measured and VBench-gated with it on; set to 0 to A/B against the weight-only preset.
+# When set, the linear activations are narrowed to bf8 where they cross the fabric. More aggressive than the
+# weight quant it rides on: weights are a fixed, well-conditioned distribution, activations are not. On by
+# default; set to 0 to A/B against the weight-only preset. SDPA is not part of the profile: it runs the
+# attention's recipe (STANDARD with BF16 K/V unless the pipeline passes ``sdpa_precision``/``sdpa_kv_dtype``;
+# FAST with BFP8 K/V is the low-precision option).
 LTX_QUANT_ACTIVATIONS = os.environ.get("LTX_QUANT_ACTIVATIONS", "1") in ("1", "true", "True")
 
 
