@@ -9,6 +9,7 @@
 #include <map>
 #include <regex>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -342,11 +343,20 @@ PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& tra
     // address -- and can report a per-core peak that exceeds physical L1 on a passing op. Track
     // usage per core and take the max. L1 tensor buffers report a per-bank size but not which
     // cores, so they are added to a base resident on every participating core.
-    std::map<std::pair<int, int>, size_t> per_core_program_l1;  // CB + dfb + scratchpad per core
-    size_t l1_buffer_base = 0;                                  // resident L1 tensor buffers
+    // Keyed by (device, core): a multi-device program reports its CBs once per chip it occupies, and a heterogeneous
+    // MeshWorkload reports one program per chip; summing those over the bare (x, y) would multiply the per-core peak
+    // by the number of chips. Nodes without a device id share one key.
+    using DeviceCore = std::tuple<std::string, int, int>;
+    std::map<DeviceCore, size_t> per_core_program_l1;  // CB + dfb + scratchpad per (device, core)
+    size_t l1_buffer_base = 0;                         // resident L1 tensor buffers
+    auto device_of = [](const nlohmann::json& node) -> std::string {
+        const auto& params = node.at(kParams);
+        return params.contains(kDeviceId) ? params.at(kDeviceId).dump() : std::string();  // string or number
+    };
     auto add_program_l1 = [&](const nlohmann::json& node, size_t alloc_size) {
-        for (const auto& c : parse_core_range_set_str(node.at(kParams).at(kCoreRangeSet).get<std::string>())) {
-            per_core_program_l1[c] += alloc_size;
+        const std::string device = device_of(node);
+        for (const auto& [x, y] : parse_core_range_set_str(node.at(kParams).at(kCoreRangeSet).get<std::string>())) {
+            per_core_program_l1[{device, x, y}] += alloc_size;
         }
     };
     auto update_peak_total = [&]() {

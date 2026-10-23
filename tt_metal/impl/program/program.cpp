@@ -2228,7 +2228,10 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
     std::vector<const IDevice*> devices_to_track;
     const tt::tt_metal::distributed::MeshDevice* mesh_device =
         dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device);
-    if (mesh_device != nullptr) {
+    if (mesh_device != nullptr && !this->cb_tracking_devices_.empty()) {
+        // One device range of a heterogeneous MeshWorkload: its CBs live only on that range's devices
+        devices_to_track = this->cb_tracking_devices_;
+    } else if (mesh_device != nullptr) {
         // Mesh device: track all sub-devices
         const auto sub_devices = mesh_device->get_devices();
         devices_to_track.reserve(sub_devices.size());

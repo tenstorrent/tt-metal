@@ -33,6 +33,7 @@
 #include "kernel_types.hpp"
 #include "mesh_coord.hpp"
 #include "mesh_device.hpp"
+#include <tt-metalium/graph_tracking.hpp>
 #include "mesh_workload_impl.hpp"
 #include "program/program_device_map.hpp"
 #include "program/program_impl.hpp"
@@ -132,6 +133,14 @@ void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Prog
 
 void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device) {
     auto& program = programs_.at(device_range);
+    if (programs_.size() > 1) {
+        // Heterogeneous workload: this program's CBs occupy only the devices of its own range
+        std::vector<const IDevice*> range_devices;
+        for (const auto& coord : device_range) {
+            range_devices.push_back(mesh_device->get_device(coord));
+        }
+        program.impl().set_cb_tracking_devices(std::move(range_devices));
+    }
     program.impl().compile_and_allocate(mesh_device, false);
 }
 
@@ -144,8 +153,12 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
     // programs are already compiled and laid out, so compile_program is a flag check per program;
     // handing those to the thread pool costs a worker wake-up and a join for no work. Only the
     // first compile of a multi-program workload does enough to be worth parallelizing.
-    if (programs_.size() == 1 || this->is_finalized()) {
-        // Compile from main thread for homogeneous workloads
+    // Graph capture state (GraphTracker processors) is thread-local: CB allocations reported from a thread-pool
+    // worker never reach an active capture, so a heterogeneous workload compiled during a capture would report no
+    // CB usage at all. Compile on the calling thread while a capture is active.
+    const bool graph_capture_active = !GraphTracker::instance().get_processors().empty();
+    if (programs_.size() == 1 || this->is_finalized() || graph_capture_active) {
+        // Compile from main thread for homogeneous workloads (and under graph capture, see above)
         for (auto& [device_range, _] : programs_) {
             this->compile_program(device_range, mesh_device);
         }

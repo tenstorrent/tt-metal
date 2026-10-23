@@ -1,0 +1,55 @@
+
+{
+ "summary": {
+  "total": 47025,
+  "supported_pass": 784,
+  "supported_fail": 0,
+  "supported_marked_xfail": 0,
+  "supported_skipped": 0,
+  "supported_other": 0,
+  "xfail_expected": 12457,
+  "xpass_drift": 1,
+  "xfail_wrong_mode": 0,
+  "xfail_other": 0,
+  "invalid_skipped": 33696,
+  "invalid_unexpected": 0,
+  "infeasible_skipped": 0,
+  "no_axes_found": 87
+ },
+ "category_counts": {
+  "supported_pass": 784,
+  "no_axes_found": 87,
+  "xfail_expected": 12457,
+  "invalid_skipped": 33696,
+  "xpass_drift": 1
+ },
+ "loud_categories": {
+  "supported_fail": [],
+  "xpass_drift": [
+   {
+    "nodeid": "eval/golden_tests/distributed_rms_norm/test_translated.py::test_pre_all_gather_non_welford_fp32_requires_fp32_dest_acc",
+    "axes": {
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "fp32_dest_acc_en": false,
+     "gamma_mode": "no_gamma",
+     "gamma_dtype": "none",
+     "gamma_layout": "none",
+     "memory_layout": "INTERLEAVED",
+     "cluster_axis": 1,
+     "topology": "Linear",
+     "num_links": null,
+     "alignment": "tile_aligned",
+     "rank": 4
+    },
+    "status": "passed"
+   }
+  ],
+  "xfail_wrong_mode": [],
+  "supported_marked_xfail": [],
+  "supported_other": [],
+  "xfail_other": [],
+  "invalid_unexpected": []
+ },
+ "note": "Compacted by the verifier (full report > 500 KB): summary, per-category counts and every loud-category entry. Full report: eval/verify_supported over the golden run results (EVAL_CAPTURE_L1=0)."
+}

@@ -254,6 +254,9 @@ public:
     void invalidate_dataflow_buffer_allocation();
     // Always used in conjunction with validate_circular_buffer_region and compile
     void allocate_circular_buffers(const IDevice* device);
+    // Restrict CB memory reporting (graph tracking) to these devices instead of every sub-device of the mesh the
+    // program is compiled on: set by a heterogeneous MeshWorkload for the program of one device range.
+    void set_cb_tracking_devices(std::vector<const IDevice*> devices) { cb_tracking_devices_ = std::move(devices); }
     void allocate_dataflow_buffers(const IDevice* device);
     // Metal 2.0 only: allocate Program-scope L1 for each kernel's scratchpads,
     // and patch the base address into the CRTA buffer
@@ -711,6 +714,8 @@ private:
     std::vector<CircularBufferAllocator> cb_allocators_;
     // Tracks which devices this program has CBs allocated on (for CB memory reporting)
     std::unordered_set<const IDevice*> cb_devices_;
+    // Empty = report CBs for every sub-device of the device the program is allocated on (see set_cb_tracking_devices)
+    std::vector<const IDevice*> cb_tracking_devices_;
 
     std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers_;
     std::unordered_map<uint32_t, std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>

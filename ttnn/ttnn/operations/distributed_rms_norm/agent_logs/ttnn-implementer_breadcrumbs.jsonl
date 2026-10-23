@@ -1,0 +1,17 @@
+
+{"event":"tool_use","tool":"Skill","skill":"perf-measure","args":"","ts":"2026-10-22T14:50:33+00:00"}
+{"event":"test_run","result":"pass","detail":"acceptance 66 passed 1 skipped; traced perf 640x1792 ~27us, 32x1792 ~12us, 2048x1280 ~43us","ts":"2026-10-22T14:50:33+00:00"}
+{"event":"hypothesis","what":"WIDTH 640x1792 171us: single root gathers/finalizes all 20 rows (G_w=56 partials per row)","ts":"2026-10-22T20:00:18+00:00"}
+{"event":"fix_applied","what":"R3-RS owners for WIDTH_SHARDED; gather/inv depth 1; balanced blocks","ts":"2026-10-22T20:00:18+00:00"}
+{"event":"test_run","result":"pass","what":"1152 valid sharded golden cells: 0 fail; WIDTH 640x1792 26.3us","ts":"2026-10-22T20:00:18+00:00"}
+{"event":"hypothesis","what":"persistent landing/sems created under a live shard cap CB region (bank-uniform allocator)","evidence":"budget 1.46MB->0.42MB after one 512KB-shard call","ts":"2026-10-22T20:00:18+00:00"}
+{"event":"fix_applied","what":"acceptance file -> root mesh_device fixture (precompile zero-write); graph capture: main-thread compile under capture, per-range CB tracking, per-(device,core) extractor","golden":"1957 pass / 1 fail / 0 hang; gate 1921/1945","ts":"2026-10-22T21:26:02+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"memory-layouts","args":"","ts":"2026-10-22T21:40:37+00:00"}
+{"event":"test_run","result":"pass","detail":"unit dir 194 passed/6 skipped; golden stratified 186/186; translated+regression 248 passed 0 failed","ts":"2026-10-22T22:00:01+00:00"}
+{"event":"test_run","refinement":3,"status":"pass","tests":"verifier_regressions waves_alternating (lookahead + back_to_back), sharded -k waves","note":"WAVE_PIPELINE look-ahead + decoupled port; perf 640x1792 cap1 27.3->22.2us","ts":"2026-10-22T23:04:46+00:00"}
+{"event":"test_run","refinement":3,"status":"pass","tests":"unit dir 201 passed/6 skipped; golden slice 71 passed; test_regression 12 passed","perf":"640x1792 ring 27.3->22.3-22.8us; guard set no regression","ts":"2026-10-22T23:24:10+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-10-22T23:46:06+00:00"}
+{"event":"test_run","result":"pass","details":"R4: golden slices 108/108 + 432/432; precision matrix 320 pass; unit dir green. Fixes: UnpackToDestFp32 gated on fp32 DEST (16-bit DEST gave inf), bf8b W-pad mantissa zeroing","ts":"2026-10-23T00:04:31+00:00"}
+{"event":"hypothesis","text":"R5: exchange off the critical path on last-launched chip; per-packet 2D route compute caused +0.8us","ts":"2026-10-23T01:33:32+00:00"}
+{"event":"fix_applied","text":"pre-routed headers per destination; rectangular R3 groups for single-rect inv mcast","ts":"2026-10-23T01:33:32+00:00"}
+{"event":"test_run","result":"pass","text":"unit dir 187p/6s, ring transport regression 16/16, golden slice 123/123; perf 640x1792 22.6-23.2 -> 21.5-22.0 us, 32x1792 11.4-11.6 -> 10.8-11.1 us","ts":"2026-10-23T01:33:32+00:00"}
