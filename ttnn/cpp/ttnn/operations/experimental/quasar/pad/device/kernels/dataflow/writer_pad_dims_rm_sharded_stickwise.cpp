@@ -20,9 +20,8 @@
 #define u16_l1_ptr volatile tt_l1_ptr uint16_t*
 #define u32_l1_ptr volatile tt_l1_ptr uint32_t*
 
-template <uint32_t padding_value_num_bytes, uint32_t num_bytes>
-inline __attribute__((always_inline)) void fill_dfb_with_padding_value(
-    DataflowBuffer& cb, const uint32_t padding_value_as_u32) {
+template <uint32_t padding_value_num_bytes, uint32_t num_bytes, typename DFB>
+inline __attribute__((always_inline)) void fill_dfb_with_padding_value(DFB& cb, const uint32_t padding_value_as_u32) {
     constexpr uint32_t num_elts =
         num_bytes / padding_value_num_bytes;  // constexpr so that this division happens once on host
     uint32_t cb_write_addr = cb.get_write_ptr();

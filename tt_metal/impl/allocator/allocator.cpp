@@ -39,7 +39,9 @@ AllocatorImpl::AllocatorImpl(const AllocatorConfig& alloc_config) :
     tracking_enabled_(trace_allocation_tracking_enabled()),
     traceback_capture_enabled_(tracking_enabled_ && trace_allocation_diagnostics_enabled()),
     skip_program_cache_(trace_allocation_skip_program_cache_enabled()) {
-    if (traceback_capture_enabled_) {
+    // Aggregate allocation queries need every tracking-enabled allocator, even
+    // when traceback diagnostics are disabled.
+    if (tracking_enabled_) {
         register_traceback_allocator(this);
     }
 }
@@ -666,7 +668,7 @@ void AllocatorConfig::reset() {
 }
 
 AllocatorImpl::~AllocatorImpl() {
-    if (traceback_capture_enabled_) {
+    if (tracking_enabled_) {
         unregister_traceback_allocator(this);
     }
     this->clear_trace_allocation_state();

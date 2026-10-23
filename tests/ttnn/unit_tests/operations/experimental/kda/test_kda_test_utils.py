@@ -227,6 +227,15 @@ def test_nrmse_keep_dims_gates_the_worst_slice(expect_error) -> None:
         assert_accurate(expected, actual, pcc_threshold=0.99, nrmse_threshold=0.1, nrmse_keep_dims=(0,))
 
 
+def test_pcc_keep_dims_gates_the_worst_slice(expect_error) -> None:
+    signal = torch.linspace(-1.0, 1.0, 8)
+    expected = torch.stack([100.0 * signal, signal])  # a large correct head next to a small one
+    actual = torch.stack([100.0 * signal, -signal])  # the small head is anti-correlated
+    assert assert_accurate(expected, actual, pcc_threshold=0.999, nrmse_threshold=None) > 0.999
+    with expect_error(AssertionError, "worst slice 1"):
+        assert_accurate(expected, actual, pcc_threshold=0.999, nrmse_threshold=None, pcc_keep_dims=(0,))
+
+
 def test_offset_peak_gate_detects_local_carry_fault(expect_error) -> None:
     expected = torch.linspace(-1, 1, 1280 * 32).reshape(1280, 32)
     actual = expected.clone()
