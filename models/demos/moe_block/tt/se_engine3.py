@@ -376,7 +376,11 @@ void kernel_main() {
             const uint32_t t = (ni++ % 14) + 1, o = offset_of(b);
             trid_of[b / GY] = t;
             noc_async_read_set_trid(t);
+#ifdef SE_PROBE_NOWL
+            noc_async_read(get_noc_addr_from_bank_id<true>(wbank, w_addr + wbase + o * WTB), wown + o * WTB, 16);  // (probe)
+#else
             noc_async_read(get_noc_addr_from_bank_id<true>(wbank, w_addr + wbase + o * WTB), wown + o * WTB, bsize(b) * WTB);
+#endif
             ++pending;
         }
     };
@@ -872,7 +876,8 @@ void kernel_main() {
 
 
 def _probes():
-    """(timing only) SE_PROBE=NOX,NOW: skip the x / W data multicasts (semaphores kept): the results are wrong."""
+    """(timing only) SE_PROBE=NOX,NOW: skip the x / W data multicasts (semaphores kept); NOMATH: no matmuls; NOWL: no W
+    DRAM reads (16 B a block) - the results are wrong."""
     import os
 
     return "".join(f"#define SE_PROBE_{p}\n" for p in os.environ.get("SE_PROBE", "").split(",") if p)

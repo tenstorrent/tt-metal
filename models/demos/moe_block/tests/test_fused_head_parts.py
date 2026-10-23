@@ -273,7 +273,16 @@ def test_se_engine3(mesh_device, device_params):
             rows, H, I, GX, GY = map(int, os.environ["SE_SHAPE"].split(","))
             N = 2 * I
         eng = SeEngine3(
-            mesh_device, rows=rows, H=H, I=I, glu=glu, GX=GX, GY=GY, MT=MT, KB=int(os.environ.get("SE_KB", "0")) or None
+            mesh_device,
+            rows=rows,
+            H=H,
+            I=I,
+            glu=glu,
+            GX=GX,
+            GY=GY,
+            MT=MT,
+            KB=int(os.environ.get("SE_KB", "0")) or None,
+            fidelity=getattr(ttnn.MathFidelity, os.environ.get("SE_FID", "HiFi2")),  # (a timing probe: LoFi)
         )
         logger.info(
             f"SE3 {name}: chunks {eng.NCH} x {eng.CR * 32} rows, KB {eng.KB}, x families {eng.S0} + {eng.S1}, "

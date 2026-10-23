@@ -869,3 +869,25 @@ dispatch_prep's two outputs, made inside the head (the whole-head numbers includ
 - The router cores' fin (last arrival -> top-K start), GLM: 16 us, of it the full-precision fp32 sigmoid 11.3 (probe:
   4.7 without it); top-K 10.4; rows (after the top-K) 12. For later: a cheaper sigmoid (or the arrivals' sums and
   sigmoid as each source lands), the top-K and rows over more RISCs.
+
+### The SE engine's compute (K3's SE path binds; GLM's ties): what bounds it (engine alone, MT 2, 640 rows)
+| probe (SE_PROBE) | K3 us | GLM us |
+|---|---|---|
+| none | 317 | 97 |
+| NOX,NOW (no x / W data in the multicasts) | 307 | 93 |
+| NOMATH | 310 | 78 |
+| NOWL (no W DRAM reads) | 256 | 91 |
+| NOMATH,NOWL | 222 | 64 |
+| NOX,NOW,NOMATH | 209 | 62 |
+| NOX,NOW,NOMATH,NOWL | 107 | 38 |
+- K3 zones (NOX,NOW): gate / up + latent 231 us (52% of HiFi2 peak), down 72 (64%); LoFi: 307 -> 242 (math ~65).
+- Data movement and compute each bind at ~300 (taking either away leaves the other); the W stream from DRAM (~40 MB a
+  call, ~400 GB/s, the NCRISC's NOC1 reads) ~60 us on K3's path; the protocol rest ~107.
+- Tried, no gain: KB 8 (303) / 4 (345) vs 16 (317); 4 x slots (298 at KB 8; 6 slots / KB 16 x 4 slots wrong results -
+  an overlay); credit-based x rounds (W-style, XS in flight, no per-round handshake): 334 full, protocol-only 211 -
+  the rounds' handshake latency does not bind. Reverted.
+- Structural: DEST 8 fp32 tiles and MT 2 (all 640 rows over 10 core rows) -> ~1 KB of x + W a tile-MAC into each
+  core; x re-multicast every pass (K3 3 passes). Options: x-stationary passes with fp32 accumulation in L1 (packer
+  L1 acc: x reuse over all of a column's tiles, ~28% less per-MAC traffic, more pack traffic); the W stream on NOC0 /
+  bank-local readers (NOC1 DRAM reads are the slow ones on BH); W for the next layer prefetched under other ops (a
+  model-level change).
