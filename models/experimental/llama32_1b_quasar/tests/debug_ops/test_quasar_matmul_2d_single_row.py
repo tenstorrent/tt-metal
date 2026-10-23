@@ -18,6 +18,7 @@ This test builds a 2D-mcast matmul on a 2x1 grid with per_core_M = full M (num_b
 row, i.e. num_cores_with_work_r == 1), which is exactly the degenerate case: WITHOUT the clamp it FATALs at
 program creation with "No core (0,1)"; WITH it, it builds and computes. N is split across the 2 columns and M
 streams via out_block_h. Inputs are built via quasar.tilize (from_torch(TILE) faults on Quasar).
+no_program_config runs the same matmul through ttnn.experimental.quasar.matmul with no program config.
 
 Run (Quasar, SLOW dispatch = the true single-row grid):
     TTSIM_QSR_TC_LEGACY_TRUNCATION_ALIAS=0 TT_METAL_SIMULATOR=~/sim/libttsim.so TT_METAL_SLOW_DISPATCH_MODE=1 \
@@ -30,6 +31,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from tests.ttnn.utils_for_testing import assert_allclose
 
 # [M, K, N] in tiles * 32. A 2x1 grid: M (2 tiles) on the single row, N (2 tiles) split across the 2 columns.
 M, K, N = 64, 64, 64  # 2 x 2 x 2 tiles
@@ -58,7 +60,8 @@ def _pcc(a, b):
 
 
 @pytest.mark.timeout(3600)
-def test_matmul_2d_mcast_single_row(mesh_device):
+@pytest.mark.parametrize("use_program_config", [True, False], ids=["2d_mcast", "no_program_config"])
+def test_matmul_2d_mcast_single_row(mesh_device, use_program_config):
     """2D-mcast matmul on a 2x1 grid (single work row). Fails at program creation ('No core (0,1)') without
     the single-row mcast-corner clamp; builds + PCC-checks with it."""
     torch.manual_seed(0)
@@ -81,7 +84,10 @@ def test_matmul_2d_mcast_single_row(mesh_device):
         fuse_batch=False,
     )
 
-    out = ttnn.matmul(at, bt, program_config=program_config, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if use_program_config:
+        out = ttnn.matmul(at, bt, program_config=program_config, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    else:
+        out = ttnn.experimental.quasar.matmul(at, bt, program_config=None, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.synchronize_device(mesh_device)
     o = ttnn.to_torch(out)
 
@@ -90,3 +96,5 @@ def test_matmul_2d_mcast_single_row(mesh_device):
     logger.info(f"[mm-2d-single-row] out {tuple(o.shape)} finite={torch.isfinite(o).all().item()} PCC={pcc:.5f}")
     assert tuple(o.shape) == (1, 1, M, N), f"unexpected shape {tuple(o.shape)}"
     assert pcc > 0.99, f"2D single-row matmul PCC {pcc}"
+    if not use_program_config:
+        assert_allclose(ref.reshape(1, 1, M, N), o.float(), rtol=0.02, atol=0.02 * ref.abs().max().item())

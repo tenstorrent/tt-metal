@@ -6,13 +6,18 @@
 The llama graph captures that select MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig need 12 DRAM
 banks, so they skip on the Quasar simulator (2 banks). This test sizes itself from the device's DRAM bank
 count instead: one in0 L1 width shard and one in1 DRAM width shard per bank, several K blocks per shard so
-the multicast / credit path is exercised more than once. It runs on any arch (WH/BH too).
+the multicast / credit path is exercised more than once. It runs on any arch (WH/BH too). no_program_config
+runs the same operands through ttnn.experimental.quasar.matmul with no program config; off Quasar in1 is
+DRAM-interleaved there, since no program config means the fork's legacy auto config, which takes an interleaved
+in1 only.
 """
 
 import pytest
 import torch
 import ttnn
 from loguru import logger
+
+from tests.ttnn.utils_for_testing import assert_allclose
 
 M = 32
 K_TILES_PER_BANK = 4  # in0 shard width in tiles -> 4 K blocks per shard with in0_block_w=1
@@ -23,7 +28,7 @@ def _pcc(a, b):
     return torch.corrcoef(torch.stack([a.flatten().float(), b.flatten().float()]))[0, 1].item()
 
 
-@pytest.mark.parametrize("in0_block_w", [1, K_TILES_PER_BANK], ids=["kblocks4", "kblocks1"])
+@pytest.mark.parametrize("in0_block_w", [1, K_TILES_PER_BANK, None], ids=["kblocks4", "kblocks1", "no_program_config"])
 def test_matmul_dram_sharded_bank_sized(mesh_device, in0_block_w):
     nb = int(mesh_device.dram_grid_size().x)
     grid = mesh_device.compute_with_storage_grid_size()
@@ -60,10 +65,12 @@ def test_matmul_dram_sharded_bank_sized(mesh_device, in0_block_w):
     in0_t = ttnn.to_device(
         ttnn.from_torch(in0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper), mesh_device, in0_cfg
     )
+    if in0_block_w is None and mesh_device.arch() != ttnn.device.Arch.QUASAR:
+        in1_cfg = ttnn.DRAM_MEMORY_CONFIG
     in1_t = ttnn.to_device(
         ttnn.from_torch(in1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper), mesh_device, in1_cfg
     )
-    pc = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+    pc = in0_block_w and ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=in0_block_w, per_core_M=M // 32, per_core_N=N_TILES_PER_BANK, fused_activation=None
     )
     ck = ttnn.init_device_compute_kernel_config(
@@ -73,7 +80,7 @@ def test_matmul_dram_sharded_bank_sized(mesh_device, in0_block_w):
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
-    out_t = ttnn.matmul(
+    out_t = (ttnn.matmul if pc else ttnn.experimental.quasar.matmul)(
         in0_t,
         in1_t,
         program_config=pc,
@@ -88,3 +95,5 @@ def test_matmul_dram_sharded_bank_sized(mesh_device, in0_block_w):
     logger.info(f"pcc={pcc:.6f} max_abs_err={(out - ref).abs().max().item():.4f} zeros={zeros}/{out.numel()}")
     assert pcc > 0.999, f"PCC {pcc} below 0.999"
     assert zeros < out.numel() // 8, f"{zeros} zero outputs: a pack-destination / write-back miss"
+    if pc is None:
+        assert_allclose(ref, out, rtol=0.1, atol=0.1 * ref.abs().max().item())
