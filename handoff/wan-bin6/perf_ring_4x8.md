@@ -1,6 +1,6 @@
 # Wan2.2 perf on a Bin6 BH Galaxy: 4x8 ring
 
-Branch: `jameslee/test-pr60190-dram-endpoints` @ `adfc799f3a1` (PR #60190 DRAM endpoints + DRAM-harvest VAE chunking).
+Branch: `jameslee/test-pr60190-dram-endpoints` @ `adfc799f3a1` (PR #60190 DRAM endpoints + DRAM-harvest VAE chunking). PR #60190 is a do-not-merge draft and is not part of the branch this file is published on; Wan needs it to run on 7-bank Blackhole.
 Machine: `bh-glx-120-b10u20` (single BH Galaxy, 32 Blackhole chips, firmware bundle 19.13.2).
 Run 2026-10-20 by a Claude Code session for jameslee@tenstorrent.com.
 
@@ -9,7 +9,7 @@ Run 2026-10-20 by a Claude Code session for jameslee@tenstorrent.com.
 - **The 4x8 ring runs on this machine.** Unlike `b10u08` (see `README.md`), `b10u20` is cabled as a full 4x8 torus.
 - **All 8 runs passed, none hung:** T2V and I2V at 480p and 720p, each at the default power limit and at `TT_METAL_TDP_LIMIT_WATTS=130`. That includes 720p with the chunked VAE, which hung 17 of 17 times on `b10u08` without the 130 W setting.
 - **Only VAE decode misses its CI target, by 17–29%, and the chunking is why.** Denoise and total are 24–26% under target at the default limit. On 7-bank DRAM the branch decodes in chunks (`vae_t_chunk_size=7`). In an A/B on b10u20 at 480p, chunking costs 0.18–0.19 s (0.49–0.52 s against 0.30–0.35 s full-T), about 0.3–1% of the total. Full-T meets the 0.42 s target on this machine. With PR #61784's readback fix, CI meets both VAE targets full-T on 8 banks.
-- **Against an 8-bank CI Galaxy at the same 130 W, b10u20 is 3.6–4.9% slower in denoise and 3.7–5.3% slower in total.** The reference is PR #61784 (`main` plus the VAE readback fix, #60670) on `d07` hosts: T2V 39.08 / 123.86 s denoise at 480p / 720p and I2V 720p 124.20 s, against 40.99 / 128.41 / 128.63 s on b10u20. Forcing 130 W on a `d07` host changed nothing, so power isn't the cause. The DRAM bank and the machine itself are still mixed together; unharvesting b10u20 (`gddr/README.md`) would separate them.
+- **Against 8-bank CI Galaxies at the same 130 W, b10u20 is 2.9–4.8% slower in denoise and 3.1–5.2% slower in total** (n=3 on b10u20 against n=2–3 CI high-power runs, see "More CI runs"). **At standard power the gap disappears:** b10u20 at 75 W denoises 0.5–0.8% faster than the one standard-power CI run. The single-run comparison first gave 3.6–4.9% and 3.7–5.3%. The reference is PR #61784 (`main` plus the VAE readback fix, #60670) on `d07` hosts: T2V 39.08 / 123.86 s denoise at 480p / 720p and I2V 720p 124.20 s, against 40.99 / 128.41 / 128.63 s on b10u20. Forcing 130 W on a `d07` host changed nothing, so power isn't the cause. The DRAM bank and the machine itself are still mixed together; unharvesting b10u20 (`gddr/README.md`) would separate them.
 - **With CI's readback fixed, the VAE gap is all chunking.** CI's full-T at 480p (0.278 s) matches b10u20's full-T (0.299 s at 130 W). b10u20's chunked decode is 0.21 s slower at 480p and 0.41 s at 720p, where 7 banks can't run full-T (#59504). This branch on an 8-bank CI Galaxy matches `main` on the same host within ±0.5%, so PR #60190 itself costs nothing there.
 - **75 W is a `bh-mod` override; the stock limit is 130 W.** Every chip on b10u20 has `chip_limits.tdp_limit` = 75 against a firmware default of 130 (`bh-mod get --delta`), set together with the Bin6 soft harvest. `TT_METAL_TDP_LIMIT_WATTS=0` returns to the override (75 W), not to 130 W. So the "130 W" runs are at stock power, and the 75 W runs are at a deliberately reduced limit; going to 130 W makes every config 17–26% faster. This probably reverses the README's finding 5 for `b10u08`: setting 130 W restored stock power rather than capping it.
 
@@ -107,6 +107,60 @@ What this shows:
 3. **Totals: b10u20 is 3.7–5.3% slower,** about 90% of it denoise.
 4. **Local b10u20 runs don't show #60670 because Weka walls its poller cores off from everything else here.** `/etc/wekaio/service.conf` has `isolate_cpusets=true`, re-applied every 5 minutes. The two pollers are pinned to CPUs 1 and 2. Every other process, including a login shell and pytest, may only use `0,3-32,35-63`, which leaves out CPUs 1 and 2 and their SMT siblings 33 and 34. So none of pytest's 64 torch threads can share a core with a poller, and the OpenMP barriers in `_reassemble_2d` never wait on one. The CI job runs in a runner container whose CPU set apparently isn't covered by that isolation, so its threads do land on those cores. That last part is inferred from the slowdown and not checked on a CI host (a `grep Cpus_allowed_list /proc/self/status` in the job would show it). The b10u20 numbers in this file don't include PR #61784, and on this machine it shouldn't change them.
 
+### More CI runs (n=2–3 at 130 W)
+
+Later PR #61784 runs added two T2V and two I2V repeats. One T2V repeat landed on `d04u14`, a standard-power host (probably the same 75 W override as b10u20, not confirmed). It is listed but left out of the 130 W statistics.
+
+| Run | Host | Power | Config | Image enc | Denoise | VAE | Total |
+|---|---|---|---|---|---|---|---|
+| T2V [round 1](https://github.com/tenstorrent/tt-metal/actions/runs/39527173942/job/118995017424) | d07u08 | High | 480p | – | 39.08 | 0.278 | 39.46 |
+| | | | 720p | – | 123.86 | 0.591 | 124.57 |
+| T2V [repeat 2](https://github.com/tenstorrent/tt-metal/actions/runs/39624837554/job/119334164500) | d04u14 | Standard (excluded) | 480p | – | 56.22 | 0.307 | 56.62 |
+| | | | 720p | – | 155.80 | 0.632 | 156.54 |
+| T2V [repeat 3](https://github.com/tenstorrent/tt-metal/actions/runs/39624856948/job/119372934235) | d07u02 | High | 480p | – | 39.36 | 0.291 | 39.75 |
+| | | | 720p | – | 123.90 | 0.581 | 124.59 |
+| I2V [round 1](https://github.com/tenstorrent/tt-metal/actions/runs/39527176210/job/119003689944) | d07u02 | High | 720p | 1.085 | 124.20 | 0.602 | 125.97 |
+| I2V [repeat 2](https://github.com/tenstorrent/tt-metal/actions/runs/39624846512/job/119400356971) | d07u08 | High | 720p | 1.086 | 123.95 | 0.586 | 125.72 |
+| I2V [repeat 3](https://github.com/tenstorrent/tt-metal/actions/runs/39624865884/job/119346019285) | d06u02 | High | 720p | 1.078 | 125.93 | 0.600 | 127.72 |
+
+130 W, mean ± sample std dev. b10u20 values are the n=3 means from "Repeat runs" below. Difference = b10u20 minus CI.
+
+**T2V 480p** (CI hosts d07u08, d07u02):
+
+| Stage | CI, 8 banks (n=2) | b10u20, 7 banks (n=3) | Difference (s) | Difference (%) |
+|---|---|---|---|---|
+| Denoise | 39.22 ± 0.20 | 41.10 ± 0.39 | +1.88 | +4.8% |
+| VAE | 0.285 ± 0.009 | 0.496 ± 0.002 | +0.212 | +74% |
+| Total | 39.61 ± 0.21 | 41.67 ± 0.39 | +2.07 | +5.2% |
+
+**T2V 720p** (CI hosts d07u08, d07u02):
+
+| Stage | CI, 8 banks (n=2) | b10u20, 7 banks (n=3) | Difference (s) | Difference (%) |
+|---|---|---|---|---|
+| Denoise | 123.88 ± 0.03 | 128.45 ± 0.19 | +4.57 | +3.7% |
+| VAE | 0.586 ± 0.007 | 1.020 ± 0.012 | +0.434 | +74% |
+| Total | 124.58 ± 0.01 | 129.56 ± 0.19 | +4.98 | +4.0% |
+
+**I2V 720p** (CI hosts d07u02, d07u08, d06u02):
+
+| Stage | CI, 8 banks (n=3) | b10u20, 7 banks (n=3) | Difference (s) | Difference (%) |
+|---|---|---|---|---|
+| Image encode | 1.083 ± 0.004 | 0.905 ± 0.018 | −0.178 | −16% |
+| Denoise | 124.69 ± 1.08 | 128.34 ± 0.66 | +3.65 | +2.9% |
+| VAE | 0.596 ± 0.009 | 1.024 ± 0.010 | +0.428 | +72% |
+| Total | 126.47 ± 1.09 | 130.34 ± 0.64 | +3.87 | +3.1% |
+
+Standard power, T2V, `d04u14` (n=1, power limit not confirmed) against b10u20 at 75 W (n=3):
+
+| Stage | 480p CI | 480p b10u20 | Difference | 720p CI | 720p b10u20 | Difference |
+|---|---|---|---|---|---|---|
+| Denoise | 56.22 | 55.76 ± 0.05 | −0.46 s (−0.8%) | 155.80 | 154.95 ± 0.08 | −0.85 s (−0.5%) |
+| VAE | 0.307 | 0.520 ± 0.002 | +0.213 s (+69%) | 0.632 | 1.087 ± 0.010 | +0.455 s (+72%) |
+| Total | 56.62 | 56.36 ± 0.05 | −0.26 s (−0.5%) | 156.54 | 156.12 ± 0.08 | −0.42 s (−0.3%) |
+
+- **The 130 W denoise gap is 2.9–4.8%,** larger than b10u20's run-to-run spread (at most 0.9%) and than the spread between CI hosts (up to 1.6%: d06u02 denoised I2V in 125.93 s against about 124 s on the d07 hosts). Less of it is clearly beyond machine variance than the single runs above suggested.
+- **At standard power b10u20 is as fast as the 8-bank host or slightly faster.** One possible reading, not tested: at 75 W the chips are power-limited and the missing bank doesn't matter; at 130 W they run fast enough for DRAM bandwidth to count. Unharvesting b10u20 (`gddr/README.md`) at both power levels would settle it.
+
 ### Older CI runs, before the VAE readback fix
 
 Kept for denoise and for the 75 W comparison: no PR #61784 run landed on a `d04` host. The VAE column carries the extra ~0.4 s from #60670.
@@ -188,7 +242,7 @@ Run on 2026-10-21 on b10u20 with the same build. Each config got 3 separate pyte
 
 - **Run-to-run spread is small:** at most 0.9% in denoise and total. 75 W is tighter (≤0.1%) than 130 W (0.1–0.9%), probably because at 75 W the chips sit at the power limit the whole run.
 - **The earlier single runs above fall inside these ranges or within 0.2 s of them,** so the earlier tables stand.
-- **The gap to the 8-bank CI Galaxy (PR #61784, 130 W) is well outside the noise.** With these means, b10u20 is +2.02 s (+5.2%) at T2V 480p, +4.59 s (+3.7%) at T2V 720p and +4.14 s (+3.3%) at I2V 720p in denoise, against a standard deviation of at most 0.66 s. The CI side is one run per config, but the `d07` nightlies agree with it within about 1%.
+- **The gap to the 8-bank CI Galaxies (PR #61784, 130 W) is outside b10u20's noise.** Against the CI means in "More CI runs", b10u20 is +1.88 s (+4.8%) at T2V 480p, +4.57 s (+3.7%) at T2V 720p and +3.65 s (+2.9%) at I2V 720p in denoise.
 
 ## Notes
 
