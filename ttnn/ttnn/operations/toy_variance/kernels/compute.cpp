@@ -47,6 +47,13 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in_tiles, dfb::scaler, dfb::out_tiles);
 
+    DataflowBuffer dfb_in_tiles(dfb::in_tiles);
+    DataflowBuffer dfb_mean(dfb::mean);
+    DataflowBuffer dfb_centered_sq(dfb::centered_sq);
+    DataflowBuffer dfb_variance(dfb::variance);
+    DataflowBuffer dfb_out_tiles(dfb::out_tiles);
+    DataflowBuffer dfb_scaler(dfb::scaler);
+
     constexpr auto reduce_block_shape = ckl::ReduceInputBlockShape::of(Ht, BLOCK_SIZE, /*NC=*/1);
     constexpr auto bin_block_shape = ckl::IterationShape::grid(Ht, BLOCK_SIZE);
 
@@ -86,9 +93,10 @@ void kernel_main() {
                 ckl::WaitPolicy::Upfront,
                 ckl::PopPolicy::None,
                 ckl::InputTileMapping::Col),
-            ckl::output(dfb::centered_sq)>(bin_block_shape);
+            ckl::output(dfb::centered_sq)>(bin_block_shape, dfb_in_tiles, dfb_mean, dfb_centered_sq);
 
-        ckl::square<ckl::input(dfb::centered_sq), ckl::output(dfb::centered_sq)>(bin_block_shape);
+        ckl::square<ckl::input(dfb::centered_sq), ckl::output(dfb::centered_sq)>(
+            bin_block_shape, dfb_centered_sq, dfb_centered_sq);
 
         const bool is_last = (b + 1 == NUM_BLOCKS);
         const auto block_scaler = is_last ? partial_scaler : ckl::ReducePartialScaler::none();
@@ -126,16 +134,14 @@ void kernel_main() {
             block_scaler);
     }
 
-    DataflowBuffer dfb_mean(dfb::mean);
-    DataflowBuffer dfb_scaler(dfb::scaler);
-
     // dfb::mean was held across pass 2 (Upfront wait, no pop) -- release it now.
     dfb_mean.pop_front(Ht);
 
     // ---------- Drain variance -> out_tiles ----------
     // Per-tile streaming copy with input + output format reconfig (chain owns wait/pop on
     // dfb::variance and reserve/push on dfb::out_tiles).
-    ckl::copy<ckl::input(dfb::variance), ckl::output(dfb::out_tiles)>(ckl::IterationShape::tiles(Ht));
+    ckl::copy<ckl::input(dfb::variance), ckl::output(dfb::out_tiles)>(
+        ckl::IterationShape::tiles(Ht), dfb_variance, dfb_out_tiles);
 
     dfb_scaler.pop_front(HAS_PARTIAL_W ? 2 : 1);
 }
