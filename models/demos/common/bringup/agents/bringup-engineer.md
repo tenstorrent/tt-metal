@@ -118,6 +118,8 @@ You start with no memory of earlier steps. Everything you need is in the brief a
     is not refused (DeepSeek-V4.1 P.18 / P.19: prefer-expect-error refused fork tests that used pytest.raises; use
     the `expect_error(Error, "<text of the real message>")` fixture):
     `pre-commit run --files $(git diff --name-only HEAD; git ls-files -o --exclude-standard)`.
+    Run the hooks BEFORE your last `gate <task> --check`, never after: a formatter that rewrites a file after the
+    check makes the recorded passes stale, and the orchestrator then re-runs every unit (DeepSeek-V4.1 P.22, F176).
 13. End with a short plain-text summary: what changed, what the gate printed, anything the next step must know.
 14. Precision checks (owner). Every device test (component, swap, ladder, contract, fork) runs the shipped realistic
    settings and compares the device with the full-precision CPU reference (`numerics: native`). Its limit is calib x
