@@ -198,43 +198,53 @@ class TTConv2D:
             self.linear_bias = None if self.bias is None else ttnn.to_device(self.bias, self.device)
             self.linear_program_config = self._linear_program_config(grid, fp32_dest_acc_en)
 
-    # A linear at least this many tile rows per core takes _linear_program_config's split.
-    LINEAR_SPLIT_MIN_ROWS_PER_CORE = 16
+    # A widening linear whose activation gives each grid row fewer tile rows than this keeps
+    # ttnn.linear's own split: layer4's 512 -> 2048 runs faster on it than on the 2D split.
+    LINEAR_2D_MIN_ROWS_PER_GRID_ROW = 64
 
     def _linear_program_config(self, grid, fp32_dest_acc_en):
-        """The pointwise linear's program config for a tall activation, None for ttnn.linear's own.
-        Its own splits the layer1/layer2 activations badly. A narrow output (up to 4 tiles) splits
-        the rows over every core with the weights multicast; a wider one also splits the output
+        """The pointwise linear's program config, None for ttnn.linear's own, which splits the
+        backbone's activations far from DRAM bandwidth. A linear that narrows to at most 8 tiles
+        splits the rows over every core with the weights multicast; a wider output also splits its
         columns over up to 8 grid columns, which keeps a write-heavy linear off a few cores."""
         num_cores = grid.x * grid.y
         rows_t = math.ceil(self.batch_size * self.input_height * self.input_width / ttnn.TILE_SIZE)
-        if rows_t < num_cores * self.LINEAR_SPLIT_MIN_ROWS_PER_CORE:
+        if rows_t < num_cores:
             return None
         in_t, out_t = self.in_channels // ttnn.TILE_SIZE, self.out_channels // ttnn.TILE_SIZE
         max_subblock = 4 if fp32_dest_acc_en else 8
         relu = None if self.linear_activation is None else ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
-        if out_t <= 4:
-            block_h = 4
+
+        def largest_divisor(n, limit):
+            return max(d for d in range(1, limit + 1) if n % d == 0)
+
+        if out_t <= in_t and out_t <= 8:
+            per_core_m = math.ceil(rows_t / num_cores)
+            # Blocks of 4 rows on layer1/layer2's tall activations, one row on layer3's.
+            block_h = 4 if per_core_m >= 16 else 1
+            per_core_m = math.ceil(per_core_m / block_h) * block_h
             return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(grid.x, grid.y),
-                in0_block_w=in_t,
+                in0_block_w=in_t if in_t <= 16 else largest_divisor(in_t, 8),
                 out_subblock_h=1,
-                out_subblock_w=out_t,
+                out_subblock_w=largest_divisor(out_t, max_subblock),
                 out_block_h=block_h,
                 out_block_w=out_t,
-                per_core_M=math.ceil(math.ceil(rows_t / num_cores) / block_h) * block_h,
+                per_core_M=per_core_m,
                 per_core_N=out_t,
                 fuse_batch=True,
                 fused_activation=relu,
                 mcast_in0=False,
             )
-        cols = max(c for c in range(1, min(grid.x, 8) + 1) if out_t % c == 0)
+        if out_t > in_t and math.ceil(rows_t / grid.y) < self.LINEAR_2D_MIN_ROWS_PER_GRID_ROW:
+            return None
+        cols = largest_divisor(out_t, min(grid.x, 8))
         per_core_n = out_t // cols
         block_h = 16
-        subblock_w = max(w for w in range(1, max_subblock + 1) if per_core_n % w == 0)
+        subblock_w = largest_divisor(per_core_n, max_subblock)
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(cols, grid.y),
-            in0_block_w=max(w for w in range(1, 5) if in_t % w == 0),
+            in0_block_w=largest_divisor(in_t, 4),
             out_subblock_h=2 if 2 * subblock_w <= max_subblock else 1,
             out_subblock_w=subblock_w,
             out_block_h=block_h,
