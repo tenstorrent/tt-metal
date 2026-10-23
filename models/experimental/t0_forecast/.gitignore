@@ -1,0 +1,7 @@
+# Raw profiler output from perf_iteration.sh (the compact reports are kept)
+doc/optimize/**/tracy/
+doc/optimize/**/ops_perf_results.csv
+doc/optimize/**/*.log
+# Goldens and weights never live in git (see tests/golden/MANIFEST.json)
+*.safetensors
+*.pt
