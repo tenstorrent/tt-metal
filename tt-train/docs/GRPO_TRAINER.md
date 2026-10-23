@@ -161,7 +161,7 @@ In `ttt_remote_sync` both ranks run this script. The constructor picks the role:
 Rules and limitations of `ttt_remote_sync`:
 
 - **Llama only, no FSDP**, and `model_source` must be a HuggingFace Hub id
-  (both ranks load HF-named weights from it; a local path raises `ValueError`).
+  (rank 0 loads its weights from it, rank 1 its config and tokenizer; a local path raises `ValueError`).
 - **Rank 1 boots with dummy weights**, and rank 0 pushes its weights as
   version 0 before training starts. Rank 1 starts at weight_version -1 and
   refuses to generate until that push arrives. A batch generated before a push carries
@@ -169,10 +169,8 @@ Rules and limitations of `ttt_remote_sync`:
   correct with `weight_sync_every > 1`.
 - **Log-probs come from tt-transformers.** `TTTRolloutSampler` enables
   on-device log-probs (`enable_log_probs`, `num_logprobs=0`) and only packs
-  them; tt-train recomputes nothing. tt-transformers emits no log-probs on its
-  greedy path (`temperature=0` or `top_k=1`), so those settings fail
-  validation. It samples from the top 32 tokens but reports the full-vocab
-  log-prob of the sampled token.
+  them; tt-train recomputes nothing. It samples from the top 32 tokens but
+  reports the full-vocab log-prob of the sampled token.
 - **Prompts are never truncated**: a prompt longer than
   `max_seq_len - max_completion_length` raises `ValueError` on rank 1.
 - **A failure on either rank ends the job.** An exception in rank 1's
@@ -326,9 +324,10 @@ GRPOTrainer(
     model_source,
     dataset_func,
     config,
-    reward_func,
-    optimizer_dict,
+    reward_func=None,
+    optimizer_dict=None,
     callbacks=None,
+    reward_funcs=None,
 )
 ```
 
@@ -339,9 +338,10 @@ GRPOTrainer(
 | `model_source` | `str` | HuggingFace model ID or local checkpoint directory the trainer loads the model from. Its HF config is also saved with checkpoints. |
 | `dataset_func` | `Callable[[], Dataset]` | Zero-argument callable returning a HuggingFace `datasets.Dataset` with at least a `"prompt"` column. All other columns are passed to the reward function. Called once, in the constructor. |
 | `config` | `GRPOConfig` | Training configuration (see above); `rollout_backend` selects the sampler. |
-| `reward_func` | `Callable` | Reward function. Receives decoded completions and any dataset columns (see [Reward Functions](#reward-functions)). |
+| `reward_func` | `Callable` | Single reward function. Receives decoded completions and any dataset columns (see [Reward Functions](#reward-functions)). Pass exactly one of `reward_func` / `reward_funcs`. |
 | `optimizer_dict` | `dict` | Optimizer config dict passed to the [ttml optimizer registry](TTML_ONBOARDING.md). Must include a `"type"` key. |
 | `callbacks` | `list[TrainerCallback] \| None` | Hooks into the training loop (see [Callbacks](#callbacks)). |
+| `reward_funcs` | `list[Callable] \| None` | Reward functions summed per completion; with more than one, each one's mean is logged as `<name>_mean`. |
 
 The constructor opens the device, loads the model, builds the rollout
 sampler (in-process), the optimizer and the LR scheduler, tokenizes the
@@ -389,17 +389,7 @@ The dispatcher automatically matches parameter names to available data:
 If the function declares `**kwargs`, all available data is passed. If it does not,
 only explicitly named parameters are passed.
 
-> **Note:** Unlike TRL, which accepts a list of reward functions (`reward_funcs=[f1, f2]`)
-> and sums their outputs, `GRPOTrainer` takes a single `reward_func`. To combine
-> multiple reward signals, sum them in your function:
->
-> ```python
-> def combined_reward(completions, answer, **kwargs):
->     acc = [2.0 if c.strip().lower().startswith(a) else -1.0
->            for c, a in zip(completions, answer)]
->     brev = [-0.1 * (len(c) / 20) ** 2 for c in completions]
->     return [a + b for a, b in zip(acc, brev)]
-> ```
+> **Note:** As in TRL, `reward_funcs=[f1, f2]` sums the functions' outputs per completion.
 
 ---
 
@@ -442,7 +432,7 @@ callback's hook returns, so `GRPOMonitor` (which runs last, after
 when it writes the row.
 
 `step_time_s` is the **total per-step wall time** — it covers generation, host
-post-generation work, the reference log-probs pass, the training loop, every
+post-generation work, the training loop, every
 non-monitor `on_step_end` callback, and any checkpoint save on this step (this
 matches TRL's `step_time`, which is also the full step wall time including
 generation). `GRPOMonitor`'s own cost is deliberately outside `step_time_s`
@@ -595,8 +585,8 @@ built-in optimizers.
 
 ## Device Config
 
-`GRPOTrainer` imposes no `device_config` of its own; it reads the
-topology from the already-opened device. The mesh is configured from a
+`GRPOTrainer` opens the mesh from `device_config` and reads the topology
+from it. The mesh is configured from a
 YAML training config (`device_config:` block):
 
 ```yaml
@@ -706,7 +696,7 @@ from datasets import load_dataset
 
 dataset = load_dataset("google/boolq", split="train").map(format_fn)
 # dataset must have: "prompt" (str)
-# dataset may have:  "answer", "category", ... (passed to reward_func)
+# dataset may have:  "answer", "category", ... (passed to the reward functions)
 ```
 
 ---
@@ -716,7 +706,6 @@ dataset = load_dataset("google/boolq", split="train").map(format_fn)
 | Aspect | TRL `GRPOTrainer` | ttml `GRPOTrainer` |
 |--------|-------------------|---------------------|
 | **Model** | Passed as a `transformers` model object | Built by the trainer from `transformer_config` and a HF ID or local path |
-| **Reward functions** | List of functions (`reward_funcs=[f1, f2]`), summed | Single function (`reward_func=f`) |
 | **Training budget** | `max_steps` (optimizer steps) | `prompts_to_train` (total prompts) |
 | **Optimizer** | String name (`optim="adamw_bnb_8bit"`) | Config dict (`{"type": "MorehAdamW", ...}`) |
 | **Device setup** | Handled by HF Accelerate | The trainer opens the mesh from a YAML `device_config:` block |

@@ -325,7 +325,7 @@ class TTTRolloutSampler(RolloutSampler):
                 raise RuntimeError(
                     "TTTRolloutSampler: prefill log-probs are not a torch.Tensor "
                     f"(got {type(lp_prefill).__name__}); the top-k LogProbsResult path is not supported here. "
-                    "Configure sampling with top_k=0 and top_p=1.0 to get scalar per-token log-probs."
+                    "Scalar per-token log-probs need num_logprobs=0 in the sampling params."
                 )
             prefill_logprobs = [float(x) for x in lp_prefill.reshape(-1).tolist()]
         _prefill_s = time.perf_counter() - _t_prefill

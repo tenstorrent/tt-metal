@@ -148,14 +148,14 @@ Both ranks construct the same `GRPOTrainer`, which picks each rank's role:
   `MPIRolloutServer`, never loads the dataset, and serves requests until
   rank 0 is done.
 
-Both ranks boot with the Hub weights of `model_source` (weight version 0),
-so no initial weight push is needed.
+Rank 1 boots with dummy weights at weight version -1 and refuses to generate
+until rank 0 pushes its weights as version 0, before the first batch.
 
 ### Remote config fields
 
 | Field | Description |
 | ----- | ----------- |
-| `training_config.model_source` | HuggingFace Hub id. Both ranks load their weights from it; a local path is rejected in `ttt_remote_sync`. |
+| `training_config.model_source` | HuggingFace Hub id. Rank 0 loads its weights from it and rank 1 reads its config and tokenizer; a local path is rejected in `ttt_remote_sync`. |
 | `grpo_config.rollout_backend` | `"ttt_remote_sync"`. |
 | `grpo_config.weight_sync_every` | Push the policy weights to rank 1 every *N* optimizer steps (default 1). |
 | `remote_rollout_config.mesh_shape` | Rank 1's parent mesh `[rows, cols]`, split into `rows * cols` `[1, 1]` submeshes that generate data-parallel. |
@@ -170,11 +170,10 @@ quietbox with P100 / P150 cards: 4 single-chip PCIe devices, 2 pinned to
 each rank. Two files encode the host-specific assumptions:
 
 - `rank_bindings.yaml` pins PCIe devices per rank with `TT_VISIBLE_DEVICES`.
-  It indexes PCIe devices, not chips: on N300 / P300 one device exposes two
+  It indexes PCIe devices, not chips: on P300 one device exposes two
   chips, so a `[1, 2]` mesh per rank needs one device per rank
   (`TT_VISIBLE_DEVICES: "0"` and `"1"`).
-- `mgd.textproto` sets the arch (`BLACKHOLE` for P100 / P150, `WORMHOLE_B0`
-  for N100 / N150 / N300) and the mesh shape.
+- `mgd.textproto` sets the arch (`BLACKHOLE`) and the mesh shape.
 
 For a `[1, 4]` mesh per rank (8 chips), set `device_config.mesh_shape` and
 `remote_rollout_config.mesh_shape` to `[1, 4]`, expand
