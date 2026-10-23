@@ -66,7 +66,8 @@ void kernel_main() {
     constexpr uint32_t shard_stick_bytes = get_compile_time_arg_val(24);  // RM output shard: local stick stride
     constexpr uint32_t gamma_read_align = get_compile_time_arg_val(25);   // DRAM alignment (bytes)
     constexpr bool gamma_streamed = get_compile_time_arg_val(26) != 0;    // gamma per chunk (else resident)
-    constexpr auto out_args = TensorAccessorArgs<27>();
+    constexpr bool ragged_last_block = get_compile_time_arg_val(27) != 0;  // short last block (zero-copy)
+    constexpr auto out_args = TensorAccessorArgs<28>();
     constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto inv_mcast = dataflow_kernel_lib::McastArgs<
         get_named_compile_time_arg_val("inv_mcast_ct_offset"),
@@ -76,7 +77,6 @@ void kernel_main() {
     constexpr uint32_t TILE_H = 32;
     constexpr uint32_t FACE_W = 16;
     constexpr uint32_t row_stride_tiles = chunks_per_row * chunk_w_tiles;
-    constexpr uint32_t chunk_tiles = block_rows * chunk_w_tiles;
     constexpr uint32_t out_tile_col_bytes = TILE_W * out_elem_bytes;
     constexpr uint32_t out_stick_stride_bytes = chunk_w_tiles * out_tile_col_bytes;
 
@@ -200,43 +200,46 @@ void kernel_main() {
         const uint32_t block_row0 = block_idx * block_rows;
         const uint32_t remaining_rows = core_rows_tiles - block_row0;
         const uint32_t valid_rows = remaining_rows < block_rows ? remaining_rows : block_rows;
+        // rows exchanged / retired for this block: nominal, or (ragged_last_block) the actual short-block count
+        const uint32_t br = ragged_last_block ? valid_rows : block_rows;
+        const uint32_t chunk_tiles = br * chunk_w_tiles;
 
         // ---------------- combine_block (R2) ----------------
         if constexpr (is_w_split) {
             // Reserve the multicast destination before the partial leaves: the root multicasts block b only
             // after every member's block-b partial arrived, so no member's live inverse-RMS is overwritten.
-            cb_reserve_back(cb_inv_rms, block_rows);
-            cb_wait_front(cb_rowsum_partial, block_rows);
+            cb_reserve_back(cb_inv_rms, br);
+            cb_wait_front(cb_rowsum_partial, br);
             const uint32_t partial_src = get_read_ptr(cb_rowsum_partial);
             const uint32_t partial_bytes = get_tile_size(cb_rowsum_partial);
             // gather capacity == one block's push, so its write pointer is the CB base on every core (M1/M6).
             const uint32_t gather_base = get_write_ptr(cb_rowsum_gather);
-            for (uint32_t r = 0; r < block_rows; ++r) {
+            for (uint32_t r = 0; r < br; ++r) {
                 noc_async_write(
                     partial_src + r * partial_bytes,
                     get_noc_addr(root_x, root_y, gather_base + (r * w_group_size + member_idx) * partial_bytes),
                     partial_bytes);
             }
             noc_async_write_barrier();
-            cb_pop_front(cb_rowsum_partial, block_rows);
+            cb_pop_front(cb_rowsum_partial, br);
 
             if (member_idx == 0) {
-                cb_reserve_back(cb_rowsum_gather, w_group_size * block_rows);
+                cb_reserve_back(cb_rowsum_gather, w_group_size * br);
                 noc_semaphore_wait_min(
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_gather_addr),
                     (w_group_size - 1) * (block_idx + 1));
-                cb_push_back(cb_rowsum_gather, w_group_size * block_rows);
+                cb_push_back(cb_rowsum_gather, w_group_size * br);
 
-                cb_wait_front(cb_inv_rms_root, block_rows);
+                cb_wait_front(cb_inv_rms_root, br);
                 auto sender = inv_mcast.optional_sender(noc);
-                sender->send(get_read_ptr(cb_inv_rms_root), get_write_ptr(cb_inv_rms), block_rows * partial_bytes);
-                cb_pop_front(cb_inv_rms_root, block_rows);
+                sender->send(get_read_ptr(cb_inv_rms_root), get_write_ptr(cb_inv_rms), br * partial_bytes);
+                cb_pop_front(cb_inv_rms_root, br);
             } else {
                 noc_semaphore_inc(get_noc_addr(root_x, root_y, sem_gather_addr), 1);
                 auto receiver = inv_mcast.optional_receiver(noc);
                 receiver->receive();
             }
-            cb_push_back(cb_inv_rms, block_rows);
+            cb_push_back(cb_inv_rms, br);
         }
 
         // ---------------- store_block ----------------

@@ -194,8 +194,9 @@ def _fit_block(geo: Geometry, gw, n, gr, rows_hi, l1_budget_bytes):
 
     Zero-copy shards (geo.zero_copy) add wrap-safety constraints: x / out are read and written in place in the
     resident shard, whose row stride is exactly `n` tiles and whose height is `rows_hi` tile-rows, so the chunk must
-    divide `n` (k·c == n; RM: k == 1, a tilize / untilize row is a whole shard stick) and the block must divide
-    `rows_hi` (no nominal tail past the shard). Returns None if even the finest chunk does not fit.
+    divide `n` (k·c == n; RM: k == 1, a tilize / untilize row is a whole shard stick), and a short last block runs
+    at its actual row count (kernel CT `ragged_last_block`) so no nominal tail runs past the shard. Returns None
+    if even the finest chunk does not fit.
     """
     if geo.zero_copy and geo.is_rm:
         chunk_candidates = [(n, 1)]
@@ -215,8 +216,6 @@ def _fit_block(geo: Geometry, gw, n, gr, rows_hi, l1_budget_bytes):
                 block_rows = 1  # k > 1 => 1 (M5: a chunk of a multi-row block is not FIFO-contiguous)
                 if k == 1:
                     for b in range(rows_hi, 0, -1):
-                        if geo.zero_copy and rows_hi % b != 0:
-                            continue
                         if fp(b) <= l1_budget_bytes:
                             block_rows = b
                             break
@@ -666,6 +665,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, gamma, epsilon, co
         shard_stick_bytes_out,
         ttnn.get_dram_alignment(),
         int(plan.gamma_streamed),
+        int(geo.zero_copy),  # ragged_last_block
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_ct.extend(
@@ -697,6 +697,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, gamma, epsilon, co
         plan.xg_lookahead_chunks,
         gw,
         int(plan.gamma_streamed),
+        int(geo.zero_copy),  # ragged_last_block
     ]
 
     inv_w_bits = _f32_bits(1.0 / geo.tensor_w_elems)
@@ -735,7 +736,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, gamma, epsilon, co
             w.out_col0_bytes,
             w.gamma_col0_elem,
         ]
-        compute_rt[x][y] = [num_blocks, w.slice_w_tiles, int(w.member_idx == 0), inv_w_bits, eps_bits]
+        compute_rt[x][y] = [num_blocks, w.slice_w_tiles, int(w.member_idx == 0), inv_w_bits, eps_bits, w.rows_tiles]
 
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),

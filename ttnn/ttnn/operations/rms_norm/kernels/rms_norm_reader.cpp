@@ -82,7 +82,7 @@ void kernel_main() {
         // load_block (zero-copy shard): the shard is already resident in the CB compute reads x from (TILE:
         // cb_x_tiles; RM: cb_x_rm_sticks, the tilize source); publish all of it at once.
         constexpr uint32_t cb_x_source = is_rm ? cb_x_rm_sticks : cb_x_tiles;
-        const uint32_t shard_pages = num_blocks * block_rows * chunks_per_row * chunk_w_tiles;
+        const uint32_t shard_pages = core_rows_tiles * chunks_per_row * chunk_w_tiles;  // short last block: actual
         cb_reserve_back(cb_x_source, shard_pages);
         cb_push_back(cb_x_source, shard_pages);
         return;

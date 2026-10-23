@@ -56,6 +56,9 @@ void kernel_main() {
     // Gamma residency (plan.gamma_streamed): false = whole slice resident in cb_gamma_tiles, addressed at the chunk
     // offset; true = one chunk per (block, chunk) streamed by the writer, waited / popped around each x*gamma pass.
     constexpr bool gamma_streamed = get_compile_time_arg_val(20) != 0;
+    // Short last block (zero-copy shards: x / out are the shard itself, so no nominal tail may run past it):
+    // true = the last block carries its actual row count everywhere; false = every block is nominal.
+    constexpr bool ragged_last_block = get_compile_time_arg_val(21) != 0;
 
     constexpr uint32_t row_stride_tiles = chunks_per_row * chunk_w_tiles;
 
@@ -64,6 +67,7 @@ void kernel_main() {
     const bool is_root = get_arg_val<uint32_t>(2) != 0;
     const uint32_t inv_w_bits = get_arg_val<uint32_t>(3);
     const uint32_t eps_bits = get_arg_val<uint32_t>(4);
+    const uint32_t core_rows_tiles = get_arg_val<uint32_t>(5);
 
     using namespace ckl;
 
@@ -93,14 +97,14 @@ void kernel_main() {
     // scale_gamma_block for one chunk: x chunk is the FIFO front (earlier chunks already popped; M5),
     // gamma is addressed at the chunk's column offset (resident) or is the streamed chunk at the FIFO front.
     // The chain's gamma input is WaitPolicy::None / PopPolicy::None, so its lifecycle is this kernel's.
-    auto scale_gamma_chunk = [](uint32_t chunk_idx) {
+    auto scale_gamma_chunk = [](uint32_t chunk_idx, uint32_t br) {
         if constexpr (has_gamma) {
             const uint32_t gamma_offset = gamma_streamed ? 0u : chunk_idx * chunk_w_tiles;
             if constexpr (gamma_streamed) {
                 cb_wait_front(cb_gamma_tiles, chunk_w_tiles);
             }
             eltwise_chain(
-                IterationShape::grid(block_rows, chunk_w_tiles),
+                IterationShape::grid(br, chunk_w_tiles),
                 BinaryFpu<
                     BinaryFpuOp::Mul,
                     input(cb_x_tiles, WaitPolicy::None, PopPolicy::AtEnd, InputTileMapping::Block),
@@ -120,17 +124,20 @@ void kernel_main() {
     };
 
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+        // rows in this block: nominal, or (ragged_last_block) the actual count of a short last block
+        const uint32_t rows_left = core_rows_tiles - block_idx * block_rows;
+        const uint32_t br = ragged_last_block && rows_left < block_rows ? rows_left : block_rows;
         // ---- load_block (RM part): one tilize call per block ----
         if constexpr (is_rm) {
-            tilize<chunk_w_tiles, cb_x_rm_sticks, cb_x_tiles>(block_rows * chunks_per_row);
+            tilize<chunk_w_tiles, cb_x_rm_sticks, cb_x_tiles>(br * chunks_per_row);
         }
-        cb_wait_front(cb_x_tiles, block_rows * row_stride_tiles);
+        cb_wait_front(cb_x_tiles, br * row_stride_tiles);
 
         // ---- sumsq_block: x*x accumulated across the slice in DEST, per row ----
-        cb_reserve_back(cb_sumsq, block_rows * cols_per_row);
+        cb_reserve_back(cb_sumsq, br * cols_per_row);
         if (slice_w_tiles > 1) {
             eltwise_chain(
-                IterationShape::grid(block_rows, slice_w_tiles - 1),
+                IterationShape::grid(br, slice_w_tiles - 1),
                 BinaryFpu<
                     BinaryFpuOp::Mul,
                     input(
@@ -159,7 +166,7 @@ void kernel_main() {
                     DestAccumulation::PerRow)>{StridedTileRange{0, cols_per_row}});
         }
         eltwise_chain(
-            IterationShape::grid(block_rows, 1),
+            IterationShape::grid(br, 1),
             BinaryFpu<
                 BinaryFpuOp::Mul,
                 input(
@@ -187,7 +194,7 @@ void kernel_main() {
                 DataFormatReconfig::Enabled,
                 TileAddressing::Strided,
                 DestAccumulation::PerRow)>{StridedTileRange{cols_per_row - 1, cols_per_row}});
-        cb_push_back(cb_sumsq, block_rows * cols_per_row);
+        cb_push_back(cb_sumsq, br * cols_per_row);
 
         // ---- rowsum_block ----
         if constexpr (is_w_split) {
@@ -201,7 +208,7 @@ void kernel_main() {
                 ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
                 ReduceFp32Mode::Fast,
                 ReduceAlgorithm::ReduceTile>(
-                ReduceInputBlockShape::of(block_rows, cols_per_row),
+                ReduceInputBlockShape::of(br, cols_per_row),
                 ReduceInputMemoryLayout::contiguous(),
                 NoAccumulation{},
                 NoOp{},
@@ -217,7 +224,7 @@ void kernel_main() {
                 ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
                 ReduceFp32Mode::Fast,
                 ReduceAlgorithm::ReduceTile>(
-                ReduceInputBlockShape::of(block_rows, cols_per_row),
+                ReduceInputBlockShape::of(br, cols_per_row),
                 ReduceInputMemoryLayout::contiguous(),
                 NoAccumulation{},
                 finalize_inv_rms,
@@ -227,7 +234,7 @@ void kernel_main() {
         // ---- scale_gamma_block (lookahead): fills the combine stall in R2 (S1 / S1') ----
         if constexpr (has_gamma) {
             for (uint32_t ci = 0; ci < xg_lookahead_chunks; ++ci) {
-                scale_gamma_chunk(ci);
+                scale_gamma_chunk(ci, br);
             }
         }
 
@@ -245,7 +252,7 @@ void kernel_main() {
                     ReduceFp32Mode::Fast,
                     ReduceAlgorithm::AccumulateViaAdd,
                     ReduceWithinTile::Skip>(
-                    ReduceInputBlockShape::of(block_rows, w_group_size),
+                    ReduceInputBlockShape::of(br, w_group_size),
                     ReduceInputMemoryLayout::contiguous(),
                     NoAccumulation{},
                     finalize_inv_rms);
@@ -253,25 +260,25 @@ void kernel_main() {
         }
 
         // ---- normalize_block (+ remaining x*gamma chunks, + RM untilize) ----
-        cb_wait_front(cb_inv_rms, block_rows);
+        cb_wait_front(cb_inv_rms, br);
         for (uint32_t ci = 0; ci < chunks_per_row; ++ci) {
             if constexpr (has_gamma) {
                 mul<input(cb_x_gamma, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
                     input(cb_inv_rms, BroadcastDim::Col, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col),
-                    output(cb_out_tiles)>(IterationShape::grid(block_rows, chunk_w_tiles));
+                    output(cb_out_tiles)>(IterationShape::grid(br, chunk_w_tiles));
                 if (ci + xg_lookahead_chunks < chunks_per_row) {
-                    scale_gamma_chunk(ci + xg_lookahead_chunks);
+                    scale_gamma_chunk(ci + xg_lookahead_chunks, br);
                 }
             } else {
                 mul<input(cb_x_tiles, WaitPolicy::None, PopPolicy::AtEnd, InputTileMapping::Block),
                     input(cb_inv_rms, BroadcastDim::Col, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col),
-                    output(cb_out_tiles)>(IterationShape::grid(block_rows, chunk_w_tiles));
+                    output(cb_out_tiles)>(IterationShape::grid(br, chunk_w_tiles));
             }
             if constexpr (is_rm) {
-                untilize<chunk_w_tiles, cb_out_tiles, cb_out_rm_sticks>(block_rows);
+                untilize<chunk_w_tiles, cb_out_tiles, cb_out_rm_sticks>(br);
             }
         }
-        cb_pop_front(cb_inv_rms, block_rows);
+        cb_pop_front(cb_inv_rms, br);
     }
 
     if constexpr (has_gamma && !gamma_streamed) {
