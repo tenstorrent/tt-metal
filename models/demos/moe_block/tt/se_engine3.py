@@ -1308,7 +1308,7 @@ class SeEngine3:
                     if latent
                     else []
                 )
-                + ([("po", 2 * self.PFULL * 2048)] + ([("lrdy", 64)] if latent else []) if prep else [])
+                + ([("po", 2 * self.PFULL * 2048)] + ([("lrdy", self._lrdy_bytes())] if latent else []) if prep else [])
             ):
                 off[k], o = o, al(o + v)
             self.seq_ends = sorted(set(off.values()) | {o})  # (the sequential regions' bounds: the CB plan check's)
@@ -1409,6 +1409,12 @@ class SeEngine3:
             # chunk up front - NCH - 1 pages, else its NCRISC blocks on the reserve and stops the W stream; a hang)
             self.rs_sizes["ffree"] = 16 * max(2, self.NCH - 1)
         return list(self.rs_sizes.items())
+
+    def _lrdy_bytes(self):
+        """The latent-arrivals credits (a 16 B page a chunk): the prep (every chunk's units in the last chunk's op) waits
+        for all NCH of them at once, unpopped - 4 pages held NCH 4 at most, at 5 the NCRISC blocked on the reserve and
+        stopped the W stream (K3 1280 rows: a hang)."""
+        return 16 * max(4, self.NCH)
 
     def alloc_arena(self, extra=()):
         """The arena (call scratch: x, the weights, every CB) as an L1 tensor; base its address (the programs bake it).
@@ -1592,7 +1598,7 @@ class SeEngine3:
             cb(PREP_CB["pu"], pk, pend - off[pk], ttnn.bfloat16, 2048)
             cb(PREP_CB["po"], "po", 2 * self.PFULL * 2048, ttnn.bfloat16, 2048)
             if self.LT:
-                cb(PREP_CB["lrdy"], "lrdy", 64, ttnn.bfloat16, 16)
+                cb(PREP_CB["lrdy"], "lrdy", self._lrdy_bytes(), ttnn.bfloat16, 16)
         if rtr is not None:
             KTO = self.rtr["KTO"]
             cb(RTR_CB["rx"], "rx", 2 * self.KC * MT * self.NCH * 2048, ttnn.bfloat16, 2048)  # (two rounds' buffers)

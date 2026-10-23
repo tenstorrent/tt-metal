@@ -1623,3 +1623,9 @@ Structural (not fixed here):
 - Ring of 4, routings at 640 rows (packed skipped on the fused head): K3 zipf spread / one hot / empty experts /
   zero-row chip .9961 - .9962; GLM-5.3-Flash .9869 / .9865 / .9847 / .9866. Ring soak K3 640: 10k replays clean
   (PCC min .9962).
+- K3 1280 rows (fused head NCH 5, MT 1, 10 router cores) hung in the warm-up: the latent-arrivals credit CB (LRDY) had
+  4 pages; the prep (every chunk's units in the last chunk's op) waits for all NCH unpopped, so at NCH 5 the NCRISC
+  blocked on its fifth reserve inside its poll loop and stopped the W stream (triage: trisc0 waiting WIN on every
+  core, ncrisc at cb_reserve_back(SE_LRDY)) - the FFREE pattern again. Sized 16 x max(4, NCH). Soak 10k replays clean,
+  PCC .9962; head 1893 | dispatch 244 | experts 1474 | tail 252 us (the NCH 5 head is slow - perf later). Soak
+  GLM-5.3 1024 (NCH 4, the FFREE fix): 10k clean, PCC .9867.

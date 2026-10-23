@@ -113,7 +113,7 @@ def _cases():
     for mn in ("k3", "glm53_flash"):
         for rt in ROUTINGS[1:]:
             out.append(Case(mn, 640, rt, 32, "nightly"))
-    for mn, rows in (("k3", 640), ("k3", 1024), ("glm53_flash", 640)):
+    for mn, rows in (("k3", 640), ("k3", 1024), ("glm53_flash", 640), ("glm53", 1024), ("k3", 1280)):
         out.append(Case(mn, rows, "uniform", 10000, "soak"))
         out.append(Case(mn, rows, "zipf_packed", 10000, "soak"))
     return out
