@@ -2152,6 +2152,7 @@ class ttMLA:
         seq_len_local,
         compact=False,
         overlap=None,
+        q_seq=None,
     ):
         """Consume joined/finalized branch outputs on the restored default full-grid manager."""
         for value in tt_kvpe if isinstance(tt_kvpe, tuple) else (tt_kvpe,):
@@ -2167,6 +2168,7 @@ class ttMLA:
             cache_batch_idx=None,
             compact=compact,
             overlap=overlap,
+            q_seq=q_seq,
         )
         # NOT deallocated: the full-mesh gather writes the model-owned persistent scratch, and freeing
         # that would take the buffer away from every later chunk and layer. (high_bw_all_gather returns a
@@ -2185,8 +2187,11 @@ class ttMLA:
         populated_global,
         seq_len_local,
         metadata=None,
+        q=None,
     ):
-        """Run the closed two-program overlap region and return joined branch outputs.
+        """Run the closed two-program overlap region and return joined branch outputs: (indices, gathered KVPE,
+        q resharded for sparse_sdpa or None). With `q`, its head-to-sequence reshard runs on the gather branch after
+        the KV gather, hidden behind the longer top-k branch.
 
         Manager clear is the device-side join. Any exception restores the default manager and resets
         caller-owned semaphores only after draining, so an unknown residue is never reused.
@@ -2218,6 +2223,10 @@ class ttMLA:
                 overlap_resources=resources,
                 metadata=metadata,
             )
+            q_seq = None
+            if q is not None and self._needs_head_to_seq_reshard:
+                ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_Q_RESHARD`")
+                q_seq = self._sparse_q_seq(q, subdevice_id=resources.gather_subdevice_id)
         except Exception:
             failed = True
             raise
@@ -2233,7 +2242,7 @@ class ttMLA:
 
         ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_INDEX_REDISTRIBUTION`")
         indices = self._indexer.finalize_distribution(local_indices, selection_state)
-        return indices, kvpe_dev
+        return indices, kvpe_dev, q_seq
 
     def _sparse_chunked_attn_overlapped(
         self,
@@ -2261,13 +2270,14 @@ class ttMLA:
             actual_end=actual_end,
             metadata=metadata,
         )
-        indices, kvpe_dev = self._select_and_gather_overlapped(
+        indices, kvpe_dev, q_seq = self._select_and_gather_overlapped(
             selection_state=selection_state,
             kvpe_cache=kvpe_cache,
             cache_batch_idx=cache_batch_idx,
             populated_global=populated_global,
             seq_len_local=seq_len_local,
             metadata=metadata,
+            q=tt_q,
         )
         # The first shared layer after this one reuses these indices: plan its push now and prefetch its prefix
         # rows during this layer's sparse_sdpa.
@@ -2285,6 +2295,7 @@ class ttMLA:
             kvpe_cache=kvpe_cache,
             seq_len_local=seq_len_local,
             overlap=overlap,
+            q_seq=q_seq,
         )
         return output, indices
 
@@ -2456,6 +2467,7 @@ class ttMLA:
         cache_batch_idx: Optional[int] = None,
         compact: bool = False,
         overlap=None,
+        q_seq: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """Absorbed MQA over the top-k selected latents (FlashMLA sparse contract: no causal mask —
         ``indices`` already encode it via the 0xFFFFFFFF sentinel). Invoked SPMD on the SP×TP mesh:
@@ -2489,18 +2501,8 @@ class ttMLA:
         # The indexer emits matching TP sequence shards directly. The partition fallback below also
         # accepts SP-only or globally replicated indices from callers using the older output contract.
         transpose_head_to_seq = self._needs_head_to_seq_reshard
-
-        q_seq_sharded = q
-        if transpose_head_to_seq:
-            q_seq_sharded = ttnn.experimental.all_to_all_async_generic(
-                q,
-                in_dim=1,
-                out_dim=2,
-                num_links=self.ccl_num_links,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cluster_axis=self.tp_axis,
-            )  # [1,H,S/(sp·tp),576] — FABRIC_2D path selected at runtime; topology resolves to Linear
-
+        # A full layer reshards q inside its overlap region (see _select_and_gather_overlapped).
+        q_seq_sharded = self._sparse_q_seq(q) if q_seq is None else q_seq
         q_rm = ttnn.to_layout(q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT)  # the op is ROW_MAJOR-only; q comes in TILE
         if q_seq_sharded is not q:
             ttnn.deallocate(q_seq_sharded)
@@ -2568,6 +2570,21 @@ class ttMLA:
             ttnn.deallocate(ret)
             ret = head_sharded
         return ret
+
+    def _sparse_q_seq(self, q, subdevice_id=None):
+        """q sequence-sharded over TP for sparse_sdpa when the per-chip head shard is too thin (else q itself).
+        Optionally on one sub-device."""
+        if not self._needs_head_to_seq_reshard:
+            return q
+        return ttnn.experimental.all_to_all_async_generic(
+            q,
+            in_dim=1,
+            out_dim=2,
+            num_links=self.ccl_num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=self.tp_axis,
+            subdevice_id=subdevice_id,
+        )  # [1,H,S/(sp·tp),576] — FABRIC_2D path selected at runtime; topology resolves to Linear
 
     def _sparse_sdpa_grid(self, rows: int) -> dict:
         """sparse_sdpa's core grid for `rows` query rows per chip: the top-k grid when it needs no more rows per core

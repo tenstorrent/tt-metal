@@ -464,14 +464,14 @@ def test_sparse_mla_overlap_region_orders_join_before_distribution(monkeypatch):
     markers = []
     monkeypatch.setattr(ttnn, "tracy_message", markers.append)
 
-    actual_indices, actual_gathered = mla._select_and_gather_overlapped(
+    actual_indices, actual_gathered, actual_q = mla._select_and_gather_overlapped(
         selection_state=state,
         kvpe_cache=object(),
         cache_batch_idx=3,
         populated_global=4096,
         seq_len_local=640,
     )
-    assert actual_indices is final_indices and actual_gathered is gathered
+    assert actual_indices is final_indices and actual_gathered is gathered and actual_q is None
     assert events == ["load", "topk", "gather", "clear", "finalize"]
     assert markers == [
         "`TT_SIGNPOST: SPARSE_MLA_OVERLAP_START`",
