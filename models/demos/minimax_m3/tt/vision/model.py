@@ -10,7 +10,7 @@ Forward pipeline (matches `MiniMaxM3VLVisionModel.forward` then
     pixel_values (L, 1176) host
         -> patch_embed       (Conv3d-as-Linear 1176 -> 1280)          device
         -> pre_layrnorm
-        -> 32 x encoder blocks
+        -> encoder blocks, one per reference layer (32 in the checkpoint)
               (LN1 -> attn(3D RoPE, full SDPA) -> residual; LN2 -> MLP -> residual)
         -> [tower output (L, 1280)]
         -> projector         (per-patch MLP -> merge 4 patches -> merge MLP)
@@ -19,7 +19,8 @@ Forward pipeline (matches `MiniMaxM3VLVisionModel.forward` then
 There is NO post-encoder LayerNorm and NO attention windowing — the tower
 attends fully. The 3D-RoPE cos/sin are precomputed host-side from
 `image_grid_thw` and pushed to device once per forward (shared by all
-blocks). Weights come from the `_m3_loader` reference module tree.
+blocks). Weights come from the Torch reference (reference/vision.py): seeded
+random weights in the unit tests, the checkpoint's through loader.build_reference.
 """
 from __future__ import annotations
 
@@ -63,7 +64,7 @@ class M3VLVisionModel(LightweightModule):
     def from_torch(
         cls,
         mesh_device,
-        reference,  # VisionReference from _m3_loader.build_reference
+        reference,  # MiniMaxM3VisionEncoder from reference/vision.py
         model_args,
         with_projector: bool = True,
         dtype=ttnn.bfloat16,
@@ -123,7 +124,7 @@ class M3VLVisionModel(LightweightModule):
 
     # ------------------------------------------------------------------
     def forward_tower(self, pixel_values: torch.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
-        """Run patch_embed -> pre_layrnorm -> 32 blocks. Returns (1, 1, L, 1280)."""
+        """Run patch_embed -> pre_layrnorm -> the blocks. Returns (1, 1, L, 1280)."""
         x_tt = self._push_pixel_values(pixel_values)
         x_tt = self.patch_embed(x_tt)
         x_tt = self.pre_layrnorm(x_tt)
