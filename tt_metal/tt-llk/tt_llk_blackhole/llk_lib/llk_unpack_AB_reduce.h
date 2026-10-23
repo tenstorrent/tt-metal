@@ -171,6 +171,7 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape tensor_shape)
  *
  * @tparam pool_type: Type of pooling operation, values = <SUM/AVG/MAX>
  * @tparam reduce_dim: Dimension along which to reduce, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam early_context_poll: Read the context semaphore before the counter reset (always on for REDUCE_SCALAR).
  * @param address_a: Base address for source A data in L1 memory.
  * @param address_b: Base address for source B data in L1 memory.
  *
@@ -178,12 +179,13 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape tensor_shape)
  * @note This function manages dual-context switching for pipelined execution.
  * @note Semaphores ensure proper synchronization between Trisc and unpacker.
  */
-template <PoolType pool_type, ReduceDim reduce_dim>
+template <PoolType pool_type, ReduceDim reduce_dim, bool early_context_poll = false>
 inline void _llk_unpack_AB_reduce_(const std::uint32_t address_a, const std::uint32_t address_b)
 {
-    // SCALAR reads the context count first so the semaphore load overlaps the counter reset
+    // Reading the context count first overlaps the semaphore load with the counter reset
+    constexpr bool early_poll     = early_context_poll || reduce_dim == ReduceDim::REDUCE_SCALAR;
     std::uint32_t contexts_in_use = 0;
-    if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR)
+    if constexpr (early_poll)
     {
         contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
     }
@@ -195,7 +197,7 @@ inline void _llk_unpack_AB_reduce_(const std::uint32_t address_a, const std::uin
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
 
     // Wait for free context
-    if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR)
+    if constexpr (early_poll)
     {
         while (contexts_in_use >= 2)
         {

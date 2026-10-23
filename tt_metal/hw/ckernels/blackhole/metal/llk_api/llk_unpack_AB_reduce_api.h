@@ -27,10 +27,10 @@ inline void llk_unpack_AB_reduce_init_impl(const ckernel::TensorShape& tensor_sh
     _llk_unpack_AB_reduce_init_<pool_type, reduce_dim, col_pair>(tensor_shape);
 }
 
-template <PoolType pool_type, ReduceDim reduce_dim>
+template <PoolType pool_type, ReduceDim reduce_dim, bool early_context_poll = false>
 inline void llk_unpack_AB_reduce_impl(const std::uint32_t address_a, const std::uint32_t address_b) {
     WAYPOINT("UABW");
-    _llk_unpack_AB_reduce_<pool_type, reduce_dim>(address_a, address_b);
+    _llk_unpack_AB_reduce_<pool_type, reduce_dim, early_context_poll>(address_a, address_b);
     WAYPOINT("UABD");
 }
 
@@ -42,7 +42,7 @@ inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::u
     llk_unpack_AB_reduce_init_impl<pool_type, reduce_dim, col_pair>(tensor_shape);
 }
 
-template <PoolType pool_type, ReduceDim reduce_dim>
+template <PoolType pool_type, ReduceDim reduce_dim, bool early_context_poll = false>
 inline void llk_unpack_AB_reduce(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -78,7 +78,7 @@ inline void llk_unpack_AB_reduce(
         StateDiscard<std::uint32_t>(tile_index_a),
         StateDiscard<std::uint32_t>(tile_index_b)));
 
-    llk_unpack_AB_reduce_impl<pool_type, reduce_dim>(address_a, address_b);
+    llk_unpack_AB_reduce_impl<pool_type, reduce_dim, early_context_poll>(address_a, address_b);
 }
 
 template <PoolType pool_type, ReduceDim reduce_dim>

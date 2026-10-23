@@ -48,6 +48,40 @@ constexpr bool reduce_col_pair() {
 #endif
 }
 
+#ifdef ARCH_BLACKHOLE
+// The early context poll pays where the unpack call binds a tile call (LoFi and max); BFP columns and HiFi sums do not gain.
+// SCALAR polls early in the LLK itself.
+template <PoolType reduce_type, ReduceDim reduce_dim, bool pow2_scaler>
+ALWI bool reduce_early_context_poll(std::uint32_t icb) {
+#if defined(TRISC_UNPACK)
+    constexpr bool lofi_or_max =
+        reduce_type == PoolType::MAX ||
+        reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY) == MathFidelity::LoFi;
+    if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR || !lofi_or_max) {
+        return false;
+    } else if constexpr (reduce_dim == ReduceDim::REDUCE_ROW) {
+        return true;
+    } else {
+        return !IS_BFP_FORMAT(unpack_src_format[get_operand_id(icb)]);
+    }
+#else
+    return false;
+#endif
+}
+
+template <PoolType reduce_type, ReduceDim reduce_dim, bool pow2_scaler>
+ALWI void reduce_unpack_tile(
+    std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t itile, std::uint32_t itile_scaler) {
+#if defined(TRISC_UNPACK)
+    if (reduce_early_context_poll<reduce_type, reduce_dim, pow2_scaler>(icb)) {
+        llk_unpack_AB_reduce<reduce_type, reduce_dim, true>(icb, icb_scaler, itile, itile_scaler);
+    } else {
+        llk_unpack_AB_reduce<reduce_type, reduce_dim>(icb, icb_scaler, itile, itile_scaler);
+    }
+#endif
+}
+#endif
+
 // clang-format off
 /**
  * Performs the necessary hardware and software initialization for reduce operation for provided circular buffer identifiers (CB IDs). In order for reduce
@@ -219,14 +253,15 @@ ALWI void reduce_tile(
           reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY),
           false,
           reduce_col_pair<reduce_type, reduce_dim, pow2_scaler>() ? 1 : -1>(icb, icb_scaler, idst)));
+    reduce_unpack_tile<reduce_type, reduce_dim, pow2_scaler>(icb, icb_scaler, itile, itile_scaler);
 #else
     MATH((llk_math_reduce<
           reduce_type,
           reduce_dim,
           is_fp32_dest_acc_en,
           reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY)>(icb, icb_scaler, idst)));
-#endif
     UNPACK((llk_unpack_AB_reduce<reduce_type, reduce_dim>(icb, icb_scaler, itile, itile_scaler)));
+#endif
 #else
     MATH((llk_math_reduce<reduce_type, reduce_dim>(icb, icb_scaler, idst)));
     UNPACK((llk_unpack_AB_reduce(icb, icb_scaler, itile, itile_scaler)));
@@ -325,7 +360,7 @@ ALWI void reduce_block(
               reduce_math_fidelity<reduce_type, reduce_dim, pow2_scaler>(MATH_FIDELITY)>(
             icb, icb_scaler, start_idst, ntiles, idst_stride)));
         for (std::uint32_t i = 0; i < ntiles; ++i) {
-            UNPACK((llk_unpack_AB_reduce<reduce_type, reduce_dim>(icb, icb_scaler, start_itile + i, itile_scaler)));
+            reduce_unpack_tile<reduce_type, reduce_dim, pow2_scaler>(icb, icb_scaler, start_itile + i, itile_scaler);
         }
         return;
     }
