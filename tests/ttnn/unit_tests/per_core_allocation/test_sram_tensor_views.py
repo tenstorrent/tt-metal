@@ -107,6 +107,8 @@ def test_view_rejects_invalid_placements(per_core_mesh_device, bad, expect_error
     placements = [] if bad == "missing" else [placement]
     with expect_error(RuntimeError, "SRAM"):
         ttnn.experimental_create_sram_tensor_view(mesh, spec, _memory(placements))
+    # Expected-error tracebacks can retain the owner past device teardown; release its storage now.
+    ttnn.deallocate(owner)
 
 
 def test_view_rejects_span_that_fits_payload_but_not_padding(per_core_mesh_device, expect_error):
@@ -126,6 +128,8 @@ def test_view_rejects_span_that_fits_payload_but_not_padding(per_core_mesh_devic
     )
     assert _address(view, coord, core) == _address(owner, coord, core)
     assert torch.all(_read(owner) == 0)
+    ttnn.deallocate(view)
+    ttnn.deallocate(owner)
 
 
 def test_nested_view_preserves_address_and_geometry(per_core_mesh_device):
@@ -156,6 +160,8 @@ def test_lockstep_view_requires_one_address(per_core_mesh_device, expect_error):
             spec,
             _memory([(coord, core, owner.buffer_address() + i * 256, 256) for i, core in enumerate(cores)]),
         )
+    ttnn.deallocate(view)
+    ttnn.deallocate(owner)
 
 
 def test_distinct_per_core_addresses_preserve_backing(per_core_mesh_device, expect_error):
@@ -187,6 +193,7 @@ def test_distinct_per_core_addresses_preserve_backing(per_core_mesh_device, expe
     del view
     gc.collect()
     torch.testing.assert_close(_read(owner), expected)
+    ttnn.deallocate(owner)
 
 
 def test_view_preserves_selected_device_coverage(mesh_device):
@@ -311,6 +318,10 @@ def test_semaphore_rejects_invalid_addresses_before_writing(per_core_mesh_device
     assert torch.all(data[:256] == 0)
     assert data[256:260].tolist() == [37, 0, 0, 0]
     assert torch.all(data[256 + ttnn.get_l1_alignment() :] == 0)
+    assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == occupied
     del sem
+    assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == occupied
     gc.collect()
     assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == occupied
+    torch.testing.assert_close(_read(owner).reshape(-1), data)
+    ttnn.deallocate(owner)
