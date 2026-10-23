@@ -8,6 +8,9 @@ The mirror holds full repo snapshots at `<root>/<org>/<repo>` (the layout `hf do
 produces), so a repo found there loads with no hub lookup, and the directory keeps the repo id's
 basename that the tt_dit cache namespace is keyed on. A repo absent from the mirror resolves to the
 repo id itself, so callers fall back to the HuggingFace cache unchanged.
+
+The mirror is opt-in: it is only consulted when `$TT_DIT_WEIGHTS_ROOT` names its root. CI jobs whose
+runners mount a shared mirror set it in their job env.
 """
 
 from __future__ import annotations
@@ -18,12 +21,11 @@ from pathlib import Path
 from loguru import logger
 
 WEIGHTS_ROOT_ENV = "TT_DIT_WEIGHTS_ROOT"
-DEFAULT_WEIGHTS_ROOT = "/mnt/weka/model-weights/video"
 
 
 def weights_root() -> Path | None:
-    """The mirror root: `$TT_DIT_WEIGHTS_ROOT` if set, else the Weka default. Set it empty to disable the mirror."""
-    root = os.environ.get(WEIGHTS_ROOT_ENV, DEFAULT_WEIGHTS_ROOT)
+    """The mirror root from `$TT_DIT_WEIGHTS_ROOT`, or None (mirror disabled) when it is unset or empty."""
+    root = os.environ.get(WEIGHTS_ROOT_ENV)
     return Path(root) if root else None
 
 

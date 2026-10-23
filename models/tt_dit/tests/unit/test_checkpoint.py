@@ -8,13 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from models.tt_dit.utils.checkpoint import (
-    DEFAULT_WEIGHTS_ROOT,
-    WEIGHTS_ROOT_ENV,
-    local_checkpoint_dir,
-    local_revision,
-    resolve_checkpoint,
-)
+from models.tt_dit.utils.checkpoint import WEIGHTS_ROOT_ENV, local_checkpoint_dir, local_revision, resolve_checkpoint
 
 REPO_ID = "Org/Model-Diffusers"
 
@@ -56,11 +50,11 @@ def test_empty_root_disables_the_mirror(monkeypatch, tmp_path):
     assert resolve_checkpoint(REPO_ID) == REPO_ID
 
 
-def test_root_defaults_to_weka(monkeypatch):
+def test_unset_root_disables_the_mirror(monkeypatch, tmp_path):
+    _mirror_repo(tmp_path, "vae")
+    monkeypatch.chdir(tmp_path)  # a relative default root would find the repo here
     monkeypatch.delenv(WEIGHTS_ROOT_ENV, raising=False)
-    missing = "NoSuchOrg/no-such-model"
-    assert local_checkpoint_dir(missing) is None
-    assert DEFAULT_WEIGHTS_ROOT == "/mnt/weka/model-weights/video"
+    assert local_checkpoint_dir(REPO_ID) is None
 
 
 def test_existing_directory_is_returned_unchanged(mirror, tmp_path):
