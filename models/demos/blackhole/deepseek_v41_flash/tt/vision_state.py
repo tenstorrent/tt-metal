@@ -55,6 +55,25 @@ def locate_spans(tokens, span_lens, image_token_id, first=0):
     return starts
 
 
+def cut_end(tokens, span_lens, image_token_id, end, align=1):
+    """Largest piece end <= ``end`` (a multiple of ``align``) that does not cut an image span: the scheduler (vLLM) rolls a piece back before an image only while the image's encoder output is
+    not cached; a repeat of a request whose images are still in the encoder cache gets a piece that ENDS INSIDE the span (found with the first-step cap / budget / threshold of the production
+    scheduler: A, B, B again -> ``image span ... is not contained`` killed the server). ``tokens``: the prompt tokens [>= end]; ``span_lens``: tokens per image of the request (all images).
+    The piece is then shortened to the chunk boundary at or below the span's first token; the next piece of the request finds no carried state at its start and recomputes from position 0 (always correct).
+    """
+    t = torch.as_tensor(tokens).reshape(-1)[:end]
+    pos = 0
+    for n in span_lens:
+        hit = (t[pos:] == image_token_id).nonzero()
+        if hit.numel() == 0:
+            break
+        s = pos + int(hit[0])
+        if s + n > t.numel():
+            return s // align * align
+        pos = s + n
+    return int(end)
+
+
 class VisionBook:
     """Images of the live requests, per model user: the encoder rows computed so far and the spans located so far. ``update_many`` is called at every prefill call (the first chunk and every
     continuation chunk of each request in it); ``pixel_values`` / ``grids`` hold ALL images of the request (vLLM's multimodal kwargs), the spans of the images whose tokens are already in
@@ -78,6 +97,13 @@ class VisionBook:
 
     def get(self, p):
         return self.seqs.get(p)
+
+    def cut_end(self, tokens, end, grids, align=1):
+        """``cut_end`` for the request's images ``grids`` [n, 3] (all images of the request)."""
+        a = self.vision.a
+        g = torch.as_tensor(grids).reshape(-1, 3)
+        llm = [(-(-int(x[1]) // a.ratio), -(-int(x[2]) // a.ratio)) for x in g]
+        return cut_end(tokens, [h * (w + 1) + 2 for h, w in llm], self.image_token_id, end, align)
 
     @staticmethod
     def _key(patches, h, w):

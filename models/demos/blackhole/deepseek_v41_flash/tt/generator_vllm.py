@@ -1009,6 +1009,25 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             phys.append(p)
         if len(set(phys)) != N:
             raise ValueError(f"duplicate prefill slots {empty_slots}")
+        # a piece must not END INSIDE an image span (the vision splice needs whole images): vLLM rolls a piece back before an image only while the image's encoder output is not cached, a repeat of an
+        # image request gets pieces cut by the budget / first-step cap anywhere. Such a piece is shortened to the chunk boundary below the span (nothing to compute when that is not past its start); the
+        # request's next piece then finds no carried state and recomputes from position 0 (vision_state.cut_end).
+        ends = [int(e) for e in ends]
+        skipped = set()
+        if self.vbook is not None:
+            for i, (p, t, st, e) in enumerate(items):
+                pv_, gr_ = self._mm_row(mm, i)
+                if pv_ is None:
+                    continue
+                cut = self.vbook.cut_end(toks[i], e, gr_, align=self._interleave_chunk())
+                if cut < e:
+                    logger.warning(
+                        f"DSV4.1 prefill (interleave): piece [{st}, {e}) of user {p} ends inside an image span: {'nothing to compute before the image' if cut <= st else f'shortened to [{st}, {cut})'}; the request recomputes from 0 at its next piece"
+                    )
+                    if cut <= st:
+                        skipped.add(i)
+                    else:
+                        items[i], ends[i] = (p, t, st, cut), cut
         eff = [
             it[2] for it in items
         ]  # effective starts: a request whose reported start (a vLLM prefix hit) had no carried state is a NEW request (start 0)
@@ -1036,17 +1055,28 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             raise ValueError("a request carries images but the server was started without image input (DSV41_VISION=1)")
         if self.vbook is not None:
             seqs = self.vbook.update_many(
-                [(p, toks[i], e, rows_mm[i][0], rows_mm[i][1], st) for i, (p, _, st, e) in enumerate(items)]
+                [
+                    (p, toks[i], e, rows_mm[i][0], rows_mm[i][1], st)
+                    for i, (p, _, st, e) in enumerate(items)
+                    if i not in skipped
+                ]
             )  # the images of the whole call are encoded together (up to 4 at a time over the mesh rows)
             vis = {p: seq for p, seq in seqs.items() if seq is not None}
             if vis:
                 logger.info(
                     f"DSV4.1 prefill (interleave): images in users {sorted(vis)} ({sum(len(v.spans) for v in vis.values())} spans)"
                 )
-        res = self.m.prefill_interleaved(
-            items, chunk, s_pad_max=self.s_pad_cur, want_logits=want_logits, vis=vis or None
+        run = [it for i, it in enumerate(items) if i not in skipped]
+        res = (
+            self.m.prefill_interleaved(run, chunk, s_pad_max=self.s_pad_cur, want_logits=want_logits, vis=vis or None)
+            if run
+            else {}
         )
+        for i in skipped:  # (the scheduler discards the token of a piece that does not finish its prompt)
+            res[phys[i]] = (0, None)
         for i, p in enumerate(phys):
+            if i in skipped:
+                continue
             self.book.set_prompt(p, toks[i, : ends[i]].reshape(-1))
             self.inprog.update(p, ends[i], toks[i])
             if self.spec is not None:
@@ -1069,7 +1099,12 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                         lg.float(), samp[0][i], samp[1][i], samp[2][i], self._gen_for(phys[i])
                     )
             return torch.tensor(first, dtype=torch.int32).reshape(N)
-        return torch.stack([res[p][1] for p in phys]).float().reshape(N, 1, -1)
+        vocab = next((int(res[p][1].numel()) for p in phys if res[p][1] is not None), 0)
+        return (
+            torch.stack([res[p][1] if res[p][1] is not None else torch.zeros(vocab) for p in phys])
+            .float()
+            .reshape(N, 1, -1)
+        )
 
     # ---- decode ------------------------------------------------------------------------------------------------------------------------------
     def _fresh_rows_via_spec(self, tokens, start_pos, args, kwargs):
