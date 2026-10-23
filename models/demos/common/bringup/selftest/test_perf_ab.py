@@ -520,8 +520,10 @@ def test_a_quick_pick_is_accepted_now_and_its_full_gate_runs_once_before_the_fin
     assert decide(o, "P.2", "accept") == 0
     assert o.run() == DONE, mk.lines[-4:]
     assert not o.led.state()["P.1"].get("full_pending") and not o.led.state()["P.2"].get("full_pending")
-    assert sum("full gate (quick-accepted pick)" in ln for ln in mk.lines) == 1  # P.2 shares P.1's run
-    assert "the same gate as P.1" in Path(o.led.state()["P.2"]["log"]).read_text()
+    assert sum("full gate (quick-accepted pick)" in ln for ln in mk.lines) == 1  # P.1 shares P.2's run
+    # F175: the newest pick runs first (its own units already passed on this code: the delta); the older one shares it
+    assert any("[P.2] full gate (quick-accepted pick)" in ln for ln in mk.lines)
+    assert "the same gate as P.2" in Path(o.led.state()["P.1"]["log"]).read_text()
 
 
 @pytest.mark.parametrize("limits", [True, False])

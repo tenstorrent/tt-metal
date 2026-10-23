@@ -281,3 +281,16 @@ def test_a_docstring_or_setting_text_edit_keeps_the_code_under_test():
     assert h(base) != h(base.replace("x + 1", "x + 2"))
     assert h(base) != h(base.replace('Setting("fused"', 'Setting("ops"'))
     assert h("def (") != h("def ( ")  # unparsable: hashed as text
+
+
+def test_a_record_made_under_the_byte_key_stays_valid_on_an_identical_tree(tmp_path):
+    """F175: F173 changed the under-test key's formula; the passes P.22's agent recorded an hour earlier (byte key)
+    showed as stale on the identical tree. Both keys are accepted; the semantic one is written."""
+    from models.demos.common.bringup.core import stamps
+    from models.demos.common.bringup.core.gate import _kept
+
+    rec = {"verdict": "PASS", "under_test": "BYTES", "cmd": stamps.sha16("c"), "env": stamps.env_key({}), "metrics": {}}
+    assert _kept(rec, ("SEM", "BYTES"), "c", {}, {}, True)
+    assert _kept(dict(rec, under_test="SEM"), ("SEM", "BYTES"), "c", {}, {}, True)
+    assert not _kept(dict(rec, under_test="OTHER"), ("SEM", "BYTES"), "c", {}, {}, True)
+    assert _kept(dict(rec, under_test="SEM"), "SEM", "c", {}, {}, True)

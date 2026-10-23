@@ -218,11 +218,12 @@ def semantic_py_hash(text: str) -> str:
     return "ast:" + sha16(ast.dump(_Strip().visit(tree), annotate_fields=False, include_attributes=False))
 
 
-def under_test_key(repo: Path, spec, paths=()) -> str:
+def under_test_key(repo: Path, spec, paths=(), with_bytes: bool = False):
     """F169: the content of the model's own code and tests (models/demos/<model>/ without its bring-up records: of
     bringup/ only the Python, e.g. hooks.py), the forks and ttnn / tt_metal (ttnn/, tt_metal/), the paths the task
     (and a fix job's gate tasks) may change, and the goldens. A passed unit stays passed for its task while this key is
-    unchanged (gate --continue)."""
+    unchanged (gate --continue). with_bytes (F175): also the byte-for-byte key of the same files, which records made
+    before F173 carry (an identical tree is the same code: they stay valid)."""
     try:
         own = str(Path(spec.model_dir).resolve().relative_to(Path(repo).resolve())).rstrip("/") + "/"
     except ValueError:  # a model outside the repo
@@ -238,14 +239,17 @@ def under_test_key(repo: Path, spec, paths=()) -> str:
         return p.startswith(own) or any(p == r or p.startswith(r if r.endswith("/") else r + "/") for r in roots)
 
     files = _file_map(repo, keep)
-    for (
-        p
-    ) in (
-        files
-    ):  # F173: the model's own Python by behaviour, not bytes (a docstring / Setting-text edit re-ran 18 units)
-        if p.endswith(".py") and p.startswith(own) and (Path(repo) / p).is_file():
-            files[p] = semantic_py_hash((Path(repo) / p).read_text(errors="replace"))
-    return sha16("\n".join(f"{p}\0{h}" for p, h in sorted(files.items())) + "\n" + goldens_key(spec))
+    gk = goldens_key(spec)
+    raw = sha16("\n".join(f"{p}\0{h}" for p, h in sorted(files.items())) + "\n" + gk)
+    # F173: the model's own Python by behaviour, not bytes (a docstring / Setting-text edit re-ran 18 units)
+    sem = {
+        p: semantic_py_hash((Path(repo) / p).read_text(errors="replace"))
+        if p.endswith(".py") and p.startswith(own) and (Path(repo) / p).is_file()
+        else h
+        for p, h in files.items()
+    }
+    key = sha16("\n".join(f"{p}\0{h}" for p, h in sorted(sem.items())) + "\n" + gk)
+    return (key, raw) if with_bytes else key
 
 
 def goldens_key(spec) -> str:
