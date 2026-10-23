@@ -475,12 +475,11 @@ def _with_hang_timeout():
     if not CHUNK_TIMEOUT_SECONDS:
         yield
         return
-    saved = ttnn.device.GetOperationTimeoutSeconds()
     ttnn.device.SetOperationTimeoutSeconds(CHUNK_TIMEOUT_SECONDS)
     try:
         yield
     finally:
-        ttnn.device.SetOperationTimeoutSeconds(saved)
+        ttnn.device.SetOperationTimeoutSeconds(0)
 
 
 def _compute_and_send(
@@ -758,6 +757,9 @@ def main() -> None:
         l1_small_size=_L1_SMALL_SIZE,
         trace_region_size=_TRACE_REGION_SIZE,
     )
+
+    if CHUNK_TIMEOUT_SECONDS:
+        ttnn.device.SetOperationTimeoutSeconds(0)
 
     hf_config = ADAPTER.load_hf_config()
     hf_config.max_seq_len = MAX_SEQ_LEN
