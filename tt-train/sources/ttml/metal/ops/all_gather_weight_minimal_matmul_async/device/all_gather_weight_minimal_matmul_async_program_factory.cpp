@@ -273,7 +273,7 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
             layout.ring_size,
             layout.stripe_tiles,
             layout.piece_tiles,
-            subblock_w,
+            layout.hops_before,
             static_cast<uint32_t>(transpose_b),
         };
         tt::tt_metal::TensorAccessorArgs(*own_input.buffer()).append_to(args);
@@ -380,7 +380,8 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
                  subblock_w,
                  layout.piece_tiles,
                  layout.ring_size,
-                 static_cast<uint32_t>(transpose_b)},
+                 static_cast<uint32_t>(transpose_b),
+                 layout.hops_before},
             .defines = compute_defines});
 
     const uint32_t k_blocks_per_core =

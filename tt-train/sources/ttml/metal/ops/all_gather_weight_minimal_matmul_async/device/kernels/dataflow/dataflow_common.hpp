@@ -13,7 +13,7 @@
 #include "tt-train/sources/ttml/metal/ops/all_gather_weight_minimal_matmul_async/device/kernels/all_gather_weight_minimal_matmul_async_utils.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/kernels/matmul_dataflow_common.hpp"
 
-template <uint32_t N_block_tiles, uint32_t piece_tiles, uint32_t ring_size, uint32_t subblock_w>
+template <uint32_t N_block_tiles, uint32_t piece_tiles, uint32_t ring_size, uint32_t hops_before>
 inline bool block_columns(
     uint32_t n_block_iter,
     const uint32_t* stripe_order,
@@ -22,7 +22,7 @@ inline bool block_columns(
     uint32_t chain_width,
     uint32_t* cols,
     uint32_t& width) {
-    const BlockSpan span = StripeBlocks<N_block_tiles, piece_tiles, ring_size, subblock_w>::span(n_block_iter);
+    const BlockSpan span = StripeBlocks<N_block_tiles, piece_tiles, ring_size, hops_before>::span(n_block_iter);
     width = span.width;
     bool any_real = false;
     for (uint32_t j = 0; j < span.width; j++) {

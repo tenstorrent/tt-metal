@@ -87,7 +87,8 @@ void kernel_main() {
     constexpr uint32_t piece_tiles = get_compile_time_arg_val(8);
     constexpr uint32_t ring_size = get_compile_time_arg_val(9);
     constexpr bool transpose_b = get_compile_time_arg_val(10) == 1;
-    using Blocks = StripeBlocks<N_block_tiles, piece_tiles, ring_size, subblock_w>;
+    constexpr uint32_t hops_before = get_compile_time_arg_val(11);
+    using Blocks = StripeBlocks<N_block_tiles, piece_tiles, ring_size, hops_before>;
 
     uint32_t argidx = 0;
     const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);

@@ -35,7 +35,7 @@ void kernel_main() {
     constexpr uint32_t ring_size = get_compile_time_arg_val(17);
     constexpr uint32_t stripe_tiles = get_compile_time_arg_val(18);
     constexpr uint32_t piece_tiles = get_compile_time_arg_val(19);
-    constexpr uint32_t subblock_w = get_compile_time_arg_val(20);
+    constexpr uint32_t hops_before = get_compile_time_arg_val(20);
     constexpr bool transpose_b = get_compile_time_arg_val(21) == 1;
 
     uint32_t argidx = 0;
@@ -90,7 +90,7 @@ void kernel_main() {
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
 
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
-            const bool any_real = block_columns<N_block_tiles, piece_tiles, ring_size, subblock_w>(
+            const bool any_real = block_columns<N_block_tiles, piece_tiles, ring_size, hops_before>(
                 n_block_iter, stripe_order, stripe_tiles, chain_offset, chain_width, cols, width);
             const uint32_t forward_row_bytes = any_real ? width * in1_tile_size : 0;
             bool is_last_block = (m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1));

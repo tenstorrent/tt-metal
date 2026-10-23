@@ -5,6 +5,7 @@
 #include "stripe_layout.hpp"
 
 #include <algorithm>
+#include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
 #include <utility>
 
@@ -21,33 +22,35 @@ uint32_t StripeLayout::chain_width(uint32_t c) const {
     return base + (c < rem ? 1u : 0u);
 }
 
-uint32_t StripeLayout::n_blocks_per_core() const {
-    return local_blocks + remote_blocks;
+uint32_t StripeLayout::hops_after() const {
+    return ring_size - 1 - hops_before;
 }
 
-std::vector<uint32_t> stripe_consumption_order(uint32_t ring_size, uint32_t ring_index, bool ring) {
-    std::vector<uint32_t> order;
-    order.reserve(ring_size);
-    order.push_back(ring_index);
-    std::vector<bool> taken(ring_size, false);
-    taken[ring_index] = true;
-    const int32_t r = static_cast<int32_t>(ring_size);
-    const int32_t d = static_cast<int32_t>(ring_index);
-    for (int32_t dist = 1; static_cast<uint32_t>(order.size()) < ring_size; ++dist) {
-        for (const int32_t s : {d - dist, d + dist}) {
-            int32_t idx = s;
-            if (ring) {
-                idx = ((s % r) + r) % r;
-            } else if (s < 0 || s >= r) {
-                continue;
-            }
-            if (!taken[idx]) {
-                taken[idx] = true;
-                order.push_back(static_cast<uint32_t>(idx));
-            }
-        }
+uint32_t StripeLayout::num_regions() const {
+    return 1 + std::max(hops_before, hops_after());
+}
+
+uint32_t StripeLayout::region_pieces(uint32_t r) const {
+    return r == 0 ? 1u : (r <= hops_before ? 1u : 0u) + (r <= hops_after() ? 1u : 0u);
+}
+
+uint32_t StripeLayout::region_blocks(uint32_t r) const {
+    return tt::div_up(region_pieces(r) * piece_tiles, N_block_tiles);
+}
+
+uint32_t StripeLayout::n_blocks_per_core() const {
+    uint32_t n = 0;
+    for (uint32_t r = 0; r < num_regions(); ++r) {
+        n += region_blocks(r);
     }
-    return order;
+    return n;
+}
+
+uint32_t stripe_hops_before(uint32_t ring_size, uint32_t ring_index, bool ring) {
+    if (!ring) {
+        return ring_index;
+    }
+    return ring_size / 2;
 }
 
 StripeLayout make_stripe_layout(
@@ -69,11 +72,18 @@ StripeLayout make_stripe_layout(
     layout.ring_size = ring_size;
     layout.stripe_tiles = N_tiles / ring_size;
     layout.num_chains = num_chains;
-    layout.piece_tiles = (layout.stripe_tiles + num_chains - 1) / num_chains;
+    layout.piece_tiles = tt::div_up(layout.stripe_tiles, num_chains);
     layout.N_block_tiles = N_block_tiles;
-    layout.local_blocks = (layout.piece_tiles + N_block_tiles - 1) / N_block_tiles;
-    layout.remote_blocks = (((ring_size - 1) * layout.piece_tiles) + N_block_tiles - 1) / N_block_tiles;
-    layout.stripe_order = stripe_consumption_order(ring_size, ring_index, ring);
+    layout.hops_before = stripe_hops_before(ring_size, ring_index, ring);
+    layout.stripe_order.push_back(ring_index);
+    for (uint32_t dist = 1; dist < layout.num_regions(); ++dist) {
+        if (dist <= layout.hops_before) {
+            layout.stripe_order.push_back((ring_index + ring_size - dist) % ring_size);
+        }
+        if (dist <= layout.hops_after()) {
+            layout.stripe_order.push_back((ring_index + dist) % ring_size);
+        }
+    }
 
     return layout;
 }

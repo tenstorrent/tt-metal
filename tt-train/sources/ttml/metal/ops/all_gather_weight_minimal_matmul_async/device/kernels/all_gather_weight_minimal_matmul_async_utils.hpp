@@ -23,27 +23,40 @@ struct BlockSpan {
     uint32_t width = 0;
 };
 
-template <uint32_t N_block_tiles, uint32_t piece_tiles, uint32_t ring_size, uint32_t subblock_w>
+template <uint32_t N_block_tiles, uint32_t piece_tiles, uint32_t ring_size, uint32_t hops_before>
 struct StripeBlocks {
-    static constexpr uint32_t local_blocks = (piece_tiles + N_block_tiles - 1) / N_block_tiles;
-    static constexpr uint32_t remote_tiles = (ring_size - 1) * piece_tiles;
-    static constexpr uint32_t remote_blocks = (remote_tiles + N_block_tiles - 1) / N_block_tiles;
-    static constexpr uint32_t num_blocks = local_blocks + remote_blocks;
-
-    static BlockSpan balanced(uint32_t b, uint32_t tiles, uint32_t blocks) {
-        const uint32_t units = (tiles + subblock_w - 1) / subblock_w;
-        const uint32_t base = units / blocks;
-        const uint32_t rem = units % blocks;
-        const uint32_t v_start = subblock_w * ((b * base) + std::min(b, rem));
-        const uint32_t width = subblock_w * (base + (b < rem ? 1u : 0u));
-        return {v_start, std::min(width, tiles - v_start)};
+    static constexpr uint32_t hops_after = ring_size - 1 - hops_before;
+    static constexpr uint32_t num_regions = 1 + std::max(hops_before, hops_after);
+    static constexpr uint32_t region_pieces(uint32_t r) {
+        return r == 0 ? 1u : (r <= hops_before ? 1u : 0u) + (r <= hops_after ? 1u : 0u);
     }
+    static constexpr uint32_t region_blocks(uint32_t r) {
+        return ((region_pieces(r) * piece_tiles) + N_block_tiles - 1) / N_block_tiles;
+    }
+    static constexpr uint32_t count_blocks() {
+        uint32_t n = 0;
+        for (uint32_t r = 0; r < num_regions; r++) {
+            n += region_blocks(r);
+        }
+        return n;
+    }
+    static constexpr uint32_t num_blocks = count_blocks();
 
     static BlockSpan span(uint32_t n_block_iter) {
-        if (n_block_iter < local_blocks) {
-            return balanced(n_block_iter, piece_tiles, local_blocks);
+        uint32_t first_piece = 0;
+        for (uint32_t r = 0; r < num_regions; r++) {
+            const uint32_t nb = region_blocks(r);
+            if (n_block_iter < nb) {
+                const uint32_t tiles = region_pieces(r) * piece_tiles;
+                const uint32_t base = tiles / nb;
+                const uint32_t rem = tiles % nb;
+                return {
+                    (first_piece * piece_tiles) + (n_block_iter * base) + std::min(n_block_iter, rem),
+                    base + (n_block_iter < rem ? 1u : 0u)};
+            }
+            n_block_iter -= nb;
+            first_piece += region_pieces(r);
         }
-        const BlockSpan r = balanced(n_block_iter - local_blocks, remote_tiles, remote_blocks);
-        return {piece_tiles + r.v_start, r.width};
+        return {0, 0};
     }
 };
