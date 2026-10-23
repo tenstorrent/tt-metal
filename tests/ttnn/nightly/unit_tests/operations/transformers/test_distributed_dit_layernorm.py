@@ -312,8 +312,8 @@ def test_distributed_dit_layernorm_odd_hidden_dim(
 @pytest.mark.parametrize("stats_dtype", [ttnn.bfloat16], ids=["BFLOAT16_stats"])
 @pytest.mark.parametrize(
     "seqlen",
-    [9472, 18944],
-    ids=["seqlen9472", "seqlen18944"],
+    [8192, 9472, 16384, 18944],
+    ids=["seqlen8192", "seqlen9472", "seqlen16384", "seqlen18944"],
 )
 @pytest.mark.parametrize("hidden_dim", [5120], ids=["hidden_dim5120"])
 @pytest.mark.parametrize("use_affine", [True], ids=["with_affine"])
