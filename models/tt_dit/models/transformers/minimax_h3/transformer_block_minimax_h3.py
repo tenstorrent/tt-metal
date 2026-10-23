@@ -452,5 +452,8 @@ class MiniMaxH3TransformerBlock(Module):
         return ttnn.addcmul(residual, ff_out, modulation(_GATE_MLP))
 
     def _ff1_kwargs(self, normed: ttnn.Tensor) -> dict:
-        """ff1's blocking kwargs: the per-device length's class pin, else the length-keyed swept table."""
+        """ff1's blocking kwargs on the fused all-gather matmul (class pin, else the length-keyed swept table);
+        none on the unfused path, whose matmul overruns L1 with the swept blockings at long sequence lengths."""
+        if not self.use_fused_agmm:
+            return {}
         return agmm_kwargs(self._ff1_pins, *self._ff1_kn, normed.padded_shape[-2])

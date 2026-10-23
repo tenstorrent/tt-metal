@@ -227,6 +227,7 @@ class MiniMaxH3Attention(Module):
         self.exp_ring_max_k_chunk = 512  # largest k worth trying; `_exp_sdpa_l1_bytes` picks down from here
         self.use_exp_ring_sdpa = (
             self.use_ring
+            and ccl_manager.topology == ttnn.Topology.Ring
             and not dynamic_length  # the exp ring op keys its program on the length
             and is_blackhole()
             and tp_factor == 4
@@ -529,6 +530,7 @@ class MiniMaxH3Attention(Module):
         # all-gather of the K-fractured input folds into the matmul that consumes it, instead of
         # running as a separate op. Only on ring topologies -- on a line the unfused path is faster,
         # which is the same condition WanAttention uses.
+        # Swept block sizes fit the fused op's CBs; the unfused matmul overruns L1 with them at long seq.
         matmul_parallel_config = self.parallel_config if self.use_fused_agmm else None
         if not self.use_fused_agmm and tp_factor > 1:
             spatial_1BND = self.ccl_manager.all_gather(
@@ -541,9 +543,7 @@ class MiniMaxH3Attention(Module):
             parallel_config=matmul_parallel_config,
             force_transpose=False,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
-            **agmm_kwargs(
-                self._qkv_pins, self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND.padded_shape[-2]
-            ),
+            **self._agmm_kwargs(self._qkv_pins, self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND),
         )
 
         def create_heads(inp: ttnn.Tensor) -> ttnn.Tensor:
@@ -663,11 +663,18 @@ class MiniMaxH3Attention(Module):
             addcmul_a=addcmul_residual if fuse_gate else None,
             addcmul_b=addcmul_gate if fuse_gate else None,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
-            **agmm_kwargs(self._out_pins, self.inner_dim, self.hidden_size // tp_factor, spatial_1BND.padded_shape[-2]),
+            **self._agmm_kwargs(self._out_pins, self.inner_dim, self.hidden_size // tp_factor, spatial_1BND),
         )
         if addcmul_residual is not None and not fuse_gate:
             out = ttnn.addcmul(addcmul_residual, out, addcmul_gate)
         return out
+
+    def _agmm_kwargs(self, pins: dict | None, k: int, n: int, x: ttnn.Tensor) -> dict:
+        """The fused all-gather matmul's blocking kwargs at `x`'s per-device rows (class pin or swept table);
+        none on the unfused path, whose matmul overruns L1 with the swept blockings at long sequence lengths."""
+        if not self.use_fused_agmm:
+            return {}
+        return agmm_kwargs(pins, k, n, x.padded_shape[-2])
 
     def _ring_sdpa_program_config(self, seq_local: int) -> ttnn.SDPAProgramConfig:
         """The per-device length's class pin on the dynamic-length path, else the length-keyed table."""
