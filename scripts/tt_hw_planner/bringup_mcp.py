@@ -34,9 +34,9 @@ harness_skipped.json + skip_diagnosis.json, the SAME artifacts the fsm OUTCOME b
 Gate ladder per ungraduated component (mirrors the fsm loop, model-agnostic):
   harness-skip -> fix_harness. Otherwise emit (attempt 0) -> repair (pre-cap). AT cap: if the failure
   verdict warrants it (and not already decomposed) -> decompose (split + retire parent); else if still
-  harness-skipping -> mark_manual; else -> fall_back_to_cpu.
-can_stop is true ONLY when every material component is graduated OR fallen back to CPU OR
-harness-skipped (manual).
+  harness-skipping -> mark_manual; else -> reset attempts and keep repairing (CPU fallback is NOT
+  allowed — every component must graduate on device).
+can_stop is true ONLY when every material component is graduated OR harness-skipped (manual).
 
 Config via env:
   BRINGUP_MCP_DEMO_DIR / BRINGUP_MCP_MODEL_ID / BRINGUP_MCP_STATE (required)
@@ -523,9 +523,7 @@ def _run_pcc(component: str) -> dict:
         else:
             stages = getattr(_cli, "_LAST_PYTEST_STAGES", None) or {}
             if stages:
-                extras.append(
-                    "Last reported stage(s): " + ", ".join(f"{tname}={stg}" for tname, stg in stages.items())
-                )
+                extras.append("Last reported stage(s): " + ", ".join(f"{tname}={stg}" for tname, stg in stages.items()))
         details = hang if not extras else hang + "\n" + "\n".join(extras)
         return {
             "ran": True,
@@ -896,6 +894,22 @@ def _unmark_fallback(component: str) -> None:
     _save_state(st)
 
 
+def _reset_attempts_for(component: str, st: dict | None = None) -> None:
+    """Reset a component's attempt counter and consecutive-same-class streak so the gate re-enters
+    it as fresh work. Also clears any fallback mark so it is no longer terminal."""
+    if st is None:
+        st = _load_state()
+    for key in ("attempts", "consecutive_same_class"):
+        m = st.get(key)
+        if isinstance(m, dict):
+            m.pop(component, None)
+    fb = set(st.get("fallback") or [])
+    if component in fb:
+        fb.discard(component)
+        st["fallback"] = sorted(fb)
+    _save_state(st)
+
+
 def _status_of(component: str) -> str:
     """The component's plan tier (NEW/ADAPT/REUSE) from bringup_status.json; '' if unknown."""
     return str(_status_component(component).get("status") or "")
@@ -980,21 +994,19 @@ def _do_fallback(component: str) -> dict:
 
 @mcp.tool()
 def fall_back_to_cpu(component: str) -> dict:
-    """Retire a component that exhausted its attempt cap to CPU (mixed execution) — the SAME
-    re-testing CASCADE the fsm loop runs. Only the gate should direct you here (rung 'fallback').
-    Refuses (returns {gated: True}) unless the component is at its attempt cap."""
-    if not _component_is_at_cap(component):
-        st = _load_state()
-        attempts = (st.get("attempts", {}) or {}).get(component, 0)
-        return {
-            "gated": True,
-            "component": component,
-            "reason": (
-                f"cannot fall back yet — component has only {attempts} attempt(s); cap is "
-                f"{_MAX_ATTEMPTS}. Keep repairing until the gate names rung='fallback'."
-            ),
-        }
-    return _do_fallback(component)
+    """CPU fallback is disabled — every component must graduate on device. This tool always refuses.
+    When a component exhausts its attempt cap, the gate resets its budget and sends it back for
+    repair. Keep iterating: try a different ttnn strategy, decompose into smaller pieces, or study
+    sibling models' implementations."""
+    return {
+        "gated": True,
+        "component": component,
+        "reason": (
+            "CPU fallback is not allowed. Every component must graduate on device. "
+            "The gate will never direct you to this rung — keep repairing or decompose "
+            "the component into smaller pieces that can each graduate natively."
+        ),
+    }
 
 
 @mcp.tool()
@@ -1144,10 +1156,11 @@ def resolve_reference_loader(component: str = "") -> dict:
 @mcp.tool()
 def termination_check() -> dict:
     """THE deterministic stop gate for bring-up. can_stop is true ONLY when every material component is
-    graduated OR fallen back to CPU. Otherwise returns next_target = the next component + rung. Rung
-    ladder (model-agnostic, mirrors the fsm loop): emit (never tried) -> repair (pre-cap); AT cap, if
-    the failure verdict warrants it and it hasn't been decomposed -> decompose, else -> fallback. Uses
-    the extracted bringup_ladder cap rule. Agent may NOT declare done."""
+    graduated. CPU fallback is NOT a valid terminal state — components that exhausted their attempt cap
+    get their budget reset and keep retrying until they graduate on device. Otherwise returns
+    next_target = the next component + rung. Rung ladder (model-agnostic, mirrors the fsm loop):
+    emit (never tried) -> repair (pre-cap); AT cap -> decompose (if verdict warrants it), else reset
+    attempts and keep repairing. Uses the extracted bringup_ladder cap rule. Agent may NOT declare done."""
     st = _load_state()
     _ensure_component_tests()
     comps = _components()
@@ -1159,7 +1172,7 @@ def termination_check() -> dict:
     harness_skip_reasons = st.get("harness_skip_reason", {}) or {}
     loader_resolvable = _rlr.is_enabled() and not _rlr.has_loader(_DEMO_DIR)
     terminal = set(st.get("harness_skipped") or [])
-    terminal |= set(st.get("fallback") or [])
+    terminal |= decomposed
     try:
         from scripts.tt_hw_planner.agentic.convergence import should_extend_component_cap as _g8_extend
     except Exception:
@@ -1285,8 +1298,7 @@ def termination_check() -> dict:
             nxt["reason"] = (
                 f"last run of '{c}' was HANG and the stub is unchanged. "
                 f"EDIT _stubs/{c}.py (collective / mesh / synchronize — not a test timeout) "
-                f"BEFORE calling run_component. Blind re-run of the same binary is gated.\n"
-                + hang_block
+                f"BEFORE calling run_component. Blind re-run of the same binary is gated.\n" + hang_block
             )
     elif needs_cap:
         c = needs_cap[0]
@@ -1307,11 +1319,14 @@ def termination_check() -> dict:
                 f"honestly (surfaced in harness_skipped.json, NOT counted as graduated).",
             }
         else:
+            _reset_attempts_for(c, st)
             nxt = {
                 "unit": c,
-                "rung": "fallback",
-                "reason": f"component '{c}' exhausted its attempt cap — call fall_back_to_cpu('{c}') to "
-                f"retire it to CPU (mixed execution) so the pipeline still works.",
+                "rung": "repair",
+                "reason": f"component '{c}' exhausted its attempt cap — budget reset, keep repairing. "
+                f"CPU fallback is not allowed; every component must graduate on device. "
+                f"Try a different approach: study sibling models' ttnn implementations, "
+                f"decompose into smaller pieces, or try a fundamentally different ttnn strategy.",
             }
     systemic_hint: str | None = None
     try:
