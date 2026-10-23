@@ -18,7 +18,6 @@
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
-#include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/data_movement/view/view.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/functions.hpp"
@@ -347,7 +346,7 @@ ttnn::Tensor repeat_via_codegen(
 
     if (plan.round_trip) {
         // ttnn::untilize rather than to_layout, which bypasses untilize's codegen route on a padded tensor.
-        working = ttnn::untilize(working);
+        /* TODO(nuked-op untilize): passthrough */ (void)0;
     }
 
     for (size_t i = 0; i < num_legs; ++i) {
