@@ -82,6 +82,9 @@ jobs:
 
           gh label create "$BYPASS_LABEL" --color B60205 \
             --description "Blessed by the codeowner-bypass team; the author may /enqueue" 2>/dev/null || true
+          # Re-adding a label that is already present records no new `labeled`
+          # event, so drop it first: /enqueue checks that the latest one is ours.
+          gh api -X DELETE "repos/$GH_REPO/issues/$PR_NUMBER/labels/$BYPASS_LABEL" > /dev/null 2>&1 || true
           gh api -X POST "repos/$GH_REPO/issues/$PR_NUMBER/labels" -f "labels[]=$BYPASS_LABEL" > /dev/null
 
           reply "✅ Blessed for code-owner bypass by @$COMMENT_AUTHOR. The PR author can now comment \`/enqueue\` to put it in the merge queue (comment it again if the PR is evicted). Required checks and the merge queue still apply."
