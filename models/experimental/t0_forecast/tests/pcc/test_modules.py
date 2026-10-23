@@ -6,7 +6,8 @@
     patch encoder     random tokens with PAD / MISSING cells and a historical row (type embedding path)
     time layer        random activations, causal and PAD-masked; q / k after QK-norm + RoPE (S = 66, 288)
     group layer       G = 1 (the V-only shortcut), G = 4, and G = 4 with PAD patches (masked path)
-    MLP, head         random activations
+    MLP, head         random activations (the head also checks the raw decoder output before softplus)
+    out_norm, decoder the single-series golden's layer-23 output: out_norm >= 0.999, decoder output >= 0.998
     every layer       the single-series golden: layer i on the reference output of layer i - 1
 
 Floor: 0.999 for every module (the contract's module floor); PAD tokens are excluded (the reference returns
@@ -33,6 +34,7 @@ from models.experimental.t0_forecast.tt.common import TtT0Precision, pad_to_tile
 from models.experimental.t0_forecast.tt.model import TtT0
 
 FLOOR = 0.999
+DECODER_FLOOR = 0.998  # the contract's decoder output (pre-head) floor
 
 
 def _model(device, layers, precision="accuracy"):
@@ -132,9 +134,35 @@ def test_head(device):
     got = ttnn.to_torch(out).float()[0, 0, : x.shape[2]].reshape(4, 66, 32, 21)
     ttnn.deallocate(out)
     value = pcc(m["out"], got)
-    print(f"\n[pcc] decoder + monotone head {value:.6f}")
-    assert value >= FLOOR
+    raw_dev = tt.decode(upload(device, rows))
+    raw = ttnn.to_torch(raw_dev).float()[0, 0, : x.shape[2]].reshape(m["decoder"].shape)
+    ttnn.deallocate(raw_dev)
+    raw_value = pcc(m["decoder"], raw)
+    print(f"\n[pcc] decoder raw (pre-softplus) {raw_value:.6f}, decoder + monotone head {value:.6f}")
+    assert raw_value >= DECODER_FLOOR and value >= FLOOR
     assert bool((got[..., 1:] >= got[..., :-1]).all()), "quantiles must be monotone"
+
+
+def test_out_norm_and_decoder(device):
+    """out_norm and the decoder output (pre-head, the raw values before softplus) on the reference's layer-23
+    output of the single-series golden: out_norm >= 0.999, decoder >= 0.998 (the contract's pre-head floor)."""
+    import ttnn
+
+    from models.experimental.t0_forecast.tt.common import rms_norm
+
+    g = golden("single.pt")
+    tt = _model(device, [])
+    x = upload_rows(device, g["layer_23"])
+    normed = rms_norm(x, tt._out_norm, 1e-8, tt.precision)
+    p_norm = pcc(g["out_norm"], download_rows(normed, 1, 66))
+    ttnn.deallocate(normed)
+    raw_dev = tt.decode(x)
+    raw = download_rows(raw_dev, 1, 66)
+    ttnn.deallocate(raw_dev)
+    p_dec = pcc(g["decoder"], raw)
+    p_dec_ro = pcc(g["decoder"][:, 63:65], raw[:, 63:65])
+    print(f"\n[pcc] out_norm {p_norm:.6f}; decoder output {p_dec:.6f} (read-out patches {p_dec_ro:.6f})")
+    assert p_norm >= FLOOR and min(p_dec, p_dec_ro) >= DECODER_FLOOR
 
 
 @pytest.mark.parametrize("name,layer", [("single.pt", 0), ("single.pt", 22), ("single_long.pt", 1)])

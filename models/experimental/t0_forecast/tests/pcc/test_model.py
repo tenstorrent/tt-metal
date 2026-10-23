@@ -3,13 +3,20 @@
 
 """Full-model PCC of TTNN t0-gamma on real weights against the fp32 reference goldens.
 
-    pcc_normalized   the monotone head's quantiles in asinh space at the read-out patches ([rows, n, 32, 21]),
-                     against a hook on ``m.head`` (before ``sinh(q) * scale + loc``)
+Metrics on the read-out patches ``[rows, n, 32, 21]`` in asinh space, against a hook on ``m.head`` (before
+``sinh(q) * scale + loc``), plus the data-space quantiles (``tests/helpers.quantile_metrics``):
+    pcc_normalized   PCC over everything; dominated by each row's level
+    pcc_spread       PCC of ``h - mean_q(h)``, the quantile spread around each step's centre: catches a collapse
+                     of the quantiles that pcc_normalized cannot see on trending series
+    pcc_row_p01 / pcc_row_min   per-row PCC of ``h`` (1st percentile / minimum over rows)
     pcc_final        data-space quantiles after the host post-processing (raw21: the 21 trained levels)
+Each case also prints the collapsed output's metrics (every quantile = its mean over the quantile axis), which
+every gate floor must reject.
 
 Cases and the paths they take:
     single          1 x 2048 -> 64               clean causal time attention, G = 1, S = 66 -> 96
-    paper16         16 x 2048 -> 64              the first 16 series of the paper golden
+    single_long     1 x 8192 -> 1024             S = 288, 32 read-out patches (the far horizon)
+    paper16         16 x 2048 -> 64              the first 16 series of the paper golden (realistic mix)
     multivariate    4 series x 8 variates        real group attention (G = 8, no mask)
     long2           2 x 8192 -> 1024             S = 288 (tile aligned, xPos centre 143), 32 read-out patches
     e2e             64 x 2048 -> 64              leading NaN -> PAD patches (explicit time mask), gaps
@@ -21,13 +28,11 @@ from __future__ import annotations
 
 import pytest
 
-from models.experimental.t0_forecast.tests.helpers import golden, pcc, weights
+from models.experimental.t0_forecast.tests.helpers import FLOORS, collapsed, golden, pcc, quantile_metrics, weights
 from models.experimental.t0_forecast.tt.common import TtT0Precision
 from models.experimental.t0_forecast.tt.model import TtT0
 
 GIFT_LEVELS = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
-FLOORS = {"accuracy": (0.999, 0.99), "performance": (0.995, 0.98)}  # (pcc_normalized, pcc_final)
-
 _MODELS: dict = {}
 
 
@@ -40,11 +45,11 @@ def _tt(device, precision: str) -> TtT0:
     return _MODELS[key]
 
 
-def _forward(tt: TtT0, context, horizon):
-    """One forward: ``(normalized [R, n, 32, 21], raw21 data space)``."""
+def _forward(tt: TtT0, context, horizon, **kwargs):
+    """One forward: ``(prepared, normalized [R, n, 32, 21], raw21 data space)``."""
     import ttnn
 
-    prepared = tt.prepare_inputs(context, horizon)
+    prepared = tt.prepare_inputs(context, horizon, **kwargs)
     inputs = tt.upload_inputs(prepared)
     out = tt.forward_device(inputs)
     normalized = tt.normalized(out, prepared)
@@ -54,13 +59,33 @@ def _forward(tt: TtT0, context, horizon):
     return prepared, normalized, final
 
 
+def check(case: str, floors: dict, head_ref, normalized, raw_ref=None, final=None, strict: bool = True) -> dict:
+    """Score, print (with the collapsed output's scores) and assert ``floors``; returns the metrics. ``strict``: every
+    gate metric alone must reject the collapsed output (the realistic bench inputs); otherwise the floors together
+    must (smooth coverage inputs, where pcc_normalized alone cannot see a collapse)."""
+    got = quantile_metrics(head_ref, normalized)
+    bad = quantile_metrics(head_ref, collapsed(head_ref))
+    if raw_ref is not None:
+        got["pcc_final"] = pcc(raw_ref, final)
+    show = lambda m: ", ".join(f"{k} {v:.6f}" for k, v in m.items())
+    print(f"\n[pcc] {case}: {show(got)}\n[pcc] {case} collapsed: {show(bad)}")
+    for key, floor in floors.items():
+        if key in got:
+            assert got[key] >= floor, f"{case}: {key} {got[key]:.6f} < {floor}"
+        if strict and key in bad:
+            assert bad[key] < floor, f"{case}: the collapsed output passes {key} ({bad[key]:.6f} >= {floor})"
+    assert any(bad[k] < f for k, f in floors.items() if k in bad), f"{case}: the collapsed output passes the gate"
+    return got
+
+
 CASES = {
-    # name: (golden file, rows / groups to take, precision)
-    "single": ("single.pt", None, "accuracy"),
-    "paper16": ("bench_paper.pt", 16, "accuracy"),
-    "multivariate": ("bench_multivariate.pt", 4, "accuracy"),
-    "long2": ("bench_long_context.pt", 2, "accuracy"),
-    "paper16_performance": ("bench_paper.pt", 16, "performance"),
+    # name: (golden file, rows / groups to take, precision, floors, read-out slice of the full head capture)
+    "single": ("single.pt", None, "accuracy", "single", (63, 2)),
+    "single_long": ("single_long.pt", None, "accuracy", "single_long", (255, 32)),
+    "paper16": ("bench_paper.pt", 16, "accuracy", "accuracy", None),
+    "multivariate": ("bench_multivariate.pt", 4, "accuracy", "accuracy", None),
+    "long2": ("bench_long_context.pt", 2, "accuracy", "accuracy", None),
+    "paper16_performance": ("bench_paper.pt", 16, "performance", "performance", None),
 }
 
 
@@ -77,34 +102,45 @@ def device(request):
 
 @pytest.mark.parametrize("case", list(CASES))
 def test_forward(device, case):
-    name, take, precision = CASES[case]
+    name, take, precision, floors, readout = CASES[case]
     g = golden(name)
     context = g["context"] if take is None else g["context"][:take]
     rows = context.shape[0] * (context.shape[1] if context.ndim == 3 else 1)
-    head_ref = g["head"][:, 63:65] if name == "single.pt" else g["head_readout"][:rows]
+    head_ref = g["head"][:, readout[0] : sum(readout)] if readout else g["head_readout"][:rows]
     raw_ref = g["raw21"] if take is None else g["raw21"][:take]
     tt = _tt(device, precision)
     prepared, normalized, final = _forward(tt, context, g["horizon"])
     assert normalized.shape == head_ref.shape and final.shape == raw_ref.shape
-    p_norm, p_final = pcc(head_ref, normalized), pcc(raw_ref, final)
-    floor_norm, floor_final = FLOORS[precision]
-    print(
-        f"\n[pcc] {case}: rows {rows}, S {prepared.num_patches}, G {prepared.group_size}, "
-        f"time mask {prepared.time_mask is not None}: pcc_normalized {p_norm:.6f}, pcc_final {p_final:.6f}"
-    )
-    assert p_norm >= floor_norm and p_final >= floor_final
+    print(f"\n[case] {case}: rows {rows}, S {prepared.num_patches}, G {prepared.group_size}")
+    check(case, FLOORS[floors], head_ref, normalized, raw_ref, final)
 
 
 def test_e2e_masked_paths(device):
     """PAD patches from trimming (explicit time mask), MISSING gaps, counts: plain raw21 and its head."""
     g = golden("e2e.pt")
     tt = _tt(device, "accuracy")
-    series_prepared = tt.prepare_inputs(g["context"], g["horizon"])
-    assert series_prepared.time_mask is None  # untrimmed NaN are MISSING, not PAD
     _, normalized, final = _forward(tt, g["context"], g["horizon"])
-    p_norm, p_final = pcc(g["head_readout"], normalized), pcc(g["raw21"], final)
-    print(f"\n[pcc] e2e plain: pcc_normalized {p_norm:.6f}, pcc_final {p_final:.6f}")
-    assert p_norm >= 0.999 and p_final >= 0.99
+    check("e2e", FLOORS["coverage"], g["head_readout"], normalized, g["raw21"], final, strict=False)
+
+
+def test_rope_cache_eviction(device):
+    """Device inputs keep their RoPE tables after the per-shape cache evicts them (more shapes than entries)."""
+    from models.experimental.t0_forecast.tt.model import _MAX_CONSTANTS
+
+    g = golden("single.pt")
+    tt = _tt(device, "accuracy")
+    prepared = tt.prepare_inputs(g["context"], 64)
+    inputs = tt.upload_inputs(prepared)
+    shapes = range(10, 10 + _MAX_CONSTANTS // 4 + 2)  # 4 tables per shape: crosses the cache size
+    for k in shapes:
+        other = tt.upload_inputs(tt.prepare_inputs(g["context"][:, : 32 * k], 64))
+        tt.deallocate_inputs(other)
+    assert len(tt._constants) <= _MAX_CONSTANTS
+    assert not any(key[1] == prepared.num_patches for key in tt._constants), "the first shape must be evicted"
+    out = tt.forward_device(inputs)
+    normalized = tt.normalized(out, prepared)
+    tt.deallocate_inputs(inputs)
+    check("rope_cache_eviction", FLOORS["single"], g["head"][:, 63:65], normalized, strict=False)
 
 
 @pytest.mark.parametrize("levels", ["gift9", "gift21"])
@@ -140,16 +176,22 @@ def test_branch_paths(device):
     tt = _tt(device, "accuracy")
     q = tt.config.quantile_levels
     _, normalized, final = _forward(tt, g["uni_context"], g["uni_horizon"])
-    p_uni = pcc(g["uni_head_readout"], normalized), pcc(g["uni_raw21"], final)
     assert final.shape == g["uni_raw21"].shape
+    check("paths_uni_h40", FLOORS["coverage"], g["uni_head_readout"], normalized, g["uni_raw21"], final, strict=False)
     prepared = tt.prepare_inputs(g["multi_context"], 64, mask=g["multi_mask"])
     assert prepared.group_size == 3 and prepared.group_mask is not None and prepared.time_mask is not None
     normalized = tt.network(prepared)
     final = tt.predict(g["multi_context"], 64, q, mask=g["multi_mask"])
-    p_multi = pcc(g["multi_head_readout"], normalized), pcc(g["multi_raw21"], final)
+    check(
+        "paths_multi_masked",
+        FLOORS["coverage"],
+        g["multi_head_readout"],
+        normalized,
+        g["multi_raw21"],
+        final,
+        strict=False,
+    )
     settings = dict(trim_leading_missing=True, symmetric_averaging=True, clip_nonnegative=True, snap_integers=True)
     p_gift = pcc(g["multi_gift21"], tt.predict(g["multi_context"], 64, q, **settings))
-    print(
-        f"\n[pcc] paths: uni h40 {p_uni[0]:.6f} / {p_uni[1]:.6f}, multi masked {p_multi[0]:.6f} / {p_multi[1]:.6f}, gift {p_gift:.6f}"
-    )
-    assert min(p_uni[0], p_multi[0]) >= 0.999 and min(p_uni[1], p_multi[1], p_gift) >= 0.99
+    print(f"\n[pcc] paths gift21 (GIFT-Eval settings): pcc_final {p_gift:.6f}")
+    assert p_gift >= 0.99

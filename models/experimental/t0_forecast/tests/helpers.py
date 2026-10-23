@@ -35,7 +35,63 @@ def pcc(expected: torch.Tensor, got: torch.Tensor) -> float:
     if not (torch.isfinite(a).all() and torch.isfinite(b).all()):
         return float("nan")
     a, b = a - a.mean(), b - b.mean()
-    return float((a @ b) / (a.norm() * b.norm()).clamp(min=1e-300))
+    if float(a.norm()) == 0.0 or float(b.norm()) == 0.0:
+        return 0.0  # a constant carries no correlation (a fully collapsed spread)
+    return float((a @ b) / (a.norm() * b.norm()))
+
+
+def quantile_metrics(expected: torch.Tensor, got: torch.Tensor) -> dict:
+    """Gate metrics on read-out quantiles ``[rows, n, ps, Q]`` (asinh space):
+
+    ``pcc_normalized``  PCC over everything (dominated by each row's level)
+    ``pcc_spread``      PCC of ``h - mean_q(h)``: the quantile spread around each step's centre
+    ``pcc_row_p01``, ``pcc_row_min``  per-row PCC of ``h``, 1st percentile and minimum over rows
+    """
+    e, g = expected.double(), got.double()
+    centre = lambda t: t - t.mean(dim=-1, keepdim=True)
+    rows = torch.tensor([pcc(e[r], g[r]) for r in range(e.shape[0])], dtype=torch.float64)
+    rows = torch.nan_to_num(rows, nan=-1.0)
+    return {
+        "pcc_normalized": pcc(e, g),
+        "pcc_spread": pcc(centre(e), centre(g)),
+        "pcc_row_p01": float(torch.quantile(rows, 0.01)),
+        "pcc_row_min": float(rows.min()),
+    }
+
+
+# Gate floors per case class (proposed at the G1 re-raise; the orchestrator sets the final values). Shared by the
+# PCC suite (tests/pcc/test_model.py) and the bench records (``floor_ok``).
+FLOORS = {
+    "accuracy": {
+        "pcc_normalized": 0.999,
+        "pcc_spread": 0.998,
+        "pcc_row_p01": 0.995,
+        "pcc_row_min": 0.98,
+        "pcc_final": 0.99,
+    },
+    "performance": {
+        "pcc_normalized": 0.995,
+        "pcc_spread": 0.99,
+        "pcc_row_p01": 0.98,
+        "pcc_row_min": 0.95,
+        "pcc_final": 0.98,
+    },
+    # Branch-coverage inputs (e2e, paths: the smooth generator, counts, gaps). Per-row PCC is reported, not gated:
+    # it is ill-conditioned on rows whose quantiles span ~1 % of their level (e2e row 9: std 0.013 in asinh space,
+    # so a 0.002 absolute error reads 0.979).
+    "coverage": {"pcc_normalized": 0.999, "pcc_spread": 0.998, "pcc_final": 0.99},
+    "single": {"pcc_normalized": 0.999, "pcc_spread": 0.999, "pcc_final": 0.99},
+    "single_long": {"pcc_normalized": 0.9975, "pcc_spread": 0.998, "pcc_final": 0.99},
+}
+
+
+def meets(metrics: dict, floors: dict) -> bool:
+    return all(metrics[k] >= v for k, v in floors.items() if k in metrics)
+
+
+def collapsed(t: torch.Tensor) -> torch.Tensor:
+    """Every quantile replaced by the mean over the quantile axis (the bf16-softplus failure, at its worst)."""
+    return t.mean(dim=-1, keepdim=True).expand_as(t).contiguous()
 
 
 def module_inputs(x: torch.Tensor, group_ids, variate_type, mask) -> host.T0HostInputs:
