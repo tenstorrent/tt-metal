@@ -116,7 +116,7 @@ void kernel_main() {
     constexpr bool network_stable = stable_sort && !fused_keys;
 
     // Runtime args
-    std::uint32_t direction_init = get_arg_val<std::uint32_t>(0);
+    const auto direction_init = get_arg_val<std::uint32_t>(0);
 
     // Constants
     // Dest indices for where to unpack the tiles for the llk
@@ -144,7 +144,7 @@ void kernel_main() {
 
     // Process each height row independently
     for (std::uint32_t ht = 0; ht < Ht; ++ht) {
-        bool ascending = !largest;  // Sort direction for bitonic sequence properties
+        bool ascending = largest == 0;  // Sort direction for bitonic sequence properties
 
         // Initial bitonic sort on local width chunk
         process_and_sort_tiles<network_stable, fused_keys, largest != 0, tie_order>(
@@ -178,11 +178,11 @@ void kernel_main() {
                 input_dest_end,              // Destination register 1 (second tile)
                 index_dest_start,            // Destination register 2 (first indices)
                 index_dest_end,              // Destination register 3 (second indices)
-                !direction_init,             // Base sort direction
+                direction_init == 0,         // Base sort direction
                 switch_dir,                  // Whether to switch direction per iteration
                 logk,                        // log2(K) for bitonic network depth
                 seq_per_2tiles,              // Sequences that fit in 2 tiles
-                largest);                    // Find largest (true) or smallest (false)
+                largest != 0);               // Find largest (true) or smallest (false)
         }  // m_iter loop
 
         // Extract and prepare local TopK results for transmission
