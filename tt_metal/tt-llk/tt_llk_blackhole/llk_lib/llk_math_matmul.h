@@ -380,9 +380,22 @@ inline void matmul_configure_mop(
     const std::uint32_t replay_buf_len =
         (is_in0_16x32 && is_in1_32x16) ? 4 : ((is_in0_16x32 || is_in1_32x16 || is_in0_32x16 || is_in1_16x32) ? (partial_face ? 4 : 8) : 16);
 
+    // The last phase ends on a MVMUL that clears the held source and resets the fidelity phase through ADDR_MOD_3,
+    // so the MOP needs no end op slot.
+    constexpr bool endfold = high_fidelity && !load_only;
+    if constexpr (endfold)
+    {
+        addr_mod_t {
+            .srca     = {.incr = 0, .clr = 1, .cr = 1},
+            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+            .dest     = {.incr = 0, .clr = 1, .cr = 1},
+            .fidelity = {.incr = 0, .clr = 1},
+        }
+            .set(ADDR_MOD_3);
+    }
     load_replay_buf(
         ckernel::math::replay_buf_offset,
-        replay_buf_len,
+        endfold ? replay_buf_len - 1 : replay_buf_len,
         // Lambda function to load reply buffer
         [high_fidelity, reuse_a, partial_face, is_in1_32x16, in1_alt, is_in0_16x32, is_in0_32x16, is_in1_16x32, t_dim]
         {
@@ -468,7 +481,10 @@ inline void matmul_configure_mop(
             if constexpr (high_fidelity)
             {
                 // TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B3A3 or B3A2 // reset srca/srcb/dest, increment phase (addr_mod_5)
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0); // B3A3 or B3A2 // reset srca/srcb/dest, increment phase (addr_mod_5)
+                if constexpr (!endfold)
+                {
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0); // B3A3 or B3A2 // reset srca/srcb/dest, increment phase (addr_mod_5)
+                }
             }
             else
             {
@@ -490,6 +506,17 @@ inline void matmul_configure_mop(
 
     // TODO: can we commonize this?
     constexpr std::uint32_t inner_loops = high_fidelity ? to_underlying(math_fidelity) : 1;
+    if constexpr (endfold)
+    {
+        ckernel_template tmp(
+            1 /* outer loop */,
+            inner_loops,
+            lltt::replay_insn(ckernel::math::replay_buf_offset, replay_buf_len - 1),
+            TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0));
+        tmp.set_last_outer_loop_instr(TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_3, 0));
+        tmp.program();
+        return;
+    }
     ckernel_template tmp(1 /* outer loop */, inner_loops, lltt::replay_insn(ckernel::math::replay_buf_offset, replay_buf_len));
 
     if constexpr (high_fidelity)
