@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from loguru import logger
 from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, effective_matmul_ring_size
 from ttnn.operations.ccl import MoEActivationFunction
 
@@ -56,6 +57,40 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.decode_matmul import (
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn.prefill_dense import Qwen38TTNNPrefillDense, prefill_linear
 from models.tt_transformers.tt.ccl import tt_all_reduce
+
+_MOE_ALLREDUCE_LINKS_ENV = "QWEN38_MOE_ALLREDUCE_LINKS"
+_MOE_ALLREDUCE_TP_AXIS = 1
+_MOE_ALLREDUCE_LINKS_LOGGED: set[tuple[int, str]] = set()  # log each resolved setting once per process
+
+
+def _resolve_moe_allreduce_links(tt_ccl) -> int:
+    """Link count for the MoE output all-reduce, resolved once per MoE instance.
+
+    The all-reduce runs with ``cluster_axis=0`` (extent 1 on the (1, 4) mesh), so the helper's own link query finds
+    no links on that axis, warns and falls back to 1.  Passing the count explicitly skips that query.
+
+    ``QWEN38_MOE_ALLREDUCE_LINKS``: unset or ``1`` -> 1; integer N >= 1 -> N;
+    ``auto`` -> the available links on the real TP axis (axis 1 of the (1, 4) mesh).
+    """
+    raw = os.environ.get(_MOE_ALLREDUCE_LINKS_ENV, "").strip().lower()
+    if raw in ("", "1"):
+        links = 1
+    elif raw == "auto":
+        links = int(tt_ccl.get_num_links(_MOE_ALLREDUCE_TP_AXIS))
+    else:
+        try:
+            links = int(raw)
+        except ValueError:
+            raise ValueError(
+                f"{_MOE_ALLREDUCE_LINKS_ENV} must be unset, 'auto' or an integer >= 1, got {raw!r}"
+            ) from None
+        if links < 1:
+            raise ValueError(f"{_MOE_ALLREDUCE_LINKS_ENV} must be >= 1, got {links}")
+    if (links, raw) not in _MOE_ALLREDUCE_LINKS_LOGGED:
+        _MOE_ALLREDUCE_LINKS_LOGGED.add((links, raw))
+        logger.info("MoE output all-reduce links: {} ({}={!r})", links, _MOE_ALLREDUCE_LINKS_ENV, raw or None)
+    return links
+
 
 HIDDEN_SIZE = 2560
 INTERMEDIATE_SIZE = 640
@@ -541,6 +576,7 @@ class Qwen38TTNNMoE:
         # layer's exact same ``weights`` object without another copy.
         self.weights = weights
         self.collective_topology = collective_topology or ttnn.Topology.Linear
+        self.allreduce_links = _resolve_moe_allreduce_links(tt_ccl)
         self.prefill_dense = Qwen38TTNNPrefillDense.resolve(prefill_dense, mesh_device)
         self.row_contract = row_contract
         self.rows = self.row_contract.rows
@@ -1991,6 +2027,8 @@ class Qwen38TTNNMoE:
                 self.tt_ccl,
                 cluster_axis=0,
                 dim=3,
+                num_reduce_scatter_links=self.allreduce_links,
+                num_all_gather_links=self.allreduce_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=self.collective_topology,
             )

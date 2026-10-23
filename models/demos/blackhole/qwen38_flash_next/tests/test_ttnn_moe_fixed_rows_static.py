@@ -550,6 +550,7 @@ def test_five_row_forward_validates_reduce_scatter_shape_and_topology() -> None:
     local_sum = _FakeTensor(contract.full_hidden)
     output = _FakeTensor(contract.output_sharded)
     module.collective_topology = object()
+    module.allreduce_links = 1
     module._all_gather_hidden = mock.Mock(return_value=full_hidden)
     module._route = mock.Mock(return_value=routing)
     module._routed_partial = mock.Mock(return_value=routed_partial)
@@ -578,6 +579,8 @@ def test_five_row_forward_validates_reduce_scatter_shape_and_topology() -> None:
         module.tt_ccl,
         cluster_axis=0,
         dim=3,
+        num_reduce_scatter_links=1,
+        num_all_gather_links=1,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         topology=module.collective_topology,
     )
