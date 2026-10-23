@@ -396,13 +396,17 @@ def test_prefill_trace_eager_hf_parity(batch_size, prefill_len, mesh_device, res
     # The direct-model reference prefills with page_table=None (a minimal tile-aligned kernel); under bounded
     # sliding its deferred ring fill needs the ring tables (paged_fill_cache: modulo must be a multiple of the
     # block), so that reference is skipped there and the Generator eager path is the reference.
+    # The trace audit first (traced vs eager Generator), the HF references after: the direct-model reference's own
+    # agreement with HF (a minimal 32-token kernel on an MoE whose routing is chaotic at that length) must not mask the
+    # traced-vs-eager verdict (batch-32 x 128 on the 26B (4,1): traced == eager on all 32 first tokens while the direct
+    # reference sat at 0.91 vs HF, 2026-10-23).
+    _assert_parity("traced vs eager (Generator)", out_eager, out_trace, request)
     out_direct = None if bounded else _run_direct_model_prefill_last_logit(generator, tokens, prompt_lens).float()
-    if out_direct is not None:
-        _assert_parity("direct model prefill vs HF", hf_last_eager, out_direct, request)
     if out_direct is None and prompt_len >= prefill_len:
         _assert_parity("eager (Generator) vs HF", hf_last_trace, out_eager, request)
-    _assert_parity("traced vs eager (Generator)", out_eager, out_trace, request)
     if prompt_len >= prefill_len:
         _assert_parity("traced vs HF", hf_last_trace, out_trace, request)
         if out_direct is not None:
             _assert_parity("traced vs direct model prefill", out_direct, out_trace, request)
+    if out_direct is not None:
+        _assert_parity("direct model prefill vs HF", hf_last_eager, out_direct, request)
