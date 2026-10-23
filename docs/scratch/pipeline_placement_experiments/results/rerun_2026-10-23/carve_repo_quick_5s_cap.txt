@@ -1,0 +1,15 @@
+4x8 ring of 32 x 1x1 (fills)                 area 32/32 | dfs yes    0.001s | sat yes    0.014s
+2x16 ring of 32 x 1x1 (fills)                area 32/32 | dfs yes    0.001s | sat yes    0.014s
+5x5 ring of 25 x 1x1 (odd: none)             area 25/25 | dfs no     0.637s | sat no     0.015s
+1x8 ring of 3 x 1x1 (line: none)             area  3/8  | dfs no     0.000s | sat no     0.001s
+4x8: 1x1, 1x2 x6, 2x2 x4, 1x1                area 30/32 | dfs yes    0.002s | sat yes    0.011s
+8x4: 1x1, 2x1 x6, 2x2 x4, 1x1                area 30/32 | dfs yes    0.001s | sat yes    0.011s
+2x16: 1x1, 1x2 x15, 1x1                      area 32/32 | dfs yes    0.001s | sat yes    0.012s
+2x16: 1x1, 2x2 x7, 1x1 (fills 30/32)         area 30/32 | dfs no     0.001s | sat no     0.005s
+4x8: 2x4 x4 (fills, ring of 4)               area 32/32 | dfs yes    0.000s | sat yes    0.004s
+random 8x8: 30 stages                        area 64/64 | dfs ??? >5s    | sat ??? >5s   
+random 2x16: 14 stages                       area 30/32 | dfs no     0.002s | sat no     0.010s
+random 8x8: 29 stages                        area 64/64 | dfs yes    3.207s | sat ??? >5s   
+random 8x8: 31 stages                        area 63/64 | dfs yes    1.783s | sat yes    3.142s
+random 8x8: 34 stages                        area 64/64 | dfs ??? >5s    | sat ??? >5s   
+random 8x8: 37 stages                        area 64/64 | dfs yes    0.068s | sat yes    0.546s

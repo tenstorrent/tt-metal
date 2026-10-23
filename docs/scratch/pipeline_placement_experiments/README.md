@@ -42,7 +42,8 @@ Knobs, as environment variables: `PER_MGD` (pipelines per fabric, default 3), `M
 (largest fabric to include, default 8; the blitz rings go to 144), `CASE_TIMEOUT` (seconds per
 case, default 1), `SEED`, `OUT` (output directory, default `./.out`), `BUILD_DIR` (tt-metal build
 used for CaDiCaL, default `build_Debug`), `TT_BLAZE`, `CARVE_TIMEOUT` (seconds per carve solve;
-each solve runs in a child process that is killed, since an alarm cannot interrupt CaDiCaL).
+each solve runs in a child process that is killed, since an alarm cannot interrupt CaDiCaL),
+`CADICAL_SRC` and `CADICAL_LIB` (see below).
 
 **Keep runs small on shared machines.** The large settings used for the results below
 (`PER_MGD=20 MAX_MESHES=1000 CASE_TIMEOUT=3`) took about 16 minutes, mostly in cases that hit the
@@ -52,7 +53,13 @@ cap. The slow cases are opt-in with `big`: `./run_experiments.sh resolver big` (
 
 Recorded outputs are in `results/`: the full Tier B run, and the quick runs of `resolver`,
 `resolver_sat`, `carve`, `carve_repo` (with `CARVE_TIMEOUT=5`) and `planner` (tt-blaze
-`45d3be26c4`) from 2026-10-22.
+`45d3be26c4`) from 2026-10-22. A full rerun from 2026-10-23, with the answers to "should Tier B
+check anything" and "SAT or DFS in Tier C", is in
+[`results/rerun_2026-10-23/REPORT.md`](results/rerun_2026-10-23/REPORT.md).
+
+`resolver_sat` takes its CaDiCaL from the tt-metal build. If the CPM source cache is gone, point
+`CADICAL_SRC` at a CaDiCaL `rel-2.2.1` checkout; if the build is Debug, its archive is unoptimized
+and every SAT time is about 10x slower, so point `CADICAL_LIB` at an `-O3` build.
 
 ## 1. Tier B: simple checks vs full search
 

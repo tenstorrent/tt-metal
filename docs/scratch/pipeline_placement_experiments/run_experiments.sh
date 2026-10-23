@@ -107,13 +107,21 @@ resolver() {
     [[ "${1:-}" == big ]] || echo "  skipped: 'odd' (5x7 takes > 120 s) and 'big' (> 120 s); run: $0 resolver big"
 }
 
+# CaDiCaL comes from the tt-metal build: the header from the CPM source checkout and the archive from
+# $BUILD_DIR/third_party. CADICAL_SRC overrides the source dir (the CPM cache can be gone while the
+# archive is still there), CADICAL_LIB the archive. A Debug build's archive is unoptimized and makes
+# every SAT time here about 10x slower; use a RelWithDebInfo/Release build, or build CaDiCaL with -O3
+# yourself and point CADICAL_LIB at it.
 resolver_sat() {
-    local src
-    src="$(sed -n 's/^CPM_PACKAGE_cadical_SOURCE_DIR:INTERNAL=//p' "$BUILD_DIR/CMakeCache.txt" 2>/dev/null || true)"
-    local lib="$BUILD_DIR/third_party/libcadical.a"
-    if [[ -z "$src" || ! -f "$lib" ]]; then
-        echo "resolver_sat: needs a tt-metal build (BUILD_DIR=$BUILD_DIR) with CaDiCaL; skipping"
+    local src="${CADICAL_SRC:-}"
+    [[ -n "$src" ]] || src="$(sed -n 's/^CPM_PACKAGE_cadical_SOURCE_DIR:INTERNAL=//p' "$BUILD_DIR/CMakeCache.txt" 2>/dev/null || true)"
+    local lib="${CADICAL_LIB:-$BUILD_DIR/third_party/libcadical.a}"
+    if [[ ! -f "$src/src/cadical.hpp" || ! -f "$lib" ]]; then
+        echo "resolver_sat: needs cadical.hpp (CADICAL_SRC=$src) and libcadical.a (CADICAL_LIB=$lib); skipping"
         return 0
+    fi
+    if [[ -z "${CADICAL_LIB:-}" ]] && grep -q '^CMAKE_BUILD_TYPE:STRING=Debug$' "$BUILD_DIR/CMakeCache.txt" 2>/dev/null; then
+        echo "resolver_sat: $BUILD_DIR is a Debug build; its CaDiCaL is unoptimized (times about 10x slower)"
     fi
     log "CaDiCaL encoding of the same ring placement ${1:-quick}; 60 s cap (the big case takes > 230 s)"
     g++ -O2 -std=c++20 -I "$src/src" -o "$OUT/resolver_sat" "$HERE/resolver/sat.cpp" "$lib"
