@@ -4,8 +4,9 @@
 // NCRISC (NOC 0): this core's columns of its DRAM bank's weight tiles, streamed into cb_w block by block.
 //
 // The DRAM-interleaved w [K, 8 * cpb * 32] puts tile column n in bank n % 8, so bank b holds kt rows of cpb tiles
-// (columns b, b + 8, ...), contiguous per row. The cores of bank b split the cpb slots: this core reads its row_bytes
-// at col_offset of every row as one packet, a block of block_rows rows landing as [rows][cols].
+// (columns b, b + 8, ...), contiguous per row. The cores of bank b split the cpb slots: this core reads read_bytes
+// (<= row_bytes: its slots that hold real columns, not the zero padding) at col_offset of every row as one packet, a
+// block of block_rows rows landing as [rows][cols] (row stride row_bytes; unread slots feed only unwritten columns).
 //
 // With start_count > 0 the stream starts once semaphore start_sem reaches start_count (a producer in the same launch
 // has finished its own DRAM stream), and with num_buffers = num_blocks the whole slice lands in cb_w before x does
@@ -32,6 +33,7 @@ void kernel_main() {
     const uint32_t vc = get_arg_val<uint32_t>(1);
     const uint32_t w_addr = get_arg_val<uint32_t>(2);
     const uint32_t col_offset = get_arg_val<uint32_t>(3);
+    const uint32_t read_bytes = get_arg_val<uint32_t>(4);
 
     if constexpr (start_count > 0) {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(start_sem)), start_count);
@@ -41,7 +43,7 @@ void kernel_main() {
     // not pushed, and each reserve covers them plus the new block.
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
     const uint64_t w_noc_base = get_noc_addr_from_bank_id<true>(bank_id, w_addr);
-    noc_async_read_one_packet_set_state<true>(w_noc_base, row_bytes, vc);
+    noc_async_read_one_packet_set_state<true>(w_noc_base, read_bytes, vc);
     const uint32_t cb_base = get_write_ptr(cb_w);
 
     uint32_t issued = 0;

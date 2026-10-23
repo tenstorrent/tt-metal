@@ -91,15 +91,33 @@ class BankStreamMatmul:
     IN_FLIGHT = 3
     MAX_PACKET = 16384
     MAX_DEST = 4  # fp32 tiles in half-sync Dest
-    CB_X, CB_W, CB_OUT, CB_ZERO = 0, 1, 2, 3
+    CB_X, CB_W, CB_OUT, CB_ZERO, CB_PART, CB_GATHER = 0, 1, 2, 3, 4, 5
     SEM_X = 0  # tiles of x the bank's loader has landed
+    SEM_PART = 3  # k_split: partials landed in this core's cb_gather
 
-    def __init__(self, plan, k, n, compute_kernel_config, skip_bank_core=False, group=None, avoid=(), x_rows=TILE):
+    def __init__(
+        self,
+        plan,
+        k,
+        n,
+        compute_kernel_config,
+        skip_bank_core=False,
+        group=None,
+        avoid=(),
+        x_rows=TILE,
+        own_rows=False,
+        k_split=False,
+    ):
         """``skip_bank_core``: use the ``group`` (default GROUP) cores after each bank core in its row instead of
         starting at it. A group larger than GROUP takes GROUP cores per row, the bank core's row first and then the
         nearest rows (the same columns, close to the bank); ``avoid``: logical (x, y) cores to leave free (another
         section of the same launch). ``x_rows``: the height of the x and output tiles in L1 (8, 16 or 32): the users
-        sit in rows 0-3, and a shorter x tile cuts the matmul per K tile (4 of a full tile's 16 MVMULs at 8 rows)."""
+        sit in rows 0-3, and a shorter x tile cuts the matmul per K tile (4 of a full tile's 16 MVMULs at 8 rows).
+        ``own_rows`` (group <= GROUP): give every bank group a core row no other group uses (its bank core's row when
+        that is free, else the nearest such row, south first, rows with ``avoid`` cores last), so no two groups' DRAM
+        streams share a row's NoC links; the greedy order above when no such row is left. ``k_split`` (``section``
+        only): the group's cores split K instead of the columns (each streams every column slot of its K slice and
+        accumulates them in full-sync Dest), then each core sums the group's fp32 partials of its own columns."""
         assert x_rows in (8, 16, TILE), x_rows
         self.x_rows = x_rows
         device = plan.mesh_device
@@ -112,20 +130,41 @@ class BankStreamMatmul:
         assert k % TILE == 0 and n % TILE == 0 and self.cpb % self.group == 0, (k, n)
         self.cpc = self.cpb // self.group
         assert self.cpc <= self.MAX_DEST, self.cpc
+        self.k_split = self.group if k_split else 0
+        if self.k_split:
+            kq = self.kt // self.k_split
+            assert self.group <= self.GROUP and kq * self.k_split == self.kt and kq % self.banks == 0, (k, n)
+            assert self.cpb <= 2 * self.MAX_DEST and x_rows in (16, TILE), (self.cpb, x_rows)
+            assert compute_kernel_config.fp32_dest_acc_en
         grid = device.compute_with_storage_grid_size()
         bank_cores = list(dram_bank_cores(device))
         taken, self.cores, self.slots = set(avoid), [], []
         if skip_bank_core:
             taken |= {(c.x, c.y) for c in bank_cores}
+        avoid_rows = {y for _, y in avoid}
+        group_rows = set()
         for b, c in enumerate(bank_cores):
-            picked = []
-            for y in sorted(range(grid.y), key=lambda y: (abs(y - c.y), y)):
-                row = [(x, y) for x in list(range(c.x, grid.x)) + list(range(c.x - 1, -1, -1))]
-                picked += [p for p in row if p not in taken][: min(self.GROUP, self.group - len(picked))]
-                taken.update(picked)
-                if len(picked) == self.group:
-                    break
+            order = list(range(c.x, grid.x)) + list(range(c.x - 1, -1, -1))
+            picked = None
+            if own_rows and self.group <= self.GROUP:
+                near = sorted((y for y in range(grid.y) if y != c.y), key=lambda y: (abs(y - c.y), y < c.y))
+                rows = [c.y] + [y for y in near if y not in avoid_rows] + [y for y in near if y in avoid_rows]
+                for y in rows:
+                    free = [(x, y) for x in order if (x, y) not in taken]
+                    if y not in group_rows and len(free) >= self.group:
+                        picked = free[: self.group]
+                        break
+            if picked is None:
+                picked = []
+                for y in sorted(range(grid.y), key=lambda y: (abs(y - c.y), y)):
+                    row = [(x, y) for x in order]
+                    picked += [p for p in row if p not in taken][: min(self.GROUP, self.group - len(picked))]
+                    taken.update(picked)
+                    if len(picked) == self.group:
+                        break
             assert len(picked) == self.group, (b, c)
+            taken.update(picked)
+            group_rows.update(y for _, y in picked)
             for q, (x, y) in enumerate(picked):
                 self.cores.append(ttnn.CoreCoord(x, y))
                 self.slots.append((b, q))
@@ -137,17 +176,24 @@ class BankStreamMatmul:
             math_fidelity=cfg.math_fidelity,
             math_approx_mode=cfg.math_approx_mode,
             fp32_dest_acc_en=cfg.fp32_dest_acc_en,
-            dst_full_sync_en=False,
+            dst_full_sync_en=bool(self.k_split),
         )
+        if self.k_split:
+            modes = [ttnn.UnpackToDestMode.Default] * 64
+            modes[self.CB_GATHER] = ttnn.UnpackToDestMode.UnpackToDestFp32
+            self.compute_config.unpack_to_dest_mode = modes
 
-    def _sizes(self, w_dtype):
+    def _sizes(self, w_dtype, k_split=0):
+        """(weight tile bytes, bytes per K row a core reads, K rows per block, K tiles per core, matmul columns)."""
         w_tile = ttnn.Tile([TILE, TILE]).get_tile_size(w_dtype)
-        row_bytes = self.cpc * w_tile
+        cols = self.cpb if k_split else self.cpc
+        kt = self.kt // k_split if k_split else self.kt
+        row_bytes = cols * w_tile
         assert row_bytes <= self.MAX_PACKET
-        block_rows = max(1, min(self.kt, self.BLOCK_BYTES // row_bytes))
-        while self.kt % block_rows:
+        block_rows = max(1, min(kt, self.BLOCK_BYTES // row_bytes))
+        while kt % block_rows:
             block_rows -= 1
-        return w_tile, row_bytes, block_rows
+        return w_tile, row_bytes, block_rows, kt, cols
 
     def x_loaders(self, x):
         """Per bank, the NoC coordinate of the core that reads x for its group, or None when every core reads x
@@ -206,7 +252,9 @@ class BankStreamMatmul:
                 skip_bank_core=True,
                 group=cls.PREFETCH_GROUP,
                 avoid=avoid,
-                x_rows=8,
+                x_rows=16,
+                own_rows=True,
+                k_split=True,
             )
         except AssertionError:
             return None
@@ -258,9 +306,13 @@ class BankStreamMatmul:
         if compact:
             compact_tiles = self.n // TILE // (TILE // 4)
             assert out.shape[-1] == compact_tiles * TILE and out.memory_config().buffer_type == ttnn.BufferType.DRAM
-        w_tile, row_bytes, block_rows = self._sizes(w.dtype)
-        num_blocks = self.kt // block_rows
-        block_tiles = block_rows * self.cpc
+        ks = self.k_split if prefetch is not None else 0
+        w_tile, row_bytes, block_rows, kt_core, mm_cols = self._sizes(w.dtype, ks)
+        num_blocks = kt_core // block_rows
+        block_tiles = block_rows * mm_cols
+        # k_split: every core reads its x slice in one batch; the output is a full tile (its partials are)
+        x_blocks, x_block_rows = (1, kt_core) if ks else (num_blocks, block_rows)
+        out_rows = TILE if ks else self.x_rows
         num_buffers, in_flight = self.NUM_BUFFERS, self.IN_FLIGHT
         start_sem = start_count = x_sem = x_count = 0
         if prefetch is not None:
@@ -276,18 +328,36 @@ class BankStreamMatmul:
                 if q:
                     peers[b].append(noc)
         share_len = 4 + 2 * max(len(p) for p in peers)
+        owners = [[] for _ in range(self.banks)]
+        for (b, q), noc in sorted(zip(self.slots, self.noc_cores), key=lambda s: s[0]):
+            owners[b].append(noc)
+        x_tile = ttnn.Tile([TILE, TILE]).get_tile_size(x.dtype)
         reader_rt, writer_rt = [], []
         for (b, q), vc in zip(self.slots, self.vcs):
             first = b + self.banks * q * self.cpc
             valid = sum(1 for j in range(self.cpc) if first + self.banks * j < nt)
-            reader_rt.append([b, vc, w_addr, q * row_bytes])
+            if ks:
+                # K rows [q * kt_core, (q + 1) * kt_core), every slot with a real column
+                bank_valid = sum(1 for j in range(self.cpb) if b + self.banks * j < nt)
+                reader_rt.append([b, vc, w_addr, q * kt_core * self.cpb * w_tile, max(1, bank_valid) * w_tile])
+            else:
+                # only the slots with real columns (the valid ones come first); the rest are prepare's zero padding
+                reader_rt.append([b, vc, w_addr, q * row_bytes, max(1, valid) * w_tile])
             if loaders is None:
                 share = [0, 0, 0, 0]
             elif q == 0:
-                share = [1, 0, 0, len(peers[b])] + [v for c in peers[b] for v in (c.x, c.y)]
+                role = 4 if ks else 1
+                share = [role, 0, 0, len(peers[b])] + [v for c in peers[b] for v in (c.x, c.y)]
+            elif ks:
+                share = [3, 0, 0, 0]
             else:
                 share = [2, loaders[b].x, loaders[b].y, 0]
-            writer_rt.append([x_addr, out_addr, first, valid] + share + [0] * (share_len - len(share)))
+            # k_split: x tile k of this core is tile q * kt_core + k (kt_core is a multiple of the bank count)
+            xa = x_addr + (q * kt_core // self.banks) * x_tile if ks else x_addr
+            args = [xa, out_addr, first, valid] + share + [0] * (share_len - len(share))
+            if ks:
+                args += [q] + [v for c in owners[b] for v in (c.x, c.y)]
+            writer_rt.append(args)
 
         ranges = _ranges(self.cores)
         reader = _kernel(
@@ -309,11 +379,16 @@ class BankStreamMatmul:
             ttnn.ReaderConfigDescriptor(),
         )
         cbs = [
-            _cb(self.CB_X, x.dtype, self.kt, ranges, rows=self.x_rows),
+            _cb(self.CB_X, x.dtype, kt_core, ranges, rows=self.x_rows),
             _cb(self.CB_W, w.dtype, num_buffers * block_tiles, ranges),
-            _cb(self.CB_OUT, x.dtype, self.cpc, ranges, rows=self.x_rows),
+            _cb(self.CB_OUT, x.dtype, self.cpc, ranges, rows=out_rows),
             _cb(self.CB_ZERO, x.dtype, 1, ranges),
         ]
+        if ks:
+            cbs += [
+                _cb(self.CB_PART, ttnn.float32, self.cpb, ranges),
+                _cb(self.CB_GATHER, ttnn.float32, ks * self.cpc, ranges),
+            ]
         writer = _kernel(
             "proj_writer.cpp",
             self.cores,
@@ -322,8 +397,8 @@ class BankStreamMatmul:
                 self.CB_OUT,
                 self.CB_ZERO,
                 x_dram,
-                num_blocks,
-                block_rows,
+                x_blocks,
+                x_block_rows,
                 self.cpc,
                 self.banks,
                 self.SEM_X,
@@ -331,6 +406,12 @@ class BankStreamMatmul:
                 x_sem,
                 x_count,
                 self.x_rows,
+                out_rows,
+                ks,
+                self.SEM_PART if ks else 0,
+                self.CB_PART,
+                self.CB_GATHER,
+                4 + share_len,
             ],
             writer_rt,
             ttnn.WriterConfigDescriptor(),
@@ -338,13 +419,26 @@ class BankStreamMatmul:
         compute = _kernel(
             "proj_compute.cpp",
             self.cores,
-            [self.CB_X, self.CB_W, self.CB_OUT, num_blocks, block_rows, self.cpc],
+            [
+                self.CB_X,
+                self.CB_W,
+                self.CB_OUT,
+                num_blocks,
+                block_rows,
+                mm_cols,
+                ks,
+                self.CB_PART,
+                self.CB_GATHER,
+                self.cpc,
+            ],
             [[] for _ in self.cores],
             self.compute_config,
         )
         semaphores = [_semaphore(ranges)] if loaders is not None else []
         if prefetch is not None:
             semaphores += [_semaphore(ranges, start_sem), _semaphore(ranges, x_sem)]
+        if ks:
+            semaphores.append(_semaphore(ranges, self.SEM_PART))
         return [reader, writer, compute], cbs, semaphores
 
 
@@ -446,7 +540,7 @@ class RouterScoreStream:
             "proj_reader.cpp",
             self.cores,
             [self.CB_W, num_blocks, 1, self.BLOCK_TILES, packet, packet, num_blocks + 1, num_blocks, 0, 0],
-            [[b, vc, w_addr, q * self.kq * w_tile] for (b, q), vc in zip(self.slots, self.vcs)],
+            [[b, vc, w_addr, q * self.kq * w_tile, packet] for (b, q), vc in zip(self.slots, self.vcs)],
             ttnn.ReaderConfigDescriptor(),
         )
         out_args = [x.buffer_address(), self.scores.buffer_address(), self.biased.buffer_address()]

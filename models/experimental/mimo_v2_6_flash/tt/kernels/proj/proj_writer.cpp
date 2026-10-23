@@ -12,6 +12,11 @@
 // their own. With x_wait_count > 0 a core that reads x from the tensor (roles 0 and 1) first waits until semaphore
 // x_wait_sem reaches x_wait_count: a producer in the same launch writes x and then raises it.
 //
+// Roles 3 and 4 (k_split): every core reads its own K slice of x from the tensor; the loader (4) waits for x and
+// raises the x semaphore of each peer (3) by one, which then reads. With k_split > 0 the core then sends rows 0-3 of
+// its fp32 partials of each group core's columns to slot q of that core's cb_gather, raises that core's part
+// semaphore, and hands compute its own cb_gather once all k_split partials have landed.
+//
 // Only rows 0-3 of x carry users and an output row depends only on the same x row, so the unread rows of cb_x
 // reach only output rows that are written as zeros.
 #include <cstdint>
@@ -39,6 +44,12 @@ void kernel_main() {
     constexpr uint32_t x_wait_sem = get_compile_time_arg_val(10);
     constexpr uint32_t x_wait_count = get_compile_time_arg_val(11);
     constexpr uint32_t x_rows = get_compile_time_arg_val(12);
+    constexpr uint32_t out_rows = get_compile_time_arg_val(13);
+    constexpr uint32_t k_split = get_compile_time_arg_val(14);
+    constexpr uint32_t part_sem_id = get_compile_time_arg_val(15);
+    constexpr uint32_t cb_part = get_compile_time_arg_val(16);
+    constexpr uint32_t cb_gather = get_compile_time_arg_val(17);
+    constexpr uint32_t part_args = get_compile_time_arg_val(18);
     constexpr uint32_t tile_bytes = 2048;  // bf16 32x32 (x and the output in their tensors)
     constexpr uint32_t face_bytes = 512;   // bf16 16x16
     constexpr uint32_t user_bytes = 128;   // rows 0-3 of a face
@@ -46,6 +57,9 @@ void kernel_main() {
     constexpr uint32_t l1_tile_bytes = x_rows * 64;
     constexpr uint32_t l1_face_bytes = (x_rows < 16 ? x_rows : 16) * 32;
     constexpr uint32_t x_read_bytes = l1_face_bytes + user_bytes;  // a peer's copy: rows 0-3 of faces 0 and 1
+    // cb_out tiles: out_rows x 32
+    constexpr uint32_t out_l1_tile_bytes = out_rows * 64;
+    constexpr uint32_t out_l1_face_bytes = (out_rows < 16 ? out_rows : 16) * 32;
 
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
     const uint32_t out_addr = get_arg_val<uint32_t>(1);
@@ -60,10 +74,19 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
 
     if constexpr (x_wait_count > 0) {
-        if (role != 2) {
+        if (role != 2 && role != 3) {
             noc_semaphore_wait_min(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(x_wait_sem)), x_wait_count);
         }
+    }
+    if (role == 4) {
+        for (uint32_t p = 0; p < num_peers; p++) {
+            const uint32_t px = get_arg_val<uint32_t>(8 + 2 * p);
+            const uint32_t py = get_arg_val<uint32_t>(9 + 2 * p);
+            noc_semaphore_inc(get_noc_addr(px, py, sem_addr), 1);
+        }
+    } else if (role == 3) {
+        noc_semaphore_wait_min(sem, 1);
     }
     cb_reserve_back(cb_x, num_blocks * block_rows);
     uint32_t x_l1 = get_write_ptr(cb_x);
@@ -104,6 +127,39 @@ void kernel_main() {
         zero[i] = 0;
     }
 
+    if constexpr (k_split > 0) {
+        constexpr uint32_t part_tile_bytes = 4096;  // fp32 32x32
+        constexpr uint32_t part_face_bytes = 1024;  // fp32 16x16
+        constexpr uint32_t part_user_bytes = 256;   // rows 0-3 of an fp32 face
+        constexpr uint32_t parts = k_split * cols;
+        const uint32_t q = get_arg_val<uint32_t>(part_args);
+        const uint32_t part_sem_addr = get_semaphore(part_sem_id);
+        const uint32_t gather = get_write_ptr(cb_gather);  // the same address on every core of the group
+        cb_wait_front(cb_part, parts);
+        const uint32_t part = get_read_ptr(cb_part);
+        for (uint32_t p = 0; p < k_split; p++) {
+            const uint32_t ox = get_arg_val<uint32_t>(part_args + 1 + 2 * p);
+            const uint32_t oy = get_arg_val<uint32_t>(part_args + 2 + 2 * p);
+            for (uint32_t j = 0; j < cols; j++) {
+                const uint32_t s = part + (p * cols + j) * part_tile_bytes;
+                const uint32_t d = gather + (q * cols + j) * part_tile_bytes;
+                noc_async_write(s, get_noc_addr(ox, oy, d), part_user_bytes);
+                noc_async_write(s + part_face_bytes, get_noc_addr(ox, oy, d + part_face_bytes), part_user_bytes);
+            }
+        }
+        noc_async_write_barrier();
+        for (uint32_t p = 0; p < k_split; p++) {
+            const uint32_t ox = get_arg_val<uint32_t>(part_args + 1 + 2 * p);
+            const uint32_t oy = get_arg_val<uint32_t>(part_args + 2 + 2 * p);
+            noc_semaphore_inc(get_noc_addr(ox, oy, part_sem_addr), 1);
+        }
+        cb_pop_front(cb_part, parts);
+        cb_reserve_back(cb_gather, parts);
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(part_sem_addr), k_split);
+        cb_push_back(cb_gather, parts);
+        noc_async_atomic_barrier();
+    }
+
     cb_wait_front(cb_out, cols);
     uint32_t src = get_read_ptr(cb_out);
     if constexpr (compact_tiles > 0) {
@@ -113,12 +169,12 @@ void kernel_main() {
             const uint64_t dst = page_noc_addr<true>(out_addr, n % compact_tiles, tile_bytes) +
                                  (c / 4) * 2 * face_bytes + (c % 4) * user_bytes;
             noc_async_write(src, dst, user_bytes);
-            noc_async_write(src + l1_face_bytes, dst + face_bytes, user_bytes);
-            src += l1_tile_bytes;
+            noc_async_write(src + out_l1_face_bytes, dst + face_bytes, user_bytes);
+            src += out_l1_tile_bytes;
         }
         noc_async_write_barrier();
         cb_pop_front(cb_out, cols);
-        if (role == 1) {
+        if (role == 1 || role == 4) {
             noc_async_atomic_barrier();
         }
         return;
@@ -127,13 +183,13 @@ void kernel_main() {
         const uint64_t dst = page_noc_addr<false>(out_addr, first_col + j * col_stride, tile_bytes);
         noc_async_write(src, dst, user_bytes);
         noc_async_write(zero_l1, dst + user_bytes, face_bytes - user_bytes);
-        noc_async_write(src + l1_face_bytes, dst + face_bytes, user_bytes);
+        noc_async_write(src + out_l1_face_bytes, dst + face_bytes, user_bytes);
         noc_async_write(zero_l1, dst + face_bytes + user_bytes, tile_bytes - face_bytes - user_bytes);
-        src += l1_tile_bytes;
+        src += out_l1_tile_bytes;
     }
     noc_async_write_barrier();
     cb_pop_front(cb_out, cols);
-    if (role == 1) {
+    if (role == 1 || role == 4) {
         noc_async_atomic_barrier();
     }
 }
