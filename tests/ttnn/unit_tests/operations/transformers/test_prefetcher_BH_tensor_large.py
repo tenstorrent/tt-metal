@@ -1722,6 +1722,8 @@ def test_tensor_prefetcher_gather_and_mcast_in0_share_pipes(device, gather_strea
 # Sparse matmul over PrefetcherPipes (device-selected experts)
 # ---------------------------------------------------------------------------
 _SPARSE_NUM_EXPERTS = 8
+# The fused expert weight is built by make_recv_contig_grouped_weight, which has no K-row-major form.
+_SPARSE_WEIGHT_LAYOUTS = {name: strategy for name, strategy in _MCAST_IN0_LAYOUTS.items() if strategy is not None}
 
 
 def _sparse_pipe_setup(device, weight_layout, per_core_N=1, dtype=ttnn.bfloat16, is_input_a_sparse=False):
@@ -1744,7 +1746,7 @@ def _sparse_pipe_setup(device, weight_layout, per_core_N=1, dtype=ttnn.bfloat16,
 
     torch.manual_seed(zlib.crc32(f"sparse_pipes_{weight_layout}_{per_core_N}_{dtype}_{is_input_a_sparse}".encode()))
     pt_weight = torch.randn(1, E, K, N)
-    distribution_strategy = _MCAST_IN0_PIPE_LAYOUTS[weight_layout]
+    distribution_strategy = _SPARSE_WEIGHT_LAYOUTS[weight_layout]
     tt_weight = _make_recv_contig_grouped_weight(
         device,
         pt_weight,
@@ -1847,7 +1849,7 @@ def _sparse_matmul_over_pipes(setup, pipes, sparsity, **kwargs):
     )
 
 
-@pytest.mark.parametrize("weight_layout", list(_MCAST_IN0_PIPE_LAYOUTS), ids=list(_MCAST_IN0_PIPE_LAYOUTS))
+@pytest.mark.parametrize("weight_layout", list(_SPARSE_WEIGHT_LAYOUTS), ids=list(_SPARSE_WEIGHT_LAYOUTS))
 @pytest.mark.parametrize("per_core_N", [1, 2], ids=["1tile", "2tile"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bfp8"])
 @pytest.mark.parametrize("nnz_given", [True, False], ids=["nnz_given", "nnz_none"])
@@ -1874,7 +1876,7 @@ def test_tensor_prefetcher_sparse_matmul_pipes(device, weight_layout, per_core_N
     ), "second sparse matmul over pipes did not hit the program cache"
 
 
-@pytest.mark.parametrize("weight_layout", list(_MCAST_IN0_PIPE_LAYOUTS), ids=list(_MCAST_IN0_PIPE_LAYOUTS))
+@pytest.mark.parametrize("weight_layout", list(_SPARSE_WEIGHT_LAYOUTS), ids=list(_SPARSE_WEIGHT_LAYOUTS))
 def test_tensor_prefetcher_sparse_matmul_pipes_input_a_sparse(device, weight_layout):
     """The down projection: A holds one [M, K] slice per expert ([1, E, M, K]), and in0 skips the
     masked-out experts' slices in step with the pipes skipping their weights."""
