@@ -32,7 +32,8 @@ inline void llk_math_compressed_custom_mm_init(const std::uint32_t operand0, con
     _llk_math_compressed_custom_mm_init_<transpose, split_acc, dense_packing>(operandB_face_r_dim);
 }
 
-template <bool finalize = true>
+// dense_packing must match llk_math_compressed_custom_mm_init's: it is the DEST stride a zero-tile skip steps over.
+template <bool finalize, bool dense_packing>
 inline void llk_math_compressed_custom_mm(
     const std::uint32_t operand0,
     const std::uint32_t operand1,
@@ -45,5 +46,6 @@ inline void llk_math_compressed_custom_mm(
     const std::uint32_t operandB_id = get_operand_id(operand0);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
 
-    _llk_math_compressed_custom_mm_<finalize>(base_address_meta, operandB_face_r_dim, dst_index, kt_dim, ct_dim);
+    _llk_math_compressed_custom_mm_<finalize, dense_packing>(
+        base_address_meta, operandB_face_r_dim, dst_index, kt_dim, ct_dim);
 }
