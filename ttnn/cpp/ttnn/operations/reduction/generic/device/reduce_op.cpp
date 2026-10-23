@@ -233,8 +233,10 @@ Tensor reduce(
     // SUM, MAX and MIN pass through unchanged.
     // The accurate fp32 SFPU mean also lowers AVG to SUM: the SFPU folds tiles with a plain
     // add (add_binary_tile) and normalizes via the 1/N post-mul below, so it needs SUM semantics.
+    // bfloat16 mean lowers to SUM too and scales after the sum: the FPU scaler tile turns inf into a finite value.
     tt::tt_metal::ReduceOpMath prim_reduce_math = reduce_math;
-    if ((use_rm_dense || use_sfpu_fp32_mean) && reduce_math == tt::tt_metal::ReduceOpMath::AVG) {
+    if ((use_rm_dense || use_sfpu_fp32_mean || input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16) &&
+        reduce_math == tt::tt_metal::ReduceOpMath::AVG) {
         prim_reduce_math = tt::tt_metal::ReduceOpMath::SUM;
     }
 
