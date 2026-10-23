@@ -1233,8 +1233,9 @@ void RealtimeProfilerManager::add_consumer(
     tt::ProgramRealtimeProfilerCallbackHandle handle,
     tt::ProgramRealtimeProfilerCallback callback,
     std::optional<std::unordered_set<uint32_t>> chip_filter) {
-    std::lock_guard<std::mutex> lock(consumers_mutex_);
+    // Checked before locking: another thread may hold the lock while it waits for this callback to return.
     TT_FATAL(!on_consumer_thread(), "A real-time profiler callback must not register callbacks");
+    std::lock_guard<std::mutex> lock(consumers_mutex_);
     if (!ring_.has_value() || consumers_shut_down_) {
         return;
     }
@@ -1246,30 +1247,28 @@ void RealtimeProfilerManager::add_consumer(
 }
 
 void RealtimeProfilerManager::remove_consumer(tt::ProgramRealtimeProfilerCallbackHandle handle) {
-    std::unique_ptr<Consumer> consumer;
-    {
-        std::lock_guard<std::mutex> lock(consumers_mutex_);
-        auto it = consumers_.find(handle);
-        if (it == consumers_.end()) {
-            return;
-        }
-        TT_FATAL(!on_consumer_thread(), "A real-time profiler callback must not unregister callbacks");
-        consumer = std::move(it->second);
-        consumers_.erase(it);
+    TT_FATAL(!on_consumer_thread(), "A real-time profiler callback must not unregister callbacks");
+    // Stopping under the lock makes a concurrent removal of the same handle, or shutdown(), wait until the callback
+    // has returned.
+    std::lock_guard<std::mutex> lock(consumers_mutex_);
+    auto it = consumers_.find(handle);
+    if (it == consumers_.end()) {
+        return;
     }
-    stop_consumer(*consumer, ConsumerStopMode::StopWithoutDrain);
-    const uint64_t dropped = consumer->dropped;
+    stop_consumer(*it->second, ConsumerStopMode::StopWithoutDrain);
+    const uint64_t dropped = it->second->dropped;
     if (dropped > 0) {
         log_warning(tt::LogMetal, "[Real-time profiler] Callback {} dropped {} record(s)", handle, dropped);
     }
+    consumers_.erase(it);
 }
 
 void RealtimeProfilerManager::drain_and_remove_consumers(
     const std::unordered_set<tt::ProgramRealtimeProfilerCallbackHandle>& handles) {
+    TT_FATAL(!on_consumer_thread(), "A real-time profiler callback must not close a mesh");
     std::unordered_set<uint32_t> chip_ids;
     {
         std::lock_guard<std::mutex> lock(consumers_mutex_);
-        TT_FATAL(!on_consumer_thread(), "A real-time profiler callback must not unregister callbacks");
         bool found = false;
         for (const auto handle : handles) {
             auto it = consumers_.find(handle);

@@ -1245,7 +1245,8 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         realtime_profiler.reset();
     }
     if (!inherited_handles.empty() && parent_mesh_) {
-        // This mesh's programs have finished, but its callbacks live in an ancestor that keeps running.
+        // This mesh's programs have finished, but its callbacks live in an ancestor that keeps running. If an
+        // ancestor is closing instead, waiting for it to close means its shutdown has finished those callbacks.
         parent_mesh_->impl().with_realtime_profiler(
             [&](RealtimeProfilerManager& ancestor_profiler, const auto&, const auto& path) {
                 ancestor_profiler.drain_and_remove_consumers(inherited_handles);
@@ -1255,7 +1256,8 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
                         mesh->inherited_realtime_profiler_handles_.erase(handle);
                     }
                 }
-            });
+            },
+            /*wait_for_close=*/true);
     }
     if (realtime_profiler_was_open) {
         {
@@ -2012,7 +2014,7 @@ bool MeshDeviceImpl::with_realtime_profiler(
         if (wait_for_close) {
             TT_FATAL(
                 !RealtimeProfilerManager::on_consumer_thread(),
-                "A real-time profiler callback must not unregister callbacks");
+                "A real-time profiler callback must not unregister callbacks or close a mesh");
             realtime_profiler_closed_cv_.wait(
                 lock, [this] { return realtime_profiler_state_ == RealtimeProfilerState::Closed; });
         }

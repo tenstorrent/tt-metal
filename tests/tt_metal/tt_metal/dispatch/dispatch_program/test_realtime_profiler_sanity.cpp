@@ -183,6 +183,42 @@ private:
     std::vector<ProgramRealtimeRecord> records_;
 };
 
+// A callback that blocks in its first invocation until released.
+class BlockingCallback {
+public:
+    ProgramRealtimeProfilerCallback callback() {
+        return [this](const ProgramRealtimeRecordBatch&) {
+            std::unique_lock lk(mu_);
+            entered_ = true;
+            cv_.notify_all();
+            cv_.wait(lk, [this] { return released_; });
+            returned_ = true;
+        };
+    }
+
+    bool wait_until_entered(std::chrono::milliseconds timeout) {
+        std::unique_lock lk(mu_);
+        return cv_.wait_for(lk, timeout, [this] { return entered_; });
+    }
+
+    void release() {
+        {
+            std::lock_guard lk(mu_);
+            released_ = true;
+        }
+        cv_.notify_all();
+    }
+
+    bool returned() const { return returned_.load(); }
+
+private:
+    std::mutex mu_;
+    std::condition_variable cv_;
+    bool entered_ = false;
+    bool released_ = false;
+    std::atomic<bool> returned_{false};
+};
+
 TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
     constexpr int kDeviceId = 0;
 
@@ -561,6 +597,8 @@ TEST(RealtimeProfilerSanity, SubmeshCloseRetiresCallbacks) {
 TEST(RealtimeProfilerSanity, UnregisterWaitsForCallbackDuringClose) {
     constexpr int kDeviceId = 0;
 
+    // Outlives the mesh, so a close that still delivers to the callback never touches a destroyed one.
+    BlockingCallback blocker;
     auto mesh_device = distributed::MeshDevice::create_unit_mesh(
         kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
     ASSERT_NE(mesh_device, nullptr);
@@ -571,25 +609,14 @@ TEST(RealtimeProfilerSanity, UnregisterWaitsForCallbackDuringClose) {
     }
 
     // The callback blocks in its first invocation, so close stalls delivering to it.
-    std::mutex mu;
-    std::condition_variable cv;
-    bool entered = false;
-    bool released = false;
-    std::atomic<bool> callback_returned{false};
     ProgramRealtimeProfilerCallbackHandle handle =
-        RegisterProgramRealtimeProfilerCallback(*mesh_device, [&](const ProgramRealtimeRecordBatch&) {
-            std::unique_lock lk(mu);
-            entered = true;
-            cv.notify_all();
-            cv.wait(lk, [&] { return released; });
-            callback_returned = true;
-        });
+        RegisterProgramRealtimeProfilerCallback(*mesh_device, blocker.callback());
     enqueue_sanity_programs(mesh_device, /*first_runtime_id=*/1, kNumPrograms);
     mesh_device->quiesce_devices();
-    {
-        std::unique_lock lk(mu);
-        ASSERT_TRUE(cv.wait_for(lk, std::chrono::seconds(10), [&] { return entered; }))
-            << "The callback was never invoked";
+    if (!blocker.wait_until_entered(std::chrono::seconds(10))) {
+        blocker.release();
+        UnregisterProgramRealtimeProfilerCallback(*mesh_device, handle);
+        FAIL() << "The callback was never invoked";
     }
 
     std::thread closer([&] { EXPECT_TRUE(mesh_device->close()); });
@@ -599,20 +626,60 @@ TEST(RealtimeProfilerSanity, UnregisterWaitsForCallbackDuringClose) {
     std::atomic<bool> unregistered{false};
     std::thread unregisterer([&] {
         UnregisterProgramRealtimeProfilerCallback(*mesh_device, handle);
-        EXPECT_TRUE(callback_returned.load()) << "Unregister returned while the callback was still running";
+        EXPECT_TRUE(blocker.returned()) << "Unregister returned while the callback was still running";
         unregistered = true;
     });
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     EXPECT_FALSE(unregistered.load());
 
-    {
-        std::lock_guard lk(mu);
-        released = true;
-    }
-    cv.notify_all();
+    blocker.release();
     unregisterer.join();
     closer.join();
     EXPECT_TRUE(unregistered.load());
+}
+
+TEST(RealtimeProfilerSanity, SubmeshCloseWaitsForClosingParent) {
+    constexpr int kDeviceId = 0;
+
+    BlockingCallback blocker;
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(
+        kDeviceId, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
+    ASSERT_NE(mesh_device, nullptr);
+
+    if (!IsProgramRealtimeProfilerActive(*mesh_device)) {
+        mesh_device->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+
+    // The submesh's callback lives in the parent's profiler and blocks, so closing the parent stalls delivering to it.
+    auto submesh = mesh_device->create_submesh(mesh_device->shape());
+    ProgramRealtimeProfilerCallbackHandle handle =
+        RegisterProgramRealtimeProfilerCallback(*submesh, blocker.callback());
+    enqueue_sanity_programs(submesh, /*first_runtime_id=*/1, kNumPrograms);
+    mesh_device->quiesce_devices();
+    if (!blocker.wait_until_entered(std::chrono::seconds(10))) {
+        blocker.release();
+        UnregisterProgramRealtimeProfilerCallback(*submesh, handle);
+        FAIL() << "The callback was never invoked";
+    }
+
+    std::thread parent_closer([&] { EXPECT_TRUE(mesh_device->close()); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    // The parent's shutdown still runs the callback, so closing the submesh may only return after it has.
+    std::atomic<bool> submesh_closed{false};
+    std::thread submesh_closer([&] {
+        EXPECT_TRUE(submesh->close());
+        EXPECT_TRUE(blocker.returned()) << "Submesh close returned while the callback was still running";
+        submesh_closed = true;
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT_FALSE(submesh_closed.load());
+
+    blocker.release();
+    submesh_closer.join();
+    parent_closer.join();
+    EXPECT_TRUE(submesh_closed.load());
 }
 
 TEST(RealtimeProfilerSanity, ClosedMeshIgnoresCallbacks) {
