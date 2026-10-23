@@ -16,10 +16,6 @@ def is_datacopy_node(compute_node: FpuNode) -> bool:
     return False
 
 
-def is_unary_unpacker(compute_node: FpuNode) -> bool:
-    return False
-
-
 def hw_configure_unpack(
     compute_node: FpuNode,
     dest_acc: str,

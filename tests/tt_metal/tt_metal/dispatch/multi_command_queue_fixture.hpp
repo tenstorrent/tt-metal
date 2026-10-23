@@ -63,11 +63,9 @@ protected:
     DispatchCoreType get_dispatch_core_type() {
         DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
         if (this->arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() != 1) {
-            if (!tt::tt_metal::IsGalaxyCluster()) {
-                log_warning(
-                    tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in SetUp()");
-                dispatch_core_type = DispatchCoreType::ETH;
-            }
+            log_warning(
+                tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in SetUp()");
+            dispatch_core_type = DispatchCoreType::ETH;
         }
         return dispatch_core_type;
     }

@@ -108,7 +108,7 @@ void delta_rule_residual(uint32_t a, uint32_t b, uint32_t beta, uint32_t o, uint
     for (uint32_t i0 = 0; i0 < n; i0 += per_batch) {
         const uint32_t nn = (n - i0 < per_batch) ? (n - i0) : per_batch;
         tile_regs_acquire();
-        sub_tiles_init(a, b);
+        sub_init(a, b);
         for (uint32_t j = 0; j < nn; j++) {
             sub_tiles(a, b, i0 + j, i0 + j, j);
         }
@@ -132,7 +132,7 @@ void delta_rule_residual(uint32_t a, uint32_t b, uint32_t beta, uint32_t o, uint
 void bcast_scalar_mul(uint32_t a, uint32_t scal, uint32_t o, uint32_t n) {
     CircularBuffer cb_o(o);
     cb_o.reserve_back(n);
-    mul_tiles_bcast_scalar_init_short(a, scal);
+    mul_bcast_scalar_init(a, scal);
     for (uint32_t i = 0; i < n; i++) {
         tile_regs_acquire();
         mul_tiles_bcast_scalar(a, scal, i, 0, 0);

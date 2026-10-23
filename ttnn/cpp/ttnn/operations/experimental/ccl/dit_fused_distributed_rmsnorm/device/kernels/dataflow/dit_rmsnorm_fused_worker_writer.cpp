@@ -15,7 +15,7 @@
  *      has landed in this chip's DRAM scratch).
  *   3. Reads its ring_size gathered sticks from DRAM (page(d, forwarder, round)
  *      + slot*128 B for each device d) into ROW 0 of stats_transposed_gathered_cb
- *      tiles, and pushes them to compute (which FPU-adds + transpose_wh_dest).
+ *      tiles, and pushes them to compute (which FPU-adds + transpose_dest).
  *   4. Drains the row's output_cb tiles to the output tensor.
  *
  * Also populates compute's reduce-scalar / epsilon / trans_mat CBs up front
@@ -36,7 +36,7 @@
 #include "api/core_local_mem.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "dit_rmsnorm_scalar_setup.hpp"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 constexpr uint32_t output_cb = get_compile_time_arg_val(0);
 constexpr uint32_t num_tile_cols = get_compile_time_arg_val(1);

@@ -162,6 +162,9 @@ class MultirankPccHarnessTests(unittest.TestCase):
             (golden / "kv_cache" / f"layer_{layer}.safetensors").touch()
         harness = metal / "run_multirank_pcc.sh"
         shutil.copyfile(HARNESS, harness)
+        perf_gate = metal / "models/demos/common/prefill/runners/ci/perf_gate.py"
+        perf_gate.parent.mkdir(parents=True)
+        shutil.copyfile(HARNESS.with_name("perf_gate.py"), perf_gate)
         ttrun_dir = root / "ttop"
         ttrun_dir.mkdir()
         if hosts is None:

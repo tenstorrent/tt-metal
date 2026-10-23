@@ -6,7 +6,7 @@ user_invocable: true
 
 # /run-test — Run LLK Tests
 
-Wraps `.claude/scripts/run_test.sh`, which serialises simulator access (flock), kills stale port processes, sets `TT_UMD_SIMULATOR_PATH`, and exposes `count` / `compile` / `simulate` / `run` subcommands. Agents and Claude must never call `pytest` directly.
+Wraps `.claude/scripts/run_test.sh`, which serialises simulator access (flock), sets `TT_UMD_SIMULATOR_PATH`, and exposes `count` / `compile` / `simulate` / `run` subcommands. Agents and Claude must never call `pytest` directly.
 
 ## Usage
 
@@ -35,7 +35,6 @@ Examples:
 - `--rerun` — skip compile, simulate only (uses prior compile-producer artifacts)
 - `--compile-only` — compile-producer only, no simulate
 - `--no-split` — combined compile+run in one pytest invocation (issue-solver tests)
-- `--port <N>` — simulator port (default 5556)
 - `--timeout <secs>` — pytest timeout ceiling (default 600)
 - `--progress` — manual-debug aid: emit a `[progress] <phase>: elapsed=Ns, last_output=Ns ago` line to stderr every 30s during compile and simulate. Off by default; pass when you suspect a hang and want to see whether a phase is alive but slow vs. truly stuck. Pair with `--progress-interval <secs>` to tune.
 
@@ -66,7 +65,7 @@ If `--arch` is not provided, infer in this order:
        test_file: {test_file}
        arch:      {arch}
        command:   {compile|simulate|run|count}
-       options:   {whatever applies from --k / --test-id / --maxfail / --no-split / --port / --timeout}
+       options:   {whatever applies from --k / --test-id / --maxfail / --no-split / --timeout}
    ```
 
 4. **Relay** the agent's verdict to the user. On FAIL or COMPILE_FAIL, suggest `/debug-kernel`. On ENV_ERROR or HANG, surface the agent's diagnosis and stop — don't auto-retry (the same hang will reappear, and env errors need a human fix).

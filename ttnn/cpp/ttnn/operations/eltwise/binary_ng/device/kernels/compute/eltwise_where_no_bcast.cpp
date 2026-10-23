@@ -27,6 +27,9 @@ void kernel_main() {
     constexpr auto dfb_cond_id = tt::CBIndex::c_0;
     constexpr auto dfb_tensor_id = tt::CBIndex::c_1;
     constexpr auto dfb_out_id = tt::CBIndex::c_2;
+    DataflowBuffer dfb_cond(dfb_cond_id);
+    DataflowBuffer dfb_tensor(dfb_tensor_id);
+    DataflowBuffer dfb_out(dfb_out_id);
 
 #if WHERE_TTS
     // TTS: tensor is true value, goes to dst_reg 1
@@ -48,7 +51,7 @@ void kernel_main() {
         ckl::CopyTile<
             ckl::input(
                 dfb_cond_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
-            ckl::Dst::D0>{},
+            ckl::Dst::D0>{dfb_cond},
         // tensor -> D1 (TTS) / D2 (TST) (block read, init_short for dfb_tensor_id).
         ckl::CopyTile<
             ckl::input(
@@ -56,7 +59,7 @@ void kernel_main() {
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block),
-            kTensorSlot>{},
+            kTensorSlot>{dfb_tensor},
         // scalar fill -> the other slot. Inactive flavor folds to a no-op.
         ckl::Optional<kIsInt, ckl::FillInt<kWhereDF, kFillSlot>>{scalar_value},
         ckl::Optional<kIsFloat, ckl::FillBitcast<kFillSlot>>{scalar_value},
@@ -66,5 +69,5 @@ void kernel_main() {
             dfb_out_id,
             ckl::ReservePolicy::PerBlockSize,
             ckl::PushPolicy::PerBlockSize,
-            ckl::DataFormatReconfig::Disabled)>{});
+            ckl::DataFormatReconfig::Disabled)>{dfb_out});
 }

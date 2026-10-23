@@ -138,7 +138,7 @@ void kernel_main() {
         }
 
         // dfb_in1 is reserved once as an alignment scratchpad (no downstream consumer);
-        // commit the reservation so the CB is left balanced.
+        // push the reserved pages so the buffer is left balanced.
         dfb_in1.push_back(num_trids);
     }
     // Reset the sticky NOC_PACKET_TAG register for downstream untagged reads

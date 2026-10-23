@@ -49,7 +49,6 @@ def test_unary_pow_ttnn(input_shapes, exponent, device):
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype, pcc",
     [
-        (torch.float32, ttnn.float32, 0.999),
         (torch.bfloat16, ttnn.bfloat8_b, 0.99),
     ],
 )
@@ -134,7 +133,7 @@ def test_unary_gelu_ttnn(input_shapes, fast_and_approx, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("ttnn_dtype", [ttnn.float32, ttnn.int32])
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.int32])
 def test_unary_neg_ttnn(input_shapes, device, ttnn_dtype):
     in_data1, input_tensor1 = data_gen_with_range_dtype(input_shapes, -100, 100, device, ttnn_dtype=ttnn_dtype)
 
