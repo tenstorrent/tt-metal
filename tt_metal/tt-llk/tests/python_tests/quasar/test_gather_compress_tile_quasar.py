@@ -58,6 +58,11 @@ def make_compress_mask(elem_cnt: int, gen: torch.Generator):
 )
 @pytest.mark.parametrize("compress", [False, True], ids=["gather", "compress"])
 def test_gather_compress_tile_quasar(data_format, compress):
+    from helpers.chip_architecture import quasar_variant
+
+    if quasar_variant() != "saturn":
+        pytest.skip("Gather/compress requires TT_METAL_QUASAR_VARIANT=saturn")
+
     elem_cnt = elem_cnt_for(data_format)
     num_vectors = TILE_ELEMS // elem_cnt
 
