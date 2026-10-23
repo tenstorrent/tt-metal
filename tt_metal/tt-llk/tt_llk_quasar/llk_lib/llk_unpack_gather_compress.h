@@ -80,7 +80,7 @@ inline void _llk_unpack_gather_compress_hw_configure_(const std::uint32_t unpack
 template <GatherCompressModeSelect MODE>
 inline void _llk_unpack_gather_compress_init_(const std::uint32_t buf_desc_id, const std::uint32_t unpack_dst_format, const std::uint32_t num_vectors = 1)
 {
-    static_assert(TENSIX_GATHER == 1, "Gather/compress needs a Tensix built with the gather unit (TENSIX_GATHER); build for the quasar_gather variant");
+    static_assert(TENSIX_GATHER == 1, "Gather/compress needs a Tensix built with the gather unit (TENSIX_GATHER); build for the saturn variant");
     LLK_ASSERT(
         unpack_dst_format == static_cast<std::uint32_t>(DataFormat::Int8) || unpack_dst_format == static_cast<std::uint32_t>(DataFormat::UInt8) ||
             unpack_dst_format == static_cast<std::uint32_t>(DataFormat::Float16_b),

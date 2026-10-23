@@ -130,7 +130,7 @@ inline void _llk_math_gather_compress_mop_config_(const bool is_64_elem, const s
  */
 inline void _llk_math_gather_compress_init_(const std::uint32_t src_format, const std::uint32_t num_vectors = 1)
 {
-    static_assert(TENSIX_GATHER == 1, "Gather/compress needs a Tensix built with the gather unit (TENSIX_GATHER); build for the quasar_gather variant");
+    static_assert(TENSIX_GATHER == 1, "Gather/compress needs a Tensix built with the gather unit (TENSIX_GATHER); build for the saturn variant");
     LLK_ASSERT(
         src_format == static_cast<std::uint32_t>(DataFormat::Int8) || src_format == static_cast<std::uint32_t>(DataFormat::UInt8) ||
             src_format == static_cast<std::uint32_t>(DataFormat::Float16_b),

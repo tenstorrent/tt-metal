@@ -47,7 +47,7 @@ inline void _llk_pack_gather_compress_mop_config_(const std::uint32_t buf_desc_i
  */
 inline void _llk_pack_gather_compress_init_(const std::uint32_t buf_desc_id, const std::uint32_t num_vectors = 1)
 {
-    static_assert(TENSIX_GATHER == 1, "Gather/compress needs a Tensix built with the gather unit (TENSIX_GATHER); build for the quasar_gather variant");
+    static_assert(TENSIX_GATHER == 1, "Gather/compress needs a Tensix built with the gather unit (TENSIX_GATHER); build for the saturn variant");
     _llk_pack_gather_compress_mop_config_(buf_desc_id, num_vectors);
 }
 
