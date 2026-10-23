@@ -34,8 +34,7 @@ def _host(x: ttnn.Tensor, c: int | None = None) -> torch.Tensor:
     return y[..., :c] if c else y
 
 
-def _up(x: torch.Tensor, device) -> ttnn.Tensor:
-    dtype = ttnn.float32 if tt._fp32_conv() else ttnn.bfloat16
+def _up(x: torch.Tensor, device, dtype) -> ttnn.Tensor:
     return ttnn.from_torch(x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
 
@@ -47,7 +46,7 @@ def test_ss_decoder_stage_probe(mesh_device):
     z, gold, _ = goldens.ss_decoder_call()
 
     x_host = z.float().permute(0, 2, 3, 4, 1)
-    x = _up(tt._pad_channels(x_host, 4), mesh_device)
+    x = _up(tt._pad_channels(x_host, 4), mesh_device, dec.dtypes[tt.STAGES[0]])
     _cmp("input_upload", _host(x, host.LATENT_CHANNELS), x_host)
 
     g = host._conv(x_host, s["input_layer.weight"], s["input_layer.bias"])
@@ -83,6 +82,8 @@ def test_ss_decoder_stage_probe(mesh_device):
             _cmp(f"blocks.{i}.shuffle", _host(sh), host.shuffle_ndhwc(_host(c)))
             dhw = tuple(sh.shape)[1:4]
             h = tt._tokens(sh)
+            if h.dtype != dec.dtypes[dhw[0]]:
+                h = ttnn.typecast(h, dec.dtypes[dhw[0]])
     hin = _host(tt._grid(h, dhw))
     n = dec.out_norm(h)
     _cmp("out_norm", _host(tt._grid(n, dhw)), host._norm_silu(hin, s, "out_layer.0"))

@@ -26,10 +26,17 @@ ALIGN = 32
 TT_DIT_BLOCKING = (128, 256, 512, 768)  # input channel counts with a blocking in tt_dit get_conv3d_config
 
 
-def _fp32_conv() -> bool:
-    """Activations, weights and convs in fp32 (conv3d's fp32-exact path): bf16 gave 3x the CPU bf16 floor in 64^3 flips,
-    fp32 is below it at 1.84 s vs 0.15 s (S10 G4a). TRELLIS2_SSDEC_FP32_CONV=0 restores bf16."""
-    return os.environ.get("TRELLIS2_SSDEC_FP32_CONV", "1") == "1"
+STAGES = (16, 32, 64)  # the resolution a conv reads
+
+
+def _fp32_stages() -> frozenset[int]:
+    """Stages whose activations, weights and convs run in fp32 (conv3d's fp32-exact path): all-bf16 gave 3x the CPU
+    bf16 floor in 64^3 flips, all-fp32 is below it at 1.84 s vs 0.15 s (S10 G4a). TRELLIS2_SSDEC_FP32_STAGES=16,32
+    keeps only those stages in fp32; TRELLIS2_SSDEC_FP32_CONV=0 makes every stage bf16."""
+    if os.environ.get("TRELLIS2_SSDEC_FP32_CONV", "1") != "1":
+        return frozenset()
+    stages = os.environ.get("TRELLIS2_SSDEC_FP32_STAGES", ",".join(map(str, STAGES)))
+    return frozenset(int(s) for s in stages.split(",") if s)
 
 
 def _hifi4(device):
@@ -50,9 +57,9 @@ def _pad_channels(t: torch.Tensor, dim: int) -> torch.Tensor:
 class _Conv3d:
     """k x k x k conv with symmetric zero padding on a row-major [1, D, H, W, C] activation."""
 
-    def __init__(self, w: torch.Tensor, b: torch.Tensor, *, device) -> None:
+    def __init__(self, w: torch.Tensor, b: torch.Tensor, *, device, fp32: bool) -> None:
         self.device = device
-        dtype = ttnn.float32 if _fp32_conv() else ttnn.bfloat16
+        dtype = ttnn.float32 if fp32 else ttnn.bfloat16
         self.k = w.shape[-1]
         # Pad C_out to a multiple of 32 with zero filters (tt_dit never runs conv3d below 32); callers slice.
         w, b = _pad_channels(w, 0), _pad_channels(b, 0)
@@ -117,8 +124,9 @@ class _NormSiLU:
     0.1-0.2% (S10 probe), which flips near-zero logits. TRELLIS2_SSDEC_FP32_NORM=0 restores bf16 for A/B runs.
     """
 
-    def __init__(self, w: torch.Tensor, b: torch.Tensor, *, device) -> None:
+    def __init__(self, w: torch.Tensor, b: torch.Tensor, *, device, fp32_out: bool) -> None:
         self.fp32 = os.environ.get("TRELLIS2_SSDEC_FP32_NORM", "1") == "1"
+        self.fp32_out = fp32_out
         dtype = ttnn.float32 if self.fp32 else ttnn.bfloat16
         to_dev = lambda t: ttnn.from_torch(
             t.float().reshape(1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
@@ -137,7 +145,7 @@ class _NormSiLU:
             compute_kernel_config=self.compute_kernel_config,
         )
         y = ttnn.silu(y)
-        return ttnn.typecast(y, ttnn.bfloat16) if self.fp32 and not _fp32_conv() else y
+        return ttnn.typecast(y, ttnn.bfloat16) if self.fp32 and not self.fp32_out else y
 
 
 def _tokens(x: ttnn.Tensor) -> ttnn.Tensor:
@@ -161,11 +169,11 @@ def _shuffle(x: ttnn.Tensor, s: int = host.SCALE) -> ttnn.Tensor:
 
 
 class _ResBlock:
-    def __init__(self, s: dict[str, torch.Tensor], p: str, *, device) -> None:
-        self.norm1 = _NormSiLU(s[p + "norm1.weight"], s[p + "norm1.bias"], device=device)
-        self.conv1 = _Conv3d(s[p + "conv1.weight"], s[p + "conv1.bias"], device=device)
-        self.norm2 = _NormSiLU(s[p + "norm2.weight"], s[p + "norm2.bias"], device=device)
-        self.conv2 = _Conv3d(s[p + "conv2.weight"], s[p + "conv2.bias"], device=device)
+    def __init__(self, s: dict[str, torch.Tensor], p: str, *, device, fp32: bool) -> None:
+        self.norm1 = _NormSiLU(s[p + "norm1.weight"], s[p + "norm1.bias"], device=device, fp32_out=fp32)
+        self.conv1 = _Conv3d(s[p + "conv1.weight"], s[p + "conv1.bias"], device=device, fp32=fp32)
+        self.norm2 = _NormSiLU(s[p + "norm2.weight"], s[p + "norm2.bias"], device=device, fp32_out=fp32)
+        self.conv2 = _Conv3d(s[p + "conv2.weight"], s[p + "conv2.bias"], device=device, fp32=fp32)
 
     def __call__(self, x: ttnn.Tensor, dhw: tuple[int, int, int]) -> ttnn.Tensor:
         """x: tile [1, 1, N, C] (residual stream) -> same."""
@@ -180,21 +188,28 @@ class TtSSDecoder:
     def __init__(self, state: dict[str, torch.Tensor], *, mesh_device: ttnn.MeshDevice) -> None:
         self.device = mesh_device
         s = {k: v.float() for k, v in state.items()}
-        self.input_layer = _Conv3d(s["input_layer.weight"], s["input_layer.bias"], device=mesh_device)
+        fp32 = _fp32_stages()
+        self.dtypes = {r: ttnn.float32 if r in fp32 else ttnn.bfloat16 for r in STAGES}
+        r = STAGES[0]
+        self.input_layer = _Conv3d(s["input_layer.weight"], s["input_layer.bias"], device=mesh_device, fp32=r in fp32)
         self.middle = [
-            _ResBlock(s, f"middle_block.{i}.", device=mesh_device) for i in range(host.NUM_RES_BLOCKS_MIDDLE)
+            _ResBlock(s, f"middle_block.{i}.", device=mesh_device, fp32=r in fp32)
+            for i in range(host.NUM_RES_BLOCKS_MIDDLE)
         ]
         self.blocks = []
         for i, (kind, _, _) in enumerate(host.block_layout()):
             if kind == "res":
-                self.blocks.append(("res", _ResBlock(s, f"blocks.{i}.", device=mesh_device)))
+                self.blocks.append(("res", _ResBlock(s, f"blocks.{i}.", device=mesh_device, fp32=r in fp32)))
             else:
                 w, b = host.shuffle_weight_order(s[f"blocks.{i}.conv.weight"], s[f"blocks.{i}.conv.bias"])
-                self.blocks.append(("up", _Conv3d(w, b, device=mesh_device)))
-        self.out_norm = _NormSiLU(s["out_layer.0.weight"], s["out_layer.0.bias"], device=mesh_device)
+                self.blocks.append(("up", _Conv3d(w, b, device=mesh_device, fp32=r in fp32)))
+                r *= host.SCALE
+        self.out_norm = _NormSiLU(
+            s["out_layer.0.weight"], s["out_layer.0.bias"], device=mesh_device, fp32_out=r in fp32
+        )
         # Logits come out in the conv dtype: a bf16-input conv3d with an fp32 output returns garbage (scale 0 vs the
         # mirror, S10 probe); bf16 rounding never changes a logit's sign, so occupancy (logits > 0) is unaffected.
-        self.out_conv = _Conv3d(s["out_layer.2.weight"], s["out_layer.2.bias"], device=mesh_device)
+        self.out_conv = _Conv3d(s["out_layer.2.weight"], s["out_layer.2.bias"], device=mesh_device, fp32=r in fp32)
 
     def forward_device(self, z: ttnn.Tensor) -> ttnn.Tensor:
         """Row-major [1, 16, 16, 16, 32] (latent channels zero-padded to 32) -> row-major [1, 64, 64, 64, 32] (channel 0 is the logit)."""
@@ -209,11 +224,12 @@ class TtSSDecoder:
                 g = _shuffle(block(_grid(h, dhw)))
                 dhw = tuple(g.shape)[1:4]
                 h = _tokens(g)
+                if h.dtype != self.dtypes[dhw[0]]:
+                    h = ttnn.typecast(h, self.dtypes[dhw[0]])
         return self.out_conv(_grid(self.out_norm(h), dhw))
 
     def __call__(self, z: torch.Tensor) -> torch.Tensor:
         x = _pad_channels(z.float().permute(0, 2, 3, 4, 1), 4)
-        dtype = ttnn.float32 if _fp32_conv() else ttnn.bfloat16
-        x = ttnn.from_torch(x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        x = ttnn.from_torch(x, dtype=self.dtypes[STAGES[0]], layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
         out = ttnn.to_torch(ttnn.get_device_tensors(self.forward_device(x))[0]).float()
         return out[..., : host.OUT_CHANNELS].permute(0, 4, 1, 2, 3).contiguous()
