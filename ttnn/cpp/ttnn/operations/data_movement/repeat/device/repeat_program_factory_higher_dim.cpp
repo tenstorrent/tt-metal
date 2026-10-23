@@ -86,6 +86,11 @@ ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryHigherDim::create_p
     // Reserve one alignment for rounding the scratch base and one for matching the NoC address.
     // At the cap: at most 64 + 63 + 2048 = 2175 bytes are addressed in the 2176-byte scratchpad.
     const uint32_t cb_size_bytes = (READ_ALIGNMENT * 2) + scratch_page_size_bytes;
+    constexpr uint32_t staged_base_alignment = 64;
+    constexpr uint32_t staged_max_noc_offset = 63;
+    TT_FATAL(
+        !stage_shard_pages || cb_size_bytes >= staged_base_alignment + staged_max_noc_offset + scratch_page_size_bytes,
+        "Repeat staging scratchpad must cover base alignment, NoC offset and the transfer payload");
 
     // Metal 2.0 named resource ids. Declared function-local so the unity build (both repeat factory
     // .cpp files land in one translation unit) sees no duplicate anonymous-namespace symbols.

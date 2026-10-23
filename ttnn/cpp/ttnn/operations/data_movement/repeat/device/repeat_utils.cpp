@@ -122,11 +122,9 @@ bool is_native_repeat_sharding(
     }
     if (input_spec.layout() == Layout::ROW_MAJOR) {
         const auto& shard = input_spec.memory_config().shard_spec()->shape;
-        // A row narrower than its shard is one padded page, and repeat's views keep that padding. Codegen and the
-        // composite path unshard it first: an L1 shard with an L1-aligned page takes sharded_to_interleaved, and any
-        // other page a row-major copy, which completes for a HEIGHT page but not for a WIDTH or BLOCK page wider than
-        // its row, so repeat throws there. A split row whose final shard is partial stays on codegen or the composite
-        // path, unless repeat's view leaves its shape unchanged: native then repeats the tensor as it is, as on main.
+        // A row narrower than its shard is one padded page, and repeat's views keep that width padding.
+        // A split row whose final shard is partial stays on codegen or the composite path, unless repeat's
+        // view leaves its shape unchanged: native then repeats the tensor as it is, as on main.
         const bool narrow_row = input_spec.logical_shape()[-1] < shard[1];
         if (!narrow_row && input_spec.padded_shape()[-1] != input_spec.logical_shape()[-1] &&
             !upper_repeat_view_keeps_shape(input_spec.logical_shape(), repeat_dim)) {

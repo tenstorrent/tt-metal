@@ -8,6 +8,8 @@ import pytest
 import torch
 import ttnn
 
+pytestmark = pytest.mark.timeout(60, method="thread")
+
 # Output modes: (memory_config kind, preallocate). "implicit" passes no memory_config.
 OUTPUTS = [
     ("implicit", False),
@@ -50,34 +52,44 @@ def _route(call):
         return "codegen"
     if ops[:1] == ["RepeatDeviceOperation"] and set(ops[1:]) <= {"CopyDeviceOperation"}:
         return "staged" if repeat_scratchpads == 2 else "native"
+    if ops and set(ops) == {"CopyDeviceOperation"}:
+        return "copy"
+    if ops and set(ops) == {"ReshardDeviceOperation"}:
+        return "reshard"
     return "composite"
 
 
-def _repeat(device, shape, input_memory, repeats, output_memory, preallocate, route):
-    """Repeats uint32 words that use the high bits; checks every output word and a preallocated output. The route is
-    asserted before the call runs, so a case routed onto a path that hangs fails instead."""
-    values = (torch.arange(prod(shape), dtype=torch.int64).reshape(shape) * 1000003 + 7).to(torch.int32)
+def _repeat(device, shape, input_memory, repeats, output_memory, preallocate, route=None, dtype=ttnn.uint32):
+    """Check every output value, placement, a preallocated output, and the unchanged input."""
+    indices = torch.arange(prod(shape), dtype=torch.int64).reshape(shape)
+    values = ((indices * 1000003 + 7) % (1 << 31)).to(torch.int32)
+    if dtype == ttnn.bfloat16:
+        values = (indices % 251 - 125).to(torch.bfloat16)
     source = ttnn.from_torch(
-        values, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_memory
+        values, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=input_memory
     )
-    assert torch.equal(ttnn.to_torch(source).to(torch.int64), values.to(torch.int64))
-    expected = values.to(torch.int64).repeat(*repeats)
+    assert torch.equal(ttnn.to_torch(source).to(values.dtype), values)
+    expected = values.repeat(*repeats)
     kwargs = {} if output_memory is None else {"memory_config": output_memory}
     if preallocate:
         target = ttnn.from_torch(
             torch.full(expected.shape, -1, dtype=torch.int32),
-            dtype=ttnn.uint32,
+            dtype=dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
             memory_config=output_memory,
         )
         kwargs["optional_output_tensor"] = target
-    assert _route(lambda: ttnn.repeat(source, repeats, **kwargs)) == route
+    if route is not None:
+        assert _route(lambda: ttnn.repeat(source, repeats, **kwargs)) == route
     result = ttnn.repeat(source, repeats, **kwargs)
-    assert torch.equal(ttnn.to_torch(result).to(torch.int64), expected)
+    assert torch.equal(ttnn.to_torch(result).to(values.dtype), expected)
     if preallocate:
         assert result.buffer_address() == target.buffer_address()
-        assert torch.equal(ttnn.to_torch(target).to(torch.int64), expected)
+        assert torch.equal(ttnn.to_torch(target).to(values.dtype), expected)
+    assert torch.equal(ttnn.to_torch(source).to(values.dtype), values)
+    if output_memory is not None:
+        assert result.memory_config() == output_memory
     return result
 
 
@@ -100,9 +112,7 @@ def _output_memory(kind, sharded):
 @pytest.mark.parametrize("strategy", [ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.BLOCK, ttnn.ShardStrategy.HEIGHT])
 @pytest.mark.parametrize("output, preallocate", OUTPUTS)
 def test_repeat_narrow_rows(device, rank, strategy, output, preallocate):
-    # A 3-word row in a 5-word shard is one padded 20-byte page. Native repeats it in place. For WIDTH and BLOCK it is
-    # the only route: codegen and the composite path unshard it first, and the row-major unshard does not take such a
-    # page wider than the row.
+    # A 3-word row in a 5-word shard is one padded 20-byte page. Native repeats this single axis in place.
     if strategy == ttnn.ShardStrategy.WIDTH:
         layout, grid, shape = ttnn.TensorMemoryLayout.WIDTH_SHARDED, _cores(1, 1), [1, 4, 3]
     elif strategy == ttnn.ShardStrategy.HEIGHT:
@@ -234,23 +244,15 @@ _NARROW_BLOCK = (ttnn.TensorMemoryLayout.BLOCK_SHARDED, _cores(1, 2), [4, 5])
         "dram_input_aligned_page",
     ],
 )
-def test_repeat_unaligned_narrow_rows_off_native_throw(device, expect_error, source, repeats, output):
-    # Off the native path these pages (20 bytes in L1, or a DRAM shard), wider than their 12-byte rows, would leave
-    # their shards through the row-major copy, which does not complete. Repeat throws first. The call runs only in a
-    # NO_DISPATCH capture, so this check cannot hang.
+def test_repeat_unaligned_narrow_rows_off_native(device, source, repeats, output):
+    # These calls may unshard through the row-major copy. Its reader clamps both initial block ends to the row.
     layout, grid, shard, shape, *buffer = source
-    values = torch.arange(prod(shape), dtype=torch.int32).reshape(shape)
     memory = ttnn.MemoryConfig(
         layout,
         buffer[0] if buffer else ttnn.BufferType.L1,
         ttnn.ShardSpec(grid, shard, ttnn.ShardOrientation.ROW_MAJOR),
     )
-    tensor = ttnn.from_torch(
-        values, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory
-    )
-    kwargs = {} if output is None else {"memory_config": output}
-    with expect_error(RuntimeError, "does not complete"):
-        _route(lambda: ttnn.repeat(tensor, repeats, **kwargs))
+    _repeat(device, shape, memory, repeats, output, False)
 
 
 def _bank(x):
@@ -268,15 +270,21 @@ def _bank(x):
     ids=["dram_to_other_bank", "dram_unaligned_to_other_bank", "dram_to_l1", "dram_new_axis_to_other_bank"],
 )
 def test_repeat_narrow_rows_identity_into_shards(device, shard, buffer, repeats):
-    # An all-ones repeat of narrow rows in a DRAM shard into another sharded placement. to_memory_config reshards it
-    # (DRAM to DRAM copies whole pages) or copies it between the two sharded layouts, as main does wherever its views
-    # accept the shape; only a move into interleaved memory takes the copy that does not complete. No repeat program
-    # runs, which _route reports as composite.
+    # These placements preserve the shard width. DRAM-to-DRAM uses reshard; DRAM-to-L1 uses copy.
+    # Different-width destinations are covered separately and rely on the row-major copy clamps.
     layout, row = ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.ShardOrientation.ROW_MAJOR
     input_memory = ttnn.MemoryConfig(layout, ttnn.BufferType.DRAM, ttnn.ShardSpec(_bank(0), shard, row))
     output_bank = 1 if buffer == ttnn.BufferType.DRAM else 0
     output_memory = ttnn.MemoryConfig(layout, buffer, ttnn.ShardSpec(_bank(output_bank), shard, row))
-    result = _repeat(device, [1, 4, 3], input_memory, repeats, output_memory, False, "composite")
+    result = _repeat(
+        device,
+        [1, 4, 3],
+        input_memory,
+        repeats,
+        output_memory,
+        False,
+        "reshard" if buffer == ttnn.BufferType.DRAM else "copy",
+    )
     assert result.memory_config() == output_memory
 
 
@@ -288,7 +296,7 @@ _HEIGHT = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     [
         ([1, 4, 3], (1, 1), [4, 5], ttnn.BufferType.L1, [2, 2, 1], None, "codegen"),
         ([1, 4, 3], (1, 1), [4, 5], ttnn.BufferType.DRAM, [1, 2, 1], None, "codegen"),
-        ([1, 4, 3], (1, 1), [4, 5], ttnn.BufferType.L1, [1, 1, 1], ttnn.DRAM_MEMORY_CONFIG, "composite"),
+        ([1, 4, 3], (1, 1), [4, 5], ttnn.BufferType.L1, [1, 1, 1], ttnn.DRAM_MEMORY_CONFIG, "copy"),
         ([1, 1, 1, 4, 3], (1, 1), [4, 5], ttnn.BufferType.L1, [1, 1, 2, 2, 1], None, "composite"),
         ([1, 4, 3], (1, 1), [4, 5], ttnn.BufferType.L1, [1, 2, 1], _sharded(_HEIGHT, _cores(2, 1), [4, 5]), "codegen"),
         ([1, 4, 3], (1, 1), [4, 5], ttnn.BufferType.L1, [1, 1, 2], None, "codegen"),
@@ -496,3 +504,97 @@ def test_repeat_nondividing_output_width(device, rank, preallocate):
     route = "composite" if rank == 5 else "codegen"
     result = _repeat(device, shape, input_memory, repeats, output_memory, preallocate, route)
     assert result.memory_config() == output_memory
+
+
+@pytest.mark.parametrize("buffer", [ttnn.BufferType.L1, ttnn.BufferType.DRAM], ids=["l1", "dram"])
+@pytest.mark.parametrize(
+    "output_layout, output_width",
+    [(ttnn.TensorMemoryLayout.WIDTH_SHARDED, w) for w in [4, 6, 8]]
+    + [(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, w) for w in [3, 5]],
+    ids=["width4", "width6", "width8", "height3", "height5"],
+)
+def test_repeat_identity_different_narrow_pages(device, buffer, output_layout, output_width):
+    row = ttnn.ShardOrientation.ROW_MAJOR
+    source = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer, ttnn.ShardSpec(_bank(0), [4, 5], row))
+    output = ttnn.MemoryConfig(output_layout, buffer, ttnn.ShardSpec(_bank(1), [4, output_width], row))
+    route = "reshard" if buffer == ttnn.BufferType.DRAM and output_width == 5 else "copy"
+    _repeat(device, [1, 4, 3], source, [1, 1, 1], output, False, route)
+
+
+def test_repeat_identity_aligned_dram_narrow_pages(device):
+    row, layout = ttnn.ShardOrientation.ROW_MAJOR, ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    source = ttnn.MemoryConfig(layout, ttnn.BufferType.DRAM, ttnn.ShardSpec(_bank(0), [4, 4], row))
+    output = ttnn.MemoryConfig(layout, ttnn.BufferType.DRAM, ttnn.ShardSpec(_bank(1), [4, 8], row))
+    _repeat(device, [1, 4, 3], source, [1, 1, 1], output, False, "copy")
+
+
+@pytest.mark.parametrize("input_memory", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG], ids=["l1", "dram"])
+@pytest.mark.parametrize("buffer", [ttnn.BufferType.L1, ttnn.BufferType.DRAM], ids=["l1", "dram"])
+def test_repeat_identity_into_narrow_pages(device, input_memory, buffer):
+    output = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer,
+        ttnn.ShardSpec(_bank(0), [4, 5], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    _repeat(device, [1, 4, 3], input_memory, [1, 1, 1], output, False, "copy")
+
+
+@pytest.mark.parametrize("output", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG], ids=["l1", "dram"])
+def test_repeat_identity_narrow_nd_shard(device, output):
+    source = ttnn.MemoryConfig(
+        ttnn.BufferType.L1,
+        ttnn.NdShardSpec(ttnn.Shape([1, 4, 5]), _bank(0), orientation=ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    assert source.shard_spec is None
+    _repeat(device, [1, 4, 3], source, [1, 1, 1], output, False, "copy")
+
+
+@pytest.mark.parametrize(
+    "shape, shard, repeats",
+    [([1, 4, 48], [4, 64], [1, 2, 1]), ([1, 1, 65536], [1, 65537], [1, 1, 1])],
+    ids=["parallel_copy", "capped_subblock"],
+)
+def test_repeat_dram_narrow_pages_that_already_complete(device, shape, shard, repeats):
+    source = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(_bank(0), shard, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    # This is a value/placement check: codegen's memory budget may select a different valid route on another SKU.
+    _repeat(device, shape, source, repeats, ttnn.DRAM_MEMORY_CONFIG, False)
+
+
+@pytest.mark.parametrize("rank", [2, 3, 4, 5])
+@pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.bfloat16])
+def test_repeat_narrow_input_output_staging(device, rank, dtype):
+    grid = _cores(2, 1)
+    source = _sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, grid, [4, 5])
+    output = _sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, grid, [8, 2])
+    shape = [1] * (rank - 2) + [4, 3]
+    repeats = [1] * rank
+    repeats[-2] = 2
+    _repeat(device, shape, source, repeats, output, False, "staged", dtype)
+
+
+@pytest.mark.parametrize("rank", [3, 5])
+@pytest.mark.parametrize("layout", [ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.TensorMemoryLayout.BLOCK_SHARDED])
+def test_repeat_bfloat16_staged_pages(device, rank, layout):
+    grid = _cores(8, 1)
+    shape = [1] * (rank - 2) + [4, 40]
+    repeats = [1] * rank
+    repeats[-2] = 2
+    source = _sharded(layout, grid, [4, 8])
+    output = _sharded(layout, grid, [8, 5])
+    # Aligned 16-byte input pages and split 10-byte output pages require 2-byte-offset staging.
+    _repeat(device, shape, source, repeats, output, True, "staged", ttnn.bfloat16)
+
+
+def test_repeat_untilized_width_shard_is_rejected_before_repeat(device, expect_error):
+    values = (torch.arange(2 * 30 * 20).reshape(2, 30, 20) % 251 - 125).to(torch.bfloat16)
+    memory = _sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, _cores(1, 1), [64, 32])
+    tiled = ttnn.from_torch(values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory)
+    assert torch.equal(ttnn.to_torch(tiled), values)
+    # This proposed padded-row input cannot reach repeat: untilize rejects its WIDTH shard height.
+    with expect_error(RuntimeError, "Shard height 64 must match physical height 60"):
+        ttnn.untilize(tiled, memory_config=memory)
+    assert torch.equal(ttnn.to_torch(tiled), values)

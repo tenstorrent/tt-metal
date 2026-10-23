@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <type_traits>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/scratchpad.h"
@@ -50,7 +51,10 @@ void kernel_main() {
                         std::min(transfer_bytes, row_bytes - offset),
                         std::min(src_page_bytes - src_offset, dst_page_bytes - dst_offset));
                     const uint32_t src_page = input_row * src_pages_per_row + offset / src_page_bytes;
-                    const uint32_t aligned_source = read_buffer + (src.get_noc_addr(src_page, src_offset) & read_mask);
+                    const uint32_t aligned_source =
+                        read_buffer + (noc_traits_t<std::remove_cv_t<decltype(src)>>::src_addr<Noc::AddressType::NOC>(
+                                           src, noc, {.page_id = src_page, .offset_bytes = src_offset}) &
+                                       read_mask);
                     noc.async_read(
                         src,
                         CoreLocalMem<uint32_t>(aligned_source),
@@ -62,7 +66,10 @@ void kernel_main() {
                         const uint32_t output_row = (h * repetitions + n) * lower_dims * rep_dim + r * lower_dims + l;
                         const uint32_t dst_page = output_row * dst_pages_per_row + offset / dst_page_bytes;
                         const uint32_t aligned_dest =
-                            write_buffer + (dst.get_noc_addr(dst_page, dst_offset) & OFFSET_16);
+                            write_buffer +
+                            (noc_traits_t<std::remove_cv_t<decltype(dst)>>::dst_addr<Noc::AddressType::NOC>(
+                                 dst, noc, {.page_id = dst_page, .offset_bytes = dst_offset}) &
+                             OFFSET_16);
                         tt_memmove<false, false, false, transfer_bytes>(noc, aligned_dest, aligned_source, bytes);
                         noc.async_write(
                             CoreLocalMem<uint32_t>(aligned_dest),
