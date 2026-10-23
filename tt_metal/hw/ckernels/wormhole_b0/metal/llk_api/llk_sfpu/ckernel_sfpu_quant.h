@@ -98,6 +98,7 @@ template <DataFormat OUTPUT_FORMAT, std::uint32_t T_LREG>
 inline void _rne_clamp_init_() {
     constexpr int LO = OUTPUT_FORMAT == DataFormat::UInt8 ? 0 : -128;
     constexpr int HI = OUTPUT_FORMAT == DataFormat::UInt8 ? 255 : 127;
+    constexpr int IMM12_MASK = 0xfff;  // SFPIADD takes a 12-bit 2's complement immediate
     _sfpu_load_imm32_(p_sfpu::LREG5, RNE_MAGIC_FP32);
     _sfpu_load_imm32_(p_sfpu::LREG1, ZP_SPLIT_FP32);
     // LREG0 = zp_hi = fl(zp + ZP_SPLIT) - ZP_SPLIT
@@ -113,13 +114,13 @@ inline void _rne_clamp_init_() {
     // LREG5 = RNE_MAGIC + zp_hi
     TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG5, 0 /*mod1*/);
     TTI_SFPNOP;
-    TTI_SFPIADD(LO & 0xfff, T_LREG, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-    TTI_SFPCONFIG(0, 12, 0);
-    TTI_SFPIADD(HI & 0xfff, T_LREG, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-    TTI_SFPCONFIG(0, 13, 0);
+    TTI_SFPIADD(LO & IMM12_MASK, T_LREG, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
+    TTI_SFPIADD(HI & IMM12_MASK, T_LREG, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
     TTI_SFPIADD(0, p_sfpu::LCONST_0, T_LREG, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
     if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
-        TTI_SFPIADD(128, T_LREG, T_LREG, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(-LO, T_LREG, T_LREG, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
     }
 }
 

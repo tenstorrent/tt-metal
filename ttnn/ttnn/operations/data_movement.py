@@ -678,14 +678,12 @@ def _quantized_output_dtype(dtype, output_tensor):
     return torch.int32
 
 
-def _golden_function_quantize(input_tensor, scale, zero_point, *_, axis=None, dtype=None, output_tensor=None, **__):
+def _round_add_zp_saturate(scaled_input, zero_point, torch_dtype):
     import torch
 
-    # q = round(x / scale) + zero_point; per-channel args broadcast along `axis`.
-    scale = _broadcast_quantization_arg(scale, input_tensor, axis)
-    zero_point = _broadcast_quantization_arg(zero_point, input_tensor, axis)
-    torch_dtype = _quantized_output_dtype(dtype, output_tensor)
-    scaled_input = torch.div(input_tensor, scale)
+    # A scalar zero point takes the fused kernel. It rounds, adds the zero point and saturates.
+    # A tensor zero point takes the composite path. It adds the zero point first. int32 and uint8 are then
+    # truncated by a typecast that does not saturate, while int8 is rounded and saturated.
     if isinstance(zero_point, torch.Tensor):
         output = scaled_input + zero_point
         if torch_dtype in (torch.int32, torch.uint8):
@@ -695,6 +693,16 @@ def _golden_function_quantize(input_tensor, scale, zero_point, *_, axis=None, dt
         output = torch.round(scaled_input) + zero_point
     q_min, q_max = (0, 255) if torch_dtype == torch.uint8 else (-128, 127)
     return torch.clamp(output, q_min, q_max).to(torch_dtype)
+
+
+def _golden_function_quantize(input_tensor, scale, zero_point, *_, axis=None, dtype=None, output_tensor=None, **__):
+    import torch
+
+    # q = round(x / scale) + zero_point; per-channel args broadcast along `axis`.
+    scale = _broadcast_quantization_arg(scale, input_tensor, axis)
+    zero_point = _broadcast_quantization_arg(zero_point, input_tensor, axis)
+    torch_dtype = _quantized_output_dtype(dtype, output_tensor)
+    return _round_add_zp_saturate(torch.div(input_tensor, scale), zero_point, torch_dtype)
 
 
 ttnn.attach_golden_function(ttnn.quantize, golden_function=_golden_function_quantize)
@@ -735,15 +743,7 @@ def _golden_function_requantize(
     out_zero_point = _broadcast_quantization_arg(out_zero_point, input_tensor, axis)
     torch_dtype = _quantized_output_dtype(dtype, output_tensor)
     scaled_input = (input_tensor - in_zero_point) * (in_scale / out_scale)
-    if isinstance(out_zero_point, torch.Tensor):
-        output = scaled_input + out_zero_point
-        if torch_dtype in (torch.int32, torch.uint8):
-            return output.to(torch_dtype)
-        output = torch.round(output)
-    else:
-        output = torch.round(scaled_input) + out_zero_point
-    q_min, q_max = (0, 255) if torch_dtype == torch.uint8 else (-128, 127)
-    return torch.clamp(output, q_min, q_max).to(torch_dtype)
+    return _round_add_zp_saturate(scaled_input, out_zero_point, torch_dtype)
 
 
 ttnn.attach_golden_function(ttnn.requantize, golden_function=_golden_function_requantize)

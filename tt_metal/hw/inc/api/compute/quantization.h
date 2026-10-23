@@ -200,9 +200,9 @@ ALWI void dequant_int8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  *
  * Return value: None
  *
- * | Argument   | Description                            | Data type | Valid range | Required |
- * |------------|----------------------------------------|-----------|-------------|----------|
- * | zero_point | The zero point, as an fp32 bit pattern | uint32_t  | Any number  | Yes      |
+ * | Argument   | Description                            | Data type | Valid range              | Required |
+ * |------------|----------------------------------------|-----------|--------------------------|----------|
+ * | zero_point | The zero point, as an fp32 bit pattern | uint32_t  | Integer in [-2^24, 2^24] | Yes      |
  * */
 // clang-format on
 ALWI void quant_tile_init(const uint32_t zero_point) {
@@ -216,9 +216,9 @@ ALWI void quant_tile_init(const uint32_t zero_point) {
  *
  * Return value: None
  *
- * | Argument   | Description                            | Data type | Valid range | Required |
- * |------------|----------------------------------------|-----------|-------------|----------|
- * | zero_point | The zero point, as an fp32 bit pattern | uint32_t  | Any number  | Yes      |
+ * | Argument   | Description                            | Data type | Valid range              | Required |
+ * |------------|----------------------------------------|-----------|--------------------------|----------|
+ * | zero_point | The zero point, as an fp32 bit pattern | uint32_t  | Integer in [-2^24, 2^24] | Yes      |
  * */
 // clang-format on
 ALWI void quant_uint8_tile_init(const uint32_t zero_point) {
@@ -231,9 +231,9 @@ ALWI void quant_uint8_tile_init(const uint32_t zero_point) {
  *
  * Return value: None
  *
- * | Argument   | Description                            | Data type | Valid range | Required |
- * |------------|----------------------------------------|-----------|-------------|----------|
- * | zero_point | The zero point, as an fp32 bit pattern | uint32_t  | Any number  | Yes      |
+ * | Argument   | Description                            | Data type | Valid range              | Required |
+ * |------------|----------------------------------------|-----------|--------------------------|----------|
+ * | zero_point | The zero point, as an fp32 bit pattern | uint32_t  | Integer in [-2^24, 2^24] | Yes      |
  * */
 // clang-format on
 ALWI void quant_int8_tile_init(const uint32_t zero_point) {
@@ -250,10 +250,10 @@ ALWI void quant_int8_tile_init(const uint32_t zero_point) {
  *
  * Return value: None
  *
- * | Argument       | Description                                    | Data type | Valid range | Required |
- * |----------------|------------------------------------------------|-----------|-------------|----------|
- * | zero_point     | -z_in * (s_in / s_out), as an fp32 bit pattern | uint32_t  | Any number  | Yes      |
- * | out_zero_point | The output zero point, as an fp32 bit pattern  | uint32_t  | Any number  | No       |
+ * | Argument       | Description                                    | Data type | Valid range              | Required |
+ * |----------------|------------------------------------------------|-----------|--------------------------|----------|
+ * | zero_point     | -z_in * (s_in / s_out), as an fp32 bit pattern | uint32_t  | Any number               | Yes      |
+ * | out_zero_point | The output zero point, as an fp32 bit pattern  | uint32_t  | Integer in [-2^24, 2^24] | No       |
  * */
 // clang-format on
 ALWI void requant_tile_init(const uint32_t zero_point, const uint32_t out_zero_point = 0) {
@@ -270,10 +270,10 @@ ALWI void requant_tile_init(const uint32_t zero_point, const uint32_t out_zero_p
  *
  * Return value: None
  *
- * | Argument       | Description                                    | Data type | Valid range | Required |
- * |----------------|------------------------------------------------|-----------|-------------|----------|
- * | zero_point     | -z_in * (s_in / s_out), as an fp32 bit pattern | uint32_t  | Any number  | Yes      |
- * | out_zero_point | The output zero point, as an fp32 bit pattern  | uint32_t  | Any number  | No       |
+ * | Argument       | Description                                    | Data type | Valid range              | Required |
+ * |----------------|------------------------------------------------|-----------|--------------------------|----------|
+ * | zero_point     | -z_in * (s_in / s_out), as an fp32 bit pattern | uint32_t  | Any number               | Yes      |
+ * | out_zero_point | The output zero point, as an fp32 bit pattern  | uint32_t  | Integer in [-2^24, 2^24] | No       |
  * */
 // clang-format on
 ALWI void requant_uint8_tile_init(const uint32_t zero_point, const uint32_t out_zero_point = 0) {
@@ -290,10 +290,10 @@ ALWI void requant_uint8_tile_init(const uint32_t zero_point, const uint32_t out_
  *
  * Return value: None
  *
- * | Argument       | Description                                    | Data type | Valid range | Required |
- * |----------------|------------------------------------------------|-----------|-------------|----------|
- * | zero_point     | -z_in * (s_in / s_out), as an fp32 bit pattern | uint32_t  | Any number  | Yes      |
- * | out_zero_point | The output zero point, as an fp32 bit pattern  | uint32_t  | Any number  | No       |
+ * | Argument       | Description                                    | Data type | Valid range              | Required |
+ * |----------------|------------------------------------------------|-----------|--------------------------|----------|
+ * | zero_point     | -z_in * (s_in / s_out), as an fp32 bit pattern | uint32_t  | Any number               | Yes      |
+ * | out_zero_point | The output zero point, as an fp32 bit pattern  | uint32_t  | Integer in [-2^24, 2^24] | No       |
  * */
 // clang-format on
 ALWI void requant_int8_tile_init(const uint32_t zero_point, const uint32_t out_zero_point = 0) {
@@ -311,10 +311,10 @@ ALWI void requant_int8_tile_init(const uint32_t zero_point, const uint32_t out_z
  *
  * Return value: None
  *
- * | Argument       | Description                                            | Data type | Valid range | Required |
- * |----------------|--------------------------------------------------------|-----------|-------------|----------|
- * | zero_point     | -(z_in + 128) * (s_in / s_out), as an fp32 bit pattern | uint32_t  | Any number  | Yes      |
- * | out_zero_point | The output zero point, as an fp32 bit pattern          | uint32_t  | Any number  | No       |
+ * | Argument       | Description                                            | Data type | Valid range              | Required |
+ * |----------------|--------------------------------------------------------|-----------|--------------------------|----------|
+ * | zero_point     | -(z_in + 128) * (s_in / s_out), as an fp32 bit pattern | uint32_t  | Any number               | Yes      |
+ * | out_zero_point | The output zero point, as an fp32 bit pattern          | uint32_t  | Integer in [-2^24, 2^24] | No       |
  * */
 // clang-format on
 ALWI void requant_int8_in_tile_init(const uint32_t zero_point, const uint32_t out_zero_point = 0) {
@@ -333,10 +333,10 @@ ALWI void requant_int8_in_tile_init(const uint32_t zero_point, const uint32_t ou
  *
  * Return value: None
  *
- * | Argument       | Description                                            | Data type | Valid range | Required |
- * |----------------|--------------------------------------------------------|-----------|-------------|----------|
- * | zero_point     | -(z_in + 128) * (s_in / s_out), as an fp32 bit pattern | uint32_t  | Any number  | Yes      |
- * | out_zero_point | The output zero point, as an fp32 bit pattern          | uint32_t  | Any number  | No       |
+ * | Argument       | Description                                            | Data type | Valid range              | Required |
+ * |----------------|--------------------------------------------------------|-----------|--------------------------|----------|
+ * | zero_point     | -(z_in + 128) * (s_in / s_out), as an fp32 bit pattern | uint32_t  | Any number               | Yes      |
+ * | out_zero_point | The output zero point, as an fp32 bit pattern          | uint32_t  | Integer in [-2^24, 2^24] | No       |
  * */
 // clang-format on
 ALWI void requant_int8_in_uint8_out_tile_init(const uint32_t zero_point, const uint32_t out_zero_point = 0) {
@@ -355,10 +355,10 @@ ALWI void requant_int8_in_uint8_out_tile_init(const uint32_t zero_point, const u
  *
  * Return value: None
  *
- * | Argument       | Description                                            | Data type | Valid range | Required |
- * |----------------|--------------------------------------------------------|-----------|-------------|----------|
- * | zero_point     | -(z_in + 128) * (s_in / s_out), as an fp32 bit pattern | uint32_t  | Any number  | Yes      |
- * | out_zero_point | The output zero point, as an fp32 bit pattern          | uint32_t  | Any number  | No       |
+ * | Argument       | Description                                            | Data type | Valid range              | Required |
+ * |----------------|--------------------------------------------------------|-----------|--------------------------|----------|
+ * | zero_point     | -(z_in + 128) * (s_in / s_out), as an fp32 bit pattern | uint32_t  | Any number               | Yes      |
+ * | out_zero_point | The output zero point, as an fp32 bit pattern          | uint32_t  | Integer in [-2^24, 2^24] | No       |
  * */
 // clang-format on
 ALWI void requant_int8_in_int8_out_tile_init(const uint32_t zero_point, const uint32_t out_zero_point = 0) {

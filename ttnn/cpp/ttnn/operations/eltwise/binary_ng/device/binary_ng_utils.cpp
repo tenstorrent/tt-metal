@@ -533,7 +533,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case REQUANT:
             return {
                 "requant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX), "
-                "get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX + 1));",
+                "get_arg_val<uint32_t>(QUANT_OUT_ZERO_POINT_RT_ARGS_IDX));",
                 "requant_tile"};
         case DEQUANT:
             return {"dequant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "dequant_tile"};
