@@ -53,10 +53,15 @@ supported_formats = [
     DataFormat.Bfp8_b,
 ]
 
+# Eight 32-bit tiles fill DEST under DestSync.Full, so the multi-tile axis reaches DEST tiles 4-7.
+NUM_TILES_32BIT_FULL_DEST = 8
+
 # Sweep tile dimensions from tiny ([1,32]..[16,32]) through full ([32,32]).
 # Tiny tiles have fewer faces (num_faces=2) and variable face_r_dim;
 # full 32x32 tiles have 4 faces with face_r_dim=16.
 # BroadcastType.None_ is a datacopy (unpack A -> DEST -> pack to L1).
+# 32x32 tiles also run NUM_TILES_32BIT_FULL_DEST tiles stacked along rows so math writes DEST tile slots past 0;
+# for 32-bit / dest-accumulation variants under DestSync.Half it also spans two blocks, using both DEST halves.
 BCAST_TILE_DIMENSIONS = [[1, 32], [2, 32], [4, 32], [8, 32], [16, 32], [32, 32]]
 BCAST_PERF_TILE_DIMENSIONS = [
     list(tile_dimensions)
@@ -131,9 +136,16 @@ def get_perf_input_dimensions_bcast(dest_acc, tile_dimensions):
 def get_input_dimensions_bcast(dest_acc, tile_dimensions):
     """A single tile, plus every perf geometry, so the shared kernel is
     golden-checked at the shapes perf_bcast.py benchmarks."""
-    return [list(tile_dimensions)] + get_perf_input_dimensions_bcast(
+    input_dimensions = [list(tile_dimensions)] + get_perf_input_dimensions_bcast(
         dest_acc, tile_dimensions
     )
+    multi_tile_dimensions = [
+        tile_dimensions[0] * NUM_TILES_32BIT_FULL_DEST,
+        tile_dimensions[1],
+    ]
+    if tile_dimensions == [32, 32] and multi_tile_dimensions not in input_dimensions:
+        input_dimensions.append(multi_tile_dimensions)
+    return input_dimensions
 
 
 def _run_unpack_bcast_test(
@@ -147,6 +159,7 @@ def _run_unpack_bcast_test(
     perf_report=None,
     run_types=None,
     loop_factor: int = 1,
+    dest_sync=BCAST_DEST_SYNC,
 ):
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
@@ -172,7 +185,7 @@ def _run_unpack_bcast_test(
     )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        BCAST_DEST_SYNC,
+        dest_sync,
         dest_acc,
         formats,
         input_dimensions,
@@ -186,7 +199,7 @@ def _run_unpack_bcast_test(
         "formats": formats,
         "templates": [
             BROADCAST_TYPE(broadcast_type),
-            DEST_SYNC(BCAST_DEST_SYNC),
+            DEST_SYNC(dest_sync),
         ],
         "runtimes": [
             NUM_FACES(num_faces, num_faces, num_faces),
@@ -285,4 +298,22 @@ def test_unpack_bcast(
 ):
     _run_unpack_bcast_test(
         formats, dest_acc, tile_dimensions, broadcast_type, input_dimensions
+    )
+
+
+# DestSync.Full puts all eight 32-bit unpack-to-dest tiles in one block, so math reaches DEST tiles 4-7.
+@parametrize(
+    formats=input_output_formats(
+        [DataFormat.Int32, DataFormat.UInt32, DataFormat.Float32], same=True
+    ),
+    broadcast_type=BCAST_TYPES,
+)
+def test_unpack_bcast_dest_sync_full(formats, broadcast_type):
+    _run_unpack_bcast_test(
+        formats,
+        DestAccumulation.Yes,
+        [32, 32],
+        broadcast_type,
+        [32 * NUM_TILES_32BIT_FULL_DEST, 32],
+        dest_sync=DestSync.Full,
     )
