@@ -25,6 +25,7 @@ Env:
   EXPERT_DTYPE        MoE routed-expert weight dtype: "bf4" or "bf8"                        [default bf4]
   GPT_OSS_WEIGHTS_FROM_CACHE  "1" -> pass an empty state_dict (load tilized weights from the TTNN cache)
   HF_MODEL            real gpt-oss weights dir (read by ModelArgs)
+  PREFILL_REQUIRE_GALAXY  "1" -> fail (rc 1) instead of skipping when no galaxy is visible (CI)
 
 Run (single Blackhole galaxy, after weights + golden are staged):
   export HF_MODEL=/path/to/gpt-oss-120b
@@ -36,29 +37,22 @@ Run (single Blackhole galaxy, after weights + golden are staged):
 import json
 import math
 import os
-import resource
 import statistics
 import sys
 import time
 from pathlib import Path
 
 import ttnn
-
-# The (4,8) galaxy = 32 devices. Below this we can't do TP=8 + EP=32, so auto-skip.
-GALAXY_NUM_DEVICES = 32
-ROWS, COLS = 4, 8  # SP=4 (rows), TP=8 (cols), EP=32
-
-
-def _raise_nproc_limit():
-    """Raise RLIMIT_NPROC to the hard limit so tt-metal's parallel kernel JIT (a burst of g++/make
-    procs) doesn't starve with EAGAIN mid-build."""
-    soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
-    if soft != resource.RLIM_INFINITY and (hard == resource.RLIM_INFINITY or soft < hard):
-        try:
-            resource.setrlimit(resource.RLIMIT_NPROC, (hard, hard))
-            print(f"[prefill-pcc] raised RLIMIT_NPROC soft {soft} -> {hard}")
-        except (ValueError, OSError) as e:
-            print(f"[prefill-pcc] WARNING: could not raise RLIMIT_NPROC (soft={soft}): {e}", file=sys.stderr)
+from models.demos.gpt_oss_d_p.tests.galaxy_harness import (
+    COLS,
+    ROWS,
+    expert_weight_dtype,
+    galaxy_exit_code,
+    load_state_dict,
+    open_galaxy_mesh,
+    raise_nproc_limit,
+    runtime_topology,
+)
 
 
 def plan(n_tokens, chunk_size, chunked, sp):
@@ -81,19 +75,15 @@ def plan(n_tokens, chunk_size, chunked, sp):
 
 
 def main():
-    _raise_nproc_limit()
+    raise_nproc_limit("prefill-pcc")
 
     golden_dir = os.environ.get("PREFILL_TRACE_DIR")
     if not golden_dir:
         print("[prefill-pcc] SKIP: set PREFILL_TRACE_DIR to a golden trace dir", flush=True)
         return 0
-    if ttnn.get_num_devices() < GALAXY_NUM_DEVICES:
-        print(
-            f"[prefill-pcc] SKIP: needs the (4,8) galaxy ({GALAXY_NUM_DEVICES} devices) for TP=8 + EP=32; "
-            f"have {ttnn.get_num_devices()}",
-            flush=True,
-        )
-        return 0
+    rc = galaxy_exit_code("prefill-pcc")
+    if rc is not None:
+        return rc
 
     token_ids = list(json.load(open(Path(golden_dir) / "metadata.json"))["token_ids"])
     n_tokens = len(token_ids)
@@ -126,9 +116,7 @@ def main():
     # all-gather fallback. Both use ring collectives and therefore need the cyclic torus route
     # -> FABRIC_1D_RING + the torus mesh descriptor
     # (TT_MESH_GRAPH_DESC_PATH=.../single_bh_galaxy_torus_xy_graph_descriptor.textproto).
-    _linear = os.getenv("PREFILL_TOPOLOGY", "ring") == "linear"
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D if _linear else ttnn.FabricConfig.FABRIC_1D_RING)
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(ROWS, COLS))
+    mesh = open_galaxy_mesh()
     print(f"[prefill-pcc] mesh opened {tuple(mesh.shape)} ndev={mesh.get_num_devices()}", flush=True)
     try:
         model_args = ModelArgs(mesh_device=mesh)  # HF_MODEL
@@ -140,7 +128,7 @@ def main():
             hf_config.num_hidden_layers = num_layers
             print(f"[prefill-pcc] PREFILL_NUM_LAYERS={num_layers}: first {num_layers} layers only", flush=True)
 
-        expert_dtype = ttnn.bfloat8_b if os.getenv("EXPERT_DTYPE", "bf4") == "bf8" else ttnn.bfloat4_b
+        expert_dtype = expert_weight_dtype()
         # KV-cache storage dtype (default bf8). KV_CACHE_DTYPE=bf16 -> bump the cache to bf16 to test
         # whether bf8 block-float storage (shared-exponent tiles, hurt by the growing MoE outliers) is
         # what drives the V-at-depth PCC decline. ~2x KV DRAM. Write-only in one-shot (SDPA uses live
@@ -149,12 +137,7 @@ def main():
         print(f"[prefill-pcc] expert_dtype={expert_dtype} kv_cache_dtype={kv_cache_dtype}", flush=True)
         cache_path = model_args.weight_cache_path(ttnn.bfloat8_b)
 
-        if os.getenv("GPT_OSS_WEIGHTS_FROM_CACHE") == "1":
-            print("[prefill-pcc] GPT_OSS_WEIGHTS_FROM_CACHE=1 -> empty state_dict (load tilized cache)", flush=True)
-            state_dict = {}
-        else:
-            print("[prefill-pcc] loading real bf16 weights (slow: safetensors read) ...", flush=True)
-            state_dict = ModelArgs.load_state_dict(model_args.weights_path)
+        state_dict = load_state_dict(model_args, "prefill-pcc")
 
         cfg = TtPrefillRuntimeConfig(
             num_layers=num_layers,
@@ -166,7 +149,7 @@ def main():
             cache_dtype=kv_cache_dtype,
             weight_cache_path=cache_path,
             owns_kv_cache=True,  # standalone harness owns its cache (runtime.kv_cache)
-            topology=ttnn.Topology.Linear if _linear else ttnn.Topology.Ring,
+            topology=runtime_topology(),
             bounded_sliding_kv_cache=bounded_kv,
         )
         runtime = TtPrefillRuntime(mesh, hf_config, state_dict, cfg)

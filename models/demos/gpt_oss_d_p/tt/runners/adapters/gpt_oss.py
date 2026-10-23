@@ -131,6 +131,12 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
         """Build the GPT-OSS model + runtime for this rank. The runtime is stateless w.r.t. the KV
         cache (owns_kv_cache=False): the engine allocated it via allocate_kv_cache and passes it into
         each call."""
+        if params.dflash_enabled:
+            # The runner's DFlash path needs trace capture and passes no dflash_handoff/dflash_sink.
+            raise NotImplementedError(
+                "GPT-OSS DFlash prefill is not wired through the common runner; set "
+                "TtPrefillRuntimeConfig.dflash_checkpoint_path and call prefill_chunk(dflash_handoff=True)"
+            )
         import ttnn
         from models.demos.gpt_oss_d_p.tt.model_config import ModelArgs
         from models.demos.gpt_oss_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig

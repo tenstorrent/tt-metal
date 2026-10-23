@@ -133,6 +133,7 @@ class DecoderLayer:
         batch_size=1,
         cached_len=0,
         indexed_rope=False,
+        dflash_accumulator=None,
     ):
         seqlen = hidden_states.shape[-2]
         if seqlen > 32 * 1024:
@@ -171,5 +172,10 @@ class DecoderLayer:
 
         hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
         residual.deallocate(True)
+
+        # DFlash (z-lab/gpt-oss-120b-DFlash) trains on decoder-layer outputs, HF
+        # hidden_states[layer_id + 1], i.e. after this residual add.
+        if dflash_accumulator is not None:
+            dflash_accumulator.tap(hidden_states, self.layer_idx)
 
         return hidden_states
