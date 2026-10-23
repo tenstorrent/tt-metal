@@ -467,6 +467,14 @@ def load_ttsim_skips(path):
         skips = yaml.safe_load(f) or {}
     if not isinstance(skips, dict):
         raise GateError(f"{path} is not a mapping of arch -> test ids")
+    for arch, ids in skips.items():
+        for test_id in ids or []:
+            if not isinstance(test_id, str):
+                # A plain scalar ending in ':' loads as a one-key mapping, which would silently
+                # drop the ':' and then break "--deselect=" + test_id.
+                raise GateError(
+                    f"{path}: entry {test_id!r} under {arch} is not a string; quote test ids that end in ':'"
+                )
     return {arch: list(ids or []) for arch, ids in skips.items()}
 
 

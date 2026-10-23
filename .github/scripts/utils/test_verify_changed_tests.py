@@ -1477,6 +1477,18 @@ def test_sim_sku_with_no_skip_list_arch_gets_no_deselects(repo: Repo):
     assert payload["legs"][0]["gate_pytest_deselect"] == ""
 
 
+def test_non_string_skip_list_entry_is_a_gate_error(repo: Repo):
+    # "- some::test[param:" is a yaml mapping key, not a string; the gate must say so rather than crash
+    # on "--deselect=" + dict or silently lose the trailing ':'.
+    rows = sim_repo(repo)
+    repo.write(
+        "tests/pipeline_reorg/ttsim-skip-list.yaml", SKIP_LIST + "  - tests/ttnn/unit_tests/test_f.py::test_g[case:\n"
+    )
+    code, payload, stderr = run_with_skips(repo, {"sample_sim_tests": rows})
+    assert code != 0
+    assert "is not a string; quote test ids that end in ':'" in stderr
+
+
 def test_missing_skip_list_is_not_fatal(repo: Repo):
     rows = sim_repo(repo)
     (repo.root / "tests/pipeline_reorg/ttsim-skip-list.yaml").unlink()
