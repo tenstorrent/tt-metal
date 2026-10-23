@@ -507,6 +507,30 @@ jobs:
       post-pr-suggestions: ${{ github.event_name == 'pull_request' }}
       check-harbor-runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-light-prio' || 'tt-ubuntu-light' }}
 
+  # Shadow run: times a clang-tidy 23 full scan, with its check set matched to
+  # today's v20 behavior (see cmake/clang-tidy.d/.clang-tidy.v23-new-checks.yaml),
+  # against real PR traffic. Informational only — intentionally left out of
+  # workflow-status's `needs:` below so its result can never affect PR Gate
+  # Status. PR-gate only; does not run in the merge queue.
+  code-analysis-shadow-clang-tidy-23:
+    needs: [build-docker-images, find-changed-files]
+    if: >-
+      ${{
+        needs.find-changed-files.outputs.run-clang-tidy == 'true' &&
+        github.event_name == 'pull_request' &&
+        !github.event.pull_request.draft
+      }}
+    uses: ./.github/workflows/code-analysis.yaml
+    secrets: inherit
+    with:
+      platform: "Ubuntu 24.04"
+      ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
+      dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
+      force-scan: true
+      post-pr-suggestions: false
+      clang-tidy-version: "23"
+      check-harbor-runs-on: tt-ubuntu-light
+
   # LLK PR Labeling — auto-apply labels based on which LLK directories changed
   llk-label-pr:
     needs: find-changed-files
