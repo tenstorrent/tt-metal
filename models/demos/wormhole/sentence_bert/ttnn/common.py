@@ -29,10 +29,10 @@ ff1_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
 ff2_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
     compute_with_storage_grid_size=(6, 8),
     in0_block_w=4,
-    out_subblock_h=1,
-    out_subblock_w=6,
+    out_subblock_h=2,
+    out_subblock_w=4,
     per_core_M=12,
-    per_core_N=12,
+    per_core_N=4,
     transpose_mcast=False,
     fused_activation=None,
 )
