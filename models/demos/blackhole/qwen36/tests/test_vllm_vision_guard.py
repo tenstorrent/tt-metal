@@ -4,8 +4,9 @@
 
 (a) default warmup (no max_pixels): an over-size grid (1x86x128 = 11008 patches) raises ValueError at once, no hang;
 (b) simulated vLLM config max_pixels=1048576 is read by _read_vllm_max_pixels; warmup covers its bucket and a 1 MP
-    image (4096 patches) runs; (c) max_pixels=3e6 appends a new bucket (12288) to the warmup and the 11008-patch
-    grid then runs instead of being rejected.
+    image (4096 patches) runs; (c) max_pixels=3e6 warms every bucket up to 12288 (10240 included, not just the
+    largest) and the 11008- and 9000-patch grids then run instead of being rejected; (d) a QWEN36_VISION_WARMUP_GRIDS
+    override with a gap (only bucket 8192) refuses an item in the gap (bucket 2048) even though it is below the max.
 
     pytest models/demos/blackhole/qwen36/tests/test_vllm_vision_guard.py -svq
 """
@@ -43,7 +44,7 @@ def _kwargs(model, grid):
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_vision_guard(mesh_device, reset_seeds, ensure_gc, expect_error):
+def test_vision_guard(mesh_device, reset_seeds, ensure_gc, expect_error, monkeypatch):
     from transformers import AutoConfig
 
     hf_config = AutoConfig.from_pretrained(os.environ["HF_MODEL"])
@@ -52,8 +53,9 @@ def test_vision_guard(mesh_device, reset_seeds, ensure_gc, expect_error):
 
     # (a) no max_pixels -> default grids (max bucket 8192); over-size item is refused host-side.
     assert gen._vllm_mm_max_pixels is None
+    monkeypatch.delenv("QWEN36_VISION_WARMUP_GRIDS", raising=False)
     gen.warmup_vision()
-    assert gen._vision_warmed_max_bucket == 8192
+    assert gen._vision_warmed_buckets == {2048, 4096, 6144, 8192}
     with expect_error(ValueError, "max_pixels"):
         gen._compute_vision_tokens(model, _kwargs(model, (1, 86, 128)))
 
@@ -73,13 +75,23 @@ def test_vision_guard(mesh_device, reset_seeds, ensure_gc, expect_error):
             assert Qwen36ForCausalLM._read_vllm_max_pixels() == 1048576
     gen._vllm_mm_max_pixels = 1048576
     gen.warmup_vision()
-    assert gen._vision_warmed_max_bucket == 8192
+    assert gen._vision_warmed_buckets == {2048, 4096, 6144, 8192}
     ttnn.deallocate(gen._compute_vision_tokens(model, _kwargs(model, (1, 64, 64))))  # 1 MP image: 4096 patches
 
-    # (c) larger max_pixels appends a bucket; the formerly-hanging 2048x1365 grid now runs.
+    # (c) larger max_pixels warms every bucket up to its own; the formerly-hanging 2048x1365 grid now runs, and so
+    # does a 1x90x100 grid (9000 patches) in bucket 10240, below the largest warmed bucket.
     gen._vllm_mm_max_pixels = 3_000_000
     gen.warmup_vision()
-    assert gen._vision_warmed_max_bucket == 12288
+    assert gen._vision_warmed_buckets == {2048, 4096, 6144, 8192, 10240, 12288}
     ttnn.deallocate(gen._compute_vision_tokens(model, _kwargs(model, (1, 86, 128))))
+    ttnn.deallocate(gen._compute_vision_tokens(model, _kwargs(model, (1, 90, 100))))
     with expect_error(ValueError, "max_pixels"):
         gen._compute_vision_tokens(model, _kwargs(model, (1, 128, 128)))
+
+    # (d) an override with a gap: only bucket 8192 is warmed, so a bucket-2048 item is refused, not compiled late.
+    gen._vllm_mm_max_pixels = None
+    monkeypatch.setenv("QWEN36_VISION_WARMUP_GRIDS", "1x80x80")
+    gen.warmup_vision()
+    assert gen._vision_warmed_buckets == {8192}
+    with expect_error(ValueError, "not warmed"):
+        gen._compute_vision_tokens(model, _kwargs(model, (1, 32, 32)))

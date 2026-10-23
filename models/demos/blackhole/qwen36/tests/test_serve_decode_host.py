@@ -168,6 +168,32 @@ def test_read_vllm_chunked_prefill_from_config(monkeypatch):
     assert read(_vllm_cfg(budget=262144, thr=8192)) == (262144, 8192, 128)
 
 
+def test_max_pixels_is_reread_when_allocating_inside_the_vllm_config(monkeypatch):
+    """The plugin builds the model outside vLLM's config context and allocates the KV cache inside it: max_pixels
+    (which warmup_vision sizes the vision buckets from) is picked up at allocation, and kept without a config."""
+    monkeypatch.delenv("QWEN36_CHUNKED_PREFILL", raising=False)
+    gen = Qwen36ForCausalLM.__new__(Qwen36ForCausalLM)
+    gen.model = [SimpleNamespace(args=SimpleNamespace(max_batch_size=WIDTH), allocate_kv_caches=lambda *a, **k: "kv")]
+    cfg = SimpleNamespace(
+        cache_config=SimpleNamespace(enable_prefix_caching=False),
+        model_config=SimpleNamespace(
+            mm_processor_kwargs=None, multimodal_config=SimpleNamespace(mm_processor_kwargs={"max_pixels": 3_000_000})
+        ),
+    )
+
+    monkeypatch.setattr(Qwen36ForCausalLM, "_vllm_config_or_none", staticmethod(lambda: None))
+    gen._read_vllm_serving_flags()  # initialize_vllm_model: no current config
+    assert gen._vllm_mm_max_pixels is None
+
+    monkeypatch.setattr(Qwen36ForCausalLM, "_vllm_config_or_none", staticmethod(lambda: cfg))
+    assert gen.allocate_kv_cache((1, 1, 32, 128), None, 1) == "kv"
+    assert gen._vllm_mm_max_pixels == 3_000_000 and gen._vllm_prefix_caching is False
+
+    monkeypatch.setattr(Qwen36ForCausalLM, "_vllm_config_or_none", staticmethod(lambda: None))
+    gen._read_vllm_serving_flags()
+    assert gen._vllm_mm_max_pixels == 3_000_000
+
+
 @pytest.mark.parametrize(
     "budget, step_tokens, chunk_len, end, expected",
     [

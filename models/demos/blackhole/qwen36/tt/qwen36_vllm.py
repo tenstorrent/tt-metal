@@ -233,7 +233,6 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # Non-vLLM callers (tests, demos) have no current config and keep the default (enabled). The plugin builds the
         # model OUTSIDE vLLM's config context, so allocate_kv_cache (inside it) reads these again.
         inst._read_vllm_serving_flags()
-        inst._vllm_mm_max_pixels = cls._read_vllm_max_pixels()
         return inst
 
     @staticmethod
@@ -250,16 +249,19 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         return vc if vc is not None and getattr(vc, "model_config", None) is not None else None
 
     def _read_vllm_serving_flags(self):
-        """(Re)read vLLM's prefix caching / chunked prefill settings; keeps the current values without a vLLM config."""
+        """(Re)read vLLM's prefix caching / chunked prefill / max_pixels settings; keeps the current values without a
+        vLLM config. max_pixels must be current before warmup_vision, which picks the vision buckets from it."""
         vc = self._vllm_config_or_none()
         if vc is None and hasattr(self, "_vllm_prefix_caching"):
             return
         self._vllm_prefix_caching = True if vc is None else bool(vc.cache_config.enable_prefix_caching)
         self._vllm_chunked_prefill = self._read_vllm_chunked_prefill(vc)
+        self._vllm_mm_max_pixels = self._read_vllm_max_pixels(vc)
         if vc is not None:
             logger.info(
                 f"vLLM serving config: enable_prefix_caching={self._vllm_prefix_caching}, chunked prefill "
-                f"(budget, long_prefill_threshold, align)={self._vllm_chunked_prefill}"
+                f"(budget, long_prefill_threshold, align)={self._vllm_chunked_prefill}, "
+                f"max_pixels={self._vllm_mm_max_pixels}"
             )
 
     @staticmethod
@@ -286,13 +288,16 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         return (budget, thr, align)
 
     @staticmethod
-    def _read_vllm_max_pixels():
+    def _read_vllm_max_pixels(vc=None):
         """max_pixels from vLLM's --mm-processor-kwargs (model_config.mm_processor_kwargs, mirrored on
-        model_config.multimodal_config.mm_processor_kwargs), or None when unset / no current vLLM config."""
+        model_config.multimodal_config.mm_processor_kwargs) of `vc` (default: the current vLLM config), or None when
+        unset / no vLLM config."""
         try:
-            from vllm.config import get_current_vllm_config
+            if vc is None:
+                from vllm.config import get_current_vllm_config
 
-            mc = get_current_vllm_config().model_config
+                vc = get_current_vllm_config()
+            mc = vc.model_config
             for src in (getattr(mc, "multimodal_config", None), mc):
                 kw = getattr(src, "mm_processor_kwargs", None) if src is not None else None
                 if kw and kw.get("max_pixels") is not None:
@@ -367,22 +372,33 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         """Padded patch bucket the tower runs on (same rule as tt/vision/model.py: ceil-to-2048 of count + 1 step)."""
         return (int(num_patches) // 2048 + 1) * 2048
 
+    @classmethod
+    def _vision_grid_for_bucket(cls, bucket):
+        """A 1 x h x w warmup grid (h, w even) whose patch count falls in `bucket`."""
+        n = bucket - 1
+        h = 2 * math.ceil(math.sqrt(n) / 2)
+        w = 2 * math.ceil(n / h / 2)
+        while cls._vision_bucket(h * w) > bucket and w > 2:
+            w -= 2
+        return (1, h, w)
+
     def _check_vision_bucket(self, grid_thw):
         """Refuse an item whose padded bucket was not compiled before trace capture (warmup_vision).
 
         Running the unwarmed tower after capture compiles programs that a later trace replay can clobber, which HANGS
-        the device (seen: tt_all_reduce). Raising here still fails this request's step (the engine reports the error)
-        but avoids the device hang. No check when warmup_vision never ran (tests / demos) or was disabled.
+        the device (seen: tt_all_reduce). Checks membership in the warmed set, so a gap below the largest warmed bucket
+        is refused too. Raising here still fails this request's step (the engine reports the error) but avoids the
+        device hang. No check when warmup_vision never ran (tests / demos) or was disabled.
         """
-        warmed = getattr(self, "_vision_warmed_max_bucket", None)
+        warmed = getattr(self, "_vision_warmed_buckets", None)
         if not warmed:
             return
         for g in grid_thw.reshape(-1, 3):
             n = int(g[0]) * int(g[1]) * int(g[2])
-            if self._vision_bucket(n) > warmed:
+            if self._vision_bucket(n) not in warmed:
                 raise ValueError(
                     f"Vision input of {n} patches (grid {tuple(int(x) for x in g)}, bucket {self._vision_bucket(n)}) "
-                    f"exceeds the largest vision bucket warmed before trace capture ({warmed} patches); running it "
+                    f"needs a vision bucket not warmed before trace capture (warmed: {sorted(warmed)}); running it "
                     f"would compile the tower after capture and hang the device. Set vLLM "
                     f"--mm-processor-kwargs '{{\"max_pixels\": N}}' (e.g. 1048576) so every accepted input fits a warmed "
                     f"bucket, or extend QWEN36_VISION_WARMUP_GRIDS."
@@ -741,7 +757,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     # 4096 -> 6144, 6400 -> 8192 ...; the exact request size only trims rows on host), so one grid per bucket compiles
     # everything a request of that bucket will run. A program first dispatched AFTER the prefill / decode traces were
     # captured can have its binary clobbered by a later trace replay, which hangs the next vision call -- hence this
-    # runs in the eager warmup phase. Buckets not listed still work, but compile at request time (hang risk).
+    # runs in the eager warmup phase. Requests needing a bucket that was not warmed are refused (_check_vision_bucket).
     # Override: QWEN36_VISION_WARMUP_GRIDS="1x32x32;1x80x80" (empty string disables).
     _VISION_WARMUP_GRIDS = "1x32x32;1x48x64;1x64x64;1x80x80"
 
@@ -759,32 +775,27 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                 if grids:
                     logger.warning(
                         "vLLM --mm-processor-kwargs max_pixels is not set: image/video inputs needing a vision bucket "
-                        f"above the warmed maximum ({max(self._vision_bucket(t * h * w) for t, h, w in grids)} patches) "
-                        "will be REJECTED (an unwarmed bucket would hang the device). Set "
+                        f"outside the warmed ones ({sorted({self._vision_bucket(t * h * w) for t, h, w in grids})} "
+                        "patches) will be REJECTED (an unwarmed bucket would hang the device). Set "
                         "--mm-processor-kwargs '{\"max_pixels\": 1048576}' (or your serving limit)."
                     )
             else:
                 # Patches of any accepted item: image <= max_pixels/patch^2; a video (frames x H x W <= max_pixels,
                 # t = frames/temporal_patch_size) is <= max_pixels/(patch^2 * temporal_patch_size); the image bound
-                # covers both (conservative).
+                # covers both (conservative). Every bucket up to that one is reachable, so all of them are warmed.
                 need = -(-int(max_pixels) // vc.patch_size**2)
                 need_bucket = self._vision_bucket(need)
-                if not any(self._vision_bucket(t * h * w) == need_bucket for t, h, w in grids):
-                    h = 2 * math.ceil(math.sqrt(need) / 2)
-                    w = 2 * math.ceil(need / h / 2)
-                    while self._vision_bucket(h * w) > need_bucket and w > 2:  # keep the grid inside the needed bucket
-                        w -= 2
-                    grids.append((1, h, w))
-                    logger.info(
-                        f"max_pixels={max_pixels}: up to {need} patches -> also warming bucket {need_bucket} "
-                        f"with grid 1x{h}x{w}"
-                    )
+                have = {self._vision_bucket(t * h * w) for t, h, w in grids}
+                added = [b for b in range(2048, need_bucket + 1, 2048) if b not in have]
+                if added:
+                    grids.extend(self._vision_grid_for_bucket(b) for b in added)
+                    logger.info(f"max_pixels={max_pixels}: up to {need} patches -> also warming vision buckets {added}")
         patch_dim = vc.in_channels * vc.temporal_patch_size * vc.patch_size**2
         for t, h, w in grids:
             pix = torch.zeros(t * h * w, patch_dim, dtype=torch.float32)
             grid = torch.tensor([[t, h, w]], dtype=torch.int32)
             ttnn.deallocate(model.get_image_features(pix, grid))  # image / video share the device work
-        self._vision_warmed_max_bucket = max((self._vision_bucket(t * h * w) for t, h, w in grids), default=None)
+        self._vision_warmed_buckets = {self._vision_bucket(t * h * w) for t, h, w in grids}
         model._req_image_grid_thw = None
         model._req_video_grid_thw = None
         ttnn.synchronize_device(self.mesh_device)

@@ -312,12 +312,14 @@ replay and hangs the device (seen: `tt_all_reduce`). `warmup_vision` therefore w
 (default `1x32x32;1x48x64;1x64x64;1x80x80`, buckets up to 8192 patches) in the eager warmup phase.
 
 - **Always serve with `--mm-processor-kwargs '{"max_pixels": 1048576}'`** (or your limit). `initialize_vllm_model` reads
-  it from the vLLM config (`model_config.mm_processor_kwargs`) and `warmup_vision` also warms the bucket covering
-  `max_pixels / patch_size^2` patches (1 MP -> 4096 patches -> bucket 6144, already in the defaults; e.g. 3 MP appends
-  bucket 12288), so every input vLLM can accept is pre-compiled. Video is bounded by the same figure (conservatively).
-- If `max_pixels` is unset (vLLM default ~16 MP, ~65k patches) a WARNING is logged at warmup, and any item whose bucket
-  exceeds the largest warmed one is **rejected** with a `ValueError` (patch count, warmed max, advice) instead of being
-  run. This still fails that request's step (the engine reports the error) but avoids the device hang.
+  it from the vLLM config (`model_config.mm_processor_kwargs`) and `warmup_vision` also warms every bucket up to the
+  one covering `max_pixels / patch_size^2` patches (1 MP -> 4096 patches -> bucket 6144, already in the defaults; e.g.
+  3 MP adds buckets 10240 and 12288), so every input vLLM can accept is pre-compiled. Video is bounded by the same
+  figure (conservatively). Each extra bucket adds a few seconds to warmup.
+- Any item whose bucket was not warmed (above the largest, or in a gap of a `QWEN36_VISION_WARMUP_GRIDS` override) is
+  **rejected** with a `ValueError` (patch count, warmed buckets, advice) instead of being run. This still fails that
+  request's step (the engine reports the error) but avoids the device hang. If `max_pixels` is unset (vLLM default
+  ~16 MP, ~65k patches) a WARNING is logged at warmup.
 - Test: `tests/test_vllm_vision_guard.py`.
 
 ## Tests
