@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""SDPA exponential coverage for FP32 standard and BF16 streaming destination paths."""
+"""SDPA exponential coverage: BF16-destination streaming and FP32-destination (routed ACCURATE recipe) paths."""
 import json
 
 import pytest
@@ -17,22 +17,20 @@ from tests.ttnn.unit_tests.operations.sdpa.standard_exp_test_utils import (
 )
 
 
-# FP32 destination accumulation selects the standard compute path; BF16 destination
-# accumulation selects streaming. Inputs, masks and outputs remain BF16 in both.
-# On the standard path, False must honor accurate exp and the full-FP32 attention
-# scale. The frozen gate allows BF16 quantization while detecting larger distortion.
+# BF16 destination accumulation selects the streaming path; inputs, masks and outputs are BF16.
+# The frozen gate allows BF16 quantization while detecting larger distortion.
 # One K chunk isolates the main exp; two chunks cover explicit -inf and a fully
 # masked later chunk, while every query keeps valid earlier keys. Unit/nonunit scale
 # catch missing or duplicate scaling. Repeated False/True calls check reused state.
-# On Blackhole and Wormhole B0, FP32 destination accumulation without `precision` runs the ACCURATE recipe instead (precision
-# routing), which owns its exp: exp_approx_mode is ignored, so both modes share one program and one output, and
-# both meet the accurate-exp gate.
+# FP32 destination accumulation without `precision` runs the ACCURATE recipe instead (precision routing), which owns
+# its exp: exp_approx_mode is ignored, so both modes share one program and one output, and both meet the accurate-exp
+# gate.
 @pytest.mark.parametrize("k_chunks", [1, 2], ids=["one-k-chunk", "masked-second-k-chunk"])
 @pytest.mark.parametrize("scale", [1.0, 128**-0.5], ids=["unit-scale", "nonunit-scale"])
 @pytest.mark.parametrize("fp32_dest_acc_en", [True, False], ids=["fp32-dest", "bf16-dest"])
 def test_standard_sdpa_exp_modes(device, k_chunks, scale, fp32_dest_acc_en, record_property):
     device.enable_program_cache()
-    routed = fp32_dest_acc_en and ttnn.get_arch_name() in ("blackhole", "wormhole_b0")
+    routed = fp32_dest_acc_en
     skip_routed_on_simulator(routed)
     host_inputs = make_fixture(k_chunks)
     golden = reference(*host_inputs, scale)
@@ -102,9 +100,9 @@ def test_standard_sdpa_exp_modes(device, k_chunks, scale, fp32_dest_acc_en, reco
             for head in range(4):
                 values = metrics(golden[:, head], actual[:, head])
                 measured.append({"iteration": iteration, "exp_approx_mode": mode, "head": head, **values})
-                # Streaming uses approximate main-score exp for both modes, so use the
-                # approximate PCC >= 0.998 gate; standard accurate exp keeps its PCC/L2 gate.
-                accurate_exp = routed or (fp32_dest_acc_en and not mode)
+                # Streaming uses approximate main-score exp for both modes (PCC >= 0.998 gate);
+                # the ACCURATE recipe (FP32 DEST) keeps the accurate-exp PCC/L2 gate.
+                accurate_exp = fp32_dest_acc_en
                 passed = passes_false_gate(values) if accurate_exp else values["pcc"] >= TRUE_PCC_MIN
                 if not passed:
                     failures.append(measured[-1])
@@ -114,10 +112,6 @@ def test_standard_sdpa_exp_modes(device, k_chunks, scale, fp32_dest_acc_en, reco
         record_property("false_true_mismatched_elements", mismatched_elements)
         if routed:
             assert mismatched_elements == 0, "the routed ACCURATE recipe must ignore exp_approx_mode"
-        elif fp32_dest_acc_en:
-            # Standard exp must distinguish modes. Streaming can produce identical
-            # outputs because its main-score exp stays approximate in both modes.
-            assert mismatched_elements > 0, "exp_approx_mode=False and True returned identical outputs"
     finally:
         record_property("standard_sdpa_exp_cache_entries", json.dumps(cache_entries))
         record_property("standard_sdpa_exp_metrics", json.dumps(measured, allow_nan=False))

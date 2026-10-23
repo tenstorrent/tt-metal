@@ -1203,168 +1203,6 @@ struct Slice {
     uint32_t get_d3_size() const { return d3_end - d3_start; }
 };
 
-template <typename FirstReaderType, typename SecondReaderType>
-struct CatAddrGenerator {
-    FirstReaderType first_reader;
-    SecondReaderType second_reader;
-    TensorTileShape first_shape;
-    TensorTileShape second_shape;
-    uint32_t first_seq_padded;
-    uint32_t second_seq_padded;
-
-    CatAddrGenerator(
-        const FirstReaderType& first_reader,
-        TensorTileShape first_logical_shape,
-        uint32_t first_seq_padded,
-        const SecondReaderType& second_reader,
-        TensorTileShape second_logical_shape,
-        uint32_t second_seq_padded) :
-        first_reader(first_reader),
-        second_reader(second_reader),
-        first_shape(first_logical_shape),
-        second_shape(second_logical_shape),
-        first_seq_padded(first_seq_padded),
-        second_seq_padded(second_seq_padded) {}
-
-    // Issue async NoC reads for a slice to L1. No barrier — caller must issue a
-    // read barrier. Splits [slice.d2_start, slice.d2_end) into up to four segments
-    // (first tensor / gap / second tensor / tail); each valid segment hoists id_of once.
-    // end_seq_tile is unused: bounds come from first_shape/second_shape; signature kept for
-    // API symmetry with PaddedAddrGenerator (fetch_block dispatches generically).
-    void issue_reads(
-        const Slice& slice,
-        uint32_t /*end_seq_tile*/,
-        uint32_t dst_cb_id,
-        uint32_t dst_addr,
-        uint32_t outer_stride,
-        uint32_t inner_stride,
-        uint32_t barrier_threshold) const {
-        const uint32_t d2_start = slice.d2_start;
-        const uint32_t d2_end = slice.d2_end;
-        const uint32_t cols = slice.get_d3_size();
-        const uint32_t first_end = first_shape.shape[2];
-        const uint32_t gap_end = first_seq_padded;
-        const uint32_t second_end = first_seq_padded + second_shape.shape[2];
-        uint32_t barrier_count = 0;
-
-        // Segment 0: first tensor.
-        const uint32_t s0_end = std::min(d2_end, first_end);
-        if (d2_start < s0_end) {
-            issue_block_reads(
-                first_reader,
-                first_shape.id_of(slice.d0, slice.d1, d2_start, slice.d3_start),
-                first_shape.strides[2],
-                s0_end - d2_start,
-                cols,
-                /*dst_row_origin=*/0,
-                dst_addr,
-                outer_stride,
-                inner_stride,
-                barrier_threshold,
-                barrier_count);
-        }
-        // Segment 1: gap (zero-fill).
-        const uint32_t s1_start = std::max(d2_start, first_end);
-        const uint32_t s1_end = std::min(d2_end, gap_end);
-        if (s1_start < s1_end) {
-            zero_fill_block(
-                first_reader,
-                s1_end - s1_start,
-                cols,
-                s1_start - d2_start,
-                dst_cb_id,
-                dst_addr,
-                outer_stride,
-                inner_stride);
-        }
-        // Segment 2: second tensor (d2 shifted by first_seq_padded).
-        const uint32_t s2_start = std::max(d2_start, gap_end);
-        const uint32_t s2_end = std::min(d2_end, second_end);
-        if (s2_start < s2_end) {
-            issue_block_reads(
-                second_reader,
-                second_shape.id_of(slice.d0, slice.d1, s2_start - first_seq_padded, slice.d3_start),
-                second_shape.strides[2],
-                s2_end - s2_start,
-                cols,
-                s2_start - d2_start,
-                dst_addr,
-                outer_stride,
-                inner_stride,
-                barrier_threshold,
-                barrier_count);
-        }
-        // Segment 3: tail (zero-fill).
-        const uint32_t s3_start = std::max(d2_start, second_end);
-        if (s3_start < d2_end) {
-            zero_fill_block(
-                first_reader,
-                d2_end - s3_start,
-                cols,
-                s3_start - d2_start,
-                dst_cb_id,
-                dst_addr,
-                outer_stride,
-                inner_stride);
-        }
-    }
-
-    // Issue async NoC writes for a slice from L1. No barrier — caller must issue a
-    // write barrier. Same segment split as issue_reads; gap and tail produce no
-    // writes (those rows aren't mapped to either tensor). end_seq_tile unused (see issue_reads).
-    void issue_writes(
-        Noc noc,
-        const Slice& slice,
-        uint32_t /*end_seq_tile*/,
-        uint32_t src_addr,
-        uint32_t outer_stride,
-        uint32_t inner_stride,
-        uint32_t trid = 0) const {
-        const uint32_t d2_start = slice.d2_start;
-        const uint32_t d2_end = slice.d2_end;
-        const uint32_t cols = slice.get_d3_size();
-        const uint32_t first_end = first_shape.shape[2];
-        const uint32_t gap_end = first_seq_padded;
-        const uint32_t second_end = first_seq_padded + second_shape.shape[2];
-
-        // Segment 0: first tensor.
-        const uint32_t s0_end = std::min(d2_end, first_end);
-        if (d2_start < s0_end) {
-            issue_block_writes(
-                noc,
-                first_reader,
-                first_shape.id_of(slice.d0, slice.d1, d2_start, slice.d3_start),
-                first_shape.strides[2],
-                s0_end - d2_start,
-                cols,
-                /*src_row_origin=*/0,
-                src_addr,
-                outer_stride,
-                inner_stride,
-                trid);
-        }
-        // Gap rows: no writes.
-        // Segment 2: second tensor.
-        const uint32_t s2_start = std::max(d2_start, gap_end);
-        const uint32_t s2_end = std::min(d2_end, second_end);
-        if (s2_start < s2_end) {
-            issue_block_writes(
-                noc,
-                second_reader,
-                second_shape.id_of(slice.d0, slice.d1, s2_start - first_seq_padded, slice.d3_start),
-                second_shape.strides[2],
-                s2_end - s2_start,
-                cols,
-                s2_start - d2_start,
-                src_addr,
-                outer_stride,
-                inner_stride,
-                trid);
-        }
-        // Tail rows: no writes.
-    }
-};
-
 template <typename ReaderType, typename TensorShapeType = TensorTileShape>
 struct PaddedAddrGenerator {
     ReaderType reader;
@@ -1478,15 +1316,14 @@ PaddedAddrGenerator(const ReaderType&, TensorShapeType) -> PaddedAddrGenerator<R
 // the reserve/push sequence on the destination CB. Used by forwarding paths that mcast before pushing.
 //
 // Dispatches to the generator's issue_reads. PaddedAddrGenerator's overload hoists id_of
-// (4 muls + 3 adds) and the row-only validity check out of the inner col loop;
-// CatAddrGenerator keeps per-tile dispatch (off the ring SDPA hot path).
+// (4 muls + 3 adds) and the row-only validity check out of the inner col loop.
 //
 // noinline: reader (NCRISC) has 3+ call sites and the issue_reads body is large enough that
 // inlining at every site overflows the TENSIX kernel-config ringbuffer. Function-call
 // overhead is negligible next to the per-block NoC reads.
-template <typename CatAddrGeneratorType>
+template <typename AddrGeneratorType>
 __attribute__((noinline)) void fetch_block(
-    const CatAddrGeneratorType& cat_addr_generator,
+    const AddrGeneratorType& cat_addr_generator,
     const Slice& src_slice,
     const uint32_t end_seq_tile,
     const uint32_t dst_cb_id,
@@ -1509,9 +1346,9 @@ __attribute__((noinline)) void fetch_block(
     noc.write_zeros_l1_barrier();
 }
 
-template <typename CatAddrGeneratorType>
+template <typename AddrGeneratorType>
 void read_block(
-    const CatAddrGeneratorType& cat_addr_generator,
+    const AddrGeneratorType& cat_addr_generator,
     const Slice& src_slice,
     const uint32_t end_seq_tile,
     const uint32_t cb_id,
@@ -1531,32 +1368,6 @@ void read_block(
         transpose,
         barrier_threshold);
     cb.push_back(num_tiles);
-}
-
-// Pop a (rows × cols) tile block out of a CB and write it via NoC. Symmetric to read_block:
-// wait-front + dispatch + barrier + pop-front. Dispatches to the generator's issue_writes
-// (PaddedAddrGenerator hoists id_of out of the inner col loop; CatAddrGenerator keeps per-tile
-// dispatch). Out-of-bound rows are skipped (no zero-fill on writes).
-template <typename CatAddrGeneratorType>
-void write_block(
-    Noc noc,
-    const CatAddrGeneratorType& cat_addr_generator,
-    const Slice& dst_slice,
-    const uint32_t end_seq_tile,
-    const uint32_t cb_id,
-    const uint32_t tile_bytes) {
-    const uint32_t dst_rows = dst_slice.get_d2_size();
-    const uint32_t dst_cols = dst_slice.get_d3_size();
-    const uint32_t num_tiles = dst_rows * dst_cols;
-    CircularBuffer cb(cb_id);
-    const uint32_t outer_ptr_stride = dst_cols * tile_bytes;
-    const uint32_t inner_ptr_stride = tile_bytes;
-
-    cb.wait_front(num_tiles);
-    cat_addr_generator.issue_writes(
-        noc, dst_slice, end_seq_tile, cb.get_read_ptr(), outer_ptr_stride, inner_ptr_stride);
-    noc.async_write_barrier();
-    cb.pop_front(num_tiles);
 }
 
 template <typename TensorAccessorType>
@@ -1657,10 +1468,10 @@ void write_block_row_grouped(
 // write via noc.async_write<NocOptions::TXN_ID>(..., {.trid=flush_trid});
 // per-group flush uses noc.async_writes_flushed<TXN_ID>(flush_trid) so it waits exactly for
 // THIS drain's writes to be source-L1-acked. Caller handles any final DRAM-arrival NoC barrier.
-template <bool all_rows_valid = false, typename CatAddrGeneratorType>
+template <bool all_rows_valid = false, typename AddrGeneratorType>
 void write_block_row_grouped_trid(
     Noc noc,
-    const CatAddrGeneratorType& cat_addr_generator,
+    const AddrGeneratorType& cat_addr_generator,
     const Slice& dst_slice,
     const uint32_t end_seq_tile,
     const uint32_t cb_out,
