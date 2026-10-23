@@ -481,3 +481,18 @@ def test_moreh_matmul_with_bias_add_fp32_dest_acc(params, device):
     logger.debug(f"mean={diff_fp16.mean()}")
     logger.debug(f"topk(5) {torch.topk(diff_fp16.reshape(-1), 5)}")
     assert diff.mean() < diff_fp16.mean()
+
+
+@pytest.mark.parametrize("width", [10, 323, 16384])
+def test_moreh_matmul_1d(width, device):
+    torch.manual_seed(3072)
+    torch_input = torch.rand([1, 1, 1, width], dtype=torch.bfloat16)
+    torch_other = torch.rand([1, 1, 1, width], dtype=torch.bfloat16)
+    tt_input = create_tt_tensor(torch_input, ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    tt_other = create_tt_tensor(torch_other, ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+
+    tt_output = ttnn.to_torch(ttnn.operations.moreh.matmul(tt_input, tt_other)).reshape(()).float()
+
+    # moreh_dot's bf16 accumulator returned about half the true value at 16384 elements.
+    torch_output = torch.dot(torch_input.reshape(-1).float(), torch_other.reshape(-1).float())
+    assert torch.allclose(tt_output, torch_output, rtol=0.02)
