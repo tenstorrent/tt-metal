@@ -117,6 +117,10 @@ or checkpoint is unavailable, including under CI. Available references still
 undergo digest and configuration checks; invalid assets fail. A skipped case
 is not a successful device qualification. See the [test instructions](tests/README.md)
 for asset layout and commands.
+Attention and CFG/Euler also have capture-free CPU reference tests on one/two
+cards. CFG/Euler compares against the vendored MOSS scheduler at early, middle
+and final steps; attention compares against dense PyTorch attention. These are
+component checks on TT hardware, not full-model CPU inference support.
 
 Component replay intentionally supplies captured CUDA inputs to isolate a stage.
 Independent generation starts from raw prompts and independently sampled noise;
