@@ -5,6 +5,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_log1p_bf16_replay_window.h"
 #include "sfpu/ckernel_sfpu_log1p_bf16_log1p.h"
 namespace ckernel::sfpu::bf16::log1p {
 // The exponent term reads ln2*2^-23 from vConstFloatPrgm0, which the stock log1p_init sets to

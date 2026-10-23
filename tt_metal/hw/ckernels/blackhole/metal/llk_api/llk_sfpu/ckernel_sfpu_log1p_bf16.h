@@ -30,10 +30,10 @@ inline bool bf16_dest_log1p() {
     return false;
 #endif
 }
-// Each call records replay slots 0-26, overwriting what an init recorded there (matmul and reduce
-// record from replay_buf_offset = 16).
+// Each call records replay slots 0-15, below replay_buf_offset = 16, where matmul and
+// reduce record.
 template <int ITERATIONS = 32>
-inline void calculate_log1p_bf16() {
+__attribute__((noinline)) inline void calculate_log1p_bf16() {
     ckernel::sfpu::bf16::log1p::calculate_log1p<ckernel::sfpu::Log1PBf16Config, ITERATIONS>();
 }
 inline void init_log1p_bf16() { ckernel::sfpu::bf16::log1p::init_log1p<ckernel::sfpu::Log1PBf16Config>(); }

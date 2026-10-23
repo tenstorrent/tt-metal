@@ -5,6 +5,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_sfpu_log1p_bf16_replay_window.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu::bf16::log1p
@@ -20,7 +21,7 @@ constexpr std::uint32_t kLog1pHold = ADDR_MOD_7;
 constexpr std::uint32_t kLog1pCompactSlots = 27u;
 
 template <typename Config>
-inline void log1p_compact_row()
+inline void log1p_compact_row_head()
 {
     TTI_SFPLOAD(p_sfpu::LREG2, 0, kLog1pHold, 0);                                    // x
     TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG1, 0); // u = x + 1
@@ -38,10 +39,15 @@ inline void log1p_compact_row()
     TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LCONST_neg1, p_sfpu::LREG3, 0); // t = 2^-k - 1
     TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 3);                                    // e to sign-magnitude
     TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG2, 0);       // r = 2^-k x + t
-    TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);                                    // float(e)
-    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG3, 0);       // p = c2 r + c1
-    TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);    // r^2
-    TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG3, 0);       // p = p r + c0
+}
+
+template <typename Config>
+inline void log1p_compact_row_tail()
+{
+    TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);                                 // float(e)
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG2, p_sfpu::LREG5, p_sfpu::LREG3, 0);    // p = c2 r + c1
+    TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG1, 0); // r^2
+    TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG3, 0);    // p = p r + c0
     TTI_SFPNOP;
     TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LREG2, 0); // r^2 p + r
     TTI_SFPNOP;
@@ -68,20 +74,16 @@ inline void calculate_log1p()
     TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_UPPER, c2 >> 16);
     TTI_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_LOWER, c2 & 0xffffu);
     TTI_SFPLOADI(p_sfpu::LREG6, 0, 0xC080); // -4
-    load_replay_buf<Exec>(
-        0,
-        kLog1pCompactSlots,
-        [&]
-        {
-            log1p_compact_row<Config>();
-            // DEST is addressed only through the hold mode, which every SFPU init leaves at zero and no FPU
-            // op sets; the counter steps to the next row outside the record, so the replay keeps its length.
-            TTI_INCRWC(0, 2, 0, 0);
-        });
+    auto row_head = [&] { log1p_compact_row_head<Config>(); };
+    auto row_tail = [&] { log1p_compact_row_tail<Config>(); };
+    record_split<0, kLog1pCompactSlots, 16>(row_head, row_tail);
+    // DEST is addressed only through the hold mode, which every SFPU init leaves at zero and no FPU
+    // op sets; the counter steps to the next row outside the record, so the replay keeps its length.
+    TTI_INCRWC(0, 2, 0, 0);
 #pragma GCC unroll 8
     for (int row = 1; row < Iterations; ++row)
     {
-        TTI_REPLAY(0, kLog1pCompactSlots, 0, 0);
+        replay_split<0, kLog1pCompactSlots, 16>(row_head, row_tail);
         TTI_INCRWC(0, 2, 0, 0);
     }
 }
