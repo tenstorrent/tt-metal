@@ -270,26 +270,25 @@ class MiniMaxH3Attention(Module):
             self._exp_sdpa_program_configs[seq_local] = self._build_recipe_exp_sdpa_program_config(seq_local)
         return self._exp_sdpa_program_configs[seq_local]
 
-    # Recipe exp ring blocking: Q 128-320 in 32-row steps (odd tile counts
-    # allowed -- recipes keep exp-ring state resident), at most exp_ring_max_passes passes.
+    # Exp ring routing window (this module's choice, not an op limit: the op takes Q up to 1024 rows and
+    # chooses the Q chunk and grid width itself).
     _RECIPE_EXP_Q_RANGE = (128, 320)
 
     def _build_recipe_exp_sdpa_program_config(self, seq_local: int) -> ttnn.SDPAProgramConfig | None:
-        """Whether a recipe exp-ring shape exists (else None: ring joint SDPA), as an op-selected config.
+        """The op-selected exp ring config if this module routes `seq_local` to exp ring, else None (ring joint).
 
-        The exp ring op gives Q chunk `x` to core column `x`, so a head's chunks (split over up to
-        three head-segments) must fill a core row exactly. Search (cols, segs_per_head) for a
-        tile-multiple q_chunk in 128..320 with at most 3 passes (ceil(n_local_heads * segs / rows));
-        the op then chooses the Q chunk and grid width itself (same row-filling and pass
-        constraints, Q up to 1024 rows, plus L1; the 128..320 window is this module's routing
-        choice), and its host check rejects a shape that overflows L1. None (no recipe shape) falls
-        back to ring joint SDPA.
+        The exp ring op gives Q chunk `x` to core column `x`, so a head's chunks (split over head-segments) must
+        fill a core row exactly, in at most `exp_ring_max_passes` passes (ceil(n_local_heads * segs / rows)) and
+        on at least 3 SDPA columns. Exp ring is used when such a shape exists with a tile-multiple Q chunk of
+        128..320 rows. Longer rows run ring joint: the quad's ref2va 7680/10208-row rungs need Q >= 352, and
+        there exp ring with op-chosen blocking measured no faster than ring joint (STANDARD, 14 heads, per-device
+        rows on a 4x8 Galaxy ring: 7680 rows 20.6 vs 20.4 ms, 10208 rows 44.8 vs 36.0 ms).
         """
         tile = ttnn.TILE_SIZE
         rows = self.full_grid.y
         q_lo, q_hi = self._RECIPE_EXP_Q_RANGE
-        for cols in range(self.full_grid.x - 1, 1, -1):
-            for segs in (1, 2, 3):
+        for cols in range(self.full_grid.x - 1, 2, -1):
+            for segs in range(1, self.exp_ring_max_passes + 1):
                 chunks = cols * segs
                 q_chunk = math.ceil(math.ceil(seq_local / chunks) / tile) * tile
                 if (

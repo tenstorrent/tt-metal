@@ -45,4 +45,7 @@ def test_exp_ring_recipe_infeasible_falls_back_to_ring():
     attn = _bare_attention(ACCURATE)
     assert attn._exp_sdpa_program_config(20000) is None  # needs > 33 chunks of <= 320 rows
     assert attn._exp_sdpa_program_config(100) is None  # every usable q_chunk is below 128
+    # The quad ref2va 7680/10208-row rungs need Q >= 352: ring joint (measured as fast or faster there).
+    assert attn._exp_sdpa_program_config(7680) is None
+    assert attn._exp_sdpa_program_config(10208) is None
     assert _bare_attention(ACCURATE, use_exp=False)._exp_sdpa_program_config(2304) is None
