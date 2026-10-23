@@ -306,9 +306,6 @@ def test_sfpu_reduce(
     reduced_extent,
 ):
 
-    if reduce_pool in [ReducePool.Average, ReducePool.Min] and TestConfig.WITH_COVERAGE:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
-
     if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
         pytest.skip(
             reason="32-bit formats require DestAccumulation.Yes (HW cannot unpack into SrcA/SrcB)"
@@ -608,8 +605,6 @@ def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
     "negative zero", ranked as 0), so the earlier INT32_2S_COMP path dropped it. This injects the extreme
     values into an otherwise moderate Int32 tile and checks the device reduction against a torch golden.
     """
-    if reduce_pool == ReducePool.Min and TestConfig.WITH_COVERAGE:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
 
     golden_slice, res_slice = _run_integer_reduce(
         mathop, reduce_pool, injected_value, base_range=base_range
@@ -680,8 +675,6 @@ def _check_max_min(
     input_format: DataFormat,
 ):
     """Reduce ``values`` on device and compare every result with torch's max / min."""
-    if reduce_pool == ReducePool.Min and TestConfig.WITH_COVERAGE:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
 
     if reduce_pool == ReducePool.Max:
         expected = values.amax(dim=block.reduced_dim)
@@ -1000,8 +993,6 @@ def test_float_reduce_specials(mathop, reduce_pool, edge_class, formats):
     and NaN on the way in, so the probe would never arrive. That leaves exactly one dest_acc per
     format, and both are cells the measured matrix accepts.
     """
-    if reduce_pool in (ReducePool.Average, ReducePool.Min) and TestConfig.WITH_COVERAGE:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
 
     dest_acc = (
         DestAccumulation.Yes
@@ -1210,8 +1201,6 @@ def test_uint32_reduce_column_average_bit31(band):
     See the block comment above for the mechanism. Compared exactly: every lane's expected
     average is an integer the shift produces without rounding.
     """
-    if TestConfig.WITH_COVERAGE:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
 
     column_sums, golden, res = _run_uint32_column_average(_UINT32_AVERAGE_BANDS[band])
 
@@ -1270,8 +1259,6 @@ _INT32_COLUMN_SUM_BANDS = {
 )
 def test_int32_reduce_column_average_exact(band):
     """Int32 column AVG must equal the column sum divided by 32, rounded toward zero, on every lane."""
-    if TestConfig.WITH_COVERAGE:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
 
     column_sums = torch.tensor(_INT32_COLUMN_SUM_BANDS[band], dtype=torch.int64)
     # Every row holds floor(sum / 32) and row 0 also carries the remainder in [0, 31], so the column
