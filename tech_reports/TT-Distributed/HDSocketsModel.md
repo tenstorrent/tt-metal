@@ -150,6 +150,43 @@ See **S.3** for fully annotated kernel code showing exactly how each call maps t
 
 ---
 
+### 2.5 H2D: HOST\_DMA
+
+A third H2D mode for hosts whose CPU cannot issue MMIO stores fast enough. The device side is
+identical to `HOST_PUSH`: the ring lives in receiver L1, the kernel reads it in place and acks
+through the same `bytes_acked` counter, so every `HOST_PUSH` kernel works unchanged. On the host,
+`write()` copies the page into a pinned staging ring at the same offset it will occupy in L1 and
+then asks UMD for a zero-copy PCIe DMA from that ring (`TTDevice::dma_write_zero_copy`) into the
+L1 ring. The chip's DMA engine moves the payload, not the host CPU. UMD's DMA call returns once
+the engine reports completion, so the staging slot is immediately reusable and the socket's
+credit protocol is unchanged.
+
+Use it when `HOST_PUSH` throughput is the limit and `DEVICE_PULL` is not an option (for example
+the receiver kernel must not spend NOC bandwidth pulling). Where the device exposes no DMA engine
+(mock/emulated devices, or a connector process that holds no UMD device handle) the mode silently
+degrades to `HOST_PUSH` MMIO writes.
+
+Measured on a Galaxy Rev C x8 chip (asic 6), 1 MiB FIFO, single receiver core, October 2026
+(`BM_H2DSocketLatency` round trip p50 and `BM_H2DSocketThroughput` at 1 GiB total):
+
+| page | `HOST_PUSH` RTT (us) | `HOST_DMA` RTT (us) | `HOST_PUSH` GB/s | `HOST_DMA` GB/s |
+|---|---|---|---|---|
+| 64 B | 1.26 | 5.95 | 0.12 | 0.01 |
+| 1 KiB | 4.35 | 6.00 | 0.29 | 0.20 |
+| 2 KiB | 7.76 | 6.00 | 0.29 | 0.40 |
+| 4 KiB | 14.4 | 6.62 | 0.30 | 0.78 |
+| 16 KiB | 54.9 | 7.06 | 0.30 | 2.61 |
+| 64 KiB | 216 | 10.5 | 0.30 | 6.98 |
+| 256 KiB | 863 | 21.5 | 0.30 | 11.7 |
+
+`HOST_PUSH` costs ~3.3 ns per byte regardless of page size (the host CPU's MMIO store rate, so
+0.3 GB/s flat). `HOST_DMA` costs ~5 us per transfer plus ~0.065 ns per byte (~15 GB/s on the
+wire), so the crossover is at ~2 KiB pages. The 5 us floor is UMD's per-call setup: the
+cross-process PCIe DMA lock, a verified TLB reconfigure, a dozen UC register writes and the
+completion poll. UMD exposes no submit/wait split, so the call blocks for the whole transfer;
+an asynchronous variant would hide the poll behind the next page's staging copy, and a
+descriptor ring would amortise the setup across pages.
+
 ## 3. API Walkthrough
 
 This section walks through the benchmark kernels and their host-side counterparts, annotating each API call. Code is drawn from `tests/tt_metal/distributed/test_hd_sockets.cpp` and `tests/tt_metal/tt_metal/test_kernels/misc/socket/`.

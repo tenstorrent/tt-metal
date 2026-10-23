@@ -1,0 +1,476 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <tt-metalium/experimental/sockets/host_mesh_socket.hpp>
+
+#include <tt-metalium/experimental/sockets/d2h_socket.hpp>
+#include <tt-metalium/experimental/sockets/h2d_socket.hpp>
+#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/mesh_device.hpp>
+
+#include "tt_metal/distributed/host_transport/host_transport.hpp"
+#include "tt_metal/distributed/host_transport/socket_relay.hpp"
+#include <vector>
+#include <span>
+#include <mutex>
+#include <map>
+#include "tt_metal/distributed/mesh_socket_utils.hpp"
+
+#include <fmt/format.h>
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <thread>
+
+namespace tt::tt_metal::distributed {
+
+using host_transport::RelayLoop;
+using host_transport::RelayReceiver;
+using host_transport::RelaySender;
+using host_transport::RingGeometry;
+
+namespace {
+
+// One tag per socket instance, so two sockets between the same rank pair cannot
+// mix up each other's endpoints. Assumes both ranks construct in the same order,
+// as MeshSocket's exchange-tag counter also does.
+constexpr uint32_t kEndpointExchangeTagBase = 0x7248;
+
+// Reserves a contiguous run, since each connection takes kTagsPerConnection of
+// them. Keyed by context and ordered rank pair, as rank-scoped MeshSockets are:
+// a process-wide counter would drift between two ranks that took part in
+// different sockets before connecting to each other, and they would then pick
+// different tags and block in the handshake. Both ends of a given pair allocate
+// in the same construction order, so both derive the same base without
+// exchanging it.
+multihost::Tag reserve_exchange_tags(
+    const multihost::DistributedContext& context,
+    multihost::Rank sender,
+    multihost::Rank receiver,
+    size_t connections) {
+    static std::mutex mutex;
+    static std::map<std::pair<multihost::DistributedContextId, uint64_t>, uint32_t> next;
+    const uint64_t pair_key = (static_cast<uint64_t>(*sender) << 32) | static_cast<uint32_t>(*receiver);
+    const uint32_t width = static_cast<uint32_t>(connections) * host_transport::kTagsPerConnection;
+
+    std::lock_guard<std::mutex> lock(mutex);
+    uint32_t& cursor = next[{context.id(), pair_key}];
+    const uint32_t base = cursor;
+    cursor += width;
+    return multihost::Tag{static_cast<int>(kEndpointExchangeTagBase + base)};
+}
+
+// The two endpoints, and only them. create_sub_context uses MPI_Comm_create_group,
+// so ranks outside the group neither call it nor are waited on.
+std::shared_ptr<multihost::DistributedContext> endpoint_context(
+    const std::shared_ptr<multihost::DistributedContext>& context, const SocketConfig& config) {
+    std::vector<int> ranks{*config.sender_rank, *config.receiver_rank};
+    return context->create_sub_context(ranks);
+}
+
+}  // namespace
+
+struct HostMeshSocket::Impl {
+    // Declaration order sets teardown order and is load-bearing: stop polling,
+    // tear the transport down, then free the rings it was reading from.
+    struct Connection {
+        std::unique_ptr<D2HSocket> d2h;  // sender endpoints only; owns its ring
+        std::unique_ptr<H2DSocket> h2d;  // receiver endpoints only; owns its ring
+        std::unique_ptr<host_transport::HostTransport> transport;
+        std::shared_ptr<host_transport::RelayEndpoint> relay;
+    };
+
+    SocketConfig config;
+    TransportConfig transport;
+    SocketEndpoint endpoint = SocketEndpoint::SENDER;
+    MeshDevice* mesh_device = nullptr;
+    std::shared_ptr<MeshBuffer> config_buffer;
+    std::shared_ptr<MeshBuffer> data_buffer;  // receiver endpoints only
+    DeviceAddr config_buffer_address = 0;
+    RingGeometry geometry;
+    std::vector<Connection> connections;
+    std::vector<MeshCoreCoord> active_cores;
+    // The two endpoint ranks only; barriers must not touch non-participants.
+    std::shared_ptr<multihost::DistributedContext> endpoints;
+    bool participates = false;
+
+    // Unregisters every relay this socket owns. Idempotent, so the destructor
+    // and move assignment can both call it.
+    void detach() {
+        if (!transport.own_relay_thread) {
+            return;
+        }
+        for (auto& connection : connections) {
+            if (connection.relay) {
+                RelayLoop::instance().remove(connection.relay);
+                connection.relay.reset();
+            }
+        }
+    }
+
+    bool poll() {
+        bool progress = false;
+        for (auto& connection : connections) {
+            progress |= connection.relay->poll();
+        }
+        return progress;
+    }
+};
+
+namespace {
+
+std::vector<MeshCoreCoord> local_cores(const SocketConfig& config, SocketEndpoint endpoint) {
+    std::vector<MeshCoreCoord> cores;
+    for (const auto& connection : config.socket_connection_config) {
+        const auto& core = endpoint == SocketEndpoint::SENDER ? connection.sender_core : connection.receiver_core;
+        if (std::find(cores.begin(), cores.end(), core) == cores.end()) {
+            cores.push_back(core);
+        }
+    }
+    return cores;
+}
+
+}  // namespace
+
+HostMeshSocket::HostMeshSocket(
+    const std::shared_ptr<MeshDevice>& device, const SocketConfig& config, const TransportConfig& transport) :
+    impl_(std::make_unique<Impl>()) {
+    impl_->config = config;
+    impl_->transport = transport;
+    impl_->mesh_device = device.get();
+
+    const uint32_t page_size = transport.page_size;
+    const uint32_t fifo_size = config.socket_mem_config.fifo_size;
+    TT_FATAL(page_size != 0, "HostMeshSocket requires TransportConfig::page_size");
+    TT_FATAL(fifo_size != 0, "HostMeshSocket requires a non-zero fifo_size");
+    TT_FATAL(
+        fifo_size % page_size == 0,
+        "fifo_size ({}) must be a whole number of pages of {} B: a partial tail page would have to be charged to the "
+        "flow-control counters on both sides, and the page size need not be a power of two",
+        fifo_size,
+        page_size);
+    TT_FATAL(!config.socket_connection_config.empty(), "HostMeshSocket requires at least one connection");
+    // The host rings (and so the host hop's credit ring) are as deep as asked for, never
+    // shallower than the socket's fifo.
+    uint32_t host_ring_pages = transport.host_ring_pages;
+    if (host_ring_pages == 0) {
+        host_ring_pages = std::max<uint32_t>(fifo_size / page_size, (16u << 20) / page_size);
+    }
+    TT_FATAL(
+        host_ring_pages >= fifo_size / page_size,
+        "host_ring_pages ({}) must be at least the socket fifo ({} pages of {} B)",
+        host_ring_pages,
+        fifo_size / page_size,
+        page_size);
+    const uint32_t host_ring_bytes = host_ring_pages * page_size;
+    impl_->geometry = RingGeometry{.page_size = page_size, .num_pages = host_ring_pages};
+
+    const auto context =
+        config.distributed_context ? config.distributed_context : multihost::DistributedContext::get_current_world();
+    const auto rank = context->rank();
+    TT_FATAL(
+        config.sender_rank != config.receiver_rank,
+        "HostMeshSocket connects two ranks over the host interconnect; sender_rank and receiver_rank are both {}",
+        *config.sender_rank);
+
+    if (rank == config.sender_rank) {
+        impl_->endpoint = SocketEndpoint::SENDER;
+    } else if (rank == config.receiver_rank) {
+        impl_->endpoint = SocketEndpoint::RECEIVER;
+    } else {
+        log_warning(
+            tt::LogDistributed,
+            "Rank {} is neither the sender ({}) nor the receiver ({}) of this HostMeshSocket; it allocates nothing",
+            *rank,
+            *config.sender_rank,
+            *config.receiver_rank);
+        return;
+    }
+    impl_->participates = true;
+    impl_->active_cores = local_cores(config, impl_->endpoint);
+
+    // Both endpoints agree before either enters the transport handshake: the
+    // handshake is a blocking send/recv pair, so one rank throwing while the
+    // other waits would hang instead of failing both.
+    impl_->endpoints = endpoint_context(context, config);
+    {
+        uint8_t mine = host_transport::host_transport_available() ? 1 : 0;
+        std::vector<uint8_t> all(static_cast<size_t>(*impl_->endpoints->size()), 0);
+        impl_->endpoints->all_gather(
+            std::span<std::byte>(reinterpret_cast<std::byte*>(&mine), 1),
+            std::span<std::byte>(reinterpret_cast<std::byte*>(all.data()), all.size()));
+        const bool both = std::all_of(all.begin(), all.end(), [](uint8_t v) { return v != 0; });
+        TT_FATAL(
+            both,
+            "HostMeshSocket needs a usable host transport on both endpoints; rank {} has {}",
+            *rank,
+            mine ? "one" : "none");
+    }
+
+    // One page per core, so every core finds its metadata at the same L1 address
+    // and a multi-core kernel needs only one.
+    impl_->config_buffer = create_socket_config_buffer(device, config, impl_->endpoint);
+    impl_->config_buffer_address = impl_->config_buffer->address();
+
+    // Same allocation D2D makes, so a receiver kernel has a socket-owned landing
+    // buffer to pull into and get_data_buffer() means the same thing on both.
+    // Not under HOST_DMA: there the H2D socket's own L1 ring is where pages land
+    // and the kernel reads them in place, so a second ring would only cost L1.
+    if (impl_->endpoint == SocketEndpoint::RECEIVER && transport.h2d_mode != H2DMode::HOST_DMA) {
+        impl_->data_buffer = create_socket_data_buffer(device, config);
+    }
+
+    const bool is_sender = impl_->endpoint == SocketEndpoint::SENDER;
+    const auto exchange_tag = reserve_exchange_tags(
+        *context, config.sender_rank, config.receiver_rank, config.socket_connection_config.size());
+
+    impl_->connections.resize(config.socket_connection_config.size());
+    for (size_t i = 0; i < config.socket_connection_config.size(); i++) {
+        const auto& wire = config.socket_connection_config[i];
+        auto& connection = impl_->connections[i];
+
+        host_transport::TransportParams tp;
+        tp.geometry = impl_->geometry;
+        tp.is_sender = is_sender;
+        tp.peer_rank = is_sender ? *config.receiver_rank : *config.sender_rank;
+        tp.context = context;
+        tp.tag_base = *exchange_tag + static_cast<int>(i) * host_transport::kTagsPerConnection;
+        tp.max_batch_pages = transport.max_batch_pages;
+
+        if (is_sender) {
+            // The D2H ring lives in host memory, so it is the deep one.
+            connection.d2h = std::make_unique<D2HSocket>(
+                device,
+                wire.sender_core,
+                host_ring_bytes,
+                D2HSocket::ExternalConfigBuffer{
+                    .address = static_cast<uint32_t>(impl_->config_buffer_address),
+                },
+                D2HSocket::ProcessScope::InProcess);
+            connection.d2h->set_page_size(page_size);
+            tp.ring = connection.d2h->host_fifo().data();
+        } else {
+            // DEVICE_PULL: the device's ring is the host ring, so it is deep too. HOST_DMA: the
+            // device ring is fifo_size of L1 and the deep host ring stages in front of it.
+            connection.h2d = std::make_unique<H2DSocket>(
+                device,
+                wire.receiver_core,
+                config.socket_mem_config.socket_storage_type,
+                transport.h2d_mode == H2DMode::HOST_DMA ? fifo_size : host_ring_bytes,
+                transport.h2d_mode,
+                H2DSocket::ExternalConfigBuffer{
+                    .address = static_cast<uint32_t>(impl_->config_buffer_address),
+                },
+                transport.h2d_mode == H2DMode::HOST_DMA ? host_ring_bytes : 0);
+            connection.h2d->set_page_size(page_size);
+            tp.ring = connection.h2d->host_fifo().data();
+        }
+
+        connection.transport = host_transport::make_host_transport(tp);
+
+        if (is_sender) {
+            connection.relay = std::make_shared<RelaySender>(
+                *connection.transport, *connection.d2h, impl_->geometry, transport.max_batch_pages);
+        } else {
+            connection.relay = std::make_shared<RelayReceiver>(*connection.transport, *connection.h2d, impl_->geometry);
+        }
+    }
+
+    // Endpoints only; barriering on the full context would wait on ranks that
+    // returned above and never call it.
+    impl_->endpoints->barrier();
+
+    if (transport.own_relay_thread) {
+        for (auto& connection : impl_->connections) {
+            RelayLoop::instance().add(connection.relay);
+        }
+    }
+}
+
+HostMeshSocket::~HostMeshSocket() {
+    if (impl_ != nullptr) {
+        impl_->detach();
+    }
+}
+
+HostMeshSocket::HostMeshSocket(HostMeshSocket&&) noexcept = default;
+
+HostMeshSocket& HostMeshSocket::operator=(HostMeshSocket&& other) noexcept {
+    if (this != &other) {
+        // The relay loop holds shared_ptrs to our endpoints, which reference this
+        // socket and its transport. Replacing impl_ without unregistering first
+        // would leave the relay thread polling freed objects.
+        if (impl_ != nullptr) {
+            impl_->detach();
+        }
+        impl_ = std::move(other.impl_);
+    }
+    return *this;
+}
+
+DeviceAddr HostMeshSocket::get_config_buffer_address() const { return impl_->config_buffer_address; }
+
+std::shared_ptr<MeshBuffer> HostMeshSocket::get_config_buffer() const { return impl_->config_buffer; }
+
+std::shared_ptr<MeshBuffer> HostMeshSocket::get_data_buffer() const {
+    // Unlike D2D this is not the FIFO -- that is the pinned host ring the NIC
+    // reaches -- but it is the same size and shape, so a receiver kernel pulls
+    // into it exactly where a D2D kernel would find its pages.
+    TT_FATAL(
+        impl_->transport.h2d_mode != H2DMode::HOST_DMA,
+        "HOST_DMA lands pages in the H2D socket's L1 ring; the kernel reads them at socket.read_ptr, there is "
+        "no separate data buffer.");
+    TT_FATAL(impl_->data_buffer, "Cannot access the data buffer for a sender socket.");
+    return impl_->data_buffer;
+}
+
+const SocketConfig& HostMeshSocket::get_config() const { return impl_->config; }
+
+SocketEndpoint HostMeshSocket::get_socket_endpoint_type() const { return impl_->endpoint; }
+
+std::vector<MeshCoreCoord> HostMeshSocket::get_active_cores() const { return impl_->active_cores; }
+
+MeshDevice* HostMeshSocket::get_mesh_device() const { return impl_->mesh_device; }
+
+bool HostMeshSocket::poll() {
+    if (!impl_->participates) {
+        return false;
+    }
+    // An endpoint's completion queue must be drained by one consumer. Polling
+    // here while the relay thread polls it double-consumes completions and
+    // corrupts the arrival and credit accounting.
+    TT_FATAL(
+        !impl_->transport.own_relay_thread,
+        "HostMeshSocket::poll() is only for a socket built with own_relay_thread = false; the relay thread is "
+        "already polling this one");
+    return impl_->poll();
+}
+
+void HostMeshSocket::set_latency_sampling(bool enabled) {
+    for (auto& connection : impl_->connections) {
+        if (auto* sender = dynamic_cast<RelaySender*>(connection.relay.get())) {
+            sender->set_credit_latency_sampling(enabled);
+        } else if (auto* receiver = dynamic_cast<RelayReceiver*>(connection.relay.get())) {
+            receiver->set_drain_latency_sampling(enabled);
+        }
+    }
+}
+
+HostMeshSocket::HopSamples HostMeshSocket::take_hop_samples() {
+    HopSamples all;
+    auto append = [](std::vector<uint64_t>& into, std::vector<uint64_t> from) {
+        into.insert(into.end(), from.begin(), from.end());
+    };
+    for (auto& connection : impl_->connections) {
+        if (auto* sender = dynamic_cast<RelaySender*>(connection.relay.get())) {
+            append(all.send_to_credit_ns, sender->take_credit_latencies_ns());
+            append(all.send_to_release_ns, sender->take_release_latencies_ns());
+        } else if (auto* receiver = dynamic_cast<RelayReceiver*>(connection.relay.get())) {
+            append(all.publish_to_drain_ns, receiver->take_drain_latencies_ns());
+        }
+    }
+    return all;
+}
+
+std::vector<uint64_t> HostMeshSocket::take_latency_samples_ns() {
+    std::vector<uint64_t> all;
+    for (auto& connection : impl_->connections) {
+        if (auto* sender = dynamic_cast<RelaySender*>(connection.relay.get())) {
+            auto samples = sender->take_credit_latencies_ns();
+            all.insert(all.end(), samples.begin(), samples.end());
+        }
+    }
+    return all;
+}
+
+uint64_t HostMeshSocket::pages_transferred() const {
+    uint64_t total = 0;
+    for (const auto& connection : impl_->connections) {
+        if (const auto* sender = dynamic_cast<const RelaySender*>(connection.relay.get())) {
+            total += sender->pages_forwarded();
+        } else if (const auto* receiver = dynamic_cast<const RelayReceiver*>(connection.relay.get())) {
+            total += receiver->pages_arrived();
+        }
+    }
+    return total;
+}
+
+void HostMeshSocket::barrier(std::optional<uint32_t> timeout_ms) {
+    if (!impl_->participates) {
+        return;
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms.value_or(30000));
+    const bool drive_here = !impl_->transport.own_relay_thread;
+
+    // The relay's counters are all zero until it has polled, so snapshotting a
+    // target before that reads "nothing outstanding" and drains instantly while
+    // pages still sit in the D2H ring. Wait for a poll that *started* after this
+    // call: one may already have been in flight when we read the counter, so the
+    // first wholly-subsequent poll is the one two ahead.
+    std::vector<uint64_t> fresh;
+    fresh.reserve(impl_->connections.size());
+    for (const auto& connection : impl_->connections) {
+        fresh.push_back(connection.relay->polls() + 2);
+    }
+    while (true) {
+        if (drive_here) {
+            impl_->poll();
+        }
+        bool observed = true;
+        for (size_t i = 0; i < impl_->connections.size(); i++) {
+            const auto& relay = impl_->connections[i].relay;
+            TT_FATAL(!relay->failed(), "HostMeshSocket relay failed: {}", relay->error());
+            observed = observed && relay->polls() >= fresh[i];
+        }
+        if (observed) {
+            break;
+        }
+        TT_FATAL(
+            std::chrono::steady_clock::now() < deadline,
+            "HostMeshSocket::barrier timed out waiting for the relay to observe the socket");
+        std::this_thread::yield();
+    }
+
+    // Wait only for what is outstanding now. The peer pipelines ahead, so waiting
+    // for full idle would never finish on a socket still being fed.
+    std::vector<uint64_t> targets;
+    targets.reserve(impl_->connections.size());
+    for (const auto& connection : impl_->connections) {
+        targets.push_back(connection.relay->watermark());
+    }
+
+    while (true) {
+        if (drive_here) {
+            impl_->poll();
+        }
+        bool done = true;
+        for (size_t i = 0; i < impl_->connections.size(); i++) {
+            const auto& relay = impl_->connections[i].relay;
+            // Surface a stopped endpoint instead of spinning to the deadline.
+            TT_FATAL(!relay->failed(), "HostMeshSocket relay failed: {}", relay->error());
+            done = done && relay->drained(targets[i]);
+        }
+        if (done) {
+            return;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            std::string state;
+            for (size_t i = 0; i < impl_->connections.size(); i++) {
+                const auto& relay = impl_->connections[i].relay;
+                // Formatting live relay state must be serialized against the relay
+                // thread; when we drive polling ourselves there is no other reader.
+                const std::string detail = drive_here ? relay->describe() : RelayLoop::instance().describe(*relay);
+                state += fmt::format("\n  want {} drained: {}", targets[i], detail);
+            }
+            TT_THROW(
+                "HostMeshSocket::barrier timed out as {}:{}",
+                impl_->endpoint == SocketEndpoint::SENDER ? "sender" : "receiver",
+                state);
+        }
+        std::this_thread::yield();
+    }
+}
+
+}  // namespace tt::tt_metal::distributed
