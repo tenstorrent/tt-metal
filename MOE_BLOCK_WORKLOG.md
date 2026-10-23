@@ -1589,3 +1589,34 @@ replay, us; all routings on the device's own routing):
 
 zipf_packed / ties are skipped on the fused head (the planner's rows_cap overflow: the token-dropping policy is
 pending). Not built: M3 at 2048 rows (the flat op's arena 1288 KB > the 1256 KB left).
+
+Ring of 4 (LoudBox 1x4, torus X), traced, uniform: every model at 128 - 2048 rows passes (PCC as on the 2x4). Spans,
+us: K3 1460 / 1698 / 1724 / 1814 / 2384 / 4530 (128 / 256 / 512 / 640 / 1024 / 2048); GLM-5.3-Flash 1370 / 1393 /
+1499 / 1532 / 1720 / 2446; GLM-5.3 (64 experts a chip) 3294 / 3450 / 3602 / 3676 / 3892 / 4798; DeepSeek V4.1-Flash
+2227 / 2317 / 2510 / 2581 / 2882 / 3602; M3 1024: 3106, 2048: 3921 (M3 128 - 640 built only after the ops warm-up fix,
+below: PCC .9885 - .9886).
+- The ops warm-up stranded L1: the logits reduce-scatter's first call places 8 persistent 64 B words under its large
+  L1 intermediate (650 KB down on Galaxy); the exchange's arena then only got the L1 under them. The ops warm-up now
+  runs with a free 16 KB block at the top held apart by a 64 B spacer (the words land there, the intermediates below).
+
+Generality map (host-only mock, test_generality_map.py), rows 128 - 2048 a mesh row (320 excluded, below):
+
+| mesh | builds | does not build |
+|---|---|---|
+| 2x4 line (12 x 10) | 39 / 40 | M3 2048 (flat arena) |
+| 1x4 ring (an 11-column board: the 4xP150 mock) | 36 / 40 | GLM-5.3 1024 / 1280 / 2048 and M3 2048: combine (9 free cells) |
+| Galaxy 4x4 torus X | 36 / 40 | K3 2048 (ops head planner static CBs 1.9 MB); M3 1024 / 1280 / 2048 (flat arena) |
+| Galaxy 8x4 torus XY | 31 / 41 | K3 2048, GLM-5.3-Flash 2048 (planner static CBs); GLM-5.3 1280 / 2048 (combine: 31 sources, 25 / 3 landing slots); M3 512+ (flat arena) |
+
+Structural (not fixed here):
+- Rows not a multiple of 32 x TP a chip (320 a mesh row: 80 tokens a chip) - needs padded chunks.
+- 2048 rows: no fused-head engine layout (row chunks of whole owner blocks) - the ops head; on Galaxy its combine
+  planner's static CBs grow past L1 at S 512 a chip (K3, GLM-5.3-Flash on 8x4).
+- Combine landing pool: one slot per source chip at the shallowest ring - 31 on the 8x4 - does not fit GLM-5.3's
+  large rows at 1280 / 2048; on an 11-column board GLM-5.3's flat layout leaves 9 cells.
+- The flat op's arena takes no L1 budget: M3 (H 6144, I 3072) plans 1288 KB at any rows, over the L1 left on the 8x4
+  from 512 rows (the exchange now says so at build instead of a CB clash at the first call).
+- Fused head: sigmoid router and SiLU / SiTU shared experts only - M3 (swiglu_oai) and DeepSeek V4.1 (sqrtsoftplus,
+  clamped SiLU) run the ops head (correct, slower).
+- More than 64 experts a chip (the flat op): the router fold proxy (K3 on the LoudBox).
+- Packed routings (zipf packed, ties): the planner's rows_cap overflow - the token-dropping policy is pending.
