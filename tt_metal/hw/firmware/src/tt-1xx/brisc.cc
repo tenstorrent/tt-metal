@@ -305,8 +305,9 @@ void arm_l1_ecc_halt() {
 #if defined(L1_ECC_HALT)
     volatile tt_reg_ptr uint32_t* ecc_ctrl = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_ECC_CTRL);
     // ECC_CTRL survives RISC soft reset. Nothing else enables its interrupts today (ARC firmware leaves it at 0), so
-    // any enable outside our own means another owner, such as future ARC firmware, and arming is skipped.
-    if (*ecc_ctrl & ~ECC_CTRL_VIEW_MASK & ~ecc_ctrl_armed) {
+    // any enable outside our own means another owner, such as future ARC firmware, and arming is skipped. The clears
+    // are ours too: a reset between the handler's two ECC_CTRL writes leaves them set.
+    if (*ecc_ctrl & ~(ECC_CTRL_VIEW_MASK | ecc_ctrl_armed | ECC_CTRL_COUNTS_CLR | ECC_CTRL_IRQ_CLR)) {
         return;
     }
     // Arm in this order: clear stale state, enable the ECC sources, install the handler, and enable BRISC at the
