@@ -82,6 +82,17 @@ def spec_learn_positions(start_pos, prompt_len, align=SPEC_PREFIX_ALIGN, min_tai
     return out
 
 
+def prefix_stride_low_prio():
+    """QWEN36_PREFIX_CACHE_STRIDE_LOW_PRIO (default 1): pure stride snapshots are evicted first; 0 = pure LRU."""
+    return os.environ.get("QWEN36_PREFIX_CACHE_STRIDE_LOW_PRIO", "1") == "1"
+
+
+class SpecPoints(list):
+    """Sorted save points; ``low`` = the subset that is a pure stride point (low cache priority)."""
+
+    low = frozenset()
+
+
 def spec_save_points(
     prompt_len, s, learn, chunk=2048, min_len=8192, stride=8192, align=SPEC_PREFIX_ALIGN, end_point=True
 ):
@@ -89,7 +100,8 @@ def spec_save_points(
     the learn positions, the end-of-prompt position for L >= min_len, else the last full-chunk boundary, and every
     `stride` tokens from s (chunk-aligned strides only). Same policy as the plain O path (model._plan_prefix_prefill).
     ``end_point`` False (a non-final chunked-prefill chunk resumed exactly, Option B): no end-of-prompt / last-full-chunk
-    point (the caller snapshots the chunk end itself); learn positions and strides stay.
+    point (the caller snapshots the chunk end itself); learn positions and strides stay. The result is a SpecPoints whose
+    ``low`` holds the pure stride points (in the stride range only: not a learn / end / last-chunk point).
     """
     pts = {p for p in learn if s < p <= prompt_len - 3}
     b_end = ((prompt_len - 3) // align) * align
@@ -102,9 +114,13 @@ def spec_save_points(
         p = s + ((prompt_len - s) // chunk) * chunk
         if s < p <= prompt_len - 3:
             pts.add(p)
+    out = SpecPoints()
     if stride > 0 and stride % chunk == 0:
-        pts.update(range(s + stride, prompt_len - 2, stride))
-    return sorted(pts)
+        strided = set(range(s + stride, prompt_len - 2, stride))
+        out.low = frozenset(strided - pts)
+        pts.update(strided)
+    out.extend(sorted(pts))
+    return out
 
 
 class GdnPrefixStateCache:
@@ -130,7 +146,7 @@ class GdnPrefixStateCache:
         self._lru = OrderedDict()  # (pos, digest) -> slot, least recently used first
         self._by_pos = {}  # pos -> {digest, ...}
         self._positions = []  # sorted positions present
-        self.stats = dict(lookups=0, hits=0, tokens_skipped=0, saves=0, evictions=0)
+        self.stats = dict(lookups=0, hits=0, tokens_skipped=0, saves=0, evictions=0, evictions_low=0)
         logger.info(f"{self.name}: {self.num_slots} slots x {len(self._dns)} GDN layers allocated.")
 
     def _alloc_pair(self, dn):
@@ -160,6 +176,7 @@ class GdnPrefixStateCache:
         pos = max(found)
         key = (pos, found[pos])
         self._lru.move_to_end(key)
+        self._low().discard(key)  # a hit proves value
         self.stats["hits"] += 1
         self.stats["tokens_skipped"] += pos
         return pos, self._lru[key]
@@ -170,6 +187,10 @@ class GdnPrefixStateCache:
     def _pins(self):
         """owner (engine row) -> key of its pinned snapshot, insertion ordered (lazy: caches built without __init__ work)."""
         return self.__dict__.setdefault("_pin_map", OrderedDict())
+
+    def _low(self):
+        """Keys saved at low priority (pure stride snapshots, evicted first), lazy like _pins."""
+        return self.__dict__.setdefault("_low_keys", set())
 
     def bump(self, name, n=1):
         self.stats[name] = self.stats.get(name, 0) + n
@@ -218,26 +239,36 @@ class GdnPrefixStateCache:
         return (
             f"pinned={self.pinned_count()}/{self.max_pinned_limit()} pinned_saves={st.get('pinned_saves', 0)} "
             f"skipped_saves={st.get('skipped_saves', 0)} evictions={st.get('evictions', 0)} "
+            f"evictions_low={st.get('evictions_low', 0)} low={len(self._low())} "
             f"exact_resumes={st.get('exact_resumes', 0)} refusals={st.get('refusals', 0)} "
             f"saves={st.get('saves', 0)} entries={len(self._lru)}/{self.num_slots}"
         )
 
     def _evict_victim(self):
-        """Least recently used UNPINNED key, or None."""
+        """Least recently used UNPINNED low-priority key (QWEN36_PREFIX_CACHE_STRIDE_LOW_PRIO), else the LRU UNPINNED
+        key, or None."""
         pinned = set(self._pins().values())
+        low = self._low()
+        if low and prefix_stride_low_prio():
+            for k in self._lru:
+                if k in low and k not in pinned:
+                    return k
         for k in self._lru:
             if k not in pinned:
                 return k
         return None
 
-    def save(self, tokens, pos):
-        """Snapshot the currently bound GDN state (the state AFTER tokens[:pos]) into a slot. LRU eviction skips pinned
-        snapshots; when no slot is free and none is evictable the save is skipped (counted, debug log). Returns True when the
-        snapshot is in the cache afterwards."""
+    def save(self, tokens, pos, low_prio=False):
+        """Snapshot the currently bound GDN state (the state AFTER tokens[:pos]) into a slot. ``low_prio``: a new key is
+        evicted before normal ones (an existing normal key is never downgraded; a normal save upgrades a low key). Eviction
+        skips pinned snapshots; when no slot is free and none is evictable the save is skipped (counted, debug log).
+        Returns True when the snapshot is in the cache afterwards."""
         buf = _tokens_np(tokens)
         key = (int(pos), self._digest(buf, int(pos)))
         if key in self._lru:
             self._lru.move_to_end(key)
+            if not low_prio:
+                self._low().discard(key)
             return True
         if self._free:
             slot = self._free.pop()
@@ -249,11 +280,16 @@ class GdnPrefixStateCache:
                 return False
             slot = self._lru.pop(old_key)
             self._drop_pos(old_key)
+            if old_key in self._low():
+                self._low().discard(old_key)
+                self.bump("evictions_low")
             self.stats["evictions"] += 1
         for dn, (rec, carry) in zip(self._dns, self._slots[slot]):
             ttnn.copy(dn.rec_state, rec)
             ttnn.copy(dn.conv_carry, carry)
         self._lru[key] = slot
+        if low_prio:
+            self._low().add(key)
         if key[0] not in self._by_pos:
             self._by_pos[key[0]] = set()
             bisect.insort(self._positions, key[0])

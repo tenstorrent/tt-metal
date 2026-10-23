@@ -1647,6 +1647,7 @@ class Qwen36Model:
         if cache is None or start_pos is None or self.args.max_batch_size <= 1:
             return None
         from models.demos.blackhole.qwen36.tt.prefix_cache import (
+            SpecPoints,
             spec_learn_positions,
             spec_resume_cap,
             spec_save_points,
@@ -1673,7 +1674,9 @@ class Qwen36Model:
         )
         forced = [int(p) for p in force_points if s < int(p) <= L - 3 and int(p) % 128 == 0]
         if forced:
-            points = sorted(set(points) | set(forced))
+            low = points.low - set(forced)
+            points = SpecPoints(sorted(set(points) | set(forced)))
+            points.low = low
         if s == 0 and not points and not nonfinal:
             return None
         return s, src, points
@@ -1768,7 +1771,7 @@ class Qwen36Model:
                 tokens, page_table, seg_start, seg_end, on_chunk, want_logits=last and want_logits
             )
             if not last:
-                cache.save(tokens[0], seg_end)
+                cache.save(tokens[0], seg_end, low_prio=seg_end in getattr(points, "low", ()))
                 saved.append(seg_end)
             seg_start = seg_end
         if save_end:  # non-final chunk, exact resume: the next chunk starts from the state after tokens[:L]

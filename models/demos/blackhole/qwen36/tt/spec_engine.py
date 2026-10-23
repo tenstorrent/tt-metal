@@ -2651,7 +2651,8 @@ class MTPSpecEngine:
                 if host is None:
                     return None  # only the first from-0 segment may decline, before any side effect
                 if not final:
-                    model._prefix_cache.save(prompt[0], b)  # the bound scratch = the state after tokens[:b]
+                    # the bound scratch = the state after tokens[:b]
+                    model._prefix_cache.save(prompt[0], b, low_prio=b in getattr(points, "low", ()))
                     saved.append(b)
                 a = b
             if save_end:
