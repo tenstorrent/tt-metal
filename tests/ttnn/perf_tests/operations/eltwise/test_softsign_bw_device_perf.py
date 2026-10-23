@@ -11,8 +11,8 @@ placement it runs the fused program, so both write the same memory. A call's tim
 kernel duration summed over the programs it launches, the median of REPEATS calls. The fused
 program must be faster by more than MARGIN.
 
-The fused program serves the other memory layouts too, where no call of this build runs the
-composite; the layout test times each one.
+The fused program serves the other memory layouts too, where no call of this build runs
+the composite; the layout test times each one.
 """
 
 import pandas as pd

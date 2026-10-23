@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "recv_async_h2d_op_program_factory.hpp"
+#include "recv_async_h2d_op_device_operation.hpp"
 
-#include <algorithm>
 #include <cstdint>
-#include <unordered_map>
+#include <optional>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
@@ -34,55 +34,43 @@ inline tt::tt_metal::distributed::MeshCoreCoord get_h2d_active_core(
 
 }  // namespace
 
-RecvAsyncH2DMeshWorkloadFactory::cached_mesh_workload_t RecvAsyncH2DMeshWorkloadFactory::create_mesh_workload(
-    const RecvAsyncH2DParams& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const Tensor& tensor_args,
-    std::vector<Tensor>& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+tt::tt_metal::ProgramDescriptor RecvAsyncH2DDeviceOperation::create_descriptor(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    using namespace tt::tt_metal;
 
-    // The H2D socket lives on exactly one mesh coordinate; only dispatch a program there,
-    // and require that coordinate to be part of the output tensor's coordinate set.
-    const auto active_core = get_h2d_active_core(*operation_attributes.h2d_socket);
-    const auto& socket_device_coord = active_core.device_coord;
-
-    const auto tensor_coords_flattened = tensor_coords.coords();
     TT_FATAL(
-        std::find(tensor_coords_flattened.begin(), tensor_coords_flattened.end(), socket_device_coord) !=
-            tensor_coords_flattened.end(),
-        "recv_async_h2d: H2DSocket device coordinate is not part of the output tensor's coordinate set");
+        mesh_dispatch_coordinate.has_value(),
+        "recv_async_h2d: the program factory requires a per-device mesh dispatch coordinate");
 
-    auto cached_program = create_at(operation_attributes, socket_device_coord, tensor_args, tensor_return_value);
-    workload.add_program(ttnn::MeshCoordinateRange(socket_device_coord), std::move(cached_program.program));
-    shared_variables.emplace(ttnn::MeshCoordinateRange(socket_device_coord), cached_program.shared_variables);
-
-    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
-}
-
-ttnn::device_operation::CachedProgram<RecvAsyncH2DMeshWorkloadFactory::shared_variables_t>
-RecvAsyncH2DMeshWorkloadFactory::create_at(
-    const RecvAsyncH2DParams& operation_attributes,
-    const ttnn::MeshCoordinate& /*mesh_coordinate*/,
-    const Tensor& tensor_args,
-    std::vector<Tensor>& /*tensor_return_value*/) {
     const auto& h2d_socket = *operation_attributes.h2d_socket;
     const auto& output_tensor = tensor_args;
 
+    // The H2D socket lives on exactly one mesh coordinate; only that coordinate gets a program.
+    // Validation requires that coordinate to be part of the output tensor's coordinate set.
+    // The active core (device and core coordinate) is part of the program hash.
     const auto active_core = get_h2d_active_core(h2d_socket);
+    if (*mesh_dispatch_coordinate != active_core.device_coord) {
+        return ProgramDescriptor{};
+    }
     const auto receiver_core_coord = active_core.core_coord;
 
-    tt::tt_metal::Program program{};
+    auto* output_buffer = output_tensor.buffer();
+    TT_FATAL(output_buffer != nullptr, "recv_async_h2d: output tensor buffer is null");
 
-    const uint32_t output_page_size = output_tensor.buffer()->aligned_page_size();
-    const uint32_t num_pages = output_tensor.buffer()->num_pages();
+    const uint32_t output_page_size = output_buffer->aligned_page_size();
+    const uint32_t num_pages = output_buffer->num_pages();
     const bool pull_from_host = h2d_socket.get_h2d_mode() == tt::tt_metal::distributed::H2DMode::DEVICE_PULL;
 
     const auto receiver_core_range_set = CoreRangeSet({CoreRange(receiver_core_coord, receiver_core_coord)});
 
-    const auto output_accessor_args = tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer());
+    const auto output_accessor_args = tt::tt_metal::TensorAccessorArgs(*output_buffer);
     auto output_accessor_compile_time_args = output_accessor_args.get_compile_time_args();
 
+    // The socket config buffer address is a compile-time arg and part of the program hash
+    // (see compute_program_hash), so it is structural and never needs patching on a cache hit.
     std::vector<uint32_t> writer_compile_args = {
         h2d_socket.get_config_buffer_address(),  // recv_socket_config_addr
         output_page_size,                        // page_size
@@ -91,47 +79,27 @@ RecvAsyncH2DMeshWorkloadFactory::create_at(
     writer_compile_args.insert(
         writer_compile_args.end(), output_accessor_compile_time_args.begin(), output_accessor_compile_time_args.end());
 
-    const auto writer_kernel = tt::tt_metal::CreateKernel(
-        program,
+    KernelDescriptor writer;
+    writer.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_async_h2d/device/kernels/"
-        "h2d_receiver_writer.cpp",
-        receiver_core_range_set,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
+        "h2d_receiver_writer.cpp";
+    writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer.core_ranges = receiver_core_range_set;
+    writer.compile_time_args = std::move(writer_compile_args);
+    writer.config = WriterConfigDescriptor{};
 
-    const std::vector<uint32_t> writer_rt_args = {
-        output_tensor.buffer()->address(),  // output_base_addr
-        num_pages,                          // num_pages
-    };
-    tt::tt_metal::SetRuntimeArgs(program, writer_kernel, receiver_core_coord, writer_rt_args);
+    // The output address is a Buffer* binding patched by the framework on every cache hit;
+    // num_pages derives from the tensor spec, which is in the hash.
+    writer.emplace_runtime_args(
+        receiver_core_coord,
+        {
+            output_buffer,  // output_base_addr
+            num_pages,      // num_pages
+        });
 
-    return {
-        std::move(program),
-        shared_variables_t{
-            .receiver_core_coord = receiver_core_coord,
-            .writer_kernel_id = writer_kernel,
-        }};
-}
-
-void RecvAsyncH2DMeshWorkloadFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
-    const RecvAsyncH2DParams& operation_attributes,
-    const Tensor& tensor_args,
-    [[maybe_unused]] std::vector<Tensor>& tensor_return_value) {
-    const auto& output_tensor = tensor_args;
-    const uint32_t num_pages = output_tensor.buffer()->num_pages();
-
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
-
-        auto& writer_runtime_args =
-            GetRuntimeArgs(program, shared_vars.writer_kernel_id, shared_vars.receiver_core_coord);
-        writer_runtime_args[0] = output_tensor.buffer()->address();
-        writer_runtime_args[1] = num_pages;
-
-        // H2D socket config buffer address is fixed for a given socket, so it does not
-        // need to be patched here; it lives in compile-time args.
-        (void)operation_attributes;
-    }
+    ProgramDescriptor desc;
+    desc.kernels.push_back(std::move(writer));
+    return desc;
 }
 
 }  // namespace ttnn::experimental::prim

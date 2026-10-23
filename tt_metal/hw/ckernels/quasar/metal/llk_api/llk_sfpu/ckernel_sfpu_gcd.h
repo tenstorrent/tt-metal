@@ -29,8 +29,6 @@ constexpr std::uint32_t GCD_SETCC_MOD_EQ0 = 0x6;
 // imm12 bit 0 = 0: int32 compare (assembly.yaml). An fp32 compare would see operands above
 // 0x7F800000 as NaN.
 constexpr std::uint32_t GCD_SWAP_IMM12_INT32 = 0x0;
-constexpr std::uint32_t GCD_ENCC_IMM12_ENABLE = 0x1;
-constexpr std::uint32_t GCD_ENCC_MOD_SET_EN = 0x2;
 constexpr std::uint32_t GCD_ENCC_MOD_RESET_RESULT = 0x0;
 
 // LREG1 carries b and ends as the result; LREG0 and LREG2 ping-pong between -a and the working a.
@@ -158,8 +156,6 @@ inline void calculate_gcd(
     const std::uint32_t in0_offset = dst_index_in0 * tile_stride;
     const std::uint32_t in1_offset = dst_index_in1 * tile_stride;
     const std::uint32_t out_offset = dst_index_out * tile_stride;
-
-    TTI_SFPENCC(GCD_ENCC_IMM12_ENABLE, GCD_ENCC_MOD_SET_EN);
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {

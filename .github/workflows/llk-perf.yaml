@@ -31,6 +31,21 @@ on:
         required: false
         default: false
         type: boolean
+      offload-compile:
+        description: "With shadow-compile-runner: the board measures the CPU build and does not compile"
+        required: false
+        default: false
+        type: boolean
+      debug-symbols:
+        description: "Build the ELFs with -g (the nightly builds without)"
+        required: false
+        default: false
+        type: boolean
+      shadow-compile-runner:
+        description: "Shadow compile on this CPU runner and compare (blank = off)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   actions: read
@@ -57,8 +72,12 @@ jobs:
       pipeline: ${{ github.event_name == 'schedule' && 'nightly' || inputs.pipeline }}
       # Nightly runs always use speed-of-light; manual runs use the checkbox.
       speed-of-light: ${{ github.event_name == 'schedule' || inputs.speed-of-light }}
+      debug-symbols: ${{ github.event_name != 'schedule' && inputs.debug-symbols }}
       # Nightly runs always publish; manual runs use the checkbox.
       upload-to-warehouse: ${{ github.event_name == 'schedule' || inputs.upload-to-warehouse }}
+      # Report-only shadow compile on CPU runners (#60901).
+      shadow-compile-runner: ${{ github.event_name == 'schedule' && 'tt-ubuntu-2204-xlarge-stable' || inputs.shadow-compile-runner }}
+      offload-compile: ${{ github.event_name == 'schedule' || inputs.offload-compile }}
     secrets: inherit
 
   gate:

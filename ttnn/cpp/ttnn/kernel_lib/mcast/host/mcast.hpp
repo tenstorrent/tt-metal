@@ -16,7 +16,7 @@
 #include "ttnn/kernel_lib/mcast/mcast_protocol.hpp"
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -121,7 +121,7 @@ using McastSenderConfig =
 class Mcast {
 public:
     Mcast(
-        const tt::tt_metal::IDevice& device,
+        const tt::tt_metal::distributed::MeshDevice& device,
         const McastConfig& config,
         const tt::tt_metal::CoreRangeSet& receivers,
         uint32_t receiver_group_size,

@@ -46,8 +46,8 @@ def test_bw_softsign(input_shapes, device):
 # the reference's class and a pure ULP error, |reference - output| / ulp(rounded reference),
 # below 1. A +0 where torch's own float64 result is below the smallest normal is torch's result as
 # stored, since the BF16 output cannot hold a subnormal. Each case logs one ULP line: the largest
-# pure ULP error against torch and the lanes of another class, for the output and for the
-# composite's on the same operands.
+# pure ULP error against torch and the lanes of another class, for the output and for
+# the composite's on the same operands.
 # The output is 0 wherever |x| >= 2^126 or x is infinite, where the reciprocal of 1 + |x| is 0 (the
 # composite's is too), as the composite this program replaces computes it; torch keeps the exact
 # product.
@@ -64,6 +64,7 @@ SOFTSIGN_BW_GRADS = [
     "inf",
     "-inf",
     "nan",
+    "-nan",
     "1.1754943508222875e-38",
     "-1.1754943508222875e-38",
     "3.3895313892515355e+38",
@@ -80,6 +81,9 @@ def _softsign_bw_grad_like(x, grad):
     if grad.startswith("random"):
         generator = torch.Generator().manual_seed(int(grad.removeprefix("random")))
         return torch.randn(x.shape, generator=generator).to(torch.bfloat16)
+    if grad == "-nan":
+        # torch.full rounds every NaN to 0x7FC0: the sign-set NaN, 0xFFC0, is written by its bits.
+        return torch.full(x.shape, -64, dtype=torch.int16).view(torch.bfloat16)
     return torch.full(x.shape, float(grad), dtype=torch.bfloat16)
 
 

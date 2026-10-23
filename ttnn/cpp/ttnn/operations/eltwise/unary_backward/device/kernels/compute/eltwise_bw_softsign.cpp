@@ -21,16 +21,15 @@ struct SoftsignBw : ckl::BinaryOp<SoftsignBw, ckl::Dst::D0, ckl::Dst::D1, ckl::D
 };
 
 void kernel_main() {
-    const uint32_t per_core_tile_cnt = get_arg_val<uint32_t>(0);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2);
 
     constexpr auto dfb_grad_out_id = tt::CBIndex::c_0;
     constexpr auto dfb_input_id = tt::CBIndex::c_1;
     constexpr auto dfb_grad_in_id = tt::CBIndex::c_2;
+    const uint32_t per_core_tile_cnt = get_arg_val<uint32_t>(0);
     DataflowBuffer dfb_grad_out(dfb_grad_out_id);
     DataflowBuffer dfb_input(dfb_input_id);
     DataflowBuffer dfb_grad_in(dfb_grad_in_id);
-
-    compute_kernel_hw_startup(dfb_grad_out_id, dfb_grad_in_id);
 
     const auto shape = ckl::IterationShape::tiles(per_core_tile_cnt);
 

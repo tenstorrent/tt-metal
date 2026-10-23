@@ -5,16 +5,13 @@
 // The certified body is 18 slots, or 20 with the exponent-FF NaN class tail. Fusing the gradient
 // multiply (FUSE_GRAD_SINGLE_ROUNDING) adds 6 more and retires the separate gradient pass: the two
 // products, their gap, and the flushed-reciprocal guard (setcc, move, gap, endcc): 24 slots, or 26.
-// A fused body thus records past slot 15, into the slots TT-Metal's LLK gives the math thread's FPU
-// replays (replay_buf_offset = 16 in cmath_common.h; matmul, reduce and transpose_dest record there in
-// their own init). The body records its slots again on every tile, and the unary-backward program that
-// calls it (copy_tile, this call, pack_tile) runs no FPU replay; a later program's FPU init records its
-// own slots before it replays them.
+// Every body is longer than the call's 16 replay slots, so it records its first 16 slots, the head, and
+// issues the tail after each replay (ckernel_sfpu_softsign_bw_bf16_replay_window.h).
 #include <cstdint>
 constexpr std::uint32_t kSquaredAbsDenominatorCertifiedSlots = 18u;
 constexpr std::uint32_t kSquaredAbsDenominatorBodySlots      = kSquaredAbsDenominatorCertifiedSlots + 6u;
-constexpr bool kSquaredAbsDenominatorTtiReplay =
-    (TT_TARGET_BH_BF16_SQUARED_ABS_DENOMINATOR_TTI_BODY_SLOTS == kSquaredAbsDenominatorCertifiedSlots) && tti_replay_fits(kSquaredAbsDenominatorBodySlots);
+constexpr bool kSquaredAbsDenominatorTtiReplay               = TT_TARGET_BH_BF16_SQUARED_ABS_DENOMINATOR_TTI_BODY_SLOTS == kSquaredAbsDenominatorCertifiedSlots;
+constexpr std::uint32_t kSquaredAbsDenominatorHeadSlots      = 16u;
 
 // Arm the existing BH load-macro RNE/store tail for this anonymous replay.
 // T1 captures the same FP32->BF16 RNE used by the plain body; macro sequence
@@ -32,7 +29,14 @@ inline void squared_abs_denominator_tti_lm_init()
 #endif
 }
 
-inline void squared_abs_denominator_tti_row();
+inline void squared_abs_denominator_tti_row_head();
+inline void squared_abs_denominator_tti_row_tail();
+
+inline void squared_abs_denominator_tti_row()
+{
+    squared_abs_denominator_tti_row_head();
+    squared_abs_denominator_tti_row_tail();
+}
 
 inline void squared_abs_denominator_tti_replay_tile()
 {
@@ -50,23 +54,23 @@ inline void squared_abs_denominator_tti_replay_tile()
     }
 #endif
 #if !defined(DISABLE_SFPLOADMACRO)
-    TT_REPLAY_ADDRMOD_ENTER();
-    ckernel::load_replay_buf<ckernel::Exec>(0, (kBodySlots), [&] {  // record + execute element 0
-        squared_abs_denominator_tti_row();
-        TTI_INCRWC(0, 2, 0, 0);
-    });
+    // record + execute element 0
+    ::ckernel::sfpu::bf16::softsign_bw::record_split<0, kBodySlots, kSquaredAbsDenominatorHeadSlots>(
+        squared_abs_denominator_tti_row_head, squared_abs_denominator_tti_row_tail);
+    TTI_INCRWC(0, 2, 0, 0);
 #pragma GCC unroll 32
     for (int row = 1; row < 32; ++row)
     {
-        TTI_REPLAY(0, kBodySlots, 0, 0);
+        ::ckernel::sfpu::bf16::softsign_bw::replay_split<0, kBodySlots, kSquaredAbsDenominatorHeadSlots>(
+            squared_abs_denominator_tti_row_head, squared_abs_denominator_tti_row_tail);
         TTI_INCRWC(0, 2, 0, 0);
     }
 #endif
     TT_REPLAY_TILE_EPILOGUE();
 }
 
-// One row: the body the replay records.
-inline void squared_abs_denominator_tti_row()
+// One row: the body the replay records. The head is its first 16 slots in every variant.
+inline void squared_abs_denominator_tti_row_head()
 {
     TTI_SFPLOAD(ckernel::p_sfpu::LREG0, 0, TT_ADDRMOD_DST_HOLD, 0); // x
     TTI_SFPNOP;                                                     // conservative replay load-consumer gap
@@ -90,6 +94,10 @@ inline void squared_abs_denominator_tti_row()
     TTI_SFPMAD(ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG2,
                2);            // reciprocal = y1*-t2 - 0 (predicated)
     TTI_SFPENCC(3, 0, 0, 10); // CC-balanced replay body
+}
+
+inline void squared_abs_denominator_tti_row_tail()
+{
     // (reciprocal * grad) * reciprocal is formed in FP32 and rounded to BF16 once, by the load-macro
     // tail below; scaling before squaring keeps a normal product out of the FTZ squared reciprocal.
     TTI_SFPMUL(ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG6,
