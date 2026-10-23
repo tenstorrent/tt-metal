@@ -19,9 +19,24 @@ def _clean_env(monkeypatch):
     monkeypatch.delenv("GEMMA4_TRACE_SHORT_PREFILL_MAX", raising=False)
 
 
-def test_opt_in_off_by_default():
+def test_opt_in_off_by_default_off_the_column_mesh():
+    # no mesh shape (demo / host paths) or a row mesh: off unless GEMMA4_TRACE_SHORT_PREFILL=1
     assert not gt.trace_short_prefill_opt_in()
     assert not gt.trace_short_prefill_opt_in(128, 1)
+    assert not gt.trace_short_prefill_opt_in(128, 1, mesh_shape=(1, 4))
+    assert not gt.trace_short_prefill_opt_in(128, 1, mesh_shape=(8, 4))
+
+
+def test_default_on_for_the_blackhole_column_mesh(monkeypatch):
+    from models.common.utility_functions import is_blackhole
+
+    on = gt.trace_short_prefill_default((4, 1))
+    assert on == bool(is_blackhole())  # the validated 4-chip column mesh, Blackhole only
+    monkeypatch.setenv(gt.GEMMA4_TRACE_SHORT_PREFILL_ENV, "0")
+    assert not gt.trace_short_prefill_default((4, 1))
+    assert not gt.trace_short_prefill_opt_in(128, 1, mesh_shape=(4, 1))
+    monkeypatch.setenv(gt.GEMMA4_TRACE_SHORT_PREFILL_ENV, "1")
+    assert gt.trace_short_prefill_default((1, 4))
 
 
 def test_opt_in_short_single_user_only(monkeypatch):

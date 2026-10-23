@@ -781,7 +781,11 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # Bounded sliding: never capture prefill TRACE — mid-forward paged_fill
         # corrupts token-0 on TP (see resolve_gemma4_prefill_trace_enable).
         prefill_forward_fn = None
-        if self._bounded_sliding_kv_cache and enable_trace and trace_short_prefill_opt_in():
+        if (
+            self._bounded_sliding_kv_cache
+            and enable_trace
+            and trace_short_prefill_opt_in(mesh_shape=getattr(self.model[0].mesh_device, "shape", None))
+        ):
             # GEMMA4_TRACE_SHORT_PREFILL=1: capture only the short single-user buckets (the runtime policy in
             # resolve_gemma4_prefill_trace_enable replays exactly those); everything longer stays eager.
             cap = trace_short_prefill_max()

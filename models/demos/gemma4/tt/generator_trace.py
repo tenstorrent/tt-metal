@@ -32,10 +32,28 @@ def trace_short_prefill_max() -> int:
     return int(os.environ.get("GEMMA4_TRACE_SHORT_PREFILL_MAX", "128"))
 
 
-def trace_short_prefill_opt_in(prefill_seq_len=None, batch_size: int = 1) -> bool:
-    """True when the short-prefill trace opt-in applies: flag on, a single user, and (when given) a prompt whose
-    padded kernel length is at most ``GEMMA4_TRACE_SHORT_PREFILL_MAX``."""
-    if os.environ.get(GEMMA4_TRACE_SHORT_PREFILL_ENV, "0") != "1":
+def trace_short_prefill_default(mesh_shape=None) -> bool:
+    """The short-prefill trace under bounded sliding when ``GEMMA4_TRACE_SHORT_PREFILL`` is unset: on for the Blackhole
+    4-chip column mesh (validated 2026-10-23 on the 26B-A4B: traced == eager first token and 0.99 logits parity, the 64
+    decode positions after the replayed bucket identical to the eager ring fill vs HF, replay 91 ms vs 213 ms eager),
+    off elsewhere until validated there."""
+    env = os.environ.get(GEMMA4_TRACE_SHORT_PREFILL_ENV)
+    if env is not None and env.strip() != "":
+        return env.strip() == "1"
+    from models.common.utility_functions import is_blackhole
+    from models.demos.gemma4.tt.mesh_orientation import is_column_mesh
+
+    try:
+        blackhole = is_blackhole()
+    except Exception:  # noqa: BLE001 - arch undeterminable (host-only unit tests): keep the opt-in default
+        return False
+    return bool(blackhole) and is_column_mesh(mesh_shape) and int(mesh_shape[0]) == 4
+
+
+def trace_short_prefill_opt_in(prefill_seq_len=None, batch_size: int = 1, mesh_shape=None) -> bool:
+    """True when the short-prefill trace applies: enabled (``trace_short_prefill_default`` for ``mesh_shape``), a
+    single user, and (when given) a prompt whose padded kernel length is at most ``GEMMA4_TRACE_SHORT_PREFILL_MAX``."""
+    if not trace_short_prefill_default(mesh_shape):
         return False
     if int(batch_size) != 1:
         return False
@@ -888,7 +906,12 @@ def resolve_gemma4_prefill_trace_enable(
     # bounded prefills (B=1 short nightly prompts included); eager deferred-fill
     # remains. Batched+bounded also cannot refresh the scalar fill-cap tensor.
     if getattr(model, "bounded_sliding_kv_cache", False):
-        if enable_trace and not can_batch_prefill and trace_short_prefill_opt_in(prefill_seq_lens[0], batch_size):
+        mesh_shape = getattr(getattr(model, "mesh_device", None), "shape", None)
+        if (
+            enable_trace
+            and not can_batch_prefill
+            and trace_short_prefill_opt_in(prefill_seq_lens[0], batch_size, mesh_shape=mesh_shape)
+        ):
             logger.info(
                 "Gemma4 bounded sliding: GEMMA4_TRACE_SHORT_PREFILL keeps the prefill trace for seq_len={} "
                 "(single user, padded <= {})",
