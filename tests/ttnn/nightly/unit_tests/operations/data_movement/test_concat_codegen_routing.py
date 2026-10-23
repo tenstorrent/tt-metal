@@ -887,6 +887,14 @@ _DRAM = ttnn.DRAM_MEMORY_CONFIG
 _L1 = ttnn.L1_MEMORY_CONFIG
 
 
+@pytest.fixture(autouse=True)
+def _require_concat_codegen_arch(device):
+    # Codegen is gated to these architectures (codegen_supported_on_arch); elsewhere auto falls back to native
+    # and the forced-codegen legs have nothing to exercise.
+    if not (ttnn.device.is_wormhole_b0(device) or ttnn.device.is_blackhole(device)):
+        pytest.skip("concat codegen is supported only on Wormhole and Blackhole")
+
+
 def _is_width_concat(shapes, dim):
     return dim % len(shapes[0]) == len(shapes[0]) - 1
 
