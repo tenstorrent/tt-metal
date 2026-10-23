@@ -9,10 +9,10 @@ Reference for two related dict formats:
    produces for transfer to
    [`tt_transformers.tt.model.Transformer.update_weights`](../../models/tt_transformers/tt/model.py).
    This same dict is also the wire format consumed by the cross-rank
-   [`WeightBridge`](../sources/examples/grpo/utils/weight_bridge.py),
+   [`WeightBridge`](../sources/examples/grpo_remote_rollout/utils/weight_bridge.py),
    which ships it from a ttml rank to a tt-transformers rank over MPI.
-   It is what the GRPO BoolQ example
-   ([`tt-train/sources/examples/grpo/boolq/`](../sources/examples/grpo/boolq/))
+   It is what the remote-rollout GRPO BoolQ example
+   ([`tt-train/sources/examples/grpo_remote_rollout/boolq/`](../sources/examples/grpo_remote_rollout/boolq/))
    uses to push the freshly-updated policy to the inference worker on
    every training step.
 
@@ -255,9 +255,8 @@ client.send_weights(ttml_model.weights_ref_hf_dict())
 ttt_model.update_weights(received_hf_dict, hf_rope=False)
 ```
 
-End-to-end smoke tests:
-- In-process: [`test_ttml_to_ttt_weight_transfer.py`](../sources/examples/grpo/tests/test_ttml_to_ttt_weight_transfer.py).
-- Cross-rank: [`weight_transfer/test_bridge_transfer.py`](../sources/examples/grpo/tests/weight_transfer/test_bridge_transfer.py).
+End-to-end smoke test (cross-rank):
+[`weight_transfer/test_weight_transfer.py`](../tests/python/grpo_remote_rollout/weight_transfer/test_weight_transfer.py).
 
 ---
 
@@ -270,4 +269,4 @@ End-to-end smoke tests:
 * tt-transformers dispatcher:
   [`Transformer.update_weights`](../../models/tt_transformers/tt/model.py).
 * Cross-rank transport: `WeightBridge` in
-  [`grpo/utils/weight_bridge.py`](../sources/examples/grpo/utils/weight_bridge.py).
+  [`grpo_remote_rollout/utils/weight_bridge.py`](../sources/examples/grpo_remote_rollout/utils/weight_bridge.py).

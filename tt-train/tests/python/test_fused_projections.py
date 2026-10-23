@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import ml_dtypes
 import numpy as np
 import pytest
 
@@ -17,6 +18,18 @@ from ttml.models.llama.transformer import LlamaMLP
 BATCH = 2
 SEQ = 64
 HEAD_DIM = 32
+# Observed worst case over the MLP comparisons is 1.0 ULP at seed 0 and 2.0 over seeds 0-7
+# (forward and d w_gate_up), so this leaves 2x headroom over other weights too.
+MLP_MAX_ULP = 4.0
+
+pytestmark = pytest.mark.requires_device
+
+
+@pytest.fixture(autouse=True)
+def reset_graph():
+    """The autograd context is a process-wide singleton."""
+    yield
+    ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
 def to_device(array: np.ndarray, requires_grad: bool = False) -> ttml.autograd.Tensor:
@@ -27,6 +40,10 @@ def to_device(array: np.ndarray, requires_grad: bool = False) -> ttml.autograd.T
 
 def to_host(tensor: ttml.autograd.Tensor) -> np.ndarray:
     return tensor.to_numpy().astype(np.float32)
+
+
+def bf16_round(array: np.ndarray) -> np.ndarray:
+    return array.astype(ml_dtypes.bfloat16).astype(np.float32)
 
 
 def grad(tensor: ttml.autograd.Tensor) -> np.ndarray:
@@ -48,9 +65,22 @@ def split_heads(x: np.ndarray, num_heads: int) -> np.ndarray:
     return np.ascontiguousarray(x.reshape(b, s, num_heads, -1).transpose(0, 2, 1, 3))
 
 
-@pytest.mark.requires_device
+def merge_heads(x: np.ndarray) -> np.ndarray:
+    """(B, heads, S, D) -> (B, 1, S, heads * D), the inverse of ``split_heads``."""
+    b, h, s, d = x.shape
+    return np.ascontiguousarray(x.transpose(0, 2, 1, 3).reshape(b, 1, s, h * d))
+
+
 @pytest.mark.parametrize("num_heads, num_groups", [(4, 4), (4, 2), (8, 1)], ids=["mha", "gqa", "mqa"])
-def test_heads_creation_matches_grouped_heads_creation(num_heads, num_groups):
+# Backward runs each op's node before the nodes it links to, and in DFS order otherwise.
+# q's node computes all three input gradients, so it must run after k's and v's consumers,
+# which the sync nodes' link to q's node guarantees.
+# Where q, k and v meet, backward explores the branch of the first argument first,
+# so that branch runs last. Passing q first (as attention does in every in-tree caller)
+# gets the order right even without the link; "kvq" sums the k and v terms before q's,
+# where only the link does. Without it, "kvq" crashes in backward.
+@pytest.mark.parametrize("loss_order", ["qkv", "kvq"])
+def test_heads_creation_matches_grouped_heads_creation(num_heads, num_groups, loss_order):
     rng = np.random.default_rng(0)
     q = rng.standard_normal((BATCH, 1, SEQ, num_heads * HEAD_DIM), dtype=np.float32)
     kv = rng.standard_normal((BATCH, 1, SEQ, 2 * num_groups * HEAD_DIM), dtype=np.float32)
@@ -65,19 +95,28 @@ def test_heads_creation_matches_grouped_heads_creation(num_heads, num_groups):
     for name, f, s, e in zip("qkv", fused, split, expected):
         np.testing.assert_array_equal(to_host(f), to_host(s), err_msg=f"{name} heads differ from grouped")
         # The inputs went through bf16 on the way in; the split itself must not change any value.
-        np.testing.assert_array_equal(to_host(f), to_host(to_device(e)), err_msg=f"{name} heads mislabelled")
+        np.testing.assert_array_equal(to_host(f), bf16_round(e), err_msg=f"{name} heads mislabelled")
 
     upstream = [rng.standard_normal(e.shape, dtype=np.float32) for e in expected]
-    loss_with_upstream(fused, upstream).backward(False)
-    loss_with_upstream(split, upstream).backward(False)
-    np.testing.assert_array_equal(grad(qkv_t), np.concatenate([grad(q_t), grad(kv_t)], axis=3))
-    ttml.autograd.AutoContext.get_instance().reset_graph()
+    order = ["qkv".index(name) for name in loss_order]
+    loss_with_upstream([fused[i] for i in order], [upstream[i] for i in order]).backward(False)
+    loss_with_upstream([split[i] for i in order], [upstream[i] for i in order]).backward(False)
+
+    # The gradient into each head output is upstream / numel (mean's 1/numel times mul's upstream).
+    # Every numel here is a power of two, so dividing the bf16 upstream by it is exact,
+    # and the rest of the backward only moves data, so the results must match bit for bit.
+    sizes = [e.size for e in expected]
+    assert all(n & (n - 1) == 0 for n in sizes), f"exact gradient checks need power-of-two numels, got {sizes}"
+    d_heads = [merge_heads(bf16_round(u) / u.size) for u in upstream]
+    np.testing.assert_array_equal(grad(qkv_t), np.concatenate(d_heads, axis=3), err_msg="d qkv")
+    np.testing.assert_array_equal(grad(q_t), d_heads[0], err_msg="d q")
+    np.testing.assert_array_equal(grad(kv_t), np.concatenate(d_heads[1:], axis=3), err_msg="d kv")
 
 
-@pytest.mark.requires_device
 def test_llama_mlp_matches_composite_swiglu_on_split_halves():
     embedding_size, intermediate_size = 64, 128
     rng = np.random.default_rng(0)
+    ttml.init.manual_seed(0)
     mlp = LlamaMLP(embedding_size, intermediate_size)
     w_gate_up = to_host(mlp.w_gate_up.weight.tensor)
     w_gate, w_up = w_gate_up[:, :, :intermediate_size], w_gate_up[:, :, intermediate_size:]
@@ -93,17 +132,16 @@ def test_llama_mlp_matches_composite_swiglu_on_split_halves():
     up_ref = ttml.ops.linear.linear(x_ref, w_up_ref, None)
     out_ref = ttml.ops.linear.linear(ttml.ops.binary.mul(gate_ref, up_ref), w_down_ref, None)
 
-    assert_within_bf16_ulp(to_host(out_fused), to_host(out_ref), "forward", max_ulp=2.0)
+    assert_within_bf16_ulp(to_host(out_fused), to_host(out_ref), "forward", max_ulp=MLP_MAX_ULP)
 
     upstream = [rng.standard_normal(to_host(out_fused).shape, dtype=np.float32)]
     loss_with_upstream([out_fused], upstream).backward(False)
     loss_with_upstream([out_ref], upstream).backward(False)
-    assert_within_bf16_ulp(grad(x_fused), grad(x_ref), "d x", max_ulp=2.0)
+    assert_within_bf16_ulp(grad(x_fused), grad(x_ref), "d x", max_ulp=MLP_MAX_ULP)
     assert_within_bf16_ulp(
         grad(mlp.w_gate_up.weight.tensor),
         np.concatenate([grad(w_gate_ref), grad(w_up_ref)], axis=2),
         "d w_gate_up",
-        max_ulp=2.0,
+        max_ulp=MLP_MAX_ULP,
     )
-    assert_within_bf16_ulp(grad(mlp.w2.weight.tensor), grad(w_down_ref), "d w2", max_ulp=2.0)
-    ttml.autograd.AutoContext.get_instance().reset_graph()
+    assert_within_bf16_ulp(grad(mlp.w2.weight.tensor), grad(w_down_ref), "d w2", max_ulp=MLP_MAX_ULP)

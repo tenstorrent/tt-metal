@@ -17,7 +17,8 @@ import ttml
 # Fused linears concatenate multiple matrices that should be orthogonalized
 # separately: qkv_linear ([Q|K|V], NanoGPT and Llama), w_gate_up ([gate|up], Llama)
 # and kv_linear ([K|V], the C++ Llama).
-# Splitting, applying step and concatenating is not yet supported for these parameters.
+# TODO(https://github.com/tenstorrent/tt-metal/issues/60893): apply Muon per block,
+# rather than sending them to AdamW.
 DEFAULT_ADAMW_MODULES = {"tok_emb", "pos_emb", "fc", "kv_linear", "qkv_linear", "w_gate_up"}
 
 

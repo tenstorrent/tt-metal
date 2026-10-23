@@ -5,6 +5,7 @@
 #include "multi_head_utils.hpp"
 
 #include <stdexcept>
+#include <string_view>
 #include <tt-metalium/constants.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -21,11 +22,60 @@ namespace ttml::ops {
 
 namespace {
 
+// Checks that `width` splits into `num_heads` heads of a tile-aligned head_dim, and returns head_dim.
+// `op_name` and `heads_name` (what `num_heads` counts) only label the error messages.
+uint32_t validate_head_dim(uint32_t width, uint32_t num_heads, std::string_view op_name, std::string_view heads_name) {
+    if (num_heads == 0U) {
+        throw std::invalid_argument(fmt::format("{} expects {} to be positive, got 0.", op_name, heads_name));
+    }
+    if (width % num_heads != 0U) {
+        throw std::invalid_argument(fmt::format(
+            "{} expects the input width ({}) to be divisible by {} ({}).", op_name, width, heads_name, num_heads));
+    }
+    // nlp_create_qkv_heads derives its tile count as head_dim / TILE_WIDTH, so a sub-tile head_dim
+    // silently writes nothing and returns a tile-padded tensor of garbage.
+    const uint32_t head_dim = width / num_heads;
+    if (head_dim % tt::constants::TILE_WIDTH != 0U) {
+        throw std::invalid_argument(fmt::format(
+            "{} expects head_dim (input width {} / {} {} = {}) to be a multiple of {}.",
+            op_name,
+            width,
+            heads_name,
+            num_heads,
+            head_dim,
+            tt::constants::TILE_WIDTH));
+    }
+    return head_dim;
+}
+
 // Splits `qs` (and `kvs`, when given) into heads with nlp_create_qkv_heads:
 // q: (B, num_heads, S, head_dim); k, v: (B, num_kv_heads, S, head_dim).
 // Without `kvs`, `qs` holds [Q | K | V]; with it, `qs` holds Q and `kvs` holds [K | V].
 std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> create_heads(
-    const autograd::TensorPtr& qs, const autograd::TensorPtr& kvs, uint32_t num_heads, uint32_t num_kv_heads) {
+    const autograd::TensorPtr& qs,
+    const autograd::TensorPtr& kvs,
+    uint32_t num_heads,
+    uint32_t num_kv_heads,
+    std::string_view op_name) {
+    const uint32_t qs_width = qs->get_value().logical_shape()[-1];
+    if (kvs) {
+        const uint32_t head_dim = validate_head_dim(qs_width, num_heads, op_name, "num_heads");
+        const uint32_t kvs_width = kvs->get_value().logical_shape()[-1];
+        if (kvs_width != 2U * num_kv_heads * head_dim) {
+            throw std::invalid_argument(fmt::format(
+                "{} expects the KV width ({}) to be 2 * {} KV heads * head_dim {}.",
+                op_name,
+                kvs_width,
+                num_kv_heads,
+                head_dim));
+        }
+    } else {
+        if (num_heads == 0U) {
+            throw std::invalid_argument(fmt::format("{} expects num_heads to be positive, got 0.", op_name));
+        }
+        validate_head_dim(qs_width, num_heads + 2U * num_kv_heads, op_name, "num_heads + 2 * num_groups");
+    }
+
     auto [q, k, v] = ttnn::experimental::nlp_create_qkv_heads(
         qs->get_value(),
         kvs ? std::optional<ttnn::Tensor>(kvs->get_value()) : std::nullopt,
@@ -71,7 +121,7 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_
     const autograd::TensorPtr& qkv, uint32_t num_heads, std::optional<uint32_t> num_groups) {
     // qkv: (B, 1, S, (num_heads + 2 * num_groups) * head_dim), laid out [Q | K | V].
     // num_groups defaults to num_heads (standard MHA); num_groups < num_heads selects GQA.
-    return create_heads(qkv, nullptr, num_heads, num_groups.value_or(num_heads));
+    return create_heads(qkv, nullptr, num_heads, num_groups.value_or(num_heads), "heads_creation");
 }
 
 autograd::TensorPtr split_heads(const autograd::TensorPtr& x, uint32_t num_heads) {
@@ -80,23 +130,7 @@ autograd::TensorPtr split_heads(const autograd::TensorPtr& x, uint32_t num_heads
         throw std::invalid_argument(
             fmt::format("split_heads expects an input of shape (B, 1, S, E), but dim 1 is {}.", x_shape[1]));
     }
-    if (num_heads == 0U) {
-        throw std::invalid_argument("split_heads expects num_heads to be positive, got 0.");
-    }
-    if (x_shape[3] % num_heads != 0U) {
-        throw std::invalid_argument(fmt::format(
-            "split_heads expects the embedding dim ({}) to be divisible by num_heads ({}).", x_shape[3], num_heads));
-    }
-    // The kernel derives its tile count as head_dim / TILE_WIDTH, so a sub-tile head_dim silently
-    // writes nothing and returns a tile-padded tensor of garbage.
-    if ((x_shape[3] / num_heads) % tt::constants::TILE_WIDTH != 0U) {
-        throw std::invalid_argument(fmt::format(
-            "split_heads expects head_dim (embedding dim {} / num_heads {} = {}) to be a multiple of {}.",
-            x_shape[3],
-            num_heads,
-            x_shape[3] / num_heads,
-            tt::constants::TILE_WIDTH));
-    }
+    validate_head_dim(x_shape[3], num_heads, "split_heads", "num_heads");
     // nlp_create_qkv_heads picks its program factory from the input alone, and the sharded factory
     // divides by num_kv_heads, which is 0 here. Reject rather than take a SIGFPE inside the kernel.
     if (x->get_value().is_sharded()) {
@@ -158,7 +192,7 @@ autograd::TensorPtr heads_fusion(const autograd::TensorPtr& x) {
 std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> grouped_heads_creation(
     const autograd::TensorPtr& qs, const autograd::TensorPtr& kvs, uint32_t num_heads, uint32_t num_groups) {
     // qs: (B, 1, S, num_heads * head_dim); kvs: (B, 1, S, 2 * num_groups * head_dim), laid out [K | V].
-    return create_heads(qs, kvs, num_heads, num_groups);
+    return create_heads(qs, kvs, num_heads, num_groups, "grouped_heads_creation");
 }
 
 }  // namespace ttml::ops

@@ -2,8 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import replace
-
 import ttnn
 
 from ttml.models import WeightTyingType
@@ -11,16 +9,12 @@ from ttml.models.llama import Llama, compute_swiglu_intermediate_size
 
 
 class LlamaCompositeKV(Llama):
-    """Extends Llama for 2 reasons:
-    1. Runs attention through scaled_dot_product_attention_composite (``use_composite_sdpa``): the
-       completer emits non-broadcast masks ((B, 1, S, S)) that only the composite kernel accepts,
-       and it makes the decode path (KV-cache slice -> attention) actually work.
-    2. Adds weights_ref_hf_dict() -- an HF-keyed export of live ttml ttnn.Tensor handles, shaped
-       for tt-transformers' Transformer.update_weights(...). This is the ttml->ttt bridge format
-       the remote-rollout weight sync depends on, and it doesn't exist upstream."""
+    """Extends Llama with weights_ref_hf_dict() -- an HF-keyed export of live ttml ttnn.Tensor
+    handles, shaped for tt-transformers' Transformer.update_weights(...). This is the ttml->ttt
+    bridge format the remote-rollout weight sync depends on, and it doesn't exist upstream."""
 
     def __init__(self, config):
-        super().__init__(replace(config, use_composite_sdpa=True))
+        super().__init__(config)
         self.create_name("Llama")
 
     def weights_ref_hf_dict(self) -> dict[str, ttnn.Tensor]:

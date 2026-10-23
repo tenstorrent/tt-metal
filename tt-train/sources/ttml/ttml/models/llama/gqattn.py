@@ -48,12 +48,18 @@ class GroupedQueryAttention(AbstractModuleBase):
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
         self.rope_params = rope_params
-        self.use_composite_sdpa = use_composite_sdpa
+        self.sdpa_op = (
+            ttml.ops.attention.scaled_dot_product_attention_composite
+            if use_composite_sdpa
+            else ttml.ops.attention.scaled_dot_product_attention
+        )
 
         head_dim = embedding_size // num_heads
         # Fused Q+K+V: on one device the rows are [Q | K | V]. Under TP, device d takes a contiguous
         # slice and reads it as [Q_d | K_d | V_d], so the full weight is
         # [Q_0 | K_0 | V_0 | Q_1 | K_1 | V_1 | ...] and its row order changes with the TP size.
+        # Checkpoints re-shard it without knowing this order:
+        # https://github.com/tenstorrent/tt-metal/issues/60900
         qkv_dim = (num_heads + 2 * num_groups) * head_dim  # == embedding_size + 2 * num_groups * head_dim
 
         # Head/group counts stored here are LOCAL (per-device) so that splitting
@@ -111,11 +117,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         q_heads = ttml.ops.rope.rope(q_heads, self.rope_params)
         k_heads = ttml.ops.rope.rope(k_heads, self.rope_params)
 
-        sdpa_args = (q_heads, k_heads, v_heads, mask)
-        if self.use_composite_sdpa:
-            attention = ttml.ops.attention.scaled_dot_product_attention_composite(*sdpa_args)
-        else:
-            attention = ttml.ops.attention.scaled_dot_product_attention(*sdpa_args)
+        attention = self.sdpa_op(q_heads, k_heads, v_heads, mask)
         attention = ttml.ops.multi_head_utils.heads_fusion(attention)
 
         out = self.out_linear(attention)
@@ -162,11 +164,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         k_cache_to_process = ttml.autograd.create_tensor(k_cache_slice)
         v_cache_to_process = ttml.autograd.create_tensor(v_cache_slice)
 
-        sdpa_args = (q_heads, k_cache_to_process, v_cache_to_process, mask)
-        if self.use_composite_sdpa:
-            attention = ttml.ops.attention.scaled_dot_product_attention_composite(*sdpa_args)
-        else:
-            attention = ttml.ops.attention.scaled_dot_product_attention(*sdpa_args)
+        attention = self.sdpa_op(q_heads, k_cache_to_process, v_cache_to_process, mask)
         attention = ttml.ops.multi_head_utils.heads_fusion(attention)
 
         out = self.out_linear(attention)
