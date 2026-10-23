@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #define CKL_ELTWISE_CHAIN_PACK_BLOCK
+#define CKL_ELTWISE_CHAIN_PACK_BLOCK_IF (!DST_ACCUM_MODE)
 
 #include <cstdint>
 
@@ -115,10 +116,17 @@ void kernel_main() {
 #endif
         ACQ();
 #ifdef ARCH_BLACKHOLE
-        for (uint32_t j = 0; j < Wt; ++j) {
-            matmul_tiles(dfb::input, dfb::trans_mat, j, 0, j);
+        if constexpr (!DST_ACCUM_MODE) {
+            for (uint32_t j = 0; j < Wt; ++j) {
+                matmul_tiles(dfb::input, dfb::trans_mat, j, 0, j);
+            }
+            pack_block_mop(0, dfb::rotated_interm, Wt);
+        } else {
+            for (uint32_t j = 0; j < Wt; ++j) {
+                matmul_tiles(dfb::input, dfb::trans_mat, j, 0, j);
+                pack_tile(j, dfb::rotated_interm, j);
+            }
         }
-        pack_block_mop(0, dfb::rotated_interm, Wt);
 #else
         for (uint32_t j = 0; j < Wt; ++j) {
             matmul_tiles(dfb::input, dfb::trans_mat, j, 0, j);

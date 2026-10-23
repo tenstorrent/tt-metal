@@ -110,7 +110,7 @@ void kernel_main() {
     constexpr uint32_t dfb_ex_id = dfb::ex;                    // E[x] global reduce
     constexpr uint32_t dfb_ex_external_id = dfb::ex_external;  // partial E[x] from the other cores
 #endif
-    constexpr uint32_t dfb_ex_partial2_id = dfb::ex_partial2;    // E[(x-E[x])^2] partial reduce
+    constexpr uint32_t dfb_ex_partial2_id = dfb::ex_partial2;  // E[(x-E[x])^2] partial reduce
 #ifdef TWO_STAGE_REDUCE
     constexpr uint32_t dfb_ex2_id = dfb::ex2;  // E[(x-E[x])^2] first-stage reduce, for the reader
 #endif
@@ -235,12 +235,15 @@ void kernel_main() {
             tile_regs_commit();
             tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
-            pack_block_mop(0, dfb_in_id, subblock_w);
-#else
-            for (uint32_t i = 0; i < subblock_w; i++) {
-                pack_tile(i, dfb_in_id);
-            }
+            if constexpr (!DST_ACCUM_MODE) {
+                pack_block_mop(0, dfb_in_id, subblock_w);
+            } else
 #endif
+            {
+                for (uint32_t i = 0; i < subblock_w; i++) {
+                    pack_tile(i, dfb_in_id);
+                }
+            }
             tile_regs_release();
             index_subblock_w_offset += subblock_w;
         }
@@ -380,12 +383,15 @@ void kernel_main() {
             tile_regs_commit();
             tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
-            pack_block_mop(0, dfb_xmm_id, subblock_w);
-#else
-            for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
-                pack_tile(dst_i, dfb_xmm_id);
-            }
+            if constexpr (!DST_ACCUM_MODE) {
+                pack_block_mop(0, dfb_xmm_id, subblock_w);
+            } else
 #endif
+            {
+                for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                    pack_tile(dst_i, dfb_xmm_id);
+                }
+            }
             tile_regs_release();
             index_subblock_w_offset += subblock_w;
         }
@@ -444,12 +450,15 @@ void kernel_main() {
             tile_regs_commit();
             tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
-            pack_block_mop(0, dfb_xmm2_id, subblock_w);
-#else
-            for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
-                pack_tile(dst_i, dfb_xmm2_id);
-            }
+            if constexpr (!DST_ACCUM_MODE) {
+                pack_block_mop(0, dfb_xmm2_id, subblock_w);
+            } else
 #endif
+            {
+                for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                    pack_tile(dst_i, dfb_xmm2_id);
+                }
+            }
             tile_regs_release();
             index_subblock_w_offset += subblock_w;
         }
@@ -606,12 +615,15 @@ void kernel_main() {
 
             tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
-            pack_block_mop(0, dfb_im_id, subblock_w);
-#else
-            for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
-                pack_tile(dst_i, dfb_im_id);
-            }
+            if constexpr (!DST_ACCUM_MODE) {
+                pack_block_mop(0, dfb_im_id, subblock_w);
+            } else
 #endif
+            {
+                for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                    pack_tile(dst_i, dfb_im_id);
+                }
+            }
             tile_regs_release();
 
             index_subblock_w_offset += subblock_w;
@@ -667,12 +679,15 @@ void kernel_main() {
                 tile_regs_commit();
                 tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
-                pack_block_mop(0, dfb_outgamma_id, subblock_w);
-#else
-                for (uint32_t i = 0; i < subblock_w; i++) {
-                    pack_tile(i, dfb_outgamma_id);
-                }
+                if constexpr (!DST_ACCUM_MODE) {
+                    pack_block_mop(0, dfb_outgamma_id, subblock_w);
+                } else
 #endif
+                {
+                    for (uint32_t i = 0; i < subblock_w; i++) {
+                        pack_tile(i, dfb_outgamma_id);
+                    }
+                }
                 tile_regs_release();
                 index_subblock_w_offset += subblock_w;
             }
@@ -715,12 +730,15 @@ void kernel_main() {
                 tile_regs_commit();
                 tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
-                pack_block_mop(0, dfb_out_id, subblock_w);
-#else
-                for (uint32_t i = 0; i < subblock_w; i++) {
-                    pack_tile(i, dfb_out_id);
-                }
+                if constexpr (!DST_ACCUM_MODE) {
+                    pack_block_mop(0, dfb_out_id, subblock_w);
+                } else
 #endif
+                {
+                    for (uint32_t i = 0; i < subblock_w; i++) {
+                        pack_tile(i, dfb_out_id);
+                    }
+                }
                 tile_regs_release();
                 index_subblock_w_offset += subblock_w;
             }

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #define CKL_ELTWISE_CHAIN_PACK_BLOCK
-#define CKL_ELTWISE_CHAIN_PACK_BLOCK_IF (get_compile_time_arg_val(13) >= 4)  // CT arg 13: per_core_N
+#define CKL_ELTWISE_CHAIN_PACK_BLOCK_IF (!DST_ACCUM_MODE && get_compile_time_arg_val(13) >= 4)  // CT arg 13: per_core_N
 
 #include <cstdint>
 
@@ -317,7 +317,7 @@ void kernel_main() {
                     tile_regs_commit();
                     tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
-                    if constexpr (subblock_w > 2) {
+                    if constexpr (subblock_w > 2 && !DST_ACCUM_MODE) {
                         pack_block_mop(0, dfb_mask_last_id, subblock_w);
                     } else
 #endif
@@ -356,7 +356,7 @@ void kernel_main() {
                     tile_regs_commit();
                     tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
-                    if constexpr (subblock_w > 2) {
+                    if constexpr (subblock_w > 2 && !DST_ACCUM_MODE) {
                         pack_block_mop(0, dfb_x_id, subblock_w);
                     } else
 #endif
@@ -388,7 +388,7 @@ void kernel_main() {
                     tile_regs_commit();
                     tile_regs_wait();
 #ifdef ARCH_BLACKHOLE
-                    if constexpr (subblock_w > 2) {
+                    if constexpr (subblock_w > 2 && !DST_ACCUM_MODE) {
                         pack_block_mop(0, dfb_x_id, subblock_w);
                     } else
 #endif
