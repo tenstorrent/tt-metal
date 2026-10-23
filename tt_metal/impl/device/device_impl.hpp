@@ -185,7 +185,6 @@ public:
     void unregister_program(detail::ProgramImpl* program);
     uint64_t get_total_cb_allocated() const;
 
-private:
     // Deprecated overrides for sub_device_manager_tracker
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
@@ -209,6 +208,7 @@ private:
     void set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids) override;
     void reset_sub_device_stall_group() override;
 
+private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
 
     std::unique_ptr<AllocatorImpl> initialize_allocator(
