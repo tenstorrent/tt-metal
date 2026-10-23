@@ -92,6 +92,9 @@ protected:
  * };
  * @endcode
  *
+ * Each run() reports itself to the LLK sanitizer through SAN_HOOK, e.g. SAN_HOOK(unsupported()) for
+ * an op the sanitizer does not model.
+ *
  * @ref UnaryInit and @ref UnaryExecute are constructible only by the dispatcher, so it is the only
  * way to obtain Init / Execute and its checks cannot be bypassed.
  *
@@ -107,7 +110,6 @@ struct UnaryDispatch
      */
     static inline __attribute__((always_inline)) auto init()
     {
-        SAN_HOOK(unsupported());
         _llk_math_eltwise_unary_sfpu_init_once_();
         math::reset_counters(p_setrwc::SET_ABD_F);
 
@@ -135,7 +137,6 @@ struct UnaryDispatch
         LLK_VALIDATE_TENSOR_SHAPE_MATH("llk::sfpu::UnaryDispatch::execute", Shape);
         _llk_math_eltwise_sfpu_assert_dst_index_<Sync>(output, "output exceeds max dest tiles");
         _llk_math_eltwise_sfpu_assert_dst_index_<Sync>(input, "input exceeds max dest tiles");
-        SAN_HOOK(unsupported());
 
         static_assert(std::is_base_of_v<UnaryExecute<Op>, typename Op::template Execute<Shape, Agnostic>>, "Op::Execute must derive from UnaryExecute<Op>");
         return typename Op::template Execute<Shape, Agnostic> {{output, input}};
