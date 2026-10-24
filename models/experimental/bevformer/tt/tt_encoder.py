@@ -16,17 +16,10 @@ import torch
 from typing import Optional, List, Dict, Any
 
 from .tt_spatial_cross_attention import TTSpatialCrossAttention, build_rebatch_plan
-from .tt_common import layer_norm
+from .tt_common import layer_norm, signpost, use_signpost
 from .tt_temporal_self_attention import TTTemporalSelfAttention
 from .tt_point_sampling_3d_2d import point_sampling_3d_to_2d_ttnn
 from ..reference.point_sampling_3d_2d import generate_reference_points
-
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
 
 from loguru import logger
 
@@ -174,7 +167,7 @@ class TTBEVFormerLayer:
         )
 
         if use_signpost:
-            signpost(header="BEVLayer TSA Complete")
+            signpost(header="BEVLayer TSA End")
 
         # Layer normalization (norm1)
         temp_query = layer_norm(temp_query, self.params.norm1)
@@ -195,7 +188,7 @@ class TTBEVFormerLayer:
         )
 
         if use_signpost:
-            signpost(header="BEVLayer SCA Complete")
+            signpost(header="BEVLayer SCA End")
 
         # Layer normalization (norm2)
         spatial_query = layer_norm(spatial_query, self.params.norm2)
@@ -208,7 +201,7 @@ class TTBEVFormerLayer:
         ffn_output = self._forward_ffn(bev_query)
 
         if use_signpost:
-            signpost(header="BEVLayer FFN Complete")
+            signpost(header="BEVLayer FFN End")
 
         # Layer normalization and residual connection (norm3)
         ffn_output_with_residual = ttnn.add(bev_query, ffn_output)
@@ -524,7 +517,7 @@ class TTBEVFormerEncoder:
         rebatch_plan = build_rebatch_plan(reference_points_cam, bev_mask, self.device) if bev_mask is not None else None
 
         if use_signpost:
-            signpost(header="BEVEncoder Reference Points Complete")
+            signpost(header="BEVEncoder Reference Points End")
 
         # Every layer reads the same camera features, so SCA takes them batch-first and this
         # runs once per forward, not once per layer.
@@ -549,7 +542,7 @@ class TTBEVFormerEncoder:
                 **kwargs,
             )
             if use_signpost:
-                signpost(header=f"BEVEncoder Layer {lid} Complete")
+                signpost(header=f"BEVEncoder Layer {lid} End")
 
             if self.return_intermediate:
                 intermediate.append(output)

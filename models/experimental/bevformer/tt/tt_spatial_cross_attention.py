@@ -15,15 +15,9 @@ from dataclasses import dataclass
 from typing import Optional
 
 
+from .tt_common import signpost, use_signpost
 from .tt_ms_deformable_attention import TTMSDeformableAttention
 from ..model_config import DeformableAttentionConfig
-
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
 
 from loguru import logger
 

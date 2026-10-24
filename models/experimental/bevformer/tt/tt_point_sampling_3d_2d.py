@@ -17,13 +17,7 @@ import torch
 from typing import Tuple, List, Optional
 
 from ..reference.point_sampling_3d_2d import generate_reference_points as torch_generate_reference_points
-
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
+from .tt_common import signpost, use_signpost
 
 
 def generate_reference_points_ttnn(
@@ -118,7 +112,7 @@ def point_sampling_3d_to_2d_ttnn(
         lidar2img = ttnn.from_torch(lidar2img, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
 
     if use_signpost:
-        signpost(header="Point Sampling Tensor Setup Complete")
+        signpost(header="Point Sampling Tensor Setup End")
 
     # Get tensor shapes
     batch_size, num_queries, num_points, _ = reference_points.shape

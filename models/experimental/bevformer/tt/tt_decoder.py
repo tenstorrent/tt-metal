@@ -25,7 +25,7 @@ import math
 
 import ttnn
 from models.experimental.bevformer.model_config import CENTERS_FIRST_CENTERS, GRID_DTYPE, INVERSE_SIGMOID_EPS
-from models.experimental.bevformer.tt.tt_common import TTFFN, layer_norm, signpost
+from models.experimental.bevformer.tt.tt_common import TTFFN, layer_norm, signpost, use_signpost
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention
 
 # inverse_sigmoid's range: its eps clamp bounds the logits to +-log(1 / eps).
@@ -85,20 +85,28 @@ class TTDetrTransformerDecoderLayer:
         """All batch-first: ``query``/``query_pos`` ``(bs, nq, C)``, ``value`` ``(bs, bev_h * bev_w, C)``,
         ``reference_points`` ``(bs, nq, 1, 2)`` ``GRID_DTYPE`` in [0, 1]."""
         norms = self.params.norms
-        signpost(header="TTNN DecoderLayer Forward Start")
-        signpost(header="DecoderLayer SelfAttn Start")
+        if use_signpost:
+            signpost(header="TTNN DecoderLayer Forward Start")
+        if use_signpost:
+            signpost(header="DecoderLayer SelfAttn Start")
         self_attn_output = self.self_attn(query, query_pos)
-        signpost(header="DecoderLayer SelfAttn Complete")
+        if use_signpost:
+            signpost(header="DecoderLayer SelfAttn End")
         query = layer_norm(self_attn_output, norms[0], residual=query)
-        signpost(header="DecoderLayer CrossAttn Start")
+        if use_signpost:
+            signpost(header="DecoderLayer CrossAttn Start")
         query = self.cross_attn(query=query, value=value, query_pos=query_pos, reference_points=reference_points)
-        signpost(header="DecoderLayer CrossAttn Complete")
+        if use_signpost:
+            signpost(header="DecoderLayer CrossAttn End")
         query = layer_norm(query, norms[1])
-        signpost(header="DecoderLayer FFN Start")
+        if use_signpost:
+            signpost(header="DecoderLayer FFN Start")
         ffn_output = self.ffn(query)
-        signpost(header="DecoderLayer FFN Complete")
+        if use_signpost:
+            signpost(header="DecoderLayer FFN End")
         query = layer_norm(ffn_output, norms[2], residual=query)
-        signpost(header="TTNN DecoderLayer Forward End")
+        if use_signpost:
+            signpost(header="TTNN DecoderLayer Forward End")
         return query
 
 
@@ -131,7 +139,8 @@ class TTDetectionTransformerDecoder:
         """
         if reference_points.dtype != GRID_DTYPE:
             raise ValueError(f"reference_points must be {GRID_DTYPE}, got {reference_points.dtype}")
-        signpost(header="TTNN Decoder Forward Start")
+        if use_signpost:
+            signpost(header="TTNN Decoder Forward Start")
         output = query
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))
@@ -148,9 +157,11 @@ class TTDetectionTransformerDecoder:
             # Axis 2 is the fused op's pillar axis: R = 1, one point per query for every sample.
             output = layer(output, value, query_pos, ttnn.unsqueeze(reference_points[..., :2], 2))
 
-            signpost(header="Decoder RegBranch Start")
+            if use_signpost:
+                signpost(header="Decoder RegBranch Start")
             box_code = self._reg_branch(output, branch)
-            signpost(header="Decoder RegBranch Complete")
+            if use_signpost:
+                signpost(header="Decoder RegBranch End")
             # The clamp (a no-op on the first layer's logit output) runs inside the add.
             logits = ttnn.add(box_code[..., CENTERS_FIRST_CENTERS], logits, input_tensor_b_activations=CLAMP_LOGITS)
             reference_points = ttnn.sigmoid(logits)
@@ -164,5 +175,6 @@ class TTDetectionTransformerDecoder:
             outputs = ttnn.permute(outputs, (0, 2, 1, 3))
         reference_points_out = ttnn.stack(intermediate_reference_points, dim=0)
         box_codes_out = ttnn.stack(box_codes, dim=0)
-        signpost(header="TTNN Decoder Forward End")
+        if use_signpost:
+            signpost(header="TTNN Decoder Forward End")
         return outputs, reference_points_out, box_codes_out

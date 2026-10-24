@@ -21,13 +21,7 @@ import ttnn
 
 import torch
 from ..model_config import DeformableAttentionConfig
-
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
+from .tt_common import signpost, use_signpost
 
 from loguru import logger
 

@@ -18,15 +18,9 @@ import warnings
 # Enable/disable logging output
 ENABLE_LOGGING = False
 
+from .tt_common import signpost, use_signpost
 from .tt_ms_deformable_attention import TTMSDeformableAttention, multi_scale_deformable_attn_fused
 from ..model_config import DeformableAttentionConfig
-
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
 
 
 class TTTemporalSelfAttention:
