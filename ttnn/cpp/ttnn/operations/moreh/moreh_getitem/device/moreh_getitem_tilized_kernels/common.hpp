@@ -10,6 +10,10 @@
 
 #define INDEX_TILE_SIZE (4096)
 
+inline uint32_t same_alignment_offset(uint32_t src_offset, uint32_t dst_addr) {
+    return (src_offset - dst_addr) & (DRAM_ALIGNMENT - 1);
+}
+
 uint32_t get_noc_offset_in_tile(uint32_t stick_h, uint32_t stick_w, uint32_t tile_h, uint32_t element_size) {
     uint32_t noc_offset = 0;
     stick_h = stick_h - tile_h * TILE_HEIGHT;
