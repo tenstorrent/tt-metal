@@ -339,7 +339,7 @@ def test_request_resolve(expect_error, tmp_path) -> None:
 @mesh_rows
 @layout_rows
 @size_rows
-def test_distilled_render(mesh_device, layout: str, size: str) -> None:
+def test_distilled_render(mesh_device, layout: str, size: str, expect_error) -> None:
     golden = golden_for("distilled", size, canvas=CANVAS, steps=MODELS["distilled"]["steps"])
     png = golden_png(golden)
     pipeline = build_pipeline(mesh_device, layout, size, "distilled")
@@ -398,7 +398,7 @@ def test_distilled_render(mesh_device, layout: str, size: str) -> None:
         )
         # (c) a refused canvas never reaches the device.
         captured = {v: d.captured_keys for v, d in pipeline.denoisers.items()}
-        with pytest.raises(Flux2KleinAdmissionError) as info:
+        with expect_error(Flux2KleinAdmissionError, "budget side") as info:
             pipeline.generate(Flux2KleinRequest(prompt=golden.prompt, size=size, width=4112, height=1024, seed=1))
         assert info.value.admission.budget == "side", info.value.admission
         assert {v: d.captured_keys for v, d in pipeline.denoisers.items()} == captured

@@ -239,7 +239,7 @@ def test_config_and_sizes(size, snapshot) -> None:
 # --- H3: reduced depth ------------------------------------------------------------------------------------------------
 
 
-def test_reduced_depth_config(size, snapshot) -> None:
+def test_reduced_depth_config(size, snapshot, expect_error) -> None:
     cfg = json.loads((snapshot / "text_encoder" / "config.json").read_text())
     depth = cfg["num_hidden_layers"]
     assert FLUX2_KLEIN_TEXT_ENCODER_LAYERS == max(FLUX2_KLEIN_TEXT_OUT_LAYERS) == 27 < depth == 36
@@ -280,21 +280,21 @@ def test_reduced_depth_config(size, snapshot) -> None:
     full_keys = route_qwen3_state_keys(converted, num_layers=depth, final_norm=True, num_hidden_layers=depth)
     assert set(full_keys.kept) == set(converted) and not full_keys.dropped_layers and not full_keys.dropped_heads
 
-    with pytest.raises(ValueError, match="outside the routed groups"):
+    with expect_error(ValueError, "outside the routed groups"):
         route_qwen3_state_keys([*converted, "vision.weight"], num_layers=27, final_norm=False)
-    with pytest.raises(ValueError, match="kept layer indices"):
+    with expect_error(ValueError, "kept layer indices"):
         route_qwen3_state_keys(
             [k for k in converted if not k.startswith("layers.3.")], num_layers=27, num_hidden_layers=depth
         )
-    with pytest.raises(ValueError, match="deepest tap"):
+    with expect_error(ValueError, "deepest tap"):
         Flux2KleinPromptEncoder(
             checkpoint_name=str(snapshot), device=None, ccl_manager=None, parallel_config=None, num_layers=26
         )
-    with pytest.raises(ValueError, match="normed state"):
+    with expect_error(ValueError, "normed state"):
         Flux2KleinPromptEncoder(
             checkpoint_name=str(snapshot), device=None, ccl_manager=None, parallel_config=None, final_norm=True
         )
-    with pytest.raises(ValueError, match="num_layers"):
+    with expect_error(ValueError, "num_layers"):
         Qwen3Checkpoint(str(snapshot), subfolder=FLUX2_KLEIN_TEXT_SUBFOLDER, num_layers=depth + 1)
     logger.info(f"H3 {size}: {len(keys.kept)} kept / {len(keys.dropped_layers)} dropped layer keys of {len(index)}")
 
@@ -529,7 +529,7 @@ def timed_encode_device(encoding: Flux2KleinTextEncoding, device, prompt: str, *
 
 @mesh_rows
 @layout_rows
-def test_dit_handoff(mesh_device, layout: str, size, snapshot, prompts) -> None:
+def test_dit_handoff(mesh_device, layout: str, size, snapshot, prompts, expect_error) -> None:
     """D3: ``encode_device`` == ``encode_host`` bit for bit, in the DiT's placement (module docstring)."""
     mesh = open_mesh(mesh_device, layout)
     sp_axis, _ = LAYOUTS[layout]
@@ -544,11 +544,11 @@ def test_dit_handoff(mesh_device, layout: str, size, snapshot, prompts) -> None:
     for_dit = Flux2KleinTextEncoding(encoder, sp_axis=sp_axis)
     assert plain.sp_axis is None and for_dit.sp_axis == sp_axis
     bad_length = 32 * (sp + 1)  # tile rows, but not a multiple of 32 x SP
-    with pytest.raises(ValueError, match="partition"):
+    with expect_error(ValueError, "partition"):
         Flux2KleinTextEncoding(
             encoder, sequence_length=bad_length, text_ids=packing.text_ids(bad_length), sp_axis=sp_axis
         )
-    with pytest.raises(ValueError, match="not an axis"):
+    with expect_error(ValueError, "not an axis"):
         Flux2KleinTextEncoding(encoder, sp_axis=len(shape))
     failures = []
     for name in PROMPT_NAMES:
