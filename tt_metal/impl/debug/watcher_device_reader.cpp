@@ -1165,12 +1165,14 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
         code = 'W';
     } else if (state == dev_msgs::RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
         code = 'S';
+    } else if (state == dev_msgs::RUN_SYNC_MSG_DFB_FINISHING) {
+        code = 'F';
     }
     if (code == 'U') {
         LogRunningKernels();
         TT_THROW(
-            "Watcher data corruption, unexpected run state on core{}: {} (expected {}, {}, {}, {}, {}, {}, {}, {}, or "
-            "{})",
+            "Watcher data corruption, unexpected run state on core{}: {} (expected {}, {}, {}, {}, {}, {}, {}, {}, {}, "
+            "or {})",
             virtual_coord_.str(),
             state,
             dev_msgs::RUN_MSG_INIT,
@@ -1181,7 +1183,8 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
             dev_msgs::RUN_MSG_REPLAY_TRACE,
             dev_msgs::RUN_SYNC_MSG_LOAD,
             dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET,
-            dev_msgs::RUN_SYNC_MSG_INIT_SYNC_REGISTERS);
+            dev_msgs::RUN_SYNC_MSG_INIT_SYNC_REGISTERS,
+            dev_msgs::RUN_SYNC_MSG_DFB_FINISHING);
     } else {
         fprintf(reader_.f, "%c", code);
     }

@@ -242,6 +242,9 @@ struct M2SingleDFBParams {
     std::optional<uint32_t> num_entries_in_buffer = std::nullopt;  // override for ring pressure
     M2Oracle oracle = M2Oracle::ORDERED;
     uint32_t block_size = 0;                                       // BLOCKED only: tiles per block (0 for STRIDED/ALL)
+    // DM STRIDED implicit sync only: spread each DM kernel's transfers over a temporary, a copy passed to
+    // a helper and the main object, so the kernel-exit finish must see one shared count per DFB.
+    bool use_temporaries = false;
 };
 
 inline uint32_t default_num_entries(uint32_t num_p, uint32_t num_c) {
@@ -400,6 +403,9 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
                                        ? "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_producer.cpp"
                                        : "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp";
         producer = make_dm_kernel(PRODUCER, producer_src, p.num_producers);
+        if (p.use_temporaries) {
+            producer.compiler_options = {.defines = {{"DFB_TEST_TEMPORARIES", "1"}}};
+        }
         producer.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
         producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
     } else {
@@ -438,6 +444,9 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
             consumer_blocked ? "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_consumer.cpp"
                              : "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp",
             p.num_consumers);
+        if (p.use_temporaries) {
+            consumer.compiler_options = {.defines = {{"DFB_TEST_TEMPORARIES", "1"}}};
+        }
         consumer.tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}};
         // "blocked_consumer" is the ALL-pattern flag, not BLOCKED.
         if (consumer_blocked) {
