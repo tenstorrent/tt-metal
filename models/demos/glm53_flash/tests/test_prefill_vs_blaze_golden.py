@@ -150,15 +150,26 @@ def _kda_state_host(model: GLM53MeshModel, dec) -> dict[str, torch.Tensor]:
 def _dsa_state_host(model: GLM53MeshModel, dec, S: int) -> dict[str, torch.Tensor]:
     """Slot 0's latent rows [S, 512] (identity page table), plus the indexer pool cache and raw rings."""
     c = dec.cache
-    lat = model.mesh.to_host(c.cache)  # [max_blocks, 1, 32, 512], first replica
-    lat = lat[: c.blocks_per_seq].reshape(-1, lat.shape[-1])[:S]
+    # only the blocks holding rows [0, S) of slot 0 (identity page table): a 1 M-position cache is 1 GiB per layer
+    nb = min(-(-S // 32), int(c.cache.shape[0]))
+    part = ttnn.slice(c.cache, [0, 0, 0, 0], [nb, *[int(c.cache.shape[i]) for i in range(1, len(c.cache.shape))]])
+    lat = model.mesh.to_host(part)  # [nb, 1, 32, 512], first replica
+    ttnn.deallocate(part)
+    lat = lat.reshape(-1, lat.shape[-1])[:S]
     out = {"latent": lat.contiguous().to(torch.bfloat16)}
     idx = getattr(c, "index", None) or getattr(dec, "index", None)
     if idx is None:
         idx = next((v for v in vars(c).values() if type(v).__name__ == "TtIndexCache"), None)
     if idx is not None:
-        pool = model.mesh.to_host(idx.pool_cache)
-        out["index_pool"] = pool[: idx.pool_blocks].reshape(-1, pool.shape[-1]).contiguous().float()
+        # likewise only slot 0's blocks holding pools [0, ceil(S/4)), in the cache's own bf16 (the ring's dsa_history
+        # widens to fp32 itself): the full 1 M allocation is 262 400 rows = 134 MB per layer as fp32 (G53F-0089)
+        np_ = -(-S // 4)
+        pb = min(-(-np_ // 32), int(idx.pool_blocks))
+        pc = idx.pool_cache
+        part = ttnn.slice(pc, [0, 0, 0, 0], [pb, *[int(pc.shape[i]) for i in range(1, len(pc.shape))]])
+        pool = model.mesh.to_host(part)
+        ttnn.deallocate(part)
+        out["index_pool"] = pool.reshape(-1, pool.shape[-1])[:np_].contiguous().to(torch.bfloat16)
         out["index_ring_k"] = model.mesh.to_host(idx.ring_k)[0, 0].contiguous().float()
         out["index_ring_g"] = model.mesh.to_host(idx.ring_g)[0, 0].contiguous().float()
     return out

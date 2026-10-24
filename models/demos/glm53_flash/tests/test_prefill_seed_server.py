@@ -14,6 +14,9 @@ frames of ``u32 header length | JSON header | u64 body length | body`` (body = s
   answers ``{"op": "done", "S_prime": S', "prefill_s", "export_s", "push_ack_s", "bytes", "next_token", ...}``.
 * ``{"op": "logits", "ids": [...], "cands": [...], "k": 8}`` -- diagnosis: this mesh's last-position logits after a
   whole prompt (top-k and the named candidates), e.g. to grade a ring divergence against an independent prefill.
+* ``{"op": "needle", "n": N, "depth": d, "env": {...}}`` -- diagnosis (G53F-0170): arg's needle prompt of ~N tokens
+  (``test_mesh_long_context.build_needle_ids``), its first token / top-5 and whether it is the needle key's first
+  token; ``env`` sets runtime knobs first. Prompts longer than ``GLM53F_PREFILL_CHUNK`` use the chunked prefill.
 * ``{"op": "stop"}`` -- stop every rank, answer the driver, then wait for the next ring (the server outlives ring runs;
   ``GLM53F_SEED_SERVER_ONESHOT=1`` exits instead). A ring that dies mid-run (a closed rank or driver socket) is dropped
   the same way, and a connection that closes before its first header is ignored.
@@ -47,6 +50,8 @@ from models.demos.glm53_flash.tt.mesh_model import GLM53MeshModel
 MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "8,4").split(","))
 PORT = int(os.environ.get("GLM53F_SEED_PORT", "7653"))
 MAX_SEQ = int(os.environ.get("GLM53F_PREFILL_MAXSEQ", "8192"))
+#: prompts longer than this go through ``prefill_chunked`` (16 K chunks: the 1 M test's geometry, G53F-0089)
+CHUNK = int(os.environ.get("GLM53F_PREFILL_CHUNK", "16384"))
 TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "256"))
 _DT = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
 EXPERT_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DTYPE", "bfp8")]
@@ -71,6 +76,76 @@ def _recv_exact(sock, n: int) -> bytes:
     return bytes(buf)
 
 
+def _prefill(model, ids: list[int]):
+    """``(streams, logits_last, owner_row)`` of a whole prompt for slot 0: one eager prefill up to ``CHUNK`` tokens,
+    16 K chunks above (``GLM53MeshModel.prefill_chunked``)."""
+    t = torch.tensor([int(v) for v in ids], dtype=torch.int64)
+    if len(ids) > CHUNK:
+        return model.prefill_chunked(t, user=0, chunk=CHUNK)
+    return model.prefill(t, user=0)
+
+
+class _SelectionTrace:
+    """G53F-0170 diagnosis: every DSA layer's sparse index rows for the last ``rows`` prompt positions -- how many of
+    the needle's token positions [lo, hi) each row selects (``TtDSA.on_indices``; mesh row r's slab read on its
+    column 0, as ``test_mesh_slab_prefill.IndexRecorder``). Blocks entirely below the traced rows are not read back."""
+
+    def __init__(self, model, S: int, lo: int, hi: int, rows: int = 4):
+        self.mesh, self.S, self.lo, self.hi, self.first = model.mesh, S, lo, hi, S - rows
+        self.hits: dict[int, dict[int, list[int]]] = {}
+        self.errors: list[str] = []
+        self.attns = [d.layer.attn for d in model.layers if d.cache is not None]
+        for d in model.layers:
+            if d.cache is not None:
+                d.layer.attn.on_indices = self._hook(d.layer_idx)
+
+    def _hook(self, layer: int):
+        def rec(query_start, indices):
+            try:  # a diagnosis hook must never take the prefill down with it
+                self._record(layer, query_start, indices)
+            except Exception as e:  # noqa: BLE001
+                self.errors.append(f"layer {layer}: {e!r}")
+
+        return rec
+
+    def _record(self, layer: int, query_start, indices):
+        starts = query_start if isinstance(query_start, tuple) else (query_start,)
+        n = int(indices.shape[-2])
+        if max(starts) + n <= self.first:
+            return
+        devs = self.mesh.device_tensors(indices)
+        for r, s0 in enumerate(starts):
+            if s0 + n <= self.first:
+                continue
+            t = ttnn.to_torch(devs[r * self.mesh.cols]).reshape(-1, indices.shape[-1]).to(torch.int64) & 0xFFFFFFFF
+            for i in range(t.shape[0]):
+                pos = s0 + i
+                if self.first <= pos < self.S:
+                    row = t[i][t[i] != 0xFFFFFFFF]
+                    hit = int(((row >= self.lo) & (row < self.hi)).sum())
+                    self.hits.setdefault(layer, {})[pos] = [hit, int(row.numel())]
+
+    def close(self) -> dict:
+        for a in self.attns:
+            a.on_indices = None
+        return {
+            "lo": self.lo,
+            "hi": self.hi,
+            "rows_from": self.first,
+            "errors": self.errors[:4],
+            "layers": {str(L): {str(p): v for p, v in sorted(h.items())} for L, h in sorted(self.hits.items())},
+        }
+
+
+def _find_sub(ids: list[int], sub: list[int]) -> int:
+    """First index of the token run ``sub`` in ``ids`` (-1 when absent)."""
+    n = len(sub)
+    for i in range(len(ids) - n + 1):
+        if ids[i] == sub[0] and ids[i : i + n] == sub:
+            return i
+    return -1
+
+
 def _recv(sock) -> tuple[dict, bytes]:
     (hl,) = struct.unpack("<I", _recv_exact(sock, 4))
     header = json.loads(_recv_exact(sock, hl))
@@ -86,6 +161,9 @@ def _recv(sock) -> tuple[dict, bytes]:
 def test_prefill_seed_server(mesh_device):
     layers = list(range(45))
     cfg = GLM53FlashConfig.from_hf_config_json(default_snapshot_dir() / "config.json")
+    from transformers import AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(str(default_snapshot_dir()))
     t0 = time.time()
     model = GLM53MeshModel(
         mesh_device,
@@ -105,7 +183,7 @@ def test_prefill_seed_server(mesh_device):
             ids = torch.tensor(([785, 6722, 315, 9621] * (n // 4 + 1))[: min(n, MAX_SEQ)], dtype=torch.int64)
             ttnn.synchronize_device(mesh_device)
             tw = time.perf_counter()
-            st, lg, _ = model.prefill(ids, user=0)
+            st, lg, _ = _prefill(model, ids.tolist())
             ttnn.synchronize_device(mesh_device)
             tp = time.perf_counter()
             ttnn.deallocate(st)
@@ -189,10 +267,59 @@ def test_prefill_seed_server(mesh_device):
                 _drop_ring("stop")
                 logger.info(f"[seed-server] READY for the next ring on port {PORT}")
                 continue
-            if (
-                hdr["op"] == "logits"
-            ):  # diagnosis: this mesh's last-position logits after ``ids`` (top-k + named tokens)
-                st, lg, owner = model.prefill(torch.tensor([int(t) for t in hdr["ids"]], dtype=torch.int64), user=0)
+            if hdr["op"] == "needle":  # G53F-0170 diagnosis: a needle prompt (arg's builder) -> the first token + top-5
+                from models.demos.glm53_flash.tests import test_mesh_long_context as LC
+
+                for k_, v_ in (hdr.get("env") or {}).items():  # runtime knobs read per call (e.g. GLM53_TOPK_SEGMENTS)
+                    if v_ is None:
+                        os.environ.pop(k_, None)
+                    else:
+                        os.environ[k_] = str(v_)
+                ids, _text = LC.build_needle_ids(tok, int(hdr["n"]), float(hdr["depth"]))
+                trace = None
+                if hdr.get("trace"):  # the selection of the last rows vs the needle's tokens (G53F-0170)
+                    key = tok.encode(LC.NEEDLE_KEY, add_special_tokens=False)
+                    at = _find_sub(ids, key)
+                    if at < 0:  # mid-sentence: the key tokenizes with its leading space
+                        key = tok.encode(" " + LC.NEEDLE_KEY, add_special_tokens=False)
+                        at = _find_sub(ids, key)
+                    trace = _SelectionTrace(model, len(ids), at, at + len(key), int(hdr["trace"]))
+                ttnn.synchronize_device(mesh_device)
+                tn = time.perf_counter()
+                st, lg, owner = _prefill(model, ids)
+                ttnn.synchronize_device(mesh_device)
+                pre_s = time.perf_counter() - tn
+                shard = model.mesh.device_tensors(lg)[owner * model.mesh.cols]
+                vec = ttnn.to_torch(shard).float().reshape(-1)[: cfg.vocab_size]
+                ttnn.deallocate(lg)
+                ttnn.deallocate(st)
+                top = torch.topk(vec, 5)
+                want = tok.encode(LC.NEEDLE_KEY, add_special_tokens=False)[0]
+                rep = {
+                    "op": "needle",
+                    "S": len(ids),
+                    "depth": float(hdr["depth"]),
+                    "prefill_s": round(pre_s, 3),
+                    "top_ids": top.indices.tolist(),
+                    "top_vals": top.values.tolist(),
+                    "top_text": [tok.decode([int(i)]) for i in top.indices.tolist()],
+                    "key_token": int(want),
+                    "key_logit": float(vec[want]),
+                    "found": int(top.indices[0]) == int(want),
+                    "env": hdr.get("env") or {},
+                    "trace": trace.close() if trace is not None else None,
+                }
+                logger.info(f"[seed-server] needle: {rep}")
+                _send(s, rep)
+                continue
+            if hdr["op"] == "logits":  # diagnosis: this mesh's last-position logits after ``ids``
+                tr = hdr.get("trace")
+                trace = (
+                    _SelectionTrace(model, len(hdr["ids"]), int(tr["lo"]), int(tr["hi"]), int(tr.get("rows", 4)))
+                    if tr
+                    else None
+                )
+                st, lg, owner = _prefill(model, hdr["ids"])
                 shard = model.mesh.device_tensors(lg)[owner * model.mesh.cols]  # every chip holds the full vocab row
                 vec = ttnn.to_torch(shard).float().reshape(-1)[: cfg.vocab_size]
                 ttnn.deallocate(lg)
@@ -205,11 +332,12 @@ def test_prefill_seed_server(mesh_device):
                         "top_ids": top.indices.tolist(),
                         "top_vals": top.values.tolist(),
                         "cands": {str(int(t)): float(vec[int(t)]) for t in hdr.get("cands", [])},
+                        "trace": trace.close() if trace is not None else None,
                     },
                 )
                 continue
             if hdr["op"] == "verify":  # the per-request check: this mesh's own next token after the whole prompt
-                st, lg, owner = model.prefill(torch.tensor([int(t) for t in hdr["ids"]], dtype=torch.int64), user=0)
+                st, lg, owner = _prefill(model, hdr["ids"])
                 nt = model.first_token(lg, owner)
                 ttnn.deallocate(lg)
                 ttnn.deallocate(st)
@@ -230,7 +358,7 @@ def test_prefill_seed_server(mesh_device):
                     ranks[int(h2["layer"])] = c
             ttnn.synchronize_device(mesh_device)
             t1 = time.perf_counter()
-            st, lg, owner = model.prefill(torch.tensor(ids[:sp], dtype=torch.int64), user=0)
+            st, lg, owner = _prefill(model, ids[:sp])
             nxt = model.first_token(lg, owner)
             ttnn.synchronize_device(mesh_device)
             t2 = time.perf_counter()
