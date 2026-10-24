@@ -579,6 +579,7 @@ class AllGatherConfig:
         ]
         out.extend(
             ttnn.setup_fabric_connection(
+                mesh_device=self.mesh_device,
                 src_fabric_node_id=info["fabric_node_id"],
                 dst_fabric_node_id=dst_fabric_node_id,
                 link_idx=0,

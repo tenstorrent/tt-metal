@@ -322,6 +322,7 @@ auto plan_mux_workers(
 }
 
 void add_mux_worker_kernels(
+    const MeshDevice& mesh_device,
     tt::tt_metal::ProgramDescriptor& desc,
     const tt::tt_fabric::FabricMuxV2Config& mux_config,
     const tt::tt_fabric::FabricNodeId& src_node_id,
@@ -332,6 +333,7 @@ void add_mux_worker_kernels(
         // back-pressures their DRAM weight reads; on a Wormhole Galaxy that hung dm0 in
         // noc_async_read_barrier_with_trid (see moe_compute dm0.cpp).
         tt::tt_fabric::add_fabric_mux_v2_to_program(
+            mesh_device,
             desc,
             mux_config,
             placement.logical_core,
@@ -768,8 +770,8 @@ void append_selective_reduce_combine_to_descriptor(
         operations::ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, axis);
 
     // Plan mux cores now; their kernels are pushed after the writer so the writer index stays stable.
-    const auto [mux_config, mux_neigbor_core_maps, mux_placements] = detail::plan_mux_workers(
-        *mesh_device, mux_core_range_set, neighbors, num_links, num_worker_cores);
+    const auto [mux_config, mux_neigbor_core_maps, mux_placements] =
+        detail::plan_mux_workers(*mesh_device, mux_core_range_set, neighbors, num_links, num_worker_cores);
 
     // launch writer kernel
     const uint32_t flat_mesh_idx = operations::ccl::common::get_linearized_index(mesh_coordinate, mesh_view);
@@ -916,7 +918,7 @@ void append_selective_reduce_combine_to_descriptor(
         }
     }
 
-    detail::add_mux_worker_kernels(desc, mux_config, fabric_node_id, mux_placements);
+    detail::add_mux_worker_kernels(*mesh_device, desc, mux_config, fabric_node_id, mux_placements);
 }
 
 void UnifiedSelectReduce::override_runtime_arguments(

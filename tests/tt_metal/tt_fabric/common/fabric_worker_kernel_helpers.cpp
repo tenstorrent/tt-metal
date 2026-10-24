@@ -104,13 +104,7 @@ std::shared_ptr<tt_metal::Program> create_traffic_generator_program(
 
     // Append fabric connection runtime args
     tt::tt_fabric::append_fabric_connection_rt_args(
-        src_fabric_node,
-        dest_fabric_node,
-        0,
-        *program,
-        logical_core,
-        runtime_args,
-        CoreType::WORKER);
+        *device, src_fabric_node, dest_fabric_node, 0, *program, logical_core, runtime_args, CoreType::WORKER);
 
     // Set runtime args
     tt_metal::SetRuntimeArgs(*program, kernel_id, logical_core, runtime_args);

@@ -548,6 +548,7 @@ class HostInterface:
             if h2d_uses_fabric:
                 for idx in range(self.num_fwd_links):
                     fwd_fabric_args = ttnn.setup_fabric_connection(
+                        self.mesh_device,
                         h2d_fabric_node_id,
                         my_downstream_fabric_node_id,
                         idx,
@@ -568,6 +569,7 @@ class HostInterface:
             if d2h_uses_fabric:
                 for idx in range(self.num_bwd_links):
                     bwd_fabric_args = ttnn.setup_fabric_connection(
+                        self.mesh_device,
                         d2h_fabric_node_id,
                         my_upstream_fabric_node_id,
                         idx,
