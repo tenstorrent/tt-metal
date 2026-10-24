@@ -234,6 +234,18 @@ def test_embedding_tiled_input(
     assert_equal(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.parametrize("index_shape", [(2, 1, 32), (2, 1, 1, 32), (3, 1, 64)], ids=["rank3", "rank4", "rank3_batch3"])
+def test_embedding_tiled_input_higher_rank(device, index_shape):
+    torch.manual_seed(1234)
+    torch_input_tensor = torch.randint(0, 511, index_shape)
+    torch_weights = torch_random((512, 64), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.embedding(input_tensor, weights, layout=ttnn.ROW_MAJOR_LAYOUT))
+    assert_equal(torch_output_tensor.reshape(index_shape[0], index_shape[-1], -1), output_tensor)
+
+
 @pytest.mark.parametrize("batch_size", [2])
 @pytest.mark.parametrize("sentence_size", [640])
 @pytest.mark.parametrize("hidden_embedding_dim", [1792])
@@ -903,3 +915,45 @@ def test_embedding_tiled_input_index_dtypes_and_types(
 
     expected = torch.nn.functional.embedding(indices, torch_weights)
     assert_equal(expected, ttnn.to_torch(output_tensor).reshape(expected.shape))
+
+
+@pytest.mark.parametrize("width", [8, 16, 24])
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("output_buffer", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
+def test_embedding_l1_indices_dram_weights(device, width, input_layout, output_buffer):
+    torch.manual_seed(0)
+    vocabulary_size = 64
+    torch_input_tensor = torch.randint(0, vocabulary_size, (32, 288))
+    torch_weights = torch_random((vocabulary_size, width), -1, 1, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.uint32,
+        layout=input_layout,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    output = ttnn.embedding(
+        input_tensor,
+        weights,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, output_buffer),
+    )
+    assert_equal(torch.nn.functional.embedding(torch_input_tensor, torch_weights), ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize("width", [8, 24])
+@pytest.mark.requires_grid_size((4, 1))
+def test_embedding_l1_indices_dram_weights_sharded_output_rejected(device, expect_error, width):
+    torch.manual_seed(0)
+    indices = torch.randint(0, 200, (2, 128))
+    torch_weights = torch_random((200, width), -1, 1, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        indices, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    shard_spec = ttnn.ShardSpec(shard_grid, (64, width), ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    with expect_error(RuntimeError, "do not fit in the"):
+        ttnn.embedding(input_tensor, weights, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=output_mem_config)

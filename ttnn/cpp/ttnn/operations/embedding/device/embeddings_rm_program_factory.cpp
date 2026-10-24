@@ -5,6 +5,8 @@
 #include "embeddings_rm_program_factory.hpp"
 #include "embedding_program_factory_common.hpp"
 
+#include <algorithm>
+
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -92,7 +94,8 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
 
     tt::DataFormat weights_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
 
-    uint32_t rounded_weight_page_size = tt::align(weight_page_size, alignment);
+    const uint32_t row_alignment = std::max(alignment, weights.buffer()->alignment());
+    uint32_t rounded_weight_page_size = tt::align(weight_page_size, row_alignment);
 
     constexpr uint32_t max_l1_budget_bytes = 1024 * 1024;  // 1MB budget for embedding output staging
     // Count double buffering inside the budget. Applying it afterwards asks for twice the budget.
@@ -105,8 +108,8 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     uint32_t last_chunk_size;
     bool use_chunked = !output_sharded && rounded_weight_page_size * buffering_size > max_l1_budget_bytes;
     if (use_chunked) {
-        chunk_size = ((max_l1_budget_bytes / buffering_size) / alignment) * alignment;
-        chunk_size = std::max(chunk_size, alignment);
+        chunk_size = ((max_l1_budget_bytes / buffering_size) / row_alignment) * row_alignment;
+        chunk_size = std::max(chunk_size, row_alignment);
         num_chunks = (rounded_weight_page_size + chunk_size - 1) / chunk_size;
         last_chunk_size = rounded_weight_page_size - (num_chunks - 1) * chunk_size;
     } else {
@@ -150,8 +153,8 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
     // Dataflow buffers
     // -----------------------------------------------------------------------
     // The output's total size has to divide evenly by the per-row stride. The two are derived from
-    // different alignments, the stride from the index buffer's and the sharded total from the output
-    // shard's own, so they can disagree.
+    // different alignments, the stride from the larger of the index and weight buffers' and the sharded
+    // total from the output shard's own, so they can disagree.
     TT_FATAL(
         out_dfb_total_size % chunk_size == 0,
         "Embedding output staging buffer size {} B must be divisible by its entry size {} B",
