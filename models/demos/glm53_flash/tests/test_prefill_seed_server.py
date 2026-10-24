@@ -12,6 +12,8 @@ frames of ``u32 header length | JSON header | u64 body length | body`` (body = s
 * ``{"op": "driver"}`` then ``{"op": "prefill", "ids": [...], "slot": s}`` -- the ring's stage 0. The server prefills
   ``ids[:S']`` with S' = 4 * floor((len(ids) - 1) / 4), exports every layer's state, pushes it, waits for every ack and
   answers ``{"op": "done", "S_prime": S', "prefill_s", "export_s", "push_ack_s", "bytes", "next_token", ...}``.
+* ``{"op": "logits", "ids": [...], "cands": [...], "k": 8}`` -- diagnosis: this mesh's last-position logits after a
+  whole prompt (top-k and the named candidates), e.g. to grade a ring divergence against an independent prefill.
 * ``{"op": "stop"}`` -- stop every rank, answer the driver, then wait for the next ring (the server outlives ring runs;
   ``GLM53F_SEED_SERVER_ONESHOT=1`` exits instead). A ring that dies mid-run (a closed rank or driver socket) is dropped
   the same way, and a connection that closes before its first header is ignored.
@@ -99,14 +101,24 @@ def test_prefill_seed_server(mesh_device):
     # compile the programs at the lengths the ring will ask for (GLM53F_SEED_WARMUP, default 4 and 4092 tokens: the
     # first request at a new length otherwise pays its compile, 4.66 s vs 1.82 s at 4092, G53F-0085)
     for n in [int(v) for v in os.environ.get("GLM53F_SEED_WARMUP", "4,4092").split(",") if v.strip()]:
-        tw = time.perf_counter()
-        ids = torch.tensor(([785, 6722, 315, 9621] * (n // 4 + 1))[: min(n, MAX_SEQ)], dtype=torch.int64)
-        st, lg, _ = model.prefill(ids, user=0)
-        ttnn.deallocate(st)
-        ttnn.deallocate(lg)
-        for dec in model.layers:  # the export path too
-            _dsa_state_host(model, dec, len(ids)) if dec.cache is not None else _kda_state_host(model, dec)
-        logger.info(f"[seed-server] warm-up {len(ids)} tokens: {time.perf_counter() - tw:.2f} s")
+        for rep in range(2):  # the second pass is the warm cost (what a request at this length pays)
+            ids = torch.tensor(([785, 6722, 315, 9621] * (n // 4 + 1))[: min(n, MAX_SEQ)], dtype=torch.int64)
+            ttnn.synchronize_device(mesh_device)
+            tw = time.perf_counter()
+            st, lg, _ = model.prefill(ids, user=0)
+            ttnn.synchronize_device(mesh_device)
+            tp = time.perf_counter()
+            ttnn.deallocate(st)
+            ttnn.deallocate(lg)
+            nbytes = 0
+            for dec in model.layers:  # the export path too
+                st_ = _dsa_state_host(model, dec, len(ids)) if dec.cache is not None else _kda_state_host(model, dec)
+                nbytes += sum(v.numel() * v.element_size() for v in st_.values())
+            te = time.perf_counter()
+            logger.info(
+                f"[seed-server] warm-up {len(ids)} tokens pass {rep}: prefill {tp - tw:.3f} s, export {te - tp:.3f} s "
+                f"({nbytes / 2**20:.1f} MiB)"
+            )
     decs = {d.layer_idx: d for d in model.layers}
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -176,6 +188,25 @@ def test_prefill_seed_server(mesh_device):
                     return
                 _drop_ring("stop")
                 logger.info(f"[seed-server] READY for the next ring on port {PORT}")
+                continue
+            if (
+                hdr["op"] == "logits"
+            ):  # diagnosis: this mesh's last-position logits after ``ids`` (top-k + named tokens)
+                st, lg, owner = model.prefill(torch.tensor([int(t) for t in hdr["ids"]], dtype=torch.int64), user=0)
+                shard = model.mesh.device_tensors(lg)[owner * model.mesh.cols]  # every chip holds the full vocab row
+                vec = ttnn.to_torch(shard).float().reshape(-1)[: cfg.vocab_size]
+                ttnn.deallocate(lg)
+                ttnn.deallocate(st)
+                top = torch.topk(vec, int(hdr.get("k", 8)))
+                _send(
+                    s,
+                    {
+                        "op": "logits",
+                        "top_ids": top.indices.tolist(),
+                        "top_vals": top.values.tolist(),
+                        "cands": {str(int(t)): float(vec[int(t)]) for t in hdr.get("cands", [])},
+                    },
+                )
                 continue
             if hdr["op"] == "verify":  # the per-request check: this mesh's own next token after the whole prompt
                 st, lg, owner = model.prefill(torch.tensor([int(t) for t in hdr["ids"]], dtype=torch.int64), user=0)
