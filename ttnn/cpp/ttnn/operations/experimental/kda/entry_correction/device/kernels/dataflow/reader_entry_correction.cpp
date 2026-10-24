@@ -31,7 +31,8 @@ constexpr auto end_args = TensorAccessorArgs<start_args.next_compile_time_args_o
 constexpr uint32_t state_tiles = kt * kt;
 
 // Entry correction reader: the chronology (this core's valid chunks and the reset chunk), the head's seeds (read by the
-// head's first core and written to the head's other cores), and the rows of A and B this core forms the final state of.
+// head's first core and multicast to the head's other cores, the group's first so compute starts on it while the tail's
+// streams in), and the rows of A and B this core forms the final state of.
 void kernel_main() {
     size_t arg = 0;
     const uint32_t a_address = get_arg_val<uint32_t>(arg++);
@@ -45,7 +46,7 @@ void kernel_main() {
     const uint32_t last_chunk = get_arg_val<uint32_t>(arg++);
     // The first tile row of the final state this core forms (kt: none); it forms every final_stride-th row on.
     const uint32_t final_row = get_arg_val<uint32_t>(arg++);
-    // The head's first core reads its seeds and writes them to the head's other cores (NoC x | y << 16 each).
+    // The head's first core reads its seeds and writes them to the head's other cores.
     const bool seed_sender = get_arg_val<uint32_t>(arg++);
     const uint32_t seed_receivers = get_arg_val<uint32_t>(arg++);
     const size_t receiver_args = arg;
@@ -100,73 +101,116 @@ void kernel_main() {
     cb_push_back(cb_ctl_writer, 1);
     cb_push_back(cb_ctl, 1);
 
-    const uint32_t seeds = need_group + need_tail;
-    if (seed_sender) {
-        const auto send = [&](uint32_t cb, uint32_t address, const auto& args) {
-            cb_reserve_back(cb, state_tiles);
-            const uint32_t local = get_write_ptr(cb);
-            const auto states = TensorAccessor(args, address);
-            const uint32_t tile = get_tile_size(cb);
-            for (uint32_t i = 0; i < state_tiles; ++i) {
-                noc_async_read_page(head * state_tiles + i, states, local + i * tile);
-            }
-            noc_async_read_barrier();
-            for (uint32_t d = 0; d < seed_receivers; ++d) {
-                const uint32_t xy = get_arg_val<uint32_t>(receiver_args + d);
-                noc_async_write(local, get_noc_addr(xy & 0xFFFF, xy >> 16, local), state_tiles * tile);
-            }
-            cb_push_back(cb, state_tiles);
-        };
-        if (need_group) {
-            send(cb_seed, entry_address, entry_args);
-        }
-        if (need_tail) {
-            send(cb_tail, tail_address, tail_args);
-        }
-        if (seeds != 0) {
-            noc_async_write_barrier();
-            for (uint32_t d = 0; d < seed_receivers; ++d) {
-                const uint32_t xy = get_arg_val<uint32_t>(receiver_args + d);
-                noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, seed_semaphore), seeds);
-            }
-            noc_async_atomic_barrier();
-        }
-    } else if (seeds != 0) {
-        // The seeds land at the same buffer addresses on every core of the program.
-        volatile tt_l1_ptr uint32_t* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(seed_semaphore);
-        noc_semaphore_wait_min(landed, seeds);
-        if (need_group) {
-            cb_reserve_back(cb_seed, state_tiles);
-            cb_push_back(cb_seed, state_tiles);
-        }
-        if (need_tail) {
-            cb_reserve_back(cb_tail, state_tiles);
-            cb_push_back(cb_tail, state_tiles);
-        }
-    }
-    // This core's chunk rows are in place in its shard of the emitted terms.
+    // This core's chunk rows are in place in its shard of the emitted terms: compute forms the differences (which need
+    // no seed) while the seeds arrive.
     if (chunks != 0) {
         cb_reserve_back(cb_m, chunks * kt);
         cb_reserve_back(cb_base, chunks * kt);
         cb_push_back(cb_m, chunks * kt);
         cb_push_back(cb_base, chunks * kt);
     }
-    if (final) {
-        // Tile rows of A and of B: each row of the final state is A[row] @ seed + B[row].
-        const auto a = TensorAccessor(a_args, a_address);
-        const auto b = TensorAccessor(b_args, b_address);
+    // Tile rows of A and of B: each row of the final state is A[row] @ seed + B[row].
+    const auto a = TensorAccessor(a_args, a_address);
+    const auto b = TensorAccessor(b_args, b_address);
+    uint32_t row = final_row;
+    const auto read_final_row = [&]() {
         const uint32_t tile = get_tile_size(cb_b);
-        for (uint32_t row = final_row; row < kt; row += final_stride) {
-            cb_reserve_back(cb_a, kt);
-            cb_reserve_back(cb_b, kt);
-            for (uint32_t c = 0; c < kt; ++c) {
-                const uint32_t page = head * state_tiles + row * kt + c;
-                noc_async_read_page(page, a, get_write_ptr(cb_a) + c * tile);
-                noc_async_read_page(page, b, get_write_ptr(cb_b) + c * tile);
+        cb_reserve_back(cb_a, kt);
+        cb_reserve_back(cb_b, kt);
+        for (uint32_t c = 0; c < kt; ++c) {
+            const uint32_t page = head * state_tiles + row * kt + c;
+            noc_async_read_page(page, a, get_write_ptr(cb_a) + c * tile);
+            noc_async_read_page(page, b, get_write_ptr(cb_b) + c * tile);
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_a, kt);
+        cb_push_back(cb_b, kt);
+        row += final_stride;
+    };
+
+    // The head's seeds, counted on every other core of the head by its seed semaphore: 1 once the group's seed has
+    // landed, 2 once the tail's has. Compute starts the group's chunks as soon as the group's seed is in.
+    const uint32_t seeds = need_group + need_tail;
+    if (seed_sender) {
+        // The head's other cores: one multicast rectangle when they form one (start, end in NoC 0 order, x | y << 16),
+        // then every core (x | y << 16) for the semaphore increments and the unicast fallback.
+        const bool multicast = get_arg_val<uint32_t>(receiver_args) != 0;
+        const size_t list_args = receiver_args + 3;
+        uint32_t x0 = get_arg_val<uint32_t>(receiver_args + 1) & 0xFFFF;
+        uint32_t y0 = get_arg_val<uint32_t>(receiver_args + 1) >> 16;
+        uint32_t x1 = get_arg_val<uint32_t>(receiver_args + 2) & 0xFFFF;
+        uint32_t y1 = get_arg_val<uint32_t>(receiver_args + 2) >> 16;
+        if (noc_index == 1) {
+            // NoC 1 runs the other way: its rectangle starts at the far corner.
+            const uint32_t x = x0;
+            const uint32_t y = y0;
+            x0 = x1;
+            y0 = y1;
+            x1 = x;
+            y1 = y;
+        }
+        const uint32_t tile = get_tile_size(cb_seed);
+        const auto read = [&](uint32_t cb, uint32_t address, const auto& args) {
+            cb_reserve_back(cb, state_tiles);
+            const uint32_t local = get_write_ptr(cb);
+            const auto states = TensorAccessor(args, address);
+            for (uint32_t i = 0; i < state_tiles; ++i) {
+                noc_async_read_page(head * state_tiles + i, states, local + i * tile);
             }
+            return local;
+        };
+        // A landed seed: this core's compute takes it, the head's other cores get it and then one increment each.
+        const auto send = [&](uint32_t cb, uint32_t local) {
+            cb_push_back(cb, state_tiles);
+            if (seed_receivers == 0) {
+                return;
+            }
+            if (multicast) {
+                noc_async_write_multicast(
+                    local, get_noc_multicast_addr(x0, y0, x1, y1, local), state_tiles * tile, seed_receivers);
+            } else {
+                for (uint32_t d = 0; d < seed_receivers; ++d) {
+                    const uint32_t xy = get_arg_val<uint32_t>(list_args + d);
+                    noc_async_write(local, get_noc_addr(xy & 0xFFFF, xy >> 16, local), state_tiles * tile);
+                }
+            }
+            noc_async_write_barrier();
+            for (uint32_t d = 0; d < seed_receivers; ++d) {
+                const uint32_t xy = get_arg_val<uint32_t>(list_args + d);
+                noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, seed_semaphore), 1);
+            }
+        };
+        if (need_group) {
+            const uint32_t group = read(cb_seed, entry_address, entry_args);
             noc_async_read_barrier();
-            cb_push_back(cb_a, kt);
-            cb_push_back(cb_b, kt);
+            // The tail's seed streams in while the group's goes out.
+            const uint32_t tail = need_tail ? read(cb_tail, tail_address, tail_args) : 0;
+            send(cb_seed, group);
+            if (need_tail) {
+                noc_async_read_barrier();
+                send(cb_tail, tail);
+            }
+            noc_async_atomic_barrier();
+        }
+    } else if (seeds != 0) {
+        // This core's first final row needs no seed: it lands while the seeds are on their way.
+        if (final) {
+            read_final_row();
+        }
+        // The seeds land at the same buffer addresses on every core of the program.
+        volatile tt_l1_ptr uint32_t* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(seed_semaphore);
+        noc_semaphore_wait_min(landed, 1);
+        cb_reserve_back(cb_seed, state_tiles);
+        cb_push_back(cb_seed, state_tiles);
+        if (need_tail) {
+            noc_semaphore_wait_min(landed, 2);
+            cb_reserve_back(cb_tail, state_tiles);
+            cb_push_back(cb_tail, state_tiles);
+        }
+    }
+    if (final) {
+        while (row < kt) {
+            read_final_row();
         }
     }
 }
