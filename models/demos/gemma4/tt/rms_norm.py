@@ -113,7 +113,7 @@ class RMSNorm(nn.Module):
         out.deallocate(True)
         return out_interleaved
 
-    def forward(self, x):
+    def forward(self, x, prefill=False):
         if self.is_distributed:
             activation_grid_bounding_box_size = x.memory_config().shard_spec.grid.bounding_box().grid_size()
             shard_height, shard_width = x.memory_config().shard_spec.shape
@@ -159,8 +159,11 @@ class RMSNorm(nn.Module):
             # Prefill (height > 32) and the no-weight per-head norms keep the
             # plain path. Sharded config is dim-specific, so rebuild if the
             # activation width ever changes.
+            # ``prefill`` keeps a tile-sized prefill (32-token prompt) on the FP32 prefill
+            # path below instead of this bf16-accumulating decode fast path.
             if (
-                self.with_scale
+                not prefill
+                and self.with_scale
                 and self.tt_weight is not None
                 and len(x.shape) == 4
                 and 1 <= x.shape[-2] <= ttnn.TILE_SIZE
@@ -173,7 +176,7 @@ class RMSNorm(nn.Module):
                 if self._sharded_cfg:
                     return self._forward_sharded(x)
 
-            is_prefill = len(x.shape) == 4 and x.shape[-2] > ttnn.TILE_SIZE
+            is_prefill = prefill or (len(x.shape) == 4 and x.shape[-2] > ttnn.TILE_SIZE)
             compute_kernel_config = self.prefill_compute_kernel_config if is_prefill else None
             weight = self.tt_weight_tile if is_prefill and self.tt_weight_tile is not None else self.tt_weight
             if self.with_scale:

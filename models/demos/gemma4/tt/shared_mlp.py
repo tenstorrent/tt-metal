@@ -25,7 +25,7 @@ from models.demos.gemma4.tt.ccl import (
     ccl_lane_gather_rows,
     ccl_lane_scatter_rows,
 )
-from models.demos.gemma4.tt.compute_config import gelu_variant
+from models.demos.gemma4.tt.compute_config import gelu_variant, prefill_linear_compute_kernel_config
 from models.demos.gemma4.tt.dram_sharded import TILE_SIZE, DramShardedLinear, can_dram_shard
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
@@ -202,7 +202,9 @@ class SharedMLP:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            self.gate_up_proj = lambda x: ttnn.linear(x, gate_up_proj)
+            self.gate_up_proj = lambda x, compute_kernel_config=None, prefill=False: ttnn.linear(
+                x, gate_up_proj, compute_kernel_config=compute_kernel_config
+            )
 
         if dram_shard and can_dram_shard(down_k, self.hidden_size, dtype=dtype):
             self.down_proj = DramShardedLinear(
@@ -229,14 +231,18 @@ class SharedMLP:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            self.down_proj = lambda x: ttnn.linear(x, down_proj)
+            self.down_proj = lambda x, compute_kernel_config=None, prefill=False: ttnn.linear(
+                x, down_proj, compute_kernel_config=compute_kernel_config
+            )
 
-    def __call__(self, hidden_states):
+    def __call__(self, hidden_states, prefill=False):
         """
         GeGLU MLP forward with TP support.
 
         gate/up are column-parallel, down is row-parallel + allreduce.
+        ``prefill`` selects the fp32-accumulation prefill linear config.
         """
+        ckc = prefill_linear_compute_kernel_config(hidden_states.device()) if prefill else None
         # Fused gate/up projection: one matmul produces [.., 2*inter_pad/device]
         # laid out as [up_i | gate_i]. Split with the padded half-width so TILE
         # slice bounds stay aligned (264 would round to 288 and break down_proj).
@@ -245,7 +251,7 @@ class SharedMLP:
             # Slice-3 choreography: rows are lane-local but the weights are
             # fractured across lanes, so gather all lanes' rows first ...
             hidden_states = ccl_lane_gather_rows(hidden_states, self.mesh_config)
-        gate_up = self.gate_up_proj(hidden_states)
+        gate_up = self.gate_up_proj(hidden_states, compute_kernel_config=ckc, prefill=prefill)
         shard = self._inter_per_device
         s = gate_up.shape[-2]
         up = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, s, shard])
@@ -260,7 +266,7 @@ class SharedMLP:
         up.deallocate(True)
 
         # output = hidden @ down_proj
-        output = self.down_proj(hidden)
+        output = self.down_proj(hidden, compute_kernel_config=ckc, prefill=prefill)
         hidden.deallocate(True)
 
         # Allreduce after row-parallel down_proj

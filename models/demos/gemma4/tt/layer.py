@@ -236,7 +236,7 @@ class Gemma4DecoderLayer:
         """
         # 1. Attention block: norm -> attn -> post_attn_norm -> residual add
         residual = hidden_states
-        normed = self.input_layernorm.forward(hidden_states)
+        normed = self.input_layernorm.forward(hidden_states, prefill=not is_decode)
         if not is_decode and batch_size > 1:
             attn_in = ttnn.reshape(normed, [batch_size, 1, normed.shape[-2] // batch_size, -1])
         else:
@@ -266,7 +266,7 @@ class Gemma4DecoderLayer:
         if isinstance(attn_output, torch.Tensor):
             hidden_states = residual
         else:
-            attn_output = self.post_attention_layernorm.forward(attn_output)
+            attn_output = self.post_attention_layernorm.forward(attn_output, prefill=not is_decode)
             if not is_decode and batch_size > 1:
                 residual = ttnn.reshape(
                     residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1]
@@ -277,8 +277,8 @@ class Gemma4DecoderLayer:
 
         # 2. MLP + MoE block
         residual = hidden_states
-        normed = self.pre_feedforward_layernorm.forward(hidden_states)
-        mlp_output = self.shared_mlp(normed)
+        normed = self.pre_feedforward_layernorm.forward(hidden_states, prefill=not is_decode)
+        mlp_output = self.shared_mlp(normed, prefill=not is_decode)
         normed.deallocate(True)
 
         if self.enable_moe_block:
@@ -307,7 +307,7 @@ class Gemma4DecoderLayer:
             hidden_states = mlp_output
 
         # post_feedforward_layernorm -> residual add
-        hidden_states = self.post_feedforward_layernorm.forward(hidden_states)
+        hidden_states = self.post_feedforward_layernorm.forward(hidden_states, prefill=not is_decode)
         combined = ttnn.add(residual, hidden_states)
         residual.deallocate(True)
         hidden_states.deallocate(True)
