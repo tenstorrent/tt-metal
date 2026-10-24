@@ -9,9 +9,8 @@ Expected output: standard tilized tiles (4 faces of 16x16 per tile).
 Uses TilizeGolden from the existing test infrastructure.
 """
 
-import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from conftest import blackhole_only
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, PerfRunType, format_dict
@@ -28,6 +27,8 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.utils import passed_test
+
+pytestmark = blackhole_only
 
 # Warm reset is no longer needed per-test: _llk_pack_fast_tilize_uninit_ now
 # restores all modified config (strides, addr_mods, X counter, MOP, replay buf).
@@ -60,9 +61,6 @@ TILE_C = 32
     ],
 )
 def test_fast_tilize_full(formats, dest_acc, dimensions):
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("BH only")
-
     input_height_tiles, input_width_tiles = dimensions
     assert input_width_tiles >= 1, "ct_dim must be >= 1"
 
@@ -172,9 +170,6 @@ def test_fast_tilize_full(formats, dest_acc, dimensions):
     ],
 )
 def test_fast_tilize_large(formats, dest_acc, dimensions):
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("BH only")
-
     input_height_tiles, input_width_tiles = dimensions
     input_dimensions = [input_height_tiles * TILE_R, input_width_tiles * TILE_C]
     tile_count = input_height_tiles * input_width_tiles
@@ -247,9 +242,6 @@ def test_fast_tilize_large(formats, dest_acc, dimensions):
     ],
 )
 def test_fast_tilize_overflow_guard(formats, dest_acc, dimensions):
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("BH only")
-
     input_height_tiles, input_width_tiles = dimensions
     input_dimensions = [input_height_tiles * TILE_R, input_width_tiles * TILE_C]
     tile_count = input_height_tiles * input_width_tiles
