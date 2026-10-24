@@ -37,6 +37,12 @@ struct RotaryEmbeddingParams {
 autograd::TensorPtr rope(
     const autograd::TensorPtr& input, const RotaryEmbeddingParams& rope_params, const uint32_t token_position);
 
+// position_ids: [B, S] UINT32 ROW_MAJOR, the absolute position of every query row.
+autograd::TensorPtr rope(
+    const autograd::TensorPtr& input,
+    const RotaryEmbeddingParams& rope_params,
+    const autograd::TensorPtr& position_ids);
+
 std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
     uint32_t head_dim,
     uint32_t sequence_length,

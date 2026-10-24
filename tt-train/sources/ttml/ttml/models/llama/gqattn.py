@@ -135,6 +135,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         kv_cache: ttml.models.KvCache,
         layer_idx: int,
         new_tokens: int,
+        position_ids: Optional[ttml.autograd.Tensor] = None,
     ) -> ttml.autograd.Tensor:
         q = self.q_linear(input)
         kv = self.kv_linear(input)
@@ -143,7 +144,7 @@ class GroupedQueryAttention(AbstractModuleBase):
             q, kv, self.num_heads, self.num_groups
         )
 
-        token_pos = kv_cache.get_cache_position()
+        token_pos = kv_cache.get_cache_position() if position_ids is None else position_ids
 
         q_heads = ttml.ops.rope.rope(q_heads, self.rope_params, token_pos)
         k_heads = ttml.ops.rope.rope(k_heads, self.rope_params, token_pos)
@@ -187,9 +188,10 @@ class GroupedQueryAttention(AbstractModuleBase):
         kv_cache: Optional[ttml.models.KvCache] = None,
         layer_idx: Optional[int] = None,
         new_tokens: Optional[int] = None,
+        position_ids: Optional[ttml.autograd.Tensor] = None,
     ) -> ttml.autograd.Tensor:
         if kv_cache is None:
             return self.forward_no_kv(input, mask)
         if layer_idx is None or new_tokens is None:
             raise ValueError("forward with kv_cache requires layer_idx and new_tokens to be set")
-        return self.forward_kv(input, mask, kv_cache, layer_idx, new_tokens)
+        return self.forward_kv(input, mask, kv_cache, layer_idx, new_tokens, position_ids)
