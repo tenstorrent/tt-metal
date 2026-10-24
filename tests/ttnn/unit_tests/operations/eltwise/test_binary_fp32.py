@@ -752,6 +752,24 @@ def test_logaddexp2_infinities(device, a, b, torch_dtype, ttnn_dtype):
     assert got == want, f"logaddexp2({a}, {b}) returned {got}; the exact result is {want}"
 
 
+def test_logaddexp2_large_gap_ulp_fp32(device):
+    # With max(a, b) = 0 the result is log2(1 + 2**-gap), which for large gaps is ~2**-gap * log2(e)
+    # and carries none of max's magnitude, so any error in 2**-gap shows up directly in the ULP.
+    # Computing 2**-gap as exp(-gap * ln 2) rounds the argument and the error grows with the
+    # gap: up to 69 ULP near gap 121, and gap 126 flushed to 0 (issue #60010).
+    gap = torch.linspace(0, 125.99, 32 * 1024, dtype=torch.float32)
+    gap = torch.cat([gap, torch.tensor([10.3, 24.53, 56.52905, 92.53289, 101.534325, 121.536606, 126.0] + [0.0] * 25)])
+    x_torch = torch.zeros_like(gap).reshape(1, 1, -1, 32)
+    y_torch = (-gap).reshape(1, 1, -1, 32)
+    z_torch = torch.logaddexp2(x_torch.double(), y_torch.double()).float()
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(ttnn.logaddexp2(x_tt, y_tt))
+
+    assert_with_ulp(expected_result=z_torch, actual_result=tt_out, ulp_threshold=2)
+
+
 # ---------------------------------------------------------------------------------------------
 # logaddexp / logaddexp2: IEEE special values, the scalar and in-place APIs, and broadcasting.
 #

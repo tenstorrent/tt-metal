@@ -219,19 +219,30 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
 // silicon-verified -- no Quasar target available.
 // unsafe = true drops the overflow/underflow guards, as the Blackhole template of the same name does;
 // only for callers that already bound the argument inside exp's finite range.
-template <bool unsafe = false>
+//
+// base_two = true computes 2^a instead of e^a. The reduction is then exact: j = round(a) and
+// a - j are both representable, so the only rounding before the polynomial is one multiply by
+// ln 2 on |a - j| <= 1/2. Passing a * ln2 to the base-e form instead rounds the argument,
+// and that relative error grows into the result in proportion to |a| (tens of ULP near 2^-126).
+template <bool unsafe = false, bool base_two = false>
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     sfpi::vInt i;
     sfpi::vFloat f, r, j;
 
-    // j = round(a / ln2) (as a float) and i = the same value as an integer, interleaved with the
-    // first coefficient of the polynomial.
     r = 1.37805939e-3f;
-    j = _sfpu_round_to_nearest_int32_(1.442695f * a, i);
+    if constexpr (base_two) {
+        // j = round(a) and i = the same value as an integer, f = (a - j) * ln2.
+        j = _sfpu_round_to_nearest_int32_(a, i);
+        f = (a - j) * 6.93147182e-1f;
+    } else {
+        // j = round(a / ln2) (as a float) and i = the same value as an integer, interleaved with
+        // the first coefficient of the polynomial.
+        j = _sfpu_round_to_nearest_int32_(1.442695f * a, i);
 
-    // f = a - j*ln2 (two-part Cody-Waite).
-    f = j * -6.93145752e-1f + a;
-    f = j * -1.42860677e-6f + f;
+        // f = a - j*ln2 (two-part Cody-Waite).
+        f = j * -6.93145752e-1f + a;
+        f = j * -1.42860677e-6f + f;
+    }
 
     // r = exp(f) on [-ln2/2, ln2/2] via a degree-6 minimax polynomial in Horner form.
     r = r * f + 8.37312452e-3f;  // 0x1.125edcp-7
@@ -271,6 +282,11 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
 }
 
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) { return _sfpu_exp_fp32_accurate_<true>(x); }
+
+// 2^x with the guards of the base-e form.
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_base2_(sfpi::vFloat x) {
+    return _sfpu_exp_fp32_accurate_<false, true>(x);
+}
 
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_exp_accurate_(sfpi::vFloat val);
