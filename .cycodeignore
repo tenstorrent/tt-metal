@@ -20,3 +20,10 @@ tt_metal/tt-llk/.claude/tools/llk-audit/llkaudit/registry.py
 # NOTE: this file is honoured by the Cycode CLI only -- the PR bot scans the diff server-side and does not
 # read it, so an entry here never suppresses a review comment.
 tests/ttnn/tracy/test_streaming_profiler.py
+
+# tt-ember: local tools that run the workload, telemetry and tt-smi with subprocess, argv lists and
+# shell=False. See #61436.
+tools/tt-ember/auto.py
+tools/tt-ember/common.py
+tools/tt-ember/run_all.py
+tools/tt-ember/run_power_cases.py
