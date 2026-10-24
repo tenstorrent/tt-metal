@@ -36,6 +36,17 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
     const auto& sin = tensor_args.sin_cache;
     const auto& trans_mat = tensor_args.trans_mat;
 
+    if (operation_attributes.active_cores_only) {
+        TT_FATAL(
+            !operation_attributes.is_decode_mode && input_tensor.logical_shape()[0] == 1 &&
+                operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                cos.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                sin.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                trans_mat.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "active_cores_only currently supports only interleaved B1 prefill RoPE");
+    }
+
     auto* ref_device = input_tensor.device();
     // Validate inputs are on device and same device
     TT_FATAL(
@@ -238,7 +249,8 @@ ttnn::Tensor rotary_embedding_llama(
     const ttnn::Tensor& trans_mat,
     bool is_decode_mode,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    bool active_cores_only) {
     using OperationType = ttnn::experimental::prim::RotaryEmbeddingLlamaDeviceOperation;
 
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
@@ -254,7 +266,8 @@ ttnn::Tensor rotary_embedding_llama(
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_decode_mode = is_decode_mode,
         .output_mem_config = memory_config.value_or(default_memory_config),
-        .compute_kernel_config = kernel_config_val};
+        .compute_kernel_config = kernel_config_val,
+        .active_cores_only = active_cores_only};
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor = input_tensor, .cos_cache = cos_cache, .sin_cache = sin_cache, .trans_mat = trans_mat};
 
