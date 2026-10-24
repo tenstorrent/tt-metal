@@ -857,7 +857,15 @@ class ShapeLab:
             outs = []
             tid = ttnn.begin_trace_capture(dev, cq_id=0)
             try:
-                outs = [cand.call() for _ in range(OPS_PER_TRACE)]
+                # Only the last call's output stays alive (the model holds one matmul output at a time): with a kept
+                # L1 width-sharded output and a kernel whose static CBs nearly fill L1 (12B gate_up tp4: 1.43 MB of
+                # 1.5 MB), ten live output shards clash with the CB region. A trace records the deallocations.
+                for i in range(OPS_PER_TRACE):
+                    out_i = cand.call()
+                    if i < OPS_PER_TRACE - 1:
+                        out_i.deallocate(True)
+                    else:
+                        outs = [out_i]
             finally:
                 ttnn.end_trace_capture(dev, tid, cq_id=0)
             try:
