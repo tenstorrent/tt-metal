@@ -203,6 +203,17 @@ def create_optimizer(model, yaml_config: dict):
     return ttml.optimizers.create_optimizer(optimizer_cfg, model.parameters())
 
 
+def validate_clip_grad_norm(model) -> None:
+    """clip_grad_norm computes a per-device norm with no cross-mesh reduction, so it is only correct
+    when every parameter is replicated. Reject sharded (FSDP/TP) params up front rather than silently
+    clipping by a wrong per-shard norm."""
+    if any(not ttml.Sharding.from_tensor(p).is_fully_replicated for p in model.parameters().values()):
+        raise ValueError(
+            "clip_grad_norm is not supported with sharded parameters (FSDP/TP): each device holds "
+            "only a shard, so the per-shard norm is wrong"
+        )
+
+
 def get_loss_over_devices(loss):
     """Aggregate loss over all devices and return mean."""
     device = ttml.autograd.AutoContext.get_instance().get_device()
