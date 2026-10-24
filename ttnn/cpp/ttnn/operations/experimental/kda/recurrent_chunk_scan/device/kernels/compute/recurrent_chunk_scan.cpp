@@ -54,6 +54,7 @@ FORCE_INLINE void matrix_multiply(DFBA& a, DFBB& b, DFBOut& output) {
 // destination-reuse binary op takes it from there, so the product never round-trips through a buffer. The operand
 // takes source A and the product source B, so a subtraction is operand - product.
 // The operand's tile for output tile t is t % OperandTiles (the summary's two paths share one value row).
+// b is waited for one row at a time, so the first rows' products overlap the pack of a b published in row groups.
 template <
     EltwiseBinaryType Op,
     uint32_t Mt,
@@ -86,6 +87,7 @@ FORCE_INLINE void matrix_multiply_then(DFBA& a, DFBB& b, DFBOperand& operand, DF
             tile_regs_acquire();
             for (uint32_t row = 0; row < group_rows; ++row) {
                 for (uint32_t k = 0; k < Kt; ++k) {
+                    b.wait_front((k + 1) * Nt);
                     matmul_block(
                         a_id,
                         b_id,
@@ -265,6 +267,8 @@ FORCE_INLINE void multiply_by_decay(
 // state is formed in DST and the product accumulates on top of it, so neither round-trips through a buffer.
 // b, typically the previous stage's packed result, is waited for here, after the first group's decayed state is in
 // DST: that work needs only the state, so it overlaps b's pack. Callers must not wait on b first.
+// Each group is published as soon as it is packed, so a consumer that waits row by row starts on the first rows while
+// the last are packed.
 template <
     uint32_t Mt,
     uint32_t Kt,
@@ -286,9 +290,9 @@ FORCE_INLINE void decayed_state_plus_product(DFBState& state, DFBDecay& decay, D
     const uint32_t a_id = a.get_id();
     const uint32_t b_id = b.get_id();
     const uint32_t output_id = output.get_id();
-    output.reserve_back(Mt * Nt);
     for (uint32_t first_row = 0; first_row < Mt; first_row += group_rows) {
         for (uint32_t first_column = 0; first_column < Nt; first_column += group_columns) {
+            output.reserve_back(group_rows * group_columns);
             tile_regs_acquire();
             reconfig_data_format(state_id, decay_id);
             mul_bcast_cols_init(state_id, decay_id);
@@ -322,15 +326,14 @@ FORCE_INLINE void decayed_state_plus_product(DFBState& state, DFBDecay& decay, D
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t row = 0; row < group_rows; ++row) {
-                for (uint32_t column = 0; column < group_columns; ++column) {
-                    pack_tile(row * group_columns + column, output_id, (first_row + row) * Nt + first_column + column);
-                }
+            // A group's tiles are contiguous in the output: whole rows, or one row's column group.
+            for (uint32_t tile = 0; tile < group_rows * group_columns; ++tile) {
+                pack_tile(tile, output_id, tile);
             }
             tile_regs_release();
+            output.push_back(group_rows * group_columns);
         }
     }
-    output.push_back(Mt * Nt);
 }
 
 // The zero-seeded B and identity-seeded A + B recurrences advance together as one [Kt, 2 * Vt] state, so every
@@ -380,8 +383,8 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         final_decay.wait_front(Kt);
         // U = T_inv (v_beta - kd S), S' = dl S + k_dec_t U, and with EmitOutputs Y = q_decay S + intra U. The stages
         // that read only the incoming state are issued first, so the correction's wait on the packed difference
-        // overlaps them, and the state update forms dl S before it waits on the packed U.
-        current.wait_front(key_pair_tiles);
+        // overlaps them, and the state update forms dl S before it waits on the packed U. The state is published and
+        // waited for in row groups, so the next chunk's kd S starts on its first rows while the last are packed.
         matrix_multiply_then<EltwiseBinaryType::ELWSUB, Ct, Kt, pair_columns, Vt>(
             kd, current, v_beta, value_new);  // v_beta - kd S
         if constexpr (EmitOutputs) {
