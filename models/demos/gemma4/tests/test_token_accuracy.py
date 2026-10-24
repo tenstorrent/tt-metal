@@ -15,7 +15,10 @@ Batch 8 and 32 feed the same passage on every row and additionally require
 every row to agree with row 0 token for token (batch-dependent branches in
 RoPE / SDPA splits showed up exactly there, tt-metal#59300).
 
-    HF_MODEL=google/gemma-4-31B-it MESH_DEVICE=P150x4 pytest test_token_accuracy.py -k "1x4 and batch_1"
+The paged-KV dtype is pinned per case (``kv_bf16`` / ``kv_bfp8`` set GEMMA4_KV_BFP8 before the model is built) and
+scored against the reference recorded for that dtype; under CI=true only the bfp8 (catalog default) batch-1 case runs.
+
+    HF_MODEL=google/gemma-4-31B-it MESH_DEVICE=P150x4 pytest test_token_accuracy.py -k "1x4 and batch_1 and kv_bfp8"
 """
 
 import os
@@ -35,14 +38,37 @@ from models.demos.gemma4.tt.generator import Gemma4Generator
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 PREFILL_LEN = 128
-# Gates, set just under the measured values so a regression trips them;
-# override for an investigation with GEMMA4_MIN_TOP1 / GEMMA4_MIN_TOP5.
-# Measured 2026-10-07, 31B on the QB2 1x4 mesh (bfp8 weights + KV), batch 1,
-# 385 scored positions: top-1 vs HF 0.8545, HF top-1 in TT top-5 0.9922,
-# top-1 vs the passage 0.4338 where HF itself scores 0.5246. The 9-point gap
-# against the passage is the precision loss to chase, not test noise.
-MIN_TOP1 = float(os.environ.get("GEMMA4_MIN_TOP1", "0.82"))
-MIN_TOP5 = float(os.environ.get("GEMMA4_MIN_TOP5", "0.98"))
+# References per checkpoint and paged-KV dtype (QB2 1x4 mesh, bfp8 weights, batch 1, 385 scored positions), measured
+# 2026-10-24 on the shipped default decode path of the 4-chip Blackhole dense build (the combined dense configuration,
+# tt/mesh_orientation.py DENSE_DECODE_FUSION_ON): top-1 vs HF / HF top-1 in TT top-5 (top-1 vs the passage, where HF
+# itself scores 0.5246 on the 31B):
+#   31B  bf16 KV 0.8442 / 0.9870 (0.4390)   bfp8 KV 0.8416 / 0.9844 (0.4468); batch 32 bfp8 0.8623 / 0.9948
+#   12B  bf16 KV 0.8078 / 0.9818 (0.2779)   bfp8 KV 0.8260 / 0.9818 (0.2857)
+# Record of the measured deltas on the 31B: old default -> combined configuration, bf16 KV -1.0 pt top-1 / -0.5 pt
+# top-5, bfp8 KV -0.3 / +0.5; bfp8 KV vs bf16 KV on the old default -1.0 / -1.3 (the 2026-10-07 reference 0.8545 /
+# 0.9922 was a bf16-KV measurement of the old default). The gates are the reference minus MARGIN so a regression trips
+# them; GEMMA4_MIN_TOP1 / GEMMA4_MIN_TOP5 override both for an investigation. A checkpoint / dtype without a recorded
+# reference uses the other dtype's reference of the same checkpoint, else the floor bars.
+MARGIN = 0.01
+REFERENCE = {  # checkpoint -> kv dtype -> (top-1 vs HF, HF top-1 in TT top-5)
+    "gemma-4-31B-it": {"bf16": (0.8442, 0.9870), "bfp8": (0.8416, 0.9844)},
+    "gemma-4-12B-it": {"bf16": (0.8078, 0.9818), "bfp8": (0.8260, 0.9818)},
+}
+FLOOR = (0.82, 0.97)
+CI = os.environ.get("CI") == "true"
+
+
+def _bars(model_path, kv):
+    """(min top-1, min top-5, reference or None) for this checkpoint and KV dtype."""
+    refs = REFERENCE.get(os.path.basename(os.path.normpath(model_path)), {})
+    ref = refs.get(kv) or refs.get("bfp8" if kv == "bf16" else "bf16")
+    top1, top5 = (ref[0] - MARGIN, ref[1] - MARGIN) if ref else FLOOR
+    env1, env5 = os.environ.get("GEMMA4_MIN_TOP1"), os.environ.get("GEMMA4_MIN_TOP5")
+    return (float(env1) if env1 else top1), (float(env5) if env5 else top5), ref
+
+
+def _ci_skip():
+    return [pytest.mark.skip(reason="CI subset: one bfp8 batch-1 case per checkpoint")] if CI else []
 
 
 def _reference_path(model_path):
@@ -61,9 +87,21 @@ def model_path():
 
 
 @parametrize_mesh_with_fabric(device_params_extra={"trace_region_size": 256_000_000})
-@pytest.mark.parametrize("batch_size", [1, 8, 32], ids=["batch_1", "batch_8", "batch_32"])
-def test_token_accuracy(mesh_device, model_path, batch_size):
+@pytest.mark.parametrize(
+    "batch_size",
+    [
+        pytest.param(1, id="batch_1"),
+        pytest.param(8, id="batch_8", marks=_ci_skip()),
+        pytest.param(32, id="batch_32", marks=_ci_skip()),
+    ],
+)
+@pytest.mark.parametrize(
+    "kv", [pytest.param("bf16", id="kv_bf16", marks=_ci_skip()), pytest.param("bfp8", id="kv_bfp8")]
+)
+def test_token_accuracy(mesh_device, model_path, batch_size, kv, monkeypatch):
     skip_if_config_only_checkpoint()
+    monkeypatch.setenv("GEMMA4_KV_BFP8", "1" if kv == "bfp8" else "0")  # the paged-KV dtype this case measures
+    min_top1, min_top5, reference = _bars(model_path, kv)
     ref_path = _reference_path(model_path)
     if not os.path.exists(ref_path):
         pytest.skip(f"no HF reference at {ref_path}; run generate_reference_tokens.py")
@@ -147,8 +185,9 @@ def test_token_accuracy(mesh_device, model_path, batch_size):
     passage_next = ids[0, positions + 1]
     passage_top1 = (tt_top1[0] == passage_next).float().mean().item()
     logger.info(
-        f"{os.path.basename(model_path)} batch={batch_size} scored={int(keep.sum())}: "
+        f"{os.path.basename(model_path)} kv={kv} batch={batch_size} scored={int(keep.sum())}: "
         f"top1 vs HF {top1:.4f}, HF-top1 in TT-top5 {top5:.4f}, top1 vs passage {passage_top1:.4f}"
+        f" (reference {reference}, gates {min_top1:.4f} / {min_top5:.4f})"
     )
 
     if batch_size > 1:
@@ -156,5 +195,5 @@ def test_token_accuracy(mesh_device, model_path, batch_size):
         bad = [int(b) for b in torch.nonzero(~rows_match).flatten()]
         assert not bad, f"rows {bad} disagree with row 0 on an identical teacher-forced passage"
 
-    assert top1 >= MIN_TOP1, f"top-1 agreement with HF {top1:.4f} < {MIN_TOP1}"
-    assert top5 >= MIN_TOP5, f"HF top-1 inside TT top-5 {top5:.4f} < {MIN_TOP5}"
+    assert top1 >= min_top1, f"top-1 agreement with HF {top1:.4f} < {min_top1:.4f} ({kv} KV, reference {reference})"
+    assert top5 >= min_top5, f"HF top-1 inside TT top-5 {top5:.4f} < {min_top5:.4f} ({kv} KV, reference {reference})"
