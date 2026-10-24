@@ -176,10 +176,8 @@ def test_layer_lanes_traced_step(mesh_device, layer_idx, reset_seeds, monkeypatc
     for n in ccl_ops:
         ccl_counts[n] = ccl_counts.get(n, 0) + 1
     knobs = " ".join(f"{k}={os.environ.get(k, '-')}" for k in KNOBS)
-    logger.info(
-        f"LANE_LAYER programs/step={len(dev_ops)} ccl_ops={len(ccl_ops)} "
-        f"{' '.join(f'{k.replace('DeviceOperation', '')}={v}' for k, v in sorted(ccl_counts.items()))} | {knobs}"
-    )
+    ccl_line = " ".join(f"{k.replace('DeviceOperation', '')}={v}" for k, v in sorted(ccl_counts.items()))
+    logger.info(f"LANE_LAYER programs/step={len(dev_ops)} ccl_ops={len(ccl_ops)} {ccl_line} | {knobs}")
 
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     out_tr = step()
