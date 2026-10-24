@@ -16,6 +16,13 @@ using DistributedContext = tt::tt_metal::distributed::multihost::DistributedCont
 
 ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttsl::SmallVector<uint32_t>& cluster_axes);
 
+// True when `value` is Shard rather than Replicate on mesh axis `axis` of the current device mesh. A collapsed 1-D
+// label (the default mappers' `{N}, [placement]`) is read as that placement on every mesh axis of size > 1. This
+// decides which axes a gradient is all-reduced along, so a label that is neither one placement per axis nor a
+// collapsed label covering the whole mesh is an error, not a guess: guessing Replicate would reduce a shard, guessing
+// Shard would skip a reduction.
+bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis);
+
 void synchronize_gradients(const serialization::NamedParameters& parameters);
 void synchronize_gradients(const serialization::NamedParameters& parameters, const std::vector<uint32_t>& cluster_axes);
 

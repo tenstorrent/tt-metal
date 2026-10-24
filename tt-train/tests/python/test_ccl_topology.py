@@ -11,6 +11,7 @@ output tensor's placement matches the op's semantics:
   * **all_reduce** — output is replicated on the collective axis.
   * **reduce_scatter** — output is sharded on the collective axis.
   * **all_gather** — output is replicated on the collective axis.
+  * **mesh_partition** — output is sharded on the collective axis (no collective runs).
 
 In all cases, placements on mesh axes *other* than ``cluster_axis`` must
 be preserved unchanged.
@@ -483,6 +484,47 @@ class TestCollapsedInputs:
         _assert_replicated(result, OTHER_AXIS, "untouched axis")
         _assert_replicated(result, CLUSTER_AXIS, "all_reduce output")
         assert np.array_equal(_compose_by_label(result), data * self.COLS)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# mesh_partition (the all_gather backward for a replicated output gradient)
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+class TestMeshPartitionTopology:
+    """mesh_partition through tt-train's wrapper (`ttml.core.distributed.mesh_partition`, the path the comm-ops
+    backward takes): the output is sharded on `cluster_axis` and its label says so, for the two layouts tt-train
+    produces. The label rules themselves are pinned in tests/nightly/t3000/ccl/test_ccl_topology_labels.py and the
+    CclTopologyUtils gtests."""
+
+    ROWS, COLS = MESH_SHAPE_2X2
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, ccl_mesh):
+        self.mesh = ccl_mesh
+
+    def test_replicated_input_becomes_sharded_on_the_axis(self):
+        tensor = _replicated_tensor((1, 1, 64, 128), seed=40)
+        data = _compose_by_label(tensor)
+
+        result = ttml.core.distributed.mesh_partition(tensor, 3, cluster_axis=CLUSTER_AXIS)
+
+        _assert_replicated(result, OTHER_AXIS, "untouched axis")
+        _assert_shard(result, CLUSTER_AXIS, 3, "mesh_partition output")
+        assert list(result.shape) == [1, 1, 64, 128 // self.COLS]
+        assert np.array_equal(_compose_by_label(result), data)
+
+    def test_other_axis_sharding_preserved(self):
+        placements = [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]
+        placements[OTHER_AXIS] = ttnn.PlacementShard(2)
+        tensor = _make_tensor((1, 1, 64, 128), placements, seed=41)
+        data = _compose_by_label(tensor)
+
+        result = ttml.core.distributed.mesh_partition(tensor, 3, cluster_axis=CLUSTER_AXIS)
+
+        _assert_shard(result, OTHER_AXIS, 2, "other axis preserved")
+        _assert_shard(result, CLUSTER_AXIS, 3, "mesh_partition output")
+        assert np.array_equal(_compose_by_label(result), data)
 
 
 if __name__ == "__main__":

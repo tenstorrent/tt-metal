@@ -11,6 +11,7 @@
 #include <numeric>
 
 #include "autograd/auto_context.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "tt-metalium/bfloat16.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
@@ -134,36 +135,33 @@ ttnn::Tensor create_tensor_from_span(
     static const tt::tt_metal::MemoryConfig tensor_memory_config{};
     const tt::tt_metal::PageConfig tensor_page_config(tt::tt_metal::Layout::ROW_MAJOR);
     tt::tt_metal::TensorLayout tensor_layout(tensor_data_type, tensor_page_config, tensor_memory_config);
-    tt::tt_metal::TensorSpec tensor_spec(tensor_shape, tensor_layout);
     auto* device = &ttml::autograd::ctx().get_device();
+
+    // Without a mapper the tensor is replicated with one placement per mesh axis (a 1x1 mesh included), so its label
+    // can be read per axis; a plain host tensor would reach the mesh under the collapsed `{N}, [Replicate]`.
+    std::unique_ptr<ttnn::distributed::TensorToMesh> replicate;
+    if (mapper == nullptr) {
+        replicate = ttml::core::replicate_to_mesh_mapper(*device);
+        mapper = replicate.get();
+    }
 
     if constexpr (!std::is_same_v<MetalType, NumpyType>) {
         std::vector<MetalType> converted_data;
         converted_data.reserve(numpy_data_span.size());
         converted_data.assign(numpy_data_span.begin(), numpy_data_span.end());
 
-        auto row_major_tensor = (mapper != nullptr)
-                                    ? ttnn::distributed::create_distributed_tensor(
-                                          ttsl::make_const_span(converted_data), tensor_shape, tensor_layout, *mapper)
-                                    : ttnn::Tensor::from_vector(converted_data, tensor_spec, device);
-
-        if (mapper != nullptr) {
-            row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
-        }
+        auto row_major_tensor = ttnn::distributed::create_distributed_tensor(
+            ttsl::make_const_span(converted_data), tensor_shape, tensor_layout, *mapper);
+        row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
 
         if (target_layout == tt::tt_metal::Layout::ROW_MAJOR) {
             return row_major_tensor;
         }
         return ttnn::tilize_with_zero_padding(row_major_tensor);
     } else {
-        auto row_major_tensor = (mapper != nullptr)
-                                    ? ttnn::distributed::create_distributed_tensor(
-                                          ttsl::make_const_span(numpy_data_span), tensor_shape, tensor_layout, *mapper)
-                                    : ttnn::Tensor::from_span(numpy_data_span, tensor_spec, device);
-
-        if (mapper != nullptr) {
-            row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
-        }
+        auto row_major_tensor = ttnn::distributed::create_distributed_tensor(
+            ttsl::make_const_span(numpy_data_span), tensor_shape, tensor_layout, *mapper);
+        row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
 
         if (target_layout == tt::tt_metal::Layout::ROW_MAJOR) {
             return row_major_tensor;
