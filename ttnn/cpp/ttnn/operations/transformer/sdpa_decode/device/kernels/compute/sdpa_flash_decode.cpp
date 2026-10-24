@@ -38,6 +38,37 @@ __attribute__((noinline, noclone)) void move_block_ool(uint32_t in_cb, uint32_t 
     move_block<true>(in_cb, out_cb, num_tiles);
 }
 
+/**
+ * out_cb = eltwise_max(in0, in1) where in0 and in1 may hold different data formats
+ * (the BF16 attention sink vs. the fp32 running max under fp32_dest_acc_en).
+ */
+template <VectorMode vector_mode = VectorMode::RC>
+__attribute__((noinline)) void max_block_mixed(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) {
+    CircularBuffer cb_in0(in0);
+    CircularBuffer cb_in1(in1);
+    CircularBuffer cb_out(out_cb);
+    pack_reconfig_data_format(out_cb);
+    cb_in0.wait_front(num_tiles);
+    cb_in1.wait_front(num_tiles);
+    cb_out.reserve_back(num_tiles);
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        tile_regs_acquire();
+        reconfig_data_format_srca(in0);
+        copy_init(in0);
+        copy_tile(in0, i, 0);
+        reconfig_data_format_srca(in1);
+        copy_init(in1);
+        copy_tile(in1, i, 1);
+        binary_max_tile_init();
+        binary_max_tile(0, 1, 0, vector_mode);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, out_cb, i);
+        tile_regs_release();
+    }
+    cb_out.push_back(num_tiles);
+}
+
 void kernel_main() {
     // Compile time arguments
 
@@ -606,6 +637,8 @@ void kernel_main() {
 
                     // Combine child with existing local/accumulated data
                     // Move child's L to cb_prev_sum_2 for correction
+                    reconfig_data_format(cb_l_in, cb_l_in);
+                    pack_reconfig_data_format(cb_prev_sum_2);
                     move_block_ool(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
                     // Fused Softmax Correction
                     // * Fused Correction is a fused operation that performs the following steps:
@@ -664,16 +697,19 @@ void kernel_main() {
                 // Use appropriate max buffer based on tree reduction
                 uint32_t max_cb_for_sink = cb_prev_max;
 
-                // m_new
-                max_block<vector_mode>(cb_attention_sink, max_cb_for_sink, cb_cur_max, Sq_chunk_t);
+                // m_new. The sink CB keeps the BF16 sink tensor's format, which differs from the
+                // intermediate format under fp32_dest_acc_en, so each operand is unpacked with its own.
+                max_block_mixed<vector_mode>(cb_attention_sink, max_cb_for_sink, cb_cur_max, Sq_chunk_t);
 
                 // exp(m - m_new)
+                reconfig_data_format(max_cb_for_sink, cb_cur_max);
                 sub_exp_block<scale_fp32>(max_cb_for_sink, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
 
                 // l -> l * exp(m - m_new)
                 mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
                 // exp(sink - m_new)
+                reconfig_data_format(cb_attention_sink, cb_cur_max);
                 sub_exp_block<scale_fp32>(cb_attention_sink, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
                 CircularBuffer(cb_cur_max).pop_front(Sq_chunk_t);
 
@@ -722,10 +758,16 @@ void kernel_main() {
             //   - cb_prev_sum: L
             //   - cb_prev_max: M
             // Move O to output CB
+            reconfig_data_format_srca(cb_out_accumulate_im);
+            pack_reconfig_data_format(cb_out_o);
             move_block_ool(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
             // Move M to output CB
+            reconfig_data_format_srca(cb_prev_max);
+            pack_reconfig_data_format(cb_out_m);
             move_block_ool(cb_prev_max, cb_out_m, Sq_chunk_t);
             // Move L to output CB
+            reconfig_data_format_srca(cb_prev_sum);
+            pack_reconfig_data_format(cb_out_l);
             move_block_ool(cb_prev_sum, cb_out_l, Sq_chunk_t);
         }
     }
