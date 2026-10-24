@@ -18,7 +18,6 @@
 #include <maybe_remote.hpp>
 #include <tt_metal.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
-#include <tt-metalium/experimental/inspector.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <algorithm>
 #include <array>
@@ -1689,7 +1688,7 @@ void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
         tensor_prefetcher_->release_trace(trace_id);
     }
 
-    tt::tt_metal::experimental::inspector::ReleaseTraceDebugEntries(trace_id);
+    Inspector::release_trace(metal_context(), trace_id);
 
     this->unregister_active_trace(trace_id);
 }
