@@ -894,8 +894,9 @@ extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsign
     TT_OP(0x92, (((imm12_math) << 12) + ((lreg_src_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPSWAP_VALID(imm12_math, lreg_src_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_src_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_TT_SFPSWAP(IP, imm12_math, lreg_src_c, lreg_dest, instr_mod1) TT_IP_INSN(IP, TT_OP_SFPSWAP(imm12_math, lreg_src_c, lreg_dest, instr_mod1))
+#define TT_IP_SFPSWAP(IP, imm12_math, lreg_src_c, lreg_dest, instr_mod1) TT_IP_INSN(IP, TT_OP_SFPSWAP(imm12_math, lreg_src_c, lreg_dest, instr_mod1))
 #define TT_SFPSWAP(imm12_math, lreg_src_c, lreg_dest, instr_mod1)        TT_IP_SFPSWAP(::ckernel::instrn_buffer, imm12_math, lreg_src_c, lreg_dest, instr_mod1)
+#define TTI_SFPSWAP(imm12_math, lreg_src_c, lreg_dest, instr_mod1)       TT_IP_SFPSWAP(nullptr, imm12_math, lreg_src_c, lreg_dest, instr_mod1)
 
 #define TT_OP_SFPTRANSP(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     TT_OP(0x8c, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
