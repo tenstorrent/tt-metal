@@ -1629,3 +1629,12 @@ Structural (not fixed here):
   core, ncrisc at cb_reserve_back(SE_LRDY)) - the FFREE pattern again. Sized 16 x max(4, NCH). Soak 10k replays clean,
   PCC .9962; head 1893 | dispatch 244 | experts 1474 | tail 252 us (the NCH 5 head is slow - perf later). Soak
   GLM-5.3 1024 (NCH 4, the FFREE fix): 10k clean, PCC .9867.
+- K3 768 rows (fused head GY 6 x MT 2, 2 chunks) gave PCC .89 / nan (new nightly rows 768 / 1280). zz_scratch_block_ab
+  (one stage ops a time): ops head passes, fused head fails (either router placement). test_head_se3: SE alone fine,
+  + the fused reduce-scatter wrong on the first row tile of every odd owner block, every chunk; GY 6 / 10 x MT 2 with
+  chunks only (owner blocks of CR / G = 3 / 5 row tiles: not a multiple of MT, so a core's two rows straddle two
+  owners). The RS fin wrote a core's rows at y0 + r x stride - contiguous - but with chunks (rows owner-major) the
+  second row is the next owner's first, rows apart. The protocol model passes (an address map, not a protocol bug).
+  Fix: where rows straddle (SE_FIN_ROWS), each (chunk, row)'s own y base in the args. Parts test 768 / 1280 rows
+  full head (RS, latent, router, routing + planner, prep) bit-exact / PCC .9998; block K3 768 PCC .9961, span 2389 us;
+  K3 640 / 1024 unchanged (2082 / 2765).

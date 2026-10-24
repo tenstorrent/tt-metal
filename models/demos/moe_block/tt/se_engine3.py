@@ -485,7 +485,11 @@ void kernel_main() {
     // (chunks: the counters count up over them - a chunk's thresholds + its index x the arrivals a chunk; args at
     // f0 + 6: the fin's y0 of chunks 1 .., the ports facing my fwd / bwd upstream (NoC x | y << 16), their zone-free
     // word, my FINB-free word, the ports reading my FINB)
+    #ifdef SE_FIN_ROWS  // (a core's MT rows straddle owner blocks: each (chunk, row)'s own y base, at f0 + 6 + NCH + 4)
+    constexpr uint32_t CHX = NCH + 4 + NCH * MT, NFF = NCH - 1;
+#else
     constexpr uint32_t CHX = NCH > 1 ? NCH + 4 : 0, NFF = NCH > 1 ? NCH - 1 : 0;
+#endif
     uint32_t nfmax = 0, nbmax = 0;
     for (uint32_t i = 0; i < naf; ++i) nfmax = get_arg_val<uint32_t>(af0 + i) > nfmax ? get_arg_val<uint32_t>(af0 + i) : nfmax;
     for (uint32_t i = 0; i < nab; ++i) nbmax = get_arg_val<uint32_t>(ab0 + i) > nbmax ? get_arg_val<uint32_t>(ab0 + i) : nbmax;
@@ -629,9 +633,14 @@ void kernel_main() {
         }
         if (fo < NCH * fcount && cb_pages_available_at_front(SE_OUTF, 1)) {
             const uint32_t mc = fo / fcount, i = fo % fcount;
+#ifdef SE_FIN_ROWS
+            const uint32_t ya = get_arg_val<uint32_t>(f0 + 6 + NCH + 4 + mc * MT + i / fw) + i % fw;
+#else
             const uint32_t y0 = mc == 0 ? fy0 : get_arg_val<uint32_t>(f0 + 6 + mc - 1);  // (chunk mc's rows)
+            const uint32_t ya = y0 + (i / fw) * fstride + i % fw;
+#endif
             cb_wait_front(SE_OUTF, 1);
-            noc_async_write(get_read_ptr(SE_OUTF), yg.get_noc_addr(y0 + (i / fw) * fstride + i % fw), 2048);
+            noc_async_write(get_read_ptr(SE_OUTF), yg.get_noc_addr(ya), 2048);
             noc_async_write_barrier();
             cb_pop_front(SE_OUTF, 1);
             ++fo;
@@ -1718,6 +1727,8 @@ class SeEngine3:
             nd += "#define SE_PREP_LAST\n"
         if self.rs is not None:
             nd += "#define SE_RS\n" + "".join(f"#define SE_{k.upper()} {v}\n" for k, v in RS_CB.items())
+            if self._fin_rows():
+                nd += "#define SE_FIN_ROWS\n"
             nd += f"#define SE_P {self.rs.P}\n#define SE_ZSF {self.rs.slots['fwd']}\n#define SE_ZSB {self.rs.slots['bwd']}\n"
         if self.LT:
             assert self.rs is not None, "the latent's all-to-all rides the reduce-scatter's ports and args"
@@ -2038,8 +2049,25 @@ class SeEngine3:
             x_, y_ = port("bwd" if d == "fwd" else "fwd", link)
             return x_ | y_ << 16
 
-        return (
+        out = (
             out + y0s + [facing("fwd"), facing("bwd"), chunk["zfree"], chunk["ffree"], len(rs.finb_readers(p, cx, cy))]
+        )
+        if self._fin_rows():  # (each (chunk, row)'s y base: y0's column offset + its global row's)
+            col = y0 - cy * self.MT * rs.NB
+            out += [col + self.grow(m, cy * self.MT + r) * rs.NB for m in range(self.NCH) for r in range(self.MT)]
+        return out
+
+    def _fin_rows(self):
+        """y rows a core finishes not contiguous: with chunks, rows scattered (y [rows, NB]) and owner blocks of CR / G
+        row tiles not a multiple of MT - a core's MT rows straddle two owners (K3 768 rows at GY 6 x MT 2: blocks of
+        3), whose global rows jump (the fin wrote the next owner's first row after the last one's: a PCC loss)."""
+        rs = self.rs
+        return (
+            rs is not None
+            and rs.scatter == -1
+            and self.NCH > 1
+            and self.shards > 1
+            and (self.CR // self.shards) % self.MT != 0
         )
 
     def attach_mcast(self, prog):

@@ -413,6 +413,8 @@ CHUNK_CASES = [
     (4, True, 11, 8, 2, 224, -1, 2),
     (4, True, 11, 8, 2, 128, -2, 2),
     (2, False, 11, 8, 2, 128, -2, 2),
+    (4, False, 11, 6, 2, 224, -1, 2),  # (768 rows = 2 chunks of GY 6 x MT 2: K3, the device's PCC loss on engine row 3)
+    (4, False, 11, 6, 2, 128, -2, 2),
     (8, True, 6, 4, 2, 64, -1, 2),  # (a ring of 8: small grid, the schedule's shape)
     (8, False, 6, 4, 2, 64, -2, 2),
 ]

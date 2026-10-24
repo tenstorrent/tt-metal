@@ -108,7 +108,7 @@ class Case:
 def _cases():
     out = [Case("k3", 640, "uniform", 16, "quick")]
     for mn in BASE:
-        for rows in (128, 256, 512, 640, 1024, 2048):
+        for rows in (128, 256, 512, 640, 768, 1024, 1280, 2048):  # (768 / 1280: the chunked heads, NCH 2 - 5)
             out.append(Case(mn, rows, "uniform", 32, "nightly"))
     for mn in ("k3", "glm53_flash"):
         for rt in ROUTINGS[1:]:
