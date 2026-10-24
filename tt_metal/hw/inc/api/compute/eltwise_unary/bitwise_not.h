@@ -12,6 +12,8 @@
 
 namespace ckernel {
 
+ALWI void bitwise_not_tile_init();
+
 // clang-format off
 /**
  * Performs element-wise bitwise_not computation on input x , where x is each element of a tile
@@ -27,6 +29,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void bitwise_not_tile(uint32_t idst) {
+    bitwise_not_tile_init();
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_bitwise_not, (APPROX), idst, VectorMode::RC));
 }
 

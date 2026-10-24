@@ -16,6 +16,8 @@
 
 namespace ckernel {
 
+ALWI void add_int_tile_init();
+
 // clang-format off
 /**
  * Performs an elementwise add operation with the two integer inputs: y = add(x0,x1)
@@ -40,6 +42,7 @@ namespace ckernel {
 // clang-format on
 template <DataFormat data_format>
 ALWI void add_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    add_int_tile_init();
 #if defined(ARCH_QUASAR)
     static_assert(data_format == DataFormat::Int32, "Unsupported data format for add_int on Quasar. Supported: Int32");
     // Int8 copy_tile + fp32_dest_acc FPU (through ELWADD) writes sign-magnitude Int32 into dest.

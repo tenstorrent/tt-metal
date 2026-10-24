@@ -55,23 +55,17 @@ ALWI void process_tile(
         tile_regs_acquire();
 
         // Load all three inputs into DST registers
-        copy_init(dfb_in0.get_id());
         copy_tile(dfb_in0.get_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
 
-        copy_init(dfb_in1.get_id());
         copy_tile(dfb_in1.get_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
 
-        copy_init(dfb_in2.get_id());
         copy_tile(dfb_in2.get_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
 
-        fill_tile_init();
         fill_tile_int<ADDCMUL_DATA_FORMAT>(3, scalar_arg);
 
-        mul_int_tile_init<ADDCMUL_DATA_FORMAT>();
         mul_int_tile<ADDCMUL_DATA_FORMAT>(3, 1, 3);
         mul_int_tile<ADDCMUL_DATA_FORMAT>(3, 2, 2);
 
-        add_int_tile_init();
         add_int_tile<ADDCMUL_DATA_FORMAT>(0, 2, 0);
 
         tile_regs_commit();
@@ -126,7 +120,6 @@ void kernel_main() {
     constexpr auto cb_out_id = tt::CBIndex::c_3;  // output
 
     compute_kernel_hw_startup(cb_in0_id, cb_out_id);
-    copy_init(cb_in0_id);
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;

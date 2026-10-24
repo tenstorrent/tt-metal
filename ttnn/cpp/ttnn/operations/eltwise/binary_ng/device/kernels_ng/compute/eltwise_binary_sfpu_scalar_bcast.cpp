@@ -76,8 +76,6 @@ ALWI void process_tile(
     DataflowBuffer exp_dfb_out(cb_out);
 
     exp_dfb_bcast.wait_front(num_tiles_per_cycle);
-    reconfig_data_format(cb_bcast, cb_bcast);
-    unary_bcast_init<BroadcastType::SCALAR>(cb_bcast);
     exp_dfb_llk_post.reserve_back(num_tiles_per_cycle);
     tile_regs_acquire();
     unary_bcast<BroadcastType::SCALAR>(cb_bcast, 0, 0);

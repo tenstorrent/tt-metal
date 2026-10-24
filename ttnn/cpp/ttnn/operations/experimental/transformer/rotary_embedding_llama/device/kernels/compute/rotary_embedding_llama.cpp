@@ -133,7 +133,7 @@ void kernel_main() {
                 pack_reconfig_data_format(rotated_in_interm_dfb, sin_interm_dfb);
                 mul_init(rotated_in_interm_dfb, sin_dfb);
                 // sin_interim = rotated * sin
-                ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+                ckl::eltwise_chain(
                     ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Mul,
@@ -144,7 +144,7 @@ void kernel_main() {
                 reconfig_data_format(rotated_in_interm_dfb, in_dfb, sin_dfb, cos_dfb);
                 pack_reconfig_data_format(sin_interm_dfb, cos_interm_dfb);
                 // cos_interim = x * cos
-                ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
+                ckl::eltwise_chain(
                     ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Mul,

@@ -15,6 +15,9 @@
 namespace ckernel {
 
 #ifndef ARCH_QUASAR
+ALWI void selu_tile_init();
+ALWI void selu_tile_init_pack();
+
 // clang-format off
 /**
  * Performs element-wise computation of selu = scale * (max(0,x) + min(0, alpha * (exp(x)-1))), where x is each
@@ -33,6 +36,7 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void selu_tile(uint32_t idst, uint32_t scale, uint32_t alpha) {
+    selu_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -46,6 +50,7 @@ ALWI void selu_tile(uint32_t idst, uint32_t scale, uint32_t alpha) {
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void selu_tile_pack(uint32_t idst, uint32_t scale, uint32_t alpha) {
+    selu_tile_init_pack();
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

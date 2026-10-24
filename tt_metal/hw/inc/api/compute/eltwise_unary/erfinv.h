@@ -11,6 +11,9 @@
 #endif
 
 namespace ckernel {
+
+ALWI void erfinv_tile_init();
+
 // clang-format off
 /**
  * Performs element-wise computation of the inverse of the error function on each element of a tile
@@ -26,6 +29,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void erfinv_tile(uint32_t idst) {
+    erfinv_tile_init();
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfinv, (APPROX), idst, VectorMode::RC));
 }
 

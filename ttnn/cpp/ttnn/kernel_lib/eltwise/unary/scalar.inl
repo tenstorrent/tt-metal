@@ -21,7 +21,6 @@ struct Threshold : UnaryOp<Threshold<Slot>, Slot> {
     uint32_t value;
     constexpr Threshold(uint32_t t, uint32_t v) noexcept : threshold(t), value(v) {}
     constexpr Threshold() noexcept : threshold(0), value(0) {}
-    static ALWI void init() { threshold_tile_init(); }
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
         threshold_tile(to_u32(Slot) + slot_offset, threshold, value);
     }
@@ -34,7 +33,6 @@ struct Clamp : UnaryOp<Clamp<Slot>, Slot> {
     uint32_t max_param;
     constexpr Clamp(uint32_t lo, uint32_t hi) noexcept : min_param(lo), max_param(hi) {}
     constexpr Clamp() noexcept : min_param(0), max_param(0) {}
-    static ALWI void init() { clamp_tile_init(); }
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
         clamp_tile(to_u32(Slot) + slot_offset, min_param, max_param);
     }
@@ -47,7 +45,6 @@ struct Clamp : UnaryOp<Clamp<Slot>, Slot> {
         uint32_t param0;                                                                                       \
         constexpr explicit Name(uint32_t p) noexcept : param0(p) {}                                            \
         constexpr Name() noexcept : param0(0) {}                                                               \
-        static ALWI void init() { binop_with_scalar_tile_init(); }                                             \
         ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { fn(to_u32(Slot) + slot_offset, param0); } \
     };
 
@@ -61,9 +58,7 @@ ELTWISE_DECLARE_BINOP_SCALAR(RsubUnary, rsub_unary_tile)
 // `dropout_kernel_init(seed)` is dropout's per-op SFPU init (it seeds the PRNG); it's
 // the dropout analogue of every other op's `*_tile_init`, except it takes the runtime
 // seed. So `init()` here is a normal instance method (non-static, like `exec`) that reads
-// the struct's `seed` — the chain dispatches init on the instance, so this just works.
-// The chain emits it once (boot-hoist), the once-per-kernel seeding the original kernel
-// did out-of-band.
+// the struct's `seed`. The chain calls it once per chain call, before the walk.
 template <Dst Slot>
 struct Dropout : PrngSeedTag, UnaryOp<Dropout<Slot>, Slot> {
     uint32_t probability;
@@ -83,7 +78,6 @@ struct RdivUnary : UnaryOp<RdivUnary<Slot>, Slot> {
     uint32_t param0;
     constexpr explicit RdivUnary(uint32_t p) noexcept : param0(p) {}
     constexpr RdivUnary() noexcept : param0(0) {}
-    static ALWI void init() { rdiv_tile_init(); }
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { rdiv_tile(to_u32(Slot) + slot_offset, param0); }
 };
 

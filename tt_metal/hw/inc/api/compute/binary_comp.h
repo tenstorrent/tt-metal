@@ -100,25 +100,41 @@ ALWI void eq_int_tile_dispatch(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 
 #ifndef ARCH_QUASAR
 template <DataFormat data_format>
+ALWI void eq_int_tile_init();
+
+template <DataFormat data_format>
 ALWI void eq_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    eq_int_tile_init<data_format>();
     MATH((detail::eq_int_tile_dispatch<SfpuType::eq, data_format>(idst0, idst1, odst)));
 }
 
 template <DataFormat data_format>
+ALWI void ne_int_tile_init();
+
+template <DataFormat data_format>
 ALWI void ne_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    ne_int_tile_init<data_format>();
     MATH((detail::eq_int_tile_dispatch<SfpuType::ne, data_format>(idst0, idst1, odst)));
 }
 #endif
 
 #ifndef ARCH_QUASAR
 template <DataFormat data_format>
+ALWI void lt_int_tile_init();
+
+template <DataFormat data_format>
 ALWI void lt_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    lt_int_tile_init<data_format>();
     MATH((detail::rel_int_tile_dispatch<SfpuType::lt, data_format>(idst0, idst1, odst)));
 }
 #endif
 
 template <DataFormat data_format>
+ALWI void gt_int_tile_init();
+
+template <DataFormat data_format>
 ALWI void gt_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    gt_int_tile_init<data_format>();
 #if defined(ARCH_QUASAR)
     // Int8 copy_tile + fp32_dest_acc FPU writes sign-magnitude Int32 into dest.
     // Native Int32 tiles use 2's-comp dest and keep SIGN_MAGNITUDE_FORMAT=false.
@@ -131,12 +147,20 @@ ALWI void gt_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 
 #ifndef ARCH_QUASAR
 template <DataFormat data_format>
+ALWI void le_int_tile_init();
+
+template <DataFormat data_format>
 ALWI void le_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    le_int_tile_init<data_format>();
     MATH((detail::rel_int_tile_dispatch<SfpuType::le, data_format>(idst0, idst1, odst)));
 }
 
 template <DataFormat data_format>
+ALWI void ge_int_tile_init();
+
+template <DataFormat data_format>
 ALWI void ge_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    ge_int_tile_init<data_format>();
     MATH((detail::rel_int_tile_dispatch<SfpuType::ge, data_format>(idst0, idst1, odst)));
 }
 #endif

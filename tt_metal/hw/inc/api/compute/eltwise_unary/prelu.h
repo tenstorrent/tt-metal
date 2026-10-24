@@ -11,6 +11,9 @@
 #endif
 
 namespace ckernel {
+
+ALWI void prelu_tile_init();
+
 // clang-format off
 /**
  * Performs element-wise prelu operation. The value to be prelued in the tile is provided as const param0. The DST
@@ -26,6 +29,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void prelu_tile(uint32_t idst, uint32_t param0) {
+    prelu_tile_init();
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_prelu, (APPROX), idst, VectorMode::RC, param0));
 }
 

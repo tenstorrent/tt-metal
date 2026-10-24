@@ -12,6 +12,9 @@
 
 namespace ckernel {
 
+template <bool APPROXIMATION_MODE>
+ALWI void mish_tile_init();
+
 // clang-format off
 /**
  * Performs element-wise mish activation:  mish(x) = x * tanh(softplus(x))
@@ -37,6 +40,7 @@ namespace ckernel {
 // clang-format on
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mish_tile(uint32_t idst) {
+    mish_tile_init<APPROXIMATION_MODE>();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_mish, (APPROXIMATION_MODE, is_fp32_dest_acc_en), idst, VectorMode::RC));
 }

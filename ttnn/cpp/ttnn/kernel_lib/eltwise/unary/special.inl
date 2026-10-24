@@ -19,20 +19,17 @@ namespace compute_kernel_lib {
 // Erf / Erfc — fast_and_approx template param.
 template <Approx fast, Dst Slot>
 struct Erf : UnaryOp<Erf<fast, Slot>, Slot> {
-    static ALWI void init() { erf_tile_init<fast == Approx::Fast>(); }
     static ALWI void exec_impl(uint32_t slot_offset) { erf_tile<fast == Approx::Fast>(to_u32(Slot) + slot_offset); }
 };
 
 template <Dst Slot>
 struct Erfc : UnaryOp<Erfc<Slot>, Slot> {
-    static ALWI void init() { erfc_tile_init(); }
     static ALWI void exec_impl(uint32_t slot_offset) { erfc_tile(to_u32(Slot) + slot_offset); }
 };
 
 #define ELTWISE_DECLARE_UNARY(Name, fn)                                                             \
     template <Dst Slot>                                                                             \
     struct Name : UnaryOp<Name<Slot>, Slot> {                                                       \
-        static ALWI void init() { fn##_tile_init(); }                                               \
         static ALWI void exec_impl(uint32_t slot_offset) { fn##_tile(to_u32(Slot) + slot_offset); } \
     };
 
@@ -47,7 +44,6 @@ ELTWISE_DECLARE_UNARY(Digamma, digamma)
 // slot binding. Out may alias an input (a/b) — TernaryOp does not enforce slot-distinctness.
 template <DataFormat DF, Dst Cond, Dst A, Dst B, Dst Out>
 struct Where : TernaryOp<Where<DF, Cond, A, B, Out>, Cond, A, B, Out> {
-    static ALWI void init() { where_tile_init(); }
     static ALWI void exec_impl(uint32_t slot_offset) {
         where_tile<DF>(
             to_u32(Cond) + slot_offset, to_u32(A) + slot_offset, to_u32(B) + slot_offset, to_u32(Out) + slot_offset);
@@ -63,13 +59,11 @@ struct Where : TernaryOp<Where<DF, Cond, A, B, Out>, Cond, A, B, Out> {
 
 template <Dst Slot>
 struct LgammaStirling : UnaryOp<LgammaStirling<Slot>, Slot> {
-    static ALWI void init() { lgamma_stirling_tile_init(); }
     static ALWI void exec_impl(uint32_t slot_offset) { lgamma_stirling_tile(to_u32(Slot) + slot_offset); }
 };
 
 template <Dst In0, Dst In1, Dst Out>
 struct LgammaStirlingFloat : BinaryOp<LgammaStirlingFloat<In0, In1, Out>, In0, In1, Out> {
-    static ALWI void init() { lgamma_stirling_float_tile_init(); }
     static ALWI void exec_impl(uint32_t slot_offset) {
         lgamma_stirling_float_tile(to_u32(In0) + slot_offset, to_u32(In1) + slot_offset, to_u32(Out) + slot_offset);
     }
@@ -79,7 +73,6 @@ struct LgammaStirlingFloat : BinaryOp<LgammaStirlingFloat<In0, In1, Out>, In0, I
 // may alias an input (the kernel uses (D0,D1,D2,D0)).
 template <Dst In0, Dst In1, Dst In2, Dst Out>
 struct LgammaAdjusted : TernaryOp<LgammaAdjusted<In0, In1, In2, Out>, In0, In1, In2, Out> {
-    static ALWI void init() { lgamma_adjusted_tile_init(); }
     static ALWI void exec_impl(uint32_t slot_offset) {
         lgamma_adjusted_tile(
             to_u32(In0) + slot_offset, to_u32(In1) + slot_offset, to_u32(In2) + slot_offset, to_u32(Out) + slot_offset);

@@ -96,6 +96,49 @@ def _typecast(to):
     return build
 
 
+def _cond(shape, dtype):
+    return (torch.rand(shape) > 0.5).to(DT[dtype][0])
+
+
+def _where(true_shape=None, false_shape=None, scalar_false=None):
+    def build(device, shape, dtype):
+        c = _cond(shape, dtype)
+        a = _rand(true_shape(shape) if true_shape else shape, dtype)
+        tc, ta = _tt(device, c, dtype), _tt(device, a, dtype)
+        if scalar_false is not None:
+            return (lambda: ttnn.where(tc, ta, scalar_false)), torch.where(c.bool(), a.float(), scalar_false)
+        b = _rand(false_shape(shape) if false_shape else shape, dtype)
+        tb = _tt(device, b, dtype)
+        return (lambda: ttnn.where(tc, ta, tb)), torch.where(c.bool(), a.float(), b.float())
+
+    return build
+
+
+def _mac_tst(device, shape, dtype):
+    a, c = _rand(shape, dtype), _rand(shape, dtype)
+    ta, tc = _tt(device, a, dtype), _tt(device, c, dtype)
+    return (lambda: ttnn.mac(ta, 0.5, tc)), a.float() * 0.5 + c.float()
+
+
+def _mac_tss(device, shape, dtype):
+    a = _rand(shape, dtype)
+    ta = _tt(device, a, dtype)
+    return (lambda: ttnn.mac(ta, 0.5, 1.25)), a.float() * 0.5 + 1.25
+
+
+def _rowcol(op, golden):
+    def build(device, shape, dtype):
+        a, b = _rand(_col(shape), dtype), _rand(_row(shape), dtype)
+        ta, tb = _tt(device, a, dtype), _tt(device, b, dtype)
+        return (lambda: op(ta, tb)), golden(a.float(), b.float())
+
+    return build
+
+
+def _scalar_shape(shape):
+    return (1, 1, 1, 1)
+
+
 def _identity_copy(device, shape, dtype):
     x = _rand(shape, dtype)
     tx = _tt(device, x, dtype)
@@ -123,10 +166,19 @@ OPS = {
     "mul_scalar": (_binary(ttnn.multiply, torch.mul, scalar=0.125), 0.9999, ("bf16", "fp32")),
     "add_rowbcast": (_binary(ttnn.add, torch.add, other_shape=_row), 0.9999, ("bf16", "fp32")),
     "mul_rowbcast": (_binary(ttnn.multiply, torch.mul, other_shape=_row), 0.9999, ("bf16", "fp32")),
-    "mul_colbcast": (_binary(ttnn.multiply, torch.mul, other_shape=_col), 0.9999, ("bf16",)),
+    "mul_colbcast": (_binary(ttnn.multiply, torch.mul, other_shape=_col), 0.9999, ("bf16", "fp32")),
+    "mul_scalarbcast": (_binary(ttnn.multiply, torch.mul, other_shape=_scalar_shape), 0.9999, ("bf16", "fp32")),
+    "mul_rowcol": (_rowcol(ttnn.multiply, torch.mul), 0.9999, ("bf16", "fp32")),
+    "where": (_where(), 0.9999, ("bf16", "fp32")),
+    "where_rowbcast": (_where(false_shape=_row), 0.9999, ("bf16", "fp32")),
+    "where_tts": (_where(scalar_false=0.0), 0.9999, ("bf16", "fp32")),
+    "where_tts_rowbcast": (_where(true_shape=_row, scalar_false=0.0), 0.9999, ("bf16", "fp32")),
+    "mac_tst": (_mac_tst, 0.9999, ("bf16", "fp32")),
+    "mac_tss": (_mac_tss, 0.9999, ("bf16", "fp32")),
     "addcmul": (_addcmul(lambda s: s), 0.9999, ("bf16",)),
     "addcmul_rowbcast": (_addcmul(_row), 0.9999, ("bf16",)),
     "addcmul_rowbcast_value": (_addcmul(_row, value=0.5), 0.9999, ("bf16",)),
+    "addcmul_colbcast": (_addcmul(_col), 0.9999, ("bf16",)),
     "lerp_tensor_weight": (_lerp_tensor_weight, 0.9999, ("fp32",)),
     "lerp_scalar_weight": (_lerp_scalar_weight, 0.9999, ("bf16",)),
 }
@@ -153,6 +205,15 @@ SHAPE_SETS = {
     "typecast_fp32_bf16": ["m8192n2560", "m32n2560"],
     "lerp_tensor_weight": ["m8192n128", "m8192n2560"],
     "lerp_scalar_weight": ["m8192n128"],
+    "mul_scalarbcast": ["m8192n2560"],
+    "mul_rowcol": ["m8192n2560"],
+    "where": ["m8192n2560"],
+    "where_rowbcast": ["m8192n2560"],
+    "where_tts": ["m8192n2560"],
+    "where_tts_rowbcast": ["m8192n2560"],
+    "mac_tst": ["m8192n2560"],
+    "mac_tss": ["m8192n2560"],
+    "addcmul_colbcast": ["m8192n2560"],
 }
 DEFAULT_SHAPES = ["m8192n2560", "m16384n2560", "m8192n5120"]
 

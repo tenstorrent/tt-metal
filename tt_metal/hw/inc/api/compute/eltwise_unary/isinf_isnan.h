@@ -11,6 +11,13 @@
 #endif
 
 namespace ckernel {
+
+ALWI void isinf_tile_init();
+ALWI void isposinf_tile_init();
+ALWI void isneginf_tile_init();
+ALWI void isnan_tile_init();
+ALWI void isfinite_tile_init();
+
 // clang-format off
 /**
  * Will store in the output of the compute core True if the input tile is infinity.
@@ -26,6 +33,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void isinf_tile(uint32_t idst) {
+    isinf_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -55,6 +63,7 @@ ALWI void isinf_tile_init() { MATH(SFPU_UNARY_INIT(isinf)); }
  */
 // clang-format on
 ALWI void isposinf_tile(uint32_t idst) {
+    isposinf_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -84,6 +93,7 @@ ALWI void isposinf_tile_init() { MATH(SFPU_UNARY_INIT(isposinf)); }
  */
 // clang-format on
 ALWI void isneginf_tile(uint32_t idst) {
+    isneginf_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -113,6 +123,7 @@ ALWI void isneginf_tile_init() { MATH(SFPU_UNARY_INIT(isneginf)); }
  */
 // clang-format on
 ALWI void isnan_tile(uint32_t idst) {
+    isnan_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -142,6 +153,7 @@ ALWI void isnan_tile_init() { MATH(SFPU_UNARY_INIT(isnan)); }
  */
 // clang-format on
 ALWI void isfinite_tile(uint32_t idst) {
+    isfinite_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
