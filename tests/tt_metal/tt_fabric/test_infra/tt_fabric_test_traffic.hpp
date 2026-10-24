@@ -183,11 +183,15 @@ struct NocUnicastWriteAtomicIncFields {
         const auto atomic_inc_args = atomic_inc_fields.get_args<IS_SOURCE>();
         args.insert(args.end(), write_args.begin(), write_args.end());
         args.insert(args.end(), atomic_inc_args.begin(), atomic_inc_args.end());
+        if constexpr (IS_SOURCE) {
+            args.push_back(flush ? 1u : 0u);
+        }
         return args;
     }
 
     NocUnicastWriteFields write_fields;
     NocUnicastAtomicIncFields atomic_inc_fields;
+    bool flush = false;  // Flush the write before the increment (sender only)
 };
 
 struct NocUnicastScatterWriteFields {
@@ -229,6 +233,16 @@ struct NocUnicastScatterWriteFields {
             args.push_back(static_cast<uint32_t>(chunk_sizes[i]));
         }
 
+        // Optional trailing semaphore increment (ntype option atomic_inc)
+        args.push_back(atomic_inc_fields.has_value() ? 1u : 0u);
+        if (atomic_inc_fields.has_value()) {
+            const auto atomic_inc_args = atomic_inc_fields->get_args<IS_SOURCE>();
+            args.insert(args.end(), atomic_inc_args.begin(), atomic_inc_args.end());
+            if constexpr (IS_SOURCE) {
+                args.push_back(atomic_inc_flush ? 1u : 0u);
+            }
+        }
+
         return args;
     }
 
@@ -237,6 +251,8 @@ struct NocUnicastScatterWriteFields {
     std::array<uint16_t, MAX_CHUNKS - 1> chunk_sizes;
     std::optional<uint32_t> dst_noc_encoding;
     uint32_t chunk_count;
+    std::optional<NocUnicastAtomicIncFields> atomic_inc_fields;
+    bool atomic_inc_flush = false;  // Flush the scatter writes before the increment (sender only)
 };
 
 // create memory maps
@@ -246,7 +262,7 @@ struct NocUnicastScatterWriteFields {
 struct TrafficParameters {
     // from TrafficPatternConfig
     ChipSendType chip_send_type;
-    NocSendType noc_send_type;
+    NocSendTypeSpec noc_send_type;
     size_t payload_size_bytes;
     size_t num_packets;
     std::optional<uint32_t> atomic_inc_val;
@@ -404,10 +420,10 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
 
     // push noc send type
     if (!is_sync_config) {
-        args.push_back(this->parameters.noc_send_type);
+        args.push_back(this->parameters.noc_send_type.type);
     }
 
-    switch (this->parameters.noc_send_type) {
+    switch (this->parameters.noc_send_type.type) {
         case NocSendType::NOC_UNICAST_WRITE: {
             const auto unicast_write_fields = NocUnicastWriteFields(
                 this->parameters.payload_size_bytes, this->target_address, this->dst_noc_encoding);
@@ -431,7 +447,8 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
             if (this->parameters.atomic_inc_val.has_value()) {
                 atomic_inc_fields.set_atomic_inc_val(this->parameters.atomic_inc_val.value());
             }
-            const auto fused_fields = NocUnicastWriteAtomicIncFields(write_fields, atomic_inc_fields);
+            auto fused_fields = NocUnicastWriteAtomicIncFields(write_fields, atomic_inc_fields);
+            fused_fields.flush = this->parameters.noc_send_type.options.flush;
             const auto fused_args = fused_fields.get_args<true>();
             args.insert(args.end(), fused_args.begin(), fused_args.end());
         } break;
@@ -450,8 +467,16 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
                 chunk_sizes[i] = static_cast<uint16_t>(chunk_size);
             }
 
-            const auto scatter_write_fields = NocUnicastScatterWriteFields(
+            auto scatter_write_fields = NocUnicastScatterWriteFields(
                 this->parameters.payload_size_bytes, dst_addresses, chunk_sizes, this->dst_noc_encoding);
+            if (this->parameters.noc_send_type.options.atomic_inc) {
+                scatter_write_fields.atomic_inc_flush = this->parameters.noc_send_type.options.flush;
+                scatter_write_fields.atomic_inc_fields =
+                    NocUnicastAtomicIncFields(this->atomic_inc_address.value(), this->dst_noc_encoding);
+                if (this->parameters.atomic_inc_val.has_value()) {
+                    scatter_write_fields.atomic_inc_fields->set_atomic_inc_val(this->parameters.atomic_inc_val.value());
+                }
+            }
             const auto scatter_write_args = scatter_write_fields.get_args<true>();
             args.insert(args.end(), scatter_write_args.begin(), scatter_write_args.end());
         } break;
@@ -485,9 +510,9 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
     args.insert(args.end(), metadata_args.begin(), metadata_args.end());
 
     // push noc send type
-    args.push_back(this->parameters.noc_send_type);
+    args.push_back(this->parameters.noc_send_type.type);
 
-    switch (this->parameters.noc_send_type) {
+    switch (this->parameters.noc_send_type.type) {
         case NocSendType::NOC_UNICAST_WRITE: {
             const auto unicast_write_fields =
                 NocUnicastWriteFields(this->parameters.payload_size_bytes, this->target_address);
@@ -530,8 +555,14 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
                 chunk_sizes[i] = static_cast<uint16_t>(chunk_size);
             }
 
-            const auto scatter_write_fields =
+            auto scatter_write_fields =
                 NocUnicastScatterWriteFields(this->parameters.payload_size_bytes, dst_addresses, chunk_sizes);
+            if (this->parameters.noc_send_type.options.atomic_inc) {
+                scatter_write_fields.atomic_inc_fields = NocUnicastAtomicIncFields(this->atomic_inc_address.value());
+                if (this->parameters.atomic_inc_val.has_value()) {
+                    scatter_write_fields.atomic_inc_fields->set_atomic_inc_val(this->parameters.atomic_inc_val.value());
+                }
+            }
             const auto scatter_write_args = scatter_write_fields.get_args<false>();
             args.insert(args.end(), scatter_write_args.begin(), scatter_write_args.end());
             break;

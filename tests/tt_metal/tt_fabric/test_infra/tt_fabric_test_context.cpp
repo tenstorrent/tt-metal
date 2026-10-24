@@ -735,7 +735,7 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
         .link_id = traffic_config.link_id,
         .vc_id = traffic_config.vc_id,
         .chip_send_type = traffic_config.parameters.chip_send_type,
-        .noc_send_type = traffic_config.parameters.noc_send_type,
+        .noc_send_type = traffic_config.parameters.noc_send_type.type,
         .num_packets = traffic_config.parameters.num_packets,
         .payload_size_bytes = traffic_config.parameters.payload_size_bytes,
     });
