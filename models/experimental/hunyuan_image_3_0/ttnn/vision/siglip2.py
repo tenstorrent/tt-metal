@@ -626,7 +626,7 @@ class HunyuanTtSiglip2MLP(LightweightModule):
         )
         h = to_interleaved_if_sharded(h)
         # gelu_pytorch_tanh == nn.GELU(approximate="tanh")
-        h = ttnn.gelu(h, fast_and_approximate_mode=True)
+        h = ttnn.unary_chain(h, [ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH, 1.0)])
         out = l1_sharded_linear(
             h,
             self.fc2_w,
