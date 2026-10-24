@@ -918,3 +918,47 @@ def test_moreh_layer_norm_backward_large_algorithm(
     run_moreh_layer_norm_backward(
         input_shape_normalized_dims, elementwise_affine, eps, dtype, device, compute_kernel_options
     )
+
+
+@pytest.mark.parametrize(
+    "input_shape_normalized_dims",
+    [
+        ([12, 8192, 2 * TILE_WIDTH], 1),
+        ([3072, TILE_HEIGHT, 2 * TILE_WIDTH], 2),
+    ],
+    ids=["[12,8192,64]-normalized_dims=1", "[3072,32,64]-normalized_dims=2"],
+)
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_moreh_layer_norm_backward_gamma_beta_grad_long_sum(
+    input_shape_normalized_dims, compute_kernel_options, device
+):
+    input_shape, normalized_dims = input_shape_normalized_dims
+    normalized_shape = input_shape[-normalized_dims:]
+
+    cpu_input = torch.tensor([-1.0, 1.0]).repeat(input_shape[-1] // 2).expand(input_shape).contiguous()
+    cpu_input = cpu_input.to(torch.bfloat16)
+    cpu_output_grad = torch.ones(input_shape, dtype=torch.bfloat16)
+    cpu_gamma = torch.ones(normalized_shape, dtype=torch.bfloat16)
+    cpu_beta = torch.zeros(normalized_shape, dtype=torch.bfloat16)
+
+    _, expected_gamma_grad, expected_beta_grad = torch_layer_norm_backward(
+        cpu_input.float(),
+        cpu_output_grad.float(),
+        normalized_dims=normalized_dims,
+        gamma=cpu_gamma.float(),
+        beta=cpu_beta.float(),
+    )
+
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
+    _, actual_gamma_grad, actual_beta_grad = tt_layer_norm_backward(
+        cpu_input,
+        cpu_output_grad,
+        normalized_dims=normalized_dims,
+        gamma=cpu_gamma,
+        beta=cpu_beta,
+        device=device,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+    torch.testing.assert_close(actual_beta_grad.float(), expected_beta_grad, rtol=2**-8, atol=0)
+    torch.testing.assert_close(actual_gamma_grad.float(), expected_gamma_grad.detach(), rtol=2**-8, atol=0)

@@ -147,6 +147,7 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
 
     const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
     auto intermed_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    const auto accum_format = tt::DataFormat::Float32;
 
     Group<DataflowBufferSpec> dfbs;
 
@@ -173,8 +174,8 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
     push_dfb(DBETA, out1_t, data_format);
     push_dfb(Y, im0_t, intermed_format);
     push_dfb(YDY, im1_t, intermed_format);
-    push_dfb(DYADD, im2_t, intermed_format);
-    push_dfb(YDYADD, im3_t, intermed_format);
+    push_dfb(DYADD, im2_t, accum_format);
+    push_dfb(YDYADD, im3_t, accum_format);
     push_dfb(XMM, im4_t, intermed_format);
     push_dfb(DYCOPY, im5_t, intermed_format);
 
@@ -189,10 +190,10 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
     KernelSpec::CompilerOptions::Defines compute_defines{
         {"REDUCE_OP", "PoolType::SUM"},
         {"REDUCE_DIM", "ReduceDim::REDUCE_COL"},
+        {"FP32_DEST_ACC_EN", "1"},
     };
     if (fp32_dest_acc_en) {
         reader_defines["FP32_DEST_ACC_EN"] = "1";
-        compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
     if (gamma_grad_has_value) {
         reader_defines["GAMMA_GRAD_HAS_VALUE"] = "1";
@@ -320,19 +321,18 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
     }
 
     auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
-    // Metal 2.0 requires an explicit unpack mode for every Float32 buffer a compute kernel consumes
-    // while the Dest register is 32-bit; the descriptor factory set no unpack_to_dest_mode at all, so
-    // every entry here reproduces that default (unpack into SrcA/B).
-    if (compute_hw.enable_32_bit_dest) {
-        auto& modes = compute_hw.unpack_modes;
-        for (const auto& dfb : dfbs) {
-            const bool consumed_by_compute =
-                std::any_of(compute_dfb_bindings.begin(), compute_dfb_bindings.end(), [&](const DFBBinding& binding) {
-                    return binding.dfb_spec_name == dfb.unique_id && binding.endpoint_type == DFBEndpointType::CONSUMER;
-                });
-            if (consumed_by_compute && dfb.data_format_metadata == tt::DataFormat::Float32) {
-                modes.emplace(dfb.unique_id, tt::tt_metal::UnpackMode::UnpackToSrc);
-            }
+    compute_hw.enable_32_bit_dest = true;
+    auto& modes = compute_hw.unpack_modes;
+    for (const auto& dfb : dfbs) {
+        const bool consumed_by_compute =
+            std::any_of(compute_dfb_bindings.begin(), compute_dfb_bindings.end(), [&](const DFBBinding& binding) {
+                return binding.dfb_spec_name == dfb.unique_id && binding.endpoint_type == DFBEndpointType::CONSUMER;
+            });
+        if (consumed_by_compute && dfb.data_format_metadata == tt::DataFormat::Float32) {
+            const bool running_sum = dfb.unique_id == DYADD || dfb.unique_id == YDYADD;
+            modes.emplace(
+                dfb.unique_id,
+                running_sum ? tt::tt_metal::UnpackMode::UnpackToDest : tt::tt_metal::UnpackMode::UnpackToSrc);
         }
     }
 

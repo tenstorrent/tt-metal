@@ -9,6 +9,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
@@ -19,6 +20,28 @@ constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Enabled;
 #else
 constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Disabled;
 #endif
+
+template <bool reduce_each_tile, uint32_t DfbIn, uint32_t DfbAcc>
+ALWI void accumulate_tile(DataflowBuffer& dfb_in, DataflowBuffer& dfb_acc, uint32_t iteration) {
+    dfb_in.wait_front(1);
+    if constexpr (reduce_each_tile) {
+        ckl::reduce<REDUCE_OP, REDUCE_DIM, DfbIn, dfb::scaler, DfbAcc, ckl::ReduceInputPolicy::NoWaitNoPop>(
+            ckl::ReduceInputBlockShape::single(),
+            ckl::ReduceInputMemoryLayout::contiguous(),
+            ckl::Accumulate::at(DfbAcc, iteration));
+    } else if (iteration == 0) {
+        copy_tile_to_dfb<DfbIn, DfbAcc>(dfb_in, dfb_acc, 0, 0);
+    } else {
+        dfb_acc.wait_front(1);
+        ckl::eltwise_chain(
+            ckl::IterationShape::one_tile(),
+            ckl::CopyTile<moreh_input<DfbAcc>, ckl::Dst::D0>{dfb_acc},
+            ckl::CopyTile<moreh_input<DfbIn>, ckl::Dst::D1>{dfb_in},
+            ckl::AddBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
+            ckl::PackTile<moreh_output<DfbAcc>>{dfb_acc});
+        dfb_acc.pop_front(1);
+    }
+}
 
 // Optional masks are absent from the generated DFB accessor header when not bound. These macros
 // therefore remove their complete operation (including the accessor name), rather than merely
@@ -57,6 +80,7 @@ void kernel_main() {
     constexpr auto Wt = get_arg(args::Wt);
     constexpr bool is_lastdim_layernorm = get_arg(args::is_lastdim_layernorm) == 1;
     constexpr bool is_groupnorm = get_arg(args::is_groupnorm) == 1;
+    constexpr bool reduce_each_tile = is_lastdim_layernorm || is_groupnorm;
 
     DataflowBuffer dfb_scaler_obj(dfb::scaler);
     DataflowBuffer dfb_dycopy_obj(dfb::dycopy);
@@ -128,21 +152,7 @@ void kernel_main() {
 
 #ifdef BETA_GRAD_HAS_VALUE
             // Compute dyadd
-            if (inner_idx == 0) {
-#ifdef GAMMA_GRAD_HAS_VALUE
-                copy_tile_to_dfb<dfb::dycopy, dfb::dyadd>(dfb_dycopy_obj, dfb_dyadd_obj, 0, 0);
-#else
-                copy_tile_to_dfb<dfb::dycopy, dfb::dyadd>(dfb_dycopy_obj, dfb_dyadd_obj, 0, 1);
-#endif
-            } else {
-#ifdef GAMMA_GRAD_HAS_VALUE
-                add_tiles_to_dfb<dfb::dyadd, dfb::dycopy, dfb::dyadd>(
-                    dfb_dyadd_obj, dfb_dycopy_obj, dfb_dyadd_obj, 0, 0, 1, 0);
-#else
-                add_tiles_to_dfb<dfb::dyadd, dfb::dycopy, dfb::dyadd>(
-                    dfb_dyadd_obj, dfb_dycopy_obj, dfb_dyadd_obj, 0, 0, 1, 1);
-#endif
-            }
+            accumulate_tile<reduce_each_tile, dfb::dycopy, dfb::dyadd>(dfb_dycopy_obj, dfb_dyadd_obj, inner_idx);
 #endif  // BETA_GRAD_HAS_VALUE
 
 #ifdef GAMMA_GRAD_HAS_VALUE
@@ -175,46 +185,22 @@ void kernel_main() {
                 ckl::output(dfb::y, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
                 ckl::IterationShape::one_tile(), dfb_xmm_obj, dfb_rstd_obj, dfb_y_obj);
 
-#ifdef BETA_GRAD_HAS_VALUE
             // Compute ydy
             mul_tiles_to_dfb<dfb::y, dfb::dycopy, dfb::ydy>(dfb_y_obj, dfb_dycopy_obj, dfb_ydy_obj, 0, 0, 1, 0);
-#else
-            mul_tiles_to_dfb<dfb::y, dfb::dycopy, dfb::ydy>(dfb_y_obj, dfb_dycopy_obj, dfb_ydy_obj, 0, 0, 1, 1);
-#endif
+
             // Compute ydyadd
-            if (inner_idx == 0) {
-                copy_tile_to_dfb<dfb::ydy, dfb::ydyadd>(dfb_ydy_obj, dfb_ydyadd_obj);
-            } else {
-                add_tiles_to_dfb<dfb::ydyadd, dfb::ydy, dfb::ydyadd>(dfb_ydyadd_obj, dfb_ydy_obj, dfb_ydyadd_obj);
-            }
+            accumulate_tile<reduce_each_tile, dfb::ydy, dfb::ydyadd>(dfb_ydy_obj, dfb_ydyadd_obj, inner_idx);
+            dfb_ydy_obj.pop_front(onetile);
 #endif  // GAMMA_GRAD_HAS_VALUE
 
-#if defined(GAMMA_GRAD_HAS_VALUE) && defined(BETA_GRAD_HAS_VALUE)
             dfb_dycopy_obj.pop_front(onetile);
-#endif
         }  // inner_idx loop
 
 #ifdef GAMMA_GRAD_HAS_VALUE
-        // Compute dgamma
-        if (is_lastdim_layernorm || is_groupnorm) {
-            // Sum[y * dy]
-            compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::ydyadd, dfb::scaler, dfb::dgamma>(
-                compute_kernel_lib::ReduceInputBlockShape::single());
-        } else {
-            // Just copy
-            copy_tile_to_dfb<dfb::ydyadd, dfb::dgamma>(dfb_ydyadd_obj, dfb_dgamma_obj);
-        }
+        copy_tile_to_dfb<dfb::ydyadd, dfb::dgamma>(dfb_ydyadd_obj, dfb_dgamma_obj);
 #endif  // GAMMA_GRAD_HAS_VALUE
 #ifdef BETA_GRAD_HAS_VALUE
-        // Compute dbeta
-        if (is_lastdim_layernorm || is_groupnorm) {
-            // Sum[dy]
-            compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::dyadd, dfb::scaler, dfb::dbeta>(
-                compute_kernel_lib::ReduceInputBlockShape::single());
-        } else {
-            // Just copy
-            copy_tile_to_dfb<dfb::dyadd, dfb::dbeta>(dfb_dyadd_obj, dfb_dbeta_obj);
-        }
+        copy_tile_to_dfb<dfb::dyadd, dfb::dbeta>(dfb_dyadd_obj, dfb_dbeta_obj);
 #endif  // BETA_GRAD_HAS_VALUE
     }  // outer_idx loop
 
