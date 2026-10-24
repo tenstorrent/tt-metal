@@ -20,6 +20,7 @@ import torch
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32.reference import pretrained_mla_weights
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32.weights import _dequant_fp8
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config, glm_5_3_hf_config
+from models.demos.deepseek_v3_d_p.tests._reuse import cached_host
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.mtp_config import MTPConfig
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import load_mtp_state_dict
 from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
@@ -85,8 +86,12 @@ def mtp_state_dict(use_pretrained, mtp_cfg) -> dict:
     path = glm53_checkpoint_path()
     if path is None:
         pytest.skip(f"set {HF_ENV}=/path/to/GLM-5.3 (dir with config.json + MTP weights)")
-    sd = load_mtp_state_dict(path, layer_idx=mtp_cfg.mtp_layer_idx)
-    return {k: v.to(torch.bfloat16) for k, v in sd.items()}
+
+    def _load():
+        sd = load_mtp_state_dict(path, layer_idx=mtp_cfg.mtp_layer_idx)
+        return {k: v.to(torch.bfloat16) for k, v in sd.items()}
+
+    return cached_host(("mtp_state_dict", path, mtp_cfg.mtp_layer_idx), _load)
 
 
 _PROJ = ("gate_proj", "up_proj", "down_proj")
@@ -144,7 +149,10 @@ def mtp_layer_state_dict(use_pretrained, mtp_cfg, config_only) -> dict | None:
     path = glm53_checkpoint_path()
     if path is None:
         pytest.skip(f"set {HF_ENV}=/path/to/GLM-5.3 (dir with config.json + MTP weights)")
-    return glm_layer_state_dict(config_only, path, mtp_cfg.mtp_layer_idx, GLM53Config.NUM_ROUTED_EXPERTS)
+    return cached_host(
+        ("mtp_layer_state_dict", path, mtp_cfg.mtp_layer_idx),
+        lambda: glm_layer_state_dict(config_only, path, mtp_cfg.mtp_layer_idx, GLM53Config.NUM_ROUTED_EXPERTS),
+    )
 
 
 @pytest.fixture
