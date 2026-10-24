@@ -114,11 +114,12 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
     sfpi::vFloat y = sfpi::as<sfpi::vFloat>(zii);
 
     // Negative base handling (for both positive and negative exponents)
+    sfpi::vFloat abs_pow = sfpi::abs(pow);
     v_if(base < 0.0f) {
         // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
         // Check valid base range
         auto pow_int = sfpi::convert<sfpi::vSMag16>(
-            pow, sfpi::RoundMode::Nearest);  // int16 should be plenty, since large powers will approach 0/Inf
+            abs_pow, sfpi::RoundMode::Nearest);  // int16 should be plenty, since large powers will approach 0/Inf
         auto pow_rounded = sfpi::convert<sfpi::vFloat>(pow_int, sfpi::RoundMode::Nearest);
 
         // If pow is odd integer then result is negative
@@ -126,7 +127,7 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
         y = sfpi::setsgn2(y, pow_int);
 
         // Check for integer power, if it is not then overwrite result with NaN
-        v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
+        v_if(pow_rounded != abs_pow) {  // negative base and non-integer power => set to NaN
             y = sfpi::vConstFloatPrgm2;
         }
         v_endif;
@@ -138,11 +139,13 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
     // fires on -0 and would replace the 0 result with NaN for non-integer p.
     // pow == 0 falls through the guard and keeps 1.
     if constexpr (IS_POSITIVE_EXPONENT) {
-        v_if(abs_base == 0.f && pow > 0.f) { y = 0.0f; }
+        v_if(abs_base == 0.f && abs_pow != 0.f) { y = sfpi::copysgn(sfpi::vFloat(0.0f), y); }
         v_endif;
     } else {
         v_if(abs_base == 0.f) {
-            y = sfpi::vConstFloatPrgm2;  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
+            y = sfpi::copysgn(sfpi::vFloat(std::numeric_limits<float>::infinity()), y);
+            v_if(sfpi::is_nan(pow)) { y = sfpi::vConstFloatPrgm2; }
+            v_endif;
         }
         v_endif;
     }
@@ -198,7 +201,11 @@ sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_hilo_(sfpi::vFloat z_hi, sfpi::
     sfpi::vFloat s = z_hi + z_lo;
     sfpi::vFloat e = z_lo - (s - z_hi);
 
-    s = sfpi::max(s, -0x7e.ffff8p0f);
+    v_if(s < sfpi::vConstFloatPrgm1) {
+        s = sfpi::vConstFloatPrgm1;
+        e = 0.0f;
+    }
+    v_endif;
 
     sfpi::vInt k_int;
     sfpi::vFloat k = _sfpu_round_to_nearest_int32_(s, k_int);
@@ -217,9 +224,11 @@ sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_hilo_(sfpi::vFloat z_hi, sfpi::
     sfpi::vFloat p = PolynomialEvaluator::eval(
         r, 1.0f, 1.0f, 0.5f, 1.0f / 6.0f, 1.0f / 24.0f, 1.0f / 120.0f, 1.0f / 720.0f, 1.0f / 5040.0f);
 
-    sfpi::vFloat result = sfpi::setexp(p, sfpi::exexp(p, sfpi::ExponentMode::Biased) + k_int);
-
-    v_if(s >= 128.0f) { result = std::numeric_limits<float>::infinity(); }
+    sfpi::vInt out_exp = sfpi::exexp(p, sfpi::ExponentMode::Biased) + k_int;
+    sfpi::vFloat result = 0.0f;
+    v_if(out_exp > 0) { result = sfpi::setexp(p, out_exp); }
+    v_endif;
+    v_if(out_exp >= 255) { result = std::numeric_limits<float>::infinity(); }
     v_endif;
 
     return result;
@@ -300,11 +309,12 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
     sfpi::vFloat z_lo = pow_lo * exp_f32 + pow * (ln_m * vConst1Ln2);
     sfpi::vFloat y = _sfpu_pow2_f32_accurate_hilo_(z_hi, z_lo);
 
+    sfpi::vFloat abs_pow = sfpi::abs(pow);
     v_if(base < 0.0f) {  // negative base
         // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
         // Check valid base range
         auto pow_int = sfpi::convert<sfpi::vSMag16>(
-            pow, sfpi::RoundMode::Nearest);  // int16 should be plenty, since large powers will approach 0/Inf
+            abs_pow, sfpi::RoundMode::Nearest);  // int16 should be plenty, since large powers will approach 0/Inf
         auto pow_rounded = sfpi::convert<sfpi::vFloat>(pow_int, sfpi::RoundMode::Nearest);
 
         // If pow is odd integer then result is negative
@@ -313,7 +323,7 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
         y = sfpi::setsgn2(y, pow_int);
 
         // Check for integer power, if it is not then overwrite result with NaN
-        v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
+        v_if(pow_rounded != abs_pow) {  // negative base and non-integer power => set to NaN
             y = sfpi::vConstFloatPrgm2;
         }
         v_endif;
@@ -325,11 +335,13 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
     // fires on -0 and would replace the 0 result with NaN for non-integer p.
     // pow == 0 falls through the guard and keeps 1.
     if constexpr (IS_POSITIVE_EXPONENT) {
-        v_if(abs_base == 0.f && pow > 0.f) { y = 0.0f; }
+        v_if(abs_base == 0.f && abs_pow != 0.f) { y = sfpi::copysgn(sfpi::vFloat(0.0f), y); }
         v_endif;
     } else {
         v_if(abs_base == 0.f) {
-            y = sfpi::vConstFloatPrgm2;  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
+            y = sfpi::copysgn(sfpi::vFloat(std::numeric_limits<float>::infinity()), y);
+            v_if(sfpi::is_nan(pow)) { y = sfpi::vConstFloatPrgm2; }
+            v_endif;
         }
         v_endif;
     }
