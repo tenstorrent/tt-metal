@@ -8,12 +8,17 @@
 #include <type_traits>
 #include <tt_stl/assert.hpp>
 #include "ttnn/tensor/types.hpp"
+#include <tt-metalium/bfloat16.hpp>
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::unary::utils {
 
 namespace {
+
+uint32_t float_scalar_bits(float value, std::optional<DataType> input_dtype) {
+    return std::bit_cast<uint32_t>(input_dtype == DataType::BFLOAT16 ? static_cast<float>(bfloat16(value)) : value);
+}
 
 std::string get_macro_definition(UnaryOpType op_type) {
     switch (op_type) {
@@ -212,7 +217,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             }
             return {
                 "relu_max_tile_init();",
-                fmt::format("relu_max_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+                fmt::format("relu_max_tile({}, {:#x}u);", idst, float_scalar_bits(param0, input_dtype))};
 
         case UnaryOpType::RELU_MIN:
             TT_FATAL(
@@ -246,7 +251,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             }
             return {
                 "relu_min_tile_init();",
-                fmt::format("relu_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+                fmt::format("relu_min_tile({}, {:#x}u);", idst, float_scalar_bits(param0, input_dtype))};
 
         case UnaryOpType::POWER:
             return {
@@ -302,7 +307,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::HEAVISIDE:
             return {
                 "heaviside_tile_init();",
-                fmt::format("heaviside_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+                fmt::format("heaviside_tile({}, {:#x}u);", idst, float_scalar_bits(param0, input_dtype))};
         case UnaryOpType::BITWISE_XOR:
             return {
                 "bitwise_xor_tile_init();",
@@ -603,7 +608,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             }
             return {
                 "unary_max_tile_init();",
-                fmt::format("unary_max_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+                fmt::format("unary_max_tile({}, {:#x}u);", idst, float_scalar_bits(param0, input_dtype))};
 
         case UnaryOpType::MINIMUM:
             TT_FATAL(
@@ -620,7 +625,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             }
             return {
                 "unary_min_tile_init();",
-                fmt::format("unary_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+                fmt::format("unary_min_tile({}, {:#x}u);", idst, float_scalar_bits(param0, input_dtype))};
 
         case UnaryOpType::CELU:
             return {
@@ -697,8 +702,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format(
                     "clamp_tile({}, {}, {});",
                     idst,
-                    std::bit_cast<uint32_t>(param0),
-                    std::bit_cast<uint32_t>(param1))};
+                    float_scalar_bits(param0, input_dtype),
+                    float_scalar_bits(param1, input_dtype))};
         }
         case UnaryOpType::HARDTANH: {
             float param1 = params[1];
@@ -707,8 +712,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format(
                     "hardtanh_tile({}, {:#x}u, {:#x}u);",
                     idst,
-                    std::bit_cast<uint32_t>(param0),
-                    std::bit_cast<uint32_t>(param1))};
+                    float_scalar_bits(param0, input_dtype),
+                    float_scalar_bits(param1, input_dtype))};
         }
         case UnaryOpType::THRESHOLD: {
             float param1 = params[1];
@@ -718,7 +723,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     "threshold_tile({}, {:#x}u, {:#x}u);",
                     idst,
                     std::bit_cast<uint32_t>(param0),
-                    std::bit_cast<uint32_t>(param1))};
+                    float_scalar_bits(param1, input_dtype))};
         }
         case UnaryOpType::SELU: {
             TT_FATAL(params.size() == 2, "Expected selu to take 2 parameters");
@@ -758,7 +763,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
     switch (op_type) {
         case UnaryOpType::BITWISE_NOT: return {"bitwise_not_tile_init();", fmt::format("bitwise_not_tile({});", idst)};
         case UnaryOpType::RECIP: return {"recip_tile_init();", fmt::format("recip_tile({});", idst)};
-        case UnaryOpType::GELU: return {"gelu_tile_init();", fmt::format("gelu_tile({});", idst)};
+        case UnaryOpType::GELU: return {"gelu_tile_init<0u>();", fmt::format("gelu_tile<0u>({});", idst)};
         case UnaryOpType::GELU_TANH: return {"gelu_tanh_tile_init();", fmt::format("gelu_tanh_tile({});", idst)};
         case UnaryOpType::LOG: return {"log_tile_init();", fmt::format("log_tile({});", idst)};
         case UnaryOpType::LOG1P: return {"log1p_tile_init();", fmt::format("log1p_tile({});", idst)};
@@ -813,7 +818,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::I1: return {"i1_tile_init();", fmt::format("i1_tile({});", idst)};
         case UnaryOpType::EXP: return {"exp_tile_init();", fmt::format("exp_tile({});", idst)};
         case UnaryOpType::SIGMOID: return {"sigmoid_tile_init();", fmt::format("sigmoid_tile({});", idst)};
-        case UnaryOpType::ERF: return {"erf_tile_init();", fmt::format("erf_tile({0});", idst)};
+        case UnaryOpType::ERF: return {"erf_tile_init<0u>();", fmt::format("erf_tile<0u>({0});", idst)};
         case UnaryOpType::ERFC: return {"erfc_tile_init();", fmt::format("erfc_tile({});", idst)};
         case UnaryOpType::ERFINV: return {"erfinv_tile_init();", fmt::format("erfinv_tile({});", idst)};
         case UnaryOpType::LOG10:

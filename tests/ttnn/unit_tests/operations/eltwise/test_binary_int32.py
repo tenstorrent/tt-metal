@@ -2340,3 +2340,15 @@ def test_mixed_float_int_promotion(device, ttnn_op, float_dtype, int_dtype, int_
     rtol = 0.05 if expected_dtype == ttnn.bfloat16 else 0.01
     rel_err = (tt_out.float() - z_torch.float()).abs() / z_torch.float().abs().clamp_min(1e-3)
     assert rel_err.max() < rtol, f"max relative error {rel_err.max():.4g} exceeds {rtol}"
+
+
+@pytest.mark.parametrize("activation", [ttnn.UnaryOpType.SIGMOID, ttnn.UnaryOpType.TANH, ttnn.UnaryOpType.SQRT])
+def test_binary_int32_fused_float_only_activation_is_rejected(device, activation):
+    t = ttnn.from_torch(
+        torch.tensor([[1, 2, 3, 4]], dtype=torch.int32).repeat(32, 8),
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    with pytest.raises(RuntimeError, match="does not support integer input dtype"):
+        ttnn.add(t, t, input_tensor_a_activations=[activation])

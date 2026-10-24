@@ -10,6 +10,7 @@
 #include "ttnn/operations/eltwise/binary/common/binary_op_dtype_policy.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "binary_ng_utils.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <cmath>
 
@@ -51,18 +52,23 @@ void validate_fast_and_approximate_mode(
 bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_approximate_mode = false) {
     using enum BinaryOpType;
     using enum DataType;
+    const auto is_narrow_float = [](DataType d) { return d == BFLOAT16 || d == BFLOAT8_B || d == BFLOAT4_B; };
+    const bool float32_with_narrow_float = (a == FLOAT32 && is_narrow_float(b)) || (b == FLOAT32 && is_narrow_float(a));
     switch (val) {
         case ADD:
         case SUB:
         case RSUB:
-            return !fast_and_approximate_mode || (a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16));
+        case MUL:
+            return !fast_and_approximate_mode || float32_with_narrow_float ||
+                   (a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16));
         case LOGICAL_AND:
         case LOGICAL_OR:
         case LOGICAL_XOR:
-        case SQUARED_DIFFERENCE: return a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16);
-        case MUL:
-            return !fast_and_approximate_mode || (a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16));
-        case DIV: return !fast_and_approximate_mode || (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32);
+        case SQUARED_DIFFERENCE:
+            return float32_with_narrow_float || (a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16));
+        case DIV:
+            return !fast_and_approximate_mode || float32_with_narrow_float || (a == FLOAT32 && b == FLOAT32) ||
+                   (a == INT32 && b == INT32);
         // logaddexp and logaddexp2 are fused SFPU kernels templated on the destination
         // precision, so the 16-bit formats route to them as well as float32. Which body they
         // get is decided by fp32_dest_acc_en, and binary_ng_program_factory.cpp derives that
@@ -79,7 +85,9 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case GT:
         case LT:
         case GE:
-        case LE: return a == b && (a == FLOAT32 || a == BFLOAT16 || a == INT32 || a == UINT16 || a == UINT32);
+        case LE:
+            return float32_with_narrow_float ||
+                   (a == b && (a == FLOAT32 || a == BFLOAT16 || a == INT32 || a == UINT16 || a == UINT32));
         case LCM:
         case GCD: return (a == INT32 && b == INT32);
         case LEFT_SHIFT:
@@ -376,6 +384,15 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     }
 
     BinaryNgDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
+
+    auto validate_activations = [](const auto& activations, DataType dtype) {
+        unary::validate_integer_input_dtype({activations.begin(), activations.end()}, dtype);
+    };
+    validate_activations(attributes.lhs_activations, input_tensor_a.dtype());
+    if (input_tensor_b.has_value()) {
+        validate_activations(attributes.rhs_activations, input_tensor_b->dtype());
+    }
+    validate_activations(attributes.post_activations, attributes.dtype.value_or(input_tensor_a.dtype()));
 
     if (attributes.dtype.has_value() && output_tensor.has_value()) {
         TT_FATAL(
