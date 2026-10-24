@@ -1,0 +1,86 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+model:
+  model_id: "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+  # A14B is a 2-expert MoE. high-noise handles t >= boundary_ratio, low-noise below.
+  boundary_ratio: 0.875
+  # "low" | "high" | "both". "low" alone is often enough for a style LoRA and keeps
+  # only one 14B expert resident.
+  train_experts: both
+
+data:
+  dataset_id: "showlab/OmniConsistency"
+  style: LEGO
+  data_dir: "data/lego"
+  cache_dir: "cache/wan22_14b_lego"
+  # h/w must be multiples of 16 (VAE spatial stride 8 * patch 2); frames must be 4k+1.
+  train_h: 512
+  train_w: 512
+  train_frames: 13
+  trigger: "lg, "
+  # Drop "lego/blocky/minifigure" clauses so the trigger alone carries the style.
+  strip_style_words: true
+  # Fraction of samples whose caption becomes "" (classifier-free guidance).
+  text_drop_prob: 0.10
+  # 0 = use every sample.
+  subset_size: 0
+  max_seq: 512
+  val_holdout: 4
+  # ttnn dtype for the on-device VAE encoder.
+  vae_dtype: bfloat16
+
+lora:
+  lora_rank: 32
+  lora_alpha: 32
+  lora_target_set: attn
+  lora_a_init: gaussian
+  lora_path: "cache/wan22_14b_lego/wan22_14b_lego_lora.safetensors"
+
+optimizer:
+  lr: 1.0e-4
+  weight_decay: 0.01
+  grad_clip: 0.0
+
+training:
+  seed: 42
+  gradient_checkpointing: true
+  conv3d_patch_embed: false
+  batch: 1
+  grad_accum: 4
+  max_steps: 3000
+  train_flow_shift: 3.0
+  lognorm_mean: 0.0
+  lognorm_std: 1.0
+  val_loss_every: 200
+  ckpt_every: 500
+
+inference:
+  infer_h: 512
+  infer_w: 512
+  # 4k+1 only; other values decode to black video.
+  infer_frames: 49
+  infer_fps: 16
+  infer_steps: 40
+  infer_guidance: 7.0
+  infer_guidance_2: 5.0
+  infer_flow_shift: 12.0
+  infer_output: "cache/wan22_14b_lego/lego_video.mp4"
+  # The prompt to generate; the trigger above is prepended automatically.
+  val_prompt: "a cat sitting on a wooden table"
+  neg_prompt: ""
+  # true = run the base model with no adapter (A/B against a trained run).
+  infer_no_lora: false
+  # Over-drive the adapter (1.5-2.0) to survive temporal dilution in video.
+  lora_scale: 1.0
+  # Leave empty to derive both from lora.lora_path.
+  infer_high_lora: ""
+  infer_low_lora: ""
+
+device:
+  mesh_shape: [4, 8]
+
+logging:
+  wandb_project: "wan22-14b-lego-lora"
+  wandb_enabled: true
