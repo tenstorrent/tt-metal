@@ -31,9 +31,10 @@ void kernel_main() {
         for (uint32_t r = 0; r < kt; ++r) {
             copy_tile(cb_b, r * kt + j, r);
         }
-        cb_wait_front(cb_ein, (j + 1) * kt);
         reconfig_data_format<SrcOrder::Reverse>(cb_a, cb_ein);
         matmul_block_init(cb_a, cb_ein, false, 1, kt, kt);
+        // Set up before waiting: the hop's latency runs from the column's landing to its last product.
+        cb_wait_front(cb_ein, (j + 1) * kt);
         for (uint32_t k = 0; k < kt; ++k) {
             matmul_block(cb_a, cb_ein, k, j * kt + k, 0, false, 1, kt, kt);
         }

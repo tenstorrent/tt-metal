@@ -86,13 +86,6 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
         tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() >= tt::constants::TILE_HW * sizeof(float),
         "{}: the relay sends whole FP32 tiles",
         operation_name);
-    TT_FATAL(
-        relay_affine_prefix_sender_slots(key_tiles, mesh->arch()) > 0,
-        "{}: a tile column of K = {} tiles needs {} packet headers, the pool holds {} per RISC",
-        operation_name,
-        key_tiles,
-        relay_affine_prefix_column_packets(key_tiles),
-        fabric_packet_headers_per_risc(mesh->arch()));
 
     const std::span<const CoreCoord> head_cores(attrs.cores.data(), heads);
     for (const auto& [landing, name] :

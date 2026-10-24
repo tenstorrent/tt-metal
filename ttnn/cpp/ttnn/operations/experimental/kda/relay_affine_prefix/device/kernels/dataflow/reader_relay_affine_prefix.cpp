@@ -67,15 +67,18 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_ein, state_tiles);
     } else {
-        // The predecessor's sender writes each tile column of this head's entry state into cb_ein's storage, then
-        // counts it.
+        // The predecessor's sender writes this head's entry state into cb_ein's storage in order, counting the tiles
+        // that have landed; each is handed to compute as soon as it is counted.
         volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_semaphore);
-        for (uint32_t j = 0; j < kt; ++j) {
-            noc_semaphore_wait_min(arrived, j + 1);
-            cb_push_back(cb_ein, kt);
+        for (uint32_t pushed = 0; pushed < state_tiles;) {
+            noc_semaphore_wait_min(arrived, pushed + 1);
+            // A faster predecessor may already be counting the next call's tiles.
+            const uint32_t count = *arrived < state_tiles ? *arrived : state_tiles;
+            cb_push_back(cb_ein, count - pushed);
+            pushed = count;
         }
-        // Subtract instead of clearing: a faster predecessor may already be counting the next call's columns.
-        noc_semaphore_inc(get_noc_addr(arrival_semaphore), 0u - kt);
+        // Subtract instead of clearing, for the same reason.
+        noc_semaphore_inc(get_noc_addr(arrival_semaphore), 0u - state_tiles);
         noc_async_atomic_barrier();
     }
 }

@@ -59,7 +59,10 @@ tt::tt_metal::ProgramDescriptor build_program(
     const auto head_set = kda_factory_detail::merged_core_set(head_cores);
     const auto sender_set = kda_factory_detail::merged_core_set(sender_cores);
 
-    const uint32_t sender_slots = relay_affine_prefix_sender_slots(kt, in.packed.device()->arch());
+    // The sender stages up to one head's state (kt tile columns), reading later columns while earlier ones are on the
+    // link.
+    const uint32_t sender_slots = kt;
+    const uint32_t packet_bytes = relay_affine_prefix_packet_bytes(kt);
     desc.cbs = {
         kda_factory_detail::cb_descriptor(cb_a, state_tiles, summary_tile, tt::DataFormat::Float16_b, head_set),
         kda_factory_detail::cb_descriptor(cb_b, state_tiles, summary_tile, tt::DataFormat::Float16_b, head_set),
@@ -93,8 +96,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     }
     std::vector<uint32_t> sender_ct = {cb_stage};
     sender_ct.insert(sender_ct.end(), chronology.begin(), chronology.end());
-    sender_ct.insert(
-        sender_ct.end(), {kt * state_tile, relay_affine_prefix_packet_bytes(), kt, sender_slots, ack_semaphore_id});
+    sender_ct.insert(sender_ct.end(), {kt * state_tile, packet_bytes, kt, sender_slots, ack_semaphore_id});
     tt::tt_metal::TensorAccessorArgs(in.actual_start.buffer()).append_to(sender_ct);
 
     tt::tt_metal::KernelDescriptor reader{

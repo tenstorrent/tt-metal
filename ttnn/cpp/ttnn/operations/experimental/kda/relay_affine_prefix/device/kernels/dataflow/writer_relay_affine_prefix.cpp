@@ -40,12 +40,12 @@ void kernel_main() {
     const auto entry = TensorAccessor(entry_args, entry_address);
     const auto final_state = TensorAccessor(final_args, final_address);
     const uint32_t tile_bytes = get_tile_size(cb_eout);
-    // Hand each tile column to this head's sender as it is packed (a count on the sender's core): the DRAM copies
-    // below are off the relay's path.
+    // Hand each tile column to this head's sender as it is packed (a count of packed tiles on the sender's core): the
+    // DRAM copies below are off the relay's path.
     const uint64_t notify = get_noc_addr(sender_x, sender_y, get_semaphore(notify_semaphore_id));
     for (uint32_t j = 0; j < kt; ++j) {
         cb_wait_front(cb_eout, (j + 1) * kt);
-        noc_semaphore_inc(notify, 1);
+        noc_semaphore_inc(notify, kt);
     }
     // The states are stored column-major by tile; the DRAM tensors are row-major.
     const auto page = [&](uint32_t i) { return head * state_tiles + (i % kt) * kt + i / kt; };
@@ -67,9 +67,9 @@ void kernel_main() {
     if (position == 0) {
         // The first rank's split tail enters at the final state, which the last rank sends here.
         volatile tt_l1_ptr uint32_t* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(final_semaphore);
-        noc_semaphore_wait_min(landed, kt);
-        // Subtract instead of clearing: a faster last rank may already be counting the next call's columns.
-        noc_semaphore_inc(get_noc_addr(final_semaphore), 0u - kt);
+        noc_semaphore_wait_min(landed, state_tiles);
+        // Subtract instead of clearing: a faster last rank may already be counting the next call's tiles.
+        noc_semaphore_inc(get_noc_addr(final_semaphore), 0u - state_tiles);
         for (uint32_t i = 0; i < state_tiles; ++i) {
             noc_async_write_page(page(i), final_state, final_landing + i * tile_bytes);
         }
