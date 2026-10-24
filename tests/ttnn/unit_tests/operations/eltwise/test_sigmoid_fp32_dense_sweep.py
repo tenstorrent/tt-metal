@@ -26,8 +26,8 @@ from models.common.utility_functions import run_for_blackhole
 
 pytestmark = run_for_blackhole()
 
-# Measured maxima: sigmoid 3.12 ULP at x = -16.654, silu 3.53 ULP at x = -16.686.
-MAX_ULP = {"sigmoid": 3.5, "silu": 4.0}
+# Measured maxima: sigmoid 3.12 ULP at x = -16.654, silu 3.53 ULP at x = -16.686, exp 0.86 ULP at x = 26.699.
+MAX_ULP = {"sigmoid": 3.5, "silu": 4.0, "exp": 1.0}
 _CHUNK_ROWS = 4096  # 4096 x 1024 values per device call
 _SMALLEST_NORMAL = 2.0**-126
 
@@ -67,9 +67,9 @@ def _ulp_error(result: torch.Tensor, golden64: torch.Tensor) -> torch.Tensor:
     return (result.double() - golden64).abs() / ulp
 
 
-@pytest.mark.parametrize("name", ["sigmoid", "silu"])
+@pytest.mark.parametrize("name", ["sigmoid", "silu", "exp"])
 def test_sigmoid_fp32_dense_sweep(device, name):
-    op = {"sigmoid": ttnn.sigmoid, "silu": ttnn.silu}[name]
+    op = {"sigmoid": ttnn.sigmoid, "silu": ttnn.silu, "exp": ttnn.exp}[name]
     x = _dense_inputs()
     result = _run_device(device, op, x)
     bits = result.view(torch.int32)
@@ -101,9 +101,17 @@ def test_sigmoid_fp32_dense_sweep(device, name):
     # The device flushes subnormal inputs to zero.
     x_ftz = torch.where(x.abs() < _SMALLEST_NORMAL, torch.zeros_like(x), x).double()
     sigmoid = torch.sigmoid(x_ftz)
-    golden = sigmoid if name == "sigmoid" else x_ftz * sigmoid
-    # Where sigmoid(x) is below the smallest normal the device flushes it, and silu(x) = x * 0 with it.
-    flushed = finite_in & (sigmoid < _SMALLEST_NORMAL)
+    if name == "exp":
+        golden = torch.exp(x_ftz)
+        # Below the smallest normal the device flushes exp(x) to 0; from 2**128 up it is +inf.
+        flushed = finite_in & (golden < _SMALLEST_NORMAL)
+        overflow = finite_in & (golden >= 2.0**128)
+        assert (result[overflow] == float("inf")).all()
+        finite_in = finite_in & ~overflow
+    else:
+        golden = sigmoid if name == "sigmoid" else x_ftz * sigmoid
+        # Where sigmoid(x) is below the smallest normal the device flushes it, and silu(x) = x * 0 with it.
+        flushed = finite_in & (sigmoid < _SMALLEST_NORMAL)
     assert (result[flushed] == 0).all()
 
     normal = finite_in & ~flushed & (golden.abs() >= _SMALLEST_NORMAL)
@@ -123,6 +131,8 @@ def test_sigmoid_fp32_dense_sweep(device, name):
         assert (result[x == float("-inf")] == 0).all()
     else:
         assert (result[x == float("inf")] == float("inf")).all()
+    if name == "exp":
+        assert (result[x == float("-inf")] == 0).all()
     nan_out = result[nan_in]
     print(f"{name} sweep: NaN inputs -> {torch.unique(nan_out.view(torch.int32))[:8].tolist()} (bit patterns)")
     assert (torch.isnan(nan_out) | (nan_out == 0) | (nan_out == 1)).all()
