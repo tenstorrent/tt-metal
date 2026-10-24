@@ -10,6 +10,7 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/data_movement/common/datacopy_rounding.hpp"
 
 namespace ttnn::operations::data_movement::clone {
 
@@ -200,7 +201,12 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
         // Metal 2.0 requires an explicit unpack_modes entry when a compute kernel consumes a
         // Float32 DFB with a 32-bit dest register. Legacy ComputeConfigDescriptor left
         // unpack_to_dest_mode default (== UnpackToSrc); mirror that value faithfully.
-        if (input.device()->arch() != tt::ARCH::QUASAR) {
+        const bool round_to_bf16 = ttnn::operations::data_movement::datacopy_rounds_fp32_to_bf16(
+            input.device()->arch(), input_data_format, output_data_format);
+        if (round_to_bf16) {
+            compute_hw.enable_32_bit_dest = true;
+            compute_hw.unpack_modes = ComputeHardwareConfig::ComputeUnpackModes{{SRC, UnpackMode::UnpackToSrc}};
+        } else if (input.device()->arch() != tt::ARCH::QUASAR) {
             if (input_data_format == tt::DataFormat::Float32 && compute_hw.enable_32_bit_dest) {
                 compute_hw.unpack_modes = ComputeHardwareConfig::ComputeUnpackModes{{SRC, UnpackMode::UnpackToSrc}};
             }
