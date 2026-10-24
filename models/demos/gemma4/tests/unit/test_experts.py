@@ -74,17 +74,24 @@ def test_experts_dispatch_fit(seq_len, sparse, mesh_device, reset_seeds, request
     run_experts(1, seq_len, mesh_device, request, sparse_routing=sparse)
 
 
-def _ring_router_config():
-    """The fabric router config the ring transport needs for this model's hidden size (dispatch_fabric2d sends a
-    whole bf16 token page plus 64 B per packet; the fabric default of 4352 B is below the 26B's 5632 + 64 B): read
-    from the HF config at collection, the 26B width when the config is not readable there."""
-    from models.demos.gemma4.tt.experts.dispatch_prefill import ring_fabric_router_config
+def _skip_unless_ring_payload_fits(hidden):
+    """dispatch_fabric2d sends a whole bf16 token page plus 64 B per fabric packet and refuses more than the fabric
+    max payload (4352 B by default). Opening the mesh with a raised router config (6528 B for the 26B's 2816-wide
+    hidden) hangs the loop-wired QB2 inside the op (tt-metal CI at ca39639f7c1, bh_quietbox_2: DispatchFabric running,
+    the board left with eth firmware not ready), so a model whose token exceeds the default is skipped here; the
+    planner refuses the ring for it at runtime (ring_transport_reason) and test_dispatch_ring_payload_host.py pins
+    the numbers. The ring transport is unit-only: no served configuration selects it."""
+    from models.demos.gemma4.tt.experts.dispatch_prefill import (
+        FABRIC_DEFAULT_PAYLOAD_BYTES,
+        ring_payload_required_bytes,
+    )
 
-    try:
-        hidden = int(TestFactory.create_hf_text_config().hidden_size)
-    except Exception:  # noqa: BLE001 - no model path at collection: size for the 26B
-        hidden = 2816
-    return ring_fabric_router_config(hidden)
+    need = ring_payload_required_bytes(hidden)
+    if need > FABRIC_DEFAULT_PAYLOAD_BYTES:
+        pytest.skip(
+            f"26B token payload exceeds the fabric default ({need} B > {FABRIC_DEFAULT_PAYLOAD_BYTES} B); upstream "
+            "dispatch_fabric2d cannot carry it on this build"
+        )
 
 
 # single-row meshes (the 4-chip and 8-chip entries) dispatch along their columns over the hop-forwarding
@@ -94,14 +101,14 @@ def _ring_router_config():
     not is_blackhole(), reason="token-dispatch prefill runs the Blackhole-only unified_routed_expert_ffn"
 )
 @parametrize_mesh_with_fabric(
-    mesh_shapes=[(1, 4), (1, 8)],
-    device_params_extra={"fabric_config": lanes_fabric_config(), "fabric_router_config": _ring_router_config()},
+    mesh_shapes=[(1, 4), (1, 8)], device_params_extra={"fabric_config": lanes_fabric_config()}
 )
 @pytest.mark.parametrize("seq_len", [128, 1024, 4096 + 128], ids=["prefill_128", "prefill_1024", "prefill_4224"])
 def test_experts_dispatch_ring(seq_len, mesh_device, reset_seeds, request, monkeypatch):
     """Token-dispatch prefill on the ring transport (single-row mesh) vs the HF reference."""
     if lanes_fabric_config() != ttnn.FabricConfig.FABRIC_1D_RING:
         pytest.skip("the ring transport (dispatch_fabric2d / combine_fabric2d) needs FABRIC_1D_RING")
+    _skip_unless_ring_payload_fits(int(TestFactory.create_hf_text_config().hidden_size))
     monkeypatch.setenv("GEMMA4_MOE_DISPATCH_PREFILL", "1")
     monkeypatch.setenv("GEMMA4_MOE_DISPATCH_RING", "1")
     monkeypatch.setenv("GEMMA4_MOE_DISPATCH_MIN_TOKENS", "128")

@@ -6,6 +6,7 @@ write, never when the last writer was prefill (the host-unchanged shortcut then 
 
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from models.demos.gemma4.tt.generator import Gemma4Generator
@@ -110,6 +111,7 @@ def test_install_pads_and_compares_each_distinct_table_once(monkeypatch):
 
 
 def test_batch_pad_keeps_group_tables_shared():
+    pytest.importorskip("vllm")  # generator_vllm imports vLLM; the unit jobs run without it
     from models.demos.gemma4.tt.generator_vllm import Gemma4ForCausalLM
 
     stub = SimpleNamespace(model_args=[SimpleNamespace(max_batch_size=32)])
@@ -160,6 +162,7 @@ def test_process_output_prefill_takes_a_one_row_host_tensor():
 
 
 def test_prefill_phase_line_sums_the_models():
+    pytest.importorskip("vllm")
     from models.demos.gemma4.tt.generator_vllm import Gemma4ForCausalLM
 
     stub = SimpleNamespace(

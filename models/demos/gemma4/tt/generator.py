@@ -2954,9 +2954,12 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         bounded_sliding_kv_cache=False,
         multimodal: bool = True,
         vision_dtype=ttnn.bfloat8_b,
+        load_tokenizer: bool = True,
     ):
-        tokenizer = _load_text_tokenizer(model_path)
-        if not hasattr(tokenizer, "stop_tokens"):
+        """``load_tokenizer=False``: no tokenizer at all (``generator.tokenizer`` is None) for callers that feed
+        token ids themselves (the prefill unit tests on a weights-only cache: no tokenizer backend needed)."""
+        tokenizer = _load_text_tokenizer(model_path) if load_tokenizer else None
+        if tokenizer is not None and not hasattr(tokenizer, "stop_tokens"):
             tokenizer.stop_tokens = [tokenizer.eos_token_id]
 
         model_args, model, tt_kv_cache, state_dict = create_tt_model(

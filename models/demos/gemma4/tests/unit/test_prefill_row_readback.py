@@ -14,7 +14,7 @@ import torch
 
 import ttnn
 
-from ..test_factory import TestFactory, _get_model_path, parametrize_mesh_with_fabric
+from ..test_factory import TestFactory, _get_model_path, parametrize_mesh_with_fabric, skip_if_config_only_checkpoint
 from .tracy_prefill_common import build_prefill_trace_fixtures, load_prefill_trace_generator
 
 PREFILL_LEN = int(os.environ.get("GEMMA4_ROW_READBACK_LEN", "128"))
@@ -28,6 +28,7 @@ def _row(out):
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(4, 1)], device_params_extra={"trace_region_size": 512_000_000})
 def test_prefill_row_readback_matches_tile_readback(mesh_device, reset_seeds, request, monkeypatch):
+    skip_if_config_only_checkpoint()  # needs the weights; the token ids are fixtures, no tokenizer is loaded
     hf_config = TestFactory.create_hf_config()
     if int(getattr(hf_config, "hidden_size_per_layer_input", 0) or 0) > 0:
         pytest.skip("PLI models disable prefill trace")

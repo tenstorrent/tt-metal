@@ -87,6 +87,7 @@ def load_prefill_trace_generator(mesh_device, model_path, fixtures):
     # bounded sliding per the demo resolution (policy + GEMMA4_BOUNDED_SLIDING), so the short-prefill trace opt-in
     # (GEMMA4_TRACE_SHORT_PREFILL=1) can be exercised under the served bounded configuration
     bounded = _resolve_bounded_sliding(fixtures["max_seq_len"], mesh_device, model_path)
+    # the fixtures are token ids: no tokenizer (a weights-only cache, such as the CI's, has no tokenizer backend)
     generator, kv_caches, _tokenizer = Gemma4Generator.from_pretrained(
         mesh_device=mesh_device,
         model_path=model_path,
@@ -94,6 +95,7 @@ def load_prefill_trace_generator(mesh_device, model_path, fixtures):
         max_seq_len=fixtures["max_seq_len"],
         paged_attention_config=fixtures["paged_cfg"],
         bounded_sliding_kv_cache=bounded,
+        load_tokenizer=False,
     )
     if bounded:
         # the served bounded configuration: ring-local page tables for the sliding layers (hybrid KV groups)
