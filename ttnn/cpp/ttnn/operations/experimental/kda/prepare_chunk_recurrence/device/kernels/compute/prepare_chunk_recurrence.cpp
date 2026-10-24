@@ -46,47 +46,62 @@ constexpr uint32_t max_dst_tiles =
 
 enum class ElementwiseBinaryOp { Add, Subtract, Multiply };
 
-// Compute out[Mt,Nt] = A[Mt,Kt] @ (transpose_b ? B[Nt,Kt]^T : B[Kt,Nt]) in the largest rectangular
-// subblocks that exactly divide the output and fit in destination registers.
+// Compute out_i[Mt,Nt] = A_i[Mt,Kt] @ (transpose_b ? B_i[Nt,Kt]^T : B_i[Kt,Nt]) for `items` independent products, in
+// the largest rectangular subblocks that exactly divide the output and fit in destination registers. Item i's
+// matrices follow item i-1's in each buffer; a shared A is the one matrix at the front of a.
 template <uint32_t Mt, uint32_t Kt, uint32_t Nt, bool Tr, typename DFB0, typename DFB1, typename DFB2>
-KDA_PREP_HELPER void matmul_blocks(DFB0& a, DFB1& b, DFB2& o) {
+KDA_PREP_HELPER void matmul_blocks(DFB0& a, bool a_shared, DFB1& b, DFB2& o, uint32_t items) {
     constexpr uint32_t subblock_columns = kda::MatmulSubblock<Mt, Nt>::columns;
     constexpr uint32_t subblock_rows = kda::MatmulSubblock<Mt, Nt>::rows;
     const uint32_t a_id = a.get_id();
     const uint32_t b_id = b.get_id();
     const uint32_t o_id = o.get_id();
 
-    o.reserve_back(Mt * Nt);
+    o.reserve_back(items * Mt * Nt);
     // Matmul maps in0=a_id->srcB and in1=b_id->srcA. Reconfigure unpack formats explicitly because init only
     // asserts formats; otherwise mixed fp32/bf16 CBs are read in the wrong format.
     reconfig_data_format(b_id, a_id);
     matmul_block_init(a_id, b_id, Tr, subblock_columns, subblock_rows, Kt);
-    for (uint32_t mi = 0; mi < Mt; mi += subblock_rows) {
-        for (uint32_t ni = 0; ni < Nt; ni += subblock_columns) {
-            tile_regs_acquire();
-            for (uint32_t ki = 0; ki < Kt; ki++) {
-                // kt_dim describes operand geometry; each K slice is still issued explicitly. B^T is stored
-                // [Nt,Kt], while the non-transposed B is stored [Kt,Nt].
-                const uint32_t b_index = Tr ? ni * Kt + ki : ki * Nt + ni;
-                matmul_block(a_id, b_id, mi * Kt + ki, b_index, 0, Tr, subblock_columns, subblock_rows, Kt);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t row = 0; row < subblock_rows; row++) {
-#pragma GCC unroll 1
-                for (uint32_t column = 0; column < subblock_columns; column++) {
-                    pack_tile(row * subblock_columns + column, o_id, (mi + row) * Nt + ni + column);
+    for (uint32_t item = 0; item < items; ++item) {
+        const uint32_t a_base = a_shared ? 0 : item * Mt * Kt;
+        const uint32_t b_base = item * Kt * Nt;
+        const uint32_t o_base = item * Mt * Nt;
+        for (uint32_t mi = 0; mi < Mt; mi += subblock_rows) {
+            for (uint32_t ni = 0; ni < Nt; ni += subblock_columns) {
+                tile_regs_acquire();
+                for (uint32_t ki = 0; ki < Kt; ki++) {
+                    // kt_dim describes operand geometry; each K slice is still issued explicitly. B^T is stored
+                    // [Nt,Kt], while the non-transposed B is stored [Kt,Nt].
+                    const uint32_t b_index = Tr ? ni * Kt + ki : ki * Nt + ni;
+                    matmul_block(
+                        a_id,
+                        b_id,
+                        a_base + mi * Kt + ki,
+                        b_base + b_index,
+                        0,
+                        Tr,
+                        subblock_columns,
+                        subblock_rows,
+                        Kt);
                 }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t row = 0; row < subblock_rows; row++) {
+#pragma GCC unroll 1
+                    for (uint32_t column = 0; column < subblock_columns; column++) {
+                        pack_tile(row * subblock_columns + column, o_id, o_base + (mi + row) * Nt + ni + column);
+                    }
+                }
+                tile_regs_release();
             }
-            tile_regs_release();
         }
     }
-    o.push_back(Mt * Nt);
+    o.push_back(items * Mt * Nt);
 }
 
 // Tilewise binary operation, shared by every elementwise stage and by the batched inverse, where the core's work
 // items run each stage together, up to max_dst_tiles items per destination-register acquire, so the inverse pays
-// its ~20 dependent stages once per core rather than once per item.
+// its ~17 dependent stages once per core rather than once per item.
 // a's tile for item i is a_base + i (or a_base alone when a is a shared constant), likewise b. Out of line, with the
 // operation a runtime argument: the program sits at the kernel-config size limit.
 template <typename DFB0, typename DFB1, typename DFB2>
@@ -265,28 +280,39 @@ KDA_PREP_HELPER void multiply_by_column_then(DFB0& a, DFB1& col, DFB2& b, DFB3& 
     o.push_back(output_tiles);
 }
 
-// out = (a[1,Kt] @ b[1,Kt]^T) * mask, one tile: the product stays in DST and the mask multiplies it as srcA (FP32).
+// out_i = (a_i[1,Kt] @ b_i[1,Kt]^T) * mask, one tile per item: each product stays in DST and the mask multiplies it
+// as srcA (FP32). A destination acquire holds up to max_dst_tiles items' products.
 template <uint32_t Kt, typename DFB0, typename DFB1, typename DFB2, typename DFB3>
-KDA_PREP_HELPER void matmul_transposed_masked(DFB0& a, DFB1& b, DFB2& mask, DFB3& o) {
+KDA_PREP_HELPER void matmul_transposed_masked(DFB0& a, DFB1& b, DFB2& mask, DFB3& o, uint32_t items) {
     const uint32_t a_id = a.get_id();
     const uint32_t b_id = b.get_id();
     const uint32_t mask_id = mask.get_id();
     const uint32_t o_id = o.get_id();
-    o.reserve_back(1);
-    reconfig_data_format(b_id, a_id);
-    matmul_block_init(a_id, b_id, true, 1, 1, Kt);
-    tile_regs_acquire();
-    for (uint32_t k = 0; k < Kt; ++k) {
-        matmul_block(a_id, b_id, k, k, 0, true, 1, 1, Kt);
+    o.reserve_back(items);
+    for (uint32_t first = 0; first < items; first += max_dst_tiles) {
+        const uint32_t count = items - first < max_dst_tiles ? items - first : max_dst_tiles;
+        reconfig_data_format(b_id, a_id);
+        matmul_block_init(a_id, b_id, true, 1, 1, Kt);
+        tile_regs_acquire();
+        for (uint32_t item = 0; item < count; ++item) {
+            const uint32_t base = (first + item) * Kt;
+            for (uint32_t k = 0; k < Kt; ++k) {
+                matmul_block(a_id, b_id, base + k, base + k, item, true, 1, 1, Kt);
+            }
+        }
+        reconfig_data_format(mask_id, mask_id);
+        mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(mask_id);
+        for (uint32_t item = 0; item < count; ++item) {
+            mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(mask_id, 0, item);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t item = 0; item < count; ++item) {
+            pack_tile(item, o_id, first + item);
+        }
+        tile_regs_release();
     }
-    reconfig_data_format(mask_id, mask_id);
-    mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(mask_id);
-    mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(mask_id, 0, 0);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(0, o_id, 0);
-    tile_regs_release();
-    o.push_back(1);
+    o.push_back(items);
 }
 
 // out[n] = A[n] * row[n]  (broadcast row 0 of each `row` tile down its tile)
@@ -462,7 +488,6 @@ KDA_PREP_HELPER void reduce_squared_rows_to_inverse_norms(
 }
 
 template <
-    uint32_t RowTiles,
     uint32_t ColumnTiles,
     bool Scale,
     uint32_t SquaredDfb,
@@ -474,23 +499,24 @@ template <
 KDA_PREP_HELPER void normalize_l2_rows(
     DFB0& input,
     DFB1& normalized,
+    uint32_t row_tiles,
     uint32_t eps_bits,
     uint32_t scale_bits,
 
     // intermediate
     DFB2& squared,
     DFB3& inverse_norms) {
-    constexpr uint32_t matrix_tiles = RowTiles * ColumnTiles;
+    const uint32_t matrix_tiles = row_tiles * ColumnTiles;
 
     square_tiles(input, squared, matrix_tiles);
 
     reduce_squared_rows_to_inverse_norms<Scale, SquaredDfb, InverseNormsDfb>(
-        RowTiles, ColumnTiles, eps_bits, scale_bits);
+        row_tiles, ColumnTiles, eps_bits, scale_bits);
 
-    inverse_norms.wait_front(RowTiles);
-    multiply_by_column(input, inverse_norms, normalized, RowTiles, ColumnTiles);
+    inverse_norms.wait_front(row_tiles);
+    multiply_by_column(input, inverse_norms, normalized, row_tiles, ColumnTiles);
     normalized.wait_front(matrix_tiles);
-    inverse_norms.pop_front(RowTiles);
+    inverse_norms.pop_front(row_tiles);
     input.pop_front(matrix_tiles);
 }
 
@@ -499,61 +525,72 @@ KDA_PREP_HELPER void normalize_l2_rows(
 // (two SFPU iterations, as for the anchor's exponential); BF16 widens exactly into the FP32 destination, and the FP32
 // transpose is exact. The rest of each beta tile is unspecified.
 template <uint32_t Ct, typename DFB0, typename DFB1, typename DFB2>
-KDA_PREP_HELPER void activate_beta(DFB0& logits, DFB1& beta_row, DFB2& beta) {
-    beta_row.reserve_back(Ct);
-    reconfig_data_format_srca(logits.get_id());
-    pack_reconfig_data_format(beta_row.get_id());
-    copy_init(logits.get_id());
+KDA_PREP_HELPER void activate_beta(DFB0& logits, DFB1& beta_row, DFB2& beta, uint32_t items) {
+    const uint32_t tiles = items * Ct;
+    const uint32_t logits_id = logits.get_id();
+    const uint32_t row_id = beta_row.get_id();
+    beta_row.reserve_back(tiles);
+    reconfig_data_format_srca(logits_id);
+    pack_reconfig_data_format(row_id);
+    copy_init(logits_id);
     sigmoid_tile_init<false>();
-    for (uint32_t tile = 0; tile < Ct; ++tile) {
+    for (uint32_t block_start = 0; block_start < tiles; block_start += max_dst_tiles) {
+        const uint32_t block_tiles = (tiles - block_start < max_dst_tiles) ? tiles - block_start : max_dst_tiles;
         tile_regs_acquire();
-        copy_tile(logits.get_id(), tile, 0);
-        sigmoid_tile<VectorMode::R, false, DST_ACCUM_MODE, 2>(0);
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            copy_tile(logits_id, block_start + tile, tile);
+            sigmoid_tile<VectorMode::R, false, DST_ACCUM_MODE, 2>(tile);
+        }
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, beta_row.get_id(), tile);
+#pragma GCC unroll 1
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            pack_tile(tile, row_id, block_start + tile);
+        }
         tile_regs_release();
     }
-    beta_row.push_back(Ct);
-    logits.pop_front(Ct);
-    beta_row.wait_front(Ct);
-    transpose_tile_row_to_column(beta_row, beta, Ct);
-    beta_row.pop_front(Ct);
+    beta_row.push_back(tiles);
+    logits.pop_front(tiles);
+    beta_row.wait_front(tiles);
+    transpose_tile_row_to_column(beta_row, beta, tiles);
+    beta_row.pop_front(tiles);
 }
 
 template <uint32_t Ct, uint32_t Vt, typename DFB0, typename DFB1, typename DFB2>
-KDA_PREP_HELPER void prepare_v_beta(DFB0& v, DFB1& beta, DFB2& v_beta) {
-    constexpr uint32_t chunk_value_tiles = Ct * Vt;
-    multiply_by_column(v, beta, v_beta, Ct, Vt);
-    v.pop_front(chunk_value_tiles);
+KDA_PREP_HELPER void prepare_v_beta(DFB0& v, DFB1& beta, DFB2& v_beta, uint32_t items) {
+    multiply_by_column(v, beta, v_beta, items * Ct, Vt);
+    v.pop_front(items * Ct * Vt);
 }
 
-// out = a @ b - c for a one-tile a and the row of Nt tiles b: the product stays in DST and the subtraction takes it
-// as srcA (in FP32, c's format), so it never round-trips through a buffer.
+// out_i = a @ b_i - c_i for a shared one-tile a and each item's row of Nt tiles b_i: the product stays in DST and the
+// subtraction takes it as srcA (in FP32, c's format), so it never round-trips through a buffer.
 template <uint32_t Nt, typename DFB0, typename DFB1, typename DFB2, typename DFB3>
-KDA_PREP_HELPER void matmul_row_minus(DFB0& a, DFB1& b, DFB2& c, DFB3& o) {
+KDA_PREP_HELPER void matmul_row_minus(DFB0& a, DFB1& b, DFB2& c, DFB3& o, uint32_t items) {
     static_assert(Nt <= max_dst_tiles, "the product row fills one DST acquire");
     const uint32_t a_id = a.get_id();
     const uint32_t b_id = b.get_id();
     const uint32_t c_id = c.get_id();
     const uint32_t o_id = o.get_id();
-    o.reserve_back(Nt);
-    reconfig_data_format(b_id, a_id);
-    matmul_block_init(a_id, b_id, false, Nt, 1, 1);
-    tile_regs_acquire();
-    matmul_block(a_id, b_id, 0, 0, 0, false, Nt, 1, 1);
-    reconfig_data_format(c_id, c_id);
-    sub_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(c_id);
-    for (uint32_t tile = 0; tile < Nt; ++tile) {
-        sub_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(c_id, tile, tile);
+    o.reserve_back(items * Nt);
+    for (uint32_t item = 0; item < items; ++item) {
+        const uint32_t base = item * Nt;
+        reconfig_data_format(b_id, a_id);
+        matmul_block_init(a_id, b_id, false, Nt, 1, 1);
+        tile_regs_acquire();
+        matmul_block(a_id, b_id, 0, base, 0, false, Nt, 1, 1);
+        reconfig_data_format(c_id, c_id);
+        sub_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(c_id);
+        for (uint32_t tile = 0; tile < Nt; ++tile) {
+            sub_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(c_id, base + tile, tile);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t tile = 0; tile < Nt; ++tile) {
+            pack_tile(tile, o_id, base + tile);
+        }
+        tile_regs_release();
     }
-    tile_regs_commit();
-    tile_regs_wait();
-    for (uint32_t tile = 0; tile < Nt; ++tile) {
-        pack_tile(tile, o_id, tile);
-    }
-    tile_regs_release();
-    o.push_back(Nt);
+    o.push_back(items * Nt);
 }
 
 // exp(x) into exponential and its precise reciprocal exp(-x) into inverse, from one unpack of x: half a DST acquire
@@ -610,7 +647,8 @@ template <
     typename DFB3,
     typename DFB4,
     typename DFB5,
-    typename DFB6>
+    typename DFB6,
+    typename DFB7>
 KDA_PREP_HELPER void prepare_gate_factors(
     DFB0& g,
     DFB1& prefix_sum_mask,
@@ -618,43 +656,111 @@ KDA_PREP_HELPER void prepare_gate_factors(
     DFB3& centered_decay,
     DFB4& centered_inverse_decay,
     DFB5& anchor_decay,
+    uint32_t items,
 
     // intermediate
-    DFB6& anchor_g) {
-    constexpr uint32_t chunk_key_tiles = Ct * Kt;
+    DFB6& centered_g,
+    DFB7& anchor_g) {
+    const uint32_t key_tiles = items * Ct * Kt;
 
     // G = cumsum(g). Anchor the separable pairwise factors at G_last/2 so neither
     // exp(G-anchor) nor exp(anchor-G) spans the full chunk range: their products are
     // those of exp(G) and exp(-G), which realistic KDA gates would overflow.
     static_assert(Ct == 1, "the gate factors take one tile row per chunk");
     // The sum-broadcast matrix carries half the gate scale, so this is the anchor G_last/2, replicated.
-    matmul_blocks<Ct, Ct, Kt, false>(sum_broadcast_matrix, g, anchor_g);
-    anchor_g.wait_front(chunk_key_tiles);
+    matmul_blocks<Ct, Ct, Kt, false>(sum_broadcast_matrix, /*a_shared=*/true, g, anchor_g, items);
+    anchor_g.wait_front(key_tiles);
 
-    {
-        auto& centered_g = anchor_decay;
-        // G - anchor, the prefix sum kept in DST.
-        matmul_row_minus<Kt>(prefix_sum_mask, g, anchor_g, centered_g);
-        centered_g.wait_front(chunk_key_tiles);
-        g.pop_front(chunk_key_tiles);
-        // exp(G-anchor) and its precise reciprocal exp(anchor-G).
-        exponential_and_reciprocal(centered_g, centered_decay, centered_inverse_decay, chunk_key_tiles);
-        centered_decay.wait_front(chunk_key_tiles);
-        centered_inverse_decay.wait_front(chunk_key_tiles);
-        centered_g.pop_front(chunk_key_tiles);
-    }
+    // G - anchor, the prefix sum kept in DST.
+    matmul_row_minus<Kt>(prefix_sum_mask, g, anchor_g, centered_g, items);
+    centered_g.wait_front(key_tiles);
+    g.pop_front(key_tiles);
 
     // exp(G_last/2) is row-replicated and the broadcasts read only row 0, so only the face rows holding it are
     // computed. That takes two SFPU iterations: one leaves part of row 0 unwritten, and kd, q_decay, k_dec_t and
     // final_decay come out wrong.
-    exponential_tiles<VectorMode::R, 2>(anchor_g, anchor_decay, chunk_key_tiles);
-    anchor_decay.wait_front(chunk_key_tiles);
-    anchor_g.pop_front(chunk_key_tiles);
+    exponential_tiles<VectorMode::R, 2>(anchor_g, anchor_decay, key_tiles);
+    anchor_decay.wait_front(key_tiles);
+    anchor_g.pop_front(key_tiles);
+
+    // exp(G-anchor) and its precise reciprocal exp(anchor-G). The anchor's buffer is free again for centered_decay.
+    exponential_and_reciprocal(centered_g, centered_decay, centered_inverse_decay, key_tiles);
+    centered_decay.wait_front(key_tiles);
+    centered_inverse_decay.wait_front(key_tiles);
+    centered_g.pop_front(key_tiles);
 }
 
+// dl [K,1] = exp(G_last) as a column: exp(G_last / 2)^2, squared in FP32 from the anchor's rows, then the transpose of
+// any replicated row. Leaves the packer in the rows' format.
+template <uint32_t Ct, uint32_t Kt, typename DFB0, typename DFB1, typename DFB2>
+KDA_PREP_HELPER void prepare_final_decay(
+    DFB0& anchor_decay,
+    DFB1& final_decay,
+    uint32_t items,
+
+    // intermediate
+    DFB2& final_decay_rows) {
+    const uint32_t key_tiles = items * Ct * Kt;
+    square_tiles(anchor_decay, final_decay_rows, key_tiles);
+    final_decay_rows.wait_front(key_tiles);
+    pack_reconfig_data_format(final_decay_rows.get_id(), final_decay.get_id());
+    transpose_tile_row_to_column(final_decay_rows, final_decay, items * Kt);
+    final_decay_rows.pop_front(key_tiles);
+    pack_reconfig_data_format(final_decay.get_id(), final_decay_rows.get_id());
+}
+
+// q_decay = q*exp(G) from the normalized q, through q_pairwise = q*exp(G-anchor), which the pairwise product reads.
+// The packer starts and ends in the FP32 intermediates' format.
 template <
     uint32_t Ct,
     uint32_t Kt,
+    uint32_t SquaredDfb,
+    uint32_t InverseNormsDfb,
+    uint32_t SCALE_BITS,
+    uint32_t EPS_BITS,
+    typename DFB0,
+    typename DFB1,
+    typename DFB2,
+    typename DFB3,
+    typename DFB4,
+    typename DFB5,
+    typename DFB6,
+    typename DFB7>
+KDA_PREP_HELPER void prepare_q_terms(
+    DFB0& q,
+    DFB1& centered_decay,
+    DFB2& anchor_decay,
+    DFB3& q_decay,
+    DFB4& q_pairwise,
+    uint32_t items,
+
+    // intermediate
+    DFB5& normalized_q,
+    DFB6& squared,
+    DFB7& inverse_norms) {
+    const uint32_t key_tiles = items * Ct * Kt;
+
+    normalize_l2_rows<Kt, true, SquaredDfb, InverseNormsDfb>(
+        q, normalized_q, items * Ct, EPS_BITS, SCALE_BITS, squared, inverse_norms);
+    elementwise_binary<ElementwiseBinaryOp::Multiply>(normalized_q, centered_decay, q_pairwise, key_tiles);
+    q_pairwise.wait_front(key_tiles);  // q*exp(G-anchor)
+    normalized_q.pop_front(key_tiles);
+
+    // The scan-facing factor exp(G) = exp(G-anchor) * exp(anchor) reuses the anchored product.
+    pack_reconfig_data_format(q_pairwise.get_id(), q_decay.get_id());
+    multiply_by_row(q_pairwise, anchor_decay, q_decay, key_tiles);
+    pack_reconfig_data_format(q_decay.get_id(), q_pairwise.get_id());
+}
+
+// kd = beta*k*exp(G) from the normalized k, through k_beta_pairwise = beta*k*exp(G-anchor) and
+// k_pairwise = k*exp(anchor-G), which the pairwise products read. Releases beta and both centered decays. The packer
+// starts and ends in the FP32 intermediates' format.
+template <
+    uint32_t Ct,
+    uint32_t Kt,
+    uint32_t SquaredDfb,
+    uint32_t InverseNormsDfb,
+    uint32_t EPS_BITS,
     typename DFB0,
     typename DFB1,
     typename DFB2,
@@ -663,53 +769,43 @@ template <
     typename DFB5,
     typename DFB6,
     typename DFB7,
-    typename DFB8>
-KDA_PREP_HELPER void prepare_scan_and_pairwise_inputs(
-    DFB0& normalized_q,
-    DFB1& normalized_k,
-    DFB2& beta,
-    DFB3& anchor_decay,
-    DFB4& centered_decay,
-    DFB5& q_decay,
-    DFB6& kd,
-    DFB7& k_beta_pairwise,
-    DFB8& q_pairwise) {
-    constexpr uint32_t chunk_key_tiles = Ct * Kt;
+    typename DFB8,
+    typename DFB9,
+    typename DFB10>
+KDA_PREP_HELPER void prepare_k_terms(
+    DFB0& k,
+    DFB1& beta,
+    DFB2& centered_decay,
+    DFB3& centered_inverse_decay,
+    DFB4& anchor_decay,
+    DFB5& kd,
+    DFB6& k_beta_pairwise,
+    DFB7& k_pairwise,
+    uint32_t items,
+
+    // intermediate
+    DFB8& normalized_k,
+    DFB9& squared,
+    DFB10& inverse_norms) {
+    const uint32_t key_tiles = items * Ct * Kt;
+
+    normalize_l2_rows<Kt, false, SquaredDfb, InverseNormsDfb>(
+        k, normalized_k, items * Ct, EPS_BITS, /*scale_bits=*/0, squared, inverse_norms);
 
     // beta*k*exp(G-anchor), beta*k kept in DST.
-    multiply_by_column_then(normalized_k, beta, centered_decay, k_beta_pairwise, Ct, Kt);
-    k_beta_pairwise.wait_front(chunk_key_tiles);
-    beta.pop_front(Ct);
-    elementwise_binary<ElementwiseBinaryOp::Multiply>(normalized_q, centered_decay, q_pairwise, chunk_key_tiles);
-    q_pairwise.wait_front(chunk_key_tiles);  // q*exp(G-anchor)
-    normalized_q.pop_front(chunk_key_tiles);
-    centered_decay.pop_front(chunk_key_tiles);
+    multiply_by_column_then(normalized_k, beta, centered_decay, k_beta_pairwise, items * Ct, Kt);
+    k_beta_pairwise.wait_front(key_tiles);
+    beta.pop_front(items * Ct);
+    centered_decay.pop_front(key_tiles);
 
-    // The scan-facing factors exp(G) = exp(G-anchor) * exp(anchor) reuse the anchored products.
-    pack_reconfig_data_format(q_pairwise.get_id(), q_decay.get_id());
-    multiply_by_row(q_pairwise, anchor_decay, q_decay, chunk_key_tiles);
-    pack_reconfig_data_format(q_decay.get_id(), kd.get_id());
-    multiply_by_row(k_beta_pairwise, anchor_decay, kd, chunk_key_tiles);
+    elementwise_binary<ElementwiseBinaryOp::Multiply>(normalized_k, centered_inverse_decay, k_pairwise, key_tiles);
+    k_pairwise.wait_front(key_tiles);  // k*exp(anchor-G)
+    normalized_k.pop_front(key_tiles);
+    centered_inverse_decay.pop_front(key_tiles);
+
+    pack_reconfig_data_format(k_pairwise.get_id(), kd.get_id());
+    multiply_by_row(k_beta_pairwise, anchor_decay, kd, key_tiles);
     pack_reconfig_data_format(kd.get_id(), k_beta_pairwise.get_id());
-}
-
-// exp(G_last) = exp(G_last / 2)^2, squared in FP32 from the anchor's rows, of which the transpose to dl reads row 0.
-template <uint32_t Ct, uint32_t Kt, typename DFB0, typename DFB1>
-KDA_PREP_HELPER void prepare_final_decay_rows(DFB0& anchor_decay, DFB1& final_decay_rows) {
-    constexpr uint32_t chunk_key_tiles = Ct * Kt;
-    square_tiles(anchor_decay, final_decay_rows, chunk_key_tiles);
-    final_decay_rows.wait_front(chunk_key_tiles);
-}
-
-template <uint32_t Ct, uint32_t Kt, typename DFB0, typename DFB1, typename DFB2>
-KDA_PREP_HELPER void prepare_k_pairwise(DFB0& normalized_k, DFB1& centered_inverse_decay, DFB2& k_pairwise) {
-    constexpr uint32_t chunk_key_tiles = Ct * Kt;
-
-    elementwise_binary<ElementwiseBinaryOp::Multiply>(
-        normalized_k, centered_inverse_decay, k_pairwise, chunk_key_tiles);
-    k_pairwise.wait_front(chunk_key_tiles);  // k*exp(anchor-G)
-    normalized_k.pop_front(chunk_key_tiles);
-    centered_inverse_decay.pop_front(chunk_key_tiles);
 }
 
 template <
@@ -720,51 +816,57 @@ template <
     typename DFB2,
     typename DFB3,
     typename DFB4,
-    typename DFB5,
-    typename DFB6>
+    typename DFB5>
 KDA_PREP_HELPER void prepare_pairwise_matrices(
-    DFB0& k_beta_pairwise, DFB1& q_pairwise, DFB2& k_pairwise, DFB3& causal_mask, DFB4& akk, DFB5& intra, DFB6& aqk) {
-    constexpr uint32_t chunk_matrix_tiles = Ct * Ct;
-    constexpr uint32_t chunk_key_tiles = Ct * Kt;
+    DFB0& k_beta_pairwise,
+    DFB1& q_pairwise,
+    DFB2& k_pairwise,
+    DFB3& causal_mask,
+    DFB4& akk,
+    DFB5& intra,
+    uint32_t items) {
+    const uint32_t key_tiles = items * Ct * Kt;
 
-    // Materialize both anchored pairwise products, then release k_beta_pairwise/q_pairwise before
-    // their whole-row storage is reused. Aqk uses separate single-tile scratch; only its masked value reaches
-    // writer-facing intra; publishing the raw matrix creates a second consumer race.
-    matmul_blocks<Ct, Kt, Ct, true>(k_beta_pairwise, k_pairwise, akk);
-    akk.wait_front(chunk_matrix_tiles);  // raw beta*k_i*k_j*exp(G_i-G_j)
-    k_beta_pairwise.pop_front(chunk_key_tiles);
+    // Raw beta*k_i*k_j*exp(G_i-G_j), which the batched inverse reads after the last batch.
+    matmul_blocks<Ct, Kt, Ct, true>(k_beta_pairwise, /*a_shared=*/false, k_pairwise, akk, items);
+    k_beta_pairwise.pop_front(key_tiles);
 
     // tril(q_i*k_j*exp(G_i-G_j)), the raw product kept in DST.
     static_assert(Ct == 1, "the masked pairwise product is one tile per chunk");
-    matmul_transposed_masked<Kt>(q_pairwise, k_pairwise, causal_mask, intra);
-    q_pairwise.pop_front(chunk_key_tiles);
+    matmul_transposed_masked<Kt>(q_pairwise, k_pairwise, causal_mask, intra, items);
+    q_pairwise.pop_front(key_tiles);
 }
 
-template <uint32_t Ct, uint32_t Kt, typename DFB0, typename DFB1, typename DFB2, typename DFB3, typename DFB4>
-KDA_PREP_HELPER void prepare_decay_outputs(
-    DFB0& k_pairwise, DFB1& anchor_decay, DFB2& final_decay_rows, DFB3& k_dec_t, DFB4& final_decay) {
-    constexpr uint32_t chunk_key_tiles = Ct * Kt;
+// k_dec_t = (kr * exp(G_last))^T, from k_pairwise and the anchor's rows, which it releases. Leaves the packer in the
+// intermediate's format.
+template <uint32_t Ct, uint32_t Kt, typename DFB0, typename DFB1, typename DFB2, typename DFB3>
+KDA_PREP_HELPER void prepare_k_decay_transposed(
+    DFB0& k_pairwise,
+    DFB1& anchor_decay,
+    DFB2& k_dec_t,
+    uint32_t items,
 
-    // dl [K,1] is the transpose of any replicated exp(G_last) row.
-    transpose_tile_row_to_column(final_decay_rows, final_decay, Kt);
-    final_decay_rows.pop_front(chunk_key_tiles);
-
-    {
-        auto& k_dec = final_decay_rows;
-
-        // k_dec_t = (kr * exp(G_last))^T.
-        pack_reconfig_data_format(final_decay.get_id(), k_dec.get_id());
-        multiply_by_row(k_pairwise, anchor_decay, k_dec, chunk_key_tiles);
-        k_dec.wait_front(chunk_key_tiles);
-        k_pairwise.pop_front(chunk_key_tiles);
-        anchor_decay.pop_front(chunk_key_tiles);
-        pack_reconfig_data_format(k_dec.get_id(), k_dec_t.get_id());
-        transpose_tile_row_to_column(k_dec, k_dec_t, Kt);
-        k_dec.pop_front(chunk_key_tiles);
-    }
+    // intermediate
+    DFB3& k_dec) {
+    const uint32_t key_tiles = items * Ct * Kt;
+    multiply_by_row(k_pairwise, anchor_decay, k_dec, key_tiles);
+    k_dec.wait_front(key_tiles);
+    k_pairwise.pop_front(key_tiles);
+    anchor_decay.pop_front(key_tiles);
+    pack_reconfig_data_format(k_dec.get_id(), k_dec_t.get_id());
+    transpose_tile_row_to_column(k_dec, k_dec_t, items * Kt);
+    k_dec.pop_front(key_tiles);
+    pack_reconfig_data_format(k_dec_t.get_id(), k_dec.get_id());
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t max_items, uint32_t SCALE_BITS, uint32_t EPS_BITS>
+template <
+    uint32_t Ct,
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t max_items,
+    uint32_t batch_items,
+    uint32_t SCALE_BITS,
+    uint32_t EPS_BITS>
 TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint32_t num_chunks) {
     DataflowBuffer control(dfb::chronology_compute);
     const uint32_t valid_chunks = kda_chronology::receive(control).chunk_count();
@@ -802,8 +904,8 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     // Semantic intermediates.
     DataflowBuffer centered_inverse_decay(dfb::centered_inverse_decay);
     DataflowBuffer anchor_decay(dfb::anchor_decay);
-    DataflowBuffer normalized_q(dfb::normalized_q);
     DataflowBuffer normalized_k(dfb::normalized_k);
+    DataflowBuffer inverse_norms(dfb::inverse_norms);
     DataflowBuffer tile_workspace_0(dfb::tile_workspace_0);
     DataflowBuffer tile_workspace_1(dfb::tile_workspace_1);
     DataflowBuffer tile_workspace_2(dfb::tile_workspace_2);
@@ -814,9 +916,8 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     DataflowBuffer workspace_0(dfb::workspace_0);
     DataflowBuffer workspace_1(dfb::workspace_1);
     DataflowBuffer workspace_2(dfb::workspace_2);
-    DataflowBuffer workspace_3(dfb::workspace_3);
 
-    compute_kernel_hw_startup(dfb::q, dfb::k, dfb::workspace_3);
+    compute_kernel_hw_startup(dfb::q, dfb::k, dfb::workspace_0);
     // The reader generates the constants after publishing the first work item, the inverse's last; those are
     // awaited just before the batched inverse.
     ones.wait_front(chunk_matrix_tiles);
@@ -826,39 +927,23 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
 
     uint32_t inverse_items = 0;
     for (uint32_t work_item = 0; work_item < work_item_count; ++work_item) {
-        if ((work_item_start + work_item) % num_chunks >= valid_chunks) {
-            continue;
+        if ((work_item_start + work_item) % num_chunks < valid_chunks) {
+            ++inverse_items;
         }
-        q.wait_front(chunk_key_tiles);
-        k.wait_front(chunk_key_tiles);
-        v.wait_front(chunk_value_tiles);
-        g.wait_front(chunk_key_tiles);
-        beta_logits.wait_front(Ct);
-        activate_beta<Ct>(beta_logits, beta_row, beta);
-        beta.wait_front(Ct);
-
-        normalize_l2_rows<Ct, Kt, true, dfb::workspace_3, dfb::tile_workspace_0>(
-            q,
-            normalized_q,
-            EPS_BITS,
-            SCALE_BITS,
-            /*squared=*/workspace_3,
-            /*inverse_norms=*/tile_workspace_0);
-
-        normalize_l2_rows<Ct, Kt, false, dfb::workspace_3, dfb::tile_workspace_0>(
-            k,
-            normalized_k,
-            EPS_BITS,
-            SCALE_BITS,
-            /*squared=*/workspace_3,
-            /*inverse_norms=*/tile_workspace_0);
-
-        // PACK state persists across helpers. Reconfigure only at actual destination-format transitions.
-        pack_reconfig_data_format(normalized_k.get_id(), v_beta.get_id());
-        prepare_v_beta<Ct, Vt>(v, beta, v_beta);
-        pack_reconfig_data_format(v_beta.get_id(), workspace_0.get_id());
+    }
+    // The work items run stage by stage in batches of batch_items, every helper over the whole batch before the next,
+    // so each stage's unpack, math and pack overlap across the batch's destination-register acquires and its init,
+    // format reconfiguration and buffer handoff are paid once per batch. The per-item buffers hold one batch, and the
+    // items past the last whole batch run one at a time: every transaction then stays inside its ring, which unpack
+    // and pack do not wrap. Each item's values come from the same operations, in the same order, as one at a time.
+    // The gate factors come first, so six Kt-tile row buffers hold every live value; the PACK state persists across
+    // helpers, which leave it in the FP32 intermediates' format and reconfigure only at actual format transitions.
+    for (uint32_t done = 0; done < inverse_items;) {
+        const uint32_t items = inverse_items - done >= batch_items ? batch_items : 1;
+        const uint32_t key_tiles = items * chunk_key_tiles;
 
         auto& centered_decay = workspace_0;
+        g.wait_front(key_tiles);
         prepare_gate_factors<Ct, Kt>(
             g,
             gate_tril,
@@ -866,42 +951,64 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
             centered_decay,
             centered_inverse_decay,
             anchor_decay,
-            /*anchor_g=*/workspace_2);
+            items,
+            /*centered_g=*/workspace_1,
+            /*anchor_g=*/workspace_0);
 
-        auto& k_beta_pairwise = workspace_1;
-        auto& q_pairwise = workspace_2;
-        prepare_scan_and_pairwise_inputs<Ct, Kt>(
-            normalized_q, normalized_k, beta, anchor_decay, centered_decay, q_decay, kd, k_beta_pairwise, q_pairwise);
+        prepare_final_decay<Ct, Kt>(anchor_decay, final_decay, items, /*final_decay_rows=*/workspace_1);
 
-        auto& final_decay_rows = workspace_0;
-        prepare_final_decay_rows<Ct, Kt>(anchor_decay, final_decay_rows);
+        beta_logits.wait_front(items * Ct);
+        activate_beta<Ct>(beta_logits, beta_row, beta, items);
+        beta.wait_front(items * Ct);
 
-        auto& k_pairwise = workspace_3;
-        prepare_k_pairwise<Ct, Kt>(normalized_k, centered_inverse_decay, k_pairwise);
+        auto& q_pairwise = workspace_1;
+        q.wait_front(key_tiles);
+        prepare_q_terms<Ct, Kt, dfb::workspace_1, dfb::inverse_norms, SCALE_BITS, EPS_BITS>(
+            q,
+            centered_decay,
+            anchor_decay,
+            q_decay,
+            q_pairwise,
+            items,
+            /*normalized_q=*/workspace_2,
+            /*squared=*/workspace_1,
+            inverse_norms);
 
-        prepare_pairwise_matrices<Ct, Kt>(k_beta_pairwise, q_pairwise, k_pairwise, tril, akk, intra, tile_workspace_0);
+        v.wait_front(items * chunk_value_tiles);
+        pack_reconfig_data_format(q_pairwise.get_id(), v_beta.get_id());
+        prepare_v_beta<Ct, Vt>(v, beta, v_beta, items);
+        pack_reconfig_data_format(v_beta.get_id(), workspace_2.get_id());
 
-        pack_reconfig_data_format(intra.get_id(), final_decay.get_id());
-        prepare_decay_outputs<Ct, Kt>(k_pairwise, anchor_decay, final_decay_rows, k_decay_transposed, final_decay);
-        pack_reconfig_data_format(k_decay_transposed.get_id(), workspace_3.get_id());
+        auto& k_beta_pairwise = workspace_2;
+        auto& k_pairwise = workspace_0;
+        k.wait_front(key_tiles);
+        prepare_k_terms<Ct, Kt, dfb::workspace_2, dfb::inverse_norms, EPS_BITS>(
+            k,
+            beta,
+            centered_decay,
+            centered_inverse_decay,
+            anchor_decay,
+            kd,
+            k_beta_pairwise,
+            k_pairwise,
+            items,
+            normalized_k,
+            /*squared=*/workspace_2,
+            inverse_norms);
+
+        prepare_pairwise_matrices<Ct, Kt>(k_beta_pairwise, q_pairwise, k_pairwise, tril, akk, intra, items);
+
+        pack_reconfig_data_format(intra.get_id(), workspace_1.get_id());
+        prepare_k_decay_transposed<Ct, Kt>(k_pairwise, anchor_decay, k_decay_transposed, items, /*k_dec=*/workspace_1);
         // v_beta, kd, q_decay, intra, k_dec_t and dl stay pushed for the writer; Akk waits for the batched inverse.
-        ++inverse_items;
+        done += items;
     }
     if (inverse_items != 0) {
         eye.wait_front(chunk_matrix_tiles);
         block_masks.wait_front(3);
         // The inverse buffers hold max_items tiles. A batch of fewer items would let a later transaction cross a
-        // ring end, which unpack and pack do not wrap, so the batch is always max_items: realign tile_workspace_0,
-        // which the per-item normalizations advanced, and append zero Akk tiles (their inverses are I and
-        // the writer discards them).
-        constexpr uint32_t workspace_0_tiles_per_item = 2 * Ct;
-        for (uint32_t tile = workspace_0_tiles_per_item * inverse_items % max_items; tile != 0 && tile < max_items;
-             ++tile) {
-            tile_workspace_0.reserve_back(1);
-            tile_workspace_0.push_back(1);
-            tile_workspace_0.wait_front(1);
-            tile_workspace_0.pop_front(1);
-        }
+        // ring end, which unpack and pack do not wrap, so the batch is always max_items: append zero Akk tiles
+        // (their inverses are I and the writer discards them).
         if (inverse_items != max_items) {
             binary_items(
                 ElementwiseBinaryOp::Subtract, eye, 0, true, eye, 0, true, akk, (max_items - inverse_items) * Ct * Ct);

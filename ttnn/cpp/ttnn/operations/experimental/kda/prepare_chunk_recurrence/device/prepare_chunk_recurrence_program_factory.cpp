@@ -34,14 +34,15 @@ uint64_t prepare_chunk_recurrence_l1_bytes(const PrepareChunkRecurrenceParams& a
     const uint64_t Kt = attrs.key_dim / TILE_WIDTH;
     const uint64_t Vt = attrs.value_dim / TILE_WIDTH;
     const auto output = [&](uint32_t index) { return (attrs.output_bf16_mask >> index) & 1U ? bf16 : fp32; };
-    // The BF16 q, k, g, v and beta logits, double-buffered, and the activated beta's row and column.
-    const uint64_t inputs = 2 * (3 * Kt + Vt + 1) * bf16 + 2 * fp32;
+    constexpr uint64_t batch = prepare_chunk_recurrence_batch_items;
+    // A batch of the BF16 q, k, g, v and beta logits, and its activated beta's rows and columns and inverse norms.
+    const uint64_t inputs = batch * ((3 * Kt + Vt + 1) * bf16 + 3 * fp32);
     // eye, tril, ones, gate_tril, gate_ones and the three block masks.
     const uint64_t constants = 8 * fp32;
-    // Eight Kt-tile rows: workspace_0/1/2/3, centered_inverse_decay, anchor_decay and normalized_q/k.
-    const uint64_t intermediates = 8 * Kt * fp32;
-    // v_beta, kd, q_decay, k_dec_t, dl and intra, double-buffered.
-    const uint64_t outputs = 2 * (Vt * output(0) + Kt * (output(1) + output(2) + output(4) + output(5)) + fp32);
+    // Six Kt-tile rows per batch item: workspace_0/1/2, centered_inverse_decay, anchor_decay and normalized_k.
+    const uint64_t intermediates = batch * 6 * Kt * fp32;
+    // A batch of v_beta, kd, q_decay, k_dec_t, dl and intra.
+    const uint64_t outputs = batch * (Vt * output(0) + Kt * (output(1) + output(2) + output(4) + output(5)) + fp32);
     return inputs + constants + intermediates + outputs +
            max_items * prepare_chunk_recurrence_inverse_tiles_per_item * fp32;
 }
@@ -73,6 +74,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     // The inverse runs once over all of a core's work items, so its buffers hold one tile per item; validation
     // checks prepare_chunk_recurrence_l1_bytes, which mirrors the buffer list below, against L1.
     const uint32_t max_items = *std::max_element(distribution.wi_count.begin(), distribution.wi_count.end());
+    // The per-item buffers hold one stage batch.
+    constexpr uint32_t batch = prepare_chunk_recurrence_batch_items;
 
     const m2::KernelSpecName READER{"reader"};
     const m2::KernelSpecName WRITER{"writer"};
@@ -103,13 +106,11 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     const m2::DFBSpecName final_decay_dfb{"final_decay"};
     const m2::DFBSpecName k_decay_transposed_dfb{"k_decay_transposed"};
     const m2::DFBSpecName anchor_decay_dfb{"anchor_decay"};
-    const m2::DFBSpecName normalized_q_dfb{"normalized_q"};
     const m2::DFBSpecName normalized_k_dfb{"normalized_k"};
+    const m2::DFBSpecName inverse_norms_dfb{"inverse_norms"};
     const m2::DFBSpecName tile_workspace_0_dfb{"tile_workspace_0"};
     const m2::DFBSpecName tile_workspace_1_dfb{"tile_workspace_1"};
     const m2::DFBSpecName tile_workspace_2_dfb{"tile_workspace_2"};
-
-    const m2::DFBSpecName workspace_3_dfb{"workspace_3"};
     const m2::DFBSpecName workspace_2_dfb{"workspace_2"};
     const m2::TensorParamName Q_TENSOR{"q"};
     const m2::TensorParamName K_TENSOR{"k"};
@@ -140,42 +141,40 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
             .data_format_metadata = format};
     };
     m2::Group<m2::DataflowBufferSpec> dfb_specs = {
-        make_dfb(q_dfb, 2 * ck, bf16),
-        make_dfb(k_dfb, 2 * ck, bf16),
-        make_dfb(v_dfb, 2 * cv, bf16),
-        make_dfb(g_dfb, 2 * ck, gate_format),
-        make_dfb(beta_dfb, 2 * Ct, bf16),
-        make_dfb(beta_row_dfb, Ct, fp32),
-        make_dfb(beta_activated_dfb, Ct, fp32),
+        make_dfb(q_dfb, batch * ck, bf16),
+        make_dfb(k_dfb, batch * ck, bf16),
+        make_dfb(v_dfb, batch * cv, bf16),
+        make_dfb(g_dfb, batch * ck, gate_format),
+        make_dfb(beta_dfb, batch * Ct, bf16),
+        make_dfb(beta_row_dfb, batch * Ct, fp32),
+        make_dfb(beta_activated_dfb, batch * Ct, fp32),
         make_dfb(eye_dfb, cc, fp32),
         make_dfb(tril_dfb, cc, fp32),
         make_dfb(ones_dfb, cc, fp32),
         make_dfb(gate_tril_dfb, cc, fp32),
         make_dfb(gate_ones_dfb, cc, fp32),
         make_dfb(block_masks_dfb, 3, fp32),
-        make_dfb(workspace_0_dfb, ck, fp32),
-        make_dfb(centered_inverse_decay_dfb, ck, fp32),
+        make_dfb(workspace_0_dfb, batch * ck, fp32),
+        make_dfb(centered_inverse_decay_dfb, batch * ck, fp32),
         make_dfb(akk_dfb, max_items * cc, fp32),
         make_dfb(t_inv_dfb, max_items * cc, output_formats[6]),
-        make_dfb(v_beta_dfb, 2 * cv, output_formats[0]),
-        make_dfb(kd_dfb, 2 * ck, output_formats[1]),
-        make_dfb(q_decay_dfb, 2 * ck, output_formats[2]),
-        make_dfb(intra_dfb, 2 * cc, output_formats[3]),
-        make_dfb(workspace_1_dfb, ck, fp32),
-        make_dfb(final_decay_dfb, 2 * Kt, output_formats[5]),
-        make_dfb(k_decay_transposed_dfb, 2 * kc, output_formats[4]),
-        make_dfb(anchor_decay_dfb, ck, fp32),
-        make_dfb(normalized_q_dfb, ck, fp32),
-        make_dfb(normalized_k_dfb, ck, fp32),
+        make_dfb(v_beta_dfb, batch * cv, output_formats[0]),
+        make_dfb(kd_dfb, batch * ck, output_formats[1]),
+        make_dfb(q_decay_dfb, batch * ck, output_formats[2]),
+        make_dfb(intra_dfb, batch * cc, output_formats[3]),
+        make_dfb(workspace_1_dfb, batch * ck, fp32),
+        make_dfb(final_decay_dfb, batch * Kt, output_formats[5]),
+        make_dfb(k_decay_transposed_dfb, batch * kc, output_formats[4]),
+        make_dfb(anchor_decay_dfb, batch * ck, fp32),
+        make_dfb(normalized_k_dfb, batch * ck, fp32),
         // Row workspaces publish whole Kt-tile rows. Keep one-tile reductions and
         // inverse intermediates separate so no transaction can cross a ring end.
+        make_dfb(inverse_norms_dfb, batch * Ct, fp32),
         make_dfb(tile_workspace_0_dfb, max_items, fp32),
         // The nested inverse reads its current level while packing the next one, for every item at once.
         make_dfb(tile_workspace_1_dfb, 2 * max_items, fp32),
         make_dfb(tile_workspace_2_dfb, max_items, fp32),
-
-        make_dfb(workspace_3_dfb, ck, fp32),
-        make_dfb(workspace_2_dfb, ck, fp32),
+        make_dfb(workspace_2_dfb, batch * ck, fp32),
     };
     m2::KernelSpec reader{
         .unique_id = READER,
@@ -241,7 +240,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
                 m2::TensorBinding{FINAL_DECAY_OUTPUT, "final_decay_output"},
                 m2::TensorBinding{T_INV_OUTPUT, "t_inv_output"},
             },
-        .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"max_items", max_items}},
+        .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"max_items", max_items}, {"batch_items", batch}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
@@ -273,13 +272,11 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     unpack_modes[final_decay_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[k_decay_transposed_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[anchor_decay_dfb] = UnpackMode::UnpackToSrc;
-    unpack_modes[normalized_q_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[normalized_k_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[inverse_norms_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[tile_workspace_0_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[tile_workspace_1_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[tile_workspace_2_dfb] = UnpackMode::UnpackToSrc;
-
-    unpack_modes[workspace_3_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[workspace_2_dfb] = UnpackMode::UnpackToSrc;
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
@@ -314,19 +311,16 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
                 m2::DFBBinding{workspace_1_dfb, "workspace_1", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{anchor_decay_dfb, "anchor_decay", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{anchor_decay_dfb, "anchor_decay", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{normalized_q_dfb, "normalized_q", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{normalized_q_dfb, "normalized_q", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{normalized_k_dfb, "normalized_k", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{normalized_k_dfb, "normalized_k", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{inverse_norms_dfb, "inverse_norms", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{inverse_norms_dfb, "inverse_norms", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{tile_workspace_0_dfb, "tile_workspace_0", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{tile_workspace_0_dfb, "tile_workspace_0", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{tile_workspace_1_dfb, "tile_workspace_1", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{tile_workspace_1_dfb, "tile_workspace_1", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{tile_workspace_2_dfb, "tile_workspace_2", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{tile_workspace_2_dfb, "tile_workspace_2", m2::DFBEndpointType::CONSUMER},
-
-                m2::DFBBinding{workspace_3_dfb, "workspace_3", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{workspace_3_dfb, "workspace_3", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{workspace_2_dfb, "workspace_2", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{workspace_2_dfb, "workspace_2", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{v_beta_dfb, "v_beta", m2::DFBEndpointType::PRODUCER},
@@ -342,6 +336,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
              {"Kt", Kt},
              {"Vt", Vt},
              {"max_items", max_items},
+             {"batch_items", batch},
              {"SCALE_BITS", std::bit_cast<uint32_t>(1.0F / std::sqrt(static_cast<float>(attrs.key_dim)))},
              {"EPS_BITS", 0x358637BDU}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks"}},

@@ -11,7 +11,7 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t max_items>
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t max_items, uint32_t batch_items>
 TT_KERNEL void writer(uint32_t work_item_start, uint32_t work_item_count, uint32_t num_chunks) {
     DataflowBuffer control(dfb::chronology_writer);
     control.wait_front(1);
@@ -39,37 +39,57 @@ TT_KERNEL void writer(uint32_t work_item_start, uint32_t work_item_count, uint32
     DataflowBuffer t_inv(dfb::t_inv);
     Noc noc;
 
-    auto drain = [&](auto& buffer, const auto& accessor, uint32_t tiles, uint32_t base) {
-        buffer.wait_front(tiles);
-        for (uint32_t tile = 0; tile < tiles; ++tile) {
-            noc.async_write(
-                buffer,
-                accessor,
-                buffer.get_entry_size(),
-                {.offset_bytes = tile * buffer.get_entry_size()},
-                {.page_id = base + tile});
-        }
-        noc.async_write_barrier();
-        buffer.pop_front(tiles);
+    // Write `items` work items' tiles, `tiles` each, published together, to their pages.
+    auto drain_items =
+        [&](auto& buffer, const auto& accessor, uint32_t tiles, const uint32_t* work_items, uint32_t items) {
+            buffer.wait_front(items * tiles);
+            for (uint32_t item = 0; item < items; ++item) {
+                for (uint32_t tile = 0; tile < tiles; ++tile) {
+                    noc.async_write(
+                        buffer,
+                        accessor,
+                        buffer.get_entry_size(),
+                        {.offset_bytes = (item * tiles + tile) * buffer.get_entry_size()},
+                        {.page_id = work_items[item] * tiles + tile});
+                }
+            }
+            noc.async_write_barrier();
+            buffer.pop_front(items * tiles);
+        };
+    auto drain = [&](auto& buffer, const auto& accessor, uint32_t tiles, uint32_t work_item) {
+        drain_items(buffer, accessor, tiles, &work_item, 1);
     };
+    // Compute runs the valid work items in batches of batch_items (those past the last whole batch one at a time) and
+    // publishes each output for a whole batch, in this order.
+    uint32_t valid_items = 0;
     for (uint32_t index = 0; index < work_item_count; ++index) {
-        const uint32_t work_item = work_item_start + index;
-        if (work_item % num_chunks >= valid_chunks) {
-            continue;
+        if ((work_item_start + index) % num_chunks < valid_chunks) {
+            ++valid_items;
         }
-        drain(v_beta, v_beta_accessor, cv, work_item * cv);
-        drain(kd, kd_accessor, ck, work_item * ck);
-        drain(intra, intra_accessor, cc, work_item * cc);
-        drain(q_decay, q_decay_accessor, ck, work_item * ck);
-        drain(k_decay_transposed, k_decay_transposed_accessor, kc, work_item * kc);
-        drain(final_decay, final_decay_accessor, Kt, work_item * Kt);
+    }
+    uint32_t next = 0;
+    for (uint32_t done = 0; done < valid_items;) {
+        const uint32_t items = valid_items - done >= batch_items ? batch_items : 1;
+        uint32_t batch[batch_items];
+        for (uint32_t item = 0; item < items; ++next) {
+            if ((work_item_start + next) % num_chunks < valid_chunks) {
+                batch[item++] = work_item_start + next;
+            }
+        }
+        drain_items(final_decay, final_decay_accessor, Kt, batch, items);
+        drain_items(q_decay, q_decay_accessor, ck, batch, items);
+        drain_items(v_beta, v_beta_accessor, cv, batch, items);
+        drain_items(kd, kd_accessor, ck, batch, items);
+        drain_items(intra, intra_accessor, cc, batch, items);
+        drain_items(k_decay_transposed, k_decay_transposed_accessor, kc, batch, items);
+        done += items;
     }
     // Compute inverts every item's Akk together after the per-item terms, padded to max_items.
     uint32_t inverse_items = 0;
     for (uint32_t index = 0; index < work_item_count; ++index) {
         const uint32_t work_item = work_item_start + index;
         if (work_item % num_chunks < valid_chunks) {
-            drain(t_inv, t_inv_accessor, cc, work_item * cc);
+            drain(t_inv, t_inv_accessor, cc, work_item);
             ++inverse_items;
         }
     }
