@@ -591,6 +591,24 @@ class DeepseekV41ForCausalLM:
             if self.decoder.capture is not None and replays >= 1:
                 break
         assert self.decoder.capture is not None, "the decode step was not captured"
+        if self.decoder.c1:
+            # the one-live-row variant (V41_DECODE_C1_MOE=1): its own eager steps and capture, on slot 0
+            tokens = {0: int(prompt[-1])}
+            sampling = {0: (1, 0.0, 0.0)} if self.decoder.sample_on_device else None
+            replays = 0
+            for step in range(WARMUP_DECODE_STEPS):
+                t0 = time.time()
+                out = self.decoder.decode(tokens, sampling)
+                tokens = {0: int(out[0]) if sampling else int(out[0].argmax())}
+                mode = self.decoder.last.get("mode")
+                replays += mode == "replay"
+                logger.info(
+                    f"DeepSeek-V4.1-Flash warm-up: c1 decode step {step} ({mode}) in {time.time() - t0:.2f} s "
+                    f"{self.decoder.last}"
+                )
+                if "c1" in self.decoder.captures and replays >= 1:
+                    break
+            assert "c1" in self.decoder.captures, "the c1 decode step was not captured"
         self.warmed_up = True
 
     def _warmup_prompt(self, n: int = WARMUP_PROMPT) -> torch.Tensor:

@@ -58,12 +58,13 @@ _BIAS_CAPABLE_ACTIVATIONS = (
     ttnn.RoutedExpertActivation.SituGlu,
 )
 
-# Activations moe_fused_swiglu implements; its own validation rejects the rest. ClampedSiluGlu is
-# absent (only unified_routed_expert_moe has it), so a hybrid split cannot hand it to the fused op.
+# Activations moe_fused_swiglu implements; its own validation rejects the rest (ClampedSiluGlu since the
+# DeepSeek-V4.1 c1 decode MoE, which runs its one token an expert through the fused op).
 _FUSED_OP_ACTIVATIONS = (
     ttnn.RoutedExpertActivation.Silu,
     ttnn.RoutedExpertActivation.SituGlu,
     ttnn.RoutedExpertActivation.SwiGluOai,
+    ttnn.RoutedExpertActivation.ClampedSiluGlu,
 )
 
 COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(

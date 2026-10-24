@@ -2,18 +2,38 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""V4.1 batched decode on the Galaxy: every slot of the pool a different prompt, against the vendored CPU reference.
+"""V4.1 batched decode on the Galaxy: every slot of the pool a different prompt, against the vendored CPU
+reference.
 
-Prefills ``sp * V41_BATCH_USERS`` prompts of real text (different windows of the text, lengths of both parities
-around ``V41_BATCH_PROMPT``) with the layer schedule ``V41_BATCH_LAYERS`` on the device (``TtV41Transformer.prefill``,
-each joining a slot of ``TtV41BatchDecoder``), then decodes ``V41_BATCH_STEPS`` tokens for all of them in one step
-each, teacher-forced on the text's own next tokens. The slots in ``V41_BATCH_REF_SLOTS`` are also run on the CPU
-reference (``Transformer.forward``; prefill then the same tokens step by step), and per step report the logits PCC,
-the greedy agreement and every block's output PCC. With ``V41_BATCH_TRACE=1`` (default) the step is captured once
-after ``V41_BATCH_WARMUP`` eager steps and replayed; replays report the device time. ``V41_BATCH_REF=0`` runs the
-device alone (checkpoint Engram schedules), judged by ``book_top1`` over all slots.
+Prefills ``sp * V41_BATCH_USERS`` prompts of real text (different windows of the text, lengths of both
+parities
+around ``V41_BATCH_PROMPT``) with the layer schedule ``V41_BATCH_LAYERS`` on the device
+(``TtV41Transformer.prefill``,
+each joining a slot of ``TtV41BatchDecoder``), then decodes ``V41_BATCH_STEPS`` tokens for all of them in one
+step
+each, teacher-forced on the text's own next tokens. The slots in ``V41_BATCH_REF_SLOTS`` are also run on the
+CPU
+reference (``Transformer.forward``; prefill then the same tokens step by step), and per step report the logits
+PCC,
+the greedy agreement and every block's output PCC. With ``V41_BATCH_TRACE=1`` (default) the step is captured
+once
+after ``V41_BATCH_WARMUP`` eager steps and replayed; replays report the device time. ``V41_BATCH_REF=0`` runs
+the
+device alone (checkpoint Engram schedules), judged by ``book_top1`` over all slots. ``V41_BATCH_LIVE=k`` steps
+``k`` slots a step instead of all of them, rotating over the slots (step ``i`` steps slots ``i k .. i k + k -
+1``
+modulo the slot count; each slot its own token counter), the c1 / c2 shape of the served step (with
+``V41_DECODE_C1_MOE=1`` and ``k = 1`` the c1 MoE path); ``V41_BATCH_LIVE_FROM=n`` steps every
+slot for the first ``n`` steps (the served order: the 32-row variant captured first); no CPU reference in that
+mode.
+The pool's window ring is indexed by the global step (a user is assumed to step every step), so a rotating
+slot's
+window goes stale after ``RING`` steps and ``book_top1`` is meaningful only for a run of up to a few rotations
+or
+with ``V41_BATCH_LIVE_ROTATE=0`` (the same ``k`` slots every step, the served c1 shape).
 
-Results go to the log as ``V41_BATCH_RESULT {json}`` and to ``V41_BATCH_OUT`` when set. Reported, not gated here: a NaN or a crash fails the test, a low PCC does not.
+Results go to the log as ``V41_BATCH_RESULT {json}`` and to ``V41_BATCH_OUT`` when set. Reported, not gated
+here: a NaN or a crash fails the test, a low PCC does not.
 """
 
 import json
@@ -108,6 +128,9 @@ def test_v41_batch_decode(mesh_device, device_params):
     trace = os.environ.get("V41_BATCH_TRACE", "1") == "1"
     warmup = int(os.environ.get("V41_BATCH_WARMUP", 2))
     sample = os.environ.get("V41_BATCH_SAMPLE", "0") == "1"  # argmax on device (DeviceSampler) instead of logits
+    live = int(os.environ.get("V41_BATCH_LIVE", 0))  # slots stepping per step (0: all)
+    live_from = int(os.environ.get("V41_BATCH_LIVE_FROM", 0))  # the steps before it step every slot
+    live_rotate = os.environ.get("V41_BATCH_LIVE_ROTATE", "1") == "1"  # 0: the same first slots every step
     profile = os.environ.get("V41_BATCH_PROFILE", "0") == "1"  # as test_v41_decode: drain the device profiler per block
     ref_slots = (
         [int(s) for s in os.environ.get("V41_BATCH_REF_SLOTS", DEFAULT_REF_SLOTS).split(",") if s] if use_ref else []
@@ -151,6 +174,7 @@ def test_v41_batch_decode(mesh_device, device_params):
         "trace": trace,
         "warmup": warmup,
         "sample_on_device": sample,
+        "live": live,
         "mesh": list(mesh_device.shape),
         "fabric": str(device_params.get("fabric_config")),
     }
@@ -245,8 +269,15 @@ def test_v41_batch_decode(mesh_device, device_params):
         decoder.on_block = drain
     per_step = []
     hits = {s: 0 for s in range(n_slots)}
+    assert not (live and reference), "V41_BATCH_LIVE steps the slots in turn: no per-step reference"
+    counter = {s: 0 for s in range(n_slots)}  # tokens each slot has stepped (the live mode)
     for i in range(steps):
-        tokens = {s: int(books[s][i]) for s in range(n_slots)}
+        if live and i >= live_from:
+            stepping = [(((i - live_from) * live if live_rotate else 0) + j) % n_slots for j in range(live)]
+            tokens = {s: int(books[s][counter[s]]) for s in stepping}
+        else:
+            stepping = list(range(n_slots))
+            tokens = {s: int(books[s][i]) for s in range(n_slots)}
         captured.clear()
         t0 = time.time()
         if sample and i == 0 and os.environ.get("V41_BATCH_DEBUG", "0") == "1":
@@ -279,14 +310,18 @@ def test_v41_batch_decode(mesh_device, device_params):
                     f"cand idx[0:4] {idx[:4].tolist()} idx[32:36] {idx[32:36].tolist()}"
                 )
         entry = {"step": i, "wall_s": round(wall, 3), **decoder.last, "slots": {}}
-        for s in range(n_slots):
+        if live:
+            entry["stepping"] = stepping
+        for s in stepping:
             if sample:
                 dev = int(out[s])
             else:
                 logits = out[s]
                 assert not torch.isnan(logits).any(), f"NaN in the logits of slot {s} at step {i}"
                 dev = int(logits.argmax())
-            hits[s] += dev == int(books[s][i + 1])
+            n = counter[s]
+            hits[s] += dev == int(books[s][n + 1])
+            counter[s] += 1
             if s in reference:
                 ref_logits, ref_blocks = reference[s]["steps"][i]
                 r, u = divmod(s, users)
@@ -315,9 +350,11 @@ def test_v41_batch_decode(mesh_device, device_params):
             result["replay_" + key] = [e.get(key) for e in replays]
         result["replay_device_only_s"] = decoder.replay_device_time()
     decoder.release()
-    result["book_top1_per_slot"] = {str(s): round(hits[s] / steps, 4) for s in range(n_slots)}
-    result["book_top1"] = round(sum(hits.values()) / (steps * n_slots), 4)
-    result["text"] = {str(s): tokenizer.decode(books[s][1 : steps + 1].tolist()) for s in (0, n_slots - 1)}
+    result["book_top1_per_slot"] = {str(s): round(hits[s] / counter[s], 4) for s in range(n_slots) if counter[s]}
+    result["book_top1"] = round(sum(hits.values()) / sum(counter.values()), 4)
+    result["text"] = {
+        str(s): tokenizer.decode(books[s][1 : counter[s] + 1].tolist()) for s in (0, n_slots - 1) if counter[s]
+    }
     if reference:
         agg = {}
         for s in reference:

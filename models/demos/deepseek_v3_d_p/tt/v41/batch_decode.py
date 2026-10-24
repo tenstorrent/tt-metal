@@ -23,8 +23,10 @@ Per step and layer the graph is the single-token one with the position-dependent
 
 Users join from a prefill state (``join``: the pool copies the state's caches into the slot) and leave by being
 forgotten; a free slot's rows still run (its inputs are zeros, its writes go nowhere). The step's graph is the same
-for every position, so a single capture replays every step (``trace=True``). Limits as ``TtV41Decoder``: text only,
-positions from ``SLIDING_WINDOW - 1`` to below ``max_seq_len``, compressed rows within the candidate budget.
+for every position, so a single capture replays every step (``trace=True``); with ``V41_DECODE_C1_MOE=1`` a second
+capture serves the steps with exactly one live row (the MoEs on that row broadcast to every chip,
+``tt/v41/moe_c1.py``). Limits as ``TtV41Decoder``: text only, positions from ``SLIDING_WINDOW - 1`` to below
+``max_seq_len``, compressed rows within the candidate budget.
 """
 
 import os
@@ -43,6 +45,7 @@ from models.demos.deepseek_v3_d_p.tt.v41.indexer import DecodePins, TtV41Indexer
 from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import range_scores
 from models.demos.deepseek_v3_d_p.tt.v41.layout import TP_AXIS
 from models.demos.deepseek_v3_d_p.tt.v41.moe import TtV41Moe
+from models.demos.deepseek_v3_d_p.tt.v41.moe_c1 import C1Moe
 from models.demos.deepseek_v3_d_p.tt.v41.pool import RING, V41DecodePool, scatter_rows
 from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp4_e4m3_qdq, fp8_qdq
 from models.demos.deepseek_v3_d_p.tt.v41.rope import RopeTables, cos_sin
@@ -285,8 +288,18 @@ class TtV41BatchDecoder(TtV41Decoder):
             if sample_on_device
             else None
         )
-        self.capture = None
-        self.eager_count = 0
+        # the step's captures by variant: "full" (the 32-row tile), and with V41_DECODE_C1_MOE=1 "c1" (one live
+        # row: the MoEs on that row broadcast to every chip); each variant runs ``warmup``
+        # eager steps before its capture (a capture cannot load binaries)
+        self.captures: dict[str, object] = {}
+        self.eager_counts: dict[str, int] = {}
+        self.last_variant = "full"
+        self.c1 = os.environ.get("V41_DECODE_C1_MOE", "0") == "1"
+        if self.c1:
+            assert MOE_ROWS == ROWS, "V41_DECODE_C1_MOE=1 needs V41_DECODE_ROUTING=1 (the 32-row MoE tile)"
+            ccl = model.blocks[0].attn.ccl
+            self.c1_moes = [C1Moe(moe, ccl, self.pool) for moe in self.moes]
+            self.c1_table = C1Moe.identity_table(self.mesh_device)
         # V41_DECODE_HOST_INPUTS=packed: the RoPE rows from host tables by position, the
         # Engram rows gathered for the chips that hold a live row only, the small inputs packed into four
         # uploads (StepPacker) and sliced apart in the graph; the default builds and uploads every input apart
@@ -307,6 +320,23 @@ class TtV41BatchDecoder(TtV41Decoder):
         self.join_traces: dict[tuple[int, int, int], SubDeviceTraceController] = {}
         self.join_buffers: dict[int, dict] = {}  # width -> the index buffers
         self.last_join: dict = {}
+
+    @property
+    def capture(self):
+        """The 32-row step's capture (None until captured)."""
+        return self.captures.get("full")
+
+    @property
+    def eager_count(self) -> int:
+        return self.eager_counts.get("full", 0)
+
+    @eager_count.setter
+    def eager_count(self, value: int) -> None:
+        self.eager_counts["full"] = value
+
+    def variant(self, tokens: dict) -> str:
+        """The step variant for ``tokens``: "c1" with the c1 MoE on and exactly one slot stepping, else "full"."""
+        return "c1" if self.c1 and len(tokens) == 1 else "full"
 
     # --- users -------------------------------------------------------------------------------------------------
     @property
@@ -409,6 +439,14 @@ class TtV41BatchDecoder(TtV41Decoder):
         ints, floats, rope, visible_cols = {"token": ids.view(sp, ROWS)}, {}, {}, {}
         inputs = {} if packed else {"token": self.pool.per_rank(ids, ttnn.uint32, device=False)}
         tick("token")
+        if self.c1:
+            live = divmod(next(iter(tokens)), users) if len(tokens) == 1 else None
+            for k, v in C1Moe.host_rows(sp, ROWS, live).items():
+                if packed:
+                    ints[k] = v
+                else:
+                    inputs[k] = self.pool.per_rank(v.view(sp, 1, 1, ROWS), ttnn.uint32, device=False)
+            tick("c1")
         if self.sample_on_device:
             k = torch.ones(sp * ROWS, dtype=torch.int32)
             p = torch.zeros(sp * ROWS, dtype=torch.float32)
@@ -509,33 +547,37 @@ class TtV41BatchDecoder(TtV41Decoder):
         t1 = time.time()
         self._stage(inputs)
         t2 = time.time()
+        variant = self.variant(tokens)
+        self.last_variant = variant
+        c1 = variant == "c1"
         if not self.trace:
             mode = "eager"
-        elif self.capture is not None:
+        elif variant in self.captures:
             mode = "replay"
-        elif self.eager_count >= self.warmup:
+        elif self.eager_counts.get(variant, 0) >= self.warmup:
             mode = "capture"
         else:
             mode = "eager"
-        self.last = {"mode": mode, "inputs_s": round(t1 - t0, 4), "stage_s": round(t2 - t1, 4)}
+        self.last = {"mode": mode, "inputs_s": round(t1 - t0, 4), "stage_s": round(t2 - t1, 4), "variant": variant}
         if self.input_timing:
             self.last["items"] = dict(self.items)
         if mode == "eager":
-            self.eager_count += 1
-            logits = self._forward(self.on_block)
+            self.eager_counts[variant] = self.eager_counts.get(variant, 0) + 1
+            logits = self._forward(self.on_block, c1=c1)
         else:
             if mode == "capture":
-                self.capture = self._capture_step()
+                self.captures[variant] = self._capture_step(c1=c1)
+            capture = self.captures[variant]
             ttnn.synchronize_device(self.mesh_device)
             t3 = time.time()
-            self.capture.controller.replay(blocking=False)
+            capture.controller.replay(blocking=False)
             t4 = time.time()
             ttnn.synchronize_device(self.mesh_device)
             t5 = time.time()
-            logits = self.capture.logits
+            logits = capture.logits
             self.last.update(sync_s=round(t3 - t2, 4), device_s=round(t5 - t3, 4), issue_s=round(t4 - t3, 4))
             if self.on_block is not None:
-                for layer, x in self.capture.blocks:
+                for layer, x in capture.blocks:
                     self.on_block(layer, x)
         t6 = time.time()
         out = self._tokens_to_host(logits, tokens) if self.sample_on_device else self._logits_to_host(logits, tokens)
@@ -565,20 +607,22 @@ class TtV41BatchDecoder(TtV41Decoder):
         return {slot: rows[slot] for slot in tokens}
 
     def replay_device_time(self, repeats: int = 3) -> dict:
-        """Device time of one replay of the captured step without host work -> {"step": min seconds}."""
-        if self.capture is None:
+        """Device time of one replay of the last stepped variant's capture without host work -> {"step": min
+        seconds}."""
+        capture = self.captures.get(self.last_variant)
+        if capture is None:
             return {}
         ttnn.synchronize_device(self.mesh_device)
         best = None
         for _ in range(repeats):
             t0 = time.time()
-            self.capture.controller.replay(blocking=False)
+            capture.controller.replay(blocking=False)
             ttnn.synchronize_device(self.mesh_device)
             dt = time.time() - t0
             best = dt if best is None else min(best, dt)
         return {"step": round(best, 4)}
 
-    def _capture_step(self):
+    def _capture_step(self, c1: bool = False):
         from models.demos.deepseek_v3_d_p.tt.v41.decode import _Trace
 
         controller = SubDeviceTraceController(self.mesh_device)
@@ -588,7 +632,7 @@ class TtV41BatchDecoder(TtV41Decoder):
         ttnn.synchronize_device(self.mesh_device)
         controller.begin_capture()
         try:
-            logits = self._forward(lambda layer, x: blocks.append((layer, x)))
+            logits = self._forward(lambda layer, x: blocks.append((layer, x)), c1=c1)
         finally:
             controller.end_capture()
             for moe in self.moes:
@@ -596,23 +640,25 @@ class TtV41BatchDecoder(TtV41Decoder):
         return _Trace(controller, logits, 0, blocks)
 
     def release(self) -> None:
-        if self.capture is not None:
-            self.capture.controller.release()
-            self.capture = None
+        for capture in self.captures.values():
+            capture.controller.release()
+        self.captures = {}
         for controller in self.join_traces.values():
             controller.release()
         self.join_traces = {}
 
     @property
     def trace_segments(self) -> int:
-        return self.capture.controller.num_segments if self.capture is not None else 0
+        capture = self.captures.get(self.last_variant)
+        return capture.controller.num_segments if capture is not None else 0
 
-    def _forward(self, on_block):
+    def _forward(self, on_block, c1: bool = False):
         """The step's device graph on the staged buffers -> the logits tile ``[1, 1, ROWS, vocab/tp]`` per chip
-        (row u: slot u of the chip's rank); the pool is updated in place."""
+        (row u: slot u of the chip's rank); the pool is updated in place. ``c1``: the MoEs on the one live row
+        (``C1Moe``; the idle rows' MoE output zero)."""
         model = self.model
         if self.packer is not None:
-            self.inputs = dict(self.packer.unpack(self.buffers), engram=self.buffers["engram"])
+            self.inputs = dict(self.packer.unpack(self.buffers), engram=self.buffers.get("engram", {}))
             self.inputs["token"] = ttnn.reshape(self.inputs["token"], (1, 1, ROWS))
         else:
             self.inputs = self.buffers
@@ -621,14 +667,23 @@ class TtV41BatchDecoder(TtV41Decoder):
         h = model.embedding(self.inputs["token"])
         x = mhc_expand(ttnn.typecast(h, ttnn.float32), self.config.HC_MULT)
         pre = self.pre_mix
-        for layer, block, moe in zip(model.layers, model.blocks, self.moes):
+        if c1:
+            sel, put = C1Moe.onehots(self.inputs["c1sel"], self.inputs["c1put"], self.c1_table)
+            moes = self.c1_moes
+        else:
+            moes = self.moes
+        for layer, block, moe in zip(model.layers, model.blocks, moes):
             if layer in model.engram:
                 x = model.engram[layer](x, self.inputs["engram"][layer])
             x, pre = block.residual(
                 x,
                 pre,
                 attention=lambda h, a=block.attn, n=block.attn_norm: self._attention(a, n(h), masks, selection),
-                ffn=lambda h, m=moe, n=block.ffn_norm: self._ffn(m, n(h)),
+                ffn=(
+                    (lambda h, m=moe, n=block.ffn_norm: m(n(h), sel, put))
+                    if c1
+                    else (lambda h, m=moe, n=block.ffn_norm: self._ffn(m, n(h)))
+                ),
             )
             if on_block is not None:
                 on_block(layer, x)
