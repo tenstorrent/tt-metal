@@ -219,7 +219,6 @@ ALWI void add_bias_and_addcmul_block(
         // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
         // pre-cleanup full-init behaviour) should become a targeted DST re-arm.
         compute_kernel_hw_startup(ternary_b_dfb, intermediate_dfb);
-        unary_bcast_init<BroadcastType::ROW>(ternary_b_dfb);
 #endif  // TERNARY_B_IS_FLOAT32
 
         tile_id = 0;
@@ -234,7 +233,6 @@ ALWI void add_bias_and_addcmul_block(
                 // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
                 // pre-cleanup full-init behaviour) should become a targeted DST re-arm.
                 compute_kernel_hw_startup(ternary_b_dfb, intermediate_dfb);
-                unary_bcast_init<BroadcastType::ROW>(ternary_b_dfb);
                 unary_bcast<BroadcastType::ROW>(ternary_b_dfb, n, TERNARY_B_DST_ID);
 
                 copy_tile(intermediate_dfb, tile_id, DST_ID);

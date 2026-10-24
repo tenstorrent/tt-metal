@@ -199,7 +199,6 @@ void add_bias_inplace_sfpu(uint32_t inout_cb, uint32_t bias_cb) {
         for (uint32_t j = 0; j < cols; ++j) {
             tile_regs_acquire();
             copy_tile(inout_cb, 0, DST_ACC);
-            unary_bcast_init<BroadcastType::ROW>(bias_cb);
             unary_bcast<BroadcastType::ROW>(bias_cb, j, DST_OPERAND);
             add_binary_tile(DST_ACC, DST_OPERAND, DST_ACC);
             tile_regs_commit();

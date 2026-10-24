@@ -203,7 +203,6 @@ ALWI void add_bias_and_addcmul_block(
         // regardless of FUSE_BIAS, so a plain reconfig would drop the MATH<->PACK DST re-arm.
         // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
         compute_kernel_hw_startup(ternary_b_cb, intermediate_cb);
-        unary_bcast_init<BroadcastType::ROW>(ternary_b_cb);
 #endif  // TERNARY_B_IS_FLOAT32
 
         tile_id = 0;
@@ -217,7 +216,6 @@ ALWI void add_bias_and_addcmul_block(
                 constexpr uint32_t TERNARY_B_DST_ID = 1;
                 // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
                 compute_kernel_hw_startup(ternary_b_cb, intermediate_cb);
-                unary_bcast_init<BroadcastType::ROW>(ternary_b_cb);
                 unary_bcast<BroadcastType::ROW>(ternary_b_cb, n, TERNARY_B_DST_ID);
 
                 copy_tile(intermediate_cb, tile_id, DST_ID);

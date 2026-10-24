@@ -161,7 +161,7 @@ ALWI void fast_untilize_block(
     uint32_t icb, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
 #ifdef ARCH_BLACKHOLE
     if constexpr (full_ct_dim > 1) {
-        reconfig_data_format(icb, icb);
+        reconfig_full_operand(icb, icb);
         pack_reconfig_data_format(ocb);
         fast_untilize_init_impl<full_ct_dim, true, is_fp32_dest_acc_en>(icb, ocb, __builtin_LINE());
         fast_untilize_detail::fast_untilize_block_body<full_ct_dim, is_fp32_dest_acc_en>(

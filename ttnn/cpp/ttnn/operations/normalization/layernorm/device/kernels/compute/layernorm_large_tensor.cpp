@@ -273,7 +273,6 @@ void kernel_main() {
             DataflowBuffer pack_dfb_obj(pack_dfb_id);
             if (final_iter) {
                 // Divide by W
-                binop_with_scalar_tile_init();
                 mul_unary_tile(dst0, generic::bit_cast<uint32_t>(1.0f / W));
             }
 
