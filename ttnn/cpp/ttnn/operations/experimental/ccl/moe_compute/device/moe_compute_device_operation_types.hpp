@@ -98,6 +98,9 @@ struct MoEComputeParams {
     }
 };
 
+// Both moe_compute programs check it: CLAMPED_SILU needs a finite, positive limit, the other activations take none.
+void validate_activation_limit(detail::MoEActivationFunction activation_type, std::optional<float> activation_limit);
+
 struct MoEComputeInputs {
     const ttnn::Tensor& tilize_input_tensor;
     const ttnn::Tensor& tilize_expert_indices_tensor;
@@ -106,6 +109,10 @@ struct MoEComputeInputs {
     const ttnn::Tensor& matmul_w0_w1_tensor;
     const ttnn::Tensor& matmul_w2_tensor;
     const std::optional<ttnn::Tensor>& optional_output_tensor;
+    // expert rows: the expert rows program's row buffer and routing table, inputs of the placement program
+    // (MoEComputePlaceFactory); empty for the ring
+    const std::optional<ttnn::Tensor>& expert_rows_tensor;
+    const std::optional<ttnn::Tensor>& expert_rows_table_tensor;
 };
 
 }  // namespace ttnn::experimental::prim

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "selective_reduce_combine_device_operation_types.hpp"
@@ -77,8 +78,9 @@ struct UnifiedSelectReduce {
         const std::optional<ttnn::MeshCoordinate>& coord = std::nullopt);
 };
 
-// Appends CBs and kernels onto desc. nullopt semaphores bake address 0 (local_combine / SingleDevice).
-void append_selective_reduce_combine_to_descriptor(
+// Appends CBs and kernels onto desc and returns the combine writer's kernel index. nullopt semaphores bake address 0
+// (local_combine / SingleDevice).
+uint32_t append_selective_reduce_combine_to_descriptor(
     tt::tt_metal::ProgramDescriptor& desc,
     const SelectiveReduceCombineParams& operation_attributes,
     const MeshCoordinate& mesh_coordinate,
@@ -92,5 +94,18 @@ void append_selective_reduce_combine_to_descriptor(
     // Fused moe_compute only: for each data-parallel (width) column, the compute cores whose
     // output feeds that column. Presence switches the writer to a double-buffered source.
     const std::optional<std::vector<std::vector<CoreCoord>>>& compute_cores_by_combine_column = std::nullopt);
+
+// The combine's init and final barrier semaphores on combine_cores, held in workload.semaphores and published with a
+// Synchronize. The final barrier is cross_device_semaphore when the caller passes one.
+std::pair<GlobalSemaphore, GlobalSemaphore> add_selective_reduce_combine_barrier_semaphores(
+    tt::tt_metal::WorkloadDescriptor& workload,
+    ttnn::MeshDevice* mesh_device,
+    const CoreRangeSet& combine_cores,
+    const std::optional<GlobalSemaphore>& cross_device_semaphore);
+
+// Cache hit with a caller-owned cross-device semaphore: writes its address into the combine writer's runtime args
+// (kernel writer_kernel_idx of program) on every core that has them.
+void override_selective_reduce_combine_cross_device_semaphore(
+    tt::tt_metal::Program& program, uint32_t writer_kernel_idx, const GlobalSemaphore& cross_device_semaphore);
 
 }  // namespace ttnn::experimental::prim
