@@ -1103,6 +1103,17 @@ def _merge_extra_programs(mesh, desc, extra_program):
 # ======================================================================================================================
 
 
+def _row_mop_defines(mesh, a, w):
+    """MM_ROW_MOP on Blackhole with full 32x32 operand tiles (as the C++ matmul factories'
+    add_row_mop_define_if_supported): the math runs one MOP per reuse row of a subblock instead of one per output
+    tile, bit-identical (same MVMULs, order and DEST rows). Every matmul_block call of the compute kernel passes the
+    subblock of its matmul_block_init, as the row MOP requires. env TT_MM_ROW_MOP=0 keeps the per-tile MOP."""
+    full = all(tuple(t.get_tile().tile_shape) == (ttnn.TILE_SIZE, ttnn.TILE_SIZE) for t in (a, w))
+    if mesh.arch() != ttnn.Arch.BLACKHOLE or not full or os.environ.get("TT_MM_ROW_MOP") == "0":
+        return []
+    return [("MM_ROW_MOP", "1")]
+
+
 def create_mesh_program_descriptor(ctx):
     mesh = ctx["mesh"]
     G, L, kind, P = ctx["G"], ctx["L"], ctx["kind"], ctx["P"]
@@ -1302,6 +1313,7 @@ def create_mesh_program_descriptor(ctx):
     # Perf-only ablation switches (debug scaffolding; output is wrong by design when set): MRS_ABLATE=compute,dram
     ablate = set(filter(None, os.environ.get("MRS_ABLATE", "").split(",")))
     ablate_compute = [("SKIP_COMPUTE", "1"), ("CKL_ELTWISE_CHAIN_SKIP_COMPUTE", "1")] if "compute" in ablate else []
+    compute_defines = ablate_compute + _row_mop_defines(mesh, a, w)
     ablate_reader = [("MRS_SKIP_DRAM", "1")] if "dram" in ablate else []
     ablate_reader += [("MRS_SKIP_MCAST", "1")] if "mcast" in ablate else []
     dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(
@@ -1441,7 +1453,7 @@ def create_mesh_program_descriptor(ctx):
                 core_ranges=mm_crs,
                 compile_time_args=compute_ct,
                 runtime_args=c_rt,
-                defines=ablate_compute,
+                defines=compute_defines,
                 config=compute_cfg,
             )
             writer = ttnn.KernelDescriptor(
