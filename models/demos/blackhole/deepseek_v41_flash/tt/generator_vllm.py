@@ -870,7 +870,15 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         mm = {k: kwargs.get(k) for k in ("pixel_values", "image_grid_thw")}
         if self.interleave:
             return self._prefill_interleaved(
-                tokens, lens, empty_slots, start_pos, device_sampling, enable_trace, sampling_params, mm=mm
+                tokens,
+                lens,
+                empty_slots,
+                start_pos,
+                device_sampling,
+                enable_trace,
+                sampling_params,
+                mm=mm,
+                prefill_final=kwargs.get("prefill_final"),
             )
         if any(self._mm_row(mm, i)[0] is not None for i in range(N)):
             raise ValueError("image input needs the interleaved prefill (DSV41_VLLM_INTERLEAVE=1)")
@@ -962,7 +970,16 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         return torch.cat([a for a, _ in pairs]), torch.stack([torch.as_tensor(b).reshape(3) for _, b in pairs])
 
     def _prefill_interleaved(
-        self, tokens, ends, empty_slots, start_pos, device_sampling, enable_trace, sampling_params=None, mm=None
+        self,
+        tokens,
+        ends,
+        empty_slots,
+        start_pos,
+        device_sampling,
+        enable_trace,
+        sampling_params=None,
+        mm=None,
+        prefill_final=None,
     ):
         """Prefill of the new requests / prompt chunks while other requests keep decoding (``Model.prefill_interleaved``): tokens [N, >= max end] (every prompt from
         position 0), ``ends`` the end position of this chunk of every row (= the prompt length for a whole prompt), ``start_pos`` the start (0 for a new request).
@@ -1079,9 +1096,21 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                     f"DSV4.1 prefill (interleave): images in users {sorted(vis)} ({sum(len(v.spans) for v in vis.values())} spans)"
                 )
         run = [it for i, it in enumerate(items) if i not in skipped]
+        final_map = None
+        if (
+            prefill_final is not None and len(prefill_final) == N
+        ):  # (plugin capability prefill_lookahead: which rows end their sequence in this step)
+            final_map = {phys[i]: bool(prefill_final[i]) for i in range(N) if i not in skipped}
         t_call0 = time.perf_counter()
         res = (
-            self.m.prefill_interleaved(run, chunk, s_pad_max=self.s_pad_cur, want_logits=want_logits, vis=vis or None)
+            self.m.prefill_interleaved(
+                run,
+                chunk,
+                s_pad_max=self.s_pad_cur,
+                want_logits=want_logits,
+                vis=vis or None,
+                **({} if final_map is None else {"final": final_map}),
+            )
             if run
             else {}
         )

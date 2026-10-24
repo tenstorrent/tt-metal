@@ -116,3 +116,15 @@ def test_window_sync_rules():
     assert w([(0, 512, 4096)], C, True, wants)  # window [512, 1024) ends on a wanted boundary
     assert not w([(0, 1024, 4096)], C, True, wants)  # [1024, 1536) -> 1536: not wanted
     assert not w([(0, 512, 4096)], C, True, wants, vis={0: object()})  # image prompts are never snapshotted
+
+
+def test_window_sync_rules_with_final_flags():
+    pytest.importorskip("ttnn")
+    from models.demos.blackhole.deepseek_v41_flash.tt.dsv41_model import window_needs_sync as w
+
+    C = 512
+    users = [(0, 3584, 4096), (1, 0, 8192)]  # user 0 ends here, user 1 continues
+    assert w(users, C, True)  # unknown: its last-token window is read
+    assert w(users, C, True, final={0})  # it ENDS its sequence: read
+    assert not w(users, C, True, final=set())  # a piece that ends mid-sequence: the token is discarded, nothing to read
+    assert not w(users, C, True, final={1})  # only the other user is final and it is far from its end

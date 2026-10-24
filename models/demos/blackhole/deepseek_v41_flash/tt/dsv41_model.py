@@ -80,15 +80,16 @@ class _UpOnly:
         self.ops = ops
 
 
-def window_needs_sync(users, C, async_win, apc_wants=None, vis=None):
+def window_needs_sync(users, C, async_win, apc_wants=None, vis=None, final=None):
     """Does the host have to wait for the device after the replay of a window of the interleaved prefill? ``users``: [(user, window start, end of its chunk)] of the users in the window.
     Yes when the window holds a user's last token of the call (the ragged head output is read), when a prefix snapshot the cache wants ends at the window (its device reads must precede the
     next replay), or when asynchronous windows are off; otherwise the window is only enqueued (``DSV41_PF_ASYNC_SERVER``).
+    ``final`` (set of users, or None = unknown): the users whose sequence ENDS in this call; with it only their last-token windows are read (the token of any other row is discarded by the scheduler).
     """
     if not async_win:
         return True
     for b, s0, e in users:
-        if e <= s0 + C:
+        if e <= s0 + C and (final is None or b in final):
             return True
         if apc_wants is not None and s0 + C <= e and not (vis and b in vis) and apc_wants(s0 + C):
             return True
@@ -1459,7 +1460,7 @@ class Model:
                 return b
         return buckets[-1]
 
-    def prefill_interleaved(self, items, chunk, s_pad_max=None, want_logits=False, vis=None):
+    def prefill_interleaved(self, items, chunk, s_pad_max=None, want_logits=False, vis=None, final=None):
         """See ``_prefill_interleaved_one``. With several captured S_pad contexts (``warm_serving(extra_spads=...)``) the users of the call are split by the context their carried state lives in
         (``pf_bucket_of``): a new prompt takes the smallest context that holds it when its first call is certainly the whole prompt, otherwise the largest; a continuation stays in its context, a
         prompt that outgrows it is recomputed from position 0 in a larger one (always correct). Each group is one ``_prefill_interleaved_one`` call on its context.
@@ -1467,7 +1468,7 @@ class Model:
         pm = self.prefill_model
         buckets = pm.dyn_buckets() if os.environ.get("DSV41_PF_SMALL_BUCKET", "1") != "0" else []
         if len(buckets) <= 1 or self.Up != self.U:
-            return self._prefill_interleaved_one(items, chunk, s_pad_max, want_logits, vis)
+            return self._prefill_interleaved_one(items, chunk, s_pad_max, want_logits, vis, final)
         C = int(chunk)
         of = self.__dict__.setdefault("pf_bucket_of", {})
         resume = self.__dict__.setdefault("pf_resume", {})
@@ -1501,7 +1502,7 @@ class Model:
                 if getattr(self, "apc", None) is not None:
                     self.apc.store.tag = k
                 vg = None if not vis else {b: v for b, v in vis.items() if b in {g[0] for g in grp}}
-                res.update(self._prefill_interleaved_one(grp, C, k, want_logits, vg or None))
+                res.update(self._prefill_interleaved_one(grp, C, k, want_logits, vg or None, final))
                 for g in grp:
                     of[g[0]] = k
                 tms.append((k, [g[0] for g in grp], dict(self.timing)))
@@ -1516,7 +1517,7 @@ class Model:
         self.timing = tm
         return res
 
-    def _prefill_interleaved_one(self, items, chunk, s_pad_max=None, want_logits=False, vis=None):
+    def _prefill_interleaved_one(self, items, chunk, s_pad_max=None, want_logits=False, vis=None, final=None):
         """Prefill of SOME users (new requests / prompt chunks) through the captured chunk trace while the other users keep their decode state.
 
         ``items``: [(user b, tokens 1-D [>= end], start, end)]: positions [start, end) of user b are computed. ``start`` must be 0 or the position the previous call for
@@ -1613,6 +1614,15 @@ class Model:
         t_apc_ovl = [0.0]  # seconds of snapshot completions run while the device replays a window
         early_bk = os.environ.get("DSV41_PF_EARLY_BK", "1") == "1"
         post_pf = async_win and os.environ.get("DSV41_PF_POST_PREFETCH", "1") == "1"
+        fin_users = (
+            None if final is None else {int(b) for b, f in final.items() if f}
+        )  # (None: the plugin does not say which rows end their sequence)
+        defer_return = (
+            async_win
+            and fin_users is not None
+            and not fin_users
+            and os.environ.get("DSV41_PF_DEFER_RETURN", "1") == "1"
+        )  # (a call with no final row returns once its windows are enqueued)
         lookahead = os.environ.get("DSV41_PF_LOOKAHEAD", "1") == "1"
         spec_enq = os.environ.get("DSV41_PF_SPEC_ENQ", "1") == "1"
         t_first = 0.0  # host seconds of window builds that were not overlapped with a replay
@@ -1920,6 +1930,7 @@ class Model:
                         async_win,
                         None if apc is None or apc_defer else apc.wants,
                         vis,
+                        fin_users,
                     )
                     th, td = pm.replay_window(
                         tok, hs, s0, C, active, vis=vw, prepped=prepped, overlap=_overlap, ops=rec_ops, sync=sync_k
@@ -1959,13 +1970,15 @@ class Model:
                     "t_apc_end": t_apc_end,
                 }
             )
-        if pm.__dict__.get(
+        if defer_return:
+            pass  # (no user of the call ends its sequence: the scheduler discards every token of this step; the windows stay in flight and the NEXT call, a decode step or any read orders itself behind them)
+        elif pm.__dict__.get(
             "_ev_hist"
         ):  # (a trailing enqueued window: nothing reads its result, but the call must not return with the device still busy)
             ttnn.synchronize_device(self.md)
             pm._ev_hist.clear()
         for b, _, _, _ in items:
-            res[b] = self._res[b]
+            res[b] = self._res[b] if (fin_users is None or b in fin_users) else self._res.get(b, (0, None))
             self.tap_n[b] = ends[b]
         self.timing = dict(
             pm.timing,

@@ -202,6 +202,7 @@ def test_chunk_probe(mesh_device):
                     CHUNK,
                     s_pad_max=WMAX if MODE == "single" else None,
                     want_logits=False,
+                    final={b: False for b in USERS} if os.environ.get("PROBE_FINAL") == "1" else None,
                 )
                 st_ = c_
                 calls_t.append(dict(m.timing))
@@ -215,6 +216,7 @@ def test_chunk_probe(mesh_device):
                 CHUNK,
                 s_pad_max=WMAX if MODE == "single" else None,
                 want_logits=(bool(os.environ.get("PROBE_SAVE")) or SAME) and os.environ.get("PROBE_NOLOGITS") != "1",
+                final={b: True for b in USERS} if os.environ.get("PROBE_FINAL") == "1" else None,
             )
             wall = time.perf_counter() - t0
             calls_t.append(dict(m.timing))
@@ -466,6 +468,8 @@ def test_chunk_probe(mesh_device):
         import pstats
 
         buf_ = io.StringIO()
-        pstats.Stats(pm.build_prof, stream=buf_).strip_dirs().sort_stats("cumulative").print_stats(45)
+        pstats.Stats(pm.build_prof, stream=buf_).strip_dirs().sort_stats(
+            os.environ.get("PROBE_PROF_SORT", "cumulative")
+        ).print_stats(60)
         log("PROBE BUILD PROFILE (host work of the window builds, cumulative):\n" + buf_.getvalue())
     log("PROBE DONE")

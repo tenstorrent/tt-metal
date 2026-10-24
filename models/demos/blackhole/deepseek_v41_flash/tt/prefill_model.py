@@ -1045,8 +1045,13 @@ class DSV41PrefillModel:
     def record_begin(self, s0, C, active):
         """The position / user dependent half of ``record_window`` alone (RoPE tables, masks, hand-off index tables: ``begin_chunk``)."""
         self.active_mask = torch.as_tensor(active).bool()
+        prof = self.__dict__.get("build_prof")
+        if prof is not None:
+            prof.enable()
         with recording() as ops:
             self.begin_chunk(s0, C)
+        if prof is not None:
+            prof.disable()
         return ops
 
     def replay_window(self, tokens, hashes, s0, C, active, vis=None, prepped=None, overlap=None, ops=None, sync=True):

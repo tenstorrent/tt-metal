@@ -603,8 +603,9 @@ class FakeInterleaveModel(FakeModel):
         self.pf_resume = {}
         self.calls = []
 
-    def prefill_interleaved(self, items, chunk, s_pad_max=None, want_logits=False, vis=None):
+    def prefill_interleaved(self, items, chunk, s_pad_max=None, want_logits=False, vis=None, final=None):
         self.calls.append(([(b, st, e) for b, _, st, e in items], chunk, s_pad_max, want_logits))
+        self.finals = getattr(self, "finals", []) + [final]
         out = {}
         for b, t, st, e in items:
             assert st == 0 or self.pf_resume.get(b) == st, "continuation without carried state"
@@ -1276,3 +1277,20 @@ def test_no_enable_prefix_caching_flag_turns_apc_off(monkeypatch):
         assert importlib.reload(GV).DeepseekV41ForCausalLM.model_capabilities["supports_prefix_caching"] is (not off)
     monkeypatch.undo()
     importlib.reload(GV)
+
+
+def test_plugin_prefill_final_flags_reach_the_model_by_physical_user(interleave_gen):
+    """capability ``prefill_lookahead``: the plugin says which rows END their sequence in the step (``prefill_final``); the model gets {user: final} (None when the plugin does not say)"""
+    gen, m = interleave_gen
+    a = torch.arange(1, 601, dtype=torch.int32).reshape(1, -1)
+    gen.prefill_forward(a[:, :512], prompt_lens=[512], start_pos=[0], empty_slots=[0], sampling_params=GREEDY)
+    assert m.finals[-1] is None  # old plugin: unknown
+    gen.prefill_forward(
+        a[:, :512], prompt_lens=[512], start_pos=[0], empty_slots=[1], sampling_params=GREEDY, prefill_final=[False]
+    )
+    assert list(m.finals[-1].values()) == [False] and len(m.finals[-1]) == 1
+    b = torch.arange(7, 307, dtype=torch.int32).reshape(1, -1)
+    gen.prefill_forward(
+        b, prompt_lens=[300], start_pos=[0], empty_slots=[2], sampling_params=GREEDY, prefill_final=[True]
+    )
+    assert list(m.finals[-1].values()) == [True]
