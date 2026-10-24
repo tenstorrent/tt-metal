@@ -180,6 +180,13 @@ static __attribute__((noinline, noclone)) void sdpa_cb_reserve_back_out_of_line(
     CircularBuffer(cb_id).reserve_back(num_tiles);
 }
 
+// Waits for and discards an entry compute has no work for (skipped or phase-alignment K/V chunks).
+static __attribute__((noinline, noclone)) void sdpa_cb_drain_out_of_line(uint32_t cb_id, uint32_t num_tiles) {
+    CircularBuffer cb(cb_id);
+    cb.wait_front(num_tiles);
+    cb.pop_front(num_tiles);
+}
+
 /**
  * Push tiles to make them visible for UNPACK reads, but rewind wr_ptr so
  * subsequent pack_tile<true> offsets remain relative to a stable base.
@@ -1503,7 +1510,7 @@ template <
     uint32_t cb_identity_scale_in,
     uint32_t cb_normalized_out,
     uint32_t cb_own>
-static void sdpa_expand_k_chunk(const uint32_t rank) {
+static void sdpa_expand_k_chunk() {
     constexpr uint32_t pe_rows = DHt_k - latent_rows;
     static_assert(DHt_qk > pe_rows, "expanded K needs no-PE rows");
     constexpr uint32_t nope_rows = DHt_qk - pe_rows;
@@ -2761,12 +2768,11 @@ template <
     bool packed_kv_enabled = false,
     // MLA expanded K (k_expand_weight): Q and the QK are DHt_qk tiles wide while cb_kt_in carries the DHt-wide latent;
     // each K chunk's no-PE rows are expanded by a head pair (sdpa_expand_k_chunk), this core's half into cb_kexp_own
-    // with its k_expand_wuk_tiles of the head's W_UK from cb_wuk, which is popped with Q; the peer's half arrives in
+    // with its rows of the head's W_UK from cb_wuk, which is popped with Q; the peer's half arrives in
     // cb_kexp_peer. The runtime k_expand_rank picks this core's half. Off (INVALID_CB) everywhere else.
     uint32_t DHt_qk = DHt,
     uint32_t cb_wuk = INVALID_CB,
     uint32_t k_expand_latent_rows = 0,
-    uint32_t k_expand_wuk_tiles = 0,
     uint32_t cb_kexp_own = INVALID_CB,
     uint32_t cb_kexp_peer = INVALID_CB,
     // No core of the program holds two Q chunks: the DRAM round-trip paths fold away (code size).
@@ -2818,8 +2824,17 @@ void sdpa_ring_v2(
     ASSERT(!single_q_per_core || q_per_core_arg <= 1);
     const uint32_t q_per_core = single_q_per_core ? 1 : q_per_core_arg;
     init_sdpa_streaming_semaphores();
-    // Expanded K: this core's half of the no-PE rows (sdpa_expand_k_chunk).
-    constexpr uint32_t k_expand_own_rows = cb_kexp_own != INVALID_CB ? (DHt_qk - (DHt - k_expand_latent_rows)) / 2 : 0;
+    // Expanded K: this core's half of the no-PE rows (sdpa_expand_k_chunk), and its rows of the head's W_UK.
+    constexpr bool k_expand = cb_kexp_own != INVALID_CB;
+    constexpr uint32_t k_expand_own_rows = k_expand ? (DHt_qk - (DHt - k_expand_latent_rows)) / 2 : 0;
+    constexpr uint32_t k_expand_wuk_tiles = k_expand_own_rows * k_expand_latent_rows;
+    // A K chunk compute skips, and its V (in-place latent V pushes none).
+    auto drain_kv_chunk = [] {
+        sdpa_cb_drain_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
+        if constexpr (!kt_inplace_v) {
+            sdpa_cb_drain_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+        }
+    };
     const bool packed_sources = packed_kv_enabled && packed_source_count > 1;
     const ring_joint::PackedKVGroupPlan packed_kv = ring_joint::packed_kv_pass_plan(
         {ring_joint::packed_kv_source_tiles(local_padded_Nt, logical_nt, kv_region_Nt, ring_size),
@@ -2969,17 +2984,10 @@ void sdpa_ring_v2(
             if constexpr (!has_sliding_window) {
                 if (is_causal_iter && k_chunk >= causal_k_limit) {
                     // Expanded K expanded this chunk already (the peer may need it): drain the peer's half too.
-                    if constexpr (cb_kexp_own != INVALID_CB) {
-                        sdpa_cb_wait_front_out_of_line(cb_kexp_peer, k_expand_own_rows * Sk_chunk_t);
-                        sdpa_cb_pop_front_out_of_line(cb_kexp_peer, k_expand_own_rows * Sk_chunk_t);
+                    if constexpr (k_expand) {
+                        sdpa_cb_drain_out_of_line(cb_kexp_peer, k_expand_own_rows * Sk_chunk_t);
                     }
-                    sdpa_cb_wait_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
-                    sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
-                    // In-place latent-V never pushes a V entry, so only K^T needs draining.
-                    if constexpr (!kt_inplace_v) {
-                        sdpa_cb_wait_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
-                        sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
-                    }
+                    drain_kv_chunk();
                     KV_chunks_processed_in_iter++;
                     return true;
                 }
@@ -3132,7 +3140,7 @@ void sdpa_ring_v2(
             // width) as the loop's exit state; whatever follows (the next step, the K-split epilogue) configures its
             // own pack width.
             uint32_t k_expand_own_slot_tiles = 0;
-            if constexpr (cb_kexp_own != INVALID_CB) {
+            if constexpr (k_expand) {
                 // cb_kexp_own is double-buffered and only the reader pops it, so this core's read pointer stays at
                 // the CB base: the QK addresses this chunk's half by the slot the expansion packed it into.
                 k_expand_own_slot_tiles = (k_expand_chunk_count++ & 1) * k_expand_own_rows * Sk_chunk_t;
@@ -3146,7 +3154,7 @@ void sdpa_ring_v2(
                     cb_qkt_im,
                     cb_identity_scale_in,
                     cb_normalized_out,
-                    cb_kexp_own>(k_expand_rank);
+                    cb_kexp_own>();
             }
             if (try_skip_causal_above_diag(source_k_chunk, causal_k_limit)) {
                 continue;
@@ -3376,8 +3384,7 @@ void sdpa_ring_v2(
                 packed_mask = plan.mask;
             }
 
-            // Expanded K: the QK reads the per-head K^T chunk built from this latent chunk.
-            constexpr bool k_expand = cb_kexp_own != INVALID_CB;
+            // Expanded K: the QK reads the expanded rows of this latent chunk in place (sdpa_expand_k_chunk).
             sdpa_inner_loop_step<
                 false,  // profiling_enabled
                 Sq_chunk_t,
@@ -3533,12 +3540,7 @@ void sdpa_ring_v2(
                 if (!packed_sources && try_skip_oob_kv(ring_id, k_chunk, k_chunk >= num_local_k_chunks)) {
                     continue;
                 }
-                sdpa_cb_wait_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
-                sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
-                if constexpr (!kt_inplace_v) {
-                    sdpa_cb_wait_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
-                    sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
-                }
+                drain_kv_chunk();
                 KV_chunks_processed_in_iter++;
             }
         }
@@ -3551,13 +3553,7 @@ void sdpa_ring_v2(
              dummy_chunk <
              dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer, kt_inplace_v>(KV_chunks_processed_in_iter);
              ++dummy_chunk) {
-            sdpa_cb_wait_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
-            sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
-            // In-place latent-V never pushes a V entry, so there is nothing extra to drain.
-            if constexpr (!kt_inplace_v) {
-                sdpa_cb_wait_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
-                sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
-            }
+            drain_kv_chunk();
         }
     }
 }

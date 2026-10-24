@@ -155,7 +155,7 @@ struct ReadinessMarkerForwarder {
     uint32_t total = 0;
     uint32_t seen = 0;       // markers landed on this link and accounted for
     uint32_t forwarded = 0;  // master: markers signaled to the consumer
-    OpSignaler* op_signaler = nullptr;
+    OpSignalerT<true>* op_signaler = nullptr;
 
     uint32_t sender_transport_rank(uint32_t marker) const {
         const uint32_t slice = marker / ttnn::ring_attention_all_gather::kReadinessParts + 1;
@@ -173,7 +173,7 @@ struct ReadinessMarkerForwarder {
     void poll() {
         const uint32_t now = landed();
         if constexpr (fuse_op) {
-            OpSignaler& sig = *this->op_signaler;
+            OpSignalerT<true>& sig = *this->op_signaler;
             if (sig.num_workers_to_sync > 1 && !sig.curr_worker_is_master) {
                 if (now > this->seen) {
                     sig.worker_sync_sem.up(
@@ -221,7 +221,7 @@ struct ReadinessMarkerForwarder {
     void finish() {
         wait_through(this->total);
         if constexpr (fuse_op) {
-            OpSignaler& sig = *this->op_signaler;
+            OpSignalerT<true>& sig = *this->op_signaler;
             if (sig.num_workers_to_sync <= 1 || sig.curr_worker_is_master) {
                 while (this->forwarded < this->total) {
                     poll();
@@ -407,9 +407,9 @@ void kernel_main() {
             input_tile_id_end);
     }
 
-    OpSignaler op_signaler;
+    OpSignalerT</*packed_signal_coords=*/true> op_signaler;
     if constexpr (fuse_op) {
-        op_signaler = OpSignaler(arg_idx, /*packed_signal_coords=*/true);
+        op_signaler = OpSignalerT<true>(arg_idx);
     }
 
     const uint32_t cb_fifo_limit = get_local_cb_interface(cb_output_id).fifo_limit;

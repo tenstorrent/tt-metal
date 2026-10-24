@@ -19,12 +19,7 @@ namespace ttnn::operations::transformer::sdpa::ring_joint {
 // Bounds the reducer's serial merge, one pass per sender.
 constexpr uint32_t kKSplitMaxCount = 4;
 
-struct KSplitRange {
-    uint32_t begin;
-    uint32_t end;
-    bool empty() const { return begin >= end; }
-    bool contains(uint32_t k_chunk) const { return k_chunk >= begin && k_chunk < end; }
-};
+using KSplitRange = ttnn::ring_attention_all_gather::ChunkRange;
 
 constexpr KSplitRange kKSplitAll{0, 0xFFFFFFFFu};
 

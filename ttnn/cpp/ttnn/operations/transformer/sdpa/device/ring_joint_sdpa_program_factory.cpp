@@ -963,6 +963,25 @@ namespace ttnn::prim {
 
 namespace {
 
+// Mirrors tt::tt_metal::NUM_SEMAPHORES (tt_metal/impl/buffers/semaphore.hpp), which no public header exposes to a ttnn
+// op. The descriptor path has no budget check of its own: an id past it surfaces later as a bare bitset IndexError.
+constexpr uint32_t kRingJointSemaphoresPerCore = 16;
+
+// Appends a worker semaphore on `cores`; ids are indices into desc.semaphores.
+uint32_t add_ring_joint_semaphore(
+    tt::tt_metal::ProgramDescriptor& desc, const CoreRangeSet& cores, uint32_t initial_value, const char* user) {
+    const auto id = static_cast<uint32_t>(desc.semaphores.size());
+    TT_FATAL(
+        id < kRingJointSemaphoresPerCore,
+        "ring_joint {}: semaphore {} is past the {} a core supports",
+        user,
+        id,
+        kRingJointSemaphoresPerCore);
+    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+        .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = cores, .initial_value = initial_value});
+    return id;
+}
+
 // Per-coord ProgramDescriptor build. Pulled into an anonymous-namespace helper so
 // create_workload_descriptor() can loop coords and reuse this body verbatim. The
 // op-specific name suffix avoids Unity-build collisions with the sibling ring
@@ -978,6 +997,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         mesh_dispatch_coordinate.has_value(),
         "build_ring_joint_sdpa_program_descriptor requires mesh_dispatch_coordinate");
     const auto& coord = mesh_dispatch_coordinate.value();
+    const auto& ag = args.all_gather_operation_attributes;
     /*
     The QKV inputs are fractured on the sequence dimension across ring_size.
     The sequence length comes in padded such that it is divisible by `TILE_HEIGHT * ring_size`.
@@ -1081,10 +1101,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     // Minimally use matmul fused op signaler
     sdpa_fused_op_signaler->init_all_gather(
-        args.all_gather_operation_attributes.ring_size,
-        transport_rank,
-        forward_writes_expected,
-        backward_writes_expected);
+        ag.ring_size, transport_rank, forward_writes_expected, backward_writes_expected);
 
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = gathered_input_tensor_k.logical_shape();
@@ -1117,7 +1134,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t DH = k_expand ? static_cast<uint32_t>(k_shape[3]) : DH_qk;
     const uint32_t q_local_padded_N = q_shape[2];
     const uint32_t kv_local_padded_N = tensor_args.local_kv_seq_len();
-    const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
+    const uint32_t ring_size = static_cast<uint32_t>(ag.ring_size);
     const uint32_t gathered_padded_N = k_shape[2];
     const uint32_t global_padded_N = kv_local_padded_N * ring_size;
     const uint32_t sliding_window_size = args.sliding_window_size.value_or(0);
@@ -1270,7 +1287,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Log padded dimensions
     log_debug(tt::LogOp, "q_local_padded_N: {}", q_local_padded_N);
     log_debug(tt::LogOp, "kv_local_padded_N: {}", kv_local_padded_N);
-    log_debug(tt::LogOp, "L: {}", L);
 
     // Log tile dimensions
     log_debug(tt::LogOp, "DHt: {}", DHt);
@@ -1318,20 +1334,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             sdpa_fused_op_signaler->fused_op_receiver_cores_noc.push_back(
                 mesh_device->worker_core_from_logical_core(core));
         }
-        const uint32_t fused_sem0_id = static_cast<uint32_t>(desc.semaphores.size());
-        desc.semaphores.push_back(SemaphoreDescriptor{
-            .id = fused_sem0_id,
-            .core_type = tt::CoreType::WORKER,
-            .core_ranges = core_grid_set,
-            .initial_value = 0,
-        });
-        const uint32_t fused_sem1_id = static_cast<uint32_t>(desc.semaphores.size());
-        desc.semaphores.push_back(SemaphoreDescriptor{
-            .id = fused_sem1_id,
-            .core_type = tt::CoreType::WORKER,
-            .core_ranges = core_grid_set,
-            .initial_value = 0,
-        });
+        const uint32_t fused_sem0_id = add_ring_joint_semaphore(desc, core_grid_set, 0, "fused op receiver");
+        const uint32_t fused_sem1_id = add_ring_joint_semaphore(desc, core_grid_set, 0, "fused op receiver");
         sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores.clear();
         sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores.push_back(fused_sem0_id);
         sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores.push_back(fused_sem1_id);
@@ -1344,16 +1348,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     uint32_t kexp_credit_sem_id = 0;
     uint32_t kexp_data_sem_id = 0;
     if (k_expand) {
-        for (uint32_t* sem_id : {&kexp_credit_sem_id, &kexp_data_sem_id}) {
-            *sem_id = static_cast<uint32_t>(desc.semaphores.size());
-            TT_FATAL(*sem_id < 16, "expanded-K head pairs need 2 semaphores, but {} are already allocated", *sem_id);
-            desc.semaphores.push_back(SemaphoreDescriptor{
-                .id = *sem_id,
-                .core_type = tt::CoreType::WORKER,
-                .core_ranges = core_grid_set,
-                .initial_value = 0,
-            });
-        }
+        kexp_credit_sem_id = add_ring_joint_semaphore(desc, core_grid_set, 0, "expanded-K head pairs");
+        kexp_data_sem_id = add_ring_joint_semaphore(desc, core_grid_set, 0, "expanded-K head pairs");
     }
 
     // Single host-derived split-forwarding decision, shared with the all-gather (passed to the
@@ -1361,11 +1357,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // unsplit protocol (its cache-replay consumption would deadlock waiting for a second half);
     // sliding-window consumes shards via get_next_ring_id_and_consume_one_signal, which has no
     // split second-half wait.
-    sdpa_fused_op_signaler->split_forwarding_enabled =
-        (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring) &&
-        (args.all_gather_operation_attributes.ring_size % 2 == 0) &&
-        (args.all_gather_operation_attributes.ring_size > 2) && !tensor_args.has_latent_v() &&
-        !args.has_sliding_window();
+    sdpa_fused_op_signaler->split_forwarding_enabled = (ag.topology == ttnn::ccl::Topology::Ring) &&
+                                                       (ag.ring_size % 2 == 0) && (ag.ring_size > 2) &&
+                                                       !tensor_args.has_latent_v() && !args.has_sliding_window();
 
     log_debug(tt::LogOp, "num_cores: {}", num_cores);
     log_debug(
@@ -1571,32 +1565,32 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // starts on the first part instead of waiting for the whole slice. Limited to the plain chunked dense path, where
     // the gather's slice is the valid prefix of local K chunks the reader iterates. The SDPA reader recomputes the
     // gather's on-device extent only when both run the metadata path.
-    const auto& ag_attrs_readiness = args.all_gather_operation_attributes;
     const auto [readiness_gather_inputs, readiness_gather_outputs] = fused_gather_kv_tensors(tensor_args);
-    const bool slice_readiness =
-        ag_attrs_readiness.topology == ttnn::ccl::Topology::Ring && ag_attrs_readiness.ring_size > 2 &&
-        kernel_chunked && !has_sliding_window && !joint_is_sharded && L == 0 && !args.is_balanced &&
-        args.kv_stripe_split == 1 && !v_shares_k_buffer &&
-        input_tensor_v.padded_shape()[2] == input_tensor_k.padded_shape()[2] &&
-        tensor_args.kv_actual_isl.has_value() == tensor_args.kv_pad_from_metadata(args.kv_stripe_split) &&
-        ring_attention_all_gather_async_detail::uses_output_bank_owned_schedule(
-            readiness_gather_inputs, readiness_gather_outputs, ag_attrs_readiness.dim);
+    const bool slice_readiness = ag.topology == ttnn::ccl::Topology::Ring && ag.ring_size > 2 && kernel_chunked &&
+                                 !has_sliding_window && !joint_is_sharded && L == 0 && !args.is_balanced &&
+                                 args.kv_stripe_split == 1 && !v_shares_k_buffer &&
+                                 input_tensor_v.padded_shape()[2] == input_tensor_k.padded_shape()[2] &&
+                                 ring_attention_all_gather_async_detail::uses_output_bank_owned_schedule(
+                                     readiness_gather_inputs, readiness_gather_outputs, ag.dim);
     sdpa_fused_op_signaler->slice_readiness = slice_readiness;
     // Floaters (kernels/ring_joint_floaters.hpp). On the validated expanded-K shapes the K split's 24 home blocks
     // of 2x2 cores fill a 10x10 sub-grid, leaving the 25th block, the last grid column and the gather column below its
     // workers idle: 20 cores, five floater groups of 4 that take over pieces of the homes' bands. The gather's workers
     // are the top 2 x num_links cores of column grid.x (column-major from (grid.x, 0)).
-    const auto& floater_ag_attrs = args.all_gather_operation_attributes;
     ring_joint::FloaterSchedule floater_schedule{};
     const bool floaters = k_expand && ksplit_count > 1 && !has_sliding_window && !use_attention_sink &&
                           num_q_chunks == 2 && ring_joint::floater_schedule(NH, ksplit_count, floater_schedule) &&
                           (NH / 2) * ksplit_count == ring_joint::kFloaterHomeBlocks && grid_size == CoreCoord(11, 10) &&
                           ring_size == 8 && args.ccl_core_grid_offset == CoreCoord(grid_size.x, 0) &&
-                          floater_ag_attrs.num_links == 2 &&
-                          floater_ag_attrs.core_allocation_strategy == ttnn::ccl::CoreAllocationStrategy::COL_MAJOR &&
+                          ag.num_links == 2 &&
+                          ag.core_allocation_strategy == ttnn::ccl::CoreAllocationStrategy::COL_MAJOR &&
                           // The homes merge at interleaved ring steps (merge_step_after), which need progressive
                           // readiness; the K split's own conditions give the rest of the interleave gate.
-                          slice_readiness && output_tensors.size() > RING_JOINT_SDPA_FLOATER_SCRATCH_IDX;
+                          slice_readiness;
+    // The device operation allocates the scratch on a looser gate (ring_joint_floaters_may_run), which must cover this.
+    TT_FATAL(
+        !floaters || output_tensors.size() > RING_JOINT_SDPA_FLOATER_SCRATCH_IDX,
+        "ring_joint floaters: no scratch output; ring_joint_floaters_may_run must admit every floater program");
     if (floaters) {
         // Homes merge the partials in the order of their pieces' iterations; every piece donates something, and a
         // home keeps part of every non-empty band (so a partial with state always has the home's own to merge into).
@@ -1609,9 +1603,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 NH,
                 ksplit_count);
         }
-        TT_FATAL(ring_size <= ring_joint::kDonationIters, "ring_joint floaters: ring of {}", ring_size);
     }
-    const uint32_t gather_workers = 2 * floater_ag_attrs.num_links;
+    const uint32_t gather_workers = 2 * ag.num_links;
     // The gather column's cores below its workers join the program as extra cores (indices num_cores..).
     const uint32_t floater_column_cores = floaters ? grid_size.y - gather_workers : 0;
     if (floaters) {
@@ -1672,9 +1665,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     //    single reserve_back, which then blocks forever (deadlock seen at q_chunk=256 causal).
     // Otherwise keep the full-size cb_out (the default path).
     const bool streaming_shrink_fits = Sq_chunk_t <= 2 * writer_out_row_group_h;
-    const bool streaming_shrink_safe = use_streaming_compute &&
-                                       (args.all_gather_operation_attributes.ring_size == 1 || max_q_per_core == 1) &&
-                                       streaming_shrink_fits;
+    const bool streaming_shrink_safe =
+        use_streaming_compute && (ag.ring_size == 1 || max_q_per_core == 1) && streaming_shrink_fits;
     if (streaming_shrink_safe) {
         out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, vDHt);
         TT_FATAL(
@@ -1738,12 +1730,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const RingWorkPlan& ring_work_plan = runtime_plan.ring_work_plan;
     const uint32_t active_ring_iter_mask = ring_work_plan.masks.active_ring_iter_mask;
     const uint32_t single_valid_kv_chunk_mask = ring_work_plan.masks.single_valid_kv_chunk_mask;
-    const auto& ag_attributes = args.all_gather_operation_attributes;
     const RingAttentionRankMapping rank_mapping{
-        .full_mesh = ag_attributes.full_mesh,
-        .orientation = ag_attributes.snake_orientation,
-        .mesh_rows = ag_attributes.mesh_rows,
-        .mesh_cols = ag_attributes.mesh_cols};
+        .full_mesh = ag.full_mesh,
+        .orientation = ag.snake_orientation,
+        .mesh_rows = ag.mesh_rows,
+        .mesh_cols = ag.mesh_cols};
 
     const uint32_t q_heads_per_kv = NH / NHK;
 
@@ -1783,7 +1774,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         num_local_k_chunks,
         num_joint_k_chunks,
         num_q_chunks,
-        args.all_gather_operation_attributes.ring_size,
+        ag.ring_size,
         qk_out_subblock_h,
         kernel_is_causal,
         args.is_balanced,
@@ -1893,27 +1884,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
         static ChainSemaphores create(ProgramDescriptor& desc, const CoreRangeSet& cores) {
             ChainSemaphores out;
-            out.sender_id = static_cast<uint32_t>(desc.semaphores.size());
-            desc.semaphores.push_back(SemaphoreDescriptor{
-                .id = out.sender_id,
-                .core_type = tt::CoreType::WORKER,
-                .core_ranges = cores,
-                .initial_value = INVALID,
-            });
-            out.receiver_id = static_cast<uint32_t>(desc.semaphores.size());
-            desc.semaphores.push_back(SemaphoreDescriptor{
-                .id = out.receiver_id,
-                .core_type = tt::CoreType::WORKER,
-                .core_ranges = cores,
-                .initial_value = INVALID,
-            });
-            out.valid_id = static_cast<uint32_t>(desc.semaphores.size());
-            desc.semaphores.push_back(SemaphoreDescriptor{
-                .id = out.valid_id,
-                .core_type = tt::CoreType::WORKER,
-                .core_ranges = cores,
-                .initial_value = VALID,
-            });
+            out.sender_id = add_ring_joint_semaphore(desc, cores, INVALID, "KV chain");
+            out.receiver_id = add_ring_joint_semaphore(desc, cores, INVALID, "KV chain");
+            out.valid_id = add_ring_joint_semaphore(desc, cores, VALID, "KV chain");
             return out;
         }
 
@@ -1981,7 +1954,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         num_q_chunks,
         packed_identity_scalar,
         scale_packed,
-        args.all_gather_operation_attributes.ring_size,
+        ag.ring_size,
         compile_time_global_n_partial_col,
         joint_l_partial_col,
         static_cast<std::uint32_t>(use_streaming_compute),
@@ -2043,7 +2016,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         num_local_k_chunks,
         num_joint_k_chunks,
         num_q_chunks,
-        args.all_gather_operation_attributes.ring_size,
+        ag.ring_size,
         qk_in0_block_w,
         qk_out_subblock_w,
         qk_out_subblock_h,
@@ -2272,15 +2245,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             ? (needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df) : cb_sum_B)
             : inactive_cb;
 
-    // Signal CB: compute signals writer when last K-chunk starts.
-    // 1 page suffices: writer pops during SALAD before compute pushes the next Q's signal.
+    // Signal CB, compute to writer, one page: compute pushes it when a Q chunk's last K chunk starts (the writer pops
+    // it during SALAD, before compute pushes the next Q's), when a K-split sender's state is staged in half A, and when
+    // a floater visit is staged for its save (the writer's pop frees half A again).
     constexpr uint32_t signal_page_size = 16;
     const uint32_t cb_signal =
         use_streaming_compute ? allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16) : inactive_cb;
     // Reader-to-compute mailbox for the metadata-derived logical geometry.
     const uint32_t cb_kv_pad_derived = allocate_cb(64, 1, tt::DataFormat::UInt32);
-    // Expanded K: the core's head's W_UK (pushed and popped with Q) and the assembled per-head K^T chunk
-    // [expanded no-PE rows | latent PE rows] the QK reads (double-buffered).
+    // Expanded K: the core's head's W_UK (pushed and popped with Q), and the expanded no-PE rows of each K chunk, this
+    // core's own and its peer's, which the QK reads in place beside the latent chunk's PE rows.
     //
     // Head pairs: each head's two Q chunks sit one per core and walk the same K chunks (one Q chunk per core, per-head
     // V chains, batch 1), and the two cores of a (K-split band, head) split the expansion: each expands kexp_own_rows
@@ -2469,7 +2443,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // and (2, 3)); the visits go round-robin over the groups in ring order, each home block's two pieces. Group core k
     // is floater core 4 f + k, and saves its visit v in its ring slot v % kFloaterRingSlots.
     struct FloaterVisit {
-        uint32_t iter, block, frac, piece;
+        uint32_t iter, block, piece;
     };
     // A home core's donated piece: the scratch slot it lands, and the floater core whose semaphore ordinal it sets.
     struct HomePiece {
@@ -2498,8 +2472,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         uint32_t next = 0;
         for (uint32_t piece = 0; piece < ring_joint::kDonatedPieces; ++piece) {
             for (uint32_t g = 0; g < ring_joint::kFloaterHomeBlocks; ++g) {
-                floater_visits[next++ % floater_groups.size()].push_back(
-                    {floater_schedule.iters[piece], g, floater_schedule.fracs[piece], piece});
+                floater_visits[next++ % floater_groups.size()].push_back({floater_schedule.iters[piece], g, piece});
             }
         }
         for (uint32_t f = 0; f < floater_groups.size(); ++f) {
@@ -3100,27 +3073,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Completion bits are never cleared during a run; reset follows the last incoming
         // handoff so early future signals survive arbitrary multicast-group skew.
         for (uint32_t sem_slot = 0; sem_slot < kRotatedHandoffSemCount; ++sem_slot) {
-            const uint32_t sem_id = static_cast<uint32_t>(desc.semaphores.size());
-            // The descriptor path has no budget check of its own: an id >= NUM_SEMAPHORES surfaces
-            // later as a bare "bitset::set: __position (17) >= _Nb (16)" IndexError from whichever
-            // helper next scans for a free id, naming neither SDPA nor this feature.
-            // Mirrors tt::tt_metal::NUM_SEMAPHORES (tt_metal/impl/buffers/semaphore.hpp), which is
-            // not reachable from a ttnn op through any public header.
-            constexpr uint32_t kSemaphoresPerCore = 16;
-            TT_FATAL(
-                sem_id < kSemaphoresPerCore,
-                "Ring MLA rotated Q split needs {} handoff semaphores, but the program has already "
-                "allocated {} and a core supports {}.",
-                kRotatedHandoffSemCount,
-                desc.semaphores.size(),
-                kSemaphoresPerCore);
-            desc.semaphores.push_back(SemaphoreDescriptor{
-                .id = sem_id,
-                .core_type = tt::CoreType::WORKER,
-                .core_ranges = core_grid_set,
-                .initial_value = 0,
-            });
-            rotated_handoff_sem_ids.push_back(sem_id);
+            rotated_handoff_sem_ids.push_back(
+                add_ring_joint_semaphore(desc, core_grid_set, 0, "rotated Q split handoff"));
         }
         // Report the selected schedule once per program compilation.
         log_debug(
@@ -3154,21 +3108,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             rotated_group_reject.empty() ? "ok" : rotated_group_reject);
     }
 
-    // Rotated Q split, compile-time: the maximum owned chunk count (base chunks plus one
+    // Rotated Q split, compile-time (named arg rotated_max_slots): the maximum owned chunk count (base chunks plus one
     // remainder unit: a chunk or a balanced pair), or 0 when the rotation declines. Kernels gate on `> 0` via if
-    // constexpr, so both paths always compile. Pushed unconditionally as the LAST compile-time arg of all three
-    // kernels, which is how they read it back -- no per-kernel index to keep in sync. The
-    // TT_FATAL below pins that "last" so a future append fails loudly instead of silently
-    // handing the kernels some other value.
+    // constexpr, so both paths always compile.
     const uint32_t rotated_max_slots_ct = use_rotated_q_split ? rotated_base_chunks + rotation_unit_chunks : 0;
     // Skip dense chunked K chunks past each device's causal end (reader and compute). Only the streaming path mirrors
     // it, and only single-Q cores, where the writer does not order saves by a per-iteration K chunk count. Split KV
     // masks its own packed streams: the skip's Q-end and region arithmetic assume the classic ring.
     const bool dense_causal_skip = use_streaming_compute && kernel_chunked && !has_sliding_window &&
                                    max_q_per_core == 1 && !use_rotated_q_split && args.kv_stripe_split == 1;
-    for (auto* args : {&reader_compile_time_args, &writer_compile_time_args, &compute_compile_time_args}) {
-        args->push_back(rotated_max_slots_ct);
-    }
     // Each core's rank in its head pair and its peer: head_segments[band * NH + head] lists the pair's cores.
     std::vector<uint32_t> kexp_rank(num_cores_all, 0);
     std::vector<uint32_t> kexp_peer(num_cores_all, 0);
@@ -3194,18 +3142,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Reducer's ready semaphore: one bit per sender, set once its state is staged.
     uint32_t ksplit_sem_id = 0;
     if (ksplit_count > 1) {
-        ksplit_sem_id = static_cast<uint32_t>(desc.semaphores.size());
-        TT_FATAL(
-            ksplit_sem_id < 16, "ring_joint K split needs a semaphore, but {} are already allocated", ksplit_sem_id);
-        desc.semaphores.push_back(SemaphoreDescriptor{
-            .id = ksplit_sem_id,
-            .core_type = tt::CoreType::WORKER,
-            .core_ranges = core_grid_set,
-            .initial_value = 0,
-        });
+        ksplit_sem_id = add_ring_joint_semaphore(desc, core_grid_set, 0, "K split");
     }
-    const std::array<size_t, 3> ct_arg_sizes_with_rotated_last = {
-        reader_compile_time_args.size(), writer_compile_time_args.size(), compute_compile_time_args.size()};
 
     // Build static MHA/shared-K V head chains. GQA uses KV-head-grouped chains instead.
     if (use_head_chain && build_kv_chains) {
@@ -3465,10 +3403,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const bool single_q = !use_rotated_q_split && std::all_of(core_work.begin(), core_work.end(), [](const auto& work) {
         return work.global_q_count <= 1;
     });
-    const bool ring_interleave = slice_readiness && ksplit_count > 1 && single_q && grouped_sources == 1 &&
-                                 !has_sliding_window && !seg_accum && use_streaming_compute;
+    // The K split's own gate (streaming, no segmented accumulation, one unit per core) and slice readiness's (no
+    // sliding window, no grouped sources) give the rest; floaters imply both terms.
+    const bool ring_interleave = slice_readiness && ksplit_count > 1;
+    TT_ASSERT(!ring_interleave || (single_q && grouped_sources == 1 && !seg_accum && use_streaming_compute));
     // A home merges its first floater piece before the step after its merge iteration's last (in interleaved order).
-    TT_FATAL(!floaters || ring_interleave, "ring_joint floaters: need interleaved ring steps");
     auto merge_step_after = [&](uint32_t iter) {
         uint32_t last = 0;
         for (uint32_t step = 0; step < ring_joint::interleaved_step_count(ring_size); ++step) {
@@ -3479,30 +3418,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Convert std::map<string,string> defines to KernelDescriptor::Defines vector form.
     KernelDescriptor::Defines kernel_defines(defines.begin(), defines.end());
 
-    // Build kernel descriptors locally so we can append per-core runtime args
-    // before pushing them into desc.kernels at the end. KernelDescriptor creation
-    // is deferred (just like the original CreateKernel calls were) until after chain
-    // construction, since the mcast_enabled compile-time arg is patched above.
+    // Build kernel descriptors locally so we can append per-core runtime args before pushing them into desc.kernels at
+    // the end. They come after chain construction, which patches the mcast_enabled compile-time arg above.
     KernelDescriptor reader_kernel{};
     reader_kernel.kernel_source =
         "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp";
     reader_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel.core_ranges = core_grid_set;
-    // The kernels read rotated_max_slots as their final compile-time arg, so nothing may be
-    // appended after it (in-place patching of earlier indices is fine and does not change size).
-    TT_FATAL(
-        reader_compile_time_args.size() == ct_arg_sizes_with_rotated_last[0] &&
-            writer_compile_time_args.size() == ct_arg_sizes_with_rotated_last[1] &&
-            compute_compile_time_args.size() == ct_arg_sizes_with_rotated_last[2],
-        "rotated_max_slots must stay the last compile-time arg; args were appended after it "
-        "(reader {}->{}, writer {}->{}, compute {}->{})",
-        ct_arg_sizes_with_rotated_last[0],
-        reader_compile_time_args.size(),
-        ct_arg_sizes_with_rotated_last[1],
-        writer_compile_time_args.size(),
-        ct_arg_sizes_with_rotated_last[2],
-        compute_compile_time_args.size());
-
     reader_kernel.compile_time_args = reader_compile_time_args;
     reader_kernel.defines = kernel_defines;
     reader_kernel.config = ReaderConfigDescriptor{};
@@ -3572,22 +3494,27 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     compute_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel.core_ranges = core_grid_set;
     compute_kernel.compile_time_args = compute_compile_time_args;
-    const KernelDescriptor::NamedCompileTimeArgs ksplit_named_args = {
+    const KernelDescriptor::NamedCompileTimeArgs common_named_args = {
         {"ksplit_count", ksplit_count},
         {"ksplit_sem_id", ksplit_sem_id},
+        {"rotated_max_slots", rotated_max_slots_ct},
         {"dense_causal_skip", dense_causal_skip ? 1u : 0u},
         {"seg_accum", seg_accum ? 1u : 0u},
         {"single_q", single_q ? 1u : 0u},
+        {"slice_readiness", slice_readiness ? 1u : 0u},
         {"ring_interleave", ring_interleave ? 1u : 0u},
         // Expanded-K floaters (kernels/ring_joint_floaters.hpp): the program runs them, and whether its homes donate
-        // their bands' tails. floater_core marks the floaters' own kernel group, set on those copies below.
+        // their bands' tails. floater_core, set per kernel group below, marks the floaters' own group.
         {"floaters", floaters ? 1u : 0u},
-        {"floater_core", 0u},
         {"donate_tail", floaters && floater_schedule.donate_tail ? 1u : 0u},
+        {"donate_iter0", floaters ? floater_schedule.iters[0] : 0u},
+        {"donate_iter1", floaters ? floater_schedule.iters[1] : 0u},
+        {"donate_frac0", floaters ? floater_schedule.fracs[0] : 0u},
+        {"donate_frac1", floaters ? floater_schedule.fracs[1] : 0u},
         {"kv_stripe_split", args.kv_stripe_split},
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
-        kernel->named_compile_time_args = ksplit_named_args;
+        kernel->named_compile_time_args = common_named_args;
     }
     // Padded multicast slots exist only under the same conditions that let static_mcast_q_count exceed q_per_core
     // (or with the rotated Q split); without them the compute kernel drops its padded-slot drain loop.
@@ -3625,38 +3552,36 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         std::vector<CoreRange> floater_ranges;
         std::vector<CoreRange> home_ranges;
         for (uint32_t c = 0; c < num_cores_all; ++c) {
-            (floater_group_of[c] != kNoGroup ? floater_ranges : home_ranges).emplace_back(logical_core(c));
+            const bool floater = floater_group_of[c] != kNoGroup;
+            // The cache-hit patch tells a floater program by its home kernels' narrower argument grid.
+            TT_FATAL(
+                floater || logical_core(c).x + 1 < grid_size.x, "ring_joint floaters: home core in the last column");
+            (floater ? floater_ranges : home_ranges).emplace_back(logical_core(c));
         }
         floater_reader_kernel = reader_kernel;
         floater_writer_kernel = writer_kernel;
         floater_compute_kernel = compute_kernel;
         for (auto* kernel : {&floater_reader_kernel, &floater_writer_kernel, &floater_compute_kernel}) {
             kernel->core_ranges = CoreRangeSet(floater_ranges);
-            for (auto& [name, value] : kernel->named_compile_time_args) {
-                value = name == "floater_core" ? 1u : value;
-            }
+            kernel->named_compile_time_args.emplace_back("floater_core", 1u);
         }
         for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
             kernel->core_ranges = CoreRangeSet(home_ranges);
         }
     }
+    for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
+        kernel->named_compile_time_args.emplace_back("floater_core", 0u);
+    }
 
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores_all; ++i) {
         const CoreCoord core = logical_core(i);
-        // Floaters, for reader and compute: [donated fraction per ring iteration], then [visit count][visits:
-        // iteration, unit, band, frac], then on a home its first piece's merge step. Floater core k runs the unit of
-        // home core k of each visited block.
+        // Floaters, for reader and compute: a floater's [visit count][visits: iteration, unit, band], or a home's
+        // [0][its first piece's merge step] (the reader stops at the count). Floater core k runs the unit of home core
+        // k of each visited block.
         const bool floater = floaters && floater_group_of[i] != kNoGroup;
         auto append_floater_args = [&](CheckedRuntimeArgList& floater_args) {
             const bool home = floaters && home_unit[i] < total_q_chunks;
-            for (uint32_t it = 0; it < ring_joint::kDonationIters; ++it) {
-                uint32_t frac = 0;
-                for (uint32_t piece = 0; home && piece < ring_joint::kDonatedPieces; ++piece) {
-                    frac = floater_schedule.iters[piece] == it ? floater_schedule.fracs[piece] : frac;
-                }
-                floater_args.push_back(frac);
-            }
             if (!floater) {
                 floater_args.push_back(0u);
                 floater_args.push_back(home ? merge_step_after(home_merge_iter[i]) : 0u);
@@ -3669,7 +3594,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 floater_args.push_back(visit.iter);
                 floater_args.push_back(home_unit[h]);
                 floater_args.push_back(home_band[h]);
-                floater_args.push_back(visit.frac);
             }
         };
 
@@ -3843,9 +3767,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             }
         }
         if (floaters) {
-            // Floaters: [scratch], then a floater's [visit count][visits: iteration, slot, home x, home y, home
-            // semaphore ordinal] (the floaters' bits follow the K-split senders'), or a home's donated pieces [slot,
-            // ring iteration, floater x, floater y, floater semaphore ordinal].
+            // Floaters: [scratch], then a floater's [visit count][visits: iteration, slot, home x, home y], or a
+            // home's donated pieces [slot, floater x, floater y, floater semaphore ordinal].
             writer_args.push_back(output_tensors.at(RING_JOINT_SDPA_FLOATER_SCRATCH_IDX).buffer());
             if (floater) {
                 const uint32_t f = floater_group_of[i];
@@ -3857,13 +3780,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                     writer_args.push_back(floater_slot(f, floater_k_of[i], v));
                     writer_args.push_back(core_work[h].physical_core.x);
                     writer_args.push_back(core_work[h].physical_core.y);
-                    writer_args.push_back(ksplit_count + 1 + visits[v].piece);
                 }
             } else {
                 for (uint32_t piece = 0; piece < ring_joint::kDonatedPieces; ++piece) {
                     const HomePiece& home_piece = home_pieces[i][piece];
                     writer_args.push_back(home_piece.slot);
-                    writer_args.push_back(floater_schedule.iters[piece]);
                     writer_args.push_back(core_work[home_piece.floater].physical_core.x);
                     writer_args.push_back(core_work[home_piece.floater].physical_core.y);
                     writer_args.push_back(home_piece.ordinal);
@@ -3969,18 +3890,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // gets no exchange. validate_on_program_cache_miss bounds the hop count.
         // plan_chunked_sliding_halo_exchanges groups the hops into exchanges.
         const uint32_t halo_remote_hops = chunked_sliding_halo_layout.remote_hop_count();
-        const auto& ag_attrs = args.all_gather_operation_attributes;
         const auto halo_exchanges = plan_halo_exchanges(args, chunked_sliding_halo_layout, transport_rank);
         // The first exchange's workers collect every arrival (RingAttentionNeighborHaloConfig::collects_arrivals).
         TT_FATAL(halo_exchanges.front().hop == 1, "The first sliding halo exchange must cover hop 1");
         const bool halo_multicast = halo_exchanges.front().multicast;
         const uint32_t halo_exchange_count = halo_exchanges.size();
         // Unicast hops beyond the link count time-share a link (see RingAttentionNeighborHaloConfig).
-        const uint32_t links_per_exchange = halo_links_per_exchange(halo_exchanges, ag_attrs.num_links);
+        const uint32_t links_per_exchange = halo_links_per_exchange(halo_exchanges, ag.num_links);
         // Each exchange needs its own workers. The CCL offset points at a reserved column (or row), so
         // walk along it: allocation order is the same for every call, so the blocks are disjoint.
-        const bool halo_column_major =
-            ag_attrs.core_allocation_strategy == ttnn::ccl::CoreAllocationStrategy::COL_MAJOR;
+        const bool halo_column_major = ag.core_allocation_strategy == ttnn::ccl::CoreAllocationStrategy::COL_MAJOR;
         const auto halo_exchange_core_grid_offset = [&](uint32_t exchange) {
             const uint32_t worker_stride = exchange * links_per_exchange;
             return CoreCoord{
@@ -3997,10 +3916,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 links_per_exchange,
                 1,
                 mesh_device,
-                ag_attrs.sub_device_id,
+                ag.sub_device_id,
                 halo_exchange_core_grid_offset(exchange),
                 std::nullopt,
-                ag_attrs.core_allocation_strategy);
+                ag.core_allocation_strategy);
             exchange_lead_cores.push_back(cores.front());
             if (exchange == 0) {
                 first_exchange_link_cores = std::move(cores);
@@ -4046,8 +3965,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 links_per_exchange,
                 links_available);
             // Never use more links than the caller asked for.
-            direction_link_span[direction] = std::min(
-                {static_cast<uint32_t>(direction_exchanges[direction].size()), ag_attrs.num_links, links_available});
+            direction_link_span[direction] =
+                std::min({static_cast<uint32_t>(direction_exchanges[direction].size()), ag.num_links, links_available});
         }
         const bool halo_links_shared = direction_exchanges[0].size() > direction_link_span[0] ||
                                        direction_exchanges[1].size() > direction_link_span[1];
@@ -4095,7 +4014,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 plan.send_backward ? -static_cast<int32_t>(plan.distance) : static_cast<int32_t>(plan.distance);
             // The nearest receiver; a multicast continues past it.
             const auto halo_destination_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-                tensor_args.input_q, coord, signed_hops, ag_attrs.topology, ag_attrs.cluster_axis);
+                tensor_args.input_q, coord, signed_hops, ag.topology, ag.cluster_axis);
             const auto halo_transport_coord = plan.send_backward ? backward_coord : forward_coord;
             TT_FATAL(
                 halo_transport_coord.has_value() && halo_destination_coord.has_value(),
@@ -4178,19 +4097,21 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 halo_destination_coord.value(),
                 all_gather_output_tensors,
                 links_per_exchange,
-                ag_attrs.ring_size,
+                ag.ring_size,
                 transport_rank,
-                ag_attrs.topology,
-                ag_attrs.semaphore,
-                ag_attrs.sub_device_id,
+                ag.topology,
+                ag.semaphore,
+                ag.sub_device_id,
                 all_gather_fused_op_signaler.value(),
                 halo_exchange_core_grid_offset(exchange),
-                ag_attrs.core_allocation_strategy,
+                ag.core_allocation_strategy,
                 args.cache_batch_idx(),
                 compute_gather_valid_Ht(args, tensor_args),
                 neighbor_halo);
         }
     } else {
+        const uint32_t kv_region_Nt =
+            tensor_args.input_q.padded_shape()[2] / (tt::constants::TILE_HEIGHT * args.kv_stripe_split);
         // Append the all-gather portion to `desc`. Buffer addresses are auto-patched on cache hits; the
         // indexed-mode input_batch_base scalar is re-patched in apply_ring_joint_scalar_runtime_args.
         // Single-slot gather is engaged whenever the op is in indexed mode -- either a host
@@ -4207,16 +4128,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             forward_coord,
             backward_coord,
             all_gather_output_tensors,
-            args.all_gather_operation_attributes.dim,
-            args.all_gather_operation_attributes.num_links,
-            args.all_gather_operation_attributes.ring_size,
+            ag.dim,
+            ag.num_links,
+            ag.ring_size,
             transport_rank,
-            args.all_gather_operation_attributes.topology,
-            args.all_gather_operation_attributes.semaphore,
-            args.all_gather_operation_attributes.sub_device_id,
+            ag.topology,
+            ag.semaphore,
+            ag.sub_device_id,
             all_gather_fused_op_signaler,
             args.ccl_core_grid_offset,
-            args.all_gather_operation_attributes.core_allocation_strategy,
+            ag.core_allocation_strategy,
             gather_slice_idx,
             // Bound the gather to the logical_n-valid prefix at create time so the first (cache-miss)
             // dispatch moves only kv_actual-sized data, not the whole oversized cache. Re-patched per
@@ -4225,7 +4146,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             tensor_args.slot_id,
             tensor_args.kv_actual_isl,
             // The gather has R sources: its slab is the KV region, not the Q slab.
-            tensor_args.input_q.padded_shape()[2] / (tt::constants::TILE_HEIGHT * args.kv_stripe_split),
+            kv_region_Nt,
             // (user, layer)-major KV-cache batch factor: the all-gather reader computes the gathered slot as
             // slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx. Defaults (1, 0) keep callers unaffected.
             args.kv_cache_num_layers,
@@ -4238,7 +4159,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             // The gather splits each slice like its receiver's K bands: a receiver ranked below the sender masks
             // the sender's newest slab (one Q slab of the chunk) under the dense causal skip.
             slice_readiness
-                ? RingAttentionSliceReadiness{ksplit_count, Sk_chunk_t, dense_causal_skip ? tensor_args.input_q.padded_shape()[2] / (tt::constants::TILE_HEIGHT * args.kv_stripe_split) : 0u}
+                ? RingAttentionSliceReadiness{ksplit_count, Sk_chunk_t, dense_causal_skip ? kv_region_Nt : 0u}
                 : RingAttentionSliceReadiness{});
     }
 

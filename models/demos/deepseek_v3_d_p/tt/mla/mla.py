@@ -1542,7 +1542,7 @@ class ttMLA:
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,
             exp_approx_mode=False,
-            max_k_splits=k_splits,
+            k_splits=k_splits,
             matmul_math_fidelity=self.sdpa_matmul_fidelity,
         )
 

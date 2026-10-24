@@ -597,9 +597,7 @@ void kernel_main() {
 
     // Maximum owned chunk count (base chunks plus one remainder unit), or 0 when the host
     // declined the rotation. The offset clears the whole CB block, not just the CBs used here.
-    // The factory pushes rotated_max_slots as the final compile-time arg of every kernel, so
-    // read it from there rather than tracking a per-kernel index into the block above.
-    constexpr uint32_t rotated_max_slots = get_ct_arg<kernel_compile_time_args.size() - 1>();
+    constexpr uint32_t rotated_max_slots = get_named_compile_time_arg_val("rotated_max_slots");
     constexpr bool rotated_q_split_enabled = rotated_max_slots > 0;
     constexpr uint32_t rotated_iter_stride = kRotatedWriterIterWords;
 
@@ -622,10 +620,15 @@ void kernel_main() {
     constexpr bool floaters = get_named_compile_time_arg_val("floaters") == 1;
     constexpr bool floater_core = get_named_compile_time_arg_val("floater_core") == 1;
     constexpr bool floater_home = floaters && !floater_core;
+    // The program's donation schedule (ring_joint_floaters.hpp); all zero without floaters.
+    [[maybe_unused]] constexpr ring_joint::DonationSchedule donation{
+        {get_named_compile_time_arg_val("donate_iter0"), get_named_compile_time_arg_val("donate_iter1")},
+        {get_named_compile_time_arg_val("donate_frac0"), get_named_compile_time_arg_val("donate_frac1")}};
     // No core holds two Q chunks (see the ring loop).
     constexpr bool single_q = get_named_compile_time_arg_val("single_q") == 1;
     static_assert(!ksplit_enabled || (!rotated_q_split_enabled && use_streaming_compute));
     static_assert(ksplit_count <= ring_joint::kKSplitMaxCount);
+    static_assert(!floaters || (ksplit_enabled && single_q), "the floaters' arg layout assumes them");
     const bool ksplit_active = ksplit_enabled && global_q_end - global_q_start == 1;
     // Segmented accumulation (see the compute kernel): the output is normalized after the ring loop.
     constexpr bool seg_accum_enabled = get_named_compile_time_arg_val("seg_accum") == 1;
@@ -655,10 +658,9 @@ void kernel_main() {
     constexpr uint32_t cb_max_A = get_compile_time_arg_val(cb_arg_offset + 18);
     constexpr uint32_t cb_sum_A = get_compile_time_arg_val(cb_arg_offset + 20);
     constexpr uint32_t ksplit_cb_sum_in = ksplit_enabled ? cb_sum_in : cb_out;
-    // Floaters, after the K-split args: [scratch address], then a floater's [visit count]
-    // [visits: iteration, slot, home x, home y, home semaphore ordinal], or a home's donated pieces [slot, ring
-    // iteration, floater x, floater y, floater semaphore ordinal]. A slot holds the max, sum and out tiles of one
-    // partial, one float32-tile page each.
+    // Floaters, after the K-split args: [scratch address], then a floater's [visit count][visits: iteration, slot,
+    // home x, home y], or a home's donated pieces [slot, floater x, floater y, floater semaphore ordinal]. A slot holds
+    // the max, sum and out tiles of one partial, one float32-tile page each.
     [[maybe_unused]] const uint32_t floater_args =
         ksplit_peer_args + 2 * (ksplit_active ? (ksplit_band + 1 < ksplit_count ? 1 : ksplit_count - 1) : 0);
     constexpr uint32_t slot_out_tiles = Sq_chunk_t * vDHt;
@@ -672,19 +674,27 @@ void kernel_main() {
             get_tile_size(cb_sum_A) <= ring_joint::kFloaterSlotPageBytes &&
             get_tile_size(cb_out_im_A) <= ring_joint::kFloaterSlotPageBytes,
         "a floater partial's tiles must fit the scratch pages");
-    // Moves `tiles` tiles of `bytes` each between L1 at `l1` and the slot's pages from `first`.
-    [[maybe_unused]] auto move_slot_tiles =
-        [&](bool to_dram, uint32_t slot, uint32_t first, uint32_t tiles, uint32_t bytes, uint32_t l1)
-            __attribute__((noinline)) {
-                for (uint32_t t = 0; t < tiles; ++t) {
-                    const uint64_t dram = floater_scratch.get_noc_addr(slot * slot_tiles + first + t);
+    // The K split's ready bits: a sender's, then the floaters' (kernels/ring_joint_floaters.hpp).
+    [[maybe_unused]] RotatedQHandoff ksplit_bits(get_named_compile_time_arg_val("ksplit_sem_id"));
+    // Moves a partial's max, sum and out tiles between L1 and its slot's pages.
+    [[maybe_unused]] auto move_slot =
+        [&](bool to_dram, uint32_t slot, uint32_t max_l1, uint32_t sum_l1, uint32_t out_l1) __attribute__((noinline)) {
+            const uint32_t l1[3] = {max_l1, sum_l1, out_l1};
+            const uint32_t tiles[3] = {Sq_chunk_t, Sq_chunk_t, slot_out_tiles};
+            const uint32_t bytes[3] = {get_tile_size(cb_max_A), get_tile_size(cb_sum_A), get_tile_size(cb_out_im_A)};
+            uint32_t page = slot * slot_tiles;
+            for (uint32_t part = 0; part < 3; ++part) {
+                for (uint32_t t = 0; t < tiles[part]; ++t, ++page) {
+                    const uint64_t dram = floater_scratch.get_noc_addr(page);
+                    const uint32_t local = l1[part] + t * bytes[part];
                     if (to_dram) {
-                        noc_async_write(l1 + t * bytes, dram, bytes);
+                        noc_async_write(local, dram, bytes[part]);
                     } else {
-                        noc_async_read(dram, l1 + t * bytes, bytes);
+                        noc_async_read(dram, local, bytes[part]);
                     }
                 }
-            };
+            }
+        };
 
     Noc noc;
 
@@ -902,14 +912,13 @@ void kernel_main() {
         // the senders', ordinals ksplit_count + 1 + piece), and hand each slot back to its floater. Compute's merge of
         // the first frees the restore CBs for the second. The ring loop below pushes nothing compute needs on a K-split
         // core, so this waits here.
-        RotatedQHandoff ready(get_named_compile_time_arg_val("ksplit_sem_id"));
         for (uint32_t piece = 0; piece < ring_joint::kDonatedPieces; ++piece) {
             const uint32_t a = floater_args + 1 + piece * ring_joint::kFloaterHomePieceArgs;
             // An inactive ring iteration runs on no core: no floater visits it, and compute expects no partial.
-            if (((active_ring_iter_mask >> get_arg_val<uint32_t>(a + 1)) & 1u) == 0) {
+            if (((active_ring_iter_mask >> donation.iters[piece]) & 1u) == 0) {
                 continue;
             }
-            ready.wait(ksplit_count + 1 + piece);
+            ksplit_bits.wait(ring_joint::piece_ordinal(ksplit_count, piece));
             const uint32_t slot = get_arg_val<uint32_t>(a);
             CircularBuffer in_max(cb_max_in);
             CircularBuffer in_sum(ksplit_cb_sum_in);
@@ -917,12 +926,10 @@ void kernel_main() {
             in_max.reserve_back(Sq_chunk_t);
             in_sum.reserve_back(Sq_chunk_t);
             in_out.reserve_back(slot_out_tiles);
-            move_slot_tiles(false, slot, 0, Sq_chunk_t, get_tile_size(cb_max_A), in_max.get_write_ptr());
-            move_slot_tiles(false, slot, Sq_chunk_t, Sq_chunk_t, get_tile_size(cb_sum_A), in_sum.get_write_ptr());
-            move_slot_tiles(
-                false, slot, 2 * Sq_chunk_t, slot_out_tiles, get_tile_size(cb_out_im_A), in_out.get_write_ptr());
+            move_slot(false, slot, in_max.get_write_ptr(), in_sum.get_write_ptr(), in_out.get_write_ptr());
             noc_async_read_barrier();
-            ready.signal(noc, get_arg_val<uint32_t>(a + 2), get_arg_val<uint32_t>(a + 3), get_arg_val<uint32_t>(a + 4));
+            ksplit_bits.signal(
+                noc, get_arg_val<uint32_t>(a + 1), get_arg_val<uint32_t>(a + 2), get_arg_val<uint32_t>(a + 3));
             in_max.push_back(Sq_chunk_t);
             in_sum.push_back(Sq_chunk_t);
             in_out.push_back(slot_out_tiles);
@@ -975,31 +982,23 @@ void kernel_main() {
                     const uint32_t previous_iter =
                         get_arg_val<uint32_t>(floater_args + 2 + previous * ring_joint::kFloaterWriterVisitArgs);
                     if (((active_ring_iter_mask >> previous_iter) & 1u) != 0) {
-                        RotatedQHandoff(get_named_compile_time_arg_val("ksplit_sem_id")).wait(previous + 1);
+                        ksplit_bits.wait(previous + 1);
                         break;
                     }
                 }
                 const uint32_t slot = get_arg_val<uint32_t>(a + 1);
-                move_slot_tiles(
-                    true, slot, 0, Sq_chunk_t, get_tile_size(cb_max_A), CircularBuffer(cb_max_A).get_read_ptr());
-                move_slot_tiles(
+                move_slot(
                     true,
                     slot,
-                    Sq_chunk_t,
-                    Sq_chunk_t,
-                    get_tile_size(cb_sum_A),
-                    CircularBuffer(cb_sum_A).get_read_ptr());
-                move_slot_tiles(
-                    true,
-                    slot,
-                    2 * Sq_chunk_t,
-                    slot_out_tiles,
-                    get_tile_size(cb_out_im_A),
+                    CircularBuffer(cb_max_A).get_read_ptr(),
+                    CircularBuffer(cb_sum_A).get_read_ptr(),
                     CircularBuffer(cb_out_im_A).get_read_ptr());
                 noc_async_write_barrier();
-                RotatedQHandoff(get_named_compile_time_arg_val("ksplit_sem_id"))
-                    .signal(
-                        noc, get_arg_val<uint32_t>(a + 2), get_arg_val<uint32_t>(a + 3), get_arg_val<uint32_t>(a + 4));
+                ksplit_bits.signal(
+                    noc,
+                    get_arg_val<uint32_t>(a + 2),
+                    get_arg_val<uint32_t>(a + 3),
+                    ring_joint::piece_ordinal(ksplit_count, donation.piece(ring_iter)));
                 noc.async_atomic_barrier();
                 staged.pop_front(1);
             }
@@ -1482,27 +1481,25 @@ void kernel_main() {
     };
     if constexpr (floater_core) {
         // Every home has read its slot once all visits' bits are set: none can set one after the reset.
-        RotatedQHandoff read_back(get_named_compile_time_arg_val("ksplit_sem_id"));
         const uint32_t visits = get_arg_val<uint32_t>(floater_args + 1);
         for (uint32_t v = 0; v < visits; ++v) {
             const uint32_t iter = get_arg_val<uint32_t>(floater_args + 2 + v * ring_joint::kFloaterWriterVisitArgs);
             if (((active_ring_iter_mask >> iter) & 1u) != 0) {
-                read_back.wait(v + 1);
+                ksplit_bits.wait(v + 1);
             }
         }
-        read_back.reset_after_run();
+        ksplit_bits.reset_after_run();
     }
     if constexpr (ksplit_enabled && !floater_core) {
-        RotatedQHandoff ready(get_named_compile_time_arg_val("ksplit_sem_id"));
         if (floaters && ksplit_active && ksplit_band + 1 < ksplit_count) {
             // A sender's semaphore carries only the floaters' bits, all landed before the ring.
-            ready.reset_after_run();
+            ksplit_bits.reset_after_run();
         }
         if (ksplit_active && ksplit_band + 1 < ksplit_count) {
             // Sender: compute signals once its state sits in half A, where it stays until the program ends.
             CircularBuffer staged(cb_signal);
             staged.wait_front(1);
-            ready.signal(
+            ksplit_bits.signal(
                 noc,
                 get_arg_val<uint32_t>(ksplit_peer_args),
                 get_arg_val<uint32_t>(ksplit_peer_args + 1),
@@ -1519,7 +1516,7 @@ void kernel_main() {
             for (uint32_t sender = 0; sender + 1 < ksplit_count; ++sender) {
                 const uint32_t x = get_arg_val<uint32_t>(ksplit_peer_args + 2 * sender);
                 const uint32_t y = get_arg_val<uint32_t>(ksplit_peer_args + 2 * sender + 1);
-                ready.wait(sender + 1);
+                ksplit_bits.wait(sender + 1);
                 auto pull = [&](CircularBuffer& cb, uint32_t source_cb, uint32_t tiles) {
                     cb.reserve_back(tiles);
                     noc.async_read(
@@ -1540,7 +1537,7 @@ void kernel_main() {
                 in_sum.push_back(Sq_chunk_t);
                 in_out.push_back(out_tiles);
             }
-            ready.reset_after_run();
+            ksplit_bits.reset_after_run();
 
             write_output_after_ring();
         }

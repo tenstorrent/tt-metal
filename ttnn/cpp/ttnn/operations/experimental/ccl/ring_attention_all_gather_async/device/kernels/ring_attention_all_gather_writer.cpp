@@ -313,11 +313,11 @@ void kernel_main() {
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
     /* Args for overlapped all gather */
-    OpSignaler op_signaler_sender;
+    OpSignalerT</*packed_signal_coords=*/true> op_signaler_sender;
 
     if constexpr (fuse_op) {
         arg_idx = arg_for_fab;
-        op_signaler_sender = OpSignaler(arg_idx, /*packed_signal_coords=*/true);
+        op_signaler_sender = OpSignalerT<true>(arg_idx);
     }
 
     Noc noc_obj;

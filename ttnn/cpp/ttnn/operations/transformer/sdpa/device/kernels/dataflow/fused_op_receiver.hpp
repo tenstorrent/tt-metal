@@ -11,7 +11,10 @@
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_slice_readiness.hpp"
 #include <array>
 
-struct RingSDPAOpReceiver {
+// slice_readiness: the producer sends progressive slices (bit 1 of the split-forwarding arg agrees). A compile-time
+// choice, so consumers without it carry none of its code.
+template <bool slice_readiness = false>
+struct RingSDPAOpReceiverT {
     RingIdSequencer seq;
     bool wait_for_op_signal = false;
     std::array<uint32_t, 2> signal_op_semaphore_ids = {0, 0};
@@ -25,20 +28,19 @@ struct RingSDPAOpReceiver {
     // Progressive readiness (ring_attention_slice_readiness.hpp): every full remote slice is signaled once per part;
     // get_next_ring_id_and_sync waits for part 0 only, and wait_part waits for later parts as the reader reaches them.
     // Kept per direction: interleaved ring steps (ring_interleave) read one slice from each direction at a time.
-    bool slice_readiness = false;
     uint32_t last_dir = 0;  // direction of the slice the last get_next_ring_id_and_sync returned
     bool slice_progressive[2] = {false, false};
     uint32_t slice_base[2] = {0, 0};
     uint32_t slice_parts_ready[2] = {0, 0};
 
-    RingSDPAOpReceiver() {}
+    RingSDPAOpReceiverT() {}
 
-    RingSDPAOpReceiver(bool wait_for_op_signal, uint32_t& rt_args_idx) :
-        RingSDPAOpReceiver(
+    RingSDPAOpReceiverT(bool wait_for_op_signal, uint32_t& rt_args_idx) :
+        RingSDPAOpReceiverT(
             wait_for_op_signal, rt_args_idx, [](uint32_t index) { return get_arg_val<uint32_t>(index); }) {}
 
     template <typename ReadArg>
-    RingSDPAOpReceiver(bool wait_for_op_signal, uint32_t& rt_args_idx, ReadArg read_arg) :
+    RingSDPAOpReceiverT(bool wait_for_op_signal, uint32_t& rt_args_idx, ReadArg read_arg) :
         wait_for_op_signal(wait_for_op_signal) {
         uint32_t ring_size = read_arg(rt_args_idx++);
         uint32_t ring_index = read_arg(rt_args_idx++);
@@ -56,7 +58,7 @@ struct RingSDPAOpReceiver {
             signal_op_semaphore_ids[1] = bwd_semaphore_id;
             signal_op_semaphore_ids[0] = fwd_semaphore_id;
             split_forwarding_enabled = (split_forwarding & 1) != 0;
-            slice_readiness = (split_forwarding & 2) != 0;
+            ASSERT(((split_forwarding & 2) != 0) == slice_readiness);
             split_shard_id = split_shard;
             split_second_half_wait = split_wait;
         }
@@ -71,7 +73,7 @@ struct RingSDPAOpReceiver {
             this->last_dir = dir;
             this->slice_progressive[dir] = false;
             if (this->wait_for_op_signal) {
-                if (this->slice_readiness && val > 0) {
+                if (slice_readiness && val > 0) {
                     // val counts slices in this direction (direction 0 also the local pre-signal); every earlier slice
                     // in the direction is full, so this one's markers start after theirs.
                     const uint32_t pre = dir == 0 ? 1 : 0;
@@ -84,9 +86,9 @@ struct RingSDPAOpReceiver {
                 }
             }
         });
-        // The split shard's second half is the forward chain's final arrival, on semaphore_ids[0] —
-        // the semaphore that also carries the local-slice pre-signal (hence the +2 in the threshold;
-        // see push_ring_sdpa_fused_op_rt_args). Its first half arrives whole, with one marker.
+        // The split shard's second half is the forward chain's final arrival, on semaphore_ids[0], the semaphore that
+        // also carries the local-slice pre-signal: its threshold is one signal past the pre-signal and every earlier
+        // full slice's markers (push_ring_sdpa_fused_op_rt_args). Its first half arrives whole, with one marker.
         if (this->wait_for_op_signal && this->split_forwarding_enabled && ring_id == this->split_shard_id) {
             this->slice_progressive[this->last_dir] = false;
             Semaphore<>(this->signal_op_semaphore_ids[0]).wait_min(this->split_second_half_wait);
@@ -96,6 +98,7 @@ struct RingSDPAOpReceiver {
 
     // The remote slice last returned from direction `dir` arrives in parts: wait for `part` before reading a chunk.
     void wait_part(uint32_t dir, uint32_t part) {
+        static_assert(slice_readiness);
         if (this->slice_progressive[dir] && part >= this->slice_parts_ready[dir]) {
             Semaphore<>(this->signal_op_semaphore_ids[dir]).wait_min(this->slice_base[dir] + part + 1);
             this->slice_parts_ready[dir] = part + 1;
@@ -112,3 +115,5 @@ struct RingSDPAOpReceiver {
         });
     }
 };
+
+using RingSDPAOpReceiver = RingSDPAOpReceiverT<>;

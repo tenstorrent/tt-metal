@@ -455,9 +455,8 @@ void kernel_main() {
     // Rows of K the fused gather sends from each device's slice, as the host bounds it (re-applied per dispatch with
     // logical_nt); the metadata path narrows it below exactly as the gather does on device. Slice readiness only.
     uint32_t gather_slice_rows = get_arg_val<uint32_t>(argidx++);
-    RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
-        true, /* wait_for_op_signal */
-        argidx);
+    constexpr bool slice_readiness = get_named_compile_time_arg_val("slice_readiness") == 1;
+    RingSDPAOpReceiverT<slice_readiness> fused_op_receiver(true /* wait_for_op_signal */, argidx);
 
     // Rotated Q split: first runtime arg past the fused-op signaler block. Captured here because
     // argidx is final at this point; the compile-time sizes are derived below with the other CT args.
@@ -541,9 +540,7 @@ void kernel_main() {
     // Maximum owned chunk count (base plus one remainder unit), or zero for static scheduling.
     // Per active ordinal the factory sends [remainder_start, group_has_remainder].
     // global_q_start/end describe the fixed base range when rotation is enabled.
-    // The factory pushes rotated_max_slots as the final compile-time arg of every kernel, so
-    // read it from there rather than tracking a per-kernel index into the block above.
-    constexpr uint32_t rotated_max_slots = get_ct_arg<kernel_compile_time_args.size() - 1>();
+    constexpr uint32_t rotated_max_slots = get_named_compile_time_arg_val("rotated_max_slots");
     constexpr bool rotated_q_split_enabled = rotated_max_slots > 0;
     constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
     constexpr bool dense_causal_skip = get_named_compile_time_arg_val("dense_causal_skip") == 1;
@@ -553,9 +550,16 @@ void kernel_main() {
     constexpr bool floaters = get_named_compile_time_arg_val("floaters") == 1;
     constexpr bool floater_core = get_named_compile_time_arg_val("floater_core") == 1;
     constexpr bool donate_tail = get_named_compile_time_arg_val("donate_tail") == 1;
+    // The program's donation schedule (ring_joint_floaters.hpp); all zero without floaters.
+    [[maybe_unused]] constexpr ring_joint::DonationSchedule donation{
+        {get_named_compile_time_arg_val("donate_iter0"), get_named_compile_time_arg_val("donate_iter1")},
+        {get_named_compile_time_arg_val("donate_frac0"), get_named_compile_time_arg_val("donate_frac1")}};
     // Interleaved ring steps (ring_joint_ksplit.hpp).
     constexpr bool ring_interleave = get_named_compile_time_arg_val("ring_interleave") == 1;
     static_assert(!ksplit_enabled || !rotated_q_split_enabled);
+    // The floaters' arg layout and merge points assume these (host: the floaters gate).
+    static_assert(!ring_interleave || (ksplit_enabled && slice_readiness));
+    static_assert(!floaters || (ring_interleave && k_expand));
     [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(rotated_args_base) : 0;
     // Expanded K: [W_UK address, rank, peer physical x, peer physical y] are the last runtime args, after the K-split
     // band. Head pairs never run the rotated split (the host refuses it).
@@ -859,12 +863,10 @@ void kernel_main() {
     // Tracks whether Q has been pushed for q_per_core == 1 optimization.
     // When q_per_core == 1, Q is identical across ring iterations so we only push it once.
     bool q_pushed = false;
-    // Floaters, after the expanded-K args: [donated fraction per ring iteration], then [visit count][visits:
-    // iteration, unit, band, frac]. A home cuts its donated pieces off its bands; a floater runs its visits instead of
-    // a unit of its own.
+    // Floaters, after the expanded-K args: [visit count][visits: iteration, unit, band]. A home cuts its donated
+    // pieces off its bands; a floater runs its visits instead of a unit of its own.
     [[maybe_unused]] const uint32_t floater_args = wuk_arg_idx + 4;
-    [[maybe_unused]] const uint32_t visit_count =
-        floater_core ? get_arg_val<uint32_t>(floater_args + ring_joint::kDonationIters) : 0;
+    [[maybe_unused]] const uint32_t visit_count = floater_core ? get_arg_val<uint32_t>(floater_args) : 0;
 
     /**
      * Iterate over ring indices.
@@ -1016,9 +1018,7 @@ void kernel_main() {
 
         uint32_t KV_chunks_processed_in_iter = 0;
         // A floater's visits of this step: it runs each whole in its iteration's first step.
-        [[maybe_unused]] ring_joint::KSplitRange visit_ranges[floater_core ? ring_joint::kFloaterMaxVisitsPerIter : 1];
-        [[maybe_unused]] uint32_t visit_units[floater_core ? ring_joint::kFloaterMaxVisitsPerIter : 1];
-        [[maybe_unused]] uint32_t step_visits = 0;
+        [[maybe_unused]] ring_joint::FloaterStepVisits<floater_core ? ring_joint::kFloaterMaxVisitsPerIter : 1> visits;
         uint32_t iter_num_kv_chunks = packed_sources ? packed_kv.chunk_count() : num_kv_chunks;
 
         // K split: this core's slice of the iteration's local K chunks, as compute derives it. Idle cores in a split
@@ -1034,28 +1034,30 @@ void kernel_main() {
                 Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, causal_end_nt);
             ring_joint::KSplitRange band_range = ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count, ring_id);
             if constexpr (floater_core) {
-                for (uint32_t v = 0; istep.piece == 0 && v < visit_count; ++v) {
-                    const uint32_t a =
-                        floater_args + ring_joint::kDonationIters + 1 + v * ring_joint::kFloaterVisitArgs;
-                    if (get_arg_val<uint32_t>(a) == ring_iter) {
-                        visit_ranges[step_visits] = ring_joint::donated_piece(
-                            ring_joint::ksplit_range(num_valid, get_arg_val<uint32_t>(a + 2), ksplit_count, ring_id),
-                            get_arg_val<uint32_t>(a + 3),
-                            donate_tail);
-                        visit_units[step_visits++] = get_arg_val<uint32_t>(a + 1);
-                    }
+                if (istep.piece == 0) {
+                    visits.template collect<donate_tail>(
+                        [](uint32_t i) { return get_arg_val<uint32_t>(i); },
+                        floater_args + 1,
+                        visit_count,
+                        ring_iter,
+                        donation.frac(ring_iter),
+                        num_valid,
+                        ksplit_count,
+                        ring_id);
                 }
             } else if constexpr (floaters) {
-                band_range = ring_joint::kept_after_donation(
-                    band_range, get_arg_val<uint32_t>(floater_args + ring_iter), donate_tail);
+                band_range = ring_joint::kept_after_donation(band_range, donation.frac(ring_iter), donate_tail);
             }
             ksplit_k_range = ring_joint::interleaved_piece(band_range, istep.piece, istep.pieces);
         }
         // Progressive readiness (ring_attention_slice_readiness.hpp): a remote slice lands in parts. Which part holds a
         // chunk is the sender's split of its slice for this device, computed as the sender does, so a chunk is read
         // early only if the sender sent it before that part's marker.
-        const uint32_t readiness_num_chunks = ttnn::ring_attention_all_gather::readiness_split_chunks(
-            gather_slice_rows, dense_causal_skip ? q_local_padded_Nt : 0, ring_id > ring_index, Sk_chunk_t);
+        [[maybe_unused]] const uint32_t readiness_num_chunks =
+            slice_readiness
+                ? ttnn::ring_attention_all_gather::readiness_split_chunks(
+                      gather_slice_rows, dense_causal_skip ? q_local_padded_Nt : 0, ring_id > ring_index, Sk_chunk_t)
+                : 0;
 
         // In causal balanced case processing KV received from other devices:
         //
@@ -1110,7 +1112,7 @@ void kernel_main() {
         }
         uint32_t gqa_group_q_iter = 0;
         if constexpr (floater_core) {
-            loop_q_count = step_visits;
+            loop_q_count = visits.count;
         }
 
         for (uint32_t q_iter = 0; q_iter < loop_q_count; ++q_iter) {
@@ -1138,8 +1140,8 @@ void kernel_main() {
             if constexpr (floater_core) {
                 // A visit is a fresh Q chunk of its own: its unit, its piece, its own Q and W_UK push.
                 is_padded_iter = false;
-                flat_q_index = visit_units[q_iter];
-                ksplit_k_range = visit_ranges[q_iter];
+                flat_q_index = visits.units[q_iter];
+                ksplit_k_range = visits.ranges[q_iter];
                 q_pushed = false;
             }
             // Same-core GQA uses group-major (batch, Q chunk, head) scheduling so consecutive
@@ -1353,11 +1355,13 @@ void kernel_main() {
                 const bool joint_chunk_is_local =
                     has_gathered_joint_k ? (kv_chunk_is_joint && ring_id == ring_index) : false;
 
-                if (!source_is_local) {
-                    fused_op_receiver.wait_part(
-                        ring_dir,
-                        ttnn::ring_attention_all_gather::readiness_part_of(
-                            source_k_chunk, readiness_num_chunks, ksplit_count, ring_id));
+                if constexpr (slice_readiness) {
+                    if (!source_is_local) {
+                        fused_op_receiver.wait_part(
+                            ring_dir,
+                            ttnn::ring_attention_all_gather::readiness_part_of(
+                                source_k_chunk, readiness_num_chunks, ksplit_count, ring_id));
+                    }
                 }
 
                 if (packed_sources) {

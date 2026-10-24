@@ -230,9 +230,7 @@ void kernel_main() {
 
     // Maximum owned chunk count (base plus one remainder unit), or zero for static scheduling. The factory
     // appends only the remainder unit's starting flat ID per active ordinal.
-    // The factory pushes rotated_max_slots as the final compile-time arg of every kernel, so
-    // read it from there rather than tracking a per-kernel index into the block above.
-    constexpr uint32_t rotated_max_slots = get_ct_arg<kernel_compile_time_args.size() - 1>();
+    constexpr uint32_t rotated_max_slots = get_named_compile_time_arg_val("rotated_max_slots");
     constexpr bool rotated_q_split_enabled = rotated_max_slots > 0;
     // Set when the factory can schedule padded multicast slots on this program (see static_mcast_q_count there).
     constexpr bool padded_q_slots_enabled = get_named_compile_time_arg_val("padded_q_slots") == 1;
@@ -240,12 +238,19 @@ void kernel_main() {
     constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
     constexpr bool dense_causal_skip = get_named_compile_time_arg_val("dense_causal_skip") == 1;
     constexpr bool ksplit_enabled = ksplit_count > 1;
+    // The restore CB of the K split's and floaters' landed sums. cb_sum_in exists only on the streaming path; alias a
+    // live CB so the other modes still compile.
+    [[maybe_unused]] constexpr uint32_t ksplit_cb_sum_in = ksplit_enabled ? cb_sum_in : cb_out;
     // Expanded-K floaters (ring_joint_floaters.hpp): the program runs them; this kernel is a floater's (it runs visits
     // instead of a unit of its own, and has no K-split role); the homes donate their bands' tails, else their heads.
     constexpr bool floaters = get_named_compile_time_arg_val("floaters") == 1;
     constexpr bool floater_core = get_named_compile_time_arg_val("floater_core") == 1;
     constexpr bool floater_home = floaters && !floater_core;
     constexpr bool donate_tail = get_named_compile_time_arg_val("donate_tail") == 1;
+    // The program's donation schedule (ring_joint_floaters.hpp); all zero without floaters.
+    [[maybe_unused]] constexpr ring_joint::DonationSchedule donation{
+        {get_named_compile_time_arg_val("donate_iter0"), get_named_compile_time_arg_val("donate_iter1")},
+        {get_named_compile_time_arg_val("donate_frac0"), get_named_compile_time_arg_val("donate_frac1")}};
     // Interleaved ring steps (ring_joint_ksplit.hpp).
     constexpr bool ring_interleave = get_named_compile_time_arg_val("ring_interleave") == 1;
     // Segmented accumulation: each ring iteration accumulates into a fresh sum and output (its max seeded from the
@@ -255,6 +260,9 @@ void kernel_main() {
     // No core holds two Q chunks: accumulators stay in L1 across ring iterations.
     constexpr bool single_q = get_named_compile_time_arg_val("single_q") == 1;
     static_assert(!(ksplit_enabled && seg_accum_enabled));
+    // The floaters' arg layout and merge points assume these (host: the floaters gate).
+    static_assert(!ring_interleave || (ksplit_enabled && single_q));
+    static_assert(!floaters || (ring_interleave && k_expand));
     static_assert(
         !(ksplit_enabled || seg_accum_enabled) ||
         (!rotated_q_split_enabled && !(has_sliding_window && seg_accum_enabled) && use_streaming_compute));
@@ -391,10 +399,8 @@ void kernel_main() {
     };
     // Drops a landed partial that carries no state from the restore CBs.
     [[maybe_unused]] auto discard_incoming = [&]() __attribute__((noinline)) {
-        constexpr uint32_t sum_in = ksplit_enabled ? cb_sum_in : cb_out;
-        for (uint32_t cb : {cb_max_in, sum_in}) {
-            sdpa_cb_wait_front_out_of_line(cb, Sq_chunk_t);
-            sdpa_cb_pop_front_out_of_line(cb, Sq_chunk_t);
+        for (uint32_t cb : {cb_max_in, ksplit_cb_sum_in}) {
+            sdpa_cb_drain_out_of_line(cb, Sq_chunk_t);
         }
         sdpa_cb_wait_front_out_of_line(cb_prev_out, Sq_chunk_t * vDHt);
         sdpa_cb_pop_front_out_of_line(cb_prev_out, Sq_chunk_t * vDHt);
@@ -424,11 +430,10 @@ void kernel_main() {
                           : logical_nt;
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
     bool seen_active_iter = false;
-    // Floaters, after the K-split band and expansion rank: [donated fraction per ring iteration], then [visit count]
-    // [visits: iteration, unit, band, frac], then on a home its first piece's merge step.
+    // Floaters, after the K-split band and expansion rank: [visit count][visits: iteration, unit, band], or on a home
+    // [0][its first piece's merge step].
     [[maybe_unused]] const uint32_t floater_args = rotated_args_base + 2;
-    [[maybe_unused]] const uint32_t visit_count =
-        floater_core ? get_arg_val<uint32_t>(floater_args + ring_joint::kDonationIters) : 0;
+    [[maybe_unused]] const uint32_t visit_count = floater_core ? get_arg_val<uint32_t>(floater_args) : 0;
     // Home: ring iterations whose donated piece holds chunks (a floater partial with state to merge).
     [[maybe_unused]] uint32_t donated_nonempty_mask = 0;
     // Floater: a visit's state sits staged in half A until the writer has saved it.
@@ -441,31 +446,24 @@ void kernel_main() {
     uint32_t floater_iters[ring_joint::kDonatedPieces] = {};
     uint32_t floater_partials = 0;
     uint32_t floater_merged = 0;
-    uint32_t first_donation_iter = ring_joint::kDonationIters;
-    for (uint32_t it = 0;
-         floater_home && it < ring_joint::kDonationIters && floater_partials < ring_joint::kDonatedPieces;
-         ++it) {
-        if (get_arg_val<uint32_t>(floater_args + it) != 0) {
-            first_donation_iter = first_donation_iter < it ? first_donation_iter : it;
-            if (((active_ring_iter_mask >> it) & 1u) != 0) {
-                floater_iters[floater_partials++] = it;
-            }
+    for (uint32_t piece = 0; floater_home && piece < ring_joint::kDonatedPieces; ++piece) {
+        if (((active_ring_iter_mask >> donation.iters[piece]) & 1u) != 0) {
+            floater_iters[floater_partials++] = donation.iters[piece];
         }
     }
     // The step before which the first piece merges; none when its ring iteration is inactive.
-    const uint32_t first_piece_merge_step = floater_partials > 0 && floater_iters[0] == first_donation_iter
-                                                ? get_arg_val<uint32_t>(floater_args + ring_joint::kDonationIters + 1)
+    const uint32_t first_piece_merge_step = floater_partials > 0 && floater_iters[0] == donation.iters[0]
+                                                ? get_arg_val<uint32_t>(floater_args + 1)
                                                 : UINT32_MAX;
     // Merges the partials up to `count`, waiting for each. A partial without state is discarded; one with state always
     // finds this core's own, since a home keeps part of every band it donates from.
     auto take_floater_partials = [&](uint32_t count) __attribute__((noinline)) {
-        constexpr uint32_t sum_in = ksplit_enabled ? cb_sum_in : cb_out;
         for (; floater_merged < count; ++floater_merged) {
             if (((donated_nonempty_mask >> floater_iters[floater_merged]) & 1u) == 0) {
                 discard_incoming();
                 continue;
             }
-            merge_into_prev({sum_in, cb_max_in, cb_prev_out});
+            merge_into_prev({ksplit_cb_sum_in, cb_max_in, cb_prev_out});
         }
     };
     auto arrival_preview = fused_op_indexer.seq;
@@ -566,9 +564,7 @@ void kernel_main() {
             packed_sources ? packed_kv.chunk_count()
                            : (do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks);
         ring_joint::KSplitRange ksplit_k_range = ring_joint::kKSplitAll;
-        [[maybe_unused]] ring_joint::KSplitRange visit_ranges[floater_core ? ring_joint::kFloaterMaxVisitsPerIter : 1];
-        [[maybe_unused]] uint32_t visit_units[floater_core ? ring_joint::kFloaterMaxVisitsPerIter : 1];
-        [[maybe_unused]] uint32_t step_visits = 0;
+        [[maybe_unused]] ring_joint::FloaterStepVisits<floater_core ? ring_joint::kFloaterMaxVisitsPerIter : 1> visits;
         // Interleaved steps split every core's K range; the host gate leaves no core outside the K split.
         ASSERT(!ring_interleave || ksplit_active || q_per_core == 0);
         if constexpr (ksplit_enabled) {
@@ -584,20 +580,19 @@ void kernel_main() {
                 ring_joint::KSplitRange band_range =
                     ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count, ring_id);
                 if constexpr (floater_core) {
-                    for (uint32_t v = 0; istep.piece == 0 && v < visit_count; ++v) {
-                        const uint32_t a =
-                            floater_args + ring_joint::kDonationIters + 1 + v * ring_joint::kFloaterVisitArgs;
-                        if (get_arg_val<uint32_t>(a) == ring_iter) {
-                            visit_ranges[step_visits] = ring_joint::donated_piece(
-                                ring_joint::ksplit_range(
-                                    num_valid, get_arg_val<uint32_t>(a + 2), ksplit_count, ring_id),
-                                get_arg_val<uint32_t>(a + 3),
-                                donate_tail);
-                            visit_units[step_visits++] = get_arg_val<uint32_t>(a + 1);
-                        }
+                    if (istep.piece == 0) {
+                        visits.template collect<donate_tail>(
+                            [](uint32_t i) { return get_arg_val<uint32_t>(i); },
+                            floater_args + 1,
+                            visit_count,
+                            ring_iter,
+                            donation.frac(ring_iter),
+                            num_valid,
+                            ksplit_count,
+                            ring_id);
                     }
                 } else if constexpr (floaters) {
-                    const uint32_t donated = get_arg_val<uint32_t>(floater_args + ring_iter);
+                    const uint32_t donated = donation.frac(ring_iter);
                     if (ring_joint::donated_cut(band_range, donated) > 0) {
                         donated_nonempty_mask |= 1u << ring_iter;
                     }
@@ -735,7 +730,7 @@ void kernel_main() {
 
         if constexpr (use_streaming_compute) {
             // A floater runs one fresh call per visit of this step; every other core runs one call.
-            const uint32_t passes = floater_core ? step_visits : 1;
+            const uint32_t passes = floater_core ? visits.count : 1;
             for (uint32_t pass = 0; pass < passes; ++pass) {
                 uint32_t call_q_start = rotated_q_split_enabled ? 0u : global_q_start;
                 uint32_t call_q_end = rotated_q_split_enabled ? rotated_my_count : global_q_end;
@@ -755,13 +750,13 @@ void kernel_main() {
                         acc_state.cur = {cb_sum_B, cb_max_B, cb_out_im_B};
                         visit_staged = false;
                     }
-                    call_q_start = visit_units[pass];
+                    call_q_start = visits.units[pass];
                     call_q_end = call_q_start + 1;
                     call_q_per_core = 1;
                     call_padded_q_slots = 0;
                     call_first = true;
                     call_last = false;
-                    call_k_range = visit_ranges[pass];
+                    call_k_range = visits.ranges[pass];
                     if (call_k_range.empty()) {
                         // No chunks, no state: the writer still saves the slot and signals, and the home discards it.
                         sdpa_cb_reserve_back_out_of_line(cb_signal, 1);
@@ -828,7 +823,6 @@ void kernel_main() {
                     DHt_qk,
                     k_expand ? cb_wuk : INVALID_CB,
                     k_expand ? kexp_latent_tiles : 0,
-                    k_expand ? wuk_tiles : 0,
                     k_expand ? cb_kexp_own : INVALID_CB,
                     k_expand ? cb_kexp_peer : INVALID_CB,
                     single_q>(
@@ -1013,8 +1007,6 @@ void kernel_main() {
         }
     }
 
-    // cb_sum_in exists only on the streaming path; alias a live CB so the other modes still compile.
-    [[maybe_unused]] constexpr uint32_t ksplit_cb_sum_in = ksplit_enabled ? cb_sum_in : cb_out;
     // K split epilogue: acc_state.prev holds this core's unnormalized state. Only primitives the K loop already
     // instantiates are used, since the program is at the kernel config buffer limit.
     if constexpr (ksplit_enabled && !floater_core) {

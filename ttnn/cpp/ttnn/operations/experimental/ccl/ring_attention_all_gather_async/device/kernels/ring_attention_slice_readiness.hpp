@@ -24,10 +24,14 @@ namespace ttnn::ring_attention_all_gather {
 // cost of a marker, a write barrier and shorter DRAM bursts per part.
 constexpr uint32_t kReadinessParts = 4;
 
+// [begin, end) of chunks or rows.
 struct ChunkRange {
     uint32_t begin;
     uint32_t end;
+    bool empty() const { return begin >= end; }
+    bool contains(uint32_t i) const { return i >= begin && i < end; }
 };
+using RowRange = ChunkRange;
 
 // First chunk of `band` in a split of `num_chunks` chunks into `bands`, for the slice of tensor rank `key`. Every band
 // gets num_chunks / bands chunks, and the num_chunks % bands extra ones go to the bands from key % bands on (wrapping),
@@ -87,10 +91,6 @@ inline uint32_t readiness_part_of(uint32_t chunk, uint32_t num_chunks, uint32_t 
 // [0, valid_rows) is covered exactly once. The gather reader and writer both walk the slice as
 // `for (r = 0; r <= bands; ++r)` over these, which keeps their page order identical. (A plain range function rather
 // than a visitor: a lambda around the per-packet send loop slowed the gather.)
-struct RowRange {
-    uint32_t begin;
-    uint32_t end;
-};
 inline RowRange readiness_rows(
     uint32_t num_chunks,
     uint32_t bands,

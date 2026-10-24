@@ -1220,12 +1220,8 @@ bool ring_joint_floaters_may_run(const RingJointSDPAParams& args, const RingJoin
         return false;
     }
     ring_joint::FloaterSchedule schedule{};
-    for (uint32_t bands = 2; bands <= args.program_config->max_k_splits; ++bands) {
-        if (ring_joint::floater_schedule(tensor_args.input_q.logical_shape()[1], bands, schedule)) {
-            return true;
-        }
-    }
-    return false;
+    return args.program_config->k_splits >= 2 &&
+           ring_joint::floater_schedule(tensor_args.input_q.logical_shape()[1], args.program_config->k_splits, schedule);
 }
 
 }  // namespace
@@ -1428,17 +1424,17 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
         const uint32_t active_cores = std::min<uint32_t>(grid.x * grid.y, scheduled_q_work);
         const uint32_t q_global_start =
             static_cast<uint32_t>(args.logical_n) - N_local * static_cast<uint32_t>(args.ring_size);
-        int ideal_cycles = k_expansion_cycles + compute_sliding_window_sdpa_ideal_cycles(
-                                                    B,
-                                                    NQH,
-                                                    N_local,
-                                                    static_cast<uint32_t>(args.ring_size),
-                                                    q_global_start,
-                                                    args.sliding_window_size.value(),
-                                                    DH,
-                                                    DV,
-                                                    fidelity,
-                                                    active_cores);
+        int ideal_cycles = compute_sliding_window_sdpa_ideal_cycles(
+            B,
+            NQH,
+            N_local,
+            static_cast<uint32_t>(args.ring_size),
+            q_global_start,
+            args.sliding_window_size.value(),
+            DH,
+            DV,
+            fidelity,
+            active_cores);
         return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, ideal_cycles);
     }
 

@@ -148,11 +148,11 @@ constexpr uint32_t kWidthDimension = 3;
 
 // Independent performance tunables. Keep these named rather than deriving one from another: the reader prefetch
 // window and writer header pool protect different pipelines.
-constexpr uint32_t kPrefetchPackets = 4;  // neighbor halo exchange
+constexpr uint32_t kHaloPrefetchPackets = 4;  // neighbor halo exchange
 // The all-gather reader is DRAM-latency bound: it needs ~128 KiB of reads in flight per worker to keep a link busy
-// (4 packets of the stock 4352 B payload are too few). Sized in bytes so a larger
-// fabric payload does not grow the CB past the 4-packet floor, and bounded so a tiny payload still batches enough
-// reads. At the stock payload the reader CB is ~2 x 128 KiB per worker core.
+// (4 packets of the stock 4352 B payload are too few). Sized in bytes, so a larger fabric payload keeps about the same
+// bytes in flight in fewer packets (at least 4), and bounded so a tiny payload still batches enough reads. At the stock
+// payload the reader CB is ~2 x 128 KiB per worker core.
 constexpr uint32_t kGatherPrefetchBytesInFlight = 128 * 1024;
 constexpr uint32_t kMinGatherPrefetchPackets = 4;
 constexpr uint32_t kMaxGatherPrefetchPackets = 32;
@@ -255,7 +255,7 @@ void ring_attention_neighbor_halo_exchange_helper(
     const uint32_t page_size = op_config.get_page_size();
     const uint32_t packet_buffer_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     const uint32_t pages_per_packet = std::min(packet_buffer_bytes / page_size, kMaxHaloPagesPerPacket);
-    const uint32_t cb_pages = kDoubleBufferingFactor * kPrefetchPackets * pages_per_packet;
+    const uint32_t cb_pages = kDoubleBufferingFactor * kHaloPrefetchPackets * pages_per_packet;
     const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensors.front().dtype());
     constexpr uint32_t data_cb = tt::CB::c_in2;
     constexpr uint32_t packet_header_cb = tt::CB::c_in1;
@@ -307,7 +307,7 @@ void ring_attention_neighbor_halo_exchange_helper(
         pages_per_packet,
         page_size,
         num_inputs,
-        kPrefetchPackets,
+        kHaloPrefetchPackets,
         reader_meta_cb,
         static_cast<uint32_t>(halo.collects_arrivals()),
         halo.arrivals_expected,
@@ -865,7 +865,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         max_payload_size_bytes);
     const uint32_t num_pages_per_packet =
         output_bank_owned_schedule ? max_pages_per_packet : std::min(max_pages_per_packet, kMaxScatterPagesPerPacket);
-    // Must be >= kDoubleBufferingFactor * prefetch_packets * num_pages_per_packet for deadlock-free buffering
+    // Must be >= kDoubleBufferingFactor * gather_prefetch_packets * num_pages_per_packet for deadlock-free buffering
     // (see PREFETCH_PACKETS in ring_attention_all_gather_reader.cpp).
     const uint32_t gather_prefetch_packets = std::clamp(
         kGatherPrefetchBytesInFlight / (num_pages_per_packet * l1_scratch_cb_page_size_bytes),
@@ -1179,12 +1179,14 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             uint32_t batch_head_size = full_batch_head_size;
             uint32_t input_batch_base = 0;
             if (input_batch_slice_idx.has_value()) {
-                const uint32_t slice_idx = input_tensor_shape[kBatchDimension] == 1 ? 0 : *input_batch_slice_idx;
+                // A batch-1 input (V beside an indexed K cache) is every slot's.
+                const bool shared_input = input_tensor_shape[kBatchDimension] == 1;
                 TT_FATAL(
-                    slice_idx < input_tensor_shape[kBatchDimension],
+                    shared_input || *input_batch_slice_idx < input_tensor_shape[kBatchDimension],
                     "input_batch_slice_idx={} out of range for input batch={}",
-                    slice_idx,
+                    *input_batch_slice_idx,
                     input_tensor_shape[kBatchDimension]);
+                const uint32_t slice_idx = shared_input ? 0 : *input_batch_slice_idx;
                 batch_head_size = num_heads;
                 input_batch_base = ttnn::ring_attention_all_gather_async_detail::input_batch_base_pages(
                     slice_idx, num_heads, input_tensor_Ht, input_tensor_Wt);
