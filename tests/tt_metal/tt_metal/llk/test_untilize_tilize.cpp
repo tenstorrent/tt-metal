@@ -131,6 +131,7 @@ static void validate_result(
         .face_c_dim = 16,
         .num_faces = static_cast<int>(test_config.tile_shape_in_faces_r * test_config.tile_shape_in_faces_c),
         .datum_bytes = tt::datum_size(test_config.input_fmt),
+        .tile_shape_in_faces_c = static_cast<int>(test_config.tile_shape_in_faces_c),
     };
 
     std::visit(
@@ -919,6 +920,163 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilize) {
                 unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
             }
         }
+    }
+}
+
+// fast_tilize_* on a 16x32 tiny tile (1x2 faces of 16x16) through the compute API. Wormhole has a
+// two-face fast-tilize data path for even block widths only (unit_dim 2), so its compute API must route
+// odd widths (unit_dim 1, or a trailing unit_dim-3 call) to tilize_*; Blackhole's fast-tilize path is
+// 32x32-only, so its compute API must route every tiny tile to tilize_* instead of running the 32x32
+// unpack/pack sequence over a 16-row tile (which reads 16 rows past the input and overruns the output
+// CB by one 16x32 tile, half a 32x32 tile, per tile).
+TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilizeTinyTile16x32) {
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        // Quasar fast_tilize_* forward to plain tilize, whose unpack tilize supports two-face tiles only
+        // with face heights 1 and 2 (1x32, 2x32), not the 16x32 tile this test exercises.
+        GTEST_SKIP() << "Quasar unpack tilize does not support 16x32 tiles";
+    }
+    constexpr std::uint32_t tile_shape_in_faces_r = 1;  // 16x32 = 1x2 faces of 16x16
+    constexpr std::uint32_t tile_shape_in_faces_c = 2;
+    constexpr std::uint32_t face_r_dim = tt::constants::FACE_HEIGHT;
+    constexpr std::uint32_t face_c_dim = tt::constants::FACE_WIDTH;
+    constexpr std::uint32_t tile_bytes =
+        tile_shape_in_faces_r * tile_shape_in_faces_c * face_r_dim * face_c_dim * sizeof(std::uint16_t);
+    // bf16 dest (8 tiles per dest on Wormhole). Even block widths: one unit (2), two units (4), one and
+    // three units across two tile-rows, one full dest (8), two dests (10 = 6 + 4) and three dests
+    // (18 = 8 + 6 + 4), so the second and third calls run at nonzero read/write tile indexes. Odd block
+    // widths: 1 (unit_dim 1), 3 (one unit_dim-3 call) and 5 (a unit_dim-2 call then a unit_dim-3 call).
+    const vector<vector<std::uint32_t>> num_tiles_bf16_dest = {
+        {1, 2}, {1, 4}, {2, 2}, {2, 6}, {1, 8}, {1, 10}, {1, 18}, {1, 1}, {1, 3}, {2, 3}, {1, 5}};
+    // fp32 dest accumulation (4 tiles per dest on Wormhole): two dests (6 = 4 + 2 and 8 = 4 + 4), three
+    // dests (10 = 4 + 4 + 2), and the odd widths 1, 3, 5 and 2x3 that take the plain tilize path with an
+    // fp32 dest (whose datacopy and pack differ from the bf16-dest one). The output stays Float16_b: fast
+    // tilize is not used with a Float32 output (the kernel_lib tilize helper excludes it for every tile shape).
+    const vector<vector<std::uint32_t>> num_tiles_fp32_dest = {{1, 6}, {1, 8}, {1, 10}, {1, 1}, {1, 3}, {1, 5}, {2, 3}};
+    for (bool fp32_dest_acc_en : {false, true}) {
+        for (auto num_tile : fp32_dest_acc_en ? num_tiles_fp32_dest : num_tiles_bf16_dest) {
+            unit_tests::compute::tilize::TestConfig test_config = {
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .fast_tilize = true,
+                .input_single_tile_size = tile_bytes,
+                .output_single_tile_size = tile_bytes,
+                .num_tiles_r = num_tile[0],
+                .num_tiles_c = num_tile[1],
+                .tile_shape_in_faces_r = tile_shape_in_faces_r,
+                .tile_shape_in_faces_c = tile_shape_in_faces_c,
+                .face_r_dim = face_r_dim,
+                .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+                .golden_function = ::unit_tests::compute::gold_standard_tilize};
+            unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
+        }
+    }
+}
+
+// fast_tilize_* on 16x32 tiny tiles in Float16. The Wormhole two-face path handles only Float16_b and Float32
+// (unpack and pack), so both compute APIs must route this to tilize_* even at an even width. Input and output
+// are both Float16 because a program's CBs must share one exponent family; tilize only moves datums, so the
+// tilized input words are the expected output bit for bit.
+TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilizeTinyTile16x32Float16) {
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        GTEST_SKIP() << "Quasar unpack tilize does not support 16x32 tiles";
+    }
+    constexpr std::uint32_t tile_shape_in_faces_r = 1;  // 16x32 = 1x2 faces of 16x16
+    constexpr std::uint32_t tile_shape_in_faces_c = 2;
+    constexpr std::uint32_t face_r_dim = tt::constants::FACE_HEIGHT;
+    constexpr std::uint32_t face_c_dim = tt::constants::FACE_WIDTH;
+    constexpr std::uint32_t tile_bytes =
+        tile_shape_in_faces_r * tile_shape_in_faces_c * face_r_dim * face_c_dim * sizeof(std::uint16_t);
+    // Even widths only: these are the widths the two-face 16x32 fast path accepts.
+    vector<vector<std::uint32_t>> num_tiles = {{1, 2}, {1, 4}, {2, 2}};
+    for (auto num_tile : num_tiles) {
+        const std::uint32_t num_datums = num_tile[0] * num_tile[1] * tile_bytes / sizeof(std::uint16_t);
+        // Distinct half-precision bit patterns per datum (finite, normal values: exponent field 1..30).
+        std::vector<std::uint32_t> src((num_datums + 1) / 2, 0);
+        for (std::uint32_t i = 0; i < num_datums; i++) {
+            const std::uint32_t half_bits = ((((i * 37) % 30) + 1) << 10) | (i & 0x3FFu) | ((i & 1u) << 15);
+            src[i / 2] |= half_bits << (16 * (i % 2));
+        }
+        unit_tests::compute::tilize::TestConfig test_config = {
+            .fast_tilize = true,
+            .input_single_tile_size = tile_bytes,
+            .output_single_tile_size = tile_bytes,
+            .num_tiles_r = num_tile[0],
+            .num_tiles_c = num_tile[1],
+            .tile_shape_in_faces_r = tile_shape_in_faces_r,
+            .tile_shape_in_faces_c = tile_shape_in_faces_c,
+            .face_r_dim = face_r_dim,
+            .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+            .input_fmt = tt::DataFormat::Float16,
+            .output_fmt = tt::DataFormat::Float16,
+            .src0_data = src,
+            .golden_function = ::unit_tests::compute::gold_standard_tilize};
+        unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
+    }
+}
+
+// fast_tilize_* on a 32x16 narrow tile (2x1 faces of 16x16). Neither architecture has a fast-tilize data
+// path for it (Wormhole's two-face path assumes 32-wide rows and would pack the two faces side by side),
+// so both compute APIs route it to tilize_* at any block width. Only Wormhole's plain tilize has a
+// narrow-tile path (Blackhole's whole-tile tilize mode walks faces horizontally, Quasar supports two-face
+// tiles only with face heights 1 and 2), so the case can only run there.
+TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilizeNarrowTile32x16) {
+    if (MetalContext::instance().get_cluster().arch() != ARCH::WORMHOLE_B0) {
+        GTEST_SKIP() << "only the Wormhole tilize path handles a 32x16 narrow tile";
+    }
+    constexpr std::uint32_t tile_shape_in_faces_r = 2;  // 32x16 = 2x1 faces of 16x16
+    constexpr std::uint32_t tile_shape_in_faces_c = 1;
+    constexpr std::uint32_t face_r_dim = tt::constants::FACE_HEIGHT;
+    constexpr std::uint32_t face_c_dim = tt::constants::FACE_WIDTH;
+    constexpr std::uint32_t tile_bytes =
+        tile_shape_in_faces_r * tile_shape_in_faces_c * face_r_dim * face_c_dim * sizeof(std::uint16_t);
+    // Even widths only: these are the widths the Wormhole two-face path would otherwise accept.
+    vector<vector<std::uint32_t>> num_tiles = {{1, 2}, {1, 4}, {2, 2}};
+    for (auto num_tile : num_tiles) {
+        unit_tests::compute::tilize::TestConfig test_config = {
+            .fast_tilize = true,
+            .input_single_tile_size = tile_bytes,
+            .output_single_tile_size = tile_bytes,
+            .num_tiles_r = num_tile[0],
+            .num_tiles_c = num_tile[1],
+            .tile_shape_in_faces_r = tile_shape_in_faces_r,
+            .tile_shape_in_faces_c = tile_shape_in_faces_c,
+            .face_r_dim = face_r_dim,
+            .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+            .golden_function = ::unit_tests::compute::gold_standard_tilize};
+        unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
+    }
+}
+
+// fast_tilize_* on a 16x32 tile declared as four 8x16 faces (Tile::from_face_grid(2, 2, {8, 16})). Its tile
+// dims match the two-face 16x32 tiny tile but the fast-tilize sequences are written for 16-row faces and
+// would treat num_faces == 4 as a 32-row tile (reading 16 rows past the input and advancing a full 32x32
+// tile per output page), so both compute APIs must route it to tilize_* at any width. Wormhole-only:
+// Blackhole's whole-tile tilize mode is written for 16-row faces and mis-tilizes 8x16 faces with or
+// without fast_tilize; Quasar shortened-face tilize is not covered by this test.
+TEST_F(LLKMeshDeviceFixture, TensixComputeFastTilizeShortFace16x32) {
+    if (MetalContext::instance().get_cluster().arch() != ARCH::WORMHOLE_B0) {
+        GTEST_SKIP() << "only the Wormhole tilize path handles 8x16 faces";
+    }
+    constexpr std::uint32_t tile_shape_in_faces_r = 2;  // 16x32 = 2x2 faces of 8x16
+    constexpr std::uint32_t tile_shape_in_faces_c = 2;
+    constexpr std::uint32_t face_r_dim = tt::constants::FACE_HEIGHT / 2;
+    constexpr std::uint32_t face_c_dim = tt::constants::FACE_WIDTH;
+    constexpr std::uint32_t tile_bytes =
+        tile_shape_in_faces_r * tile_shape_in_faces_c * face_r_dim * face_c_dim * sizeof(std::uint16_t);
+    // Even widths only: these are the widths the two-face 16x32 fast path accepts.
+    vector<vector<std::uint32_t>> num_tiles = {{1, 2}, {1, 4}, {2, 2}};
+    for (auto num_tile : num_tiles) {
+        unit_tests::compute::tilize::TestConfig test_config = {
+            .fast_tilize = true,
+            .input_single_tile_size = tile_bytes,
+            .output_single_tile_size = tile_bytes,
+            .num_tiles_r = num_tile[0],
+            .num_tiles_c = num_tile[1],
+            .tile_shape_in_faces_r = tile_shape_in_faces_r,
+            .tile_shape_in_faces_c = tile_shape_in_faces_c,
+            .face_r_dim = face_r_dim,
+            .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+            .golden_function = ::unit_tests::compute::gold_standard_tilize};
+        unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
     }
 }
 
