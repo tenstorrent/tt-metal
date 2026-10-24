@@ -205,6 +205,17 @@ using BR = moe_fused_swiglu::WeightRuns<>;
 // pre-WSHARD path). The OUTPUT write-back keeps `BR`: the output is always DRAM interleaved.
 using BRG = moe_fused_swiglu::WeightRuns<WG_SHARD_W>;
 
+// CROSS-EXPERT W_up PREFETCH (moe-expert prototype), the reader's W_gate twin on NoC1: on an
+// expert's last M-block, once compute has finished its gate/up matmuls (cb_gate_acc), the resident
+// W_up CB is empty and phase 2 leaves DRAM idle, so the next active expert's W_up is read into it
+// under PF_W_TRID; that expert's block 0 only waits (the chunk loop's barrier) and publishes. The
+// reader names the next active expert in mailbox word MBOX_PF_NEXT. Trids 1..HGROUPS are W_down's.
+constexpr bool kPrefetchNextW = W_RESIDENT != 0;
+constexpr uint32_t PF_W_TRID = 13;
+constexpr uint32_t PF_NONE = 0xFFFFFFFFu;
+constexpr uint32_t MBOX_PF_NEXT = 7;
+static_assert(!kPrefetchNextW || HGROUPS < PF_W_TRID, "W_down's per-block trids must not reach PF_W_TRID");
+
 // PER-STAGE ZONES — PERMANENT, always compiled, free with the profiler off. 5 records per
 // M-block: out_drain, wup, wd_issue, scatter, hslice, out_issue. Names are stable across rounds so
 // old and new numbers stay comparable; give any new fast path its own zone.
@@ -285,6 +296,7 @@ void kernel_main() {
     // experts and carries every monotone semaphore and mailbox counter; `b` stays expert-relative,
     // selecting token rows and the weight-residency gate.
     uint32_t gb = 0;
+    uint32_t pf_up_expert = PF_NONE;  // the expert whose W_up is already in flight into cb_w_up
     for (uint32_t local_expert_id = 0; local_expert_id < EXPERTS_PER_CHIP; ++local_expert_id) {
         const auto wu_acc = TensorAccessor(wu_args, w_up_addr(local_expert_id), W_TILE);
         const auto wd_acc = TensorAccessor(wd_args, w_down_addr(local_expert_id), W_TILE);
@@ -295,7 +307,17 @@ void kernel_main() {
         const uint32_t mailbox_addr = mailbox_buf.get_read_ptr();
         const auto mb = moe_fused_swiglu::mailbox_wait(
             mailbox_addr, MAILBOX_MAGIC + local_expert_id, [] { invalidate_l1_cache(); });
+        // Read before the pop: the reader may republish the page as soon as both consumers popped it.
+        const uint32_t pf_next =
+            kPrefetchNextW ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_addr)[MBOX_PF_NEXT] : PF_NONE;
         mailbox_buf.pop_front(1);
+        // A prefetch aimed at an expert that is not this one (it ended up with no work) must land before
+        // anything else is read into cb_w_up.
+        const bool pf_hit = kPrefetchNextW && (pf_up_expert == local_expert_id) && (mb.m_blocks != 0);
+        if (kPrefetchNextW && pf_up_expert != PF_NONE && !pf_hit) {
+            noc.async_read_barrier();
+        }
+        pf_up_expert = PF_NONE;
         volatile tt_l1_ptr uint32_t* mailbox_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_addr);
         const uint32_t m_t = mb.m_t;
         const uint32_t m_blocks = mb.m_blocks;
@@ -383,7 +405,7 @@ void kernel_main() {
                     // Residency: M-block 0 only, because the read carries no `b`.
                     moe_fused_swiglu::read_weight_chunk<BRG>(
                         wu_acc,
-                        (b == 0) || (W_RESIDENT == 0),
+                        ((b == 0) || (W_RESIDENT == 0)) && !(pf_hit && b == 0),
                         c,
                         GU_CHUNK_W,
                         kr,
@@ -617,6 +639,33 @@ void kernel_main() {
                 mailbox_words[moe_fused_swiglu::MBOX_HSEND_DONE] = hsend_seq;
             }
 
+            // Next expert's W_up, on this expert's last block: cb_gate_acc was waited above, so
+            // compute has finished both gate/up matmuls and popped every W_up chunk. Issued after
+            // this core's h slice (and h round) went out, so the issue cost stays off phase 2's
+            // critical path; the writer would otherwise idle here until compute's first output row.
+            if (kPrefetchNextW && pf_next != PF_NONE && b + 1 == m_blocks) {
+                const auto wu_next = TensorAccessor(wu_args, get_arg_val<uint32_t>(RT_WEIGHTS + pf_next), W_TILE);
+                static_assert(GU_CHUNKS * WU_CHUNK_TILES == WU_BLOCK_TILES, "prefetch fills the whole W_up CB");
+                wu_buf.reserve_back(WU_BLOCK_TILES);
+                const uint32_t pf_wp = wu_buf.get_write_ptr();
+                noc_async_read_set_trid(PF_W_TRID);
+                for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
+                    moe_fused_swiglu::read_weight_chunk<BRG>(
+                        wu_next,
+                        true,
+                        c,
+                        GU_CHUNK_W,
+                        kr,
+                        kstart,
+                        hstart,
+                        hn,
+                        HID_T,
+                        pf_wp + c * WU_CHUNK_TILES * W_TILE,
+                        W_TILE);
+                }
+                noc_async_read_set_trid(0);
+                pf_up_expert = pf_next;
+            }
             // ---- output write-back, coalesced over the emb axis ----
             // EC_MAX is the L1 row stride of the block (uniform CB increment); `ec` is how many of
             // those columns this core actually owns.
@@ -664,6 +713,7 @@ void kernel_main() {
         noc.async_write_barrier();
         out_buf.pop_front(out_pending);
     }
+    noc.async_read_barrier();
 }
 
 #ifdef HYB_NS
