@@ -172,3 +172,15 @@ def test_prefill_phase_line_sums_the_models():
     )
     line = Gemma4ForCausalLM._g4_prefill_phases(stub, 10.0, 10.012, 0.75)
     assert line == "prelude=12.0 install=2.0x3 trace=50.0 lm_head=0.5 readback=0.2 clear=0.8 ms", line
+
+
+def test_prefill_row_record_is_off_for_the_batched_form():
+    from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin as Mixin
+
+    assert Mixin._g4_prefill_row_record(127, 0) == (127, 31)
+    assert Mixin._g4_prefill_row_record(200, 64) == (200, 8)  # a cached continuation: the row is relative
+    assert Mixin._g4_prefill_row_record(torch.tensor(33), None) == (33, 1)
+    assert Mixin._g4_prefill_row_record([127, 255], 0) is None  # batched warmup / batched prefill: per-slot list
+    assert Mixin._g4_prefill_row_record((127,), 0) is None
+    assert Mixin._g4_prefill_row_record(None, 0) is None
+    assert Mixin._g4_prefill_row_record("x", 0) is None

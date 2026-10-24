@@ -1067,12 +1067,7 @@ class ChunkedPrefillPageTableGuardMixin:
             m._sequential_row_active = True  # the capture below re-enters the eager path for this user
         # The row of the 32-row last-token tile this user's logits land on (the shared loop reads
         # ``(last_token_idx - num_cached_tokens) % 32``); ``_append_prefill_result`` slices it on device.
-        last_idx = kwargs.get("last_token_idx")
-        self._g4_pf_row = (
-            (int(last_idx), (int(last_idx) - int(kwargs.get("num_cached_tokens", 0) or 0)) % 32)
-            if last_idx is not None
-            else None
-        )
+        self._g4_pf_row = self._g4_prefill_row_record(kwargs.get("last_token_idx"), kwargs.get("num_cached_tokens", 0))
         t0 = time.perf_counter()
         try:
             if force_chunk_pt:
@@ -1087,6 +1082,20 @@ class ChunkedPrefillPageTableGuardMixin:
                     add("trace", time.perf_counter() - t0)
                     break
 
+    @staticmethod
+    def _g4_prefill_row_record(last_token_idx, num_cached_tokens):
+        """``(last_token_idx, row)`` for a single-user traced prefill (``last_token_idx`` one int), ``None`` for the
+        batched form (a list of per-slot indices: the shared batched consumption reads its own rows) and for no
+        index: the one-row readback then stays off for that call."""
+        if last_token_idx is None or isinstance(last_token_idx, (list, tuple)):
+            return None
+        try:
+            idx = int(last_token_idx)
+            cached = int(num_cached_tokens or 0)
+        except (TypeError, ValueError):
+            return None
+        return (idx, (idx - cached) % 32)
+
     def _append_prefill_result(self, prefill_results, idx, model_id, last_token_idx, tail_out, sampling_enabled):
         """Queue one row of the logits for readback instead of the whole 32-row tile from every device.
 
@@ -1099,7 +1108,11 @@ class ChunkedPrefillPageTableGuardMixin:
         pair = getattr(self, "_g4_pf_row", None)
         self._g4_pf_row = None
         # the row belongs to the traced call that recorded it: the same user (its absolute last-token index)
-        row = pair[1] if pair is not None and pair[0] == int(last_token_idx) else None
+        row = (
+            pair[1]
+            if pair is not None and not isinstance(last_token_idx, (list, tuple)) and pair[0] == int(last_token_idx)
+            else None
+        )
         model = self.model[model_id]
         if (
             sampling_enabled
