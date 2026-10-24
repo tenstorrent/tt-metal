@@ -2,13 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import statistics
 
 import numpy as np
 import pytest
 import torch
 from loguru import logger
-from PIL import Image
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -18,6 +18,7 @@ from models.tt_dit.pipelines.events import profiler_event_callback
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_config
+from models.tt_dit.utils import vbench_bundle
 from models.tt_dit.utils.video import export_to_video
 
 from ....utils.test import (
@@ -26,121 +27,60 @@ from ....utils.test import (
     ring_params_8k_req_exact_devices,
     ring_params_req_exact_devices,
 )
+from .common import check_timings, create_fractal_image, timing_limits
 
 DEVICE_PARAMS = {"trace_region_size": 150000000}
 
-# BH 4x8 linear topology is expected to be slower than ring; relax assert/CI targets by this factor.
-BH_4X8_LINEAR_EXPECTED_METRICS_SLACK = 1.10
-
-
-def _scale_expected_metrics(expected_metrics: dict, factor: float) -> dict:
-    return {k: v * factor for k, v in expected_metrics.items()}
-
-
-def create_fractal_image(width: int, height: int) -> Image.Image:
-    c = np.linspace(-2.0, 1.0, width)[None, :] + 1j * np.linspace(-1.5, 1.5, height)[:, None]
-    z = np.zeros_like(c)
-    img = np.zeros(c.shape, dtype=np.uint8)
-    for i in range(32):
-        z = z * z + c
-        img[(img == 0) & (np.abs(z) > 2)] = 255 - 8 * i
-    return Image.fromarray(np.dstack((img, np.roll(img, width // 10, 1), np.roll(img, height // 10, 0))), "RGB")
-
-
-def t2v_metrics(mesh_device, height):
-    expected_metrics = {}
-    if tuple(mesh_device.shape) == (2, 4) and height == 480:
-        if is_blackhole():
-            expected_metrics = {
-                "encoder": 0.1,
-                "denoising": 240.0,
-                "vae": 5.0,
-                "total": 255.0,
-            }
-        else:
-            expected_metrics = {
-                "encoder": 0.1,
-                "denoising": 800.0,
-                "vae": 9.0,
-                "total": 850.0,
-            }
-    elif tuple(mesh_device.shape) == (4, 8) and height == 480:
-        # 30% headroom over measured, 100% on encoder, for now.
-        # Ring measurements only; linear needs remeasuring.
-        if is_blackhole():
-            expected_metrics = {
-                "encoder": 0.21,
-                "denoising": 75.0,
-                "vae": 0.42,
-                "total": 76.0,
-            }
-        else:
-            expected_metrics = {
-                "encoder": 0.23,
-                "denoising": 142.0,
-                "vae": 1.55,
-                "total": 144.0,
-            }
-    elif tuple(mesh_device.shape) == (4, 8) and height == 720:
-        # 30% headroom over measured, 100% on encoder, for now.
-        # Ring measurements only; linear needs remeasuring.
-        if is_blackhole():
-            expected_metrics = {
-                "encoder": 0.22,
-                "denoising": 205.0,
-                "vae": 0.85,
-                "total": 206.0,
-            }
-        else:
-            expected_metrics = {
-                "encoder": 0.22,
-                "denoising": 449.0,
-                "vae": 3.4,
-                "total": 452.0,
-            }
-    elif tuple(mesh_device.shape) == (2, 2):
-        assert height == 480, "2x2 is only supported for 480p"
-        assert is_blackhole(), "2x2 is only supported for blackhole"
-        expected_metrics = {
-            "encoder": 0.12,
-            "denoising": 680.0,
-            "vae": 60.0,
-            "total": 760.0,
-        }
-    elif tuple(mesh_device.shape) == (4, 32):
-        assert is_blackhole(), "4x32 is only supported for blackhole"
-        assert height == 720, "4x32 is only supported for 720p"
-        expected_metrics = {
-            "encoder": 0.54,
-            "denoising": 75.0,
-            "vae": 5.0,
-            "total": 80.5,
-        }
-    else:
-        assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
-    return expected_metrics
-
-
-# TODO: Update device/config specific metrics for i2v
-def i2v_metrics(mesh_device, height):
-    return t2v_metrics(mesh_device, height)
-
-
-def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topology: ttnn.Topology):
-    if model_type == "t2v":
-        pipeline_cls = WanPipeline
-        expected_metrics = t2v_metrics(mesh_device, height)
-        image_prompt = None
-    else:
-        pipeline_cls = WanPipelineI2V
-        expected_metrics = i2v_metrics(mesh_device, height)
-        image_prompt = create_fractal_image(width, height)
-
-    # Only WH 4x8 uses ring; BH 4x8 linear is the distinct Linear case at this mesh shape.
-    if tuple(mesh_device.shape) == (4, 8) and topology == ttnn.Topology.Linear:
-        expected_metrics = _scale_expected_metrics(expected_metrics, BH_4X8_LINEAR_EXPECTED_METRICS_SLACK)
-
-    return pipeline_cls, image_prompt, expected_metrics
+# VBench quality gate (RUN_VBENCH=1): every (prompt, seed) clip is rendered after the timed runs, and
+# each prompt's mean over the seeds must clear that prompt's floors (models/tt_dit/utils/vbench_bundle.py).
+#
+# Floors were set ~0.03-0.06 below the lowest single-seed score of each prompt on bh_sc4 4x32 720p
+# (2026-10-24, quad A); the other quad renders different videos, so the mean needs room for that.
+# dynamic_degree is binary per clip: 0.75 tolerates one static seed out of four.
+VBENCH_SEEDS = [42, 43, 44, 45]
+VBENCH_GATE = {
+    # Prompts whose content is motion, so every seed should clear dynamic_degree. A cyberpunk-alley
+    # prompt was dropped: Wan rendered it near-static (dynamic_degree 1 of 4 seeds, 2026-10-23).
+    "t2v": [
+        {
+            "text": "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.",
+            # Per seed: subject 0.930-0.953, background 0.940-0.975, motion 0.954-0.983, imaging 0.583-0.640.
+            "thresholds": {
+                "subject_consistency": 0.88,
+                "background_consistency": 0.90,
+                "motion_smoothness": 0.93,
+                "dynamic_degree": 0.75,
+                "imaging_quality": 0.55,
+            },
+        },
+        {
+            "text": "A golden retriever sprints across a beach chasing a frisbee, sand spraying behind it.",
+            # Per seed: subject 0.904-0.941, background 0.950-0.971, motion 0.962-0.982, imaging 0.613-0.737.
+            "thresholds": {
+                "subject_consistency": 0.86,
+                "background_consistency": 0.90,
+                "motion_smoothness": 0.93,
+                "dynamic_degree": 0.75,
+                "imaging_quality": 0.58,
+            },
+        },
+    ],
+    # Prompts that animate the fractal conditioning image itself; the T2V prompts ask for content the
+    # image doesn't contain and pulled subject consistency to ~0.62. dynamic_degree and imaging_quality
+    # are meaningless on a fractal, so only intra-video consistency is gated (see test_pipeline_wan.py).
+    "i2v": [
+        {
+            "text": "A slow, smooth camera push into a glowing fractal pattern, its intricate spiral edges and colors drifting gently.",
+            # Per seed: subject 0.910-0.956, background 0.957-0.982.
+            "thresholds": {"subject_consistency": 0.86, "background_consistency": 0.92},
+        },
+        {
+            "text": "The colorful fractal pattern slowly rotates and ripples like liquid, its fine detail shimmering as the light shifts.",
+            # Per seed: subject 0.942-0.968, background 0.970-0.985.
+            "thresholds": {"subject_consistency": 0.89, "background_consistency": 0.93},
+        },
+    ],
+}
 
 
 @pytest.mark.parametrize(
@@ -219,11 +159,17 @@ def test_pipeline_performance(
     galaxy_type: str,
     is_fsdp: bool,
     quant_config_name: str | None,
+    tmp_path,
 ) -> None:
     """Performance test for Wan pipeline with detailed timing analysis."""
 
     benchmark_profiler = BenchmarkProfiler()
     traced = mesh_shape == (4, 32)  # trace only for quadx32
+    # VBENCH_EXPORT_DIR leaves the bundle for a CI step that scores it after pytest has closed the
+    # devices; without it rank 0 scores the bundle at the end of the test.
+    run_vbench = os.environ.get("RUN_VBENCH", "0") == "1"
+    vbench_export_dir = os.environ.get("VBENCH_EXPORT_DIR")
+    vbench_dir = vbench_export_dir or tmp_path / "vbench"
 
     # Skip 4U.
     if galaxy_type == "4U":
@@ -264,9 +210,16 @@ def test_pipeline_performance(
 
     print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
-    pipeline_cls, image_prompt, expected_metrics = wan_pipeline_metrics_condimg(
-        mesh_device, width, height, model_type, topology
-    )
+    limits = timing_limits(model_type, mesh_device.shape, height, topology)
+    assert limits is not None, f"No timing limits for {model_type} on {mesh_device.shape} at {height}p"
+    # Upper limits double as the CI report targets.
+    expected_metrics = {k: upper for k, (_, upper) in limits.items()}
+    if model_type == "i2v":
+        pipeline_cls = WanPipelineI2V
+        image_prompt = create_fractal_image(width, height)
+    else:
+        pipeline_cls = WanPipeline
+        image_prompt = None
 
     h_factor = tuple(mesh_device.shape)[tp_axis]
     w_factor = tuple(mesh_device.shape)[sp_axis]
@@ -341,6 +294,52 @@ def test_pipeline_performance(
         logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
         # Check output
 
+    # Gate clips are timed too: each prompt's mean over its seeds must also fall within that prompt's
+    # timing limits (for now the same limits as the timed run).
+    gate_prompts = []
+    gate_timings = []
+    if run_vbench:
+        gate_prompts = [{**prompt, "timing": limits} for prompt in VBENCH_GATE[model_type]]
+        gate_profiler = BenchmarkProfiler()
+        if is_global_rank_zero():
+            vbench_bundle.create_bundle(vbench_dir)
+        for index, gate_prompt in enumerate(gate_prompts):
+            iterations = range(index * len(VBENCH_SEEDS), (index + 1) * len(VBENCH_SEEDS))
+            for iteration, seed in zip(iterations, VBENCH_SEEDS):
+                logger.info(f"VBench clip: prompt {index}, seed {seed}")
+                with gate_profiler("run", iteration=iteration):
+                    with torch.no_grad():
+                        clip = pipeline(
+                            prompts=[gate_prompt["text"]],
+                            image_prompt=image_prompt,
+                            num_inference_steps=num_inference_steps,
+                            on_event=profiler_event_callback(gate_profiler, iteration),
+                            seed=seed,
+                            traced=traced,
+                            output_type="uint8",
+                        )
+                        ttnn.synchronize_device(mesh_device)
+                logger.info(f"  completed in {gate_profiler.get_duration('run', iteration):.2f}s")
+                if is_global_rank_zero():
+                    export_to_video(clip[0], str(vbench_bundle.clip_path(vbench_dir, index, seed)), fps=16)
+            gate_timings.append(
+                {
+                    name: statistics.mean(gate_profiler.get_duration(step, i) for i in iterations)
+                    for name, step in (
+                        ("encoder", "encoder"),
+                        ("denoising", "denoising"),
+                        ("vae", "vae"),
+                        ("total", "run"),
+                    )
+                }
+            )
+        if is_global_rank_zero():
+            vbench_bundle.write_manifest(
+                vbench_dir,
+                prompts=[{"text": p["text"], "thresholds": p["thresholds"]} for p in gate_prompts],
+                seeds=VBENCH_SEEDS,
+            )
+
     pipeline.release_traces()
 
     print(f"✓ Inference completed successfully")
@@ -412,6 +411,11 @@ def test_pipeline_performance(
     print_stats("Denoising", denoising_times)
     print_stats("VAE Decoding", vae_times)
     print_stats("Total Pipeline", total_times)
+    for index, timing in enumerate(gate_timings):
+        print(
+            f"VBench prompt {index} (mean of {len(VBENCH_SEEDS)} seeds) | "
+            + " | ".join(f"{name}: {seconds:8.4f}s" for name, seconds in timing.items())
+        )
     print("-" * 80)
 
     # Validate performance
@@ -463,15 +467,13 @@ def test_pipeline_performance(
             },
         )
 
-    pass_perf_check = True
-    assert_msgs = []
-    for k in expected_metrics.keys():
-        if measurements[k] > expected_metrics[k]:
-            assert_msgs.append(
-                f"Warning: {k} is outside of the tolerance range. Expected: {expected_metrics[k]}, Actual: {measurements[k]}"
-            )
-            pass_perf_check = False
+    assert_msgs = check_timings(measurements, limits, "timed run")
+    for index, (gate_prompt, timing) in enumerate(zip(gate_prompts, gate_timings)):
+        assert_msgs += check_timings(timing, gate_prompt["timing"], f"VBench prompt {index} mean")
 
-    assert pass_perf_check, "\n".join(assert_msgs)
+    assert not assert_msgs, "\n".join(assert_msgs)
+
+    if run_vbench and not vbench_export_dir and is_global_rank_zero():
+        vbench_bundle.evaluate(vbench_dir)
 
     logger.info("Performance test completed successfully!")
