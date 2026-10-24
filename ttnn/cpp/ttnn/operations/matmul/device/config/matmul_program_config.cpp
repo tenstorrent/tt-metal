@@ -72,6 +72,30 @@ inline uint32_t get_per_core_factor(
     return 1;
 }
 
+// Longest K block, in tiles, that the all-DRAM 2D path picks when the grid width does not divide Kt. With the default
+// compute config accuracy falls as the block grows: PCC against fp32 for a 1024-cube bf16 matmul is 0.99992 at 8 tiles
+// and 0.99984 at 16, and the matmul unit tests ask for 0.9999.
+constexpr uint32_t MAX_AUTO_IN0_BLOCK_W = 8;
+
+// On Wormhole, when each core holds at least this many tile rows of M, the all-DRAM 2D path is fastest with a K block
+// of one or two tiles: at M = 2048 on an 8x8 grid (8 rows per core), K = 896 / 1056 / 1120 and N = 512 / 1024, an
+// explicit 7-tile block took 5-11 % longer than the best one- or two-tile block (K = 896, 1120), and at K = 1056 the
+// 3-tile block took 2 % longer than one tile. Blackhole gains from the longer block at every M measured, up to 10 tile
+// rows of M per core.
+constexpr uint32_t WORMHOLE_TALL_PER_CORE_M = 8;
+constexpr uint32_t WORMHOLE_TALL_MAX_IN0_BLOCK_W = 2;
+
+// K block for a Kt that the grid width does not divide: the largest divisor of Kt up to max_block_w.
+// get_multi_dim_per_core_factor still shrinks the result to fit L1.
+uint32_t get_in0_block_w_for_indivisible_kt(uint32_t Kt, uint32_t max_block_w) {
+    for (uint32_t w = std::min(max_block_w, Kt); w > 1; w--) {
+        if (Kt % w == 0) {
+            return w;
+        }
+    }
+    return 1;
+}
+
 std::vector<uint32_t> get_multi_dim_per_core_factor(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -1322,9 +1346,15 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 }
             }
             if (all_dram_interleaved) {
-                in0_block_w = !transpose_mcast ? (Kt % num_cores_x == 0 ? Kt / num_cores_x : 1)
-                                               : (Kt % num_cores_x == 0 ? Kt / num_cores_y : 1);
                 per_core_M = !transpose_mcast ? tt::div_up(Mt, num_cores_y) : tt::div_up(Mt, num_cores_x);
+                const uint32_t max_block_w =
+                    input_tensor_a.device()->arch() == tt::ARCH::WORMHOLE_B0 && per_core_M >= WORMHOLE_TALL_PER_CORE_M
+                        ? WORMHOLE_TALL_MAX_IN0_BLOCK_W
+                        : MAX_AUTO_IN0_BLOCK_W;
+                in0_block_w = !transpose_mcast
+                                  ? (Kt % num_cores_x == 0 ? Kt / num_cores_x
+                                                           : get_in0_block_w_for_indivisible_kt(Kt, max_block_w))
+                                  : (Kt % num_cores_x == 0 ? Kt / num_cores_y : 1);
                 per_core_N = !transpose_mcast ? tt::div_up(Nt, num_cores_x) : tt::div_up(Nt, num_cores_y);
 
                 auto mutlti_dim_per_core_factor = get_multi_dim_per_core_factor(
