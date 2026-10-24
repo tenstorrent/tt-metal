@@ -154,38 +154,22 @@ inline void _llk_sync_advance_dest_section_()
 }
 
 /**
- * @brief Raise the startup barrier on semaphore `sem_index` (max 1, count 0 -> 1).
+ * @brief Spin on the RISC until semaphore `sem_index` is nonzero. No Tensix wait is armed while it spins.
  *
- * Call it on the thread that seeds the shared semaphores, after the seeds: the SEMINIT / SEMPOST pair sits behind
- * them in the same instruction stream, so a count of 1 proves the seeds have executed. The rest state is 0, so the
- * first program after reset blocks the passing thread until this runs, and @ref _llk_sync_barrier_pass_ restores 0.
- *
- * @param sem_index Semaphore id in range [0, 7].
- * @note Call once per program on the seeding thread, after the seeds, paired with exactly one
- *       @ref _llk_sync_barrier_pass_ on the passing thread. Neither helper waits for the other's previous instruction
- *       to retire, so a second pair with no DEST section between them races the first pass's SEMGET.
- */
-inline void _llk_sync_barrier_raise_(std::uint8_t sem_index)
-{
-    _llk_sync_init_(sem_index, 1 /*max*/, 0 /*init*/);
-    _llk_sync_post_(sem_index);
-}
-
-/**
- * @brief Pass the startup barrier on semaphore `sem_index`: spin until it reads 1, then consume it (back to 0).
- *
- * The spin is a RISC-side register read, not a SEMWAIT: no Tensix waiter is armed on this thread, so the raiser's
- * SEMINIT can never land on a pending wait, and every wait or post this thread issues afterwards on the seeded
- * semaphores is ordered behind their SEMINITs.
+ * Call it right before this thread's first wait on a semaphore that another thread seeds and posts: that thread's first
+ * post follows its SEMINIT, so a nonzero read proves the SEMINIT has landed, and no wait was pending when it did. Not
+ * at startup: a program with no sections never posts, and the spin would never end.
  *
  * @param sem_index Semaphore id in range [0, 7].
- * @note Call once per program on the passing thread, before its first wait or post on the seeded semaphores, paired
- *       with exactly one @ref _llk_sync_barrier_raise_ on the seeding thread.
+ * @note Does not consume the post: the caller's own wait and get on the semaphore still see it, so do not add a get
+ *       after the spin.
+ * @note The semaphore must be 0 when the program starts, i.e. the previous program matched every post with a get. In
+ *       tt-metal both halves of UNPACK_MATH run in tile_regs_commit (unpacker post, math get). Do not zero it from the
+ *       spinning thread instead: that SEMINIT can land after the poster's first post and wipe it (#60392).
  */
-inline void _llk_sync_barrier_pass_(std::uint8_t sem_index)
+inline void _llk_sync_spin_until_posted_(std::uint8_t sem_index)
 {
     while (semaphore_read(sem_index) == 0)
     {
     }
-    _llk_sync_get_(sem_index);
 }
