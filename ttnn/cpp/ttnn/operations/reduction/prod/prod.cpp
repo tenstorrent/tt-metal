@@ -52,11 +52,11 @@ inline Tensor compute_prod_nc(const Tensor& temp, int64_t dim, const MemoryConfi
 
     return tt::operations::primary::prod_nc(
         formatted_input_tensor,
-        ttnn::zeros(
+        ttnn::empty(
             ttnn_shape,
             formatted_input_tensor.dtype(),
             formatted_input_tensor.layout(),
-            *ttnn_device,
+            ttnn_device,
             output_mem_config),
         dimension,
         output_mem_config);
