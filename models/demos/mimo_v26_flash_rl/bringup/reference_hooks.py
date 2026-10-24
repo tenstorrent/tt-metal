@@ -7,8 +7,15 @@ and every test are computed from it).
 reference(spec, layers, dtype), and optionally tokenizer(spec), hf_model(spec, num_layers), hf_layers(model).
 The block-graph contract is in reference/_bringup_interface.py (vendored, do not edit). This package never imports
 the framework (bringup_fw).
+
+No hf_model: the spec sets golden.trace (an upstream HF trace of this checkpoint), so R.2 compares against the trace
+and no HF model is loaded.
 """
+
+import torch
 
 
 def reference(spec, layers=None, dtype=None):
-    raise NotImplementedError("reference stage: write models/demos/mimo_v26_flash_rl/reference/ and return it here")
+    from models.demos.mimo_v26_flash_rl.reference.model import MimoReference
+
+    return MimoReference(spec, layers=layers, dtype=dtype or torch.float32)
