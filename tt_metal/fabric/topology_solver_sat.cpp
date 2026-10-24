@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -36,6 +38,88 @@ static constexpr int kDefaultConflictCap = 300'000;
 // Zero-link maximization (#56762): budget-exhausted probes tolerated before keeping the best model found.
 static constexpr int kZeroLinkMaximizeMaxUndecidedSolves = 2;
 
+// TT_TOPO_SAT_CONFLICT_CAP overrides the per-solve conflict budget (kDefaultConflictCap). This lets an
+// investigation distinguish a genuine UNSAT from a cap-hit (solve_limited returns 0 "unknown" on budget
+// exhaustion, which the caller treats identically to UNSAT) on hard min-host placements. <=0 or unset keeps
+// the default. Read once. Allowed layer: this is the SAT solver/encoding, not a caller above it.
+static int topology_sat_env_conflict_cap() {
+    static const int cap = [] {
+        const char* e = std::getenv("TT_TOPO_SAT_CONFLICT_CAP");
+        if (e == nullptr || e[0] == '\0') {
+            return 0;
+        }
+        const long v = std::strtol(e, nullptr, 10);
+        return (v > 0 && v <= static_cast<long>(std::numeric_limits<int>::max())) ? static_cast<int>(v) : 0;
+    }();
+    return cap;
+}
+
+// When the cap override is set, log one line per solve() (size, host-cap state, cap, SAT/UNSAT/BUDGET, time) so
+// the growth/fallback walk is observable: a BUDGET_EXHAUSTED line means the cap -- not real UNSAT -- forced the
+// retry, and a jump in (nt,ng) marks the MGD-fallback pool injection.
+static bool topology_sat_log_solves() {
+    static const bool on =
+        std::getenv("TT_TOPO_SAT_CONFLICT_CAP") != nullptr || std::getenv("TT_TOPO_SAT_LOG_SOLVES") != nullptr;
+    return on;
+}
+
+// Scale the per-solve conflict budget to BOTH the CNF size and the PSD (physical-space) tightness:
+//
+//   cap = clamp( scale * clauses * rho^ALPHA * (n_global/N_ref)^BETA * host_boost , floor , ceiling )
+//
+// Clause count alone is a poor predictor: for exact-fit rings clauses ~ 7.95*n_global^2, yet the conflicts needed
+// grow ~n_global^6 (the per-clause conflict rate itself climbs 3.2 -> 8.3 -> 16.4 across the 96/112/144 rings). The
+// extra variable is how physically TIGHT the embedding is, which three free encode-time signals capture:
+//   * occupancy rho = n_target/n_global -- a full board (rho=1, exact pack) has zero placement slack. This is why a
+//     144-ring on SC36 (rho=1) is far harder than a 128-ring on the SAME SC36 (rho=0.889, 16 empty seats).
+//   * PSD size n_global -- a bigger board at the same fill is a deeper embedding (144 exact-fit >> 96 exact-fit);
+//     the (n_global/N_ref)^BETA term separates boards that rho and clauses alone cannot.
+//   * binding host-cap slack num_host_groups-K -- when the cap binds, the solver must pack almost perfectly into
+//     exactly K hosts; small slack is the regime that silently DOWNGRADES (host cap dropped) when under-budgeted.
+// For a loose seat-fill rho^ALPHA pulls the budget DOWN (saves time) while a tight host cap pushes host_boost UP --
+// the two correctly oppose on the embedded-ring case. Deterministic: keys off geometry + clause count, never wall
+// time. Tunable: TT_TOPO_SAT_CAP_SCALE, _FLOOR, _CEILING, _CAP_ALPHA(x100), _CAP_BETA(x100), _CAP_HOSTGAMMA(x100),
+// _CAP_NREF.
+static int topology_sat_scaled_conflict_cap(
+    int64_t clauses, size_t n_target, size_t n_global, size_t num_host_groups, size_t host_cap_k, bool cap_binding) {
+    auto env_ll = [](const char* name, long long dflt) -> long long {
+        const char* e = std::getenv(name);
+        if (e == nullptr || e[0] == '\0') {
+            return dflt;
+        }
+        char* end = nullptr;
+        const long long v = std::strtoll(e, &end, 10);
+        return (end != e && v > 0) ? v : dflt;
+    };
+    const long long floor_cap = env_ll("TT_TOPO_SAT_CAP_FLOOR", 1'000'000);
+    const long long scale = env_ll("TT_TOPO_SAT_CAP_SCALE", 12);  // conflicts per clause, before tightness
+    const long long ceil_cap = env_ll("TT_TOPO_SAT_CAP_CEILING", 10'000'000);
+    // Exponents/weights are passed x100 so they stay integer-valued env knobs (e.g. ALPHA=100 -> 1.0).
+    const double alpha = static_cast<double>(env_ll("TT_TOPO_SAT_CAP_ALPHA", 100)) / 100.0;       // rho exponent
+    const double beta = static_cast<double>(env_ll("TT_TOPO_SAT_CAP_BETA", 130)) / 100.0;         // size exponent
+    const double host_gamma = static_cast<double>(env_ll("TT_TOPO_SAT_CAP_HOSTGAMMA", 10)) / 100.0;  // binding kicker
+    const double n_ref = static_cast<double>(env_ll("TT_TOPO_SAT_CAP_NREF", 96));                 // reference board
+
+    double tightness = 1.0;
+    if (n_global > 0) {
+        const double rho = static_cast<double>(n_target) / static_cast<double>(n_global);
+        tightness *= std::pow(rho > 0.0 ? rho : 1.0, alpha);
+        tightness *= std::pow(static_cast<double>(n_global) / (n_ref > 0.0 ? n_ref : 1.0), beta);
+    }
+    if (cap_binding && num_host_groups > host_cap_k && host_cap_k > 0) {
+        const double slack = static_cast<double>(num_host_groups - host_cap_k);
+        tightness *= 1.0 + host_gamma * (static_cast<double>(host_cap_k) / slack);
+    }
+
+    double cap_d = static_cast<double>(scale) * static_cast<double>(clauses > 0 ? clauses : 0) * tightness;
+    long long cap = (cap_d >= static_cast<double>(std::numeric_limits<long long>::max())) ? ceil_cap
+                                                                                          : static_cast<long long>(cap_d);
+    cap = std::max(cap, floor_cap);
+    cap = std::min(cap, ceil_cap);
+    cap = std::min<long long>(cap, std::numeric_limits<int>::max());
+    return static_cast<int>(cap);
+}
+
 struct SatSearchBackend::Impl {
     TopologySatSolver solver;
     TopologySatHardEncoding enc;
@@ -57,6 +141,15 @@ struct SatSearchBackend::Impl {
     // Owned by the session's GraphIndexData (the TopologySatGraphView passed to start() is a temporary).
     const std::vector<std::vector<size_t>>* global_adj_idx = nullptr;
     ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED;
+    // Instance size, stashed at start() for the per-solve investigation log (see topology_sat_log_solves).
+    size_t n_target = 0;
+    size_t n_global = 0;
+    int64_t encode_clauses = 0;  // clause count of the static CNF; basis for the conflict-cap scaling policy
+    // PSD (physical-space) geometry, stashed at start() for the tightness-aware conflict-cap scaling. A full/large
+    // board and a binding host cap both make the solve far harder than the clause count alone reflects.
+    size_t num_host_groups = 0;   // host seat-groups on the board (0 if no host-cap constraint present)
+    size_t host_cap_k = 0;        // K = max_same_rank_groups_used (binding host cap; 0 = none)
+    bool host_cap_binding = false;  // K < num_host_groups (the cap actually constrains the packing)
 };
 
 SatSearchBackend::SatSearchBackend() = default;
@@ -1721,7 +1814,10 @@ bool SatSearchBackend::start(
     }
     impl_ = std::make_unique<Impl>();
     auto& s = *impl_;
-    s.conflict_cap = conflict_cap_;
+    const int env_cap = topology_sat_env_conflict_cap();
+    s.conflict_cap = env_cap > 0 ? env_cap : conflict_cap_;
+    s.n_target = graph_data.n_target;
+    s.n_global = graph_data.n_global;
     s.solver.configure_for_blocking_clause_enumeration();
     s.unique_shapes = unique_shapes;
     s.global_adj_idx = &graph_data.global_adj_idx;
@@ -1760,7 +1856,14 @@ bool SatSearchBackend::start(
                 min_group_capacity = std::min(min_group_capacity, grp.size());
             }
         }
-        if (num_host_groups >= 1 && max_group_capacity > 0) {
+        // A host-group cap of K is NON-BINDING when K >= the number of available host groups: "use at most
+        // K of num_host_groups" is vacuously true. Encoding it anyway still runs topology_sat_build_group_occupancy
+        // (~O(assign-lits) of used<=>OR and, under all_or_nothing, full-packing clauses), which only bloats the
+        // CNF -- for the exactly-full case (e.g. a 144-stage ring on a 36-host cluster, k_min == hosts) the
+        // occupancy merely restates a packing the bijection already forces. Skip it entirely; the solution still
+        // respects the cap trivially. Mirrors the SOFT path guard below (k_floor < num_host_groups).
+        if (num_host_groups >= 1 && max_group_capacity > 0 &&
+            constraint_data.max_same_rank_groups_used < num_host_groups) {
             const size_t K = constraint_data.max_same_rank_groups_used;
             const bool uniform_capacity = (min_group_capacity == max_group_capacity);
             const bool full_packing = uniform_capacity && (graph_data.n_target == K * max_group_capacity);
@@ -1770,6 +1873,11 @@ bool SatSearchBackend::start(
                 return false;
             }
             s.cap_active = true;
+            // Stash the binding host-cap geometry for the tightness-aware conflict budget: packing into exactly K of
+            // num_host_groups hosts with slack (num_host_groups-K) is the hard regime that silently downgrades.
+            s.num_host_groups = num_host_groups;
+            s.host_cap_k = K;
+            s.host_cap_binding = true;
         }
     }
 
@@ -1886,6 +1994,26 @@ bool SatSearchBackend::start(
         topology_sat_build_shape_blocking_clause(s.enc, shape_key, forbid_clause);
         topology_sat_add_shape_clause_or_unsat(s.solver, s.enc, forbid_clause);
     }
+
+    // Protect the assignment variables from variable elimination: every blocking clause added between solves
+    // (both the per-mapping and unique-shape paths) is built solely from these literals, so an engine that
+    // eliminated one during an earlier solve would make a later blocking clause unsound. No-op on CaDiCaL;
+    // real on kissat_extras (KISSAT_SWAP_PLAN.md §3.5). Done once here, before the first next()/solve().
+    for (const auto& target_lits : s.enc.assign_lit) {
+        for (int lit : target_lits) {
+            s.solver.protect_variable(std::abs(lit));
+        }
+    }
+
+    // Finalize the per-solve conflict budget now that the full CNF is encoded. An explicit
+    // TT_TOPO_SAT_CONFLICT_CAP override wins (experiments); otherwise scale to the clause count AND the PSD
+    // (physical-space) tightness so a large/full placement CNF gets enough budget to actually solve. (The
+    // provisional value set above is only a fallback.)
+    s.encode_clauses = s.solver.clauses_added();
+    if (env_cap <= 0) {
+        s.conflict_cap = topology_sat_scaled_conflict_cap(
+            s.encode_clauses, s.n_target, s.n_global, s.num_host_groups, s.host_cap_k, s.host_cap_binding);
+    }
     return true;
 }
 
@@ -1989,7 +2117,27 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
                     s.solver.assume(lit);
                 }
                 ++s.solve_calls;
+                const auto t0 = std::chrono::steady_clock::now();
                 const int status = s.solver.solve_limited(s.conflict_cap);
+                if (topology_sat_log_solves()) {
+                    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        std::chrono::steady_clock::now() - t0)
+                                        .count();
+                    const char* st = status == TopologySatSolver::kSat     ? "SAT"
+                                     : status == TopologySatSolver::kUnsat ? "UNSAT"
+                                                                           : "BUDGET_EXHAUSTED";
+                    log_info(
+                        tt::LogFabric,
+                        "[sat-solve] call#{} nt={} ng={} clauses={} host_cap={} cap={} status={} t={}ms",
+                        s.solve_calls,
+                        s.n_target,
+                        s.n_global,
+                        s.encode_clauses,
+                        s.cap_active ? "on" : "off",
+                        s.conflict_cap,
+                        st,
+                        static_cast<long long>(ms));
+                }
                 return status == TopologySatSolver::kSat;
             };
             if ((s.symmetry_lit != 0 && solve_once(/*with_symmetry_hint=*/true)) ||
