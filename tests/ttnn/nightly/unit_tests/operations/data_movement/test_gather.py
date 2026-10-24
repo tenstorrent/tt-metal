@@ -86,3 +86,16 @@ def test_gather_negative_dim_equals_positive(device, shape, dim):
 
     assert_with_pcc(ttnn_output_neg, ttnn_output_pos, 0.9999)
     assert_with_pcc(torch_output_neg, ttnn_output_neg, 0.999)
+
+
+@pytest.mark.parametrize("N", [2048, 4096])
+def test_gather_row_major_wide(device, N):
+    torch.manual_seed(0)
+    x = torch.rand([1, N], dtype=torch.bfloat16)
+    idx = torch.randint(0, N, [1, N], dtype=torch.int32)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    it = ttnn.from_torch(idx, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    out = ttnn.gather(xt, dim=-1, index=it)
+    ref = torch.gather(x, -1, idx.long())
+    assert torch.equal(ttnn.to_torch(out), ref)
+
