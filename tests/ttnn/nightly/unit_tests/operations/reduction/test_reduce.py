@@ -373,3 +373,26 @@ def test_rm_reduce_h_axis_split_output_layout(device, reduce_op, keepdim, output
         frobenius_threshold=0.005,
         check_ulp=False,
     )
+
+
+@pytest.mark.parametrize("fp32_dest_acc_en", [True, False], ids=["fp32_dest", "bf16_dest"])
+@pytest.mark.parametrize("op", ["sum", "max", "min"])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.int32, ttnn.bfloat16], ids=["float32", "int32", "bfloat16"])
+def test_reduce_row_keepdim_tile_padding_is_zero(device, op, dtype, fp32_dest_acc_en):
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("Quasar's SFPU reduce is not covered here")
+    if dtype != ttnn.bfloat16 and not fp32_dest_acc_en:
+        pytest.skip("32-bit formats need a 32-bit Dest")
+    torch.manual_seed(0)
+    torch_input = torch.randn(1, 1, 64, 96)
+    if dtype == ttnn.int32:
+        torch_input = (torch_input * 100).to(torch.int32)
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=fp32_dest_acc_en
+    )
+    output = getattr(ttnn, op)(tt_input, dim=-1, keepdim=True, compute_kernel_config=kernel_config)
+    padding = output.cpu().to_torch_with_padded_shape().clone()
+    padding[..., 0] = 0
+    nonzero_cols = sorted(set(torch.nonzero(padding)[:, -1].tolist()))
+    assert not nonzero_cols, f"non-zero padding in columns {nonzero_cols}"
