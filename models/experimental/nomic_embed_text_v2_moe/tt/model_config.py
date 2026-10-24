@@ -10,37 +10,33 @@ on real weights and real-text activations:
                        matmul (fc2, a 3072-deep reduction, degrades from 1.35e-1 to 2.08e+00;
                        the router reroutes 28 tokens in 1024 rather than 1). Re-blocked for the
                        8-tile destination it frees, it makes the dense minimal_matmuls 2% to 9%
-                       faster at 8x512, 0.3% of device time, and the transposed w1 no faster,
-                       while the steady 8x512 last-hidden PCC falls from 0.9965 to 0.9940.
+                       faster at 8x512, 0.3% of device time, while the steady 8x512 last-hidden
+                       PCC falls from 0.9965 to 0.9940.
   packer L1 accum      on for every matmul. Without it each K block reloads the fp32 partials
                        into the destination register; on its own it halves the dense matmuls.
                        It changes nothing numerically, the partials being fp32 either way.
-  math fidelity        HiFi2 for fc1 and expert w1, HiFi3 for QKV, out_proj and fc2, LoFi for
-                       expert w2, HiFi4 for the router. HiFi3 on bf16 x bf16 skips only the
+  math fidelity        HiFi2 for fc1, LoFi for the expert w2, HiFi3 for QKV, out_proj, fc2 and
+                       the expert w1, HiFi4 for the router. HiFi3 on bf16 x bf16 skips only the
                        low-bits-by-low-bits partial product and matches HiFi4's error to three
-                       digits. fc1 at HiFi2 is 13% faster at 8x512. The transposed w1, bfloat8_b
-                       weights in in0, is bit-identical at HiFi2 and HiFi3. w2 at LoFi is 25%
-                       faster on a 4096-token transposed pass. A stacked pass (tt/experts.py)
-                       runs both at the same fidelities. Its w2 at HiFi2 halves that one
-                       matmul's error, 10x the bfloat16 floor to 1.0x, and the pass's from 1.88e-2
-                       to 1.38e-2 relative on real activations, for 14 us of 198 at 128 tokens
-                       and 44 of 313 at 256; on real text it moved nothing measurable (retrieval
-                       at 256-token batches, every split within run-to-run noise), so it stays at
-                       LoFi, where the pass is still more accurate than the batched one it replaced
-                       (2.20e-2). Its w1 written to bfloat8_b measures the same at HiFi2 and HiFi3.
-                       The routing weights it spreads with a 0/1 matmul come out exact from HiFi3
-                       up, while HiFi2 drops their low bits, up to 3.9e-3; it runs at HiFi4. The
-                       router, bound by reading its input, runs the same at every fidelity.
+                       digits. fc1 at HiFi2 is 13% faster at 8x512. The router, bound by reading
+                       its input, runs the same at every fidelity.
+                       The routed experts (grouped_matmul) take the activations as their first
+                       operand, whose low mantissa bits the low fidelities drop. With w1 at HiFi2
+                       that left an error shared by the tokens (pooled error 1.26x that of the
+                       dense pass the routed one replaced), so w1 runs at HiFi3, which covers a
+                       bfloat16 mantissa and is identical to HiFi4. w2 at LoFi makes the routed
+                       outputs about 1.1% smaller than at HiFi2, which covers the bfloat8_b
+                       intermediate's mantissa, and saves 0.36 ms of an 8x512 forward. With it no
+                       end-to-end draw over seeds 0..7 falls below PCC 0.98 and mean errors grow
+                       about 1.4x; the 512-draw envelopes (default shapes; 4x512 and 8x384) count
+                       29 and 4 draws over 5e-3 against HiFi2's 32 and 10, routing reshuffled
+                       rather than a gain.
   weights              bf16, but bfloat8_b for both expert weights, which bound the small passes
                        by streaming them: the old token-major w1 was 25% faster at 128 tokens, w2
                        5% at 128 tokens and 11% at 74.
-  expert intermediate  bfloat8_b for the tensor that w1 writes and w2 reads, (1, 1, E*F, T) on a
-                       transposed pass, where w1 is 17% and w2 11% faster at 3520 tokens, 3.6% of
-                       device time at 8x512. A stacked pass keeps its (1, 1, T, E*F) GELU output
-                       and the gated product in it too.
-  expert output        bfloat8_b on a transposed pass for the w2 output, the gate that weights it
-                       and their product (see tt/experts.py). w2 is 11% and the reduce 43% faster
-                       at 4096 tokens, 3.1% of device time at 8x512.
+  expert intermediate  bfloat8_b for the (1, 1, R, F) tensor that w1 writes and w2 reads. On the
+                       transposed dense pass the routed one replaced, w1 was 17% and w2 11% faster
+                       with it at 3520 tokens, 3.6% of device time at 8x512.
   softmax              HiFi4 with fp32 accumulation, both halves required: max-abs is 2.7e-2 to
                        3.0e-2 stock, 5.4e-3 to 6.8e-3 with HiFi4 alone, 1.4e-3 to 1.9e-3 with
                        both, against the router's 5e-3 budget.
@@ -60,27 +56,38 @@ on real weights and real-text activations:
                        score block.
   GELU                 tanh, for the dense FFN and the experts. It is within 4.7e-4 of exact erf,
                        a thirtieth of bfloat16's rounding, and 18% faster: 1353 against 1645 us
-                       for the experts at 8x512, 171 against 208 for the dense FFN. On fc1 above
-                       32 tile rows of M and on the transposed expert w1 it is fused into the
-                       matmul, whose 2D multicast program applies it from the packer beside the
-                       math (tt/matmul_config.py, gelu_on_packer): w1 and its GELU take 1630 us at
-                       8x512 against 786 + 1353, fc1 and its GELU 260 against 132 + 171. The LUT,
-                       fused into minimal_matmul, costs 75 us over the w1 where the tanh form now
-                       costs 844, 4.6 ms a forward at 8x512, but it triples the random-id tail (108
-                       of 512 draws over 5e-3 against 37) and fails five tests, two of
-                       test_ttnn_model.py at 2x37 and three of test_ttnn_encoder.py at 2x128; it is
-                       a TtModelConfig switch away (expert_gelu).
+                       for the dense experts at 8x512, 171 against 208 for the dense FFN. On fc1
+                       above 32 tile rows of M it is fused into the matmul, whose 2D multicast
+                       program applies it from the packer beside the math (tt/matmul_config.py,
+                       gelu_on_packer): fc1 and its GELU take 260 us at 8x512 against 132 + 171,
+                       the transposed dense expert w1 took 1630 against 786 + 1353.
+                       grouped_matmul applies it to the routed w1 (routed GELU below). The LUT,
+                       fused into the transposed w1's minimal_matmul, cost 75
+                       us over the w1 where the tanh form cost 844, 4.6 ms a forward at 8x512, but
+                       it tripled the random-id tail (108 of 512 draws over 5e-3 against 37) and
+                       failed five tests, two of test_ttnn_model.py at 2x37 and three of
+                       test_ttnn_encoder.py at 2x128.
+  routed GELU          the routed experts' w1 (grouped_matmul) computes the same tanh GELU as
+                       x / (1 + exp(-2u)), GELU_TANH param 1 (routed_fast_gelu), within 1 bf16 ULP
+                       of the accurate form. On every MoE layer's real inputs at 8x512 and 2x512
+                       its bfloat8_b outputs equal the accurate form's in 99.99% of elements, with
+                       the same error against float64 erf GELU to four digits; it takes w1 from
+                       370 to 272 us at 4096 tokens.
+  routed experts       every MoE layer runs each token through its two experts only
+                       (routing_metadata, grouped_matmul and routed_combine, tt/experts.py)
+                       instead of through all eight, gated. An 8x512 forward takes 12.8 ms against
+                       25.1 with the transposed dense pass it replaced. On 22,562 retrieval texts
+                       the median 1 - cos per split is 0.65x to 1.07x that pass's, with nDCG
+                       within run-to-run noise. It also replaced a stacked dense pass up to 320
+                       tokens, which took 22 us a MoE layer less device time at 32 tokens and 18 us
+                       more at 128 (tt/experts.py), and more host time at every size.
 
 None of the reduced-precision choices above moved retrieval nDCG beyond run-to-run noise. These
 were measured and left off:
 - HiFi2 on QKV, out_proj and fc2. On QKV it shifts the pooled embedding of short padded batches
   (2x128 with a quarter padded: 6 of 8 seeds over 1e-3 against 2). On out_proj and fc2 it widens
   the random-id tail (14 of 192 draws over 1e-2 against 1).
-- LoFi on expert w1: slower at 4096 tokens (827 to 907 us), and about 0.003 off the steady
-  last-hidden PCC.
 - bfloat8_b dense weights: 1.6% at 1x128, for the largest error rise of any option.
-- bfloat4_b weights for the small-pass w1: 1.5% at 2x37, for last-hidden PCC 0.964 at 1x128
-  against 0.992.
 
 dst_full_sync_en stays off. Where it is correct it is slower, since math and pack stop
 overlapping, and in two cases it returns wrong results: a 1x8 subblock with fp32 accumulation
@@ -101,18 +108,15 @@ WEIGHT_DTYPE = ttnn.bfloat16
 
 # The one path kept at higher precision: the router's softmax feeds a top-2 selection, so a
 # near-tie decided by rounding changes which experts a token visits. Rounding the probabilities
-# to bfloat16 before the topk reroutes 0.34% to 0.59% of tokens. ttnn.topk takes fp32, so only the
-# two selected weights are cast, after the selection, for the bfloat16 gate the experts consume.
+# to bfloat16 before the topk reroutes 0.34% to 0.59% of tokens. ttnn.topk takes fp32, and
+# routing_metadata copies the two selected weights as they are, so nothing on the path is cast.
 ROUTER_DTYPE = ttnn.float32
 
-# The expert intermediate, (1, 1, T, E*F) on a stacked pass and (1, 1, E*F, T) on a transposed
-# one: the w1 output with its GELU, and on a stacked pass the gated product w2 reads. See the
-# module docstring.
-EXPERT_INTERMEDIATE_DTYPE = ttnn.bfloat8_b
+# Both expert weights, w1 and w2, which every expert pass streams. See the module docstring.
+EXPERT_WEIGHT_DTYPE = ttnn.bfloat8_b
 
-# The w2 output of a transposed expert pass, the gate that weights it and their product. See the
-# module docstring.
-EXPERT_OUTPUT_DTYPE = ttnn.bfloat8_b
+# The expert intermediate, the (1, 1, R, F) w1 output with its GELU. See the module docstring.
+EXPERT_INTERMEDIATE_DTYPE = ttnn.bfloat8_b
 
 # The additive attention mask of a padded batch. Its values are 0 and dtype-min, which bfloat4_b
 # holds exactly, and SDPA reads one mask chunk per query chunk of every head. See the module
@@ -121,7 +125,7 @@ ATTENTION_MASK_DTYPE = ttnn.bfloat4_b
 
 # The GELU of the dense FFN and of the experts. See the module docstring.
 DENSE_GELU = ttnn.GeluVariant.Tanh
-EXPERT_GELU = ttnn.GeluVariant.Tanh
+ROUTED_FAST_GELU = True
 
 LAYOUT = ttnn.TILE_LAYOUT
 MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
@@ -141,15 +145,12 @@ class OpGroup(Enum):
     FC1 = "fc1"
     FC2 = "fc2"
     ROUTER = "router"
-    EXPERT_W1 = "expert_w1"
-    EXPERT_W2 = "expert_w2"
-    STACKED_W1 = "stacked_w1"  # the experts of a stacked pass, tt/experts.py
-    STACKED_W2 = "stacked_w2"
-    EXPERT_GATE = "expert_gate"  # the 0/1 matmul spreading the routing weights over a stacked pass
+    ROUTED_W1 = "routed_w1"  # the experts, tt/experts.py
+    ROUTED_W2 = "routed_w2"
     SDPA = "sdpa"
     SOFTMAX = "softmax"  # the router's
     NORM = "norm"  # emb_ln and both block norms
-    REDUCE = "reduce"  # the expert fast_reduce_nc and the pooling sums
+    REDUCE = "reduce"  # routed_combine and the pooling sums
 
 
 MATMUL_GROUPS = (
@@ -158,31 +159,17 @@ MATMUL_GROUPS = (
     OpGroup.FC1,
     OpGroup.FC2,
     OpGroup.ROUTER,
-    OpGroup.EXPERT_W1,
-    OpGroup.EXPERT_W2,
-    OpGroup.STACKED_W1,
-    OpGroup.STACKED_W2,
-    OpGroup.EXPERT_GATE,
+    OpGroup.ROUTED_W1,
+    OpGroup.ROUTED_W2,
 )
 
 
 _MATMUL_FIDELITY = {
     OpGroup.FC1: ttnn.MathFidelity.HiFi2,
     OpGroup.ROUTER: ttnn.MathFidelity.HiFi4,
-    OpGroup.EXPERT_W1: ttnn.MathFidelity.HiFi2,
-    OpGroup.EXPERT_W2: ttnn.MathFidelity.LoFi,
-    OpGroup.STACKED_W1: ttnn.MathFidelity.HiFi2,
-    OpGroup.STACKED_W2: ttnn.MathFidelity.LoFi,
-    OpGroup.EXPERT_GATE: ttnn.MathFidelity.HiFi4,
+    OpGroup.ROUTED_W1: ttnn.MathFidelity.HiFi3,
+    OpGroup.ROUTED_W2: ttnn.MathFidelity.LoFi,
 }
-
-# bfloat8_b halves the expert weight streams that bound the small passes. Every other matmul
-# weight stays at its full width: see the module docstring.
-_MATMUL_WEIGHT_DTYPE = {
-    OpGroup.EXPERT_W1: ttnn.bfloat8_b,
-    OpGroup.EXPERT_W2: ttnn.bfloat8_b,
-}
-
 
 # fp32 accumulation selects SDPA's older kernel; a bfloat16 destination its streaming one. See the
 # module docstring.
@@ -223,19 +210,17 @@ class TtModelConfig:
     core_grid: ttnn.CoreCoord
     l1_cb_bytes: int  # per-core L1 left for circular buffers, which bounds a matmul's blocks
     l1_banks: int  # the banks an L1-interleaved tensor spreads over
-    # matmul_weight_dtypes holds the overrides of weight_dtype and router_dtype. Both mappings stay
-    # out of the hash, which a mapping proxy does not support; equality still compares them.
+    # Out of the hash, which a mapping proxy does not support; equality still compares it.
     compute_kernel_configs: Mapping[OpGroup, ttnn.DeviceComputeKernelConfig] = field(hash=False)
-    matmul_weight_dtypes: Mapping[OpGroup, ttnn.DataType] = field(hash=False)
 
     activation_dtype: ttnn.DataType = ACTIVATION_DTYPE
     weight_dtype: ttnn.DataType = WEIGHT_DTYPE
     router_dtype: ttnn.DataType = ROUTER_DTYPE
+    expert_weight_dtype: ttnn.DataType = EXPERT_WEIGHT_DTYPE
     expert_intermediate_dtype: ttnn.DataType = EXPERT_INTERMEDIATE_DTYPE
-    expert_output_dtype: ttnn.DataType = EXPERT_OUTPUT_DTYPE
     attention_mask_dtype: ttnn.DataType = ATTENTION_MASK_DTYPE
     dense_gelu: ttnn.GeluVariant = DENSE_GELU
-    expert_gelu: ttnn.GeluVariant = EXPERT_GELU
+    routed_fast_gelu: bool = ROUTED_FAST_GELU
     attention_l1: bool = True  # the head tensors and SDPA's output in L1 where they fit, tt/attention.py
     layout: ttnn.Layout = LAYOUT
 
@@ -243,8 +228,7 @@ class TtModelConfig:
         return self.compute_kernel_configs[group]
 
     def matmul_weight_dtype(self, group: OpGroup) -> ttnn.DataType:
-        default = self.router_dtype if group is OpGroup.ROUTER else self.weight_dtype
-        return self.matmul_weight_dtypes.get(group, default)
+        return self.router_dtype if group is OpGroup.ROUTER else self.weight_dtype
 
     @classmethod
     def from_device(cls, device) -> "TtModelConfig":
@@ -264,5 +248,4 @@ class TtModelConfig:
             compute_kernel_configs=MappingProxyType(
                 {group: _compute_config(device.arch(), group) for group in OpGroup}
             ),
-            matmul_weight_dtypes=MappingProxyType(dict(_MATMUL_WEIGHT_DTYPE)),
         )

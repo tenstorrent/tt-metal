@@ -24,20 +24,16 @@ call the module code, so they run the program configs chosen per call shape in
 [`../tt/matmul_config.py`](../tt/matmul_config.py):
 - the dense projections through `ttnn.experimental.minimal_matmul` above 32 tile rows of M, and
   through `ttnn.linear` with a multicast config below. Their outputs go to L1 when they fit;
-- the experts in one of two layouts per pass of tokens. Up to 320 tokens they run stacked, tokens
-  on the rows and the pass's tensors in L1: w1 as one 1D `ttnn.matmul` of x and every expert's
-  `(H, F)` slab side by side with the GELU fused, the routing weights spread over each expert's
-  columns by a 0/1 `ttnn.matmul` and applied by `ttnn.multiply`, and w2 as one 1D `ttnn.linear`
-  over every expert's `(F, H)` slab stacked, K = E*F, which reads its `(H, E*F)` weight with
-  `transpose_b` and adds the shared bias. Above, the pass runs transposed, tokens on the columns:
-  w1 as one unbatched `minimal_matmul` of the stacked `(E*F, H)` checkpoint weight and `x^T`, w2
-  as a batched 2D `ttnn.matmul` writing bfloat8_b, the gate cast to match, and the result
-  transposed back.
+- the experts routed, each token through its two experts only: `routing_metadata` sorts the top-2
+  slots by expert into 32-row regions, `ttnn.embedding` gathers each slot's token row,
+  `grouped_matmul` runs each 32-row block through its expert's w1 with the GELU fused and then its
+  w2, and `routed_combine` weights and sums each token's two rows and adds the shared bias. The
+  three are this port's own ops, in `ttnn.experimental.nomic_embed_text_v2_moe`.
 
 ## 1. Mapping
 
-Gate is PCC >= 0.999 per operator. The expert chain, on bfloat8_b weights and intermediates, and
-SDPA sit closest, at 0.99975 to 0.99994 and at 0.99976; everything else clears 0.99999.
+Gate is PCC >= 0.999 per operator. The routed expert pass, on bfloat8_b weights and intermediates
+with its w2 at LoFi, and SDPA sit closest, at 0.99990 and 0.99976; everything else clears 0.99999.
 
 ### Embeddings and normalization
 
@@ -89,37 +85,24 @@ projections run `minimal_matmul`, and measure 0.999991 to 0.999996, max-abs
 |---|---|---|---|
 | `_softmax` | `ttnn.softmax`, HiFi4 + fp32 dest acc, over 64 scored columns | 1.000000 | 1.53e-03 |
 | `topk` | `ttnn.topk`, k=2 over the 64, fp32 | exact indices | 0 |
-| dense routing weights | `ttnn.matmul` 0/1 one-hot of the indices, `ttnn.eq`, `ttnn.multiply` | 0.999998 | 1.95e-03 |
 
 The router matmul scores 64 columns, the 8 experts and 56 at -1e30, so that `ttnn.topk` has
 nothing to pad; softmax turns the 56 into exact zeros and leaves the experts' probabilities
-bit-identical to an 8-wide softmax. The dense row is bit-identical to `ttnn.scatter` of the top-k
-values into zeros (`test_one_hot_reproduces_the_scatter`), at 27 against 126 us a MoE layer at
-8x512. It has no aten counterpart: it implements `NomicRouter.dense_weights`, which the trace never
-reached because that forward took the ragged path. The inventory's own `zeros_like` and
-`scatter_` belong to that path and are eliminated (section 2).
+bit-identical to an 8-wide softmax. The experts take the top-k values and indices as they are.
 
 ### Experts
 
-Cumulative: each row consumes the previous row's device output, so the last figure is the whole
-dense-all-experts chain. `test_expert_matmuls` chains the first three the same way; the other
-tests isolate their operator.
+The routed pass runs upstream's ragged loop itself rather than its dense equivalent. Each op is checked against its own definition by the nightly tests in
+`tests/ttnn/nightly/unit_tests/operations/experimental/nomic_embed_text_v2_moe/`, and the pass
+against the reference's loop in `test_ttnn_experts.py`:
 
-| aten | TTNN | PCC | max-abs |
-|---|---|---|---|
-| `matmul` | `ttnn.experimental.minimal_matmul`, `[1,1,8*3072,768] x [1,1,768,T]` | 0.999941 | 3.07e-01 |
-| `gelu` | `ttnn.gelu`, `[1,1,8*3072,T]` | 0.999860 | 3.09e-01 |
-| `matmul` | `ttnn.matmul`, `[1,8,768,3072] x [1,8,3072,T]` | 0.999782 | 5.02e+00 |
-| `mul` | `ttnn.multiply`, gate `[1,8,1,T]` broadcast | 0.999746 | 1.61e+00 |
-| `sum` over experts | `ttnn.experimental.fast_reduce_nc(dims=[1])` | 0.999815 | 1.65e+00 |
-| `add` | `ttnn.add`, shared bias, once after the sum | 0.999814 | 1.64e+00 |
-
-At this size a pass runs transposed, everything before the sum in bfloat8_b. Up to 320 tokens
-it runs stacked, the w1 output and the gated product in bfloat8_b, and `test_expert_matmuls`
-chains the whole pass. At `T=128`, against torch on the same input: w1 with its GELU 0.999898
-(max-abs 1.68e-01), the gate spread exact (`test_stacked_gate_spreads_the_routing_weights_exactly`
-asserts it bit for bit), the gated product 0.999962 (6.86e-02), and w2 with the bias, the whole
-chain, 0.999876 (6.76e-01).
+| aten | TTNN | Check |
+|---|---|---|
+| `nonzero`, `index`, `_local_scalar_dense` | `routing_metadata`, then `ttnn.embedding` gathering each slot's row; no count is read back to the host | exact: `test_routing_metadata.py`, `test_dispatch_copies_each_slot_row` |
+| `matmul`, `gelu`, per expert | `grouped_matmul`, w1 with the GELU fused | bit-identical to a stock `ttnn.matmul` of each expert's rows: `test_grouped_matmul.py` |
+| `matmul`, per expert | `grouped_matmul`, w2 read transposed, rows written row-major | as above |
+| `mul`, `index_add_`, `add` | `routed_combine`, the shared bias added once | exact at one-hot weights: `test_routed_combine.py`, `test_combine_returns_each_slot_row` |
+| the whole loop | the four above | PCC 0.99990 at worst over seeds 0..7, a token's error at most 2.59e-02 of its norm, the outputs scaled by 0.9886 (w2 at LoFi): `test_routed_pass_with_device_experts` |
 
 ### Pooling and output
 
@@ -139,7 +122,7 @@ preparation, absorbed into a fused device op, or a no-op on this path.
 
 | aten | Disposition |
 |---|---|
-| `nonzero`, `index`, `index_add_`, `_local_scalar_dense`, `max`, `min`, `unbind`, `zeros_like`, `scatter_` | Eliminated. From upstream's ragged expert loop, which gathers each expert's tokens by value. `NomicExperts.dense_forward` replaces them with two broadcast-batch matmuls, a multiply and a reduce; `test_dense_forward_matches_the_ragged_loop` proves the two agree. |
+| `nonzero`, `index`, `index_add_`, `_local_scalar_dense`, `max`, `min`, `unbind`, `zeros_like`, `scatter_` | From upstream's ragged expert loop, which gathers each expert's tokens by value. The routed pass runs the loop itself (section 1), its indices computed on the device. `NomicExperts.dense_forward`, the loop's dense equivalent, is the module tests' oracle; `test_dense_forward_matches_the_ragged_loop` proves the two agree. |
 | `t` | Host. `transpose_linear_weight` reorients each `nn.Linear` weight once at load. |
 | `arange`, `cos`, `sin`, `slice` | Host. The rotary tables are built once by `rotary_tables`, already trimmed to seqlen, so the reference's `cos[:seqlen]` has nothing to do on device. |
 | `rsub`, `mul`, `unsqueeze` on the mask | Host. `additive_attention_mask` turns the (B, S) keep-mask into the additive `(B, 1, S, S)` form. |
@@ -162,7 +145,6 @@ All 42 inventory rows are accounted for by this table and section 1, over 41 dis
 | `ttnn.topk` | Returns `(values, indices)`; index dtype follows the input, `uint32` from fp32 and `uint16` from bf16. Widens a last dim under 64 to 64 with -inf before its device op, on one core for fp32: 95 us at 4096 rows of 8. |
 | `ttnn.linear` | A fused bias rounds every fp32 output, not only the biased ones: a zero bias on the router's 8 experts moved their logits by up to 3e-3. The router adds its padding row with its own `ttnn.add`, which is exact. |
 | `ttnn.slice` | A column at a non-tile-aligned offset goes through untilize, a row-major slice and tilize: 49 us for column 1 of a `(4096, 2)` top-k output, against 2 to 5 us at offset 0. |
-| `ttnn.experimental.fast_reduce_nc` | Replaces `sum` over dim 0, 1 or both, keeping the reduced dim at size 1. Left to allocate its output, returns the **tile-padded** row count: `T=74` gives 96 rows, the trailing 22 zero. `tt/experts.py` passes an output of the logical shape instead. `ttnn.sum` reaches the same PCC without the quirk. |
 | `ttnn.experimental.rotary_embedding_hf` | Prefill mode needs a leading batch of 1, so `(B, A, S, D)` is folded to `(1, B*A, S, D)`. cos/sin are `(1, 1, S, D)` and broadcast over heads. |
 | `ttnn.experimental.nlp_create_qkv_heads` | Takes `(B, 1, S, 3H)` and returns all three heads at once. `transpose_k_heads=False`, since SDPA wants K as `(B, A, S, D)`. |
 
@@ -183,13 +165,11 @@ All 42 inventory rows are accounted for by this table and section 1, over 41 dis
   rounds up to a multiple of 32 and 0 means "attend here", so SDPA counts the pad columns in
   the softmax denominator. At `S=37` that took the output norm to 0.69x. Build the mask in
   ROW_MAJOR and convert with `ttnn.to_layout(..., pad_value=finfo.min)`.
-- `ttnn.scatter` rejects fp32 in both TILE and ROW_MAJOR
-  (`!(input_dtype == DataType::FLOAT32 && input_layout == Layout::TILE)`). Only the destination
-  and the scattered values need casting; the index does not.
 - `ttnn.topk` accepts fp32, bf16 and `bfloat8_b`, but is only correct on the first two.
-- The MoE transient is the w1 output, `(1, 1, T, E*F)` stacked or `(1, 1, E*F, T)` transposed, about 27 MB
-  at `T=1024` in bfloat8_b, and the GELU's copy of it. It scales with batch times sequence length,
-  not sequence length alone.
+- The MoE transient is the routed pass's w1 output, `(1, 1, R, F)` with R about 2T rows: 7.4 MB
+  at `T=1024` in bfloat8_b, where every token through every expert would take 27 MB. It scales
+  with batch times sequence length, not sequence length alone; a window of at most 32768 tokens
+  caps it at about 215 MB.
 - **`ttnn.matmul` deadlocks on broadcast-batch operands** (`in0_B == 1`, `in1_B > 1`) once the
   block geometry has `num_blocks_h_dim * num_blocks_w_dim > 1`. The in0 reuse path replays
   `num_blocks_inner_dim` blocks per extra batch, dropping the `h_dim * w_dim` factor the compute
@@ -197,8 +177,7 @@ All 42 inventory rows are accounted for by this table and section 1, over 41 dis
   At `(1, 1, T, 768) x (1, E, 768, 3072)` on an 11x10 grid, T=3520 passes and T=3552 hangs for
   every E > 1 tried. The bound is joint in M and N: at M=32 tiles, N=3072 passes and N=4096
   hangs. It is a hang rather than an exception, so recovery needs `tt-smi -r`. No program in
-  `tt/experts.py` is broadcast-batch any more: the stacked w1 is unbatched, every expert's slab
-  side by side, and the transposed one puts the shared input in in1. `tests/hangRepro` reproduces it standalone.
+  `tt/experts.py` is broadcast-batch any more: the routed pass runs `grouped_matmul`. `tests/hangRepro` reproduces it standalone.
 - **`ttnn.transformer.scaled_dot_product_attention` returns wrong output at some batch shapes.**
   Measured on random q, k, v against float64 attention, masked and not: wrong at 8x264, 8x528,
   8x544, 12x352 and 16x528 (errors up to 1e+38), correct at 8x512, 8x384, 8x256, 4x528, 4x264,
@@ -212,7 +191,7 @@ Ten ways to get an operator wrong that produce finite, plausible output. Each ha
 
 | Control | Measured | Test |
 |---|---|---|
-| `ttnn.softmax` without the full config | max-abs 2.7e-02 to 3.0e-02 stock, 5.4e-03 to 6.8e-03 with HiFi4 alone, 1.4e-03 to 1.9e-03 with both. Budget is 5e-03, so HiFi4 on its own does not reach it, though only just. `numeric_stable=True` measures identically to stock. | `test_softmax_needs_both_hifi4_and_fp32_accumulation` |
+| `ttnn.softmax` without the full config | max-abs 5.4e-03 to 6.8e-03 with HiFi4 alone, 6.8e-03 to 8.0e-03 with fp32 accumulation at HiFi2, 1.4e-03 to 1.9e-03 with both (HiFi3 measures the same). Budget is 5e-03, so HiFi4 on its own does not reach it, though only just. Since a4471ecebf5 a float32 softmax with no config measures like the full one; before it, 2.7e-02 to 3.0e-02. | `test_softmax_needs_both_hifi4_and_fp32_accumulation` |
 | `ttnn.gelu(fast_and_approximate_mode=True)` | max-abs 2.34e-02 in fp32 vs 1.19e-06 accurate. Above the bf16 noise floor of 1.6e-02, so it is not swamped by it. The repo's BERT idiom `fused_activation=(ttnn.UnaryOpType.GELU, True)` selects this LUT. | `test_gelu_fast_mode_is_worse_than_the_bfloat16_noise_floor` |
 | Head-major Wqkv view | PCC 0.082 | `test_head_major_qkv_view_is_decorrelated` |
 | Attention mask left with 0 tile padding | Norm 0.69x at `S=37`, 0.96x at `S=513`. PCC is near-blind to it, moving 0.9998 to 0.9974 at `S=37` and not at all at `S=513`, so this is gated on the norm. | `test_all_ones_mask_matches_no_mask` |
@@ -220,12 +199,11 @@ Ten ways to get an operator wrong that produce finite, plausible output. Each ha
 | Interleaved (GPT-J) rotary tables | PCC 0.209 | `test_interleaved_rotary_tables_are_decorrelated` |
 | Rounding router probabilities to bf16 before `topk` | Reroutes 0.34% to 0.59% of tokens. bf16 quantizes an 8-wide row coarsely enough to turn near-ties into exact ties, which torch and ttnn order differently. | `test_rounding_probabilities_to_bfloat16_before_topk_flips_routing` |
 | `ttnn.topk` on `bfloat8_b` | Accepted, 1010/1024 rows wrong. A tile-wide shared exponent flattens an 8-wide probability row. | `test_topk_on_bfloat8_b_is_silently_wrong` |
-| A `bfloat8_b` cast of a tensor with stale tile padding | The padding enters the shared exponents. The permuted expert gate's padding held stale memory, and casting it crushed the 12 real gates of the last tile at 300 tokens: module PCC 0.984. Zeroed first with `ttnn.fill_implicit_tile_padding`, which writes in place, the cast stays within 1e-2. The padding of `x` reaches the bfloat8_b w1 output the same way on a transposed pass, so it is zeroed too. | `test_bfloat8_b_cast_reads_the_tile_padding`, and `test_the_padding_of_x_does_not_reach_the_output` in `test_ttnn_experts.py` |
+| A `bfloat8_b` cast of a tensor with stale tile padding | The padding enters the shared exponents. The permuted expert gate of a dense pass this port no longer runs held stale memory there, and casting it crushed the 12 real gates of the last tile at 300 tokens: module PCC 0.984. Zeroed first with `ttnn.fill_implicit_tile_padding`, which writes in place, the cast stays within 1e-2. | `test_bfloat8_b_cast_reads_the_tile_padding` |
 | Shared expert bias added inside the loop | PCC 0.9999+, so only max-abs sees it. | `test_shared_bias_must_be_added_after_the_weighted_sum` |
 
-Two more raise instead, and are asserted as such:
+One more raises instead, and is asserted as such:
 
 | Control | Error | Test |
 |---|---|---|
 | `w2` viewed `(E, H, F)` | `a_shape[-1] == b_shape[-2]`. In torch this view succeeds and computes noise, because `E*F*H` is symmetric in F and H. Packing to `(1, E, F, H)` moves the mistake into the matmul's inner-dimension check. `TtNomicExperts` stores w2 transposed per expert, the mistake's own shape, so at module level `test_misoriented_w2_decorrelates` catches it by PCC instead. | `test_transposed_expert_weights_are_a_shape_error` |
-| `ttnn.scatter` on fp32 | `!(input_dtype == DataType::FLOAT32 && input_layout == Layout::TILE)` | `test_scatter_rejects_float32` |
