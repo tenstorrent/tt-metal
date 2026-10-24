@@ -24,7 +24,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "llrt/get_platform_architecture.hpp"
 #include "llrt/rtoptions.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include "common/tt_backend_api_types.hpp"

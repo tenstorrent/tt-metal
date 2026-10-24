@@ -17,7 +17,7 @@
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 // Access to internal API: ProgramImpl::num_kernel, get_kernel
 #include "impl/program/program_impl.hpp"

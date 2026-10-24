@@ -23,7 +23,7 @@
 #include <dirent.h>
 #include <cstdlib>
 #include <string>
-#include <umd/device/types/telemetry.hpp>
+#include <tt-umd/types/telemetry.hpp>
 
 static bool get_dram_inject_tensix_heartbeat_stall_from_env_once() {
     const char* env = std::getenv("DRAM_TEST_INJECT_TENSIX_HEARTBEAT_STALL");
