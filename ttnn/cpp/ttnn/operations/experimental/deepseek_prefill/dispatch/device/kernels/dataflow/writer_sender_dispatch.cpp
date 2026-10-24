@@ -310,7 +310,40 @@ void kernel_main() {
 
     DPRINT_DISPATCH("[SND] drain loop start (rings={})\n", num_workers);
 
+    // Packed mode never stages metadata in the metadata rings (c_6 sets), so their L1 becomes a pool of packet
+    // headers: every packet gets its own header and no send waits for a flush. Entries are flushed and their
+    // credits returned in batches: when the pool runs out, and whenever a polling pass finds no new entry (so a
+    // worker waiting for a credit is never left waiting on a sender that is waiting for that worker).
+    constexpr uint32_t HDR_STRIDE = (sizeof(PACKET_HEADER_TYPE) + 15u) & ~15u;
+    constexpr uint32_t HDRS_PER_RING = (writer_cb_size * aligned_metadata_page_size) / HDR_STRIDE;
+    constexpr uint32_t HDR_POOL = HDRS_PER_RING * num_workers;
+    static_assert(!packed_xdev || HDRS_PER_RING >= 4, "metadata ring too small for a header pool");
+    uint32_t hdr_used = 0;
+    uint32_t uncredited[num_workers];
+    for (uint32_t s = 0; s < num_workers; s++) {
+        uncredited[s] = 0;
+    }
+    auto flush_and_credit = [&]() {
+        noc_async_writes_flushed();  // every pooled header and staged record has left L1
+        for (uint32_t s = 0; s < num_workers; s++) {
+            if (uncredited[s] != 0) {
+                noc_semaphore_inc<true>(ring_space_avail_noc[s], uncredited[s]);
+                uncredited[s] = 0;
+            }
+        }
+        hdr_used = 0;
+    };
+    [[maybe_unused]] auto next_hdr = [&]() -> volatile PACKET_HEADER_TYPE* {
+        if (hdr_used == HDR_POOL) {
+            flush_and_credit();
+        }
+        const uint32_t h = hdr_used++;
+        return reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
+            ring_meta_base[h / HDRS_PER_RING] + (h % HDRS_PER_RING) * HDR_STRIDE);
+    };
+
     while (num_done < num_workers) {
+        bool progress = false;
         for (uint32_t s = 0; s < num_workers; s++) {
             if (done[s]) {
                 continue;
@@ -327,6 +360,7 @@ void kernel_main() {
             // (which compiles to a `fence`, itself a no-op on Wormhole) does nothing there.
             invalidate_l1_cache();
             if (*ring_data_avail_ptr[s] >= consumed[s] + 1) {
+                progress = true;
                 uint32_t slot = consumed[s] % ring_slots;
                 volatile tt_l1_ptr uint32_t* route_info =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ring_route_base[s] + slot * route_info_slot_stride);
@@ -475,9 +509,6 @@ void kernel_main() {
                         // flush before the slot goes back to the worker.
                         constexpr uint32_t P = aligned_output_page_size;
                         constexpr uint32_t MW = PACKED_META_WIRE_BYTES;
-                        volatile PACKET_HEADER_TYPE* hdr_a = unicast_packet_header;
-                        volatile PACKET_HEADER_TYPE* hdr_b = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
-                            packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
                         const uint64_t page_noc =
                             tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addr_gen, page_idx, 0);
                         const uint64_t meta_noc =
@@ -493,10 +524,7 @@ void kernel_main() {
                         static_assert(LAST + MW <= 0xFFFFu, "scatter chunk sizes are 16-bit");
                         uint32_t off = 0;
                         for (uint32_t i = 0; i + 1 < N; i++) {
-                            volatile PACKET_HEADER_TYPE* h = (i & 1) ? hdr_b : hdr_a;
-                            if (i >= 2) {
-                                noc_async_writes_flushed();  // header h is reused
-                            }
+                            volatile PACKET_HEADER_TYPE* h = next_hdr();
                             const uint32_t sz = CHUNK - ((i + 2 == N) ? ADJ : 0u);
                             ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_for_route_helper(h), pkt_route_info);
                             h->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{page_noc + off}, sz);
@@ -507,10 +535,7 @@ void kernel_main() {
                             off += sz;
                         }
                         {
-                            volatile PACKET_HEADER_TYPE* h = ((N - 1) & 1) ? hdr_b : hdr_a;
-                            if constexpr (N - 1 >= 2) {
-                                noc_async_writes_flushed();
-                            }
+                            volatile PACKET_HEADER_TYPE* h = next_hdr();
                             ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_for_route_helper(h), pkt_route_info);
                             h->to_noc_unicast_scatter_write(
                                 tt::tt_fabric::NocUnicastScatterCommandHeader{
@@ -522,7 +547,7 @@ void kernel_main() {
                             payload_sender.send_payload_flush_non_blocking_from_address(
                                 (uint32_t)h, sizeof(PACKET_HEADER_TYPE));
                         }
-                        noc_async_writes_flushed();  // record + headers left L1 before the slot is freed
+                        // The record's slot is credited back after the next batch flush (flush_and_credit).
                     } else {
                         // Send payload
                         ccl_routing_utils::fabric_set_line_unicast_route(
@@ -551,12 +576,20 @@ void kernel_main() {
                     }
 #endif
 #endif  // SPARSE_MCAST_DISPATCH
-                    noc_semaphore_inc<true>(ring_space_avail_noc[s], 1);
+                    if constexpr (packed_xdev) {
+                        uncredited[s]++;
+                    } else {
+                        noc_semaphore_inc<true>(ring_space_avail_noc[s], 1);
+                    }
                     consumed[s]++;
                 }
             }
         }
+        if (!progress) {
+            flush_and_credit();
+        }
     }
+    flush_and_credit();
 
 #ifdef DEST_CHIP_ID
     // Defensive: drain any pending local NOC writes before fabric atomic-inc traffic,
