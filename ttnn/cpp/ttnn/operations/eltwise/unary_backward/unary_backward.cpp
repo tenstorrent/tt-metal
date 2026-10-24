@@ -34,6 +34,54 @@
 
 namespace ttnn {
 
+namespace {
+
+// Whether one UnaryBackwardDeviceOperation program with a generated BF16 kernel serves this call. The
+// kernels exist for Blackhole and Wormhole and read 32x32 tiles of BF16 operands in untransposed 16x16
+// faces, with one shape, interleaved or sharded in L1 or DRAM: the device operation binds each operand's
+// shard in place or addresses its pages. Every other call, including a broadcast gradient or a host
+// operand, keeps the path the program replaces.
+// one_program: that path is main's own program of the same device operation, whose output defaults to
+// the input's placement as the generated program's does. It is defined once for every generated route,
+// so a tree may hold it before any route calls it.
+[[maybe_unused]] bool generated_bf16_kernel_applies(
+    const Tensor& grad,
+    const Tensor& input,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& input_grad = std::nullopt,
+    bool one_program = false) {
+    const auto* device = input.device();
+    if (device == nullptr || (device->arch() != tt::ARCH::BLACKHOLE && device->arch() != tt::ARCH::WORMHOLE_B0)) {
+        return false;
+    }
+    const auto bf16_tiles = [&](const Tensor& tensor) {
+        const auto tile = tensor.tensor_spec().tile();
+        return tensor.device() == device && tensor.dtype() == DataType::BFLOAT16 && tensor.layout() == Layout::TILE &&
+               tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH &&
+               tile.get_face_shape() ==
+                   tt::tt_metal::Tile::FaceShape{tt::constants::FACE_HEIGHT, tt::constants::FACE_WIDTH} &&
+               !tile.get_transpose_within_face() && !tile.get_transpose_of_faces() &&
+               tensor.logical_shape() == input.logical_shape() && tensor.padded_shape() == input.padded_shape();
+    };
+    if (!bf16_tiles(grad) || !bf16_tiles(input)) {
+        return false;
+    }
+    if (input_grad.has_value()) {
+        return bf16_tiles(*input_grad);
+    }
+    // A sharded output config without a shard spec leaves the replaced path to derive one from its
+    // operands, which the program does not do.
+    if (output_mem_config.has_value()) {
+        return !output_mem_config->is_sharded() || output_mem_config->shard_spec().has_value() ||
+               output_mem_config->nd_shard_spec().has_value();
+    }
+    // Several replaced ops default to their operands' placement, which agrees with the program's only when
+    // both operands share one.
+    return one_program || grad.memory_config() == input.memory_config();
+}
+
+}  // namespace
+
 std::vector<Tensor> clamp_bw(
     const Tensor& grad,
     const Tensor& input,
