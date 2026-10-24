@@ -565,7 +565,6 @@ def test_mnist_max_pool_s2i(
     padding,
     dilation,
 ):
-    pytest.skip("currently fails due to i2s call, see GH #18425")
     torch.manual_seed(0)
     input_data = torch.randn(shape, dtype=torch.bfloat16)
     in_n, in_c, in_h, in_w = shape
