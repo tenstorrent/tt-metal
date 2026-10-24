@@ -332,3 +332,30 @@ def test_bw_pow_preallocated_output_wins_over_memory_config(input_shapes, expone
         f"{result[0].memory_config().buffer_type}"
     )
     assert preallocated.memory_config().buffer_type == ttnn.BufferType.L1
+
+
+@pytest.mark.parametrize("input_shapes", ((torch.Size([1, 1, 32, 32])),))
+@pytest.mark.parametrize("exponent", [1.0, 2.0, 3.0, 4.0])
+def test_bw_unary_pow_zero_input(input_shapes, exponent, device):
+    """The gradient at input == 0 must match the golden, which masks `input < 0` only.
+
+    The kernel used lez(input) as the mask, so every zero element got +inf instead of
+    the finite gradient (1 for exponent 1, 0 for exponent > 1). A PCC comparison cannot
+    catch this: get_atol_rtol_pcc rewrites infs and the golden's zeros to 0, mapping the
+    wrong answer onto the right one. So this test checks exact values and finiteness.
+    """
+    in_data = torch.zeros(input_shapes, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    grad_data = torch.ones(input_shapes, dtype=torch.bfloat16)
+    grad_tensor = ttnn.from_torch(grad_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_output = ttnn.pow_bw(grad_tensor, input_tensor, exponent)[0]
+    output = ttnn.to_torch(tt_output).float()
+
+    golden_function = ttnn.get_golden_function(ttnn.pow_bw)
+    golden = golden_function(grad_data, in_data, exponent)[0].float()
+
+    assert torch.isfinite(output).all(), "gradient at input == 0 must be finite"
+    assert torch.equal(output, golden), (
+        f"expected {golden.flatten()[0].item()} at input == 0, got {output.flatten()[0].item()}"
+    )
