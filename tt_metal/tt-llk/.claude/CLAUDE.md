@@ -56,6 +56,19 @@ Trigger examples for `arch-lookup`:
 - "Explain [LLK function] parameters", "What are the differences between WH and QSR?"
 - Any question about Tensix hardware, ISA instructions, or LLK implementation details
 
+## Hardware Ordering Claims
+
+Any claim that LLK code needs, or does not need, a hardware ordering guard (a `STALLWAIT`, a unit drain, a NOP gap, a fence, a semaphore) because of how the hardware orders a write against its consumer is decided by reading the RTL of the target architecture, and by nothing else.
+
+Before writing such a finding, fix, or review comment:
+1. Trace the writer path in the RTL to the cycle its value commits.
+2. Trace the consumer path in the RTL to the cycle it samples the resource.
+3. Establish the issue and arbitration structure between them (single-issue, in-order, or a separate queue).
+
+Record all three with the RTL file and line in the working notes. If in-order issue puts the commit at or before the sample, there is no finding and no guard is added. If any of the three was not read, the claim is UNCERTAIN — neither a bug nor safe — and is reported as such.
+
+ISA docs, Confluence pages, tickets, earlier findings, summaries, and code comments are leads that say where to read; they are never evidence for the verdict. A simulation or silicon run of the same instruction sequence can confirm or refute the read; it does not replace it. A filed finding that a later RTL read contradicts is retracted. Public write-ups (GitHub, Jira, Confluence) describe the mechanism in words and never quote RTL.
+
 ## Coding Style
 
 - **`const` placement**: write `const <type>` (e.g. `const uint32_t x`), never `<type> const` (e.g. `uint32_t const x`). Semantics are identical, but the codebase uses `const <type>` everywhere — match it. Applies to all type qualifiers in the same position (e.g. `volatile`, `constexpr` modifiers on declarations).
