@@ -2255,6 +2255,8 @@ class Model:
             b.compile(tok, pos, phys)
             self.buckets_x[name] = (b, tok, pos, phys)
         ttnn.synchronize_device(self.md)
+        if compiled and os.environ.get("DSV41_WARM_APC", "1") == "1":
+            self.warm_apc()  # (compile-before-capture: the snapshot / restore programs must not first compile while a trace is live)
         gc.collect()
         t2 = time.perf_counter()
         if compiled:  # (a (re)capture of the prefill trace: the carried prefill state of every user is gone)
@@ -2297,6 +2299,48 @@ class Model:
             f"warm_serving: prefill chunk {chunk} / S_pad {s_pad}, decode buckets U' {sorted(self.buckets)} + {U}: compile {t2 - t0:.1f} s, capture {t3 - t2:.1f} s"
         )
         return self.timing["warm_serving"]
+
+    def warm_apc(self, max_size=None):
+        """Pre-compile the prefix cache's device ops BEFORE any trace is captured (``warm_serving``): a snapshot (ttnn.slice of the carried tables, ttnn.embedding pool gather, reads) and a restore
+        (write_batch / paged_scatter_rows) of every size 512 .. ``max_size`` (powers of two of the chunk, the sizes the ``pow2`` policy takes) on an idle user. The shapes depend on the size only,
+        so each first-seen size cost a kernel-cache compile (0.4 s each, 3-4 s over the first prompts) in the first requests. The state of the idle user is zeros and is released afterwards.
+        -> seconds (0.0 without prefix caching)."""
+        apc = getattr(self, "apc", None)
+        if apc is None or not apc.active():
+            return 0.0
+        from models.demos.blackhole.deepseek_v41_flash.tt import prefix_cache as PC
+
+        t0 = time.perf_counter()
+        b, chunk = 0, apc.chunk
+        top = min(int(max_size or os.environ.get("DSV41_WARM_APC_MAX", "32768")), self.max_ctx - 1)
+        sizes = [chunk * 2**k for k in range(32) if chunk * 2**k <= top]
+        resume = self.__dict__.setdefault("pf_resume", {})
+        try:
+            for s_ in sizes:
+                self.release_user(b)
+                self.pool.release(b)
+                self.pool.admit(b, s_ + 1)
+                self.pool.sync_page_table()
+                if self.Up != self.U:
+                    self._slot_alloc([(b, None, 0, s_)], resume)
+                resume[b] = s_
+                toks = torch.zeros(s_, dtype=torch.long)
+                if apc.defer():
+                    snap = PC.snapshot_finish(self, PC.snapshot_begin(self, b, s_, toks))
+                else:
+                    snap = PC.snapshot_user(self, b, s_, toks)
+                del snap
+        except PC.ApcUnsupported as e:
+            self.log(f"APC warm-up skipped: {e}")
+        finally:
+            self.release_user(b)
+            resume.pop(b, None)
+            self.__dict__.pop("pf_slot_of", None)
+            self.__dict__.pop("pf_slot_owner", None)
+        ttnn.synchronize_device(self.md)
+        dt = time.perf_counter() - t0
+        self.log(f"warm_apc: snapshot + restore of {sizes} on an idle user: {dt:.1f} s")
+        return dt
 
     def bench_buckets(self, n=40):
         """Device time per replay (ms, blocking replay + token read) of every decode bucket, the ablation variants (DSV41_BUCKET_ABLATE) and the full step, on idle filler inputs."""
