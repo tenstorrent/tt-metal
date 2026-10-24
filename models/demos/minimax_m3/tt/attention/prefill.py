@@ -398,7 +398,7 @@ def _output_projection(tt_sdpa_out, weights, mesh_config, ccl_manager, hidden_si
     )
     if use_fused_rs:
         with zone("o_proj_fused_rs"):
-            rs_out = apply_output_projection_fused_rs(tt_sdpa_out, weights, mesh_config, ccl_manager)
+            rs_out = apply_output_projection_fused_rs(tt_sdpa_out, weights, mesh_config, ccl_manager, activation_dtype)
         tt_sdpa_out.deallocate(True)
         if sharded_residual:
             # The fused op already reduce-scattered: that IS the sharded-residual output. Only the
