@@ -48,12 +48,7 @@ def test_concat_fallback(input_shapes, dim, on_device, device):
     # Test on host RM
     t0s = []
     for x in xs:
-        t0 = ttnn.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            ttnn.bfloat16,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
+        t0 = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         if on_device:
             t0 = t0.to(device)
         t0s.append(t0)

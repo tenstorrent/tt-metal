@@ -159,12 +159,7 @@ def test_fill_rm(device):
 
     # Create input tensor
     input = torch.zeros((N, C, H, W))
-    xt = ttnn.Tensor(
-        input.reshape(-1).tolist(),
-        input.shape,
-        ttnn.bfloat16,
-        ttnn.TILE_LAYOUT,
-    ).to(device)
+    xt = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT).to(device)
 
     # Fill the tensor
     output = ttnn.fill_rm(N, C, H, W, hOnes, wOnes, xt, val_hi, val_lo)
@@ -184,12 +179,7 @@ def test_fill_ones_rm(device):
 
     # Create input tensor
     input = torch.zeros((N, C, H, W))
-    xt = ttnn.Tensor(
-        input.reshape(-1).tolist(),
-        input.shape,
-        ttnn.bfloat16,
-        ttnn.TILE_LAYOUT,
-    ).to(device)
+    xt = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT).to(device)
 
     # Fill the tensor
     output = ttnn.fill_ones_rm(N, C, H, W, hOnes, wOnes, xt)

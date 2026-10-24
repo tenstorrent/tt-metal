@@ -30,12 +30,7 @@ def test_silu_fallback(input_shape, on_device, device):
     pt_out = torch.nn.functional.silu(x)
 
     # Test on host RM
-    t0 = ttnn.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    )
+    t0 = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     if on_device:
         t0 = t0.to(device)
 

@@ -10,18 +10,8 @@ def test_tensor_alignment(device):
     a = torch.arange(1022).to(torch.bfloat16).reshape(1, 1, 1, 1022)
     b = torch.arange(1024).to(torch.bfloat16).reshape(1, 1, 32, 32)
 
-    t0 = ttnn.Tensor(
-        a.reshape(-1).tolist(),
-        a.shape,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    )
-    t1 = ttnn.Tensor(
-        b.reshape(-1).tolist(),
-        b.shape,
-        ttnn.bfloat16,
-        ttnn.TILE_LAYOUT,
-    )
+    t0 = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    t1 = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     t0_d = t0.to(device)
 

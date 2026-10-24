@@ -505,14 +505,7 @@ def test_rotary_embedding_llama(
     # shift input/output tensor by creating very small tensor between loop
     inp = torch.randn(1, 1, 32, 32)
     test_tensor = (
-        ttnn.Tensor(
-            inp.reshape(-1).tolist(),
-            inp.shape,
-            ttnn.bfloat16,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device)
+        ttnn.from_torch(inp, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT).to(ttnn.TILE_LAYOUT).to(device)
     )
 
 
@@ -573,14 +566,7 @@ def test_rotary_embedding_llama_with_program_cache(
         # shift input/output tensor by creating very small tensor between loop
         inp = torch.randn(1, 1, 32, 32)
         test_tensor = (
-            ttnn.Tensor(
-                inp.reshape(-1).tolist(),
-                inp.shape,
-                ttnn.bfloat16,
-                ttnn.ROW_MAJOR_LAYOUT,
-            )
-            .to(ttnn.TILE_LAYOUT)
-            .to(device)
+            ttnn.from_torch(inp, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT).to(ttnn.TILE_LAYOUT).to(device)
         )
 
         cache_tensors.append(test_tensor)

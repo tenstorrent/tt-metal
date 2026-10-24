@@ -18,16 +18,7 @@ def test_eltwise_unary_chain(device):
     W = 32
     x = torch.randn((N, C, H, W)).bfloat16().float()
 
-    xt = (
-        ttnn.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            ttnn.bfloat16,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device)
-    )
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT).to(ttnn.TILE_LAYOUT).to(device)
 
     xtt = ttnn.unary_chain(
         xt,
@@ -56,26 +47,8 @@ def test_eltwise_binary_fused(device):
     x = torch.randn((N, C, H, W)).bfloat16().float()
     y = torch.randn((N, C, H, W)).bfloat16().float()
 
-    xt = (
-        ttnn.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            ttnn.bfloat16,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device)
-    )
-    yt = (
-        ttnn.Tensor(
-            y.reshape(-1).tolist(),
-            y.shape,
-            ttnn.bfloat16,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device)
-    )
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT).to(ttnn.TILE_LAYOUT).to(device)
+    yt = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT).to(ttnn.TILE_LAYOUT).to(device)
 
     xtt = ttnn.add(
         xt,

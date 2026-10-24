@@ -97,34 +97,19 @@ def test_layer_norm_fallback(input_shape, weight_shape, bias_shape, normalized_s
     )
 
     # Test on host RM
-    t0 = ttnn.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    )
+    t0 = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     if on_device:
         t0 = t0.to(device)
 
     if w is not None:
-        w0 = ttnn.Tensor(
-            w.reshape(-1).tolist(),
-            w.shape,
-            ttnn.bfloat16,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
+        w0 = ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         if on_device:
             w0 = w0.to(device)
     else:
         w0 = None
 
     if b is not None:
-        b0 = ttnn.Tensor(
-            b.reshape(-1).tolist(),
-            b.shape,
-            ttnn.bfloat16,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
+        b0 = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         if on_device:
             b0 = b0.to(device)
     else:
@@ -201,30 +186,15 @@ def test_LayerNorm_fallback(
     pt_out = pt_nn(x)
 
     # Test on host RM
-    t0 = ttnn.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    )
+    t0 = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     if on_device:
         t0 = t0.to(device)
 
-    w0 = ttnn.Tensor(
-        w.reshape(-1).tolist(),
-        w.shape,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    )
+    w0 = ttnn.from_torch(w, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     if on_device:
         w0 = w0.to(device)
 
-    b0 = ttnn.Tensor(
-        b.reshape(-1).tolist(),
-        b.shape,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-    )
+    b0 = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     if on_device:
         b0 = b0.to(device)
 
