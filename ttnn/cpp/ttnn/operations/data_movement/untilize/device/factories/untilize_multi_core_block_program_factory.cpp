@@ -191,6 +191,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
                     {"num_tiles_per_2d", num_tiles_2d},
                     {"third_dim", third_dim},
                     {"total_tiles_per_row", total_tiles_per_row},
+                    {"out_dim_c", 1u},
+                    {"in_dim_c", 1u},
                 },
             .runtime_arg_schema =
                 {
