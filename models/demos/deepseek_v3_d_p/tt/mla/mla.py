@@ -741,8 +741,9 @@ class ttMLA:
             b1 = self._resolve_mm_cfg("wkv_b1", self.active_seq_len_local)["program_config"]
             n_t = (self.kv_lora_rank + self.qk_rope_head_dim) // ttnn.TILE_SIZE
             sub_w = max(w for w in range(1, 9) if n_t % w == 0)
+            grid = b1.compute_with_storage_grid_size
             self._wkv_b1_padded_pc = ttnn.MatmulMultiCoreReuseProgramConfig(
-                compute_with_storage_grid_size=b1.compute_with_storage_grid_size,
+                compute_with_storage_grid_size=(grid.x, grid.y),
                 in0_block_w=b1.in0_block_w,
                 out_subblock_h=1,
                 out_subblock_w=sub_w,
