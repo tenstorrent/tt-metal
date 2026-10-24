@@ -204,8 +204,11 @@ private:
     using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
     MeshBufferState state_;
 
-    friend MeshBuffer experimental::per_core_allocation::create_sram_buffer_view(
-        MeshDevice&, const TensorSpec&, const experimental::per_core_allocation::PerNodeMeshDeviceMemorySpan&);
+    friend tt::tt_metal::distributed::MeshBuffer
+    tt::tt_metal::experimental::per_core_allocation::create_sram_buffer_view(
+        tt::tt_metal::distributed::MeshDevice&,
+        const tt::tt_metal::TensorSpec&,
+        const tt::tt_metal::experimental::per_core_allocation::PerNodeMeshDeviceMemorySpan&);
 
     friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::per_core_allocation::create_on_single_device(
         const tt::tt_metal::distributed::MeshBufferConfig&,
