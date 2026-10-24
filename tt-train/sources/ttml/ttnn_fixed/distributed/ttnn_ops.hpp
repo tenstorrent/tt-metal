@@ -29,6 +29,13 @@ enum class RingShiftDirection {
     Backward  // device i sends to device (i-1+ring_size) % ring_size
 };
 
+namespace detail {
+
+uint32_t resolve_ring_shift_cluster_axis(
+    const tt::tt_metal::distributed::MeshShape& mesh_shape, std::optional<uint32_t> cluster_axis);
+
+}  // namespace detail
+
 /**
  * Ring shift operation - shifts tensor to next/previous device in the ring.
  *
@@ -38,8 +45,9 @@ enum class RingShiftDirection {
           each device with coordinate (idx0, idx1) sends to ((idx0 + 1) % mesh_shape[0], idx1),
           otherwise if cluster axis == 1, then
           each device with coordinate (idx0, idx1) sends to (idx0, (idx1 + 1) % mesh_shape[1])
- *        If std::nullopt (the default) and the device fabric is 1D, axis 1 is used.
- *        For multi-dimensional fabrics, this parameter must be explicitly specified.
+ *        If std::nullopt (the default), the device fabric and logical mesh must both be 1D; the
+ *        sole non-singleton mesh axis is inferred. For multi-dimensional fabrics or meshes, this
+ *        parameter must be explicitly specified.
  * @param direction Direction to shift: Forward (i -> i+1) or Backward (i -> i-1)
  * @return The tensor received from the neighbor device
  */
