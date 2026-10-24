@@ -4,8 +4,8 @@
 """Tracy harness for the detector end to end: images to class logits, boxes, the frame's BEV and the
 3D detections, on device; dropping the invalid boxes on the host after it is timed apart.
 
-Dummy weights over a 100x100 BEV and nuScenes' six-camera rig, three frames. The images stay the
-base 1600x928; only the grid is smaller than ``BEV_SHAPES["base"]``.
+Dummy weights over a fixed 100x100 BEV and nuScenes' six-camera rig, three frames. The images, the
+feature levels and the encoder are the selected variant's (base's 1600x928 by default).
 The first frame, which has no previous BEV, runs eagerly; the second is the warmup and the PCC
 gate, then runs once more between Tracy's ``start`` and ``stop``, so the stage signposts and the
 host dispatch are in the report. The detector runs live, not under a trace: the encoder projects
@@ -44,8 +44,8 @@ def _check(expected, tt_outputs):
 
 
 @torch.no_grad()
-# The reference runs the backbone on six 928x1600 images on the CPU four times: once to record
-# the conv shapes and once per frame.
+# The reference runs the backbone on six images on the CPU four times, once to record the conv
+# shapes and once per frame: base's 928x1600 take most of this.
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
 def test_bevformer_perf(device, reset_seeds):

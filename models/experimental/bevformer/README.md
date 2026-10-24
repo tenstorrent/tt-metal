@@ -4,9 +4,10 @@
     Blackhole (p100)
 
 ## Introduction
-This directory runs BEVFormer-base end to end on device: six camera images through the
-ResNet101-DCN backbone and FPN, the perception transformer around the BEVFormer encoder, the
-detection decoder and the head with its NMS-free box coder, ending in 3D boxes.
+This directory runs BEVFormer end to end on device, base by default and tiny or small with
+`BEVFORMER_VARIANT` (see Testing): six camera images through the ResNet backbone (ResNet101-DCN
+for base and small, ResNet50 for tiny) and FPN, the perception transformer around the BEVFormer
+encoder, the detection decoder and the head with its NMS-free box coder, ending in 3D boxes.
 
 BEVFormer learns a Bird's-Eye-View representation from multi-camera images with spatiotemporal
 transformers: a spatial cross-attention into the cameras and a temporal self-attention into the
@@ -41,7 +42,10 @@ pytest --disable-warnings models/experimental/bevformer/tests/pcc/
 ```
 - `BEVFORMER_VARIANT=tiny|small|base` (default `base`) selects upstream's configuration, read once
   when `model_config.py` is first imported. The backbone and FPN tests (`test_resnet.py`,
-  `test_fpn.py`, `test_backbone_fpn.py`) run every variant; the rest run base.
+  `test_fpn.py`, `test_backbone_fpn.py`), `test_perception_transformer.py`, `test_bevformer.py`
+  and `tests/perf/test_bevformer_perf.py` run the selected variant; `test_perception_transformer.py`
+  and the perf harness keep fixed BEV grids, and the other tests' `*_base` and `*_tiny` presets are
+  fixed sizes.
 - `test_resnet.py`: the backbone's bottlenecks and layers against the reference.
 - `test_fpn.py`: the FPN neck on random backbone outputs in the dtypes the backbone emits.
 - `test_backbone_fpn.py`: camera images through the backbone and the FPN end to end.
@@ -303,7 +307,8 @@ tt/model_preprocessing.py
 - Entry point for the model is `TTBEVFormer` in `models/experimental/bevformer/tt/tt_bevformer.py`;
   `tt/model_preprocessing.py` prepares its parameters from the reference.
 - Batch size: 1
-- Input: 6 cameras at 1600x900, padded to 1600x928
-- BEV grid: 200x200; 900 object queries; up to 300 boxes per frame
+- Input (base): 6 cameras at 1600x900, padded to 1600x928; small and tiny scale them by 0.8 and 0.5
+  (`VARIANTS` in `model_config.py`)
+- BEV grid (base): 200x200, small 150x150, tiny 50x50; 900 object queries; up to 300 boxes per frame
 - The encoder reads the cameras' visibility on the host inside its forward, so the detector runs
   live, not under a trace.
