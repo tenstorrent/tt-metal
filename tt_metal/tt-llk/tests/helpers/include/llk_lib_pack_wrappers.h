@@ -121,9 +121,10 @@ inline void _llk_pack_untilize_init_wrapper_(
     [[maybe_unused]] const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t num_faces  = 4)
+    const std::uint32_t num_faces  = 4,
+    const bool narrow_tile         = false)
 {
-    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(pack_dst_format, face_r_dim, num_faces);
+    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(pack_dst_format, face_r_dim, num_faces, narrow_tile);
 }
 
 template <
@@ -139,10 +140,11 @@ inline void _llk_pack_untilize_wrapper_(
     const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim                 = FACE_R_DIM,
     [[maybe_unused]] const std::uint32_t num_faces = 4,
-    const std::uint32_t tile_dst_rt_offset         = 0)
+    const std::uint32_t tile_dst_rt_offset         = 0,
+    const bool narrow_tile                         = false)
 {
     _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
-        address, pack_dst_format, face_r_dim, tile_dst_rt_offset);
+        address, pack_dst_format, face_r_dim, tile_dst_rt_offset, narrow_tile);
 }
 
 inline void _llk_pack_untilize_uninit_wrapper_(
@@ -246,10 +248,12 @@ inline void _llk_pack_untilize_init_wrapper_(
     const std::uint32_t pack_src_format,
     [[maybe_unused]] const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t num_faces  = 4)
+    const std::uint32_t num_faces  = 4,
+    const bool narrow_tile         = false)
 {
     static_assert(!diagonal, "Blackhole pack untilize does not support diagonal mode");
-    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(pack_src_format, pack_dst_format, face_r_dim, num_faces);
+    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
+        pack_src_format, pack_dst_format, face_r_dim, num_faces, narrow_tile);
 }
 
 template <
@@ -265,10 +269,11 @@ inline void _llk_pack_untilize_wrapper_(
     [[maybe_unused]] const std::uint32_t pack_dst_format,
     [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM,
     const std::uint32_t num_faces                   = 4,
-    const std::uint32_t tile_dst_rt_offset          = 0)
+    const std::uint32_t tile_dst_rt_offset          = 0,
+    const bool narrow_tile                          = false)
 {
     static_assert(!diagonal, "Blackhole pack untilize does not support diagonal mode");
-    _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense>(address, num_faces, tile_dst_rt_offset);
+    _llk_pack_untilize_<block_ct_dim, full_ct_dim, narrow_row, tile_dst_ct_offset, dense>(address, num_faces, tile_dst_rt_offset, narrow_tile);
 }
 
 inline void _llk_pack_untilize_uninit_wrapper_(const std::uint32_t pack_src_format, [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM)

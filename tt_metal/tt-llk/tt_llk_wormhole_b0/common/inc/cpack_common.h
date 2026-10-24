@@ -925,7 +925,8 @@ inline void program_packer_untilized_destination(const std::uint32_t addr, const
     }
     else
     {
-        // Each packer packs 8 rows of full_ct_dim*TILE_C_DIM datums
+        // Each packer packs 8 rows of full_ct_dim*TILE_C_DIM datums. A narrow (16-wide) tile's packer packs 16 rows of
+        // full_ct_dim*FACE_C_DIM datums instead, the same byte count, so the offsets below hold for it as well.
         const std::uint32_t block_size  = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * TILE_C_DIM * (TILE_R_DIM / 4));
         constexpr std::uint32_t offset0 = 0;
         const std::uint32_t offset1     = (1 * row_num_datums * block_size) / 16 / TILE_C_DIM;

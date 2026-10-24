@@ -11,6 +11,11 @@ namespace ckernel {
 
 #ifdef TRISC_PACK
 namespace pack_untilize_detail {
+// The geometry-to-tile mapping of configure_explicit_geometry (JitBuildOptions' mapping: one or two faces occupy one
+// face row, four faces two) makes a 16-wide tile only out of a single face; two faces sit side by side in a 32-wide
+// row. Shared by init and pack so both derive the narrow tile flag the same way.
+inline bool explicit_geometry_narrow_tile(std::uint32_t num_faces) { return num_faces == 1; }
+
 template <
     std::uint32_t block_ct_dim,
     std::uint32_t full_ct_dim,
@@ -22,7 +27,7 @@ inline void configure_explicit_geometry(std::uint32_t ocb, std::uint32_t face_r_
     // Match the geometry-to-tile mapping used by JitBuildOptions: one/two
     // faces occupy one face row; four faces occupy two face rows.
     const std::uint32_t tile_r_dim = face_r_dim * (num_faces > 2 ? 2 : 1);
-    const std::uint32_t tile_c_dim = num_faces == 1 ? FACE_C_DIM : TILE_C_DIM;
+    const std::uint32_t tile_c_dim = explicit_geometry_narrow_tile(num_faces) ? FACE_C_DIM : TILE_C_DIM;
     const bool partial_face = tile_r_dim < TILE_R_DIM;
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
     SAN_HOOK(configure(
@@ -44,7 +49,11 @@ inline void configure_explicit_geometry(std::uint32_t ocb, std::uint32_t face_r_
         partial_face,
         0);
     llk_pack_untilize_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
-        pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
+        pack_src_format[output_id],
+        pack_dst_format[output_id],
+        face_r_dim,
+        num_faces,
+        explicit_geometry_narrow_tile(num_faces) /*narrow_tile*/);
 }
 
 template <
@@ -69,6 +78,7 @@ inline void pack_explicit_geometry(
         full_ct_dim * get_local_cb_interface(output_id).fifo_page_size,
         face_r_dim,
         num_faces,
+        explicit_geometry_narrow_tile(num_faces) /*narrow_tile*/,
         block_c_index,
         tile_dst_rt_offset);
 }
