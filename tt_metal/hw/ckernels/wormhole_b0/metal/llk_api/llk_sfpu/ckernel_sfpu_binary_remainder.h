@@ -16,6 +16,9 @@ namespace ckernel::sfpu {
 // 2^31 as float (used for INT32 sign-magnitude conversion edge cases)
 constexpr float TWO_POW_31 = 2147483648.0f;
 
+// IEEE-754 +inf; abs bits == kInfBits is +-inf, abs bits > kInfBits is NaN.
+constexpr int32_t kInfBits = 0x7F800000;
+
 // Computes the scaled reciprocal 1/|b| for the unsigned remainder (two Newton–Raphson iterations
 // plus an exponent-based scale). Split recip and remainder computation so that the tensor-scalar
 // path can hoist this loop-invariant work above its element loop, since a scalar divisor is identical
@@ -288,6 +291,48 @@ sfpi_inline void calculate_remainder_uint32_body(
     sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>() = r;
 }
 
+// Adds b to a non-zero result whose sign differs from b's: a remainder is zero or carries the
+// divisor's sign. XOR of the float bit patterns detects the sign mismatch via the MSB, avoiding a
+// compound conditional with four comparisons and an OR.
+sfpi_inline void correct_sign_to_divisor(sfpi::vFloat& result, const sfpi::vFloat& b) {
+    v_if(result != sfpi::vFloat(0.0f)) {
+        sfpi::vInt signs = sfpi::as<sfpi::vInt>(result) ^ sfpi::as<sfpi::vInt>(b);
+        v_and(signs < 0);
+        result += b;
+    }
+    v_endif;
+}
+
+// Infinite divisor: the reciprocal of +-inf is exactly 0, so the quotient * b term is 0 * inf =
+// NaN. For finite a, remainder(a, +-inf) is a when a is zero or has the sign of b, else b
+// (torch.remainder). Classify on the bit pattern, as ckernel_sfpu_isclose.h does, so a NaN divisor
+// is excluded. An infinite or NaN a keeps the NaN: clear the sign with setsgn rather than
+// sfpi::abs, because SFPABS leaves -NaN sign-set and it would read as a negative integer below
+// kInfBits. b_abs is |b|, passed in so a loop-invariant divisor magnitude stays hoisted.
+sfpi_inline void apply_remainder_inf_divisor(
+    sfpi::vFloat& result, const sfpi::vFloat& a, const sfpi::vFloat& b, const sfpi::vFloat& b_abs) {
+    sfpi::vInt a_magnitude_bits = sfpi::as<sfpi::vInt>(sfpi::setsgn(a, 0 /* sgn */));
+    v_if(sfpi::as<sfpi::vInt>(b_abs) == kInfBits && a_magnitude_bits < kInfBits) {
+        result = a;
+        // Last statement of the block: narrow the lanes instead of nesting another v_if.
+        v_and(a_magnitude_bits != 0);
+        v_and((sfpi::as<sfpi::vInt>(a) ^ sfpi::as<sfpi::vInt>(b)) < 0);
+        result = b;
+    }
+    v_endif;
+}
+
+// fmod(a, +-inf) is a for finite a and NaN for an infinite a (which an a == b special case would
+// otherwise zero for inf/inf). Same classification as apply_remainder_inf_divisor.
+sfpi_inline void apply_fmod_inf_divisor(sfpi::vFloat& result, const sfpi::vFloat& a, const sfpi::vFloat& b_abs) {
+    v_if(sfpi::as<sfpi::vInt>(b_abs) == kInfBits) {
+        result = a;
+        v_and(sfpi::as<sfpi::vInt>(sfpi::setsgn(a, 0 /* sgn */)) >= kInfBits);
+        result = sfpi::vFloat(std::numeric_limits<float>::quiet_NaN());
+    }
+    v_endif;
+}
+
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat in1) {
     // remainder(a, b) = a - floor(a/b) * b
@@ -305,32 +350,48 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     sfpi::vFloat result = a - floor_div * b;
 
     // Sign correction: remainder must match the sign of b (or be zero).
-    // XOR of the float bit-patterns detects sign mismatch via the MSB,
-    // avoiding a compound conditional with four comparisons and an OR.
-    v_if(result != sfpi::vFloat(0.0f)) {
-        sfpi::vInt signs = sfpi::as<sfpi::vInt>(result) ^ sfpi::as<sfpi::vInt>(b);
-        v_and(signs < 0);
-        result += b;
-    }
-    v_endif;
+    correct_sign_to_divisor(result, b);
 
-    // Magnitude correction: reciprocal imprecision can cause floor() to be greater than the true floor value.
-    v_if(b > sfpi::vFloat(0.0f) && a > sfpi::vFloat(0.0f)) {
-        sfpi::vFloat diff = result - b;
+    // Magnitude correction: reciprocal imprecision can leave floor() one below the true floor, so
+    // |result| >= |b|. After the sign correction result carries b's sign (or is zero), so the check
+    // is the same for either sign of a; for an exact multiple with opposite signs the raw result is
+    // b itself. Recompute the remainder from the quotient instead of subtracting b from result: for
+    // an exact multiple (floor_div + 1) * b is a and the difference is exactly zero, whereas
+    // result - b keeps the rounding of the earlier product and can land just inside |b|.
+    // The b == +-0 lanes are overwritten with NaN below, whichever arm they take.
+    sfpi::vFloat diff = a - (floor_div + sfpi::vFloat(1.0f)) * b;
+    v_if(b < sfpi::vFloat(0.0f)) {
+        v_if(diff <= sfpi::vFloat(0.0f)) { result = diff; }
+        v_endif;
+    }
+    v_else {
         v_if(diff >= sfpi::vFloat(0.0f)) { result = diff; }
         v_endif;
     }
     v_endif;
-    v_if(b < sfpi::vFloat(0.0f) && a < sfpi::vFloat(0.0f)) {
-        sfpi::vFloat diff = result - b;
-        v_if(diff <= sfpi::vFloat(0.0f)) { result = diff; }
-        v_endif;
+    // A floor two above the true quotient leaves result opposite-signed after the single sign
+    // correction above (or equal to -b for an exact multiple): step once more towards b's sign. A
+    // correct remainder is zero or already carries b's sign, so this never fires on one.
+    correct_sign_to_divisor(result, b);
+
+    // Quotients of 2^24 and above: floor_div + 1 rounds to floor_div or floor_div + 2 in float, so
+    // diff above is the raw result or a - (floor_div + 2) * b (which the sign test rejects unless
+    // the floor was two low), and a floor one below the true quotient still leaves |result| >= |b|.
+    // Subtract b if result has the sign of b, otherwise add b, so |result| shrinks; copysgn makes
+    // that one subtraction. The step is gated on the quotient because at small quotients the
+    // recompute above is exact and a correctly rounded remainder can legitimately equal b
+    // (a = -1, b = 2^26), which must be kept.
+    constexpr float kQuotientStepLimit = 16777216.0f;  // 2^24
+    v_if(sfpi::abs(floor_div) >= sfpi::vFloat(kQuotientStepLimit) && sfpi::abs(result) >= sfpi::abs(b)) {
+        result -= sfpi::copysgn(b, result);
     }
     v_endif;
 
     // Handle division by zero - return NaN
     v_if(b == sfpi::vFloat(0.0f)) { result = sfpi::vFloat(std::numeric_limits<float>::quiet_NaN()); }
     v_endif;
+
+    apply_remainder_inf_divisor(result, a, b, sfpi::abs(b));
 
     if constexpr (!is_fp32_dest_acc_en) {
         result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
