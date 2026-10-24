@@ -62,8 +62,24 @@ void kernel_main() {
 
     DataflowBuffer exp_cb_bcast(cb_bcast);
     DataflowBuffer exp_cb_llk_post(cb_llk_post);
+#if SRC_BCAST
+    auto& exp_cb_pre_lhs = exp_cb_llk_post;
+    DataflowBuffer exp_cb_pre_rhs(cb_pre_rhs);
+#endif
+#if SRC_BCAST_B
+    DataflowBuffer exp_cb_pre_lhs(cb_pre_lhs);
+    auto& exp_cb_pre_rhs = exp_cb_llk_post;
+#endif
+#if HAS_ACTIVATIONS(LHS)
     DataflowBuffer exp_cb_post_lhs(cb_post_lhs);
+#else
+    auto& exp_cb_post_lhs = exp_cb_pre_lhs;
+#endif
+#if HAS_ACTIVATIONS(RHS)
     DataflowBuffer exp_cb_post_rhs(cb_post_rhs);
+#else
+    auto& exp_cb_post_rhs = exp_cb_pre_rhs;
+#endif
 
     compute_kernel_hw_startup(cb_post_lhs, cb_out);
     copy_init(cb_post_lhs);
@@ -94,10 +110,10 @@ void kernel_main() {
         // unary_bcast_uninit<BroadcastType::ROW>(cb_bcast);
         pack_reconfig_data_format(cb_llk_post, cb_out);
 
-        PREPROCESS(LHS, DataflowBuffer(cb_pre_lhs), exp_cb_post_lhs, exp_cb_out, num_tiles_per_cycle);
+        PREPROCESS(LHS, exp_cb_pre_lhs, exp_cb_post_lhs, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_lhs.wait_front(num_tiles_per_cycle);
 
-        PREPROCESS(RHS, DataflowBuffer(cb_pre_rhs), exp_cb_post_rhs, exp_cb_out, num_tiles_per_cycle);
+        PREPROCESS(RHS, exp_cb_pre_rhs, exp_cb_post_rhs, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_rhs.wait_front(num_tiles_per_cycle);
 
         exp_cb_out.reserve_back(num_tiles_per_cycle);

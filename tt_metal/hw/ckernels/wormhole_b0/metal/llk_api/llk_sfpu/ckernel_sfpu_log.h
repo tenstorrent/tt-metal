@@ -38,8 +38,8 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
+#include "ckernel_sfpu_polyval.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
 
 namespace ckernel {
 namespace sfpu {

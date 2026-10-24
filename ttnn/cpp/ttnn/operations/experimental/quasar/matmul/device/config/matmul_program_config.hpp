@@ -28,6 +28,8 @@ MatmulProgramConfig create_simple_matmul_program_config(
     const tt::tt_metal::MemoryConfig& mem_config,
     tt::tt_metal::DataType output_dtype);
 
+// The config the matmul runs with: the caller's, with its placement chosen when it is a unified config without cores
+// (FATAL when none fits); without one, the unified matmul on Quasar where it runs, else the legacy picker's.
 MatmulProgramConfig get_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,

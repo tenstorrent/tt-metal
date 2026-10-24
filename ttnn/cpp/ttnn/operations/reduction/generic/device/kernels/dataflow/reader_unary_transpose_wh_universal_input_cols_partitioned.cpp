@@ -54,7 +54,8 @@ void kernel_main() {
 
 #ifndef WELFORD_TWO_PASS
     const float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f);
+    DataflowBuffer dfb_scaler(dfb::scaler);
+    dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(dfb_scaler, scaler_f);
 #endif
 
     auto tensor_accessor = TensorAccessor(tensor::src);
