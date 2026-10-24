@@ -252,7 +252,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop>(DST_INDEX, CT_DIM, RT_DIM);
                     }
-                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en, (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3)>();
+                    #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+                    constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b;
+                    #else
+                    constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3;
+                    #endif
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en, fused_post_flip>();
                 }
             }
         }
