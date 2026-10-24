@@ -940,4 +940,52 @@ def test_glue_r0(mesh_device, variant, config_only):
         timer("H3 rope in place into [16,640,576]", lambda: [rope(qrope, out=buf)] and None)
         _free([q, qnope, qrope, buf])
 
+    # ======================= I. gate all-reduce variants (AG of partials + fp32 reduce) =======================
+    if want("i"):
+        w_g = torch.randn(H, 256) * (1 / H**0.5)
+        tw_g = mk(mesh, w_g, dims=(None, 0))
+        ckg = ck(ttnn.MathFidelity.HiFi4, True, False)
+        pc_g = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 10), in0_block_w=8, out_subblock_h=1, out_subblock_w=1,
+            out_block_h=2, out_block_w=1, per_core_M=2, per_core_N=1, transpose_mcast=False, fuse_batch=True,
+        )
+        x2 = ttnn.reshape(x_dram, (S, HL))
+        buf_g = ttnn.empty([1, TP, S, 256], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=DRAM)
+
+        def gmm(mem=L1):
+            return ttnn.matmul(x2, tw_g, compute_kernel_config=ckg, program_config=pc_g, memory_config=mem)
+
+        def ar_base(lg):
+            return ttnn.experimental.all_reduce_async(
+                lg, cluster_axis=1, mesh_device=mesh, barrier_semaphores=tt_ccl.barrier_semaphore_handles[1],
+                rs_global_semaphores=tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=1),
+                ag_global_semaphores=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=1),
+                num_links=2, math_op=ttnn.ReduceType.Sum, memory_config=L1, topology=topo,
+            )
+
+        def ar_ag_async(lg, mem=L1):
+            g4 = ag_async(ttnn.reshape(lg, (1, 1, S, 256)), dim=1, mem=mem)
+            out = ttnn.experimental.fast_reduce_nc(g4, dims=[1], memory_config=L1, compute_kernel_config=hifi4f)
+            ttnn.deallocate(g4)
+            return ttnn.reshape(out, (S, 256))
+
+        def ar_hbag(lg):
+            g4 = hbag(ttnn.reshape(lg, (1, 1, S, 256)), buf_g, dim=1)
+            out = ttnn.experimental.fast_reduce_nc(g4, dims=[1], memory_config=L1, compute_kernel_config=hifi4f)
+            return ttnn.reshape(out, (S, 256))
+
+        ref = {d: rows(x_full, d // TP)[0, 0] @ w_g for d in (0, 5, 10, 31)}
+        lg_l1 = gmm(L1)
+        lg_d = gmm(DRAM)
+        for tag, fn, src in (("base", ar_base, lg_l1), ("ag_async+reduce", ar_ag_async, lg_l1), ("hbag+reduce", ar_hbag, lg_d)):
+            try:
+                o = fn(src)
+                cmp(f"I gate AR [{tag}] vs torch", o, ref)
+                timer(f"I gate AR [{tag}]", lambda fn=fn, src=src: fn(src))
+            except Exception as e:
+                log(f"FAIL I {tag}: {type(e).__name__}: {str(e)[:300]}")
+                traceback.print_exc()
+        timer("I gate mm -> L1", lambda: gmm(L1))
+        timer("I gate mm -> DRAM", lambda: gmm(DRAM))
+
     log("DONE")
