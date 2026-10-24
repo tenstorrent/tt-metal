@@ -254,6 +254,8 @@ class MathOperation(Enum):
     TopKMerge = OpSpec("topk_merge", MathOpType.SFPU_UNARY)
     TopKRebuild = OpSpec("topk_rebuild", MathOpType.SFPU_UNARY)
     TopKDefuse = OpSpec("topk_defuse", MathOpType.SFPU_UNARY)
+    # Generated from activations/products/quick_gelu.json.
+    QuickGelu = OpSpec("quick_gelu", MathOpType.SFPU_UNARY)
     # =============================================================================
     # SFPU BINARY OPERATIONS
     # =============================================================================
