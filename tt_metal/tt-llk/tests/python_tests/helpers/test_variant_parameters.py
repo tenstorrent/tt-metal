@@ -174,6 +174,17 @@ class MATMUL_STREAM_Z(TemplateParameter):
         return [MATMUL_STREAM_Z()] if formats.input_format in MATMUL_DENSE_STREAM_FORMATS else []
 
 
+def _matmul_throttled_h2_cell(formats, math_fidelity, dest_sync, ct_dim: int, rt_dim: int, kt_dim: int, throttle: int) -> bool:
+    """One Float16_b tile row of four k steps at HiFi2, full sync and a static throttle of 5: the k loop and the keyed forms read a cycle slower than main's, so it keeps main's."""
+    return (
+        throttle >= 5
+        and math_fidelity == MathFidelity.HiFi2
+        and dest_sync == DestSync.Full
+        and formats.input_format == formats.output_format == DataFormat.Float16_b
+        and (ct_dim, rt_dim, kt_dim) == (1, 1, 4)
+    )
+
+
 @dataclass
 class MATMUL_K_LOOP(TemplateParameter):
     """Blackhole matmul unpack of the whole inner dimension in one _llk_unpack_AB_matmul_k_ call."""
@@ -193,9 +204,13 @@ class MATMUL_K_LOOP(TemplateParameter):
         in0_c_dim: int = 32,
         in1_r_dim: int = 32,
         in1_c_dim: int = 32,
+        dest_sync=None,
+        throttle: int = 0,
     ) -> list:
         """[MATMUL_K_LOOP()] for 32x32 tiles of one 16-bit, bfp8 or float32 format, where the unpack call per k step bounds the block: 1x1 at LoFi and HiFi2 from kt 4, 2x1 at LoFi from kt 8, 1x2 and 2x2 at LoFi from kt 16, else []."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+            return []
+        if _matmul_throttled_h2_cell(formats, math_fidelity, dest_sync, ct_dim, rt_dim, kt_dim, throttle):
             return []
         if (in0_r_dim, in0_c_dim, in1_r_dim, in1_c_dim) != (32, 32, 32, 32):
             return []
@@ -282,7 +297,7 @@ class MATMUL_FORM_KEYS(TemplateParameter):
         )
 
     @staticmethod
-    def for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0, math_fidelity=None, dest_sync=None, dest_acc=None, unfuse_one_tile: bool = False) -> list:
+    def for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0, math_fidelity=None, dest_sync=None, dest_acc=None, unfuse_one_tile: bool = False, throttle: int = 0) -> list:
         """[MATMUL_FORM_KEYS(...)] on Blackhole, else []; row_le_8 when the block's row (the larger of ct_dim and rt_dim) has 8 tiles or fewer."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
             return []
@@ -294,6 +309,8 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             and dest_acc == DestAccumulation.Yes
             and formats.output_format == DataFormat.Float32
         ):
+            return [MATMUL_FORM_KEYS(0, formats.output_format, True)]
+        if _matmul_throttled_h2_cell(formats, math_fidelity, dest_sync, ct_dim, rt_dim, kt_dim, throttle):
             return [MATMUL_FORM_KEYS(0, formats.output_format, True)]
         # 32-bit input at LoFi and full sync with four k steps: the 1x2 block with a 32-bit DEST and 16-bit or bfp8 output, and the 2x1 block
         # with a Float16_b output and a 16-bit DEST, read slower with the row forms: the unknown-k key, which is the tile form
