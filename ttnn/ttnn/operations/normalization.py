@@ -544,7 +544,7 @@ def _golden_function(
     input_tensor: ttnn.Tensor,
     *,
     num_groups,
-    epsilon=1e-05,
+    epsilon=1e-12,
     weight=None,
     bias=None,
     memory_config=None,
