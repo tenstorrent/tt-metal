@@ -68,7 +68,7 @@ class MoEBlock:
             and self.experts.ep == 1
             and self.experts.moe_decode is None
             and self.router.per_expert_scale is not None
-            and RouterTopk.supports(self.num_experts, self.top_k)
+            and RouterTopk.supports(self.router.num_experts, self.router.top_k)
         )
 
     def fused_packed_routing_ok(self) -> bool:
@@ -79,7 +79,7 @@ class MoEBlock:
         return (
             flag("GEMMA4_MOE_FUSED")
             and self.router.per_expert_scale is not None
-            and RouterTopk.supports(self.num_experts, self.top_k, packed=True)
+            and RouterTopk.supports(self.router.num_experts, self.router.top_k, packed=True)
         )
 
     def __call__(self, router_input, expert_input):

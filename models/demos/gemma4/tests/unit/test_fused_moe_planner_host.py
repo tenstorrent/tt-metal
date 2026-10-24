@@ -34,12 +34,11 @@ def test_small_gather_contract():
 def _moe(num_experts, top_k, fused=True, monkeypatch=None):
     if monkeypatch is not None:
         monkeypatch.setenv("GEMMA4_MOE_FUSED", "1" if fused else "0")
+    # the block keeps the expert count and top-k on its router (MoEBlock has no num_experts of its own)
     return SimpleNamespace(
-        num_experts=num_experts,
-        top_k=top_k,
         mesh_config=None,
         experts=SimpleNamespace(ep=1, moe_decode=None),
-        router=SimpleNamespace(per_expert_scale=object()),
+        router=SimpleNamespace(per_expert_scale=object(), num_experts=num_experts, top_k=top_k),
     )
 
 
