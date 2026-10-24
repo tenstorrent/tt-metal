@@ -194,7 +194,7 @@ ALWI void copy_block(
     LLK_SAN_FUNCTION();
 #endif
 #ifndef ARCH_QUASAR
-    reconfig_data_format_srca(in_cb_id);
+    reconfig_full_operand_srca(in_cb_id);
     copy_init<is_fp32_dest_acc_en>(in_cb_id);
 #endif
     UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
