@@ -725,6 +725,31 @@ class ttMLA:
         else:
             self._apply_rope = self._apply_rope_padded if self._use_indexed_rope else self._apply_rope_one_shot
 
+        # glue track: absorbed-Q stem without the 512-channel concat copy. wkv_b1 runs with its N padded by
+        # qk_rope_head_dim zero columns, straight into the [.., kv_lora_rank + rope] Q buffer, and the indexed
+        # RoPE writes the rotated q_pe into those last channels in place (output_tensor=). Needs the
+        # rotary_embedding_indexed output_tensor mode (C++); GLUE_Q_ROPE_INPLACE=0 restores concat_prefix.
+        self._q_rope_inplace = (
+            os.environ.get("GLUE_Q_ROPE_INPLACE", "1") == "1"
+            and not kv_only
+            and self._use_indexed_rope
+            and self._is_blackhole
+            and self._resolve_mm_cfg("wkv_b1", self.active_seq_len_local) is not None
+        )
+        if self._q_rope_inplace:
+            self.wkv_b1_weight_padded = self._pad_wkv_b1_weight()
+            b1 = self._resolve_mm_cfg("wkv_b1", self.active_seq_len_local)["program_config"]
+            n_t = (self.kv_lora_rank + self.qk_rope_head_dim) // ttnn.TILE_SIZE
+            sub_w = max(w for w in range(1, 9) if n_t % w == 0)
+            self._wkv_b1_padded_pc = ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=b1.compute_with_storage_grid_size,
+                in0_block_w=b1.in0_block_w,
+                out_subblock_h=1,
+                out_subblock_w=sub_w,
+                per_core_M=b1.per_core_M,
+                per_core_N=n_t,
+            )
+
         # Bind the attention core once, by config. Sparse ALWAYS uses the block-cyclic
         # _sparse_chunked_attn (single-shot = one full-seq chunk); dense splits by chunking. forward()
         # then calls self._attention(...) with no mode ladder: the decision is made here, not per call.
@@ -1267,6 +1292,27 @@ class ttMLA:
             compute_kernel_config=self.default_compute_kernel_config,
         )
 
+    def _pad_wkv_b1_weight(self) -> ttnn.Tensor:
+        """[.., nope, kv_lora_rank] bfp8 -> [.., nope, kv_lora_rank + rope] with zero rope columns. Whole
+        tiles are appended along N, so the bfp8 -> bf16 -> bfp8 round trip keeps every block exact."""
+        w = ttnn.typecast(self.wkv_b1_weight, ttnn.bfloat16)
+        shape = list(w.shape)
+        shape[-1] = self.qk_rope_head_dim
+        zeros = ttnn.from_torch(
+            torch.zeros(shape),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        merged = ttnn.concat([w, zeros], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(w)
+        ttnn.deallocate(zeros)
+        out = ttnn.typecast(merged, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(merged)
+        return out
+
     def _concat_qkv_a_weight(self) -> ttnn.Tensor:
         # Both parts are whole tiles wide, so the bf8 round trip keeps every shared-exponent block intact.
         q, kv = self.q_a_proj_weight, self.kv_a_proj_with_mqa_weight
@@ -1347,6 +1393,29 @@ class ttMLA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(tt_q)
+
+        if self._q_rope_inplace and seq_len_local == self.active_seq_len_local:
+            # [q_nope @ wkv_b1 | 0] straight into the Q buffer, then RoPE the q_pe into its last channels.
+            tt_q = ttnn.linear(
+                tt_q_nope,
+                self.wkv_b1_weight_padded,
+                program_config=self._wkv_b1_padded_pc,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=self.default_compute_kernel_config,
+            )
+            ttnn.deallocate(tt_q_nope)
+            ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                tt_q_rope,
+                rope_tensors["cos_matrix"],
+                rope_tensors["sin_matrix"],
+                rope_tensors["trans_matrix"],
+                kv_actual_global=metadata[1] if metadata is not None else kv_actual_isl,
+                cluster_axis=self.sp_axis,
+                output_tensor=tt_q,
+            )
+            ttnn.deallocate(tt_q_rope)
+            return tt_q
 
         tt_q_nope = ttnn.linear(
             tt_q_nope,
