@@ -50,4 +50,8 @@ std::vector<Tensor> recurrent_chunk_scan(
     const std::optional<Tensor>& column_activation_input = std::nullopt,
     const std::optional<Tensor>& column_activation_output = std::nullopt);
 
+// The worker cores of v_beta's device that the summary's value blocks leave idle (its column activation's cores), in
+// row-major order: none when the [B*H, NC, chunk, V] protocol's value blocks cover the whole grid.
+std::vector<tt::tt_metal::CoreCoord> summary_idle_cores(const Tensor& v_beta);
+
 }  // namespace ttnn::experimental::prim

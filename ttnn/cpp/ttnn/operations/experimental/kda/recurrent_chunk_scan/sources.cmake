@@ -4,6 +4,7 @@ set(TTNN_OP_EXPERIMENTAL_KDA_RECURRENT_CHUNK_SCAN_SRCS
     recurrent_chunk_scan.cpp
     device/recurrent_chunk_scan_device_operation.cpp
     device/recurrent_chunk_scan_program_factory.cpp
+    device/tile_column_activation_device_operation.cpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_KDA_RECURRENT_CHUNK_SCAN_NANOBIND_SRCS

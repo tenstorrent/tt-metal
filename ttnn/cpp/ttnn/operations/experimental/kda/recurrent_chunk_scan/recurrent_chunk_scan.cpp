@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "device/recurrent_chunk_scan_device_operation.hpp"
+#include "device/tile_column_activation_device_operation.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 
 namespace ttnn::experimental::kda {
@@ -138,7 +139,10 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
                 /*default_fp32_acc=*/true,
                 /*default_l1_acc=*/false)};
     }
-    return ttnn::experimental::prim::recurrent_chunk_scan(
+    // The activation runs beside the summary on the worker cores its value blocks leave idle; when they cover the
+    // grid it runs right after, as a program of its own on the whole grid.
+    const bool beside = activation.has_value() && !ttnn::experimental::prim::summary_idle_cores(v_beta).empty();
+    auto outputs = ttnn::experimental::prim::recurrent_chunk_scan(
         v_beta,
         kd,
         q_decay,
@@ -159,9 +163,15 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
         packed_head,
         emit_outputs,
         emit_memory_config,
-        activation,
-        column_activation_input,
-        column_activation_output);
+        beside ? activation : std::nullopt,
+        beside ? column_activation_input : std::nullopt,
+        beside ? column_activation_output : std::nullopt);
+    if (activation.has_value() && !beside) {
+        TT_FATAL(column_activation_output.has_value(), "{}: a column activation needs its output", operation_name);
+        ttnn::experimental::prim::activate_tile_columns(
+            *activation, *column_activation_input, *column_activation_output);
+    }
+    return outputs;
 }
 
 }  // namespace ttnn::experimental::kda

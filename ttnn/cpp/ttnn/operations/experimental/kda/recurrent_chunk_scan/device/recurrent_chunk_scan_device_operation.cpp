@@ -170,7 +170,7 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
             *attrs.column_activation, *in.column_activation_input, *in.column_activation_output, operation_name);
         check_same_device(in.v_beta, *in.column_activation_input, operation_name, "column activation input");
         TT_FATAL(
-            !idle_cores(in.v_beta.device()->compute_with_storage_grid_size(), distribution.core_set).empty(),
+            !summary_idle_cores(in.v_beta).empty(),
             "{}: the summary leaves no worker core idle for the column activation",
             operation_name);
     }
@@ -263,6 +263,14 @@ RecurrentChunkScanOperation::create_op_performance_model(
     }
 
     return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
+}
+
+std::vector<tt::tt_metal::CoreCoord> summary_idle_cores(const Tensor& v_beta) {
+    const auto grid = v_beta.device()->compute_with_storage_grid_size();
+    const auto& shape = v_beta.logical_shape();
+    const auto distribution =
+        kda_factory_detail::distribute_value_blocks(grid, shape[0], shape[-1] / tt::constants::TILE_WIDTH);
+    return kda_factory_detail::idle_cores(grid, distribution.core_set);
 }
 
 std::vector<Tensor> recurrent_chunk_scan(

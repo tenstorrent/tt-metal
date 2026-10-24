@@ -4,6 +4,7 @@
 #include "ttnn/operations/experimental/kda/factory/chronology_binding.hpp"
 
 #include "ttnn/operations/experimental/kda/recurrent_chunk_scan/device/recurrent_chunk_scan_program_factory.hpp"
+#include "ttnn/operations/experimental/kda/recurrent_chunk_scan/device/recurrent_chunk_scan_device_operation.hpp"
 
 #include <algorithm>
 #include <vector>
@@ -539,7 +540,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
             *attrs.column_activation,
             *in.column_activation_input,
             *in.column_activation_output,
-            kda_factory_detail::idle_cores(device.compute_with_storage_grid_size(), cores));
+            summary_idle_cores(in.v_beta));
     }
     return kda_factory_detail::chronology_workload(
         ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)},

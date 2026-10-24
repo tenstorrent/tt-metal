@@ -182,7 +182,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 emitted ``F(0)`` and ``F(I)``. Defaults to ``memory_config``.
             column_activation_input (ttnn.Tensor, optional): A TILE tensor whose tile columns
                 ``[column_activation_input_column, column_activation_input_column + column_activation_columns)``
-                the summary's program also activates, on the worker cores the summary leaves idle: it writes
+                the summary's program also activates, on the worker cores the summary leaves idle (when it
+                leaves none, a program of its own on the whole grid runs it right after the summary): it writes
                 ``column_activation`` of them into the same tile columns of ``column_activation_output``
                 from ``column_activation_output_column``, every tile row, at that tensor's dtype. The chain runs
                 as ttnn's unary ops run it (FP32 accumulation, precise SFPU); an empty chain copies. Both
