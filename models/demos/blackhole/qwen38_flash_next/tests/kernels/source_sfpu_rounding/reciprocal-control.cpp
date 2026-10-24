@@ -21,7 +21,9 @@ inline void qwen38_reciprocal_fused_control() {
         sfpi::vFloat val = sfpi::setexp(sfpi::setsgn(input, 1), 126);
         sfpi::vFloat c = 1.442695f;
         sfpi::vFloat result = c * (val * c + 2.0f);
-        for (int j = 0; j < 2; ++j) { result = result * (val * result + 2.0f); }
+        for (int j = 0; j < 2; ++j) {
+            result = result * (val * result + 2.0f);
+        }
         sfpi::vInt exponent = sfpi::exexp(result) - sfpi::exexp(input) + 126;
         sfpi::vFloat out = sfpi::setexp(result, exponent);
         v_if(input < 0.0f) { out = -out; }
@@ -30,11 +32,16 @@ inline void qwen38_reciprocal_fused_control() {
         sfpi::dst_reg++;
     }
 }
-}
+}  // namespace ckernel::sfpu
 #endif
 ALWI void reciprocal_fused_control(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, qwen38_reciprocal_fused_control,
-        (APPROX, DST_ACCUM_MODE), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        qwen38_reciprocal_fused_control,
+        (APPROX, DST_ACCUM_MODE),
+        idst,
+        VectorMode::RC));
 }
 
 void kernel_main() {

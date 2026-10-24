@@ -73,8 +73,8 @@ sfpi_inline sfpi::vFloat qwen38_softplus_exp_negative(sfpi::vFloat x) {
     // exp(r) via Taylor polynomial, |r| < 0.5
 #ifdef INP_FLOAT32
     // FP32: degree 7 for < 1 ULP
-    sfpi::vFloat upper = PolynomialEvaluator::eval(
-        r, 0.166666667f, 0.0416666667f, 0.00833333333f, 0.00138888889f, 0.000198412698f);
+    sfpi::vFloat upper =
+        PolynomialEvaluator::eval(r, 0.166666667f, 0.0416666667f, 0.00833333333f, 0.00138888889f, 0.000198412698f);
     sfpi::vFloat product = r * upper;
     // Source emits SFPMUL then SFPADDI +0.5; the +1 terms remain fused.
     sfpi::vFloat poly = __builtin_rvtt_sfpaddi(ckernel::instrn_buffer, product.get(), 0x3f00, 0, 0, 0);
@@ -183,7 +183,15 @@ inline void qwen38_calculate_softplus(std::uint32_t param0, std::uint32_t param1
 namespace ckernel {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void qwen38_softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, qwen38_calculate_softplus,
-        (APPROX, is_fp32_dest_acc_en), idst, VectorMode::RC, beta, beta_reciprocal, threshold));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        qwen38_calculate_softplus,
+        (APPROX, is_fp32_dest_acc_en),
+        idst,
+        VectorMode::RC,
+        beta,
+        beta_reciprocal,
+        threshold));
 }
-} // namespace ckernel
+}  // namespace ckernel
