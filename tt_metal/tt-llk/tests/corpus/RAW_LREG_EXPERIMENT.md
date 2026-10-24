@@ -1,6 +1,26 @@
 # Raw LREG lifetime experiment — 2026-10-07
 
-## SFPI-only integration status — 2026-10-23
+## Qualified local strong-checking tuple — 2026-10-24
+
+The actual selected Blackhole run passed 14 tests with LLK harness/kernel sources at `658ab2cdfb325ba1e8656cb4e016f60ba98d7585` and GCC `08c76cc663f53a6d85f6ce540fa83e728f49f333`, SFPI include tree `ee378aa6c6c7f62ce503d044142b40f5cc4f9c7b` and binutils `a64f45d8a1c581a728951fe52103b56af01e2601`. Actual backend SHA256: `26c0e0901f78dbebbfceccf4197b53ffed2668912e09fc100821c84fa0cb43de`; actual built driver SHA256: `06288f15a6366ddba7365ac6b6e5e8a34b39887c424ee05bd6443c65d829be74`; assembler `4d2ad168c4eb8260146add762b848b12d3dc8fd0f1ac54c1d3f699e36b50be11`; linker `45e11eb9878e506bad7f3cd191ec71274632ace311e01385d744bb7b4c3cf3f2`. The three masked custody cases each have zero mismatches. These are selected correctness tests, not a full sweep or performance claim.
+
+The supplemental compiler-only prefixes/CI55 retain their recorded `rv32im/ilp32`, default ISA `20191213` profile. The coupled full/native/device tuple uses the real SFPI production `rv32i/ilp32`, `rocket`, ISA `2.2` defaults. The original BRISC source/boot CPU probe passes without CLI ISA overrides or a source patch.
+
+The package's actual expected-name launcher is `/home/ttuser/sfpi-alignment.UbW4Dy/final-device-owned-sfpi-v3/compiler/bin/riscv-tt-elf-g++` (SHA256 `cae87e5d0e35c0ff995e1375e21a55f63110de9e99699ecc3ef616fdf8c90756`). It executes the matching built xg++ frontend, with explicit target C++/newlib paths. Select that complete private package through the harness's existing `tests/sfpi` package path, including the matching source headers and generated declarations. The setup script may replace this experimental package with the normal release; it is not a release artifact.
+
+An old release frontend plus `-B` or `COMPILER_PATH` does not guarantee the matching backend. The configure-specified absolute assembler/linker defaults can also override `-B`; a path prediction alone is insufficient. Use the actual matching built frontend and retain the real execve trace of that backend, assembler and linker, with zero stock-tool fallback. No specs rewriting or installed-binary replacement is part of this recipe. Keep the target-only required-metadata ABI preflight; a global REQUIRE define also reaches scalar BRISC and is not supported. Actual launcher arguments and evidence are retained in the receipt below.
+
+PID-paired normalized successful execve counts: backend 43, assembler 43, linker 43, stock tools 0. The unchanged raw receipt records complete-line lower bounds of 33/40/40. JUnit: `/home/ttuser/sfpi-alignment.UbW4Dy/final-owned-device-v3-production-runtime/result.xml`; trace: `/home/ttuser/sfpi-alignment.UbW4Dy/final-owned-device-v3-production-runtime/execve-openat.log`. Integration `cc42927b996116509983695b10656763aa610904` differs only in the recorded workflow/documentation inputs; its commit ID is not claimed to have executed. The raw-LREG CPU workflow at focused `5b70950d209319a529ce6ac35c2ffa0779f607d6` runs the existing host metadata checks on affected pull requests; 24 local checks passed. Hosted execution and publication receipts are recorded separately.
+
+The exact local compiler/SFPI suite passes 8,649 checks / 2 expected XFAIL; all 30 prefix gates and CI55 baseline are freshly qualified with all seven required checking macros enabled. QSR runtime and full coupled per-PR approval gating remain open. The static current-main audit at `92ba6460e818374f695cfc0e474a953ffd573031` found disjoint focused/upstream paths; that is bounded static compatibility, not a new upstream merge or current-main runtime validation.
+
+The LLK source commit does not identify the separately captured standalone ttexalens/tt-umd runtime or validate current upstream main. The commands and counts in the next r2 section are historical, use a weaker checking checkpoint, and do not select or qualify this tuple.
+
+### Historical manual-2019 validation profile
+
+The earlier manual `rv32im/ilp32`, ISA `20191213` full/native checkpoints remain historical. Its 14-case device attempt stopped in shared BRISC assembly before any correctness oracle or fresh linked ELF. Device topology initialization did occur; these were not 14 numerical failures. The source stayed unchanged: the coupled compiler was rebuilt with the actual SFPI production defaults, and the original BRISC CPU compile/link passed without a source patch or CLI ISA override.
+
+## Historical r2 integration status — 2026-10-23
 
 This local epoch retains upstream `0e540ef96caa`, not the moving latest main.
 The normal SFPI 7.89.0[1050] release pin remains a compatibility default;
