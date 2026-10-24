@@ -81,6 +81,25 @@ def _tap(job: str, L: int, keys: list[str]) -> dict[str, torch.Tensor]:
     return _read(GOLDEN / "taps" / "bf16" / job / f"layer_{L}.safetensors", keys)
 
 
+def _trace(job: str, name: str) -> torch.Tensor:
+    """A full-row golden stream of ``vllm-<job>/`` (``decoder_input_layer_0`` / ``decoder_output_layer_L``): every row,
+    unlike the per-layer taps, which are sparse past the first rows of a long job."""
+    d = GOLDEN / f"vllm-{job}"
+    s = json.loads((d / "index.json").read_text())["tensor_streams"][name]
+    parts = []
+    for ch in s["chunks"]:
+        with safe_open(str(d / ch["path"]), framework="pt") as f:
+            (key,) = list(f.keys())
+            parts.append(f.get_tensor(key))
+    return torch.cat(parts) if len(parts) > 1 else parts[0]
+
+
+def _tap_positions(job: str, L: int) -> list[int]:
+    """The positions the layer's tap rows hold (``tap_row_ranges``; all rows when absent)."""
+    t = _read(GOLDEN / "taps" / "bf16" / job / f"layer_{L}.safetensors", ["tap_row_ranges"]).get("tap_row_ranges")
+    return None if t is None else [r for a, b in t.tolist() for r in range(a, b)]
+
+
 def _state(job: str, L: int) -> dict[str, torch.Tensor]:
     return _read(GOLDEN / "state" / "bf16" / job / f"layer_{L}.safetensors")
 
@@ -202,12 +221,13 @@ def test_prefill_vs_blaze_golden(mesh_device):
         ids = torch.tensor(toks[:S], dtype=torch.int64)
         streams, _ = _embed(model, ids)
         emb = _streams_host(model, streams, S)
-        g_in = _tap(job, layers[0], ["layer_in"]).get("layer_in")
-        if g_in is not None:
-            rep["embed_pcc"] = round(pcc(g_in.float()[:S], emb), 6)
-            logger.info(
-                f"[g53f-prefill] {job} input streams vs golden layer_in of L{layers[0]}: pcc {rep['embed_pcc']}"
-            )
+        g_in = (
+            _trace(job, "decoder_input_layer_0")
+            if layers[0] == 0
+            else _trace(job, f"decoder_output_layer_{layers[0] - 1}")
+        )
+        rep["embed_pcc"] = round(pcc(g_in.float()[:S], emb), 6)
+        logger.info(f"[g53f-prefill] {job} input streams vs golden layer_in of L{layers[0]}: pcc {rep['embed_pcc']}")
         t_job = time.time()
         for dec in model.layers:
             L = dec.layer_idx
@@ -215,7 +235,7 @@ def test_prefill_vs_blaze_golden(mesh_device):
             ttnn.deallocate(streams)
             streams = out
             dev = _streams_host(model, streams, S)
-            gold = _tap(job, L, ["layer_out"])["layer_out"].float()[:S]
+            gold = _trace(job, f"decoder_output_layer_{L}").float()[:S]
             p_all = pcc(gold, dev)
             p_min, at = _row_pcc_min(gold, dev)
             ent = {"layer_out_pcc": round(p_all, 6), "row_min": round(p_min, 6), "row_min_at": at}
@@ -231,8 +251,10 @@ def test_prefill_vs_blaze_golden(mesh_device):
                 )
             if dec.cache is not None:  # DSA
                 st = _dsa_state_host(model, dec, S)
-                g = _tap(job, L, ["dsa_kv_latent"])["dsa_kv_latent"].float()[:S]
-                ent["latent_pcc"] = round(pcc(g, st["latent"].float()), 6)
+                g = _tap(job, L, ["dsa_kv_latent"])["dsa_kv_latent"].float()
+                rows = _tap_positions(job, L) or list(range(g.shape[0]))
+                keep = [k for k, r in enumerate(rows) if r < S]
+                ent["latent_pcc"] = round(pcc(g[keep], st["latent"].float()[[rows[k] for k in keep]]), 6)
             if getattr(dec, "kda_batched", None) is not None:  # KDA
                 st = _kda_state_host(model, dec)
                 gs = _state(job, L)

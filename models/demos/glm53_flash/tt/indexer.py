@@ -709,11 +709,21 @@ class TtDSAIndexer(LightweightModule):
             # (``untilize_with_unpadding``, end indices inclusive): the former ``ttnn.slice`` + ``to_layout`` pair
             # moved the [T, kv_len] block twice (two 268 MB copies per 512-row sub-block at 1 M); pure data
             # movement either way, bit-identical.
-            if kv_len < scores.shape[-1]:
-                scores_rm = ttnn.untilize_with_unpadding(scores, [0, 0, T - 1, kv_len - 1])
+            # indexer_score_dsa returns ROW_MAJOR (compute_output_specs since #47223): untilize_with_unpadding then
+            # TT_FATALs (input must be TILE) -- the 10-22 device-free rewrite (71a89dbb439) broke every prefill row past
+            # 2050 (tt-blaze G53F-0084). Crop a row-major score with a plain slice; keep the one-pass crop for TILE.
+            if scores.layout == ttnn.ROW_MAJOR_LAYOUT:
+                if kv_len < scores.shape[-1]:
+                    scores_rm = ttnn.slice(scores, [0, 0, 0, 0], [1, 1, T, kv_len])
+                    ttnn.deallocate(scores)
+                else:
+                    scores_rm = scores
             else:
-                scores_rm = ttnn.to_layout(scores, ttnn.ROW_MAJOR_LAYOUT)
-            ttnn.deallocate(scores)
+                if kv_len < scores.shape[-1]:
+                    scores_rm = ttnn.untilize_with_unpadding(scores, [0, 0, T - 1, kv_len - 1])
+                else:
+                    scores_rm = ttnn.to_layout(scores, ttnn.ROW_MAJOR_LAYOUT)
+                ttnn.deallocate(scores)
         row_slice = None
         if row is not None:
             row_slice = ttnn.slice(scores_rm, [0, 0, row, 0], [1, 1, row + 1, scores_rm.shape[-1]])
