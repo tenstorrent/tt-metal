@@ -823,8 +823,10 @@ class TtIndexerBase:
         # Select the indexer's query rows BEFORE the replicated Q projection/RoPE/Hadamard.
         # Keep the original shared latent alive: the main MLA Q stem consumes it after this forward.
         tpsp = self.tp_factor > 1
-        qr_local = ttnn.mesh_partition(qr, dim=2, cluster_axis=self.tp_axis) if tpsp else qr
         sq_local = seq_len // self.tp_factor
+        # A latent that already holds only this TP rank's rows (ttMLA sequence-sharded Q reduce-scatters it over
+        # rows) is used as is.
+        qr_local = ttnn.mesh_partition(qr, dim=2, cluster_axis=self.tp_axis) if tpsp and qr.shape[2] != sq_local else qr
         wq_b_cfg = self._resolve_mm_cfg("indexer.wq_b", sq_local)
         q = ttnn.linear(
             qr_local,
