@@ -34,13 +34,12 @@ uint64_t prepare_chunk_recurrence_l1_bytes(const PrepareChunkRecurrenceParams& a
     const uint64_t Kt = attrs.key_dim / TILE_WIDTH;
     const uint64_t Vt = attrs.value_dim / TILE_WIDTH;
     const auto output = [&](uint32_t index) { return (attrs.output_bf16_mask >> index) & 1U ? bf16 : fp32; };
-    // The BF16 q, k, g, v and beta logits, double-buffered, and the activated beta.
-    const uint64_t inputs = 2 * (3 * Kt + Vt + 1) * bf16 + fp32;
+    // The BF16 q, k, g, v and beta logits, double-buffered, and the activated beta's row and column.
+    const uint64_t inputs = 2 * (3 * Kt + Vt + 1) * bf16 + 2 * fp32;
     // eye, tril, ones, gate_tril, gate_ones and the three block masks.
     const uint64_t constants = 8 * fp32;
-    // Six Kt-tile rows (workspace_0/1/2, centered_inverse_decay, normalized_q/k) and two Kt x Vt blocks
-    // (anchor_decay, workspace_3).
-    const uint64_t intermediates = (6 * Kt + 2 * Kt * Vt) * fp32;
+    // Eight Kt-tile rows: workspace_0/1/2/3, centered_inverse_decay, anchor_decay and normalized_q/k.
+    const uint64_t intermediates = 8 * Kt * fp32;
     // v_beta, kd, q_decay, k_dec_t, dl and intra, double-buffered.
     const uint64_t outputs = 2 * (Vt * output(0) + Kt * (output(1) + output(2) + output(4) + output(5)) + fp32);
     return inputs + constants + intermediates + outputs +
@@ -67,9 +66,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     const uint32_t cc = Ct * Ct;
     const uint32_t ck = Ct * Kt;
     const uint32_t cv = Ct * Vt;
-    const uint32_t kv = Kt * Vt;
     const uint32_t kc = Kt * Ct;
-    const uint32_t scratch = std::max({cc, ck, cv, kv, kc});
     const auto distribution = kda_factory_detail::distribute_prep(
         device.compute_with_storage_grid_size(), num_heads * num_chunks, std::numeric_limits<uint32_t>::max());
     const auto& cores = distribution.core_set;
@@ -85,7 +82,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     const m2::DFBSpecName v_dfb{"v"};
     const m2::DFBSpecName g_dfb{"g"};
     const m2::DFBSpecName beta_dfb{"beta"};
-    // Sigmoid of the beta logits.
+    // Sigmoid of the beta logits, in row 0, then transposed to column 0.
+    const m2::DFBSpecName beta_row_dfb{"beta_row"};
     const m2::DFBSpecName beta_activated_dfb{"beta_activated"};
     const m2::DFBSpecName eye_dfb{"eye"};
     const m2::DFBSpecName tril_dfb{"tril"};
@@ -147,6 +145,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         make_dfb(v_dfb, 2 * cv, bf16),
         make_dfb(g_dfb, 2 * ck, gate_format),
         make_dfb(beta_dfb, 2 * Ct, bf16),
+        make_dfb(beta_row_dfb, Ct, fp32),
         make_dfb(beta_activated_dfb, Ct, fp32),
         make_dfb(eye_dfb, cc, fp32),
         make_dfb(tril_dfb, cc, fp32),
@@ -165,7 +164,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         make_dfb(workspace_1_dfb, ck, fp32),
         make_dfb(final_decay_dfb, 2 * Kt, output_formats[5]),
         make_dfb(k_decay_transposed_dfb, 2 * kc, output_formats[4]),
-        make_dfb(anchor_decay_dfb, kv, fp32),
+        make_dfb(anchor_decay_dfb, ck, fp32),
         make_dfb(normalized_q_dfb, ck, fp32),
         make_dfb(normalized_k_dfb, ck, fp32),
         // Row workspaces publish whole Kt-tile rows. Keep one-tile reductions and
@@ -175,7 +174,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         make_dfb(tile_workspace_1_dfb, 2 * max_items, fp32),
         make_dfb(tile_workspace_2_dfb, max_items, fp32),
 
-        make_dfb(workspace_3_dfb, scratch, fp32),
+        make_dfb(workspace_3_dfb, ck, fp32),
         make_dfb(workspace_2_dfb, ck, fp32),
     };
     m2::KernelSpec reader{
@@ -254,6 +253,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     unpack_modes[v_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[g_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[beta_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[beta_row_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[beta_activated_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[eye_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[tril_dfb] = UnpackMode::UnpackToSrc;
@@ -294,6 +294,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
                 m2::DFBBinding{v_dfb, "v", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{g_dfb, "g", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{beta_dfb, "beta", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{beta_row_dfb, "beta_row", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{beta_row_dfb, "beta_row", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{beta_activated_dfb, "beta_activated", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{beta_activated_dfb, "beta_activated", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{eye_dfb, "eye", m2::DFBEndpointType::CONSUMER},

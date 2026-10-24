@@ -79,6 +79,7 @@ __attribute__((noinline)) void fill_ones_and_tril(DFB0& ones, DFB1& tril, uint32
 template <typename DFB0, typename DFB1>
 inline void fill_inverse_constants(DFB0& eye, DFB1& block_masks) {
     constexpr uint32_t fp32_one_bits = __builtin_bit_cast(uint32_t, 1.0F);
+    constexpr uint32_t fp32_minus_one_bits = __builtin_bit_cast(uint32_t, -1.0F);
     constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
     constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
     constexpr uint32_t tile_elements = tt::constants::TILE_HW;
@@ -98,35 +99,27 @@ inline void fill_inverse_constants(DFB0& eye, DFB1& block_masks) {
     noc.async_write_zeros(block_masks, mask_tile_count * block_masks.get_entry_size());
     noc.write_zeros_l1_barrier();
 
-    // The nested inverse consumes one mask per level: the 4-row diagonal blocks it inverts
-    // directly, the strict block-lower part that pairs those blocks into 8-row blocks, and the
-    // strict block-lower part that joins the 8-row blocks.
-    // Store only the set entries, row by row: in row r the 4-row block is columns [4(r/4), 4(r/4)+4), the rest of
-    // the 8-row pair is the other 4 columns of [8(r/8), 8(r/8)+8), and the strict block-lower part is [0, 8(r/8)).
+    // The nested inverse consumes one mask per level, each -1 on the strictly lower entries it extracts from the raw
+    // Akk (so the product is that level's part of N = -strictly_lower(Akk)): those of the 4-row diagonal blocks it
+    // inverts directly, the block-lower part that pairs those blocks into 8-row blocks, and the block-lower part that
+    // joins the 8-row blocks.
+    // Store only the set entries, row by row: in row r the 4-row block's strictly lower part is columns [4(r/4), r),
+    // the pair's is [8(r/8), 4(r/4)) (empty in the pair's first block), and the joining part is [0, 8(r/8)).
     volatile tt_l1_ptr uint32_t* masks = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(block_masks.get_write_ptr());
     auto set_columns = [&](uint32_t mask, uint32_t row, uint32_t first, uint32_t last) {
         const uint32_t row_base =
             (row / face_height) * faces_per_tile_row * face_elements + (row % face_height) * face_width;
         for (uint32_t column = first; column < last; ++column) {
             masks[mask * tile_elements + row_base + (column / face_width) * face_elements + column % face_width] =
-                fp32_one_bits;
+                fp32_minus_one_bits;
         }
     };
     for (uint32_t row = 0; row < tile_height; ++row) {
         const uint32_t block = row / inverse_block_size * inverse_block_size;
         const uint32_t pair = row / inverse_pair_size * inverse_pair_size;
-        set_columns(0, row, block, block + inverse_block_size);
-        set_columns(1, row, pair, pair + inverse_pair_size);
+        set_columns(0, row, block, row);
+        set_columns(1, row, pair, block);
         set_columns(2, row, 0, pair);
-    }
-    // Mask 1 holds the pair minus the block: clear the block entries just written.
-    for (uint32_t row = 0; row < tile_height; ++row) {
-        const uint32_t block = row / inverse_block_size * inverse_block_size;
-        const uint32_t row_base =
-            (row / face_height) * faces_per_tile_row * face_elements + (row % face_height) * face_width;
-        for (uint32_t column = block; column < block + inverse_block_size; ++column) {
-            masks[tile_elements + row_base + (column / face_width) * face_elements + column % face_width] = 0;
-        }
     }
 
     volatile tt_l1_ptr uint32_t* eye_tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(eye.get_write_ptr());
@@ -308,7 +301,7 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         // each padded row an identity step, and replacing (not scaling) the rows keeps
         // arbitrary padding, including NaN, out of the carries. Q only reaches padded outputs.
         // Beta logits zero to sigmoid(0) = 0.5, which is harmless: beta only scales K and V.
-        // Zero before moving the head column, so column 0 takes the zeroed rows.
+        // Zero before moving the head column, so row 0 takes the zeroed rows.
         if (partial_rows != 0 && head_chunk_index % num_chunks == partial_chunk) {
             zero_rows_from(noc, k, chunk_key_tiles, partial_rows);
             zero_rows_from(noc, v, chunk_value_tiles, partial_rows);
@@ -316,8 +309,9 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
             zero_rows_from(noc, beta, Ct, partial_rows);
             noc.write_zeros_l1_barrier();
         }
-        // Compute broadcasts column 0; move this head's BF16 logit column there. Each row reads its source before
-        // overwriting column 0, so the in-place move is safe.
+        // Compute activates row 0 (fewer SFPU iterations than a column) and transposes it to the column 0 the
+        // broadcasts read; move this head's BF16 logit column into row 0. Token r's logit lands in row 0, column r.
+        // The only source in row 0 is token 0's, read first, so the in-place move is safe.
         {
             auto* tile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(beta.get_write_ptr());
             const uint32_t column = head % tt::constants::TILE_WIDTH;
@@ -328,7 +322,10 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
                 const uint32_t row_base = (row % tt::constants::FACE_HEIGHT) * tt::constants::FACE_WIDTH;
                 const uint32_t source =
                     (face_row * 2 + column_face) * tt::constants::FACE_HW + row_base + column_offset;
-                tile[face_row * 2 * tt::constants::FACE_HW + row_base] = tile[source];
+                // Row 0, column `row`: face 0 or 1, first face row.
+                const uint32_t target =
+                    row / tt::constants::FACE_WIDTH * tt::constants::FACE_HW + row % tt::constants::FACE_WIDTH;
+                tile[target] = tile[source];
             }
         }
         q.push_back(chunk_key_tiles);

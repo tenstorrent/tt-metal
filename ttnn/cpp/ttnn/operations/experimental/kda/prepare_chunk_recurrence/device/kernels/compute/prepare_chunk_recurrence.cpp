@@ -347,44 +347,15 @@ __attribute__((noinline)) void matmul_items(DFB0& a, DFB1& b, DFB2& o, uint32_t 
 //   level 1: 4-row diagonal blocks. N1^4=0, so A = (I-N1)^-1 = I+N1(I+N1(I+N1)) in two matmuls.
 //   level 2: pair those blocks. M2 = A L2 satisfies M2^2=0, so B = (I+M2)A = A + M2 A.
 //   level 3: join the 8-row blocks. M3 = B L3 satisfies M3^4=0, so (I-N)^-1 = (I+M3)(I+M3^2)B.
+// Each block mask holds -1 on its level's strictly lower entries, so N1, L2 and L3 are each one product with the raw
+// Akk; a product with 0 or -1 is exact.
 // The items are independent: each stage runs over all n of them, its tile for item i at the front of its buffers + i.
-template <
-    typename DFB0,
-    typename DFB1,
-    typename DFB2,
-    typename DFB3,
-    typename DFB4,
-    typename DFB5,
-    typename DFB6,
-    typename DFB7>
+template <typename DFB0, typename DFB1, typename DFB2, typename DFB3, typename DFB4, typename DFB5, typename DFB6>
 __attribute__((noinline)) void invert_items(
-    DFB0& akk,
-    DFB1& causal_mask,
-    DFB2& identity,
-    DFB3& block_masks,
-    DFB4& inverse,
-    DFB5& matrix,
-    DFB6& total,
-    DFB7& product,
-    uint32_t n) {
+    DFB0& akk, DFB1& identity, DFB2& block_masks, DFB3& inverse, DFB4& matrix, DFB5& total, DFB6& product, uint32_t n) {
     using Op = ElementwiseBinaryOp;
     akk.wait_front(n);
-    {
-        auto& lower = matrix;
-        auto& diagonal = total;
-        binary_items(Op::Multiply, akk, 0, false, causal_mask, 0, true, lower, n);  // lower(A), with diagonal
-        lower.wait_front(n);
-        akk.pop_front(n);
-        binary_items(Op::Multiply, lower, 0, false, identity, 0, true, diagonal, n);  // diag(A)
-        diagonal.wait_front(n);
-        binary_items(Op::Subtract, diagonal, 0, false, lower, 0, false, akk, n);  // -strictly_lower(A)
-        akk.wait_front(n);
-        diagonal.pop_front(n);
-        lower.pop_front(n);
-    }
-    auto& negative_strict_lower = akk;
-
-    binary_items(Op::Multiply, negative_strict_lower, 0, false, block_masks, 0, true, matrix, n);  // N1
+    binary_items(Op::Multiply, akk, 0, false, block_masks, 0, true, matrix, n);  // N1
     matrix.wait_front(n);
     binary_items(Op::Add, identity, 0, true, matrix, 0, false, total, n);
     total.wait_front(n);
@@ -399,7 +370,7 @@ __attribute__((noinline)) void invert_items(
     }
     matrix.pop_front(n);  // total holds A
 
-    binary_items(Op::Multiply, negative_strict_lower, 0, false, block_masks, 1, true, matrix, n);  // L2
+    binary_items(Op::Multiply, akk, 0, false, block_masks, 1, true, matrix, n);  // L2
     matrix.wait_front(n);
     matmul_items(total, matrix, product, n);  // M2 = A L2
     product.wait_front(n);
@@ -412,24 +383,25 @@ __attribute__((noinline)) void invert_items(
     total.pop_front(n);
     matrix.pop_front(n);
 
-    binary_items(Op::Multiply, negative_strict_lower, 0, false, block_masks, 2, true, product, n);  // L3
+    binary_items(Op::Multiply, akk, 0, false, block_masks, 2, true, product, n);  // L3
     product.wait_front(n);
-    // -strictly_lower(Akk) is dead after extracting L3; its buffer holds I+M3 below.
-    negative_strict_lower.pop_front(n);
+    // Akk is dead after extracting L3; its buffer holds I+M3 below.
+    akk.pop_front(n);
+    auto& identity_plus_m3 = akk;
     matmul_items(total, product, matrix, n);  // M3 = B L3
     matrix.wait_front(n);
     product.pop_front(n);
     matmul_items(matrix, matrix, product, n);  // M3^2
     product.wait_front(n);
-    binary_items(Op::Add, identity, 0, true, matrix, 0, false, negative_strict_lower, n);  // I+M3
-    negative_strict_lower.wait_front(n);
+    binary_items(Op::Add, identity, 0, true, matrix, 0, false, identity_plus_m3, n);  // I+M3
+    identity_plus_m3.wait_front(n);
     matrix.pop_front(n);
     binary_items(Op::Add, identity, 0, true, product, 0, false, matrix, n);  // I+M3^2
     matrix.wait_front(n);
     product.pop_front(n);
-    matmul_items(negative_strict_lower, matrix, product, n);  // (I+M3)(I+M3^2)
+    matmul_items(identity_plus_m3, matrix, product, n);  // (I+M3)(I+M3^2)
     product.wait_front(n);
-    negative_strict_lower.pop_front(n);
+    identity_plus_m3.pop_front(n);
     matrix.pop_front(n);
     matmul_items(product, total, inverse, n);
     product.pop_front(n);
@@ -465,17 +437,19 @@ KDA_PREP_HELPER void transpose_tile_row_to_column(DFB0& in, DFB1& o, uint32_t ro
 
 // Reduce each row of squared values directly to its inverse-L2 factor. Applying epsilon, rsqrt,
 // and optional scaling in DST avoids materializing row sums in a separate intermediate DFB.
+// The row sums, and the column broadcast that applies the factors, use only column 0, so the epilogue runs on the
+// faces holding it (VectorMode::C); the other columns of each factor tile are unspecified.
 template <bool Scale, uint32_t SquaredDfb, uint32_t InverseNormsDfb>
 KDA_PREP_HELPER void reduce_squared_rows_to_inverse_norms(
     uint32_t row_tiles, uint32_t column_tiles, uint32_t eps_bits, uint32_t scale_bits) {
     auto inverse_norm = [eps_bits, scale_bits](uint32_t dst) {
         binop_with_scalar_tile_init();
-        add_unary_tile(dst, eps_bits);
+        add_unary_tile(dst, eps_bits, VectorMode::C);
         rsqrt_tile_init();
-        rsqrt_tile(dst);
+        rsqrt_tile(dst, VectorMode::C);
         if constexpr (Scale) {
             binop_with_scalar_tile_init();
-            mul_unary_tile(dst, scale_bits);
+            mul_unary_tile(dst, scale_bits, VectorMode::C);
         }
     };
 
@@ -520,26 +494,31 @@ KDA_PREP_HELPER void normalize_l2_rows(
     input.pop_front(matrix_tiles);
 }
 
-// beta = sigmoid(logits) in FP32, from the BF16 logits the reader moved into column 0. The SFPU sigmoid is the
-// accurate one ttnn.sigmoid runs; BF16 widens exactly into the FP32 destination.
-template <uint32_t Ct, typename DFB0, typename DFB1>
-KDA_PREP_HELPER void activate_beta(DFB0& logits, DFB1& beta) {
-    beta.reserve_back(Ct);
+// beta = sigmoid(logits) in FP32, from the BF16 logits the reader moved into row 0, transposed into the column 0
+// the broadcasts read. The SFPU sigmoid is the accurate one ttnn.sigmoid runs, on the face rows holding row 0 only
+// (two SFPU iterations, as for the anchor's exponential); BF16 widens exactly into the FP32 destination, and the FP32
+// transpose is exact. The rest of each beta tile is unspecified.
+template <uint32_t Ct, typename DFB0, typename DFB1, typename DFB2>
+KDA_PREP_HELPER void activate_beta(DFB0& logits, DFB1& beta_row, DFB2& beta) {
+    beta_row.reserve_back(Ct);
     reconfig_data_format_srca(logits.get_id());
-    pack_reconfig_data_format(beta.get_id());
+    pack_reconfig_data_format(beta_row.get_id());
     copy_init(logits.get_id());
     sigmoid_tile_init<false>();
     for (uint32_t tile = 0; tile < Ct; ++tile) {
         tile_regs_acquire();
         copy_tile(logits.get_id(), tile, 0);
-        sigmoid_tile<VectorMode::RC, false>(0);
+        sigmoid_tile<VectorMode::R, false, DST_ACCUM_MODE, 2>(0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, beta.get_id(), tile);
+        pack_tile(0, beta_row.get_id(), tile);
         tile_regs_release();
     }
-    beta.push_back(Ct);
+    beta_row.push_back(Ct);
     logits.pop_front(Ct);
+    beta_row.wait_front(Ct);
+    transpose_tile_row_to_column(beta_row, beta, Ct);
+    beta_row.pop_front(Ct);
 }
 
 template <uint32_t Ct, uint32_t Vt, typename DFB0, typename DFB1, typename DFB2>
@@ -802,6 +781,7 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     DataflowBuffer g(dfb::g);
     // Beta logits are activated into beta once per work item.
     DataflowBuffer beta_logits(dfb::beta);
+    DataflowBuffer beta_row(dfb::beta_row);
     DataflowBuffer beta(dfb::beta_activated);
     DataflowBuffer eye(dfb::eye);
     DataflowBuffer tril(dfb::tril);
@@ -854,7 +834,7 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
         v.wait_front(chunk_value_tiles);
         g.wait_front(chunk_key_tiles);
         beta_logits.wait_front(Ct);
-        activate_beta<Ct>(beta_logits, beta);
+        activate_beta<Ct>(beta_logits, beta_row, beta);
         beta.wait_front(Ct);
 
         normalize_l2_rows<Ct, Kt, true, dfb::workspace_3, dfb::tile_workspace_0>(
@@ -928,7 +908,6 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
         }
         invert_items(
             akk,
-            tril,
             eye,
             block_masks,
             t_inv,

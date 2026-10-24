@@ -141,18 +141,25 @@ ALWI void sigmoid_tile_init() {
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ *
+ * vec_mode selects the faces computed and iterations the SFPU iterations per face (8 cover a face; fewer cover its
+ * first rows, as for exp_tile).
  */
 // clang-format on
-template <VectorMode vec_mode = VectorMode::RC, bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <
+    VectorMode vec_mode = VectorMode::RC,
+    bool fast_and_approx = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    int iterations = 8>
 ALWI void sigmoid_tile(uint32_t idst) {
 #ifdef ARCH_QUASAR
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_sigmoid, (8 /*ITERATIONS*/), idst, vec_mode));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_sigmoid, (iterations), idst, vec_mode));
 #else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_sigmoid,
-        (fast_and_approx, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
+        (fast_and_approx, is_fp32_dest_acc_en, iterations),
         idst,
         vec_mode));
 #endif
