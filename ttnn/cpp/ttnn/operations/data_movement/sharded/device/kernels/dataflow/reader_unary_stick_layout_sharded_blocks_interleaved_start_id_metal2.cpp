@@ -30,23 +30,69 @@ void kernel_main() {
     const uint32_t block_height = get_arg(args::block_height);
     const uint32_t block_width_bytes = get_arg(args::block_width_bytes);
     const uint32_t padded_block_width_bytes = get_arg(args::padded_block_width_bytes);
+#ifndef I2S_BANK_RUNS
     const bool aligned = static_cast<bool>(get_arg(args::aligned));
     const uint32_t aligned_input_width_offset_bytes = get_arg(args::aligned_input_width_offset_bytes);
     const uint32_t aligned_block_width_bytes = get_arg(args::aligned_block_width_bytes);
     const uint32_t aligned_offset = get_arg(args::aligned_offset);
+#endif
     const uint32_t start_id = get_arg(args::start_id);
 
+#ifndef I2S_BANK_RUNS
     constexpr auto num_trids = get_arg(args::num_trids);
+#endif
 
     Noc noc;
     // dfb::in — this core's row-major shard.
-    // scratch::scratch — the alignment staging area.
+    // scratch::scratch — the alignment staging area (the per-bank staging area under I2S_BANK_RUNS).
     DataflowBuffer dfb_in(dfb::in);
     Scratchpad<uint8_t> scratch_pad(scratch::scratch);
 
     const auto s0 = TensorAccessor(tensor::src);
+#ifndef I2S_BANK_RUNS
     uint32_t stick_id = start_id;
+#endif
     dfb_in.reserve_back(block_height);
+#ifdef I2S_BANK_RUNS
+    {
+        constexpr uint32_t page_stride = I2S_BANK_RUNS_PAGE_STRIDE;
+        constexpr uint32_t num_banks = NUM_DRAM_BANKS;
+        const uint32_t pass_sticks = scratch_pad.size_in_bytes() / page_stride;
+
+        uint32_t first[num_banks];
+        uint32_t count[num_banks];
+        uint32_t stage_off[num_banks];
+        for (uint32_t done = 0; done < block_height; done += pass_sticks) {
+            const uint32_t first_stick = start_id + done;
+            const uint32_t end_stick =
+                first_stick + ((block_height - done < pass_sticks) ? (block_height - done) : pass_sticks);
+            uint32_t off = 0;
+            for (uint32_t b = 0; b < num_banks; ++b) {
+                const uint32_t f = first_stick + (b + num_banks - first_stick % num_banks) % num_banks;
+                const uint32_t c = (f < end_stick) ? (end_stick - 1 - f) / num_banks + 1 : 0;
+                first[b] = f;
+                count[b] = c;
+                stage_off[b] = off;
+                if (c) {
+                    noc.async_read(s0, scratch_pad, c * page_stride, {.page_id = f}, {.offset_bytes = off});
+                }
+                off += c * page_stride;
+            }
+            noc.async_read_barrier();
+            for (uint32_t b = 0; b < num_banks; ++b) {
+                uint32_t src_off = stage_off[b];
+                uint32_t dest_off = (first[b] - start_id) * padded_block_width_bytes;
+                for (uint32_t k = 0; k < count[b]; ++k) {
+                    noc.async_read(
+                        scratch_pad, dfb_in, block_width_bytes, {.offset_bytes = src_off}, {.offset_bytes = dest_off});
+                    src_off += page_stride;
+                    dest_off += num_banks * padded_block_width_bytes;
+                }
+            }
+            noc.async_read_barrier();
+        }
+    }
+#else
     if (aligned) {
         uint32_t dest_off = 0;
         for (uint32_t h = 0; h < block_height; ++h) {
@@ -129,6 +175,7 @@ void kernel_main() {
             }
         }
     }
+#endif
     // Reset the sticky NOC_PACKET_TAG register for downstream untagged reads
     UnicastEndpoint self_ep;
     noc.set_async_read_state<NocOptions::TXN_ID>(
