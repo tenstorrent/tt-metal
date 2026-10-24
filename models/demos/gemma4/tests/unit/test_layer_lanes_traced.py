@@ -29,7 +29,9 @@ from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
 from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
 from models.demos.gemma4.tt.ccl import CCLManager
+from models.demos.gemma4.tt.lane_frame import check_lane_decode_frame
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
+from models.tt_transformers.tt.common import PagedAttentionConfig
 
 from ...tests.test_factory import TestFactory, lanes_fabric_config, parametrize_mesh_with_fabric, skip_if_not_moe
 from .test_layer import (
@@ -42,6 +44,8 @@ from .test_layer import (
 
 ROWS_PER_LANE = 32
 CACHE_LEN = 96
+BLOCK_SIZE = 64
+BLOCKS_PER_USER = (CACHE_LEN + 64 + BLOCK_SIZE - 1) // BLOCK_SIZE  # the decode position plus headroom
 REPLAYS = int(os.environ.get("LANE_LAYER_REPLAYS", "20"))
 KNOBS = (
     "GEMMA4_CCL_NUM_LINKS",
@@ -116,31 +120,53 @@ def test_layer_lanes_traced_step(mesh_device, layer_idx, reset_seeds, monkeypatc
         max_seq_len=CACHE_LEN + 64,
         max_local_batch_size=ROWS_PER_LANE,
     )
+    # The engine's paged cache: per column block 0 is the lane scratch, then one block run per row
+    # (test_decode_roofline_lanes.py's pool); the attention's heads come from mesh_config (effective block 64).
+    paged_cfg = PagedAttentionConfig(block_size=BLOCK_SIZE, max_num_blocks=1 + ROWS_PER_LANE * BLOCKS_PER_USER)
     kv_cache = init_kv_cache(
         mesh_device,
         attn_cfg,
         max_batch_size=ROWS_PER_LANE,
         max_seq_len=CACHE_LEN + 64,
+        paged_attention_config=paged_cfg,
         cache_dtype=ttnn.bfloat16,
         mesh_config=mesh_config,
     )
     tt_layer.self_attn.kv_cache = kv_cache
 
-    # the decode frame: 32 rows per lane (lane-sharded over the columns), one row tile per chip
+    # The decode frame exactly as prepare_decode_inputs_host hands it to the layer (lane-major batch of
+    # lanes x 32 rows, each tensor lane-sharded over the columns): hidden rows on dim 2, the RoPE positions
+    # [1, batch] uint32 on dim 1, the cache positions [batch] int32 on dim 0 (the paged cache update and the
+    # decode SDPA read their batch from dim 0: a [1, rows] tensor here is ONE update index for 32 rows, window 5),
+    # the page table [batch, blocks] int32 on dim 0. Checked on the host before anything reaches the device.
     x_torch = torch.randn(1, 1, users, model_args.hidden_size, dtype=torch.bfloat16)
-    x_tt = ttnn.from_torch(
-        x_torch,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=mesh_config.lane_shard_mapper(mesh_device, 2),
+    rope_pos = torch.full((1, users), CACHE_LEN, dtype=torch.int64)
+    cache_pos = torch.full((users,), CACHE_LEN, dtype=torch.int32)
+    page_table = torch.zeros(users, BLOCKS_PER_USER, dtype=torch.int32)
+    for row in range(users):
+        slot = row % ROWS_PER_LANE
+        page_table[row] = torch.arange(1 + slot * BLOCKS_PER_USER, 1 + (slot + 1) * BLOCKS_PER_USER, dtype=torch.int32)
+    columns = check_lane_decode_frame(
+        lanes,
+        ROWS_PER_LANE,
+        hidden=tuple(x_torch.shape),
+        rope_positions=tuple(rope_pos.shape),
+        cache_positions=tuple(cache_pos.shape),
+        page_table=tuple(page_table.shape),
     )
-    position_idx_tt = ttnn.from_torch(
-        torch.full((1, ROWS_PER_LANE), CACHE_LEN, dtype=torch.int32),
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.int32,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    logger.info(f"LANE_LAYER frame per column: {columns}")
+    lane_map = lambda d: mesh_config.lane_shard_mapper(mesh_device, d)  # noqa: E731
+    x_tt = ttnn.from_torch(
+        x_torch, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=lane_map(2)
+    )
+    rope_pos_tt = ttnn.from_torch(
+        rope_pos, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=lane_map(1)
+    )
+    cache_pos_tt = ttnn.from_torch(
+        cache_pos, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=lane_map(0)
+    )
+    page_table_tt = ttnn.from_torch(
+        page_table, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=lane_map(0)
     )
     cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, CACHE_LEN + 64, layer_idx)
 
@@ -148,11 +174,12 @@ def test_layer_lanes_traced_step(mesh_device, layer_idx, reset_seeds, monkeypatc
         return tt_layer(
             x_tt,
             rope_mats=(cos_tt, sin_tt),
-            position_idx=position_idx_tt,
-            page_table=None,
+            position_idx=rope_pos_tt,
+            page_table=page_table_tt,
             kv_cache=kv_cache,
             is_decode=True,
-            token_index=CACHE_LEN,
+            token_index=None,  # per-user RoPE from the positions (the engine passes None under its 2-D rope caches)
+            position_idx_cache=cache_pos_tt,
         )
 
     # warm (compiles every program), then one graph-captured eager step: the program count and the collectives of
