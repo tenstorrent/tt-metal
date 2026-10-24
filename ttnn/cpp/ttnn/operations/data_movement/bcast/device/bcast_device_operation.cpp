@@ -117,6 +117,34 @@ void BcastDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 input_tensor_a.memory_config().is_sharded() && out_mem_config.is_sharded(),
                 "Input and output mem layouts must be the same for bcast H op!");
+            const uint32_t batches_b = input_shape_b.rank() >= 4 ? input_shape_b[-4] : 1;
+            if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED && batches_b > 1) {
+                // Both sharded-H program factories give each block shard a single input_b row, chosen as
+                // height_shard / (height_shards / batches_b). That is the right row only when every batch spans
+                // exactly height_shards / batches_b whole shards. Otherwise rows of one batch get another batch's
+                // row or are never computed, and with fewer height shards than batches the factories divide by 0.
+                const auto shard_spec = input_tensor_a.shard_spec().value();
+                const uint32_t grid_rows = shard_spec.grid.ranges().begin()->end_coord.y + 1;
+                const uint32_t height_shards = shard_spec.orientation == ShardOrientation::ROW_MAJOR
+                                                   ? grid_rows
+                                                   : shard_spec.num_cores() / grid_rows;
+                const uint32_t shard_tile_rows = shard_spec.shape[0] / TILE_HEIGHT;
+                const uint32_t tile_rows = (input_shape_a.rank() >= 4 ? input_shape_a[-4] : 1) *
+                                           (input_shape_a.rank() >= 3 ? input_shape_a[-3] : 1) * input_shape_a[-2] /
+                                           TILE_HEIGHT;
+                const uint32_t tile_rows_per_batch = tile_rows / batches_b;
+                TT_FATAL(
+                    tile_rows % batches_b == 0 && height_shards >= batches_b && shard_tile_rows > 0 &&
+                        tile_rows_per_batch % shard_tile_rows == 0 &&
+                        tile_rows_per_batch / shard_tile_rows == height_shards / batches_b,
+                    "Bcast H with a block-sharded input_a needs each of input_b's {} batches to span whole shards: "
+                    "input_a has {} tile rows ({} per batch) in {} height shards of {} tile rows",
+                    batches_b,
+                    tile_rows,
+                    tile_rows_per_batch,
+                    height_shards,
+                    shard_tile_rows);
+            }
         }
     } else {
         TT_FATAL(

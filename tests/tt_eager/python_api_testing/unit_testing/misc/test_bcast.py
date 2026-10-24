@@ -326,3 +326,42 @@ def test_bcast_hw_sharded_multi_row_col(device, orientation):
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_ref_output.float(), output_tensor, 0.999)
     logger.info(pcc_msg)
     assert passing, pcc_msg
+
+
+# Block-sharded input_a with a batched input_b: both sharded-H factories give each shard one input_b row, chosen as
+# height_shard / (height_shards / batches). With 96-row batches on test_bcast's 8-row shard grid, batch 1's first 32 rows
+# sit in a shard that the formula assigns to batch 0, so they used to get batch 0's row (silently wrong values). Shapes
+# whose batches do not span whole shards are now rejected.
+def test_bcast_h_block_sharded_batches_must_span_whole_shards(device, expect_error):
+    torch.manual_seed(0)
+    shard_grid = (8, 5)
+    if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
+        shard_grid = (4, 5)
+    batches, height, width = 2, 96, 640
+    input_tensor = ttnn.from_torch(
+        torch.rand([batches, 1, height, width], dtype=torch.bfloat16),
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+    )
+    shard_height = _nearest_y(batches * height, shard_grid[0] * 32) // shard_grid[0]
+    in_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=(shard_height, math.ceil(width / shard_grid[1])),
+        core_grid=ttnn.CoreGrid(y=shard_grid[0], x=shard_grid[1]),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_input = ttnn.to_memory_config(input_tensor, memory_config=in_sharded_mem_config)
+    tt_weight = ttnn.from_torch(
+        torch.rand([batches, 1, 1, width]).bfloat16(), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+    )
+    with expect_error(RuntimeError, "span whole shards"):
+        ttnn.bcast(
+            tt_input,
+            tt_weight,
+            ttnn.BcastOpMath.ADD,
+            ttnn.BcastOpDim.H,
+            memory_config=ttnn.get_memory_config(tt_input),
+        )
