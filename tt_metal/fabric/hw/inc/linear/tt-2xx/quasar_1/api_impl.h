@@ -30,7 +30,58 @@ namespace tt::tt_fabric::linear::experimental {
 //     uint8_t i) {}
 
 // --- Unicast write ---
+//
+// Horizon crossbar path: no ERISC hop-by-hop routing.
+// The destination NOC (x, y) and local L1 offset are extracted from
+// noc_unicast_command_header.noc_address (standard NOC address format).
+// The flat address is looked up from horizon_routing_l1_info_t at ROUTING_TABLE_BASE
+// and noc_async_write is issued directly.
+//
+// client_interface and packet_header are unused on this path.
 
+// Overload 1: explicit dst_dev_id + dst_mesh_id (mirrors the Mesh API).
+template <typename FabricSenderType>
+FORCE_INLINE void fabric_unicast_noc_unicast_write(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header) {
+    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
+    [[maybe_unused]] auto* _ci = client_interface;
+    [[maybe_unused]] auto* _ph = packet_header;
+
+    const uint64_t noc_addr = noc_unicast_command_header.noc_address;
+    const uint32_t noc_x = NOC_UNICAST_ADDR_X(noc_addr);
+    const uint32_t noc_y = NOC_UNICAST_ADDR_Y(noc_addr);
+    const uint64_t local_offset = noc_addr & NOC_LOCAL_ADDR_MASK;
+
+    const auto* routing_table =
+        reinterpret_cast<const tt_l1_ptr tt::tt_fabric::horizon_routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    const uint64_t remote_addr = routing_table->flat_addr[dst_mesh_id][dst_dev_id][noc_x][noc_y] + local_offset;
+
+    noc_async_write(src_addr, remote_addr, size);
+}
+
+// Route-manager variant: dst_dev_id / dst_mesh_id come from connection_manager slots.
+FORCE_INLINE void fabric_unicast_noc_unicast_write(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header) {
+    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+        auto& slot = connection_manager.get(i);
+        fabric_unicast_noc_unicast_write(
+            &slot.sender, packet_header, slot.dst_dev_id, slot.dst_mesh_id, src_addr, size, noc_unicast_command_header);
+    });
+}
+
+// Overload 2: num_hops-based (linear API compatibility). Delegates to overload 1.
+// TODO: num_hops is currently forwarded as dst_dev_id with dst_mesh_id=0; replace
+//       with proper hop-to-device conversion once direction encoding is defined.
 template <typename FabricSenderType>
 FORCE_INLINE void fabric_unicast_noc_unicast_write(
     tt_l1_ptr FabricSenderType* client_interface,
@@ -38,7 +89,10 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
-    uint8_t num_hops) {}
+    uint8_t num_hops) {
+    fabric_unicast_noc_unicast_write(
+        client_interface, packet_header, num_hops, 0, src_addr, size, noc_unicast_command_header);
+}
 
 FORCE_INLINE void fabric_unicast_noc_unicast_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
@@ -46,7 +100,13 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
-    uint8_t* num_hops) {}
+    uint8_t* num_hops) {
+    PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
+        auto& slot = connection_manager.get(i);
+        fabric_unicast_noc_unicast_write(
+            &slot.sender, packet_header, src_addr, size, noc_unicast_command_header, num_hops[i]);
+    });
+}
 
 // template <
 //     UnicastWriteUpdateMask UpdateMask = UnicastWriteUpdateMask::None,

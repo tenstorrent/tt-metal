@@ -2768,6 +2768,76 @@ void ControlPlane::write_routing_info_to_devices(
         physical_chip_id,
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
     this->cluster_.get().l1_barrier(physical_chip_id);
+
+    // Horizon-specific routing table: overrides the standard table at the same L1 address.
+    // Uses get_flat_address() to populate flat_addr[dst_device][noc_x][noc_y] for every
+    // reachable core on every destination device.
+    //
+    // TODO: access_points[0] is used for all destinations; verify with ATT mask coverage.
+    // TODO: offset=0 returns the L1-window base (first 1 MB per core); revisit if writes
+    //       beyond 1 MB into a core's L1 are needed.
+    {
+        const auto ip_variant = cluster.get_soc_desc(physical_chip_id).get_arch_descriptor().get_ip_variant();
+        if (ip_variant == tt::IpVariant::HORIZON) {
+            tt::tt_fabric::horizon_routing_l1_info_t horizon_info = {};
+            horizon_info.my_mesh_id = *mesh_id;
+            horizon_info.my_device_id = chip_id;
+            {
+                const auto my_cores =
+                    cluster.get_soc_desc(physical_chip_id).get_cores(CoreType::TENSIX, CoordSystem::NOC0);
+                if (!my_cores.empty()) {
+                    horizon_info.my_noc_x = my_cores[0].x;
+                    horizon_info.my_noc_y = my_cores[0].y;
+                }
+            }
+            for (const auto& [dst_node, dst_phys_id] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
+                if (*dst_node.mesh_id != *mesh_id) {
+                    continue;
+                }
+                const uint32_t dst_chip = dst_node.chip_id;
+                if (dst_chip >= tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH) {
+                    log_warning(
+                        tt::LogFabric,
+                        "Horizon routing table: dst chip {} >= MAX_HORIZON_DEVS_PER_MESH ({}), skipping",
+                        dst_chip,
+                        tt::tt_fabric::MAX_HORIZON_DEVS_PER_MESH);
+                    continue;
+                }
+
+                auto* dst_device = cluster.get_driver()->get_tt_device(dst_phys_id);
+                const auto access_points = dst_device->get_access_points();
+                if (access_points.empty()) {
+                    continue;
+                }
+
+                for (const auto& core : cluster.get_soc_desc(dst_phys_id).get_all_cores(CoordSystem::NOC0)) {
+                    if (core.x >= tt::tt_fabric::MAX_HORIZON_NOC_X || core.y >= tt::tt_fabric::MAX_HORIZON_NOC_Y) {
+                        continue;
+                    }
+                    const auto flat = dst_device->get_flat_address(
+                        access_points[0],
+                        core,
+                        tt::umd::WindowFlags::UnicastWrite,
+                        tt::umd::IoOrdering::Posted,
+                        /*offset=*/0);
+                    if (flat.has_value()) {
+                        horizon_info.flat_addr[0][dst_chip][core.x][core.y] = *flat;
+                    }
+                }
+            }
+
+            write_to_all_cores(
+                *this,
+                this->cluster_,
+                this->hal_,
+                &horizon_info,
+                sizeof(horizon_info),
+                tt::tt_metal::HalL1MemAddrType::ROUTING_TABLE,
+                physical_chip_id,
+                tt::tt_metal::HalProgrammableCoreType::TENSIX);
+            this->cluster_.get().l1_barrier(physical_chip_id);
+        }
+    }
 }
 
 // Write connection info to Tensix cores' L1 on a specific chip

@@ -26,8 +26,10 @@ static constexpr std::uint32_t PACKET_WORD_SIZE_BYTES = 16;
 // Constants for fabric mesh configuration
 static constexpr std::uint32_t MAX_MESH_SIZE = 256;
 static constexpr std::uint32_t MAX_NUM_MESHES = 1024;
-static constexpr uint16_t MAX_HORIZON_MESHES = 1;
-static constexpr uint16_t MAX_HORIZON_DEVS_PER_MESH = 16;
+static constexpr uint32_t MAX_HORIZON_MESHES = 1;
+static constexpr uint32_t MAX_HORIZON_DEVS_PER_MESH = 56;  // (2704-16)/(2*3*8) = 56 devices
+static constexpr uint32_t MAX_HORIZON_NOC_X = 2;           // from horizon_2x3_att_config.h
+static constexpr uint32_t MAX_HORIZON_NOC_Y = 3;           // from horizon_2x3_att_config.h
 
 constexpr std::uint8_t USE_DYNAMIC_CREDIT_ADDR = 255;
 
@@ -1000,30 +1002,35 @@ static_assert(
 // to a remote device's L1 via noc_async_write with a flat 64-bit address.
 // No ERISC hop-by-hop routing is required.
 //
-// Address layout (from ATT, endpoint_shift=26, endpoint_size=6):
-//   bits[25: 0]  = L1 offset (set by caller)
-//   bits[31:26]  = endpoint_id (tile selector, set by caller)
-//   bits[63:32]  = device window (stored here as node_base_address)
+// flat_addr[mesh][device][noc_x][noc_y] holds the full 64-bit flat address for core
+// (noc_x, noc_y) on device `device` in mesh `mesh` at offset 0.  Callers add the
+// L1 byte offset before calling noc_async_write.
 //
-// node_base_address stores bits[63:32] of the remote device's base address.
-// Reconstruct: (uint64_t)node_base_address[mesh][dev] << 32
-//              | (endpoint_id << 26) | l1_offset
+// Budget (MEM_ROUTING_TABLE_SIZE = 2704 bytes):
+//   metadata  :  16 bytes
+//   flat_addr : MAX_HORIZON_MESHES x MAX_HORIZON_DEVS_PER_MESH x MAX_HORIZON_NOC_X x MAX_HORIZON_NOC_Y x 8
+//             =      1     x           56             x         2          x         3          x 8 = 2688 bytes
+//   total     : 2704 bytes  (exact fit, zero waste)
 
 struct horizon_routing_l1_info_t {
-    uint16_t my_mesh_id = 0;
-    uint16_t my_device_id = 0;
-    // bits[63:32] of the flat base address for each (mesh, device) pair.
-    // Entry for this device itself is populated so a core can address its own tiles uniformly.
-    uint32_t node_base_address[MAX_HORIZON_MESHES][MAX_HORIZON_DEVS_PER_MESH] = {};
+    // ---- metadata: 16 bytes ----
+    uint16_t my_mesh_id = 0;    // 2 B
+    uint16_t my_device_id = 0;  // 2 B
+    uint8_t my_noc_x = 0;       // 1 B
+    uint8_t my_noc_y = 0;       // 1 B
+    uint16_t _pad0 = 0;         // 2 B (align to 8 bytes)
+    uint64_t _reserved = 0;     // 8 B (reserved for future offset/window field)
+    // ---- routing table: 2688 bytes ----
+    uint64_t flat_addr[MAX_HORIZON_MESHES][MAX_HORIZON_DEVS_PER_MESH][MAX_HORIZON_NOC_X][MAX_HORIZON_NOC_Y] = {};
 };
-// Total: 4 + 1*16*4 = 68 bytes
+// Total: 16 + 1*56*2*3*8 = 2704 bytes
 
-static_assert(sizeof(horizon_routing_l1_info_t) == 68, "horizon_routing_l1_info_t must be 68 bytes");
+static_assert(sizeof(horizon_routing_l1_info_t) == 2704, "horizon_routing_l1_info_t must be 2704 bytes");
 // Multi-mesh not currently supported on Horizon
 static_assert(MAX_HORIZON_MESHES == 1, "Multi-mesh not currently supported on Horizon");
 
-static_assert(offsetof(horizon_routing_l1_info_t, node_base_address) == 4);
-static_assert(sizeof(horizon_routing_l1_info_t) % 4 == 0);
+static_assert(offsetof(horizon_routing_l1_info_t, flat_addr) == 16);
+static_assert(sizeof(horizon_routing_l1_info_t) % 16 == 0);
 
 // Fabric connection synchronization region in L1
 // Used for multi-RISC synchronization when opening fabric connections
