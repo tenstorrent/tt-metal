@@ -40,8 +40,7 @@ Accuracy criteria
                               test_hardswish)
   silu, swish    : ULP ≤ 2  (near-zero and negative-sigmoid FTZ bands
                               verified explicitly; see test_silu_swish_ops)
-  softsign       : ULP ≤ 2  (near-bf16_max FTZ band verified explicitly;
-                              see test_softsign)
+  softsign       : ULP ≤ 2  (including ±1 saturation up to bf16_max)
   log_sigmoid    : ULP ≤ 2 for x <= 0; PCC ≥ 0.999 for 0 < x <= 170; see
                               test_log_sigmoid for a known kernel bug above 170
   tanhshrink     : ULP ≤ 2 for |x| >= 1; PCC ≥ 0.999 for |x| < 1; see
@@ -215,17 +214,11 @@ def test_silu_swish_ops(device, ttnn_op):
 def test_softsign(device):
     """Exhaustive normal bfloat16 coverage for softsign = x / (1 + |x|).
 
-    The SFPU computes this via reciprocal(1 + |x|); near bf16_max
-    (|x| > ~8.5e37) that intermediate underflows and flushes to 0 instead
-    of the correct ±1 saturation. At the exact threshold, that rounding is
-    architecture-dependent (WH: correct ±1, BH: flushed 0), so only that
-    one boundary magnitude accepts either outcome; everything beyond it
-    must FTZ to 0. Both are verified explicitly.
-
-    ULP ≤ 2 covers the remaining "FTZ-safe" domain. A whole-domain PCC
-    would not constrain the reciprocal path at all here, since the ~46%
-    of that domain already saturating to exactly ±1 (|x| >= 512) is
-    enough alone to satisfy PCC ≥ 0.999 for a badly broken kernel.
+    ULP ≤ 2 over the whole domain, so inputs up to ±bf16_max must saturate
+    to ±1 rather than underflow through reciprocal(1 + |x|). A whole-domain
+    PCC would not constrain the reciprocal path at all here, since the ~46%
+    of that domain already saturating to exactly ±1 (|x| >= 512) is enough
+    alone to satisfy PCC ≥ 0.999 for a badly broken kernel.
     """
     input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)
 
@@ -237,22 +230,7 @@ def test_softsign(device):
     tt_result = ttnn.softsign(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    ftz_threshold = 1.0 / SMALLEST_NORMAL_BF16 - 1.0
-    abs_input = input_tensor.abs().float()
-    # Deep-subnormal band: unambiguous FTZ to 0 on every architecture.
-    near_max = abs_input > ftz_threshold
-    assert_ftz_band(result, near_max, "near-bf16_max FTZ band")
-
-    # Boundary magnitude (|x| == ftz_threshold exactly): normal/subnormal
-    # rounding of the reciprocal is architecture-dependent, so either the
-    # FTZ'd 0 or the mathematically-correct golden (±1) is accepted.
-    boundary = abs_input == ftz_threshold
-    assert boundary.any(), "expected near-bf16_max boundary magnitude to be non-empty for this exhaustive sweep"
-    boundary_ok = (result[boundary] == 0) | (result[boundary] == golden[boundary])
-    assert boundary_ok.all(), "boundary magnitude must be either FTZ'd to 0 or exactly the golden ±1"
-
-    ftz_safe = ~near_max & ~boundary
-    assert_with_ulp(expected_result=golden[ftz_safe], actual_result=result[ftz_safe], ulp_threshold=2)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=2)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
