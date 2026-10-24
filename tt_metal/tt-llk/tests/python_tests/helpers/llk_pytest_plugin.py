@@ -239,6 +239,14 @@ def pytest_addoption(parser):
     )
 
     parser.addoption(
+        "--memory-layout",
+        choices=("normal", "debug"),
+        default=None,
+        help="Select the existing linker layout independently of coverage instrumentation. "
+        "Default: debug with --coverage, otherwise normal.",
+    )
+
+    parser.addoption(
         "--ulp-measure",
         default=None,
         metavar="PATH",
@@ -429,6 +437,10 @@ _UNIFIED_ORDER_FILE: str = "DEFAULT"
 
 def pytest_configure(config):
     _ensure_suite_pythonpath(config)
+    config.addinivalue_line(
+        "markers",
+        "memory_layout(layout): select normal or debug linker layout for this test; explicit --memory-layout takes precedence",
+    )
 
     # Configure loguru log level from CLI option or environment variable.
     log_level = config.getoption("--logging-level", default=None)
@@ -488,6 +500,7 @@ def pytest_configure(config):
         config.getoption("--detailed-artefacts", default=False),
         config.getoption("--no-debug-symbols", default=False),
         config.getoption("--speed-of-light", default=False),
+        memory_layout=config.getoption("--memory-layout", default=None),
     )
 
     worker_id = getattr(config, "workerinput", {}).get("workerid", "master")
@@ -672,7 +685,11 @@ def _collapse_runtime_only_variants(config, items):
             keep.append(item)
             continue
         compile_key_fn = marker.kwargs["compile_key_fn"]
-        key = (item.nodeid.split("[")[0], repr(compile_key_fn(item.callspec.params)))
+        key = (
+            item.nodeid.split("[")[0],
+            repr(compile_key_fn(item.callspec.params)),
+            _item_memory_layout(item),
+        )
         if key not in seen:
             seen.add(key)
             keep.append(item)
@@ -1043,6 +1060,25 @@ def pytest_runtest_teardown(item, nextitem):
         _reset_simulator_pending = True
 
 
+def _item_memory_layout(item):
+    marker = item.get_closest_marker("memory_layout")
+    if marker is not None:
+        if (
+            len(marker.args) != 1
+            or marker.args[0] not in ("normal", "debug")
+            or marker.kwargs
+        ):
+            raise pytest.UsageError(
+                "memory_layout requires one argument: normal or debug"
+            )
+    explicit = item.config.getoption("--memory-layout", default=None)
+    return (
+        explicit
+        or (marker.args[0] if marker else None)
+        or ("debug" if item.config.getoption("--coverage", default=False) else "normal")
+    )
+
+
 def _attach_to_sim_server(server_directory: str) -> None:
     tt_exalens_init.init_ttexalens(simulation_directory=server_directory)
     TestConfig.resolve_worker_tensix_location()
@@ -1059,6 +1095,7 @@ def _fail_xdist_worker(item, msg: str) -> NoReturn:
     pytest.fail(msg, pytrace=False)
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_runtest_setup(item):
     """Start the host on the first test, or restart between tests if requested.
 
@@ -1074,6 +1111,20 @@ def pytest_runtest_setup(item):
         _fail_xdist_worker(
             item, f"Simulation host (PID {_sim_host_pid}) is no longer running."
         )
+
+    if _statically_skipped(item) or item.get_closest_marker("skip"):
+        return
+    layout = _item_memory_layout(item)
+    if TestConfig.uses_debug_memory_layout() != (layout == "debug"):
+        TestConfig.setup_build(
+            Path(os.environ["LLK_HOME"]),
+            item.config.getoption("--coverage", default=False),
+            item.config.getoption("--detailed-artefacts", default=False),
+            item.config.getoption("--no-debug-symbols", default=False),
+            item.config.getoption("--speed-of-light", default=False),
+            memory_layout=layout,
+        )
+        TestConfig.create_build_directories()
 
     if _sim_server is None:
         return
