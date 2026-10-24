@@ -426,8 +426,8 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
                 row = i / num_cols;
                 col = i % num_cols;
             } else {
-                col = i / num_rows;
-                row = i % num_rows;
+                row = i / num_rows;
+                col = i % num_rows;
             }
         }
 
