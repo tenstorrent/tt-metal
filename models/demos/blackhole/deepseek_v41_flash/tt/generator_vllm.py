@@ -144,9 +144,10 @@ def _chunked_prefill_capabilities():
     # the first prefill step of an idle engine is capped at one chunk (plugin TTScheduler._schedule_prefill_only): requests that arrive a few ms later share the NEXT step instead of trailing a lone request
     # that took the whole token budget (a 5 s head start at budget 8192); nothing is held. ``DSV41_PREFILL_FIRST_STEP`` overrides (tokens, 0 = no cap).
     caps["prefill_first_step_tokens"] = int(os.environ.get("DSV41_PREFILL_FIRST_STEP", str(chunk)))
-    if os.environ.get("DSV41_PF_LOOKAHEAD", "1") == "1" and os.environ.get("DSV41_VISION", "0") != "1":
-        # plugin capability prefill_lookahead: every prefill step carries the whole sequence of each request (``prompt_lens`` still marks the end of the piece); ``Model.prefill_interleaved`` builds the
-        # Engram inputs of the next piece's first window while the device replays the last window of this piece. (Image launches keep the old behaviour: the vision book reads the row.)
+    if os.environ.get("DSV41_PF_LOOKAHEAD", "1") == "1":
+        # plugin capability prefill_lookahead: every prefill step carries the whole sequence of each request (``prompt_lens`` still marks the end of the piece) and the plugin says which rows END their
+        # sequence in the step (``prefill_final``); ``Model.prefill_interleaved`` builds the Engram inputs of the next piece's first window while the device replays the last window of this piece and a
+        # step with no final row returns once its windows are enqueued. Image launches too: the vision book only reads ``tokens[:end]`` of a row (lookahead inputs are never built for image prompts).
         caps["prefill_lookahead"] = True
     if _apc_on():
         # the scheduler rounds vLLM's prefix-cache hits down to the grid of the snapshot policy (a hit the model cannot resume from would make it recompute the whole prompt in one call)
