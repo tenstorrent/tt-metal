@@ -117,18 +117,6 @@ ContextId extract_context_id(const distributed::MeshDevice* mesh_device) {
     return mesh_device->impl().get_context_id();
 }
 
-ContextId extract_context_id(const distributed::MeshDevice* mesh_device, const IDevice* device) {
-    ContextId context_id = DEFAULT_CONTEXT_ID;
-    if (mesh_device != nullptr) {
-        context_id = extract_context_id(mesh_device);
-    } else if (device != nullptr) {
-        context_id = extract_context_id(device);
-    } else {
-        TT_FATAL(false, "Both MeshDevice and Device are nullptr");
-    }
-    return context_id;
-}
-
 void MetalContext::initialize_device_manager(
     const std::vector<ChipId>& device_ids,
     uint8_t num_hw_cqs,

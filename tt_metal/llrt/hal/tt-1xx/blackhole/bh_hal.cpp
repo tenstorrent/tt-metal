@@ -528,6 +528,9 @@ void Hal::initialize_bh(
     this->pcie_addr_lower_bound_ = 0x0000000000000000ULL;
     this->pcie_addr_upper_bound_ = 0x13FF'FFFF'FFFF'FFFFULL;
     this->supports_64_bit_pcie_addressing_ = true;
+    // The top 512 MiB of the PCIe tile's NoC address space is its SerDes, PCIe controller and NIU configuration
+    // (same document as above).
+    this->pcie_tile_local_noc_addr_base_ = 0xFFFF'FFFF'E000'0000ULL;
 
     this->noc_x_id_translate_table_ = {
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),
