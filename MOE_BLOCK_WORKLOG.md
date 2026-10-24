@@ -1690,3 +1690,6 @@ Structural (not fixed here):
   multicasts gave a stall at program 150-200 on logical column 11's row 0 / 1 cores of every chip in every variant -
   with no DRAM writes, with no lead on column 11 - a probe artifact around the movers column (never a W multicast
   column in the engine); not chased. The 20 audit sites stay unconverted suspects (knowledge dump section 17).
+- Soaks, ops-head models (10k replays, every 25th checked): M3 640 PCC .9889, DeepSeek V4.1-Flash 640 .9909; with the
+  earlier ones (K3 640 / 1024 / 1280, K3 640 zipf packed, GLM-5.3-Flash 640, GLM-5.3 1024, ring K3 640) every soak
+  tier case is clean.
