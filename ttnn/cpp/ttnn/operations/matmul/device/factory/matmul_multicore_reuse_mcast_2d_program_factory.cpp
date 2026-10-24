@@ -732,6 +732,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
         device.arch(), cores.size(), mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), cores.size(), mm_kernel_defines, throttle_level);
+    // Every matmul_block call of this program runs at the full out_subblock_w x out_subblock_h of its init.
+    operations::matmul::utilities::add_row_mop_define_if_supported(
+        device.arch(), in0_tile, in1_tile, mm_kernel_defines);
 
     if (in0_receiver_interleaved.num_cores() == 0) {
         mm_kernel_in0_sender_interleaved_defines["SKIP_MCAST"] = "1";

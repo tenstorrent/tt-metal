@@ -5,8 +5,12 @@
 #pragma once
 
 #include <bit>
+#include <map>
 #include <optional>
+#include <string>
 #include <vector>
+
+#include <tt-umd/types/arch.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -367,6 +371,20 @@ void validate_matmul_reuse_work_split(
     const MatmulMultiCoreReuseProgramConfig& program_config,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& core_range_set = std::nullopt);
+
+/*
+ * Sets MM_ROW_MOP on a matmul compute kernel's defines where the math LLK can run one MOP per reuse row of each
+ * output subblock instead of one per output tile (api/compute/matmul.h). That removes a per-tile DEST offset
+ * write, MOP restart and SETRWC; the MVMULs, their order and their DEST rows are unchanged, so results are
+ * bit-identical. Supported on Blackhole for full 32x32 in0/in1 tiles. The caller guarantees that every
+ * matmul_block call of the kernel uses the out_subblock_w/out_subblock_h of its matmul_block_init (no narrowed
+ * last subblock). Setting the env var TT_MM_ROW_MOP=0 keeps the per-tile MOP (A/B timing).
+ */
+void add_row_mop_define_if_supported(
+    tt::ARCH arch,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    std::map<std::string, std::string>& mm_kernel_defines);
 
 }  // namespace ttnn::operations::matmul::utilities
 

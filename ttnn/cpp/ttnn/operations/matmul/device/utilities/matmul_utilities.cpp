@@ -5,10 +5,13 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <limits>
 #include <set>
+#include <string_view>
 
 #include "tt-metalium/allocator.hpp"
+#include "tt-metalium/constants.hpp"
 #include "tt-metalium/experimental/device.hpp"
 #include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/hal.hpp"
@@ -329,6 +332,25 @@ void validate_matmul_reuse_work_split(
         "num_output_blocks_total ({}) must be >= num_cores ({}); some cores would have no work",
         num_output_blocks_total,
         num_cores);
+}
+
+void add_row_mop_define_if_supported(
+    tt::ARCH arch,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    std::map<std::string, std::string>& mm_kernel_defines) {
+    const auto is_full_tile = [](const tt::tt_metal::Tile& tile) {
+        return tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH;
+    };
+    const bool full_tiles = is_full_tile(in0_tile) && is_full_tile(in1_tile);
+    if (arch != tt::ARCH::BLACKHOLE || !full_tiles) {
+        return;
+    }
+    const char* row_mop_env = std::getenv("TT_MM_ROW_MOP");
+    if (row_mop_env != nullptr && std::string_view(row_mop_env) == "0") {
+        return;
+    }
+    mm_kernel_defines["MM_ROW_MOP"] = "1";
 }
 
 }  // namespace ttnn::operations::matmul::utilities
