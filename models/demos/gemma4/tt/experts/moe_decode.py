@@ -41,6 +41,43 @@ def moe_decode_kernel_enabled():
     return os.environ.get("GEMMA4_MOE_DECODE_KERNEL", "0") == "1"
 
 
+def moe_compute_custom_enabled() -> bool:
+    """GEMMA4_MOE_COMPUTE_CUSTOM_OP=1: custom_ops/moe_compute (per-expert resident weights, the standalone fabric
+    combine, GEMMA4_MOE_COMPUTE_SKIP_ZERO_SCORES) in place of the shared op's moe_compute - on decode frames only."""
+    return os.environ.get("GEMMA4_MOE_COMPUTE_CUSTOM_OP", "0") == "1"
+
+
+def kernel_decode_frame(mesh_config, rows: int) -> bool:
+    """Whether a decode MoE kernel call carries decode frames (the traced step) rather than a prefill's rows.
+
+    Under lanes the single-user owner prefill is marked by ``mesh_config._g4_single_lane_prefill_owner``: its 128
+    real rows gather to the same R as the 128-user decode frame, so R cannot tell them apart. On the tp-only shapes
+    decode rows are at most one row tile (32).
+    """
+    if mesh_config is not None and getattr(mesh_config, "lane_sharded", False):
+        return getattr(mesh_config, "_g4_single_lane_prefill_owner", None) is None
+    return int(rows) <= 32
+
+
+def moe_compute_impl(decode_frame: bool, custom_enabled: bool) -> str:
+    """Which moe_compute runs a kernel call: the custom op on decode frames when enabled, the shared op otherwise.
+
+    Galaxy window-2 arms (2026-10-24, eager 128-token lane prefill warm median / traced 128-user step): base
+    371 ms / 46.2, fused_all 532 / 32.9, fused_all without the custom op 371 / 40.7, custom op without the skip 529
+    / 45.6, fused_all without the TILE tail 538 / 34.4, GLUE only 373 / 44.4. The custom op (with the skip and the
+    TILE tail) is the decode win and, applied to the 128-row owner prefill, the +160 ms prefill regression: it is
+    scoped to decode frames, the prefill rows keep the shared op.
+    """
+    return "custom" if (decode_frame and custom_enabled) else "shared"
+
+
+def tile_tail_enabled(decode_frame: bool, flag: bool, out_is_tile: bool, batch_per_device: int) -> bool:
+    """GEMMA4_MOE_DECODE_TILE_TAIL=1 (TILE-layout gathers in the kernel tail) applies to decode frames only: on the
+    prefill rows the ROW_MAJOR tail stays (the window-2 no_tail arm: 1.5 ms/step of the decode win, prefill-neutral
+    only together with the shared op)."""
+    return bool(decode_frame and flag and out_is_tile and int(batch_per_device) % 32 == 0)
+
+
 # One TTMoEDecode per mesh, shared by every layer: the module keeps per-instance L1 scratch and semaphores (a
 # per-layer instance x 30 left ~200 KB of resident L1 and its static circular buffers then clashed), and its weights
 # are layered ([L, E, ...], forward(layer_id)). Layers register their HF tensors as they are built; the module is
@@ -97,12 +134,15 @@ class Gemma4MoEDecode:
         gate = torch.stack([gu[:, :I, :].to(torch.bfloat16).transpose(1, 2).contiguous() for gu, _ in layers], dim=0)
         up = torch.stack([gu[:, I:, :].to(torch.bfloat16).transpose(1, 2).contiguous() for gu, _ in layers], dim=0)
         down = torch.stack([d.to(torch.bfloat16).transpose(1, 2).contiguous() for _, d in layers], dim=0)
-        if os.environ.get("GEMMA4_MOE_COMPUTE_CUSTOM_OP", "0") == "1":
-            # custom_ops/moe_compute: per-expert resident weights + the standalone fabric combine (README there)
+        if moe_compute_custom_enabled():
+            # custom_ops/moe_compute: per-expert resident weights + the standalone fabric combine (README there);
+            # decode frames only (moe_compute_impl): the prefill rows run the shared op on the same instance
             from models.demos.gemma4.custom_ops.moe_compute.moe_decode_custom import TTMoEDecodeCustom as _MoECls
         else:
             _MoECls = TTMoEDecode
         reg["module"] = _MoECls(self.mesh_device, tt_config, gate, up, down)
+        # the shared op's pipeline on the same instance and weights (TTMoEDecodeCustom only swaps the compute call)
+        reg["shared_forward"] = TTMoEDecode.forward
         reg["config"] = tt_config
         reg["layers"].clear()
         logger.info(
@@ -174,21 +214,30 @@ class Gemma4MoEDecode:
             scores_memory_config=cfg.dispatch_input_expert_scores_memory_config,
             B=self.batch_per_device,
         )
-        out = self.module.forward(x, scores, ids, layer_id=self.layer_idx)  # [1,1,B,H/cols] per chip
+        out = self._run_module(x, scores, ids, decode=True)  # packed routing only feeds decode frames
         ttnn.deallocate(x)
         ttnn.deallocate(scores)
         ttnn.deallocate(ids)
-        return self._tail(out, R)
+        return self._tail(out, R, decode=True)
 
-    def _tail(self, out, R):
+    def _run_module(self, x, scores, indices, decode: bool):
+        """The kernel's compute: ``moe_compute_impl`` picks the custom op on decode frames, the shared op's forward on
+        prefill rows (the custom module keeps the parent's weights, so the shared pipeline runs on the same instance).
+        """
+        module = self.module
+        if moe_compute_impl(decode, getattr(module, "_custom_op", None) is not None) == "shared":
+            shared = self._reg.get("shared_forward")
+            if shared is not None and getattr(module, "_custom_op", None) is not None:
+                return shared(module, x, scores, indices, layer_id=self.layer_idx)
+        return module.forward(x, scores, indices, layer_id=self.layer_idx)
+
+    def _tail(self, out, R, decode: bool = True):
         """The kernel's per-chip [1,1,B,H/cols] -> the replicated [1,1,R,H] frame rows: all-gather over the columns
         (hidden chunks) and the rows (token blocks). GEMMA4_MOE_DECODE_TILE_TAIL=1 gathers in TILE layout (B is a
-        whole row tile): no untilize before / tilize after the gathers."""
+        whole row tile) on decode frames: no untilize before / tilize after the gathers."""
         B = self.batch_per_device
-        tile_tail = (
-            os.environ.get("GEMMA4_MOE_DECODE_TILE_TAIL", "0") == "1"
-            and out.layout == ttnn.TILE_LAYOUT
-            and B % ttnn.TILE_SIZE == 0
+        tile_tail = tile_tail_enabled(
+            decode, os.environ.get("GEMMA4_MOE_DECODE_TILE_TAIL", "0") == "1", out.layout == ttnn.TILE_LAYOUT, B
         )
         if not tile_tail and out.layout != ttnn.ROW_MAJOR_LAYOUT:
             out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)  # strips any tile padding of a B < 32 slice
@@ -210,10 +259,12 @@ class Gemma4MoEDecode:
             frame = ttnn.slice(frame, [0, 0, 0, 0], [1, 1, R, self.hidden])
         return frame
 
-    def forward(self, hidden, routing):
+    def forward(self, hidden, routing, decode: bool = True):
         """hidden [1,1,R,H] replicated on every chip, R <= frame_rows (padded here); routing is either the dense
         [1,1,R,E] matrix or the router's sparse ``(values [1,1,R,K] bf16, indices [1,1,R,K] uint16)``, which skip
-        the dense pad / layout / per-row top-k here. Returns [1,1,R,H] replicated: the top-k weighted expert sum."""
+        the dense pad / layout / per-row top-k here. Returns [1,1,R,H] replicated: the top-k weighted expert sum.
+        ``decode`` = the rows are decode frames (the traced step): the custom moe_compute op and the TILE tail apply;
+        a prefill's rows (the single-user owner prefill) keep the shared op and the ROW_MAJOR tail."""
         if isinstance(routing, PackedRouting):
             return self._forward_packed(hidden, routing)
         R = int(hidden.shape[2])
@@ -288,11 +339,11 @@ class Gemma4MoEDecode:
             logger.info(f"Gemma4MoEDecode: device memory state dumped to {prefix}*")
         if sparse and os.environ.get("GEMMA4_SPARSE_DEBUG") == "1":
             logger.info("[sparse-dbg] entering kernel forward")
-        out = self.module.forward(x, scores, indices, layer_id=self.layer_idx)  # [1,1,B,H/cols] per chip
+        out = self._run_module(x, scores, indices, decode=decode)  # [1,1,B,H/cols] per chip
         if sparse and os.environ.get("GEMMA4_SPARSE_DEBUG") == "1":
             ttnn.synchronize_device(self.mesh_device)
             logger.info("[sparse-dbg] kernel forward done")
         ttnn.deallocate(x)
         ttnn.deallocate(scores)
         ttnn.deallocate(indices)
-        return self._tail(out, R)
+        return self._tail(out, R, decode=decode)

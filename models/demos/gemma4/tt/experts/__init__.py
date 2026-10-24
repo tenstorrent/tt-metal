@@ -298,7 +298,8 @@ class Gemma4Experts:
                 # for decode frames (served A/B 2026-10-23: kernel vs dispatch for 128-token prefills within 3%).
                 assert not isinstance(routing_owner, tuple), "sparse routing only feeds the decode frames"
                 if self._use_decode_kernel(hidden_owner):
-                    out = self.moe_decode.forward(hidden_owner, routing_owner)  # full sum on every chip
+                    # the single-user prefill's rows: the shared op + ROW_MAJOR tail (decode=False)
+                    out = self.moe_decode.forward(hidden_owner, routing_owner, decode=False)  # full sum on every chip
                 elif self._use_dispatch(hidden_owner):
                     # already the full sum on every chip
                     out = self.dispatch_experts.forward(hidden_owner, routing_owner)
@@ -326,7 +327,13 @@ class Gemma4Experts:
                 out = ttnn.slice(out, [0, 0, 0, 0], [1, 1, rows, out.shape[-1]])
             return out
         if self._use_decode_kernel(hidden_states):
-            return self.moe_decode.forward(hidden_states, dense_routing)  # dense matrix or (values, indices)
+            from models.demos.gemma4.tt.experts.moe_decode import kernel_decode_frame
+
+            return self.moe_decode.forward(  # dense matrix or (values, indices)
+                hidden_states,
+                dense_routing,
+                decode=kernel_decode_frame(self.mesh_config, int(hidden_states.shape[2])),
+            )
         if self._use_local_routed(hidden_states):
             out = self.local_routed.forward(hidden_states, dense_routing)  # dense matrix or (values, indices)
             if self.mesh_config is not None and self.mesh_config.tp > 1:
