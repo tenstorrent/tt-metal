@@ -25,7 +25,7 @@ from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
 from models.tt_dit.pipelines.wan.text_encoder import TextEncoder
 from models.tt_dit.solvers import solver_for_scheduler
 from models.tt_dit.utils import tensor
-from models.tt_dit.utils.checkpoint import resolve_checkpoint
+from models.tt_dit.utils.checkpoint import ensure_cached
 from models.tt_dit.utils.tensor import float32_tensor
 from models.tt_dit.utils.torch_threads import cap_torch_threads_to_half_the_cpus
 
@@ -201,7 +201,7 @@ class WanPipelineConfig:
             num_frames=num_frames,
             cfg_enabled=cfg_enabled,
             max_sequence_length=max_sequence_length,
-            checkpoint_name=resolve_checkpoint(checkpoint_name),
+            checkpoint_name=ensure_cached(checkpoint_name),
         )
 
 
