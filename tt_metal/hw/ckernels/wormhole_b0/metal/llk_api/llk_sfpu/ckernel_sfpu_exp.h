@@ -282,8 +282,12 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) { retur
  * Requires _init_exponential_tti_bf16_() to have been called to configure
  *   - LREG12 = 1/ln2 (sfpi::vConstFloatPrgm0)
  *   - LREG13 = c2    (sfpi::vConstFloatPrgm1)  — poly coeff 4.791750e-15f
+ *
+ * CLAMP_NEGATIVE is ignored. It stays in the signature for source compatibility
+ * (tt-train instantiates this function with it); the lower clamp of xlog2 is
+ * unconditional here (the Blackhole copy masks lanes with a negative xlog2 unconditionally).
  */
-template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE, int ITERATIONS>
+template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE /*maybe_unused*/, int ITERATIONS>
 inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // Iteration-invariant constants:
     //   LREG3 = 127.0f                      (bias term in z = x/ln2 + 127)
@@ -303,18 +307,17 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
 
     // Number of instructions in one iteration of the loop body. Used by
     // TTI_REPLAY/record and TTI_REPLAY/replay below; MUST match exactly the count of
-    // TTI_ instructions emitted between the TTI_REPLAY/record call and the
+    // instructions (TTI_ or TT_) emitted between the TTI_REPLAY/record call and the
     // replay loop, or the replay buffer will misalign.
     //
-    //   Base body:                                                17
-    //     SFPLOAD, SFPMAD, SFPNOP, SFPSWAP, SFPNOP,
+    //   Base body:                                                19
+    //     SFPLOAD, SFPMAD, SFPMOV, SFPSWAP (lower clamp), SFPNOP, SFPSWAP (upper clamp), SFPNOP,
     //     SFPEXEXP, SFPEXMAN8, SFPSHFT, SFPEXMAN9, SFPCAST,
     //     SFPMAD poly1, SFPNOP, SFPMAD poly2,
-    //     SFPLOADI, SFPSETEXP, SFPSTORE. INCRWC
-    //   + SCALE_EN ? 1 : 0                  (SFPMULI scale + SFPNOP)
+    //     SFPLOADI, SFPSETEXP, SFPSTORE, INCRWC
+    //   + SCALE_EN ? 2 : 0                  (SFPMULI scale + SFPNOP)
     //   + is_fp32_dest_acc_en ? 0 : 1       (SFP_STOCH_RND fp32→bf16)
-    //   + CLAMP_NEGATIVE ? 2 : 0            (SFPSWAP + SFPNOP)
-    constexpr unsigned BODY_LEN = 17 + (SCALE_EN ? 2 : 0) + (is_fp32_dest_acc_en ? 0 : 1) + (CLAMP_NEGATIVE ? 2 : 0);
+    constexpr unsigned BODY_LEN = 19 + (SCALE_EN ? 2 : 0) + (is_fp32_dest_acc_en ? 0 : 1);
 
     // Record the loop body into replay buffer slot 0 the first time
     // through. Subsequent iterations replay the recorded sequence, which
@@ -336,26 +339,31 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
 
     if constexpr (SCALE_EN) {
-        // Multiply LREG0 by the BF16 scale immediate in-place.
-        TTI_SFPMULI(exp_base_scale_factor, p_sfpu::LREG0, 0);
+        // Multiply LREG0 by the BF16 scale in-place. The scale is a runtime argument
+        // (exp_tile's uint16_t scale), so the encoding is built at runtime and pushed
+        // through the instruction buffer (TT_ form); TTI_ would need a compile-time
+        // immediate and fails to build for a runtime scale. REPLAY records it like
+        // any other instruction of the body.
+        TT_SFPMULI(exp_base_scale_factor, p_sfpu::LREG0, 0 /*instr_mod1*/);
         TTI_SFPNOP;
     }
 
     // xlog2 = val * (1/ln2) + 127.0f
     TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG3, p_sfpu::LREG0, 0);
 
-    // CLAMP_NEGATIVE is used for performance when callee guarantees
-    // that xlog2 < 0.0 (i.e x < 0)
-    // Numerics are identical whenever that precondition holds. The
-    // upper clamp below is unconditional because no caller advertises an
-    // upper bound on input magnitude.
-    if constexpr (CLAMP_NEGATIVE) {
-        // Lower clamp: xlog2 <- max(xlog2, 0). SFPSWAP cannot reference
-        // the LCONST_0 fixed register directly, so we materialize 0.0 in
-        // LREG1 first. Mode VEC_MIN_MAX puts max(a, b) into the dest LReg.
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-    }
+    // Both clamps are unconditional. The integer trick below (SFPEXEXP /
+    // SFPEXMAN / SFPSHFT) reads xlog2's bit pattern and is only meaningful for
+    // xlog2 >= 0: for a negative xlog2 it shifts the (sign-less) mantissa by
+    // the magnitude's exponent and produces an arbitrary positive value, up
+    // to ~1e21, not 0 and not a negative value a packer ReLU could remove.
+    // CLAMP_NEGATIVE therefore does not disable the lower clamp here; it only
+    // governs the approximate path, as the InputClamping API documents.
+    //
+    // Lower clamp: xlog2 <- max(xlog2, 0). SFPSWAP cannot reference the
+    // LCONST_0 fixed register directly, so we materialize 0.0 in LREG1
+    // first. Mode VEC_MIN_MAX puts max(a, b) into the dest LReg.
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
     TTI_SFPNOP;
 
     // Upper clamp: xlog2 <- min(xlog2, 255). LREG2 holds 255.
