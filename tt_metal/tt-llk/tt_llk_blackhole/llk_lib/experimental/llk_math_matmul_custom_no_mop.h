@@ -447,6 +447,14 @@ inline void _llk_math_matmul_init_no_mop_(
         matmul_configure_mop_custom<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     math::reset_counters(p_setrwc::SET_ABD_F);
+
+    // The no-mop matmul never sets the Src zero-substitution flag itself, so
+    // re-establish the operand-driven DEFAULT here. A preceding copy_init/datacopy op may have left the flag in
+    // PRESERVE. Relying on a reconfig_data_format to clear it is not enough: the metal wrapper
+    // llk_math_reconfig_data_format_srca(old, new) skips the LLK reconfig entirely when old == new format, so on a
+    // same-format reconfig the reset never runs. Without this line MVMUL would inherit a stale keep-denormals flag
+    // (denormal Src results differ). Mirrors _llk_math_matmul_init_ and the other custom matmul inits.
+    math::_configure_default_zero_flag_state_();
 }
 
 inline void _llk_math_matmul_uninit_no_mop_()
@@ -465,6 +473,17 @@ inline void _llk_math_matmul_no_mop_(
     const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
     const bool partial_face            = false)
 {
+    // Zero-flag leak guard. MVMUL reads ALU_ACC_CTRL_Zero_Flag_disabled_src, which for
+    // denormal Src operands changes the result (flush vs keep). The no-mop matmul is a "runs-in-DEFAULT" op:
+    // it never sets the flag itself and relies on its init / hw_configure / a format-changing reconfig having
+    // established the operand-driven DEFAULT. If a prior copy_init/datacopy op left the flag in PRESERVE and
+    // neither the init nor a format-changing reconfig ran before this call, MVMUL silently keeps denormals.
+    // This assert catches exactly that leak (fires only under LLK asserts).
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "matmul_no_mop: Src zero-substitution flag does not hold the operand-driven value — a prior op (copy_init/datacopy) left "
+        "a keep flag before MVMUL without a format-changing reconfig; denormal Src results will differ");
+
     const bool reuse_a                = ct_dim >= rt_dim;
     const std::uint32_t t_dim         = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim       = reuse_a ? ct_dim : rt_dim; // reuse-dim
