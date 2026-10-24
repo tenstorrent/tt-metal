@@ -99,3 +99,11 @@
 - Gate: PCC 0.999995, rel vs CPU 0.0029 (limit 0.0056), worst column 2415 at 0.0149 vs 0.0279, auto_margin_min 1.87,
   host FLOPs 0.
 - Re-run: `bfw job check --task C.attn_dense.mlp --gate-only`.
+
+## C.attn_dense.mlp_residual (layer 0): PASS
+
+- Reuses `tt/residual.py` `ResidualAdd` (one `ttnn.add`, bf16, DRAM); `device_component` routes `mlp_residual` to the
+  same `_residual_component` as `attn_residual`. Operands are the local `[1, 1, 160, 4096]` residual rows (the MLP ends
+  with its TP reduce_scatter), so no collective.
+- Gate: PCC 0.999997, auto_margin_min 2.00, 1 ttnn op, host FLOPs 0.
+- Re-run: `bfw job check --task C.attn_dense.mlp_residual --gate-only`.

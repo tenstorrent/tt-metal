@@ -144,7 +144,7 @@ def device_component(mesh, spec, layer, step):
         return _norm_component(mesh, spec, layer, "input_layernorm.weight")
     if step == "attention":
         return _attention_component(mesh, spec, layer)
-    if step == "attn_residual":
+    if step in ("attn_residual", "mlp_residual"):
         return _residual_component(mesh)
     if step == "ffn_norm":
         return _norm_component(mesh, spec, layer, "post_attention_layernorm.weight")
