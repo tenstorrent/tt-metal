@@ -12,12 +12,14 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/common/types/fabric_directions.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <algorithm>
 #include <cstddef>
+#include <memory>
 #include <set>
 #include <unordered_set>
 
@@ -68,6 +70,7 @@ struct AllToAllStreamSchedule {
     std::vector<std::vector<std::vector<uint32_t>>> block_strides;
     std::vector<std::vector<std::vector<uint32_t>>> completion_flags;
     uint32_t semaphore_sent = 0;
+    std::vector<std::array<uint32_t, 2>> relay_completions;
 };
 
 AllToAllStreamSchedule build_stream_schedule(
@@ -81,6 +84,7 @@ AllToAllStreamSchedule build_stream_schedule(
     bool is_ring,
     bool is_fabric_2d,
     bool split_antipode_across_arcs,
+    bool relay_antipode,
     bool use_direction_owned_schedule,
     bool use_bank_owned_schedule,
     uint32_t workers_per_direction,
@@ -99,6 +103,7 @@ AllToAllStreamSchedule build_stream_schedule(
         .block_ends = std::vector<std::vector<std::vector<uint32_t>>>(num_senders_per_link),
         .block_strides = std::vector<std::vector<std::vector<uint32_t>>>(num_senders_per_link),
         .completion_flags = std::vector<std::vector<std::vector<uint32_t>>>(num_senders_per_link),
+        .relay_completions = std::vector<std::array<uint32_t, 2>>(num_links, {0, 0}),
     };
     for (size_t stream = 0; stream < num_senders_per_link; ++stream) {
         schedule.block_starts[stream].resize(num_links);
@@ -165,6 +170,11 @@ AllToAllStreamSchedule build_stream_schedule(
                 schedule.device_offsets[sender_stream].push_back(device_offset);
                 destination_groups[sender_stream].push_back(target_device);
             }
+        }
+        if (relay_antipode) {
+            std::stable_partition(ring_ordered_offsets.begin(), ring_ordered_offsets.end(), [&](int32_t offset) {
+                return std::abs(offset) * 2 == static_cast<int32_t>(operation_attributes.num_devices);
+            });
         }
     } else {
         // Keep a common global order on every source, but alternate destinations from opposite ends of the line.
@@ -296,7 +306,11 @@ AllToAllStreamSchedule build_stream_schedule(
                                                  : (!has_next_nonempty_offset || device_offset != next_nonempty_offset);
                 if (target_complete) {
                     schedule.completion_flags[stream][link][schedule_index] = true;
-                    ++schedule.semaphore_sent;
+                    if (relay_antipode && std::abs(device_offset) * 2 == operation_attributes.num_devices) {
+                        ++schedule.relay_completions[link][device_offset > 0 ? 0 : 1];
+                    } else {
+                        ++schedule.semaphore_sent;
+                    }
                 }
                 has_next_nonempty_offset = true;
                 next_nonempty_offset = device_offset;
@@ -331,7 +345,9 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     const AllToAllAsyncGenericInputs& tensor_args,
     Tensor& tensor_return_value,
     const tt::tt_metal::GlobalSemaphore& init_barrier_semaphore,
-    const tt::tt_metal::GlobalSemaphore& final_barrier_semaphore) {
+    const tt::tt_metal::GlobalSemaphore& final_barrier_semaphore,
+    const Tensor* relay_staging,
+    const tt::tt_metal::GlobalSemaphore* forward_semaphore) {
     log_debug(tt::LogOp, "DEBUG: build_all_to_all_async_generic_program_descriptor is called");
 
     uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
@@ -495,9 +511,6 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     }
     const uint32_t num_direction_groups = static_cast<uint32_t>(direction_group_to_physical_direction.size());
     TT_FATAL(num_direction_groups > 0, "All-to-all collective has no remote direction groups");
-    // Fabric2D route selection and encoding are owned by Fabric. Until Fabric exposes an arc-constrained routing API,
-    // send each antipodal destination through canonical unicast routing instead of constructing a route in TTNN.
-    const bool split_antipode_across_arcs = is_ring && !is_fabric_2d;
 
     const uint32_t max_useful_workers_per_direction =
         is_ring ? preferred_workers_per_direction
@@ -545,8 +558,23 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     const size_t num_senders_per_link = use_direction_owned_schedule
                                             ? direction_senders_per_link
                                             : (available_worker_cores >= 2 * routing.num_links ? 2 : 1);
+    constexpr uint32_t num_relay_signs = 2;
+    bool ring_is_local = true;
+    for (uint32_t ring_device = 0; ring_device < operation_attributes.num_devices && ring_is_local; ++ring_device) {
+        MeshCoordinate ring_coord = mesh_coordinate;
+        ring_coord[cluster_axis] = ring_device;
+        ring_is_local = device->is_local(ring_coord);
+    }
+    const bool relay_candidate =
+        relay_staging != nullptr && forward_semaphore != nullptr && is_fabric_2d && is_ring &&
+        routing.axis_is_straight && operation_attributes.num_devices == 4 && num_direction_groups == 2 &&
+        use_bank_owned_schedule && use_worker_mux && reader_has_extra_half_tile == 0 &&
+        writer_has_extra_half_tile == 0 &&
+        (direction_total_cores_per_link + num_relay_signs) * routing.num_links <= available_worker_cores &&
+        ring_is_local;
     const uint32_t total_cores_per_link =
-        use_direction_owned_schedule ? direction_total_cores_per_link : num_senders_per_link;
+        use_direction_owned_schedule ? direction_total_cores_per_link + (relay_candidate ? num_relay_signs : 0)
+                                     : num_senders_per_link;
     const auto [all_worker_core_range, all_worker_cores] = ttnn::ccl::choose_worker_cores(
         routing.num_links, total_cores_per_link, device, operation_attributes.sub_device_id);
     (void)all_worker_core_range;
@@ -590,6 +618,70 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     }
     const CoreRangeSet sender_worker_core_range(sender_worker_core_set);
 
+    const CoreCoord drain_sync_logical_core = sender_worker_cores[0];
+    const auto drain_sync_core = is_fabric_2d
+                                     ? coordinate_device->worker_core_from_logical_core(drain_sync_logical_core)
+                                     : device->worker_core_from_logical_core(drain_sync_logical_core);
+    size_t drain_candidate_index = 0;
+    if (is_fabric_2d) {
+        const auto candidate_it = std::find(
+            operation_attributes.drain_logical_core_candidates.begin(),
+            operation_attributes.drain_logical_core_candidates.end(),
+            drain_sync_logical_core);
+        TT_FATAL(
+            candidate_it != operation_attributes.drain_logical_core_candidates.end(),
+            "All-to-all drain logical core {} is not one of the exchanged candidates",
+            drain_sync_logical_core);
+        drain_candidate_index = std::distance(operation_attributes.drain_logical_core_candidates.begin(), candidate_it);
+        TT_FATAL(
+            operation_attributes.drain_virtual_cores.size() ==
+                device->shape().mesh_size() * operation_attributes.drain_logical_core_candidates.size(),
+            "All-to-all drain-core map has {} entries for {} nodes and {} candidates",
+            operation_attributes.drain_virtual_cores.size(),
+            device->shape().mesh_size(),
+            operation_attributes.drain_logical_core_candidates.size());
+    }
+    auto get_target_drain_core = [&](const MeshCoordinate& target_coord) {
+        const size_t target_index =
+            target_coord.to_linear_index(device->shape()) * operation_attributes.drain_logical_core_candidates.size() +
+            drain_candidate_index;
+        TT_FATAL(
+            target_index < operation_attributes.drain_virtual_cores.size(),
+            "Missing all-to-all drain core for mesh coordinate {}",
+            target_coord);
+        return operation_attributes.drain_virtual_cores[target_index];
+    };
+    bool use_multicast_initialization = is_fabric_2d && routing.axis_is_straight;
+    if (use_multicast_initialization) {
+        // Multicast is valid only on a physically straight axis and when every destination maps the drain semaphore
+        // to the same harvested worker. Bent axes and heterogeneous harvesting use destination-specific unicasts.
+        for (uint32_t target_device = 0;
+             target_device < operation_attributes.num_devices && use_multicast_initialization;
+             ++target_device) {
+            MeshCoordinate target_coord = mesh_coordinate;
+            target_coord[cluster_axis] = target_device;
+            use_multicast_initialization = get_target_drain_core(target_coord) == drain_sync_core;
+        }
+    }
+
+    const bool relay_antipode = relay_candidate && use_multicast_initialization;
+    // Fabric2D route selection and encoding are owned by Fabric. Until Fabric exposes an arc-constrained routing API,
+    // send each antipodal destination through canonical unicast routing instead of constructing a route in TTNN.
+    const bool split_antipode_across_arcs = is_ring && (!is_fabric_2d || relay_antipode);
+    std::array<std::vector<CoreCoord>, num_relay_signs> forwarder_cores;
+    std::set<CoreRange> worker_cb_core_set = sender_worker_core_set;
+    if (relay_antipode) {
+        for (uint32_t link = 0; link < routing.num_links; ++link) {
+            for (uint32_t sign = 0; sign < num_relay_signs; ++sign) {
+                const CoreCoord& core =
+                    all_worker_cores[link * total_cores_per_link + direction_total_cores_per_link + sign];
+                forwarder_cores[sign].push_back(core);
+                worker_cb_core_set.emplace(core);
+            }
+        }
+    }
+    const CoreRangeSet worker_cb_core_range(worker_cb_core_set);
+
     // Create CB
     // Three packet slots provide reader/writer overlap without coupling pipeline depth to payload/page geometry.
     // In particular, a one-page payload still needs multiple slots to avoid fully serializing both kernels.
@@ -599,7 +691,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
 
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = cb_size,
-        .core_ranges = sender_worker_core_range,
+        .core_ranges = worker_cb_core_range,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tt::CB::c_in0),
             .data_format = data_format,
@@ -613,7 +705,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     const uint32_t num_packet_headers_storable = 4;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = num_packet_headers_storable * packet_header_size_bytes * 2,
-        .core_ranges = sender_worker_core_range,
+        .core_ranges = worker_cb_core_range,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(reserved_packet_header_CB_index),
             .data_format = tt::DataFormat::RawUInt32,
@@ -664,6 +756,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
         is_ring,
         is_fabric_2d,
         split_antipode_across_arcs,
+        relay_antipode,
         use_direction_owned_schedule,
         use_bank_owned_schedule,
         workers_per_direction,
@@ -682,6 +775,25 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     const auto& block_strides = stream_schedule.block_strides;
     const auto& completion_flags = stream_schedule.completion_flags;
     const uint32_t semaphore_sent = stream_schedule.semaphore_sent;
+    auto relay_phases = [&](uint32_t link, uint32_t source_index, uint32_t sign) {
+        std::vector<uint32_t> phases;
+        for (uint32_t phase = 0; phase < banks_owned_by_link(num_dram_banks, routing.num_links, link); ++phase) {
+            if ((phase + source_index) % 2 == sign) {
+                phases.push_back(phase);
+            }
+        }
+        return phases;
+    };
+    uint32_t semaphore_expected_value = semaphore_sent;
+    if (relay_antipode) {
+        const uint32_t antipode_index =
+            (device_index + operation_attributes.num_devices / 2) % operation_attributes.num_devices;
+        for (uint32_t link = 0; link < routing.num_links; ++link) {
+            for (uint32_t sign = 0; sign < num_relay_signs; ++sign) {
+                semaphore_expected_value += relay_phases(link, antipode_index, sign).empty() ? 0 : 1;
+            }
+        }
+    }
     std::vector<CoreRangeSet> sender_stream_core_ranges(num_senders_per_link);
     for (uint32_t core_id = 0; core_id < sender_worker_cores.size(); ++core_id) {
         const auto& core = sender_worker_cores[core_id];
@@ -719,7 +831,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     }
 
     constexpr uint8_t num_mux_buffers_per_channel = 2;
-    const uint32_t mux_config_clients = std::max(1u, workers_per_direction);
+    const uint32_t mux_config_clients = std::max(1u, workers_per_direction) + (relay_antipode ? 1 : 0);
     // The mux stays below the floor of the L1_SMALL region, where carried semaphores live (#56769).
     const size_t mux_l1_base_address = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_l1_small_floor_address = ttnn::ccl::l1_small_floor_address(*device);
@@ -837,82 +949,48 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
         }
     }
 
-    const CoreCoord drain_sync_logical_core = sender_worker_cores[0];
-    const auto drain_sync_core = is_fabric_2d
-                                     ? coordinate_device->worker_core_from_logical_core(drain_sync_logical_core)
-                                     : device->worker_core_from_logical_core(drain_sync_logical_core);
-    size_t drain_candidate_index = 0;
-    if (is_fabric_2d) {
-        const auto candidate_it = std::find(
-            operation_attributes.drain_logical_core_candidates.begin(),
-            operation_attributes.drain_logical_core_candidates.end(),
-            drain_sync_logical_core);
-        TT_FATAL(
-            candidate_it != operation_attributes.drain_logical_core_candidates.end(),
-            "All-to-all drain logical core {} is not one of the exchanged candidates",
-            drain_sync_logical_core);
-        drain_candidate_index = std::distance(operation_attributes.drain_logical_core_candidates.begin(), candidate_it);
-        TT_FATAL(
-            operation_attributes.drain_virtual_cores.size() ==
-                device->shape().mesh_size() * operation_attributes.drain_logical_core_candidates.size(),
-            "All-to-all drain-core map has {} entries for {} nodes and {} candidates",
-            operation_attributes.drain_virtual_cores.size(),
-            device->shape().mesh_size(),
-            operation_attributes.drain_logical_core_candidates.size());
-    }
-    auto get_target_drain_core = [&](const MeshCoordinate& target_coord) {
-        const size_t target_index =
-            target_coord.to_linear_index(device->shape()) * operation_attributes.drain_logical_core_candidates.size() +
-            drain_candidate_index;
-        TT_FATAL(
-            target_index < operation_attributes.drain_virtual_cores.size(),
-            "Missing all-to-all drain core for mesh coordinate {}",
-            target_coord);
-        return operation_attributes.drain_virtual_cores[target_index];
+    auto make_writer_compile_args = [&](uint32_t source_device_index,
+                                        uint32_t expected_completions,
+                                        uint32_t direction_mask,
+                                        bool uses_mux,
+                                        bool is_forwarder) {
+        std::vector<uint32_t> sender_writer_compile_args = {
+            tt::CB::c_in0,                                      // cb0_id
+            source_device_index,                                // device_index
+            operation_attributes.num_devices,                   // num_devices
+            output_shape[operation_attributes.in_dim],          // concat_dim_size
+            dst_in_dims,                                        // inner_dims_size
+            writer_has_extra_half_tile,                         // has_writer_tail
+            page_size,                                          // intermediate_page_size
+            reserved_packet_header_CB_index,                    // reserved_packet_header_cb_id
+            expected_completions,                               // semaphore_expected_value
+            concat_num_tiles,                                   // concat_num_tiles
+            (concat_num_half_tiles * source_device_index) / 2,  // full_block_offset
+            static_cast<uint32_t>(effective_topology),          // topology
+            cluster_axis,                                       // replicate_axis
+            sender_device_fabric_node_id.chip_id,               // source_chip_id
+            *sender_device_fabric_node_id.mesh_id,              // source_mesh_id
+            is_fabric_2d,                                       // is_fabric_2d
+            direction_mask,                                     // fabric_direction_mask
+            number_pages_per_packet,                            // max_pages_per_packet
+            use_multicast_initialization                        // use_multicast_initialization
+        };
+
+        tt::tt_metal::TensorAccessorArgs(tensor_return_value.buffer()).append_to(sender_writer_compile_args);
+        sender_writer_compile_args.push_back(uses_mux);
+        sender_writer_compile_args.push_back(workers_per_direction);
+        sender_writer_compile_args.push_back(relay_antipode);
+        sender_writer_compile_args.push_back(is_forwarder);
+        return sender_writer_compile_args;
     };
-    bool use_multicast_initialization = is_fabric_2d && routing.axis_is_straight;
-    if (use_multicast_initialization) {
-        // Multicast is valid only on a physically straight axis and when every destination maps the drain semaphore
-        // to the same harvested worker. Bent axes and heterogeneous harvesting use destination-specific unicasts.
-        for (uint32_t target_device = 0;
-             target_device < operation_attributes.num_devices && use_multicast_initialization;
-             ++target_device) {
-            MeshCoordinate target_coord = mesh_coordinate;
-            target_coord[cluster_axis] = target_device;
-            use_multicast_initialization = get_target_drain_core(target_coord) == drain_sync_core;
-        }
-    }
 
     std::vector<tt::tt_metal::KernelHandle> sender_writer_kernel_ids;
     sender_writer_kernel_ids.reserve(num_senders_per_link);
     for (size_t stream = 0; stream < num_senders_per_link; ++stream) {
-        std::vector<uint32_t> sender_writer_compile_args = {
-            tt::CB::c_in0,                               // cb0_id
-            device_index,                                // device_index
-            operation_attributes.num_devices,            // num_devices
-            output_shape[operation_attributes.in_dim],   // concat_dim_size
-            dst_in_dims,                                 // inner_dims_size
-            writer_has_extra_half_tile,                  // has_writer_tail
-            page_size,                                   // intermediate_page_size
-            reserved_packet_header_CB_index,             // reserved_packet_header_cb_id
-            semaphore_sent,                              // semaphore_expected_value
-            concat_num_tiles,                            // concat_num_tiles
-            (concat_num_half_tiles * device_index) / 2,  // full_block_offset
-            static_cast<uint32_t>(effective_topology),   // topology
-            cluster_axis,                                // replicate_axis
-            sender_device_fabric_node_id.chip_id,        // source_chip_id
-            *sender_device_fabric_node_id.mesh_id,       // source_mesh_id
-            is_fabric_2d,                                // is_fabric_2d
-            sender_stream_direction_masks[stream],       // fabric_direction_mask
-            number_pages_per_packet,                     // max_pages_per_packet
-            use_multicast_initialization                 // use_multicast_initialization
-        };
-
-        tt::tt_metal::TensorAccessorArgs(tensor_return_value.buffer()).append_to(sender_writer_compile_args);
         const bool stream_uses_mux = use_worker_mux && stream < num_direction_groups * workers_per_direction &&
                                      sender_stream_direction_masks[stream] != 0;
-        sender_writer_compile_args.push_back(stream_uses_mux);
-        sender_writer_compile_args.push_back(workers_per_direction);
+        auto sender_writer_compile_args = make_writer_compile_args(
+            device_index, semaphore_expected_value, sender_stream_direction_masks[stream], stream_uses_mux, false);
 
         tt::tt_metal::KernelDescriptor sender_writer_kernel;
         sender_writer_kernel.kernel_source =
@@ -932,17 +1010,24 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
         reader_common_args.push_back(tensor_args.input_tensor.buffer());
         desc.kernels[sender_reader_kernel_id].emplace_common_runtime_args(reader_common_args);
     }
-    for (const auto kernel_id : sender_writer_kernel_ids) {
+    auto set_writer_common_args = [&](tt::tt_metal::KernelHandle kernel_id) {
         tt::tt_metal::KernelDescriptor::RTArgList writer_common_args;
         writer_common_args.push_back(tensor_return_value.buffer());
         // clang-format off
         writer_common_args.push_back(static_cast<uint32_t>(init_barrier_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
         writer_common_args.push_back(static_cast<uint32_t>(final_barrier_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
+        if (relay_antipode) {
+            writer_common_args.push_back(relay_staging->buffer());
+            writer_common_args.push_back(static_cast<uint32_t>(forward_semaphore->address()));  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
+        }
         // clang-format on
         desc.kernels[kernel_id].emplace_common_runtime_args(writer_common_args);
+    };
+    for (const auto kernel_id : sender_writer_kernel_ids) {
+        set_writer_common_args(kernel_id);
     }
 
-    CoreRange sender_box = sender_worker_core_range.bounding_box();
+    CoreRange sender_box = worker_cb_core_range.bounding_box();
     // Swap start and end coord
     // MeshDevice translates through a representative chip, which is insufficient when Galaxy chips have different
     // Tensix harvesting maps. These addresses are consumed by the program at mesh_coordinate, so translate them on
@@ -952,6 +1037,31 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
     const uint32_t mcast_dest_noc_start_y = coordinate_device->worker_core_from_logical_core(sender_box.end_coord).y;
     const uint32_t mcast_dest_noc_end_y = coordinate_device->worker_core_from_logical_core(sender_box.start_coord).y;
     const uint32_t mcast_size = sender_box.size();
+
+    auto append_relay_target_args = [&](std::vector<uint32_t>& args, int32_t device_offset, uint32_t link) {
+        if (std::abs(device_offset) * 2 != static_cast<int32_t>(operation_attributes.num_devices)) {
+            args.insert(args.end(), {0, 0, 0, 0, 0});
+            return;
+        }
+        const uint32_t sign = device_offset > 0 ? 0 : 1;
+        const auto relay_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            tensor_args.input_tensor,
+            mesh_coordinate,
+            sign == 0 ? 1 : -1,
+            effective_topology,
+            operation_attributes.cluster_axis);
+        TT_FATAL(relay_coord.has_value(), "No all-to-all relay neighbor for device offset {}", device_offset);
+        const auto relay_node_id = device->get_fabric_node_id(*relay_coord);
+        const auto forwarder_core = device->get_device(*relay_coord)
+                                        ->worker_core_from_logical_core(
+                                            all_worker_cores
+                                                [link * total_cores_per_link + direction_total_cores_per_link + sign]);
+        args.push_back(1);
+        args.push_back(*relay_node_id.mesh_id);
+        args.push_back(relay_node_id.chip_id);
+        args.push_back(static_cast<uint32_t>(forwarder_core.x));
+        args.push_back(static_cast<uint32_t>(forwarder_core.y));
+    };
 
     for (uint32_t core_id = 0; core_id < sender_worker_cores.size(); ++core_id) {
         const auto& core = sender_worker_cores[core_id];
@@ -1013,6 +1123,9 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
                 // The low-latency 1D header uses the second route field as a hop count.
                 sender_writer_rt_args.push_back(0);
                 sender_writer_rt_args.push_back(std::abs(device_offset));
+            }
+            if (relay_antipode) {
+                append_relay_target_args(sender_writer_rt_args, device_offset, link);
             }
         }
         const bool is_remote_sender = sender_stream != local_sender_stream || num_senders_per_link == 1;
@@ -1101,6 +1214,159 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
         }
     }
 
+    for (uint32_t sign = 0; relay_antipode && sign < num_relay_signs; ++sign) {
+        const int32_t relay_direction = sign == 0 ? 1 : -1;
+        const auto source_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            tensor_args.input_tensor,
+            mesh_coordinate,
+            -relay_direction,
+            effective_topology,
+            operation_attributes.cluster_axis);
+        const auto destination_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            tensor_args.input_tensor,
+            mesh_coordinate,
+            relay_direction,
+            effective_topology,
+            operation_attributes.cluster_axis);
+        TT_FATAL(
+            source_coord.has_value() && destination_coord.has_value(),
+            "All-to-all relay on {} has no ring neighbors",
+            mesh_coordinate);
+        const uint32_t source_index = ttnn::ccl::get_linearized_index_from_physical_coord(
+            tensor_args.input_tensor, *source_coord, operation_attributes.cluster_axis);
+        const auto source_schedule = build_stream_schedule(
+            operation_attributes,
+            routing.num_links,
+            tensor_args.input_tensor,
+            *source_coord,
+            device->get_fabric_node_id(*source_coord),
+            effective_topology,
+            source_index,
+            is_ring,
+            is_fabric_2d,
+            split_antipode_across_arcs,
+            relay_antipode,
+            use_direction_owned_schedule,
+            use_bank_owned_schedule,
+            workers_per_direction,
+            num_senders_per_link,
+            local_sender_stream,
+            num_direction_groups,
+            direction_group_to_physical_direction,
+            physical_direction_to_group,
+            num_dram_banks,
+            blocks_per_core,
+            num_blocks,
+            block_stride);
+        const auto destination_node_id = device->get_fabric_node_id(*destination_coord);
+        const auto direction =
+            tt::tt_fabric::get_eth_forwarding_direction(sender_device_fabric_node_id, destination_node_id);
+        TT_FATAL(direction.has_value(), "No Fabric2D direction for all-to-all relay to {}", destination_node_id);
+        const int32_t direction_group = physical_direction_to_group[static_cast<uint32_t>(*direction)];
+        TT_FATAL(
+            direction_group >= 0 && sender_stream_direction_masks[direction_group * workers_per_direction] != 0,
+            "All-to-all relay direction {} has no active mux",
+            static_cast<uint32_t>(*direction));
+        const auto destination_drain_core = get_target_drain_core(*destination_coord);
+        const CoreRangeSet forwarder_core_range(
+            std::set<CoreRange>(forwarder_cores[sign].begin(), forwarder_cores[sign].end()));
+
+        tt::tt_metal::KernelDescriptor forwarder_writer_kernel;
+        forwarder_writer_kernel.kernel_source =
+            "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/kernels/"
+            "all_to_all_sender_writer.cpp";
+        forwarder_writer_kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+        forwarder_writer_kernel.core_ranges = forwarder_core_range;
+        forwarder_writer_kernel.compile_time_args =
+            make_writer_compile_args(source_index, 0, 1U << static_cast<uint32_t>(*direction), true, true);
+        forwarder_writer_kernel.config = tt::tt_metal::WriterConfigDescriptor{};
+        const auto forwarder_writer_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
+        desc.kernels.push_back(std::move(forwarder_writer_kernel));
+        set_writer_common_args(forwarder_writer_kernel_id);
+
+        std::vector<uint32_t> forward_reader_compile_args = {
+            tt::CB::c_in0,
+            page_size,
+            number_pages_per_packet,
+            output_shape[operation_attributes.in_dim],
+            dst_in_dims,
+            concat_num_tiles,
+            (concat_num_half_tiles * source_index) / 2};
+        tt::tt_metal::TensorAccessorArgs(relay_staging->buffer()).append_to(forward_reader_compile_args);
+        tt::tt_metal::KernelDescriptor forward_reader_kernel;
+        forward_reader_kernel.kernel_source =
+            "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/kernels/"
+            "all_to_all_forward_reader.cpp";
+        forward_reader_kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+        forward_reader_kernel.core_ranges = forwarder_core_range;
+        forward_reader_kernel.compile_time_args = std::move(forward_reader_compile_args);
+        forward_reader_kernel.config = tt::tt_metal::ReaderConfigDescriptor{};
+        const auto forward_reader_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
+        desc.kernels.push_back(std::move(forward_reader_kernel));
+        {
+            tt::tt_metal::KernelDescriptor::RTArgList forward_reader_common_args;
+            forward_reader_common_args.push_back(relay_staging->buffer());
+            // clang-format off
+            forward_reader_common_args.push_back(static_cast<uint32_t>(forward_semaphore->address()));  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
+            // clang-format on
+            desc.kernels[forward_reader_kernel_id].emplace_common_runtime_args(forward_reader_common_args);
+        }
+
+        for (uint32_t link = 0; link < routing.num_links; ++link) {
+            const CoreCoord& core = forwarder_cores[sign][link];
+            const auto phases = relay_phases(link, source_index, sign);
+            std::vector<uint32_t> forward_reader_rt_args = {
+                source_schedule.relay_completions[link][sign], static_cast<uint32_t>(phases.size())};
+            std::vector<uint32_t> forwarder_writer_rt_args = {
+                num_senders_per_link + sign,
+                link,
+                mcast_dest_noc_start_x,
+                mcast_dest_noc_start_y,
+                mcast_dest_noc_end_x,
+                mcast_dest_noc_end_y,
+                mcast_size,
+                drain_sync_core.x,
+                drain_sync_core.y,
+                phases.size(),
+            };
+            for (uint32_t i = 0; i < phases.size(); ++i) {
+                const uint32_t block_start = phases[i] * routing.num_links + link;
+                forward_reader_rt_args.insert(forward_reader_rt_args.end(), {block_start, num_blocks, block_stride});
+                forwarder_writer_rt_args.insert(
+                    forwarder_writer_rt_args.end(),
+                    {static_cast<uint32_t>(2 * relay_direction),
+                     block_start,
+                     num_blocks,
+                     block_stride,
+                     i + 1 == phases.size(),
+                     *destination_node_id.mesh_id,
+                     destination_node_id.chip_id,
+                     static_cast<uint32_t>(destination_drain_core.x),
+                     static_cast<uint32_t>(destination_drain_core.y)});
+                append_relay_target_args(forwarder_writer_rt_args, relay_direction, link);
+            }
+            const auto mux_virtual_core =
+                coordinate_device->worker_core_from_logical_core(mux_cores[link][direction_group]);
+            const auto flow_control_sem_id = allocate_all_to_all_async_generic_per_core_semaphore(desc, core);
+            const auto teardown_sem_id = allocate_all_to_all_async_generic_per_core_semaphore(desc, core);
+            mux_config.append_client_connection_rt_args(
+                mux_virtual_core,
+                static_cast<uint8_t>(workers_per_direction),
+                {.flow_control_sem_id = flow_control_sem_id, .teardown_sem_id = teardown_sem_id},
+                forwarder_writer_rt_args);
+            {
+                tt::tt_metal::KernelDescriptor::RTArgList writer_rt_arg_list;
+                writer_rt_arg_list.append(forwarder_writer_rt_args);
+                desc.kernels[forwarder_writer_kernel_id].emplace_runtime_args(core, writer_rt_arg_list);
+            }
+            {
+                tt::tt_metal::KernelDescriptor::RTArgList reader_rt_arg_list;
+                reader_rt_arg_list.append(forward_reader_rt_args);
+                desc.kernels[forward_reader_kernel_id].emplace_runtime_args(core, reader_rt_arg_list);
+            }
+        }
+    }
+
     return desc;
 }
 
@@ -1158,10 +1424,26 @@ tt::tt_metal::WorkloadDescriptor AllToAllAsyncGenericProgram::create_workload_de
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
     auto final_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
+    const bool may_relay_antipode =
+        tt::tt_fabric::is_2d_fabric_config(fabric_config) && routing.topology == ttnn::ccl::Topology::Ring &&
+        routing.axis_topology == tt::tt_fabric::Topology::Ring && routing.axis_is_straight && args.num_devices == 4 &&
+        tensor_return_value.buffer()->buffer_type() == BufferType::DRAM &&
+        tensor_return_value.buffer()->buffer_layout() == TensorMemoryLayout::INTERLEAVED;
+    std::optional<tt::tt_metal::GlobalSemaphore> forward_semaphore;
+    std::shared_ptr<Tensor> relay_staging;
+    if (may_relay_antipode) {
+        forward_semaphore =
+            ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
+        relay_staging = std::make_shared<Tensor>(create_device_tensor(tensor_return_value.tensor_spec(), mesh_device));
+    }
     tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
 
     workload_descriptor.semaphores.push_back(init_barrier_semaphore);
     workload_descriptor.semaphores.push_back(final_barrier_semaphore);
+    if (may_relay_antipode) {
+        workload_descriptor.semaphores.push_back(*forward_semaphore);
+        workload_descriptor.buffers.push_back({relay_staging, relay_staging->buffer()});
+    }
 
     workload_descriptor.programs.reserve(tensor_coords.coords().size());
     for (const auto& coord : tensor_coords.coords()) {
@@ -1172,7 +1454,9 @@ tt::tt_metal::WorkloadDescriptor AllToAllAsyncGenericProgram::create_workload_de
             tensor_args,
             tensor_return_value,
             init_barrier_semaphore,
-            final_barrier_semaphore);
+            final_barrier_semaphore,
+            relay_staging.get(),
+            forward_semaphore.has_value() ? &*forward_semaphore : nullptr);
         workload_descriptor.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
 

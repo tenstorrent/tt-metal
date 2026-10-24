@@ -47,12 +47,15 @@ constexpr uint32_t mux_ct_base = output_tensor_args.next_compile_time_args_offse
 // routing-plane-manager ABI even when other streams in the same program use a worker mux.
 constexpr bool stream_uses_mux = get_compile_time_arg_val(mux_ct_base) != 0;
 constexpr uint32_t mux_num_clients = get_compile_time_arg_val(mux_ct_base + 1);
+constexpr bool relay_antipode = get_compile_time_arg_val(mux_ct_base + 2) != 0;
+constexpr bool is_forwarder = get_compile_time_arg_val(mux_ct_base + 3) != 0;
 constexpr uint32_t compile_safe_mux_num_clients = mux_num_clients == 0 ? 1 : mux_num_clients;
 constexpr bool has_fabric_connections = fabric_direction_mask != 0;
 // Base record: offset, block range/stride, completion, mesh and chip. Fabric2D adds the destination's harvested drain
 // coordinate.
 constexpr uint32_t target_drain_args = is_fabric_2d ? 2 : 0;
-constexpr uint32_t target_runtime_args = 7 + target_drain_args;
+constexpr uint32_t target_relay_args = relay_antipode ? 5 : 0;
+constexpr uint32_t target_runtime_args = 7 + target_drain_args + target_relay_args;
 constexpr uint32_t target_drain_args_idx = 7;
 constexpr auto fabric_directions =
     ttnn::operations::ccl::common::fabric_direction_mask_to_directions(fabric_direction_mask);
@@ -467,6 +470,12 @@ void kernel_main() {
     address_t output_address = get_common_arg_val<address_t>(0);
     uint32_t global_init_semaphore_addr = get_common_arg_val<uint32_t>(1);
     uint32_t global_semaphore_addr = get_common_arg_val<uint32_t>(2);
+    address_t staging_address = 0;
+    uint32_t forward_semaphore_addr = 0;
+    if constexpr (relay_antipode) {
+        staging_address = get_common_arg_val<address_t>(3);
+        forward_semaphore_addr = get_common_arg_val<uint32_t>(4);
+    }
 
     uint32_t core_id = get_arg_val<uint32_t>(arg_idx++);
     uint32_t link_id = get_arg_val<uint32_t>(arg_idx++);
@@ -481,6 +490,7 @@ void kernel_main() {
     uint32_t sender_core_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t local_num_devices = get_arg_val<uint32_t>(arg_idx++);
     auto output_addrgen = TensorAccessor(output_tensor_args, output_address);
+    auto staging_addrgen = TensorAccessor(output_tensor_args, staging_address);
     size_t device_offsets_idx = arg_idx;
     arg_idx += local_num_devices * target_runtime_args;
 
@@ -546,7 +556,7 @@ void kernel_main() {
     constexpr bool has_pre_half_tile = has_half_tile && current_device_id % 2 == 1;
     constexpr bool has_post_half_tile = has_half_tile && current_device_id % 2 == 0;
 
-    {
+    if constexpr (!is_forwarder) {
         send_initialization<topology>(
             fabric_connections,
             core_id,
@@ -559,7 +569,8 @@ void kernel_main() {
             pkt_hdr_sema_backward,
             packet_header_buffer_addr_sema_forward,
             packet_header_buffer_addr_sema_backward);
-
+    }
+    {
         if (core_id == 0 && link_id == 0) {
             const uint64_t local_set_semaphore_noc_addr = get_noc_multicast_addr(
                 mcast_dest_noc_start_x,
@@ -588,7 +599,7 @@ void kernel_main() {
             const uint32_t block_end_id = get_arg_val<uint32_t>(device_offsets_idx++);
             const uint32_t block_stride = get_arg_val<uint32_t>(device_offsets_idx++);
             const bool signal_completion = get_arg_val<uint32_t>(device_offsets_idx++) != 0;
-            const ccl_routing_utils::line_unicast_route_info_t route_info = {
+            ccl_routing_utils::line_unicast_route_info_t route_info = {
                 .dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(device_offsets_idx++)),
                 .dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(device_offsets_idx++))};
             uint32_t target_drain_sync_core_x = 0;
@@ -597,10 +608,25 @@ void kernel_main() {
                 target_drain_sync_core_x = get_arg_val<uint32_t>(device_offsets_idx++);
                 target_drain_sync_core_y = get_arg_val<uint32_t>(device_offsets_idx++);
             }
-            const uint64_t target_output_semaphore_noc_addr =
+            uint64_t target_output_semaphore_noc_addr =
                 is_fabric_2d
                     ? safe_get_noc_addr(target_drain_sync_core_x, target_drain_sync_core_y, global_semaphore_addr)
                     : output_semaphore_noc_addr_in_pkt;
+            bool relay = false;
+            if constexpr (relay_antipode) {
+                relay = get_arg_val<uint32_t>(device_offsets_idx++) != 0;
+                const uint16_t relay_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(device_offsets_idx++));
+                const uint16_t relay_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(device_offsets_idx++));
+                const uint32_t forwarder_core_x = get_arg_val<uint32_t>(device_offsets_idx++);
+                const uint32_t forwarder_core_y = get_arg_val<uint32_t>(device_offsets_idx++);
+                if (relay) {
+                    route_info.dst_mesh_id = relay_mesh_id;
+                    route_info.dst_chip_id = relay_chip_id;
+                    target_output_semaphore_noc_addr =
+                        safe_get_noc_addr(forwarder_core_x, forwarder_core_y, forward_semaphore_addr);
+                }
+            }
+            const auto& remote_addrgen = relay ? staging_addrgen : output_addrgen;
             const uint32_t device_id = (current_device_id + device_offset + num_devices) % num_devices;
 
             volatile PACKET_HEADER_TYPE* pkt_hdr = nullptr;
@@ -632,7 +658,7 @@ void kernel_main() {
                 uint64_t dst_addr =
                     (current_device_id == device_id)
                         ? output_addrgen.get_noc_addr(dest_tile_id, offset)
-                        : tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, dest_tile_id, offset);
+                        : tt::tt_fabric::linear::addrgen_detail::get_noc_address(remote_addrgen, dest_tile_id, offset);
                 return std::tuple{dst_addr, payload_size};
             };
 
