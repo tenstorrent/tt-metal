@@ -119,11 +119,23 @@ def moe_tail(combine, scores, indices, table, n_cores: int = 80):
     return out
 
 
-class DecodeReduce:
-    """``TtReduceModule`` for the decode tile: :func:`moe_tail`, then the module's TP reduce-scatter."""
+# the tail's TP reduce-scatter: ``legacy`` is ``ttnn.reduce_scatter`` (which leaves a 512-byte L1 block that a routed
+# expert FFN program compiled after it trips over); ``minimal`` is ``V41Collectives``'
+# ``reduce_scatter_minimal_async``, the step's other TP reduce-scatters
+_TAIL_RS = os.environ.get("V41_DECODE_TAIL_RS", "legacy")
+assert _TAIL_RS in ("legacy", "minimal"), _TAIL_RS
 
-    def __init__(self, reduce):
+
+class DecodeReduce:
+    """``TtReduceModule`` for the decode tile: :func:`moe_tail`, then the module's TP reduce-scatter. With
+    ``V41_SHARED_IN_FFN=1`` the decode shared expert (``moe_shared.DecodeSharedExpert``) leaves its ``[T, H]``
+    partial in ``pending_shared`` and the sum takes it before the reduce-scatter."""
+
+    def __init__(self, reduce, ccl=None):
         self._reduce = reduce
+        self._ccl = ccl
+        self.pending_shared = None
+        assert _TAIL_RS == "legacy" or ccl is not None, "V41_DECODE_TAIL_RS=minimal needs the collectives"
 
     def __getattr__(self, name):
         return getattr(self._reduce, name)
@@ -131,8 +143,16 @@ class DecodeReduce:
     def __call__(self, combine_output, weights=None, indices=None, expert_dispatch_table=None):
         assert weights is not None and indices is not None and expert_dispatch_table is not None
         summed = moe_tail(combine_output, weights, indices, expert_dispatch_table, n_cores=_CORES)
+        if self.pending_shared is not None:
+            shared, self.pending_shared = self.pending_shared, None
+            total = ttnn.add(summed, ttnn.reshape(shared, summed.shape))
+            ttnn.deallocate(summed)
+            ttnn.deallocate(shared)
+            summed = total
         r = self._reduce
         if r.mesh_device.shape[r.cluster_axis] > 1:
+            if _TAIL_RS == "minimal":
+                return self._ccl.tp_reduce_scatter(summed, dim=3)
             return ttnn.reduce_scatter(
                 summed, dim=-1, cluster_axis=r.cluster_axis, num_links=r.num_links, topology=r.topology
             )
@@ -141,8 +161,9 @@ class DecodeReduce:
     forward = __call__
 
 
-def install_decode_tail(v41_moe) -> None:
-    """Swap ``v41_moe.moe``'s reduce module for :class:`DecodeReduce`."""
+def install_decode_tail(v41_moe, ccl=None) -> None:
+    """Swap ``v41_moe.moe``'s reduce module for :class:`DecodeReduce` (``ccl``: the model's ``V41Collectives``, for
+    ``V41_DECODE_TAIL_RS=minimal``)."""
     moe = v41_moe.moe
     if not isinstance(moe.reduce_module, DecodeReduce):
-        moe.reduce_module = DecodeReduce(moe.reduce_module)
+        moe.reduce_module = DecodeReduce(moe.reduce_module, ccl)

@@ -58,6 +58,7 @@ from models.demos.deepseek_v3_d_p.tt.v41.head_layout import o_heads, q_heads
 from models.demos.deepseek_v3_d_p.tt.v41.indexer import TtV41Indexer
 from models.demos.deepseek_v3_d_p.tt.v41.layout import TP_AXIS
 from models.demos.deepseek_v3_d_p.tt.v41.moe import TtV41Moe
+from models.demos.deepseek_v3_d_p.tt.v41.moe_shared import SHARED_IN_FFN, install_shared_in_ffn
 from models.demos.deepseek_v3_d_p.tt.v41.moe_tail import install_decode_tail
 from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp4_e4m3_qdq, fp8_qdq
 from models.demos.deepseek_v3_d_p.tt.v41.rope import cos_sin
@@ -75,6 +76,11 @@ MOE_ROWS = int(os.environ.get("V41_DECODE_ROUTING_ROWS", ROWS)) if DECODE_ROUTIN
 # the decode MoE tail (tt/v41/moe_tail.py) sums the combine buffer's slots on 80 cores; it takes the 32-row tile
 DECODE_TAIL = os.environ.get("V41_DECODE_TAIL", "0") == "1"
 assert not DECODE_TAIL or DECODE_ROUTING, "V41_DECODE_TAIL=1 needs V41_DECODE_ROUTING=1 (the 32-row MoE tile)"
+# the decode shared expert's partial summed before the tail's reduce-scatter instead of reduce-scattered itself
+# (tt/v41/moe_shared.py): ``rs`` with today's matmuls, ``ffn`` as one routed-expert FFN program, whose weights
+# V41_SHARED_IN_FFN_DTYPE=bfp4 copies to bfp4 (bfp8: the tensors as they are)
+assert SHARED_IN_FFN == "0" or DECODE_TAIL, "V41_SHARED_IN_FFN needs V41_DECODE_TAIL=1 (the decode tail's sum)"
+SHARED_IN_FFN_DTYPE = {"bfp8": None, "bfp4": ttnn.bfloat4_b}[os.environ.get("V41_SHARED_IN_FFN_DTYPE", "bfp8")]
 
 
 def _round_up(x: int, m: int) -> int:
@@ -185,7 +191,9 @@ class TtV41Decoder:
         if DECODE_ROUTING:
             install_decode_routing(moe, self.moe_real_rows())
         if DECODE_TAIL:
-            install_decode_tail(moe)
+            install_decode_tail(moe, ccl=block.attn.ccl)
+        if SHARED_IN_FFN != "0":
+            install_shared_in_ffn(moe, SHARED_IN_FFN, SHARED_IN_FFN_DTYPE)
         return moe
 
     def moe_real_rows(self) -> int | None:

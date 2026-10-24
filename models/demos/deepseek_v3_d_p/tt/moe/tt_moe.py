@@ -916,7 +916,10 @@ class TtMoe(LightweightModule):
         # Convert x to TILE_LAYOUT for shared expert
         shared_output = self.shared_expert(x)
         if DEBUG_LOGGING_ENABLED:
-            logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
+            logger.debug(
+                f"[TtMoe.forward] Shared expert output shape: "
+                f"{shared_output.shape if shared_output is not None else None}"
+            )
 
         if self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
@@ -1032,7 +1035,8 @@ class TtMoe(LightweightModule):
         # ========================================
         # final_output = routed_output + shared_output
         # Both should be in TILE_LAYOUT with shape (dispatch_group_size, seq_len_per_chip, emb_dim)
-        final_output = ttnn.add(routed_output, shared_output)
+        # (a shared expert that folded its output into the reduce returns None: nothing to add)
+        final_output = ttnn.add(routed_output, shared_output) if shared_output is not None else routed_output
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] final_output (tiled) shape: {final_output.shape}")
 
