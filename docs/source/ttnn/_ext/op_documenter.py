@@ -9,11 +9,65 @@ import re
 import ttnn
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, ClassVar
 
 from sphinx.ext.autodoc import FunctionDocumenter, DataDocumenter
 
 import ttnn.decorators
+
+
+def _public_type_names(signature: str) -> str:
+    """Use exported TTNN type names instead of nanobind's implementation paths."""
+
+    def public_name(match):
+        name = match.group(1)
+        return f"ttnn.{name}" if hasattr(ttnn, name) else match.group(0)
+
+    return re.sub(r"\bttnn\._ttnn\.(?:\w+\.)*(\w+)", public_name, signature)
+
+
+def _binding_signature(operation) -> str | None:
+    """Read the callable's signature independently of its prose docstring.
+
+    C++ operations wrap callable nanobind instances, whose signatures live on
+    the type's __call__. Other operations wrap nanobind or Python functions.
+    Nanobind stores each overload and its default values separately.
+    """
+    function = operation.function
+    signatures = getattr(function, "__nb_signature__", None)
+    is_method = False
+    if not signatures:
+        signatures = getattr(getattr(type(function), "__call__", None), "__nb_signature__", None)
+        is_method = bool(signatures)
+
+    if not signatures:
+        try:
+            return _public_type_names(str(inspect.signature(function)))
+        except (TypeError, ValueError):
+            return None
+
+    result = []
+    for signature, _, defaults in signatures:
+        signature = signature[signature.index("(") :]
+        if is_method:
+            signature = re.sub(r"^\(self(?:,\s*|(?=\)))", "(", signature)
+            signature = re.sub(r"^\(/(?:,\s*|(?=\)))", "(", signature)
+        signature = _public_type_names(signature)
+
+        def substitute_default(match):
+            value = defaults[int(match.group(2))]
+            if match.group(1):  # nb::arg::sig overrides the displayed expression.
+                return value
+            if isinstance(value, Enum):
+                return _public_type_names(f"{type(value).__module__}.{type(value).__qualname__}.{value.name}")
+            return repr(value)
+
+        # Substitute in a single pass: a string default may itself contain \\0,
+        # and index 1 must not consume the prefix of index 10.
+        signature = re.sub(r"\\(=?)(\d+)", substitute_default, signature)
+        result.append(signature)
+    return "\n".join(result)
 
 
 @dataclass
@@ -162,9 +216,13 @@ class FastOperationDocumenter(FunctionDocumenter):
     priority = FunctionDocumenter.priority + 10
 
     def format_signature(self, **kwargs: Any) -> str:
+        signature = _binding_signature(self.object)
+        if signature is not None:
+            return signature
+
         docstrings = self.get_doc()
         if len(docstrings) == 0 or "Overloaded function" in self.object.__doc__:
-            return "(*args, ***kwargs)"
+            return "(*args, **kwargs)"
 
         if len(docstrings) > 1:
             raise ValueError("Multiple docstrings found for FastOperation")
@@ -186,9 +244,13 @@ class OperationDocumenter(FunctionDocumenter):
     priority = FunctionDocumenter.priority + 10
 
     def format_signature(self, **kwargs: Any) -> str:
+        signature = _binding_signature(self.object)
+        if signature is not None:
+            return signature
+
         docstrings = self.get_doc()
         if len(docstrings) == 0 or "Overloaded function" in self.object.__doc__:
-            return "(*args, ***kwargs)"
+            return "(*args, **kwargs)"
 
         if len(docstrings) > 1:
             raise ValueError("Multiple docstrings found for Operation")
@@ -211,12 +273,21 @@ class OperationDataDocumenter(DataDocumenter):
     directivetype = "function"  # Use function directive to avoid "name =" format
     priority = DataDocumenter.priority + 10
 
+    def should_suppress_value_header(self) -> bool:
+        # Operations use py:function, which does not accept DataDocumenter's
+        # :value: option containing the operation object's repr.
+        return True
+
     @classmethod
     def can_document_member(cls, member, membername, isattr, parent):
         return isinstance(member, (ttnn.decorators.Operation, ttnn.decorators.FastOperation))
 
     def format_signature(self, **kwargs: Any) -> str:
         """Format signature for Operation objects."""
+        signature = _binding_signature(self.object)
+        if signature is not None:
+            return signature
+
         # Try to parse the docstring to extract signature
         try:
             if self.object.__doc__:
