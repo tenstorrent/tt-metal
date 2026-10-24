@@ -48,9 +48,11 @@ from models.experimental.bevformer.model_config import (
     NUM_CAMS,
     NUM_CLASSES,
     NUM_HEADS,
+    NUM_LEVELS,
     NUM_POINTS_IN_PILLAR,
     NUM_QUERY,
     PC_RANGE,
+    RAW_IMAGE_SIZE,
     RESNET_KWARGS,
     SCA_NUM_POINTS,
     SPATIAL_SHAPES,
@@ -312,6 +314,19 @@ PRESETS = {
     "nuscenes_base": DatasetPreset("nuscenes_v1.0_full_1600x900", PC_RANGE, NUM_CAMS, CAMERA_IMAGE_SIZE, **_BASE),
     "carla_tiny": DatasetPreset("carla_v0.9.10_640x480", _CARLA_PC_RANGE, NUM_CAMS, (640, 480), **_TINY),
     "carla_base": DatasetPreset("carla_v0.9.10_1280x960", _CARLA_PC_RANGE, NUM_CAMS, (1280, 960), **_BASE),
+    # The selected variant's camera images, for the img_metas of the detector and the encoder glue.
+    # Its feature levels are SPATIAL_SHAPES, from the padded images, not this preset's.
+    "nuscenes_variant": DatasetPreset(
+        "nuscenes_v1.0_full_{}x{}".format(*RAW_IMAGE_SIZE),
+        PC_RANGE,
+        NUM_CAMS,
+        RAW_IMAGE_SIZE,
+        embed_dims=EMBED_DIMS,
+        num_heads=NUM_HEADS,
+        num_levels=NUM_LEVELS,
+        num_points=SCA_NUM_POINTS,
+        tsa_num_points=TSA_NUM_POINTS,
+    ),
 }
 
 
@@ -570,7 +585,7 @@ def random_encoder_inputs(bev_shape, batch_size=1, seed=0, yaw_step_deg=0.0):
     )
 
 
-def camera_img_metas(batch_size, preset="nuscenes_base", yaw_step_deg=0.0):
+def camera_img_metas(batch_size, preset="nuscenes_variant", yaw_step_deg=0.0):
     """``lidar2img`` and ``img_shape`` of a preset's six-camera rig (:func:`img_metas_for_dataset`).
     ``yaw_step_deg`` turns sample ``b``'s rig by ``b * yaw_step_deg`` about the vertical axis, so
     the samples' cameras see different BEV cells."""
@@ -583,7 +598,7 @@ def camera_img_metas(batch_size, preset="nuscenes_base", yaw_step_deg=0.0):
     return metas
 
 
-def preset_pc_range(preset="nuscenes_base"):
+def preset_pc_range(preset="nuscenes_variant"):
     """A preset's point-cloud range, the box its camera geometry projects pillars from."""
     return tuple(PRESETS[preset].pc_range)
 
