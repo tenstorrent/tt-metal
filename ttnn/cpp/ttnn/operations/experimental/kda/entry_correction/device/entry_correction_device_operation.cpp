@@ -112,6 +112,43 @@ void EntryCorrectionOperation::validate_on_program_cache_miss(
             operation_name,
             name);
     }
+    if (in.tail_landing) {
+        const auto& landing = *in.tail_landing;
+        kda_factory_detail::check_allocated_device_tensor(landing, operation_name, "tail_landing");
+        kda_factory_detail::check_layout(landing, tt::tt_metal::Layout::TILE, operation_name, "tail_landing");
+        kda_factory_detail::check_dtype(landing, tt::tt_metal::DataType::FLOAT32, operation_name, "tail_landing");
+        kda_factory_detail::check_same_device(in.final_b, landing, operation_name, "tail_landing");
+        const auto& memory = landing.memory_config();
+        TT_FATAL(
+            memory.buffer_type() == tt::tt_metal::BufferType::L1 &&
+                memory.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
+                landing.physical_volume() == uint64_t{heads} * key_dim * key_dim &&
+                memory.shard_spec()->shape[0] == key_dim && memory.shard_spec()->shape[1] == key_dim,
+            "{}: tail_landing must be height-sharded in L1, one {} x {} state per core",
+            operation_name,
+            key_dim,
+            key_dim);
+        // The relay lands head h's state on its h-th head core; the shard grid alone does not give that order.
+        const auto& landing_cores = attrs.tail_landing_cores;
+        TT_FATAL(
+            landing_cores.size() == heads &&
+                std::set<tt::tt_metal::CoreCoord>(landing_cores.begin(), landing_cores.end()).size() == heads &&
+                kda_factory_detail::same_cores(memory.shard_spec()->grid, landing_cores),
+            "{}: tail_landing_cores must be the {} distinct cores of tail_landing's shard grid, in head order",
+            operation_name,
+            heads);
+        TT_FATAL(attrs.tail_landing_semaphore_address != 0, "{}: tail_landing needs its semaphore", operation_name);
+        // The relay that fills it runs on a ring of more than two ranks, so the first rank is never the last.
+        TT_FATAL(
+            attrs.sequence_parallel_axis < mesh->shape().dims() && mesh->shape()[attrs.sequence_parallel_axis] > 2,
+            "{}: tail_landing needs a ring of more than two SP ranks",
+            operation_name);
+    } else {
+        TT_FATAL(
+            attrs.tail_landing_cores.empty() && attrs.tail_landing_semaphore_address == 0,
+            "{}: tail_landing_cores and the tail landing's semaphore need tail_landing",
+            operation_name);
+    }
     kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
     // Compute packs a K-tile row of each chunk output and of the final state out of DST.
@@ -179,14 +216,19 @@ std::tuple<Tensor, Tensor> entry_correction(
     const std::optional<Tensor>& actual_end,
     uint32_t sequence_parallel_axis,
     uint32_t local_rows,
-    const std::vector<tt::tt_metal::CoreCoord>& cores) {
+    const std::vector<tt::tt_metal::CoreCoord>& cores,
+    const std::optional<Tensor>& tail_landing,
+    const std::vector<tt::tt_metal::CoreCoord>& tail_landing_cores,
+    uint32_t tail_landing_semaphore_address) {
     auto outputs = ttnn::device_operation::launch<EntryCorrectionOperation>(
         EntryCorrectionParams{
             .sequence_parallel_axis = sequence_parallel_axis,
             .local_rows = local_rows,
             .cores = cores,
             .output_mem_config = memory_config,
-            .compute_kernel_config = compute_kernel_config},
+            .compute_kernel_config = compute_kernel_config,
+            .tail_landing_cores = tail_landing_cores,
+            .tail_landing_semaphore_address = tail_landing_semaphore_address},
         EntryCorrectionInputs{
             .zero_output = zero_output,
             .identity_output = identity_output,
@@ -195,7 +237,8 @@ std::tuple<Tensor, Tensor> entry_correction(
             .entry = entry,
             .tail_entry = tail_entry,
             .actual_start = actual_start,
-            .actual_end = actual_end});
+            .actual_end = actual_end,
+            .tail_landing = tail_landing});
     return {outputs[0], outputs[1]};
 }
 

@@ -10,7 +10,12 @@ chunk rows are in its own L1 (terms_memory_config).
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import ttnn
+
+if TYPE_CHECKING:
+    from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import RelayAffinePrefix
 
 
 class EntryCorrection:
@@ -54,8 +59,30 @@ class EntryCorrection:
         self.memory_config = ttnn.L1_MEMORY_CONFIG
         self.output_memory_config = ttnn.L1_MEMORY_CONFIG
 
-    def __call__(self, zero_output, identity_output, final_a, final_b, entry, tail_entry, actual_start, actual_end):
-        """Return (output [BH, NC, 32, V] BF16, final state [BH, K, V] FP32)."""
+    def __call__(
+        self,
+        zero_output,
+        identity_output,
+        final_a,
+        final_b,
+        entry,
+        tail_entry,
+        actual_start,
+        actual_end,
+        tail_relay: RelayAffinePrefix | None = None,
+    ):
+        """Return (output [BH, NC, 32, V] BF16, final state [BH, K, V] FP32).
+
+        ``tail_relay``: the relay that produced ``entry``, called with ``leave_final_in_landing=True``. The split
+        tail's seed is then taken from its final landing (head by head on its head cores) instead of ``tail_entry``,
+        and the first rank consumes the landing's arrival count."""
+        landing = {}
+        if tail_relay is not None:
+            landing = dict(
+                tail_landing=tail_relay.final_landing,
+                tail_landing_cores=list(tail_relay.head_cores),
+                tail_landing_semaphore=tail_relay.final_semaphore,
+            )
         return ttnn.experimental.kda.entry_correction(
             zero_output,
             identity_output,
@@ -70,4 +97,5 @@ class EntryCorrection:
             sequence_parallel_axis=self.axis,
             memory_config=self.output_memory_config,
             compute_kernel_config=self.compute_config,
+            **landing,
         )

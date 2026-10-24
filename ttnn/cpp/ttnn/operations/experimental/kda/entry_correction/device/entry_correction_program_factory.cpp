@@ -77,6 +77,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     const uint32_t bf16_tile = tt::constants::TILE_HW * sizeof(uint16_t);
     const CoreRangeSet cores = kda_factory_detail::merged_core_set(attrs.cores);
     const auto& end = in.actual_end.value_or(in.actual_start);
+    const bool tail_from_landing = in.tail_landing.has_value();
 
     tt::tt_metal::ProgramDescriptor desc;
     desc.semaphores.push_back(
@@ -110,7 +111,8 @@ tt::tt_metal::ProgramDescriptor build_program(
         attrs.local_rows,
         kt,
         static_cast<uint32_t>(in.actual_end.has_value()),
-        cores_per_head};
+        cores_per_head,
+        static_cast<uint32_t>(tail_from_landing)};
     for (const auto* tensor : {&in.final_a, &in.final_b, &in.entry, &in.tail_entry, &in.actual_start, &end}) {
         tt::tt_metal::TensorAccessorArgs(tensor->buffer()).append_to(reader_ct);
     }
@@ -152,6 +154,14 @@ tt::tt_metal::ProgramDescriptor build_program(
         for (uint32_t value :
              {head, first, first + per_core, part < kt ? part : kt, static_cast<uint32_t>(part == 0)}) {
             reader_rt.push_back(value);
+        }
+        if (tail_from_landing) {
+            // Where the head's tail seed lands: its address, the landing core (NoC x | y << 16) and the arrival
+            // counter there.
+            const auto landing = mesh->worker_core_from_logical_core(attrs.tail_landing_cores[head]);
+            reader_rt.push_back(in.tail_landing->buffer());
+            reader_rt.push_back(static_cast<uint32_t>(landing.x) | (static_cast<uint32_t>(landing.y) << 16));
+            reader_rt.push_back(attrs.tail_landing_semaphore_address);
         }
         // The head's first core writes the head's seeds to the head's other cores: one multicast when they fill a
         // rectangle without it (start and end corner), else one write each; then every core for the semaphore

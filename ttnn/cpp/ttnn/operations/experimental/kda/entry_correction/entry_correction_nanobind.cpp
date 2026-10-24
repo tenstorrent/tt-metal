@@ -51,6 +51,17 @@ void bind_entry_correction(nb::module_& mod) {
                 DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute-kernel configuration;
                 the products accumulate in DST. Defaults to HiFi2 with FP32 destination accumulation.
+            tail_landing (ttnn.Tensor, optional): The relay's ``final_landing`` after
+                ``relay_affine_prefix(leave_final_in_landing=True)``: FLOAT32 TILE-layout ``[B*H*K, K]``
+                height-sharded in L1, one state per core, possibly still landing. The split tail's seed is read
+                from it instead of ``tail_entry``. On the first chronological rank each head's first core waits
+                for the last rank's final state to land and consumes its count, whether or not a tail reads it,
+                and hands the tail's seed to the head's other cores; the group's chunks run meanwhile.
+            tail_landing_cores (list[ttnn.CoreCoord], optional): The core head ``h``'s state lands on, head by
+                head: the relay's head cores in its order (the first ``B*H`` of its ``cores``). Given with
+                ``tail_landing``.
+            tail_landing_semaphore (ttnn.GlobalSemaphore, optional): The relay's final-state arrival counter;
+                given with ``tail_landing``.
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor]: BFLOAT16 TILE-layout ``[B*H, chunks, 32, K]`` chunk outputs and
@@ -74,7 +85,10 @@ void bind_entry_correction(nb::module_& mod) {
         nb::arg("actual_end") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("tail_landing") = nb::none(),
+        nb::arg("tail_landing_cores") = std::vector<tt::tt_metal::CoreCoord>{},
+        nb::arg("tail_landing_semaphore") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::entry_correction::detail

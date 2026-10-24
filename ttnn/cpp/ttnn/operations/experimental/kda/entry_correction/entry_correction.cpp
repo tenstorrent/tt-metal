@@ -20,7 +20,13 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> entry_correction(
     const std::optional<ttnn::Tensor>& actual_end,
     uint32_t sequence_parallel_axis,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::Tensor>& tail_landing,
+    const std::vector<tt::tt_metal::CoreCoord>& tail_landing_cores,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& tail_landing_semaphore) {
+    TT_FATAL(
+        tail_landing.has_value() == tail_landing_semaphore.has_value(),
+        "entry_correction: tail_landing and tail_landing_semaphore go together");
     TT_FATAL(
         final_b.storage_type() == StorageType::DEVICE && final_b.buffer() != nullptr,
         "entry_correction: final_b must be an allocated device tensor");
@@ -45,7 +51,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> entry_correction(
         actual_end,
         sequence_parallel_axis,
         local_rows,
-        cores);
+        cores,
+        tail_landing,
+        tail_landing_cores,
+        tail_landing_semaphore ? static_cast<uint32_t>(tail_landing_semaphore->address()) : 0u);
 }
 
 }  // namespace ttnn::experimental::kda

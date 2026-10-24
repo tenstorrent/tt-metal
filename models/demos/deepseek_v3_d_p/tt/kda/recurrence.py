@@ -508,8 +508,11 @@ def _scan_sp_grouped_chunks(
             for tensor in grouped.as_kernel_args():
                 ttnn.deallocate(tensor)
         if affine_relay is not None:
+            # With the correction, the first rank's relay does not wait for the last rank's final state (the 8th
+            # hop): the correction takes the split tail's seed from the relay's final landing. Nothing else reads the
+            # prefix's final state there (the final carry takes it from the last rank).
             group_entry_states, prefix_final_state, output_gate = affine_relay(
-                packed, initial_state, actual_start, output_gate=output_gate
+                packed, initial_state, actual_start, output_gate=output_gate, leave_final_in_landing=correct
             )
         else:
             group_entry_states, prefix_final_state = distributed_prefix(
@@ -558,7 +561,9 @@ def _scan_sp_grouped_chunks(
             compute_kernel_config=compute_config.affine_prefix,
         )
     if correct:
-        output, rank_final = correction(*emitted, group_entry_states, prefix_final_state, actual_start, actual_end)
+        output, rank_final = correction(
+            *emitted, group_entry_states, prefix_final_state, actual_start, actual_end, tail_relay=affine_relay
+        )
         for tensor in (*emitted, group_entry_states):
             ttnn.deallocate(tensor)
         scan = RecurrenceResult(output=output, final_state=rank_final)
@@ -596,8 +601,8 @@ def _scan_sp_grouped_chunks(
             output_gate,
         )
     if final_carry is not None:
-        # The relay leaves the prefix's final state on the first and last chronological ranks only: without a split
-        # tail the last rank multicasts it, with one the tail's owner multicasts its own.
+        # The relay leaves the prefix's final state on the last chronological rank (and the first, without the entry
+        # correction): without a split tail the last rank multicasts it, with one the tail's owner multicasts its own.
         final_state, _ = final_carry(rank_final, prefix_final_state, actual_start, actual_end, geometry.local_rows)
         return RecurrenceResult(output, final_state, output_gate)
     # The device chooses the completed tail when split, or the prefix's final state when unsplit, at runtime: only
