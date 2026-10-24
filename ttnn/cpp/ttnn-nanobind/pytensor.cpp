@@ -493,6 +493,7 @@ void pytensor_module(nb::module_& mod) {
         [](distributed::MeshDevice& mesh, const TensorSpec& spec, const PerNodeMeshDeviceMemorySpan& memory) {
             auto buffer = tt::tt_metal::experimental::per_core_allocation::create_sram_buffer_view(mesh, spec, memory);
             std::vector<distributed::MeshCoordinate> coords;
+            coords.reserve(memory.per_device_spans.size());
             for (const auto& [coord, local] : memory.per_device_spans) {
                 coords.push_back(coord);
             }
