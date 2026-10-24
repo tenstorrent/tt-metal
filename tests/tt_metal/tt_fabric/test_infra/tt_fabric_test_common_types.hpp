@@ -42,8 +42,33 @@ using DeviceIdentifier = std::variant<
     >;
 
 using CoreConfig = std::variant<tt::tt_metal::CoreCoord, std::string>;
+
+// Modifiers of a NoC send type. Each ntype accepts only some of them (see the YAML parser); the defaults are the
+// plain packet type.
+struct NocSendTypeOptions {
+    bool atomic_inc = false;  // unicast_scatter_write: the last chunk is a semaphore increment
+    bool flush = false;       // Fused write + atomic inc: flush the writes before the increment
+
+    bool operator==(const NocSendTypeOptions&) const = default;
+};
+
+// A YAML ntype: either a plain name ("unicast_write") or a map with the name and its options
+// ({type: unicast_scatter_write, atomic_inc: true}). The options are part of the value, so they always travel
+// (merge, parametrize, serialize) together with the type.
+struct NocSendTypeSpec {
+    NocSendType type;
+    NocSendTypeOptions options{};
+
+    bool operator==(const NocSendTypeSpec&) const = default;
+};
+
+// Label used in the results CSVs: the NocSendType name, plus each non-default option (e.g.
+// "NOC_UNICAST_SCATTER_WRITE+atomic_inc+flush").
+std::string noc_send_type_label(const NocSendTypeSpec& spec);
+
 // A map to hold various parametrization options parsed from the YAML.
-using ParametrizationValues = std::variant<std::vector<std::string>, std::vector<uint32_t>>;
+using ParametrizationValues =
+    std::variant<std::vector<std::string>, std::vector<uint32_t>, std::vector<NocSendTypeSpec>>;
 using ParametrizationOptionsMap = std::unordered_map<std::string, ParametrizationValues>;
 
 // Sentinel for a per-direction hop count of "max": resolved to (axis_dim - 1) from the global mesh
@@ -65,7 +90,7 @@ struct ParsedDestinationConfig {
 
 struct ParsedTrafficPatternConfig {
     std::optional<ChipSendType> ftype;
-    std::optional<NocSendType> ntype;
+    std::optional<NocSendTypeSpec> ntype;
     std::optional<uint32_t> size;
     std::optional<uint32_t> num_packets;
     std::optional<ParsedDestinationConfig> destination;
@@ -101,7 +126,7 @@ struct SenderCreditInfo {
 
 struct TrafficPatternConfig {
     std::optional<ChipSendType> ftype;
-    std::optional<NocSendType> ntype;
+    std::optional<NocSendTypeSpec> ntype;
     std::optional<uint32_t> size;
     std::optional<uint32_t> num_packets;
     std::optional<DestinationConfig> destination;
@@ -113,6 +138,14 @@ struct TrafficPatternConfig {
     std::optional<SenderCreditInfo> sender_credit_info;  // For sender
     std::optional<uint32_t> credit_return_batch_size;    // For receivers
 };
+
+// Whether the receiver of this pattern needs an atomic counter allocated.
+inline bool pattern_needs_atomic_inc(const TrafficPatternConfig& pattern) {
+    const auto& ntype = pattern.ntype.value();
+    return ntype.type == NocSendType::NOC_UNICAST_ATOMIC_INC ||
+           ntype.type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC ||
+           (ntype.type == NocSendType::NOC_UNICAST_SCATTER_WRITE && ntype.options.atomic_inc);
+}
 
 struct SenderConfig {
     FabricNodeId device = FabricNodeId(MeshId{0}, 0);

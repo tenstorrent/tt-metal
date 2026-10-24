@@ -43,9 +43,21 @@ std::string fetch_pattern_ftype(const TrafficPatternConfig& pattern) {
     return fetch_pattern_test_type(pattern, [](const auto& pattern) { return pattern.ftype; });
 }
 
+std::string noc_send_type_label(const NocSendTypeSpec& spec) {
+    std::string label(enchantum::to_string(spec.type));
+    if (spec.options.atomic_inc) {
+        label += "+atomic_inc";
+    }
+    if (spec.options.flush) {
+        label += "+flush";
+    }
+    return label;
+}
+
 std::string fetch_pattern_ntype(const TrafficPatternConfig& pattern) {
     log_debug(tt::LogTest, "Fetching ntype from pattern");
-    return fetch_pattern_test_type(pattern, [](const auto& pattern) { return pattern.ntype; });
+    TT_FATAL(pattern.ntype.has_value(), "Test type not found in pattern");
+    return noc_send_type_label(pattern.ntype.value());
 }
 
 uint32_t fetch_pattern_int(const TrafficPatternConfig& pattern, auto lambda_parameter) {

@@ -6,6 +6,7 @@
 #include "tt_fabric_test_config.hpp"
 #include "tt_fabric_test_constants.hpp"
 #include <algorithm>
+#include <limits>
 #include <optional>
 #include <variant>
 #include "tt_fabric_test_common_types.hpp"
@@ -123,8 +124,7 @@ ParsedTrafficPatternConfig YamlConfigParser::parse_traffic_pattern_config(const 
             detail::chip_send_type_mapper.from_string(parse_scalar<std::string>(pattern_yaml["ftype"]), "ftype");
     }
     if (pattern_yaml["ntype"]) {
-        config.ntype =
-            detail::noc_send_type_mapper.from_string(parse_scalar<std::string>(pattern_yaml["ntype"]), "ntype");
+        config.ntype = parse_noc_send_type_spec(pattern_yaml["ntype"]);
     }
     if (pattern_yaml["size"]) {
         config.size = parse_scalar<uint32_t>(pattern_yaml["size"]);
@@ -563,6 +563,20 @@ static bool fine_grained_contains_string(
     return std::find(vec.begin(), vec.end(), value) != vec.end();
 }
 
+// Returns true if the fine-grained ntype parametrization contains `ntype`.
+static bool fine_grained_contains_ntype(const ParsedTestConfig& test_config, const NocSendTypeSpec& ntype) {
+    if (!test_config.parametrization_params.has_value() || test_config.parametrization_params.value().empty()) {
+        return false;
+    }
+    const auto& params = test_config.parametrization_params.value();
+    auto it = params.find("ntype");
+    if (it == params.end() || !std::holds_alternative<std::vector<NocSendTypeSpec>>(it->second)) {
+        return false;
+    }
+    const auto& vec = std::get<std::vector<NocSendTypeSpec>>(it->second);
+    return std::find(vec.begin(), vec.end(), ntype) != vec.end();
+}
+
 static bool check_topology_filter(const ParsedTestConfig& test_config, const std::optional<std::string>& filter_value) {
     if (filter_value == "TorusX") {
         return test_config.fabric_setup.topology == tt::tt_fabric::Topology::Torus &&
@@ -637,16 +651,19 @@ static bool check_num_links_filter(
 
 static bool check_ntype_filter(
     ParsedTestConfig& test_config, const std::optional<std::string>& filter_value, bool fine_grained) {
-    if (fine_grained && fine_grained_contains_string(test_config, "ntype", filter_value.value())) {
+    // A filter value is a plain ntype name, so it matches that type without options.
+    const NocSendTypeSpec filter_ntype{.type = detail::noc_send_type_mapper.from_string(filter_value.value(), "ntype")};
+    if (fine_grained && fine_grained_contains_ntype(test_config, filter_ntype)) {
         return true;
     }
     // soft filter
-    std::optional<tt::tt_fabric::NocSendType> ntype =
-        detail::noc_send_type_mapper.from_string(filter_value.value(), "ntype");
+    const auto matches = [&](const ParsedTrafficPatternConfig& pattern) {
+        return pattern.ntype.has_value() && pattern.ntype.value() == filter_ntype;
+    };
     bool checker = false;
     for (const auto& sender : test_config.senders) {
         for (const auto& pattern : sender.patterns) {
-            if (pattern.ntype.has_value() && pattern.ntype.value() == ntype.value()) {
+            if (matches(pattern)) {
                 checker = true;
                 break;
             }
@@ -658,12 +675,12 @@ static bool check_ntype_filter(
                 std::remove_if(
                     sender.patterns.begin(),
                     sender.patterns.end(),
-                    [&](const auto& pattern) { return pattern.ntype.has_value() && pattern.ntype.value() != ntype; }),
+                    [&](const auto& pattern) { return pattern.ntype.has_value() && !matches(pattern); }),
                 sender.patterns.end());
         }
     }
     if (!checker && test_config.defaults.has_value() && test_config.defaults.value().ntype.has_value()) {
-        checker = test_config.defaults.value().ntype.value() == ntype.value();
+        checker = matches(test_config.defaults.value());
     }
     return checker;
 }
@@ -1098,8 +1115,14 @@ ParametrizationOptionsMap YamlConfigParser::parse_parametrization_params(const Y
 
         TT_FATAL(node.IsSequence(), "Parametrization option '{}' must be a sequence of values.", key);
 
-        if (key == "ftype" || key == "ntype") {
+        if (key == "ftype") {
             options[key] = parse_scalar_sequence<std::string>(node);
+        } else if (key == "ntype") {
+            std::vector<NocSendTypeSpec> values;
+            for (const auto& entry : node) {
+                values.push_back(parse_noc_send_type_spec(entry));
+            }
+            options[key] = std::move(values);
         } else if (key == "size" || key == "num_packets" || key == "num_links") {
             auto values = parse_scalar_sequence<uint32_t>(node);
             if (key == "num_links") {
@@ -1115,6 +1138,40 @@ ParametrizationOptionsMap YamlConfigParser::parse_parametrization_params(const Y
         }
     }
     return options;
+}
+
+NocSendTypeSpec YamlConfigParser::parse_noc_send_type_spec(const YAML::Node& ntype_yaml) {
+    if (ntype_yaml.IsScalar()) {
+        return NocSendTypeSpec{
+            .type = detail::noc_send_type_mapper.from_string(parse_scalar<std::string>(ntype_yaml), "ntype")};
+    }
+    TT_FATAL(
+        ntype_yaml.IsMap() && ntype_yaml["type"],
+        "An ntype must be a name or a map with a 'type' key, e.g. {{type: unicast_scatter_write, atomic_inc: true}}.");
+
+    const auto type_name = parse_scalar<std::string>(ntype_yaml["type"]);
+    NocSendTypeSpec spec{.type = detail::noc_send_type_mapper.from_string(type_name, "ntype")};
+    const bool is_scatter = spec.type == NocSendType::NOC_UNICAST_SCATTER_WRITE;
+    const bool is_fused = spec.type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC;
+    for (const auto& it : ntype_yaml) {
+        const auto key = parse_scalar<std::string>(it.first);
+        if (key == "type") {
+            continue;
+        }
+        if (key == "atomic_inc" && is_scatter) {
+            spec.options.atomic_inc = parse_scalar<bool>(it.second);
+        } else if (key == "flush" && (is_scatter || is_fused)) {
+            spec.options.flush = parse_scalar<bool>(it.second);
+        } else {
+            TT_THROW("ntype option '{}' is not supported for ntype '{}'.", key, type_name);
+        }
+    }
+    // The scatter flush applies to the trailing semaphore increment, so there is nothing to flush without it.
+    TT_FATAL(
+        !is_scatter || !spec.options.flush || spec.options.atomic_inc,
+        "ntype option 'flush' requires 'atomic_inc: true' for ntype '{}'.",
+        type_name);
+    return spec;
 }
 
 HighLevelPatternConfig YamlConfigParser::parse_high_level_pattern_config(const YAML::Node& pattern_yaml) {
@@ -1659,9 +1716,30 @@ std::vector<ParsedTestConfig> TestConfigBuilder::expand_parametrizations(const P
                         ParsedTrafficPatternConfig param_default;
                         if (param_name == "ftype") {
                             param_default.ftype = detail::chip_send_type_mapper.from_string(value, "ftype");
-                        } else if (param_name == "ntype") {
-                            param_default.ntype = detail::noc_send_type_mapper.from_string(value, "ntype");
                         }
+                        next_config.defaults = merge_patterns(
+                            current_config.defaults.value_or(ParsedTrafficPatternConfig{}), param_default);
+                    }
+                }
+                // Handle ntype parameters (plain names or maps with options)
+                else if (std::holds_alternative<std::vector<NocSendTypeSpec>>(values_variant)) {
+                    const auto& values = std::get<std::vector<NocSendTypeSpec>>(values_variant);
+                    for (const auto& value : values) {
+                        next_level_configs.emplace_back(current_config);
+                        auto& next_config = next_level_configs.back();
+                        // Explicitly preserve performance_test_mode
+                        next_config.performance_test_mode = current_config.performance_test_mode;
+
+                        // Initialize parametrized_name with original name if empty
+                        if (next_config.parametrized_name.empty()) {
+                            next_config.parametrized_name = next_config.name;
+                        }
+                        // Update parametrized name to include parameter name and value
+                        detail::append_with_separator(
+                            next_config.parametrized_name, "_", param_name, detail::noc_send_type_spec_name(value));
+
+                        ParsedTrafficPatternConfig param_default;
+                        param_default.ntype = value;
                         next_config.defaults = merge_patterns(
                             current_config.defaults.value_or(ParsedTrafficPatternConfig{}), param_default);
                     }
@@ -1723,11 +1801,20 @@ void TestConfigBuilder::validate_pattern(const TrafficPatternConfig& pattern, co
         test.name);
 
     // 2. Validate atomic-related fields
-    if (pattern.ntype.has_value() && pattern.ntype.value() == NocSendType::NOC_UNICAST_WRITE) {
+    if (pattern.ntype.has_value() && pattern.ntype->type == NocSendType::NOC_UNICAST_WRITE) {
         TT_FATAL(
             !pattern.atomic_inc_val.has_value(),
             "Test '{}': 'atomic_inc_val' should not be specified for 'unicast_write' ntype.",
             test.name);
+    }
+    if (pattern.ntype.has_value() && pattern.ntype->type == NocSendType::NOC_UNICAST_SCATTER_WRITE &&
+        pattern.ntype->options.atomic_inc && pattern.atomic_inc_val.has_value()) {
+        // The fused scatter header carries the increment in a 16-bit chunk-size field.
+        TT_FATAL(
+            pattern.atomic_inc_val.value() <= std::numeric_limits<uint16_t>::max(),
+            "Test '{}': 'atomic_inc_val' {} does not fit the 16-bit increment of a scatter write with 'atomic_inc'.",
+            test.name,
+            pattern.atomic_inc_val.value());
     }
 
     // 3. Validate payload size
@@ -1808,7 +1895,7 @@ void TestConfigBuilder::validate_sync_pattern(
     }
 
     TT_FATAL(
-        pattern.ntype.has_value() && pattern.ntype.value() == NocSendType::NOC_UNICAST_ATOMIC_INC,
+        pattern.ntype.has_value() && pattern.ntype->type == NocSendType::NOC_UNICAST_ATOMIC_INC,
         "Test '{}': Line sync pattern for sender on device {} must use NOC_UNICAST_ATOMIC_INC.",
         test.name,
         sender.device);
@@ -2390,7 +2477,8 @@ std::pair<std::vector<TrafficPatternConfig>, uint32_t> TestConfigBuilder::create
     base_sync_pattern.ftype = topology == tt::tt_fabric::Topology::NeighborExchange
                                   ? ChipSendType::CHIP_UNICAST
                                   : ChipSendType::CHIP_MULTICAST;   // Global sync across devices
-    base_sync_pattern.ntype = NocSendType::NOC_UNICAST_ATOMIC_INC;  // Sync signal via atomic increment
+    // Sync signal via atomic increment
+    base_sync_pattern.ntype = NocSendTypeSpec{.type = NocSendType::NOC_UNICAST_ATOMIC_INC};
     base_sync_pattern.size = 0;                                     // No payload, just sync signal
     base_sync_pattern.num_packets = 1;                              // Single sync signal
     base_sync_pattern.atomic_inc_val = 1;                           // Increment by 1
@@ -2648,8 +2736,9 @@ void TestConfigBuilder::resolve_missing_params(ParsedTestConfig& test) {
                         get_random_choice<ChipSendType>({ChipSendType::CHIP_UNICAST, ChipSendType::CHIP_MULTICAST});
                 }
                 if (!pattern.ntype.has_value()) {
-                    pattern.ntype = get_random_choice<NocSendType>(
-                        {NocSendType::NOC_UNICAST_WRITE, NocSendType::NOC_UNICAST_ATOMIC_INC});
+                    pattern.ntype = NocSendTypeSpec{
+                        .type = get_random_choice<NocSendType>(
+                            {NocSendType::NOC_UNICAST_WRITE, NocSendType::NOC_UNICAST_ATOMIC_INC})};
                 }
                 if (!pattern.size.has_value()) {
                     pattern.size = get_random_in_range(64, 2048);
@@ -2682,7 +2771,7 @@ void TestConfigBuilder::resolve_missing_params(ParsedTestConfig& test) {
                     pattern.ftype = ChipSendType::CHIP_UNICAST;
                 }
                 if (!pattern.ntype.has_value()) {
-                    pattern.ntype = NocSendType::NOC_UNICAST_WRITE;
+                    pattern.ntype = NocSendTypeSpec{.type = NocSendType::NOC_UNICAST_WRITE};
                 }
                 if (!pattern.size.has_value()) {
                     pattern.size = 1024;  // Default from cmdline parser
@@ -2799,6 +2888,22 @@ std::string YamlTestConfigSerializer::to_string(NocSendType ntype) {
     return detail::noc_send_type_mapper.to_string(ntype, "NocSendType");
 }
 
+void YamlTestConfigSerializer::to_yaml(YAML::Emitter& out, const NocSendTypeSpec& spec) {
+    if (spec.options == NocSendTypeOptions{}) {
+        out << to_string(spec.type);
+        return;
+    }
+    out << YAML::Flow << YAML::BeginMap;
+    out << YAML::Key << "type" << YAML::Value << to_string(spec.type);
+    if (spec.options.atomic_inc) {
+        out << YAML::Key << "atomic_inc" << YAML::Value << true;
+    }
+    if (spec.options.flush) {
+        out << YAML::Key << "flush" << YAML::Value << true;
+    }
+    out << YAML::EndMap;
+}
+
 std::string YamlTestConfigSerializer::to_string(RoutingDirection dir) {
     return detail::routing_direction_mapper.to_string(dir, "RoutingDirection");
 }
@@ -2824,7 +2929,8 @@ void YamlTestConfigSerializer::to_yaml(YAML::Emitter& out, const TrafficPatternC
     }
     if (config.ntype) {
         out << YAML::Key << "ntype";
-        out << YAML::Value << to_string(config.ntype.value());
+        out << YAML::Value;
+        to_yaml(out, config.ntype.value());
     }
     if (config.size) {
         out << YAML::Key << "size";
