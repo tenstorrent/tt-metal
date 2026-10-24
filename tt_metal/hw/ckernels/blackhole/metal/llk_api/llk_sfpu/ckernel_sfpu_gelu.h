@@ -109,7 +109,7 @@ sfpi_inline sfpi::vFloat x_times_exp_negative_tail(sfpi::vFloat x, sfpi::vFloat 
 //   x >= 2.78125:                  Identity (result = x)
 //   -3.125 <= x < 2.78125:         Core CDF polynomial (degree-13 in u=x²)
 //   -5.54259443 < x < -3.125:      Moroz exp_21f: GELU = x · round_to_grid(H), H = exp(-x²/2)·corr_H
-//   x <= -5.54259443:               Zero (matches torch.gelu BF16 saturation)
+//   x <= -5.54259443:               Zero (matches torch.gelu BF16 saturation); NaN and -inf give NaN
 //
 // Deep-tail grid rounding: in the deep tail (-5.54259443, -4.828125] torch computes
 // GELU(x) = x · float32(½·erfc(|x|/√2)) where the float32 ½·erfc is a *staircase*
@@ -148,10 +148,11 @@ constexpr float GELU_HCORR_C3 = 7.5950479368e-04f;
 // Forward GELU Evaluation with CDF Polynomial Approximation
 // GELU(x) = x * Phi(x) where Phi is approximated piecewise
 sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
-    sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -5.54259443 (torch saturation)
     sfpi::vFloat x2 = x * x;
+    sfpi::vFloat result = x - x;
 
-    v_if(x > -5.54259443f) {
+    // -5.54296875f, not the -5.54259443f below: both select the same bf16 inputs.
+    v_if(x > -5.54296875f) {
         // Shared smooth H ≈ ½·erfc(|x|/√2) via Moroz exp_21f · corr_H.
         constexpr float NEG_HALF_ONE_LN2 = -0.72134752044f;  // -0.5 / ln(2)
         sfpi::vFloat xlog2 = x2 * NEG_HALF_ONE_LN2 + 127.0f;
