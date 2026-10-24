@@ -247,7 +247,11 @@ class Qwen38LaneLayout:
 
         lanes = require_lane_count(self.lanes, label="lane layout lanes", error_type=RuntimeError)
         context = qsa_module.validate_qsa_cache_capacity(self.allocated_context)
-        if len({len(self.kv), len(self.compressed), len(self.staging), len(self.ring)}) != 1:
+        # kv may be empty: the PAGED plain body's pool is not moved by the pager (kv_page_scatter admits it)
+        if len({len(self.compressed), len(self.staging), len(self.ring)}) != 1 or len(self.kv) not in (
+            0,
+            len(self.compressed),
+        ):
             raise RuntimeError(
                 f"QSA lane families must hold one tensor per QSA layer each, got kv {len(self.kv)} compressed "
                 f"{len(self.compressed)} staging {len(self.staging)} ring {len(self.ring)}"

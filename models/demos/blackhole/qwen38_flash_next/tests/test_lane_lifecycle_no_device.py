@@ -347,7 +347,8 @@ def test_lane_shapes_match_the_component_states():
     # The QSA / GDN / PLE lane-state sources allocate exactly these shapes.
     qsa = inspect.getsource(lanes_module.qsa_module.Qwen38TTNNQSA.allocate_lane_state)
     assert (
-        "(1, 1, lanes * self.allocated_context + kv_scratch_rows, 2 * HEAD_DIM)" in qsa
+        "kv_rows = pool_rows if pool_rows else lanes * self.allocated_context + kv_scratch_rows" in qsa
+        and "(1, 1, kv_rows, 2 * HEAD_DIM)" in qsa
         and "(lanes, 1, rows, INDEX_HEAD_DIM)" in qsa
     )
     assert "(1, lanes, CACHE_WRITE_ROWS, 2 * HEAD_DIM)" in qsa and "(1, lanes, CACHE_WRITE_ROWS, INDEX_HEAD_DIM)" in qsa

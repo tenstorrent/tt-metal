@@ -934,7 +934,7 @@ def test_lane_body_is_the_decode_walk_on_the_lane_layout_and_the_other_bodies_ar
         "self._score_blocks_lanes(index_query, state, lanes, lane_constants)",
         "self._materialize_rows_lanes(masked_scores, lanes, constants, lane_constants)",
         "self._main_projection_rows(full_hidden, None, cos, sin, constants)",
-        "self._write_packed_kv_lanes(state, key, value, lanes)",
+        "self._write_packed_kv_lanes(state, key, value, lanes, lane_constants)",
         "self._sparse_value_attention_rows(query, gate, sparse_indices, state, constants)",
         "self._project_output_rows(local_attention, full_hidden, constants)",
     )
@@ -1007,4 +1007,5 @@ def test_lane_body_is_the_decode_walk_on_the_lane_layout_and_the_other_bodies_ar
         "kv_staging",
         "raw_key_ring",
         "kv_scratch_rows",  # the MTP lane verify's redirect region past the last lane (0 for the plain lanes)
+        "pool_rows",  # the PAGED plain body's page pool rows (0: the flat per-lane cache)
     )

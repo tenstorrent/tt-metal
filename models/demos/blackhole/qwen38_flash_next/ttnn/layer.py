@@ -1559,12 +1559,17 @@ class Qwen38TTNNDecoderLayer:
             raise ValueError(f"lane MoE must be a rows-{lanes} instance over this layer's weights")
         return lanes
 
-    def allocate_lane_state(self, lanes: int) -> Qwen38TTNNDecoderLayerLaneState:
+    def allocate_lane_state(self, lanes: int, *, pool_rows: int = 0) -> Qwen38TTNNDecoderLayerLaneState:
         """Allocate this layer's B-lane buffers before any capture: the lane attention state, the PLE lanes state,
-        the rows-B MoE and (a QSA layer below 32 lanes) the persistent attention rows."""
+        the rows-B MoE and (a QSA layer below 32 lanes) the persistent attention rows.  ``pool_rows``: a QSA layer's
+        PAGED KV pool rows (0: the flat per-lane cache)."""
 
         lanes = require_lane_count(lanes, label="decoder-layer lanes")
-        attention = self.attention.allocate_lane_state(lanes)
+        attention = (
+            self.attention.allocate_lane_state(lanes, pool_rows=pool_rows)
+            if pool_rows and isinstance(self.attention, Qwen38TTNNQSA)
+            else self.attention.allocate_lane_state(lanes)
+        )
         ple = None
         moe = None
         attention_rows = None

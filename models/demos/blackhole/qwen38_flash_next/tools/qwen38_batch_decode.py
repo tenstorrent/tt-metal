@@ -13,10 +13,18 @@ one new greedy token per lane.
 
 Residue-free: the lanes sit at any positions (the GDN lane state keeps a per-lane conv shift register, see
 ``Qwen38TTNNGDNState.fixed_phase``).  Not a scheduler, no MTP, no mid-batch admission.
+
+Paged KV (P1c-B, ``paging=Qwen38LanePaging(...)``): the lanes' QSA KV is one page pool per layer plus one page table
+(``model.write_lane_page_table``).  ``Qwen38PageAllocator`` hands a lane ``ceil((P + decode_steps + 1) / page_size)``
+pages from a seeded-shuffled free list over pages ``1 .. num_pages - 1`` (page 0 is the scratch, never handed out), so
+the pages are non-contiguous and interleaved across lanes.  Admission writes the table, scatters the B=1 prefill's KV
+into the lane's pages (``model.admit_lane_kv_paged``) and moves the other families through the host pager (the pager
+layouts exclude the KV family).
 """
 
 from __future__ import annotations
 
+import random
 import time
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -30,8 +38,51 @@ import ttnn
 from models.demos.blackhole.qwen38_flash_next.tools import resident_decode
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import Qwen38TracedChain
 from models.demos.blackhole.qwen38_flash_next.ttnn.lanes import Qwen38LaneHostPool, Qwen38TTNNLanePager
+from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import Qwen38LanePaging
 
 WARM_TOKEN_ID = 1000  # any in-vocabulary id: the warm passes write garbage into lane state that a reset clears
+
+
+def lane_page_count(prompt_len: int, decode_steps: int, page_size: int) -> int:
+    """Pages of one lane: its prompt, the ``decode_steps`` decoded tokens and the one token consumed by the last step."""
+
+    return -(-(prompt_len + decode_steps + 1) // page_size)
+
+
+def page_table_rows(page_rows: Sequence[Sequence[int]], lanes: int) -> list[list[int]]:
+    """The host page-table rows ``write_lane_page_table`` takes: row u = lane u's pages (empty for a free lane)."""
+
+    if len(page_rows) != lanes:
+        raise ValueError(f"expected {lanes} page rows, got {len(page_rows)}")
+    return [list(row) for row in page_rows]
+
+
+class Qwen38PageAllocator:
+    """Host free list over pages ``1 .. num_pages - 1`` in a seeded-shuffled order (page 0, the scratch, is never
+    handed out): consecutive allocations are not contiguous and interleave across lanes."""
+
+    def __init__(self, num_pages: int, seed: int = 0) -> None:
+        if num_pages < 2:
+            raise ValueError(f"the allocator needs at least 2 pages, got {num_pages}")
+        self.num_pages = num_pages
+        self._rng = random.Random(seed)
+        self.free: list[int] = list(range(1, num_pages))
+        self._rng.shuffle(self.free)
+
+    def allocate(self, count: int) -> list[int]:
+        if count < 1 or count > len(self.free):
+            raise RuntimeError(f"cannot allocate {count} pages, {len(self.free)} free of {self.num_pages - 1}")
+        pages = [self.free.pop() for _ in range(count)]
+        return pages
+
+    def release(self, pages: Sequence[int]) -> None:
+        owned = set(self.free)
+        for page in pages:
+            if not 1 <= page < self.num_pages or page in owned:
+                raise RuntimeError(f"page {page} is not allocated")
+            owned.add(page)
+        self.free.extend(pages)
+        self._rng.shuffle(self.free)
 
 
 def greedy_sampling_params() -> SimpleNamespace:
@@ -72,8 +123,14 @@ def chain_warm_hook(hook):
 class Qwen38PlainLaneDecoder:
     """B lanes of the plain lane body over one adapter; see the module docstring."""
 
-    def __init__(self, lanes: int) -> None:
+    def __init__(
+        self, lanes: int, paging: Qwen38LanePaging | None = None, decode_steps: int = 32, seed: int = 0
+    ) -> None:
         self.lanes = lanes
+        self.paging = paging
+        self.decode_steps = decode_steps
+        self.allocator = None if paging is None else Qwen38PageAllocator(paging.num_pages, seed)
+        self.page_rows: list[list[int]] = [[] for _ in range(lanes)]
         self.vm = self.chain = self.mesh = self.model = None
         self.positions: list[int | None] = [None] * lanes  # P_u: the prompt length, the lane's start position
         self.contexts: list[Any] = [None] * lanes
@@ -81,7 +138,7 @@ class Qwen38PlainLaneDecoder:
         self.pager_g = self.pager_l = self.pool = None
         self.captures: list[Any] = []
         self.trace_ids: list[int] = []
-        self.timing: dict[str, float] = {}
+        self.timing: dict[str, Any] = {}
         self.released = False
 
     # -- the two build phases ----------------------------------------------------------------------
@@ -96,8 +153,9 @@ class Qwen38PlainLaneDecoder:
         self.model = model = chain.built_target.model
         lanes = self.lanes
         started = time.perf_counter()
-        self.ls = ls = model.allocate_lane_state(lanes, indexer_form="wide", residue_free=True)
-        gl = model.generic_lane_layout(chain.state)
+        paging = self.paging
+        self.ls = ls = model.allocate_lane_state(lanes, indexer_form="wide", residue_free=True, paged=paging)
+        gl = model.generic_lane_layout(chain.state, exclude_kv=paging is not None)
         ll = model.lane_layout(ls)
         self.pager_g = Qwen38TTNNLanePager(mesh, model.mesh_contract, gl)
         self.pager_l = Qwen38TTNNLanePager(mesh, model.mesh_contract, ll, buffers=self.pager_g)
@@ -114,6 +172,11 @@ class Qwen38PlainLaneDecoder:
         model.reset_lane_state_inplace(ls, zeros)
         for lane in range(lanes):
             model.admit_lane(ls, lane, 0, rope_shift=0)
+        if paging is not None:
+            # compile the scatter on the all-zero table (every write lands in the scratch page 0)
+            for lane in sorted({0, lanes - 1}):
+                model.admit_lane_kv_paged(ls, chain.state, lane, ttnn.TILE_SIZE)
+            ttnn.synchronize_device(mesh)
         model.reset_lane_state_inplace(ls, zeros)
         contexts: Sequence[Any] = [None] * lanes
         tokens = [WARM_TOKEN_ID] * lanes
@@ -182,6 +245,7 @@ class Qwen38PlainLaneDecoder:
 
         vm, model, ls = self.vm, self.model, self.ls
         length = len(prompt_ids)
+        started = time.perf_counter()
         out, _ = vm.prefill_forward(
             tokens=torch.tensor([list(prompt_ids)], dtype=torch.int32),
             page_table=None,
@@ -196,17 +260,41 @@ class Qwen38PlainLaneDecoder:
         context = vm.slot.ple_context
         if len(vm.slot.committed) != length:
             raise RuntimeError(f"adapter committed {len(vm.slot.committed)} tokens, expected {length}")
+        prefilled = time.perf_counter()
         slot = self.pool.slots[0]
+        if self.paging is not None:
+            if self.page_rows[lane]:
+                raise RuntimeError(f"lane {lane} still holds pages: release_lane first")
+            self.page_rows[lane] = self.allocator.allocate(
+                lane_page_count(length, self.decode_steps, self.paging.page_size)
+            )
+            model.write_lane_page_table(ls, page_table_rows(self.page_rows, self.lanes))
         self.pager_g.evict(0, slot)
         self.pager_g.rotate_ring_canonical(slot, length)
         slot.position = length
         model.admit_lane(ls, lane, length, rope_shift=0)
+        if self.paging is not None:
+            model.admit_lane_kv_paged(ls, self.chain.state, lane, length)
         self.pager_l.readmit(slot, lane, position_row=None)
         ttnn.synchronize_device(self.mesh)
+        self.timing.setdefault("admit_s", []).append(time.perf_counter() - prefilled)
+        self.timing.setdefault("admit_with_prefill_s", []).append(time.perf_counter() - started)
         vm.release_request(0)
         self.positions[lane] = length
         self.contexts[lane] = context
         return first_token
+
+    def release_lane(self, lane: int) -> None:
+        """Free lane ``lane``'s pages (paged mode) and zero its page-table row; the lane then writes to the scratch
+        page until it is admitted again."""
+
+        if self.paging is None:
+            raise RuntimeError("release_lane frees pages: the decoder is not paged")
+        self.allocator.release(self.page_rows[lane])
+        self.page_rows[lane] = []
+        self.model.write_lane_page_table(self.ls, page_table_rows(self.page_rows, self.lanes))
+        self.positions[lane] = None
+        self.contexts[lane] = None
 
     # -- decode ------------------------------------------------------------------------------------
 

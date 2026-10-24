@@ -1871,16 +1871,52 @@ INDEXER_FORMS = ("wide", "per_lane")
 LANE_CORE_GRID_WIDTH = 8
 
 
-def lane_kv_offsets(lanes: int, allocated_context: int) -> list[int]:
+@dataclass(frozen=True)
+class Qwen38LanePaging:
+    """Opt-in PAGED KV of the plain lane body: every QSA layer's lane cache is one pool
+    ``[1,1,num_pages*page_size,512]`` and a persistent int32 page table ``[1,1,32,max_blocks]`` (row u = lane u,
+    idle rows 0) maps lane-local token ``v`` to pool row ``table[u][v >> log2(page_size)] * page_size + v % page_size``.
+    Page 0 is the reserved scratch page (never handed to a lane; the idle rows' writes land there)."""
+
+    page_size: int
+    num_pages: int
+    max_blocks: int
+
+    def validate(self, allocated_context: int) -> "Qwen38LanePaging":
+        for name in ("page_size", "num_pages", "max_blocks"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or type(value) is not int:
+                raise ValueError(f"lane paging {name} must be an int, got {value!r}")
+        if self.page_size < ttnn.TILE_SIZE or self.page_size & (self.page_size - 1):
+            raise ValueError(f"lane paging page_size must be a power of two >= {ttnn.TILE_SIZE}, got {self.page_size}")
+        if self.max_blocks < 8 or self.max_blocks % 8:
+            raise ValueError(f"lane paging max_blocks must be a positive multiple of 8, got {self.max_blocks}")
+        if self.max_blocks * self.page_size < allocated_context:
+            raise ValueError(
+                f"lane paging max_blocks {self.max_blocks} x page_size {self.page_size} must cover the allocated "
+                f"context {allocated_context}"
+            )
+        if self.num_pages < 2:
+            raise ValueError(f"lane paging num_pages must be >= 2 (page 0 is scratch), got {self.num_pages}")
+        return self
+
+    @property
+    def pool_rows(self) -> int:
+        return self.num_pages * self.page_size
+
+
+def lane_kv_offsets(lanes: int, allocated_context: int, *, paged: bool = False) -> list[int]:
     """Row offset of every lane's KV region in the flat cache: ``u * C`` for the active lanes, 0 for idle rows (their
     ids then point into lane 0's region, always in range)."""
 
     lanes = require_lane_count(lanes, label="QSA lane count")
     capacity = validate_qsa_cache_capacity(allocated_context)
+    if paged:  # lane-local ids: the page table carries the lane's region
+        return [0] * MAX_LANES
     return [lane * capacity if lane < lanes else 0 for lane in range(MAX_LANES)]
 
 
-def qsa_lane_constant_rows(lanes: int, allocated_context: int) -> dict[str, torch.Tensor]:
+def qsa_lane_constant_rows(lanes: int, allocated_context: int, *, paged: bool = False) -> dict[str, torch.Tensor]:
     """Host images of the lane constants (UINT32 rows as int64; the bf16 select tiles as float).
 
     ``arange32_tile`` ``[1,1,32,32]`` element ``(r, u) = r``; ``lane_indicator`` ``[1,B,32,32]`` element
@@ -1889,7 +1925,7 @@ def qsa_lane_constant_rows(lanes: int, allocated_context: int) -> dict[str, torc
     row ``u``'s offset.
     """
 
-    offsets = torch.tensor(lane_kv_offsets(lanes, allocated_context), dtype=torch.int64)
+    offsets = torch.tensor(lane_kv_offsets(lanes, allocated_context, paged=paged), dtype=torch.int64)
     rows = torch.arange(MAX_LANES, dtype=torch.int64)
     indicator = torch.zeros(1, lanes, MAX_LANES, MAX_LANES)
     for lane in range(lanes):
@@ -1921,6 +1957,9 @@ class Qwen38TTNNQSALaneConstants:
     UINT32 TILE ``arange32_tile``; BF16 TILE ``lane_indicator``; UINT32 ROW_MAJOR ``kv_offsets_row``,
     ``block_offsets_lanes``, ``arange_slots_lanes``; ``compressed_rows_memory_config`` height-shards the
     ``[1,B,1,128]`` compressed rows one user per core; ``indexer_form`` picks the wide or the per-lane indexer.
+    PAGED (``paging`` / ``page_table`` / ``page_size``, the plain lane body only): the three offset constants carry
+    ZERO lane offsets (lane-local ids) and ``page_table`` (INT32 ROW_MAJOR ``[1,1,32,max_blocks]``, host-written in
+    place, fixed address) is the one page table every QSA layer's selection row and KV write read.
     """
 
     lanes: int
@@ -1932,6 +1971,12 @@ class Qwen38TTNNQSALaneConstants:
     block_offsets_lanes: Any
     arange_slots_lanes: Any
     compressed_rows_memory_config: Any
+    paging: Qwen38LanePaging | None = None
+    page_table: Any = None
+
+    @property
+    def page_size(self) -> int:
+        return 0 if self.paging is None else self.paging.page_size
 
     @classmethod
     def build(
@@ -1942,13 +1987,16 @@ class Qwen38TTNNQSALaneConstants:
         lanes: int,
         allocated_context: int,
         indexer_form: str = "wide",
+        paging: Qwen38LanePaging | None = None,
     ) -> "Qwen38TTNNQSALaneConstants":
         mesh_contract.validate_mesh(mesh_device)
         lanes = require_lane_count(lanes, label="QSA lane count")
         allocated_context = validate_qsa_cache_capacity(allocated_context)
         if indexer_form not in INDEXER_FORMS:
             raise ValueError(f"QSA lane indexer form must be one of {INDEXER_FORMS}, got {indexer_form!r}")
-        host = qsa_lane_constant_rows(lanes, allocated_context)
+        if paging is not None:
+            paging.validate(allocated_context)
+        host = qsa_lane_constant_rows(lanes, allocated_context, paged=paging is not None)
         uploaded: list[Any] = []
 
         def upload_uint32(name: str, layout):
@@ -1968,6 +2016,18 @@ class Qwen38TTNNQSALaneConstants:
             uploaded.append(indicator)
             _require_shape(indicator, (1, lanes, MAX_LANES, MAX_LANES), "QSA lane indicator")
             mesh_contract.validate_tensor(indicator, placement=TensorPlacement.REPLICATED)
+            page_table = None
+            if paging is not None:
+                page_table = ttnn.from_torch(
+                    torch.zeros(1, 1, MAX_LANES, paging.max_blocks, dtype=torch.int32),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=replicate_tensor_2d_mesh_mapper(mesh_device),
+                )
+                uploaded.append(page_table)
+                mesh_contract.validate_tensor(page_table, placement=TensorPlacement.REPLICATED)
             return cls(
                 lanes=lanes,
                 allocated_context=allocated_context,
@@ -1984,6 +2044,8 @@ class Qwen38TTNNQSALaneConstants:
                     ttnn.ShardOrientation.ROW_MAJOR,
                     use_height_and_width_as_shard_shape=True,
                 ),
+                paging=paging,
+                page_table=page_table,
             )
         except BaseException:
             _deallocate(*uploaded)
@@ -1996,6 +2058,7 @@ class Qwen38TTNNQSALaneConstants:
             self.kv_offsets_row,
             self.block_offsets_lanes,
             self.arange_slots_lanes,
+            *(() if self.page_table is None else (self.page_table,)),
         )
 
 
@@ -2624,6 +2687,9 @@ class Qwen38TTNNQSALaneState:
     # Scratch rows past the last lane's region ([B*C, B*C + kv_scratch_rows)): the MTP lanes verify redirects an
     # inactive lane's two KV block writes there, so no write of a parked lane can land in another lane's region.
     kv_scratch_rows: int = 0
+    # PAGED (the plain lane body's page pool): ``packed_kv_cache`` is the pool ``[1,1,pool_rows,512]`` (0: the flat
+    # ``[1,1,B*C + kv_scratch_rows,512]`` cache).
+    pool_rows: int = 0
 
 
 # --------------------------------------------------------------------------- lane verify (B lanes x R rows, one tile)
@@ -4913,10 +4979,13 @@ class Qwen38TTNNQSA:
         _require_shape(masked, (1, 1, 1, self.allocated_compressed_blocks), "masked QSA block scores")
         return masked
 
-    def _materialize_row_fused(self, masked_scores, position, *, rows: int = 1, block_offsets=None):
+    def _materialize_row_fused(
+        self, masked_scores, position, *, rows: int = 1, block_offsets=None, page_table=None, page_size: int = 0
+    ):
         """The top-k, then the fused selection row (ttnn/fused/qsa_block.selection_row) in place of the integer chain
         of :meth:`_materialize_row_generic`.  ``rows`` valid rows; ``block_offsets`` the offsets row(s) the expanded
-        ids take (the module's one row by default; the lanes pass their per-lane rows, row u = offsets + u * C)."""
+        ids take (the module's one row by default; the lanes pass their per-lane rows, row u = offsets + u * C).
+        ``page_table`` / ``page_size``: the PAGED selection row (the lanes' page pool, lane-local ids)."""
 
         block_ids = ttnn.experimental.topk_large_indices(masked_scores, k=BLOCK_TOPK)
         _deallocate(masked_scores)
@@ -4927,6 +4996,7 @@ class Qwen38TTNNQSA:
             self.block_offsets if block_offsets is None else block_offsets,
             position.row_keep_bits,
             position.row_fill,
+            **({} if page_table is None else {"page_table": page_table, "page_size": page_size}),
         )
         _deallocate(block_ids)
         _require_shape(sparse_indices, (1, 1, rows, SPARSE_INDEX_CAPACITY), "fused QSA sparse indices")
@@ -4935,7 +5005,18 @@ class Qwen38TTNNQSA:
         return sparse_indices
 
     def _main_tail_step(
-        self, full_hidden, cos, sin, state, position, projections=None, *, rows: int = 1, lane_rows: int = 0
+        self,
+        full_hidden,
+        cos,
+        sin,
+        state,
+        position,
+        projections=None,
+        *,
+        rows: int = 1,
+        lane_rows: int = 0,
+        page_table=None,
+        page_size: int = 0,
     ):
         """The three main linears, then the fused main tail (ttnn/fused/qsa_block.main_tail) in place of the chain after
         them in :meth:`_main_projection`, :meth:`_write_packed_kv_generic` and the query build of
@@ -4943,7 +5024,8 @@ class Qwen38TTNNQSA:
         program, released there).  With ``projections`` (the merged shard of :meth:`_project_merged`, the one-row
         served path) the linears do not run: the tail reads the qg, k and v windows of that shard, which is returned as
         the qg shard.  ``rows`` valid rows; ``lane_rows`` = the KV rows per lane of a lane state's flat cache (lane u's
-        block lands at u * lane_rows + (P_u & ~31); 0 for the 1-row cache)."""
+        block lands at u * lane_rows + (P_u & ~31); 0 for the 1-row cache); ``page_table`` / ``page_size``: the PAGED
+        main tail (the cache is the lanes' page pool)."""
 
         if projections is None:
             qg_ws = ttnn.linear(
@@ -4983,6 +5065,7 @@ class Qwen38TTNNQSA:
             state.kv_staging,
             state.packed_kv_cache,
             lane_rows=lane_rows,
+            **({} if page_table is None else {"page_table": page_table, "page_size": page_size}),
             qg_first=qg_first,
             k_first=k_first,
             v_first=v_first,
@@ -6927,11 +7010,15 @@ class Qwen38TTNNQSA:
     # out of its own compressed cache, the KV slabs written per lane into the flat cache.  The 1-row generic body
     # and the chunk body above are untouched.
 
-    def allocate_lane_state(self, lanes: int, *, kv_scratch_rows: int = 0) -> Qwen38TTNNQSALaneState:
+    def allocate_lane_state(
+        self, lanes: int, *, kv_scratch_rows: int = 0, pool_rows: int = 0
+    ) -> Qwen38TTNNQSALaneState:
         """Allocate the fixed-address caches, staging tiles and raw-key rings of ``lanes`` decode lanes.
 
         ``kv_scratch_rows`` (a multiple of 32) appends that many rows past the last lane's KV region: the MTP lanes
-        verify's redirect target for an inactive lane's block writes (the plain lane body never addresses them)."""
+        verify's redirect target for an inactive lane's block writes (the plain lane body never addresses them).
+        ``pool_rows`` (a multiple of 32, with no scratch rows): the PAGED plain body's page pool replaces the flat
+        ``[1,1,B*C,512]`` cache."""
 
         lanes = require_lane_count(lanes, label="QSA lane count")
         if isinstance(kv_scratch_rows, bool) or type(kv_scratch_rows) is not int or kv_scratch_rows < 0:
@@ -6940,6 +7027,11 @@ class Qwen38TTNNQSA:
             raise ValueError(
                 f"QSA lane KV scratch rows must be whole blocks of {CACHE_WRITE_ROWS}, got {kv_scratch_rows}"
             )
+        if isinstance(pool_rows, bool) or type(pool_rows) is not int or pool_rows < 0 or pool_rows % CACHE_WRITE_ROWS:
+            raise ValueError(f"QSA lane pool rows must be a non-negative multiple of {CACHE_WRITE_ROWS}: {pool_rows!r}")
+        if pool_rows and kv_scratch_rows:
+            raise ValueError("a paged QSA lane state has no KV scratch rows (page 0 is the scratch)")
+        kv_rows = pool_rows if pool_rows else lanes * self.allocated_context + kv_scratch_rows
         rows = self.allocated_compressed_blocks + ttnn.TILE_SIZE
         epoch = self._next_epoch
         self._next_epoch += 1
@@ -6951,14 +7043,13 @@ class Qwen38TTNNQSA:
             layer_index=self.layer_index,
             epoch=epoch,
             lanes=lanes,
-            packed_kv_cache=self._allocate_pair_grouped(
-                (1, 1, lanes * self.allocated_context + kv_scratch_rows, 2 * HEAD_DIM), layout=ttnn.ROW_MAJOR_LAYOUT
-            ),
+            packed_kv_cache=self._allocate_pair_grouped((1, 1, kv_rows, 2 * HEAD_DIM), layout=ttnn.ROW_MAJOR_LAYOUT),
             compressed_index_cache=compressed,
             compressed_index_cache_flat=flat,
             kv_staging=self._allocate_pair_grouped((1, lanes, CACHE_WRITE_ROWS, 2 * HEAD_DIM), layout=ttnn.TILE_LAYOUT),
             raw_key_ring=self._allocate_replicated_tile_zeros((1, lanes, CACHE_WRITE_ROWS, INDEX_HEAD_DIM)),
             kv_scratch_rows=kv_scratch_rows,
+            pool_rows=pool_rows,
         )
 
     def release_lane_state(self, state: Qwen38TTNNQSALaneState) -> None:
@@ -7016,11 +7107,18 @@ class Qwen38TTNNQSA:
         rows = self.allocated_compressed_blocks + ttnn.TILE_SIZE
         if state.kv_scratch_rows < 0 or state.kv_scratch_rows % CACHE_WRITE_ROWS:
             raise RuntimeError(f"QSA lane KV scratch rows must be whole blocks, got {state.kv_scratch_rows}")
+        if state.pool_rows < 0 or state.pool_rows % CACHE_WRITE_ROWS or (state.pool_rows and state.kv_scratch_rows):
+            raise RuntimeError(f"QSA lane pool rows must be whole blocks without scratch rows, got {state.pool_rows}")
         expected = (
             (
                 "packed QSA lane cache",
                 state.packed_kv_cache,
-                (1, 1, lanes * self.allocated_context + state.kv_scratch_rows, 2 * HEAD_DIM),
+                (
+                    1,
+                    1,
+                    state.pool_rows if state.pool_rows else lanes * self.allocated_context + state.kv_scratch_rows,
+                    2 * HEAD_DIM,
+                ),
             ),
             ("compressed lane index cache", state.compressed_index_cache, (lanes, 1, rows, INDEX_HEAD_DIM)),
             (
@@ -7342,6 +7440,13 @@ class Qwen38TTNNQSA:
         _require_shape(sparse_indices, (1, 1, MAX_LANES, SPARSE_INDEX_CAPACITY), "QSA lane sparse indices")
         if sparse_indices.dtype != ttnn.uint32 or sparse_indices.layout != ttnn.ROW_MAJOR_LAYOUT:
             raise RuntimeError(f"sparse QSA indices must be UINT32 ROW_MAJOR, got {tensor_metadata(sparse_indices)}")
+        if lane_constants.page_table is not None:  # PAGED: lane-local ids -> pool rows (sentinels kept)
+            from models.demos.blackhole.qwen38_flash_next.ttnn.fused import qsa_block
+
+            local = sparse_indices
+            sparse_indices = qsa_block.paged_rows_composed(local, lane_constants.page_table, lane_constants.page_size)
+            _deallocate(local)
+            _require_shape(sparse_indices, (1, 1, MAX_LANES, SPARSE_INDEX_CAPACITY), "paged QSA lane sparse indices")
         self.mesh_contract.validate_tensor(sparse_indices, placement=TensorPlacement.REPLICATED)
         return sparse_indices
 
@@ -7351,6 +7456,7 @@ class Qwen38TTNNQSA:
         key,
         value,
         lanes: Qwen38TTNNQSALaneInputs,
+        lane_constants: Qwen38TTNNQSALaneConstants | None = None,
     ) -> None:
         count = state.lanes
         packed_rows = ttnn.concat([value, key], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -7372,8 +7478,21 @@ class Qwen38TTNNQSA:
         if _tensor_key(staged) != _tensor_key(state.kv_staging):
             raise RuntimeError("QSA lane KV staging update was not in place")
         _deallocate(kept, placed)
+        paged = lane_constants is not None and lane_constants.page_table is not None
         self._write_kv_slabs_lanes(
-            state, state.kv_staging, lanes.kv_row_start_lanes, label="filled QSA lane KV staging"
+            state,
+            state.kv_staging,
+            lanes.kv_row_start_lanes,
+            label="filled QSA lane KV staging",
+            **(
+                {
+                    "page_table": lane_constants.page_table,
+                    "page_size": lane_constants.page_size,
+                    "block_start": lanes.kv_block_start,
+                }
+                if paged
+                else {}
+            ),
         )
 
     def _write_kv_slabs_lanes(
@@ -7480,7 +7599,7 @@ class Qwen38TTNNQSA:
         sparse_indices = self._materialize_rows_lanes(masked_scores, lanes, constants, lane_constants)
 
         query, gate, key, value = self._main_projection_rows(full_hidden, None, cos, sin, constants)
-        self._write_packed_kv_lanes(state, key, value, lanes)
+        self._write_packed_kv_lanes(state, key, value, lanes, lane_constants)
         local_attention = self._sparse_value_attention_rows(query, gate, sparse_indices, state, constants)
         _deallocate(sparse_indices)
         output = self._project_output_rows(local_attention, full_hidden, constants)
@@ -7987,10 +8106,23 @@ class Qwen38TTNNQSA:
         masked_scores = self._score_blocks_lanes_fused(index_query, state, lanes, lane_constants)
         _deallocate(index_query)
         sparse_indices = self._materialize_row_fused(
-            masked_scores, lanes, rows=count, block_offsets=lane_constants.block_offsets_lanes
+            masked_scores,
+            lanes,
+            rows=count,
+            block_offsets=lane_constants.block_offsets_lanes,
+            page_table=lane_constants.page_table,
+            page_size=lane_constants.page_size,
         )
         sparse_query, qg_ws = self._main_tail_step(
-            full_hidden, cos_lanes, sin_lanes, state, lanes, rows=count, lane_rows=self.allocated_context
+            full_hidden,
+            cos_lanes,
+            sin_lanes,
+            state,
+            lanes,
+            rows=count,
+            lane_rows=self.allocated_context,
+            page_table=lane_constants.page_table,
+            page_size=lane_constants.page_size,
         )
         local_attention = self._sparse_value_attention_fused(sparse_query, qg_ws, sparse_indices, state, rows=count)
         _deallocate(sparse_indices)

@@ -9,6 +9,9 @@ every lane).  The B=1 reference is the adapter's greedy prefill plus 32 decode s
 same B=1 prefill and replay 32 batched steps.  The first 8 tokens of every lane must equal the reference and the pass
 key must appear in the lane output; the full 32-token equality is logged (near ties may differ).
 
+Paged ids (``batch_N_pagedS``, page size S): the lanes' KV is a page pool with a shuffled page table (P1c-B); the same
+checks.
+
 Run:  pytest models/demos/blackhole/qwen38_flash_next/tests/test_batch_decode_device.py -v -s -k batch_2
 Env:  as demo/text_demo.py (MODEL_WEIGHTS_DIR, QWEN38_CACHE_ROOT, TT_METAL_TRACE_ALLOC_TRACKING=1, MESH_DEVICE).
 """
@@ -32,10 +35,15 @@ from models.demos.blackhole.qwen38_flash_next.demo.text_demo import (  # noqa: F
     device_params,
     greedy_sampling_params,
 )
-from models.demos.blackhole.qwen38_flash_next.tools.qwen38_batch_decode import Qwen38PlainLaneDecoder, chain_warm_hook
+from models.demos.blackhole.qwen38_flash_next.tools.qwen38_batch_decode import (
+    Qwen38PlainLaneDecoder,
+    chain_warm_hook,
+    lane_page_count,
+)
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm import Qwen38ForCausalLM
 from models.demos.blackhole.qwen38_flash_next.ttnn.builder import RESIDENT_CONTEXT_HEADROOM
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import MESH_SHAPE
+from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import Qwen38LanePaging
 
 ALLOCATED_CONTEXT = 8192
 STEPS = 32
@@ -78,16 +86,21 @@ def reference_decode(vm, prompt_ids: list[int]) -> tuple[list[int], float]:
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize(
-    "lanes",
+    "lanes, page_size",
     [
-        pytest.param(2, id="batch_2", marks=pytest.mark.timeout(5400)),
-        pytest.param(4, id="batch_4", marks=pytest.mark.timeout(5400)),
-        pytest.param(8, id="batch_8", marks=pytest.mark.timeout(5400)),
-        pytest.param(16, id="batch_16", marks=pytest.mark.timeout(5400)),
-        pytest.param(32, id="batch_32", marks=pytest.mark.timeout(5400)),
+        pytest.param(2, 0, id="batch_2", marks=pytest.mark.timeout(5400)),
+        pytest.param(4, 0, id="batch_4", marks=pytest.mark.timeout(5400)),
+        pytest.param(8, 0, id="batch_8", marks=pytest.mark.timeout(5400)),
+        pytest.param(16, 0, id="batch_16", marks=pytest.mark.timeout(5400)),
+        pytest.param(32, 0, id="batch_32", marks=pytest.mark.timeout(5400)),
+        pytest.param(2, 64, id="batch_2_paged64", marks=pytest.mark.timeout(5400)),
+        pytest.param(8, 64, id="batch_8_paged64", marks=pytest.mark.timeout(5400)),
+        pytest.param(16, 64, id="batch_16_paged64", marks=pytest.mark.timeout(5400)),
+        pytest.param(32, 64, id="batch_32_paged64", marks=pytest.mark.timeout(5400)),
+        pytest.param(8, 32, id="batch_8_paged32", marks=pytest.mark.timeout(5400)),
     ],
 )
-def test_plain_lanes_match_single_user(mesh_device, lanes, tmp_path, record_property):
+def test_plain_lanes_match_single_user(mesh_device, lanes, page_size, tmp_path, record_property):
     if not os.environ.get("MODEL_WEIGHTS_DIR"):
         pytest.fail("set MODEL_WEIGHTS_DIR to the checkpoint directory")
     checkpoint = Path(os.environ["MODEL_WEIGHTS_DIR"])
@@ -112,9 +125,19 @@ def test_plain_lanes_match_single_user(mesh_device, lanes, tmp_path, record_prop
     ]
     assert len({len(p) % 4 for p in prompts}) > 1 or lanes < 2  # mixed residues
 
+    paging = None
+    if page_size:
+        pages = [lane_page_count(len(p), STEPS, page_size) for p in prompts]  # P + 33 rows
+        max_blocks = -(-ALLOCATED_CONTEXT // page_size)
+        paging = Qwen38LanePaging(page_size=page_size, num_pages=1 + sum(pages) + 8, max_blocks=-(-max_blocks // 8) * 8)
+        logger.info(
+            f"paged KV: page_size {page_size}, {paging.num_pages} pages = {paging.pool_rows} pool rows vs "
+            f"{lanes * ALLOCATED_CONTEXT} dense rows ({lanes} x {ALLOCATED_CONTEXT}); pages per lane {pages}"
+        )
+
     mesh_device.enable_program_cache()
     started = time.perf_counter()
-    decoder = Qwen38PlainLaneDecoder(lanes)
+    decoder = Qwen38PlainLaneDecoder(lanes, paging=paging, decode_steps=STEPS)
     with chain_warm_hook(decoder.prepare):
         vm = Qwen38ForCausalLM.initialize_vllm_model(
             SimpleNamespace(_name_or_path=str(checkpoint)), mesh_device, max_batch_size=1, max_seq_len=max_seq_len
@@ -136,6 +159,10 @@ def test_plain_lanes_match_single_user(mesh_device, lanes, tmp_path, record_prop
         logger.info(f"lane decoder captured in {build_s:.1f} s: {decoder.timing}")
 
         firsts = [decoder.admit(u, prompt) for u, prompt in enumerate(prompts)]
+        admit_s = decoder.timing.get("admit_s", [])
+        logger.info(f"admission per lane (after the B=1 prefill): mean {sum(admit_s) / len(admit_s):.3f} s, {admit_s}")
+        if paging is not None:
+            logger.info(f"page table rows: {decoder.page_rows}")
         assert firsts == [ref[0] for ref in references], f"admission t0 {firsts} vs reference"
 
         outputs = [[t] for t in firsts]
@@ -188,6 +215,10 @@ def test_plain_lanes_match_single_user(mesh_device, lanes, tmp_path, record_prop
             {
                 "schema": "qwen38-plain-lanes-p1b/v1",
                 "lanes": lanes,
+                "page_size": page_size,
+                "pool_rows": None if paging is None else paging.pool_rows,
+                "dense_rows": lanes * ALLOCATED_CONTEXT,
+                "page_rows": decoder.page_rows,
                 "steps": STEPS,
                 "model_ready_s": model_ready_s,
                 "decoder_build_s": build_s,

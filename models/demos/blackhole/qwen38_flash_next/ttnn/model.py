@@ -768,6 +768,19 @@ class Qwen38TTNNTextModelLaneState:
     qsa_lane_constants: qsa_module.Qwen38TTNNQSALaneConstants
     _owner: object = field(repr=False, compare=False)
 
+    @property
+    def paging(self) -> qsa_module.Qwen38LanePaging | None:
+        """The PAGED KV configuration of the plain lane body (None: the flat per-lane cache)."""
+
+        return self.qsa_lane_constants.paging
+
+    @property
+    def page_table(self):
+        """The one persistent page table ``[1,1,32,max_blocks]`` (None when not paged); see
+        ``Qwen38TTNNTextModel.write_lane_page_table``."""
+
+        return self.qsa_lane_constants.page_table
+
 
 @dataclass
 class Qwen38TTNNGenericDecodeOutput:
@@ -3187,19 +3200,41 @@ class Qwen38TTNNTextModel:
             )
         if not state.ple_rows.active or tuple(state.ple_rows.source_contexts) != (None,) * lanes:
             raise ValueError("the lane PLE rows must be live and prepared without host n-gram contexts")
+        paging = state.qsa_lane_constants.paging
+        if (paging is None) != (state.qsa_lane_constants.page_table is None):
+            raise ValueError("the QSA lane constants hold a page table exactly when they are paged")
+        if paging is not None:
+            if not getattr(state.position, "residue_free", False):
+                raise ValueError("a paged lane state is the residue-free plain body's")
+            table = state.qsa_lane_constants.page_table
+            if tuple(table.shape) != (1, 1, CHUNK_ROWS, paging.max_blocks) or table.dtype != ttnn.int32:
+                raise ValueError(f"the lane page table must be INT32 [1,1,32,{paging.max_blocks}], got {table}")
         return lanes
 
     def allocate_lane_state(
-        self, lanes: int, *, indexer_form: str = "wide", residue_free: bool = False
+        self,
+        lanes: int,
+        *,
+        indexer_form: str = "wide",
+        residue_free: bool = False,
+        paged: qsa_module.Qwen38LanePaging | None = None,
     ) -> Qwen38TTNNTextModelLaneState:
         """Allocate the position row, every layer's lane state, the lane constants and the host-written inputs of
         B lanes (before any capture).  The first call also builds the model-lifetime generic constants.
         ``residue_free``: the plain lane body for lanes at any positions: a residue-free position row and fixed-phase
         GDN lane states (a per-lane conv shift register, one trace for every step); a lane's GDN ring slots must be
-        rotated into the canonical order when it is admitted (``Qwen38TTNNLanePager.rotate_ring_canonical``)."""
+        rotated into the canonical order when it is admitted (``Qwen38TTNNLanePager.rotate_ring_canonical``).
+        ``paged`` (a :class:`~qsa.Qwen38LanePaging`, requires ``residue_free``): every QSA layer's lane cache is the
+        page pool of ``paged.num_pages`` pages and the lane constants carry the zero-offset ids and the one page table
+        (written by :meth:`write_lane_page_table`); the KV of an admitted lane is scattered into its pages by
+        :meth:`admit_lane_kv_paged`, not moved by the pager."""
 
         self._require_healthy()
         lanes = require_lane_count(lanes, label="text-model lanes")
+        if paged is not None:
+            if not residue_free:
+                raise ValueError("paged lane state requires residue_free=True (the plain lane body)")
+            paged.validate(self.allocated_context)
         if self.rope_table is None:
             self.rope_table = Qwen38TTNNRoPETable.build(
                 self.mesh_device, self.mesh_contract, self.config, self.allocated_context
@@ -3228,9 +3263,14 @@ class Qwen38TTNNTextModel:
                 lanes=lanes,
                 allocated_context=self.allocated_context,
                 indexer_form=indexer_form,
+                paging=paged,
             )
             for layer in self.layers:
-                allocated.append(layer.allocate_lane_state(lanes))
+                allocated.append(
+                    layer.allocate_lane_state(lanes)
+                    if paged is None
+                    else layer.allocate_lane_state(lanes, pool_rows=paged.pool_rows)
+                )
                 if residue_free and isinstance(allocated[-1].attention, gdn_module.Qwen38TTNNGDNState):
                     allocated[-1].attention.fixed_phase = True
             token_row = self.model_io.embedding.upload_token_row(0)
@@ -3332,6 +3372,68 @@ class Qwen38TTNNTextModel:
         except BaseException as error:
             self._mark_poisoned("admit_lane", 0, error)
 
+    def write_lane_page_table(self, state: Qwen38TTNNTextModelLaneState, rows: Sequence[Sequence[int]]) -> None:
+        """Host upload of the page table, in place (outside any trace): ``rows[u]`` = lane u's page ids (pages 1..
+        num_pages-1; page 0 is the reserved scratch), padded with 0 to ``max_blocks``; lanes without a row (and rows
+        past ``len(rows)`` up to 32) are all 0."""
+
+        self._validate_lane_state(state)
+        paging = state.paging
+        if paging is None:
+            raise ValueError("the lane state is not paged")
+        if len(rows) > CHUNK_ROWS:
+            raise ValueError(f"the page table has {CHUNK_ROWS} rows, got {len(rows)}")
+        host = torch.zeros(1, 1, CHUNK_ROWS, paging.max_blocks, dtype=torch.int32)
+        for lane, pages in enumerate(rows):
+            pages = [int(page) for page in pages]
+            if len(pages) > paging.max_blocks:
+                raise ValueError(f"lane {lane} holds {len(pages)} pages, the table {paging.max_blocks}")
+            if any(not 0 <= page < paging.num_pages for page in pages):
+                raise ValueError(f"lane {lane} page ids must be in [0, {paging.num_pages}), got {pages}")
+            host[0, 0, lane, : len(pages)] = torch.tensor(pages, dtype=torch.int32)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                host,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=replicate_tensor_2d_mesh_mapper(self.mesh_device),
+            ),
+            state.page_table,
+        )
+
+    def admit_lane_kv_paged(
+        self, state: Qwen38TTNNTextModelLaneState, chain_state: Qwen38TTNNTextModelGenericState, lane: int, rows: int
+    ) -> None:
+        """PAGED admission of the KV: for each of the 12 QSA layers copy rows ``[0, rows)`` (rounded up to 32) of the
+        generic B=1 cache into lane ``lane``'s pages of the pool (``kv_page_scatter``).  Call AFTER
+        :meth:`write_lane_page_table` wrote lane ``lane``'s row (with at least ``ceil(rows / page_size)`` pages)."""
+
+        from models.demos.blackhole.qwen38_flash_next.ttnn.fused.kv_page_scatter import kv_page_scatter
+
+        self._validate_lane_state(state)
+        self._validate_generic_state(chain_state)
+        paging = state.paging
+        if paging is None:
+            raise ValueError("the lane state is not paged")
+        if isinstance(lane, bool) or type(lane) is not int or not 0 <= lane < state.lanes:
+            raise ValueError(f"lane must be an int in [0,{state.lanes}), got {lane!r}")
+        if isinstance(rows, bool) or type(rows) is not int or not 1 <= rows <= self.allocated_context:
+            raise ValueError(f"rows must be an int in [1,{self.allocated_context}], got {rows!r}")
+        try:
+            for lane_layer, generic_layer in zip(state.layers, chain_state.layers):
+                if not isinstance(lane_layer.attention, qsa_module.Qwen38TTNNQSALaneState):
+                    continue
+                kv_page_scatter(
+                    generic_layer.attention.packed_kv_cache,
+                    lane_layer.attention.packed_kv_cache,
+                    state.page_table,
+                    lane=lane,
+                    rows=rows,
+                    page_size=paging.page_size,
+                )
+        except BaseException as error:
+            self._mark_poisoned("admit_lane_kv_paged", 0, error)
+
     def lane_layout(self, state: Qwen38TTNNTextModelLaneState) -> Qwen38LaneLayout:
         """The lane state's per-lane device tensors by family for the lane pager (``lanes.Qwen38TTNNLanePager``:
         eviction to the host pool and re-admission): the 12 QSA caches, staging tiles and rings, the 36 GDN
@@ -3347,7 +3449,7 @@ class Qwen38TTNNTextModel:
         layout = Qwen38LaneLayout(
             lanes=lanes,
             allocated_context=self.allocated_context,
-            kv=tuple(s.packed_kv_cache for s in qsa_states),
+            kv=() if state.paging is not None else tuple(s.packed_kv_cache for s in qsa_states),
             compressed=tuple(s.compressed_index_cache for s in qsa_states),
             staging=tuple(s.kv_staging for s in qsa_states),
             ring=tuple(s.raw_key_ring for s in qsa_states),
@@ -3358,7 +3460,9 @@ class Qwen38TTNNTextModel:
         layout.validate(self.mesh_contract)
         return layout
 
-    def generic_lane_layout(self, state: Qwen38TTNNTextModelGenericState) -> Qwen38LaneLayout:
+    def generic_lane_layout(
+        self, state: Qwen38TTNNTextModelGenericState, *, exclude_kv: bool = False
+    ) -> Qwen38LaneLayout:
         """The generic (single-lane) state's tensors as a 1-lane layout for the lane pager: the state the chunk
         trace prefills is packed into a host slot and re-admitted into a lane (the lane server's prefill import).
         The device position scalar and the GDN ring phases stay with the model (the importer resets them)."""
@@ -3374,7 +3478,7 @@ class Qwen38TTNNTextModel:
         layout = Qwen38LaneLayout(
             lanes=1,
             allocated_context=self.allocated_context,
-            kv=tuple(s.packed_kv_cache for s in qsa_states),
+            kv=() if exclude_kv else tuple(s.packed_kv_cache for s in qsa_states),
             compressed=tuple(s.compressed_index_cache for s in qsa_states),
             staging=tuple(s.kv_staging for s in qsa_states),
             ring=tuple(s.raw_key_ring for s in qsa_states),
