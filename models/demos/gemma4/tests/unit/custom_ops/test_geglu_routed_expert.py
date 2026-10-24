@@ -237,7 +237,11 @@ def test_geglu_grid_rule(mesh_device, device_params, monkeypatch):
     assert "Blackhole-only" in GegluRoutedExpert.grid_reason(13, 10, False)
     monkeypatch.setenv("GEMMA4_TEST_GRID", "8x8")
     reason = GegluRoutedExpert.unsupported_reason(mesh_device)
-    assert reason is not None and "8x8" in reason, reason
+    # The contract: an 8x8 grid is refused with the Blackhole-only reason. On a Blackhole the forced grid is the
+    # cause and the reason names it; on a Wormhole the architecture check fires first (its reason has no grid).
+    assert reason is not None and "Blackhole-only" in reason, reason
+    if is_blackhole():
+        assert "8x8" in reason, reason
     refused = False
     try:
         _Fixture(mesh_device, 256, 512, 2, 256, [[32, 32]] * mesh_device.get_num_devices(), "tile", seed=1).custom_op()
