@@ -232,7 +232,7 @@ ALWI void mul_tiles(
     // mul_tiles_initf();
     // first = false;
 
-    reconfig_data_format(icb0, icb1);
+    reconfig_full_operand(icb0, icb1);
     mul_init(icb0, icb1, acc_to_dest);
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
     MATH((llk_math_eltwise_binary<
@@ -296,7 +296,7 @@ ALWI void add_tiles(
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sub_tiles(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, bool acc_to_dest = false) {
-    reconfig_data_format(icb0, icb1);
+    reconfig_full_operand(icb0, icb1);
     sub_init(icb0, icb1, acc_to_dest);
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
     MATH((llk_math_eltwise_binary<
@@ -415,9 +415,9 @@ template <EltwiseBinaryType eltwise_binary_type, EltwiseBinaryReuseDestType reus
 ALWI void binary_reuse_dest_tiles(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
 #ifndef ARCH_QUASAR
     if constexpr (reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA) {
-        reconfig_data_format_srcb(in_cb_id);
+        reconfig_full_operand_srcb(in_cb_id);
     } else {
-        reconfig_data_format_srca(in_cb_id);
+        reconfig_full_operand_srca(in_cb_id);
     }
     binary_reuse_dest_init<eltwise_binary_type, reuse_dest>(in_cb_id, __builtin_LINE());
     UNPACK(constexpr bool acc_to_dest = true);

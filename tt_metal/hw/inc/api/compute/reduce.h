@@ -161,9 +161,9 @@ ALWI void reduce_tile(
     std::uint32_t idst,
     std::uint32_t ocb) {
     if constexpr ((reduce_dim == ReduceDim::REDUCE_ROW) && (reduce_type != PoolType::MAX)) {
-        reconfig_data_format(icb_scaler, icb);
+        reconfig_full_operand(icb_scaler, icb);
     } else {
-        reconfig_data_format(icb, icb_scaler);
+        reconfig_full_operand(icb, icb_scaler);
     }
     reduce_init<reduce_type, reduce_dim, is_fp32_dest_acc_en>(icb, icb_scaler, ocb);
 #ifndef ARCH_QUASAR
