@@ -128,8 +128,10 @@ class DecodeLinear:
 # gate_up 67.3 -> 63.4, down 40.1 -> 33.5 (wqkv tp8: no gain, no row). Rows are keyed by (model tag, op, tp);
 # Wormhole and any grid of <= 64 worker cores keep the single-reader kernel (the pipeline needs workers x 8 banks
 # worker cores and was measured on the 12x10 / 13x10 Blackhole grids only). ``GEMMA4_DRAM_SHARD_PIPELINE`` is the
-# switch: ``0`` = the single-reader kernel everywhere; the default is ``PIPELINE_DEFAULT`` (off until the
-# model-level traced A/B and the token-accuracy subset pass under the rows).
+# switch: ``0`` = the single-reader kernel everywhere; ``1`` = the pipeline with fp32 Dest accumulation
+# (``pipeline_fp32_acc``); ``l1acc`` = the pipeline with the packer-L1 accumulation (perf reference only); the
+# default is ``PIPELINE_DEFAULT`` (off until the model-level traced A/B and the token-accuracy subset pass);
+# a comma list of op names (``gate_up,down``) restricts the rows to those ops (``pipeline_ops_allowed``).
 
 PIPELINE_ENV = "GEMMA4_DRAM_SHARD_PIPELINE"
 PIPELINE_DEFAULT = "0"
@@ -173,7 +175,26 @@ def dram_sharded_pipeline_row(hidden_size, op: str, tp: int, grid_xy, blackhole:
     row = DRAM_SHARDED_PIPELINE_ROWS.get((model_tag(hidden_size), op, int(tp)))
     if row is None or row[0] * 8 > gx * gy:
         return None
+    if not pipeline_ops_allowed(op):
+        return None
     return row
+
+
+def pipeline_fp32_acc() -> bool:
+    """Whether pipelined rows accumulate the whole K in fp32 Dest (the switch's ``1`` / ``on``; no L1 partials, more
+    accurate than the single-reader kernel). ``GEMMA4_DRAM_SHARD_PIPELINE=l1acc`` keeps the packer-L1 form (16-bit
+    Dest groups, Float16_b L1 accumulator, bf16 partial exchange across the bank's workers): faster on the lab's
+    random data but 4 / 385 top-1 tokens worse on the 12B token-accuracy subset."""
+    return os.environ.get(PIPELINE_ENV, PIPELINE_DEFAULT).strip().lower() != "l1acc"
+
+
+def pipeline_ops_allowed(op: str) -> bool:
+    """The switch may name the ops the rows apply to (``GEMMA4_DRAM_SHARD_PIPELINE=gate_up,down``: the MLP only;
+    ``out_proj``): every other value (``1``, ``on``, ``l1acc``) allows all ops."""
+    env = os.environ.get(PIPELINE_ENV, PIPELINE_DEFAULT).strip().lower()
+    if env in ("1", "on", "true", "yes", "l1acc", "0", "false", "no", "off", ""):
+        return True
+    return op in {tok.strip() for tok in env.split(",")}
 
 
 def pipeline_row_for(mesh_device, hidden_size, op: str, tp: int):

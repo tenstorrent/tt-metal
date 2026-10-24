@@ -358,6 +358,23 @@ class DramShardedLinear:
             pc.use_multicore_pipeline = True
             self._decode_pc = pc
             self.pipeline_row = (workers, block_w)
+        # The pipeline splits a column's K over the bank's workers and, without fp32 Dest accumulation, adds the
+        # partials in bf16 (16-bit Dest groups + a Float16_b L1 accumulator + the bf16 partial exchange): on real
+        # activations that cost the 12B 4 / 385 top-1 tokens. With fp32 Dest accumulation the whole K of a column
+        # pass stays in fp32 Dest (no L1 partials), more accurate than the single-reader kernel; the caller's own
+        # compute config, when given, still wins. GEMMA4_DRAM_SHARD_PIPELINE=l1acc keeps the packer-L1 form.
+        self._pipeline_ckc = None
+        if pipeline_row is not None:
+            from models.demos.gemma4.tt.decode_matmul import pipeline_fp32_acc
+
+            if pipeline_fp32_acc():
+                self._pipeline_ckc = ttnn.init_device_compute_kernel_config(
+                    mesh_device.arch(),
+                    math_fidelity=ttnn.MathFidelity.LoFi,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=True,
+                    packer_l1_acc=False,
+                )
         self._decode_1d = None
         if decode_flag("GEMMA4_DRAM_SHARD_DECODE_1D") == "1":
             from models.demos.gemma4.tt.decode_matmul import decode_1d_progcfg, decode_compute_kernel_config
@@ -373,6 +390,10 @@ class DramShardedLinear:
 
     def _prefill_pc(self, m):
         return prefill_progcfg(m, self.k, self.n, max_cols=self._prefill_max_cols)
+
+    def _decode_ckc(self, compute_kernel_config):
+        """The decode kernel's compute config: the caller's, else the pipelined row's fp32-Dest config, else None."""
+        return compute_kernel_config if compute_kernel_config is not None else self._pipeline_ckc
 
     @property
     def act_memory_config(self):
@@ -390,7 +411,7 @@ class DramShardedLinear:
             x_sh,
             self.weight,
             program_config=self._decode_pc,
-            compute_kernel_config=compute_kernel_config,
+            compute_kernel_config=self._decode_ckc(compute_kernel_config),
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
         x_sh.deallocate(True)
@@ -474,7 +495,7 @@ class DramShardedLinear:
                     x_sh,
                     self.weight,
                     program_config=self._decode_pc,
-                    compute_kernel_config=compute_kernel_config,
+                    compute_kernel_config=self._decode_ckc(compute_kernel_config),
                     memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 )
                 x_sh.deallocate(True)

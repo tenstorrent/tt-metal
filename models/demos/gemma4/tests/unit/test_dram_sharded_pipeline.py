@@ -25,7 +25,9 @@ from models.demos.gemma4.tt.decode_matmul import (
 )
 from models.demos.gemma4.tt.dram_sharded import TILE_SIZE, DramShardedLinear, can_dram_shard
 
-SINGLE_CHIP = [pytest.param(1, {"fabric_config": ttnn.FabricConfig.DISABLED}, id="single-chip")]
+SINGLE_CHIP = [
+    pytest.param(1, {"fabric_config": ttnn.FabricConfig.DISABLED, "trace_region_size": 32_000_000}, id="single-chip")
+]
 HIDDEN = {"31B": 5376, "12B": 3840}
 # (model, op, tp) -> (K, N) of the lead shape (the sliding layers for qkv / out_proj)
 SHAPES = {
@@ -122,3 +124,89 @@ def test_pipeline_matches_single_reader(mesh_device, device_params, case, monkey
     assert _pcc(out_sh, out_pipe) > 0.99999
     for lin in (base, pipe):
         lin.weight.deallocate(True)
+
+
+def _traced_us(mesh_device, call, n_calls=10, replays=20):
+    """Traced wall per call: ``n_calls`` calls in one trace (one live output), ``replays`` replays, median of 3."""
+    import time
+
+    out = call()
+    ttnn.synchronize_device(mesh_device)
+    out.deallocate(True)
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    last = None
+    for i in range(n_calls):
+        o = call()
+        if i < n_calls - 1:
+            o.deallocate(True)
+        else:
+            last = o
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+    means = []
+    for _ in range(3):
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        for _ in range(replays):
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        means.append((time.perf_counter() - t0) / (replays * n_calls) * 1e6)
+    ttnn.release_trace(mesh_device, tid)
+    last.deallocate(True)
+    return sorted(means)[1]
+
+
+@pytest.mark.parametrize("case", _cases())
+@pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
+def test_pipeline_outliers_accuracy_time(mesh_device, device_params, case, monkeypatch):
+    """Gemma-like activations (2 % of the channels at 64x) through today's kernel, the pipeline with the packer-L1
+    accumulation (``l1acc``) and the pipeline with fp32 Dest accumulation (the shipped ``1``): PCC and max error vs
+    the fp32 golden, and the traced wall of the model's own call (reshard in + kernel + reshard out). The fp32 form
+    must be at least as accurate as today's kernel; the l1acc numbers are the reference that explains the 12B
+    token-accuracy drop."""
+    model, op, tp = case
+    grid = mesh_device.compute_with_storage_grid_size()
+    blackhole = "blackhole" in ttnn.get_arch_name()
+    if not blackhole or grid.x * grid.y < MIN_PIPELINE_GRID_CORES:
+        pytest.skip("the pipeline rows apply to Blackhole grids of more than 64 worker cores")
+    row = dram_sharded_pipeline_row(HIDDEN[model], op, tp, (grid.x, grid.y), blackhole, default="1")
+    if row is None:
+        pytest.skip(f"no pipeline row for {case}")
+    k, n = SHAPES[case]
+    if not can_dram_shard(k, n, dtype=ttnn.bfloat8_b):
+        pytest.skip(f"[{k}, {n}] has no DRAM-sharded decode config on this grid")
+    torch.manual_seed(11)
+    w = (torch.randn(1, 1, k, n) * 0.02).to(torch.bfloat16)
+    x = torch.randn(1, 1, TILE_SIZE, k) * 2
+    hot = torch.randperm(k)[: max(1, k // 50)]
+    x[..., hot] *= 64.0  # the residual stream's outlier channels
+    x = x.to(torch.bfloat16)
+    w_q = ttnn.to_torch(ttnn.from_torch(w, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).float()
+    golden = x.float().reshape(TILE_SIZE, k) @ w_q.reshape(k, n)
+    monkeypatch.setenv("GEMMA4_DRAM_SHARD_ROW_VIEW", "1")
+    tx = ttnn.from_torch(x, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    res = {}
+    for name, env in (("base", "0"), ("l1acc", "l1acc"), ("fp32acc", "1")):
+        monkeypatch.setenv(PIPELINE_ENV, env)
+        lin = DramShardedLinear(
+            w,
+            mesh_device,
+            None,
+            k=k,
+            n=n,
+            dtype=ttnn.bfloat8_b,
+            cache_file_name=None,
+            pipeline_row=row if env != "0" else None,
+        )
+        assert (lin._pipeline_ckc is not None) == (env == "1")
+        out = ttnn.to_torch(lin(tx)).float().reshape(TILE_SIZE, n)
+        err = float((out - golden).abs().max() / golden.abs().max())
+        us = _traced_us(mesh_device, lambda lin=lin: lin(tx))
+        res[name] = (_pcc(out, golden), err, us)
+        lin.weight.deallocate(True)
+    print(
+        f"RESULT pipe_outlier case={model}-{op}-tp{tp} K={k} N={n} row={row} "
+        + " ".join(f"pcc_{m}={v[0]:.6f} err_{m}={v[1]:.5f} us_{m}={v[2]:.2f}" for m, v in res.items())
+    )
+    assert res["fp32acc"][0] >= res["base"][0] - 1e-6, (res["fp32acc"][0], res["base"][0])
+    assert res["fp32acc"][1] <= res["base"][1] * 1.05, (res["fp32acc"][1], res["base"][1])
