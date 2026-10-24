@@ -86,3 +86,29 @@ def test_gather_negative_dim_equals_positive(device, shape, dim):
 
     assert_with_pcc(ttnn_output_neg, ttnn_output_pos, 0.9999)
     assert_with_pcc(torch_output_neg, ttnn_output_neg, 0.999)
+
+
+@pytest.mark.parametrize("N", [151936, 4800, 2048, 4096, 3520, 2200, 1980])
+def test_gather_rm_wide_index_multicore(device, N):
+    """Regression for #55450: ROW_MAJOR ttnn.gather with an index last-dim > GATHER_WT_THRESHOLD*32 (=1920)
+    uses the multi-core factory, which reads/writes each core's column slice via a sharded NoC transfer at byte
+    offset w_start*elem_size. When that offset is not a multiple of the ARCHITECTURE's DRAM alignment the tail of
+    each core's slice is silently wrong.
+
+    The alignment is architectural, not a constant -- Wormhole 16B, Blackhole 64B -- so the failing widths differ
+    per board and a width that is clean on one silently corrupts on the other. Widths below cover both:
+      151936  vocab width; per-core offset off a 16B boundary on Wormhole (192 wrong of 151936)
+      4096,   2048  clean on Wormhole, both corrupt on a 110-core Blackhole before the fix
+      3520    32 elements = 64B per core on Blackhole: the aligned control, clean before and after
+      2200,   1980  20 and 18 elements per core (40B, 36B): divide evenly into 110 cores yet corrupt,
+                    which is why the per-core ELEMENT count is not the property that matters
+    Data movement => require EXACT equality (a PCC check would mask a small corrupted tail)."""
+    torch.manual_seed(0)
+    x = torch.rand([1, N], dtype=torch.bfloat16)
+    idx = torch.randint(0, N, [1, N], dtype=torch.int32)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    it = ttnn.from_torch(idx, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    out = ttnn.to_torch(ttnn.gather(xt, dim=-1, index=it)).contiguous().flatten()
+    ref = torch.gather(x, -1, idx.long()).contiguous().flatten()
+    mismatches = int((out != ref).sum().item())
+    assert mismatches == 0, f"gather returned {mismatches}/{N} wrong elements for ROW_MAJOR width N={N}"

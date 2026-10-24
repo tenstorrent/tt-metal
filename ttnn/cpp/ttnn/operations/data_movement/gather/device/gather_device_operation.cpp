@@ -8,7 +8,10 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
+#include <numeric>
+
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 
 using namespace tt::tt_metal;
 
@@ -16,8 +19,19 @@ namespace ttnn::prim {
 
 constexpr uint32_t GATHER_WT_THRESHOLD = 60;
 
+uint32_t gather_rm_w_align_elems(
+    uint32_t index_elem_size, bool index_is_dram, uint32_t output_elem_size, bool output_is_dram) {
+    const auto required_elems = [](uint32_t elem_size, bool is_dram) {
+        // Alignment follows where the buffer actually lives, not the device's DRAM alignment alone.
+        const uint32_t alignment =
+            is_dram ? tt::tt_metal::hal::get_dram_alignment() : tt::tt_metal::hal::get_l1_alignment();
+        return alignment / std::gcd(alignment, elem_size);
+    };
+    return std::lcm(required_elems(index_elem_size, index_is_dram), required_elems(output_elem_size, output_is_dram));
+}
+
 GatherDeviceOperation::program_factory_t GatherDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto input_tensor_shape = tensor_args.input_tensor.padded_shape();
     const auto input_index_tensor_shape = tensor_args.input_index_tensor.padded_shape();
 
@@ -26,7 +40,24 @@ GatherDeviceOperation::program_factory_t GatherDeviceOperation::select_program_f
         // W_input is mirrored in full to every core, so it gives no parallelism gain.
         const uint32_t W_index = input_index_tensor_shape[-1];
         constexpr uint32_t rm_w_threshold = GATHER_WT_THRESHOLD * tt::constants::TILE_WIDTH;
-        if (W_index > rm_w_threshold) {
+        // The multi-core factory is only correct when W_index splits into whole alignment units:
+        // a ragged final slice has an aligned start but an unaligned SIZE, and the sharded transfer
+        // silently corrupts it (#55450; measured on a Blackhole p150b, W=2200 and W=1980). Both
+        // properties cannot hold at once over exactly [0, W_index) when W_index is not a multiple,
+        // so widths that do not divide take the single-core path: slower, but correct.
+        // The output carries the values tensor's dtype (see compute_output_specs) and lands in the
+        // buffer type the caller asked for; the real output tensor does not exist yet at selection time.
+        const auto& index = tensor_args.input_index_tensor;
+        const bool output_is_dram =
+            tensor_args.output_tensor.has_value()
+                ? tensor_args.output_tensor->buffer()->is_dram()
+                : operation_attributes.output_mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM;
+        const uint32_t w_align_elems = gather_rm_w_align_elems(
+            index.element_size(),
+            index.buffer()->is_dram(),
+            tensor_args.input_tensor.element_size(),
+            output_is_dram);
+        if (W_index > rm_w_threshold && W_index % w_align_elems == 0) {
             return RmSingleRowMultiCore{};
         }
         return RmSingleRowSingleCore{};
