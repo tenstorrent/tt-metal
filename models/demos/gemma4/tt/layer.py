@@ -53,6 +53,7 @@ On the dense variants (31B / 12B, no MoE block) the same flags fuse the layer ta
 
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.gemma4.custom_ops.fused_norm_decode import FusedNormDecode
@@ -319,18 +320,35 @@ class Gemma4DecoderLayer:
         the MoE block itself stays on its prefill path (the router norms its own input)."""
         if decode_flag("GEMMA4_LAYER_NORM_FUSED_PREFILL") != "1" or decode_flag("GEMMA4_NORM_FUSED") != "2":
             return False
-        if isinstance(attn_output, torch.Tensor) or batch_size != 1 or self.hidden_size_per_layer_input:
-            return False
+        ok, why = self._fused_prefill_layer_norms_check(attn_output, batch_size)
+        if not ok and not getattr(self, "_fused_prefill_norms_logged", False):
+            # once per layer object: the flag is on but the tail stays composite (served runs showed no TTFT change)
+            self._fused_prefill_norms_logged = True
+            logger.info(f"fused prefill norms off on layer {self.layer_idx}: {why}")
+        return ok
+
+    def _fused_prefill_layer_norms_check(self, attn_output, batch_size):
+        """The gate's conditions with the first failing one named (for the log line above)."""
+        if isinstance(attn_output, torch.Tensor):
+            return False, "host tensor"
+        if batch_size != 1:
+            return False, f"batch_size {batch_size}"
+        if self.hidden_size_per_layer_input:
+            return False, "per-layer input"
         if getattr(self.post_attention_layernorm, "tt_weight_full", None) is None:
-            return False
+            return False, "no full-width gammas (GEMMA4_NORM_FUSED=2 weights)"
         shape = [int(v) for v in attn_output.shape]
         if len(shape) != 4 or shape[0] != 1 or shape[1] != 1 or shape[2] % 32 or shape[3] != self.hidden_size:
-            return False
+            return False, f"shape {shape}"
         if attn_output.is_sharded() or attn_output.layout != ttnn.TILE_LAYOUT:
-            return False
+            return False, f"memory {attn_output.memory_config()} layout {attn_output.layout}"
         rows_t, cols_t = shape[2] // 32, self.hidden_size // 32
         n_grid = grid_cores(compute_grid(attn_output.device()))
-        return FusedNormDecode.plan_ok(cols_t, 1, rows_t, n_grid) and FusedNormDecode.plan_ok(cols_t, 2, rows_t, n_grid)
+        if not (
+            FusedNormDecode.plan_ok(cols_t, 1, rows_t, n_grid) and FusedNormDecode.plan_ok(cols_t, 2, rows_t, n_grid)
+        ):
+            return False, f"no planner split for {rows_t} row tiles x {cols_t} column tiles on {n_grid} cores"
+        return True, ""
 
     def _forward_tail_fused_prefill(self, residual, attn_output):
         """The layer after attention on prefill rows: four fused norm programs (post_attention + residual;
