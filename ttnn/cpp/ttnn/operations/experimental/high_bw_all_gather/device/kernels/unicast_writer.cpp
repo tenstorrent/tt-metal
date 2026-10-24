@@ -84,6 +84,9 @@ void kernel_main() {
     const uint8_t data_valid_sem_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_granular_sends = get_arg_val<uint32_t>(arg_idx++);  // leading sends the downstream relays
     const uint32_t data_valid_granularity_rt = get_common_arg_val<uint32_t>(1);
+    // Segmented prefix in output chunks (0/0 = contiguous); see OutputStripeIterator::set_segments.
+    const uint32_t seg_stride_chunks = get_common_arg_val<uint32_t>(2);
+    const uint32_t seg_active_chunks = get_common_arg_val<uint32_t>(3);
     [[maybe_unused]] const uint8_t neighbor_dev_id = get_arg_val<uint32_t>(arg_idx++);
     [[maybe_unused]] const uint16_t neighbor_mesh_id = get_arg_val<uint32_t>(arg_idx++);
     constexpr uint32_t output_chunks_per_stripe = static_output_chunks_per_stripe;
@@ -212,6 +215,7 @@ void kernel_main() {
             mesh_rows,
             mesh_cols>
             it;
+        it.set_segments(seg_stride_chunks, seg_active_chunks);
 
         uint32_t stripe = initial_stripe;
         for (uint32_t iter = 0; iter < num_iters; ++iter) {

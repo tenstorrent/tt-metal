@@ -102,6 +102,11 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                 data_valid_semaphore: Optional caller-owned persistent relay/completion semaphore.
                     Supplying both semaphore handles selects the allocation-free, no-internal-sync
                     dispatch path intended for sub-device overlap.
+                gathered_segments: Segmented prefix (default 1 = one contiguous prefix). With
+                    ``k > 1`` the input's ``dim`` is ``k`` equal segments, and
+                    ``gathered_dim_size / (num_devices * k)`` rows at the start of each segment are
+                    gathered, each to its own fixed offset in the rank's output slot. Requires
+                    ``gathered_dim_size`` and excludes slot select and the trace-safe extent.
         )doc",
         &high_bw_all_gather,
         nb::arg("input_tensor").noconvert(),
@@ -120,7 +125,8 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("gathered_prefix_tensor") = nb::none(),
         nb::arg("gathered_slab_global") = 0,
         nb::arg("ready_semaphore") = nb::none(),
-        nb::arg("data_valid_semaphore") = nb::none());
+        nb::arg("data_valid_semaphore") = nb::none(),
+        nb::arg("gathered_segments") = 1);
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather::detail
