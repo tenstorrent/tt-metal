@@ -17,6 +17,8 @@ production 2048 candidate blocks (all blocks candidates / one-level / two-level 
 candidate top-k, ``segment_max`` / ``gather_runs`` underneath) and checks the same exactness against ``v41.select_candidate_blocks`` + ``torch.topk``.
 """
 
+import time
+
 import pytest
 import torch
 
@@ -37,7 +39,14 @@ from models.demos.deepseek_v3_d_p.tt.v41.indexer import (
     TtV41Indexer,
     TtV41IndexKeys,
 )
-from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import candidate_scores, gather_runs, segment_max
+from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import (
+    RANGE_CHUNK,
+    candidate_scores,
+    gather_runs,
+    range_scores,
+    segment_max,
+    split_geometry,
+)
 from tests.ttnn.utils_for_testing import comp_pcc
 
 SCORE_PCC = 0.999
@@ -658,3 +667,235 @@ def test_v41_candidate_scores(mesh_device, device_params, nk, start):
             candidate_scores(args[0], args[1], dev_pages, args[3], args[4], start, t_rows, block_base=base_blocks)
         )
         assert torch.equal(dev3[0, 0].float(), dev), "the block pages at a base differ from the row-major cache"
+
+
+def _range_score_ref(q_u: torch.Tensor, w_u: torch.Tensor, k_u: torch.Tensor, newest: int):
+    """[W] reference of ``range_scores`` for one user (``_candidate_score_ref``'s arithmetic over every key): per
+    head a bf16 q . k, relu, weighted sum over the heads in fp32, one bf16 rounding; -inf past ``newest`` (every
+    key for the sentinel). Also returns sum_h |w_h relu(q_h . k)|."""
+    s = torch.einsum("hd,td->ht", q_u.float(), k_u.float()).to(torch.bfloat16).float().relu()
+    terms = w_u.float().unsqueeze(-1) * s
+    out, magnitude = terms.sum(0).to(torch.bfloat16).float(), terms.abs().sum(0)
+    visible = torch.arange(k_u.shape[0]) <= (newest if newest != SENTINEL else -1)
+    return torch.where(visible, out, float("-inf")), magnitude
+
+
+def _unsplit(rows: torch.Tensor, width: int) -> torch.Tensor:
+    """A split-layout score [R, Wr] (``split_geometry``) -> the one row [width] of global key order."""
+    n_rows, row_width = rows.shape
+    cw = RANGE_CHUNK * 32
+    per_row = row_width // cw
+    # (r, slot) -> chunk slot * R + r; chunk c holds keys [c * cw, (c + 1) * cw)
+    chunks = rows.view(n_rows, per_row, cw).permute(1, 0, 2).reshape(-1)  # chunk-major, then rows, then keys
+    assert bool((chunks[width:] == float("-inf")).all()), "the slots past the last chunk are not -inf"
+    return chunks[:width]
+
+
+def _valid_topk(picked: set, scores: torch.Tensor, k: int) -> bool:
+    """``picked`` is a top-k of ``scores`` [W] up to ties: the right count and no pick below the k-th value."""
+    finite = int(torch.isfinite(scores).sum())
+    n = min(k, finite)
+    if len(picked) != n:
+        return False
+    if n == 0:
+        return True
+    kth = float(scores.topk(n).values[-1])
+    return all(float(scores[t]) >= kth for t in picked)
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("split", [1, 32], ids=lambda r: f"rows{r}")
+@pytest.mark.parametrize("mesh_device, device_params", KERNEL_MESHES, indirect=True)
+def test_v41_range_scores(mesh_device, device_params, split):
+    """``range_scores`` (the single-query scorer) vs torch on every chip: four users of a
+    20,480-row pool at a position that is a multiple of neither 32 nor 8, below INDEX_TOPK, on a tile boundary,
+    idle (sentinel) and at the full pool, in the one-row and the 32-row split layouts; the finite pattern exact, the values within ``candidate_scores``'s bound,
+    deterministic, bit-equal to ``candidate_scores`` over the same keys from block pages; then the one-row selection
+    (``TtV41Indexer.select`` with a one-entry pin page) on the device score is a top-k of it up to ties, the
+    consumer's inside the published blocks, and the dense path (``indexer_score_dsa`` + mask) agrees on the
+    selection up to the scorers' rounding (the overlap is printed; at least 90 % is demanded)."""
+    cfg, rows = C, 32
+    cap = 20480
+    width = cap + 32
+    users = 5
+    g = torch.Generator().manual_seed(58)
+    newest = torch.full((rows,), -1, dtype=torch.int64)  # the sentinel's bits
+    newest[:users] = torch.tensor([19999, 299, 4095, -1, cap - 1])
+    with phase("inputs", what="FP4-like query / index-K, head weights"):
+        q = _fp4_like((rows, 32, 128), g)
+        w = (torch.randn(rows, 32, generator=g) * 0.05).to(torch.bfloat16)
+        k = _fp4_like((users * width, 128), g)
+        k.view(users, width, 128)[:, cap:] = 0  # the pad tile is never written
+        rep = ttnn.ReplicateTensorToMesh(mesh_device)
+        dev_q = ttnn.from_torch(
+            q.reshape(1, 1, rows, -1),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=rep,
+        )
+        dev_w = ttnn.from_torch(
+            w.reshape(1, 1, rows, 32),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=rep,
+        )
+        dev_k = ttnn.from_torch(
+            k.reshape(users, 1, width, 128),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=rep,
+        )
+        dev_pin = _replicated(mesh_device, newest.view(1, 1, 1, rows).to(torch.int32), ttnn.uint32)
+    source = TtV41Indexer(
+        mesh_device,
+        cfg,
+        cfg.CANDIDATE_SOURCE_LAYER,
+        {
+            "wq_b": torch.zeros(cfg.INDEX_N_HEADS * cfg.INDEX_HEAD_DIM, cfg.Q_LORA_RANK),
+            "weights_proj": torch.zeros(cfg.INDEX_N_HEADS, cfg.EMB_SIZE),
+        },
+    )
+    consumer = TtV41Indexer(
+        mesh_device,
+        cfg,
+        24,
+        {
+            "wq_b": torch.zeros(cfg.INDEX_N_HEADS * cfg.INDEX_HEAD_DIM, cfg.Q_LORA_RANK),
+            "weights_proj": torch.zeros(cfg.INDEX_N_HEADS, cfg.EMB_SIZE),
+        },
+    )
+    topk = cfg.INDEX_TOPK
+    overlaps = []
+    for u in range(users):
+        n_u = int(newest[u]) if newest[u] >= 0 else SENTINEL
+        k_u = k.view(users, width, 128)[u]
+        with phase(f"user{u}", what=f"range_scores of user {u} (newest {n_u})"):
+            out = range_scores(dev_q, dev_w, dev_k, dev_pin, u, width, rows=split)
+            n_rows, _, _, row_width = split_geometry(width, split)
+            assert n_rows == split, (n_rows, split)
+            assert list(out.shape) == [1, 1, n_rows, row_width], (tuple(out.shape), n_rows, row_width)
+            devs = [_unsplit(ttnn.to_torch(d)[0, 0].float(), width) for d in ttnn.get_device_tensors(out)]
+            dev = devs[0]
+            for i, other in enumerate(devs[1:], 1):
+                assert torch.equal(other, dev), f"chip {i} differs from chip 0"
+            again = _unsplit(_chip0(range_scores(dev_q, dev_w, dev_k, dev_pin, u, width, rows=split)).float(), width)
+            assert torch.equal(again, dev), "range_scores is not deterministic"
+        ref, magnitude = _range_score_ref(q[u], w[u], k_u, n_u)
+        finite = torch.isfinite(ref)
+        assert torch.equal(torch.isfinite(dev), finite), (
+            (torch.isfinite(dev) != finite).nonzero()[:8].flatten().tolist()
+        )
+        if n_u == SENTINEL:
+            print(f"range_scores user {u}: idle, all -inf")
+            continue
+        diff = (dev[finite] - ref[finite]).abs()
+        bound = ref[finite].abs() * 2**-7 + magnitude[finite] * 2**-6 + 1e-6
+        pcc = comp_pcc(ref[finite], dev[finite], 0.0)[1]
+        print(
+            f"range_scores user {u} (newest {n_u}): exact {float((diff == 0).float().mean()):.4f}, max abs diff {float(diff.max()):.3e}, pcc {pcc:.6f}"
+        )
+        assert bool((diff <= bound).all()), float((diff / bound).max())
+        assert pcc >= 0.9999, pcc
+        # the same arithmetic as candidate_scores over the same keys (every block in order, from block pages)
+        with phase(f"user{u}-cand", what="candidate_scores over every block"):
+            nb = width // 8
+            pages = ttnn.from_torch(
+                k_u.reshape(1, 1, nb, 8 * 128),
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=rep,
+            )
+            ids = _replicated(mesh_device, torch.arange(nb, dtype=torch.int32).view(1, 1, 1, nb), ttnn.uint32)
+            q1 = ttnn.from_torch(
+                q[u].reshape(1, 1, 1, -1),
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=rep,
+            )
+            w1 = ttnn.from_torch(
+                w[u].reshape(1, 1, 1, 32),
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=rep,
+            )
+            pin1 = ttnn.slice(dev_pin, [0, 0, 0, u], [1, 1, 1, u + 1])
+            cand = _chip0(candidate_scores(q1, w1, pages, ids, pin1, 0, width))[0].float()
+        assert torch.equal(cand, dev), f"candidate_scores differs at {(cand != dev).nonzero()[:8].flatten().tolist()}"
+        # the split selection on the device score (the rows merged), with the user's one-entry pin page
+        with phase(f"user{u}-select", what="split selection"):
+            idx, published = source.select_split(out, pin1, width, topk)
+            picks = _rows(_chip0(idx))[0]
+            blocks = None if published.ids is None else _rows(_chip0(published.ids))[0]
+            assert published.ids is not None and list(published.ids.shape) == [1, 1, 1, cfg.CANDIDATE_TOPK_BLOCKS]
+            cidx = consumer.select_user_in_blocks(dev_q, dev_w, pages, pin1, published.ids, u, width, 0, topk)
+            cpicks = _rows(_chip0(cidx))[0]
+        assert _valid_topk(picks, dev, topk), f"user {u}: the source's picks are not a top-{topk}"
+        mask = v41.select_candidate_blocks(
+            dev[None].clone(), n_u + 1, cfg.CANDIDATE_TOPK_BLOCKS, cfg.CANDIDATE_BLOCK_SIZE
+        )
+        assert blocks is not None
+        ref_blocks = _ref_blocks(mask, cfg.CANDIDATE_BLOCK_SIZE)[0]
+        if blocks != ref_blocks:
+            # ties among block maxima at the boundary: every device block must reach the reference's k-th maximum
+            bmax = torch.nn.functional.pad(dev, (0, -width % 8), value=float("-inf")).view(-1, 8).amax(-1)
+            kth = min(float(bmax[b]) for b in ref_blocks if b != n_u // 8)
+            extra = sorted(blocks - ref_blocks)[:8]
+            missing = sorted(ref_blocks - blocks)[:8]
+            detail = f"{len(blocks)} vs {len(ref_blocks)} blocks, kth {kth}, extra {[(b, float(bmax[b])) for b in extra]}, missing {[(b, float(bmax[b])) for b in missing]}"
+            assert len(blocks) == len(ref_blocks) and all(
+                float(bmax[b]) >= kth for b in blocks if b != n_u // 8
+            ), f"user {u}: blocks {detail}"
+        assert _valid_topk(cpicks, dev.masked_fill(~mask[0], float("-inf")), topk), f"user {u}: the consumer's picks"
+        # the dense reference path: indexer_score_dsa on the 32-row tile + the mask
+        with phase(f"user{u}-dense", what="indexer_score_dsa + mask"):
+            qt = ttnn.from_torch(
+                q.permute(1, 0, 2).reshape(1, 32, rows, 128),
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=rep,
+            )
+            wt = ttnn.from_torch(
+                w.reshape(1, 1, rows, 32),
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=rep,
+            )
+            config = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=min(256, width), head_group_size=0)
+            dense = ttnn.experimental.indexer_score_dsa(
+                qt, dev_k, wt, chunk_start_idx=cap, seq_shard_axes=[], program_config=config, cache_batch_idx=u
+            )
+            dense_u = _chip0(dense)[u].float()
+            dense_u[n_u + 1 :] = float("-inf")
+        fin = torch.isfinite(dense_u) & finite
+        pcc_dense = comp_pcc(dense_u[fin], dev[fin], 0.0)[1]
+        dense_top = set(dense_u.topk(min(topk, n_u + 1)).indices.tolist())
+        overlap = len(picks & dense_top) / max(1, len(picks))
+        overlaps.append(overlap)
+        print(f"range_scores user {u}: vs indexer_score_dsa pcc {pcc_dense:.6f}, top-{topk} overlap {overlap:.4f}")
+        assert overlap >= 0.9, overlap
+    # timing of the full-pool user: the launch and the split selection (with the host's dispatch)
+    with phase("timing", what="range_scores and select_split at the full pool"):
+        u = users - 1
+        pin1 = ttnn.slice(dev_pin, [0, 0, 0, u], [1, 1, 1, u + 1])
+        out = range_scores(dev_q, dev_w, dev_k, dev_pin, u, width, rows=split)
+        for what, fn in (
+            ("range_scores", lambda: range_scores(dev_q, dev_w, dev_k, dev_pin, u, width, rows=split)),
+            ("select_split (source)", lambda: source.select_split(out, pin1, width, topk)),
+            ("select_split (plain)", lambda: consumer.select_split(out, pin1, width, topk, CandidateBlocks(None))),
+        ):
+            fn()
+            ttnn.synchronize_device(mesh_device)
+            t0 = time.perf_counter()
+            for _ in range(10):
+                fn()
+            ttnn.synchronize_device(mesh_device)
+            print(f"{what} at {cap} keys: {(time.perf_counter() - t0) / 10 * 1e3:.3f} ms a call (with host)")
+    print(f"range_scores overlaps with the dense path: {overlaps}")

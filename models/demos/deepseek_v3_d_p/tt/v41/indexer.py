@@ -40,7 +40,13 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_d_p.tt.v41.ccl import V41Collectives
-from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import candidate_scores, gather_runs, segment_max
+from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import (
+    PIN_PAGE,
+    RANGE_CHUNK,
+    candidate_scores,
+    gather_runs,
+    segment_max,
+)
 from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp4_ue8m0_qdq, fp8_qdq
 
 SENTINEL = 0xFFFFFFFF
@@ -240,6 +246,7 @@ class TtV41Indexer(LightweightModule):
         self.is_candidate_source = layer == config.CANDIDATE_SOURCE_LAYER
         self.uses_candidates = 0 <= config.CANDIDATE_SOURCE_LAYER < layer
         self.qdq = qdq
+        self._split_consts = {}  # the split selection's id constants (select_split)
         self.rope = _Rope(mesh_device, config)
         self.ccl = V41Collectives(mesh_device)
         self.sp, self.tp = mesh_device.shape
@@ -394,20 +401,23 @@ class TtV41Indexer(LightweightModule):
         (``candidate_scores`` over the pool's block pages) -> [1, 1, 1, k] uint32 row-major row ids (sentinel tail).
 
         ``q_rm``, ``w_rm``: ``decode_query``; ``blocks``: the pool's block pages; ``newest`` [1, 1, 1, ROWS] the
-        tile's per-row pins; ``ids`` [1, 1, ROWS, K] the blocks the candidate source published against this user's
-        keys (row ``user`` the user's own); ``rows`` the user's rows in the pool (the candidate scorer's visible
-        bound; its pin masks the rows past the user's newest); ``block_base`` the page of the user's block 0. The
-        scorer works a query row per core, so the user's K blocks are split over ROWS rows of K / ROWS blocks of
-        the same query (ROWS cores, a ROWS-th of the traffic of scoring every tile row against this user), and the
-        ROWS x (K / ROWS x 8) scores are one row again for the top-k."""
+        tile's per-row pins (or [1, 1, 1, 1], the user's own); ``ids`` [1, 1, ROWS, K] the blocks the candidate
+        source published against this user's keys (row ``user`` the user's own; or [1, 1, 1, K], the user's);
+        ``rows`` the user's rows in the pool (the candidate scorer's visible bound; its pin masks the rows past the
+        user's newest); ``block_base`` the page of the user's block 0. The scorer works a query row per core, so the
+        user's K blocks are split over ROWS rows of K / ROWS blocks of the same query (ROWS cores, a ROWS-th of the
+        traffic of scoring every tile row against this user), and the ROWS x (K / ROWS x 8) scores are one row again
+        for the top-k."""
         assert self.uses_candidates and self.ratio == 1
-        n, per = ids.shape[2], ids.shape[3] // ids.shape[2]
+        n = q_rm.shape[2]
+        per = ids.shape[3] // n
         assert per * n == ids.shape[3] and (per * self.config.CANDIDATE_BLOCK_SIZE) % 32 == 0, (tuple(ids.shape), n)
         row = [0, 0, user, 0]
         q_u = ttnn.slice(q_rm, row, [1, 1, user + 1, q_rm.shape[3]])
         w_u = ttnn.slice(w_rm, row, [1, 1, user + 1, w_rm.shape[3]])
-        ids_u = ttnn.slice(ids, row, [1, 1, user + 1, ids.shape[3]])  # [1, 1, 1, K]
-        pin_u = ttnn.slice(newest, [0, 0, 0, user], [1, 1, 1, user + 1])  # [1, 1, 1, 1]
+        # ids published for the whole tile (row user the user's own) or for the user alone (the single-query path); likewise the tile's pin page or the user's one-entry page
+        ids_u = ids if ids.shape[2] == 1 else ttnn.slice(ids, row, [1, 1, user + 1, ids.shape[3]])  # [1, 1, 1, K]
+        pin_u = newest if newest.shape[3] == 1 else ttnn.slice(newest, [0, 0, 0, user], [1, 1, 1, user + 1])
         q_n, w_n = ttnn.concat([q_u] * n, dim=2), ttnn.concat([w_u] * n, dim=2)
         pin_n = ttnn.concat([pin_u] * n, dim=3)
         ids_n = ttnn.reshape(ids_u, [1, 1, n, per])  # row r: blocks [r * per, (r + 1) * per) of the user's
@@ -435,6 +445,105 @@ class TtV41Indexer(LightweightModule):
         chosen = ttnn.to_layout(_gather_cols(ids, ttnn.to_layout(rank, ttnn.ROW_MAJOR_LAYOUT)), ttnn.TILE_LAYOUT)
         row = ttnn.add(ttnn.multiply(chosen, block), ttnn.bitwise_and(pos, block - 1))
         return ttnn.to_layout(_keep_sentinel(row, pos), ttnn.ROW_MAJOR_LAYOUT)
+
+    # ---- the split layout's selection (range_scores: one user's score as rows of chunks) ----
+
+    def _split_const(self, name: str, shape: tuple, fill):
+        """A memoized replicated uint32 tiled constant (built on the first eager step, before any capture)."""
+        key = (name,) + tuple(shape)
+        if key not in self._split_consts:
+            self._split_consts[key] = ttnn.from_torch(
+                fill(),
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self._split_consts[key]
+
+    def _merge_split(self, rows, k: int, per_chunk: int):
+        """Top-k over a split layout ``rows`` [1, 1, R, Wr] bf16 row-major (element (r, j) is global
+        ``((j // per_chunk) * R + r) * per_chunk + j % per_chunk``, R a power of two) -> [1, 1, 1, k] uint32
+        row-major global ids in descending score (sentinel tail for -inf). Per row a top-k on its own core, then one
+        top-k over the R x k_r picks' values."""
+        n_rows, width = rows.shape[2], rows.shape[3]
+        if n_rows == 1:  # one row: its top-k is the global one (slot 0 of row 0 is key 0)
+            return _topk(rows, k)
+        kr = min(k, width)
+        assert kr >= TOPK_MIN and width >= _round_up(kr, TOPK_ALIGN), (tuple(rows.shape), k)
+        local = _topk(rows, kr)  # [1, 1, R, kr] row-major
+        local_t = ttnn.to_layout(local, ttnn.TILE_LAYOUT)
+        safe = _min(local_t, width - 1)
+        safe_rm = ttnn.to_layout(safe, ttnn.ROW_MAJOR_LAYOUT)
+        values = ttnn.to_layout(_gather_cols(rows, safe_rm), ttnn.TILE_LAYOUT)  # [1, 1, R, kr] bf16
+        picked = ttnn.typecast(_is_sentinel(local_t), ttnn.bfloat16)
+        values = ttnn.where(picked, float("-inf"), values)  # a sentinel pick's value is -inf whatever the column
+        # the global id of (r, j): a shift and a mask per power of two
+        shift, row_shift = per_chunk.bit_length() - 1, n_rows.bit_length() - 1
+        row_ids = self._split_const(
+            "row",
+            (n_rows, kr),
+            lambda: torch.arange(n_rows, dtype=torch.int32).view(1, 1, n_rows, 1).expand(1, 1, n_rows, kr).contiguous(),
+        )
+        slot = ttnn.bitwise_right_shift(safe, shift)
+        within = ttnn.bitwise_and(safe, per_chunk - 1)
+        chunk = ttnn.add(ttnn.bitwise_left_shift(slot, row_shift), row_ids)
+        glob = _keep_sentinel(ttnn.add(ttnn.bitwise_left_shift(chunk, shift), within), local_t)
+        flat_values = ttnn.reshape(ttnn.to_layout(values, ttnn.ROW_MAJOR_LAYOUT), [1, 1, 1, n_rows * kr])
+        flat_ids = ttnn.reshape(ttnn.to_layout(glob, ttnn.ROW_MAJOR_LAYOUT), [1, 1, 1, n_rows * kr])
+        pos = _topk(flat_values, k)  # [1, 1, 1, k]
+        pos_t = ttnn.to_layout(pos, ttnn.TILE_LAYOUT)
+        pos_safe = ttnn.to_layout(_min(pos_t, n_rows * kr - 1), ttnn.ROW_MAJOR_LAYOUT)
+        chosen = ttnn.to_layout(_gather_cols(flat_ids, pos_safe), ttnn.TILE_LAYOUT)
+        return ttnn.to_layout(_keep_sentinel(chosen, pos_t), ttnn.ROW_MAJOR_LAYOUT)
+
+    def _split_pins(self, newest, n_rows: int, per_chunk: int):
+        """The per-row pin page [1, 1, 1, R] uint32 row-major of a split layout for the user's ``newest`` [1, 1, 1, 1]:
+        the row holding the newest key gets its local column, every other row the sentinel (an idle user's sentinel
+        lands past every row: no pin)."""
+        if n_rows == 1:
+            return newest  # the user's own one-entry page
+        shift, row_shift = per_chunk.bit_length() - 1, n_rows.bit_length() - 1
+        n_pins = max(n_rows, 2 * PIN_PAGE)  # a page of exactly PIN_PAGE entries would read as a query_first page
+        pins = ttnn.to_layout(ttnn.concat([newest] * n_pins, dim=3), ttnn.TILE_LAYOUT)  # [1, 1, 1, P]
+        chunk = ttnn.bitwise_right_shift(pins, shift)
+        row = ttnn.bitwise_and(chunk, n_rows - 1)
+        local = ttnn.add(
+            ttnn.bitwise_left_shift(ttnn.bitwise_right_shift(chunk, row_shift), shift),
+            ttnn.bitwise_and(pins, per_chunk - 1),
+        )
+        rows = self._split_const(
+            "rowpin", (1, n_pins), lambda: torch.arange(n_pins, dtype=torch.int32).view(1, 1, 1, n_pins)
+        )
+        other = _u32(ttnn.ne(row, rows))  # 1 where the row is not the newest key's
+        return ttnn.to_layout(ttnn.bitwise_or(local, ttnn.multiply(other, SENTINEL)), ttnn.ROW_MAJOR_LAYOUT)
+
+    def select_split(self, rows, newest, width: int, k: int, candidates: CandidateBlocks | None = None):
+        """B11-B12 on one user's score in the split layout (``range_scores`` of ``width`` columns) -> (top-k rows
+        [1, 1, 1, k] uint32 row-major with a sentinel tail, the published ``CandidateBlocks`` [1, 1, 1,
+        CANDIDATE_TOPK_BLOCKS] of the candidate source or None), the semantics of ``select``: the candidate source
+        publishes its best blocks by maximum with the newest key's block pinned (``segment_max`` per row with the
+        pin in the row holding it, the rows merged), and its top-k is the dense top-k (which lies in those blocks);
+        a consumer with published blocks does not come here (``select_user_in_blocks``); everything else is the
+        dense top-k of the row. ``newest`` [1, 1, 1, 1] uint32 row-major: the user's newest key (the sentinel for
+        none)."""
+        n_rows, row_width = rows.shape[2], rows.shape[3]
+        chunk_cols = RANGE_CHUNK * 32
+        block = self.config.CANDIDATE_BLOCK_SIZE
+        published = None
+        if self.is_candidate_source:
+            kb = self.config.CANDIDATE_TOPK_BLOCKS
+            if width // block > kb:
+                pins = self._split_pins(newest, n_rows, chunk_cols)
+                maxima = segment_max(rows, block, pins, 0, 0xFFFFFFFF)  # [1, 1, R, Wr / block]
+                assert maxima.shape[3] == row_width // block, (tuple(maxima.shape), row_width)
+                published = CandidateBlocks(self._merge_split(maxima, kb, chunk_cols // block))
+            else:
+                published = CandidateBlocks(None)
+        elif self.uses_candidates:
+            assert isinstance(candidates, CandidateBlocks) and candidates.ids is None, "published blocks: in blocks"
+        return self._merge_split(rows, k, chunk_cols), published
 
     def select(self, score, tables, start: int, visible: int, candidates: CandidateBlocks | None = None):
         """B11-B12 on this index source's score (``scores``) -> (top-k rows [1, 1, R, k] uint32 row-major with a

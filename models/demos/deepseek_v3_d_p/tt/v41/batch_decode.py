@@ -40,6 +40,7 @@ from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.decode import MOE_ROWS, ROWS, TtV41Decoder
 from models.demos.deepseek_v3_d_p.tt.v41.head_layout import o_heads, q_heads
 from models.demos.deepseek_v3_d_p.tt.v41.indexer import DecodePins, TtV41Indexer
+from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import range_scores
 from models.demos.deepseek_v3_d_p.tt.v41.layout import TP_AXIS
 from models.demos.deepseek_v3_d_p.tt.v41.moe import TtV41Moe
 from models.demos.deepseek_v3_d_p.tt.v41.pool import RING, V41DecodePool, scatter_rows
@@ -194,6 +195,11 @@ class TtV41BatchDecoder(TtV41Decoder):
             ttnn.ROW_MAJOR_LAYOUT,
         )
         self.sample_on_device = sample_on_device
+        # the single-query scorer: every densely scored source scores one user's query against
+        # the visible prefix of its tiled pool (range_scores, the bound read on device, the keys split over the cores
+        # as rows of a split layout) and selects by merging the rows' top-k (select_split); no 32-row dense score,
+        # no mask round-trip, no per-step mask build
+        self.single_query = os.environ.get("V41_DECODE_SINGLE_QUERY", "0") == "1"
         self.sampler = (
             DeviceSampler(self.mesh_device, self.config, model.blocks[0].attn.ccl, self.pool.gather_sp)
             if sample_on_device
@@ -478,7 +484,7 @@ class TtV41BatchDecoder(TtV41Decoder):
         """The step's device graph on the staged buffers -> the logits tile ``[1, 1, ROWS, vocab/tp]`` per chip
         (row u: slot u of the chip's rank); the pool is updated in place."""
         model = self.model
-        masks = {ratio: self._mask(ratio) for ratio in self.iota}
+        masks = {ratio: None if self.single_query else self._mask(ratio) for ratio in self.iota}
         selection = {}
         h = model.embedding(self.buffers["token"])
         x = mhc_expand(ttnn.typecast(h, ttnn.float32), self.config.HC_MULT)
@@ -649,18 +655,32 @@ class TtV41BatchDecoder(TtV41Decoder):
         in_blocks = (
             blocks_of is not None and candidates is not None and any(c.ids is not None for c in candidates.values())
         )
-        q_rm, w_rm = indexer.decode_query(q, w) if in_blocks else (None, None)
+        single = self.single_query
+        q_rm, w_rm = indexer.decode_query(q, w) if in_blocks or single else (None, None)
         for u in range(self.users):
             # Row u is the user's; the other rows' selections (and pins) are other users' queries against this
             # user's keys, discarded
             mine = candidates[u] if candidates is not None else None
+            if single:
+                # the user's own pin page [1, 1, 1, 1]: the split selection pins by it, the candidate scorer bounds
+                pin_u = ttnn.slice(pins.newest, [0, 0, 0, u], [1, 1, 1, u + 1])
             if in_blocks and mine.ids is not None:
                 # a candidate index source over published blocks: score the user's candidate rows only, from the
                 # pool's block pages (the kernel masks the rows past the user's pin)
                 base = u * (cap + 32) // cfg.CANDIDATE_BLOCK_SIZE
                 topk = indexer.select_user_in_blocks(
-                    q_rm, w_rm, blocks_of, pins.newest, mine.ids, u, cap, base, cfg.INDEX_TOPK
+                    q_rm, w_rm, blocks_of, pin_u if single else pins.newest, mine.ids, u, cap, base, cfg.INDEX_TOPK
                 )
+                parts.append(topk)
+                continue
+            if single:
+                # the single-query scorer: the user's query row against the visible prefix of its tiled keys, the
+                # bound read from the newest page on device, -inf past it (the mask's value), the keys split over
+                # the rows of the split layout (one core each); the selection merges the rows' top-k
+                score = range_scores(q_rm, w_rm, k, pins.newest, u, cap + 32)
+                topk, blocks = indexer.select_split(score, pin_u, cap + 32, cfg.INDEX_TOPK, mine)
+                if published is not None:
+                    published[u] = blocks
                 parts.append(topk)
                 continue
             # every row sees every key (the causal window starts past the slot's rows); the mask then hides the

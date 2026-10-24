@@ -15,6 +15,8 @@ the indexer's score, so every chip's rows stay local (no collectives; replicated
   layout ``gather_runs`` makes of a full score.
 """
 
+import os
+
 import ttnn
 
 _KERNEL_DIR = "models/demos/deepseek_v3_d_p/tt/v41/kernels"
@@ -317,3 +319,122 @@ def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int, block_bas
         _cb(8, writer_scratch, cores, page=writer_scratch),  # writer: pin | ids | two output rows
     ]
     return ttnn.generic_op([q, w, k, ids, pin, out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
+
+
+RANGE_CHUNK = 8  # key tile rows (of 32 keys) per range_scores chunk: 64 KB of keys read, 512 B of score written
+RANGE_ROWS = int(os.environ.get("V41_RANGE_ROWS", "32"))  # rows (cores) a range_scores launch splits the keys over
+SPLIT_MIN_WIDTH = 512  # a split row must hold a top-k of INDEX_TOPK (topk_large_indices: n >= k)
+# up to this width the score is one row: the one-core selection over it (~4.5 us per 1K columns for a top-k, as much
+# again for the block maxima) costs less than the split selection's merge (~25 small ops, ~3 ms a 40-layer step at
+# 16K)
+SPLIT_ONE_ROW_MAX_WIDTH = 1 << 16
+
+
+def split_geometry(width: int, rows: int | None = None) -> tuple[int, int, int, int]:
+    """The split layout of a ``width``-wide score over ``rows`` rows -> (rows, chunks, chunks per row, row width):
+    the key tile rows in chunks of RANGE_CHUNK, chunk ``c`` at row ``c % rows``, slot ``c // rows``; the rows are a
+    power of two, at most RANGE_ROWS, and wide enough for a top-k of SPLIT_MIN_WIDTH. Element ``(r, j)`` of the
+    layout is key ``((j // CW) * rows + r) * CW + j % CW`` with ``CW = RANGE_CHUNK * 32``; slots past the last
+    chunk are -inf."""
+    assert width % 32 == 0, width
+    chunk_cols = RANGE_CHUNK * 32
+    nchunks = -(-width // chunk_cols)
+    if rows is None:
+        rows = 1 if width <= SPLIT_ONE_ROW_MAX_WIDTH else RANGE_ROWS
+    rows = min(rows, max(1, nchunks * chunk_cols // SPLIT_MIN_WIDTH))
+    rows = 1 << (rows.bit_length() - 1)  # a power of two: the selection's id arithmetic is shifts and masks
+    per_row = -(-nchunks // rows)
+    return rows, nchunks, per_row, per_row * chunk_cols
+
+
+def range_scores(q, w, k, pin, user: int, width: int, rows: int | None = None):
+    """One user's query of the decode tile against the visible prefix of its own index keys, in the pool's tiled
+    form (the single-query scorer of the densely scored sources).
+
+    ``q`` [1, 1, R, 32 * 128] bf16 row-major and ``w`` [1, 1, R, 32] bf16 row-major (``TtV41Indexer.decode_query``;
+    row ``user`` is read), ``k`` [U, 1, width, 128] bf16 TILE_LAYOUT DRAM-interleaved (the pool's ``index_k[src]``:
+    user ``u``'s key tile row ``g`` is the tile pages ``(u * width / 32 + g) * 4 + d``), ``pin`` [1, 1, 1, P] uint32
+    row-major with ``P > user`` (the step's ``newest`` page: entry ``user`` the user's newest visible row, the
+    sentinel for none). -> bf16 row-major [1, 1, rows, row width] in the split layout of ``split_geometry(width,
+    rows)``: key ``t``'s element is ``sum_h w[user, h] * relu(q[user, h]. k[user, t])`` (``candidate_scores``'s
+    arithmetic) for ``t <= newest``, -inf past it (and everywhere for the sentinel). Chunk ``c`` of key tile rows is
+    scored by core ``c % rows`` into slot ``c // rows`` of its row; the bound is read on device, so only the visible
+    chunks are read and computed and the op is trace-safe. One op (kernels/rangescore_*)."""
+    for t, what in ((q, "query"), (w, "weights")):
+        _check_row_major(t, ttnn.bfloat16, f"range_scores {what}")
+    _check_row_major(pin, ttnn.uint32, "range_scores pin")
+    memory = k.memory_config()
+    assert k.layout == ttnn.TILE_LAYOUT and k.dtype == ttnn.bfloat16, "range_scores index-K must be tiled bf16"
+    assert memory.buffer_type == ttnn.BufferType.DRAM and not memory.is_sharded(), "index-K must be DRAM-interleaved"
+    assert width % 32 == 0 and (k.shape[2], k.shape[3]) == (width, 128), (width, tuple(k.shape))
+    assert 0 <= user < k.shape[0] and q.shape[2] > user and w.shape[2] > user, (user, tuple(k.shape))
+    assert q.shape[3] == 32 * 128 and w.shape[3] == 32, (tuple(q.shape), tuple(w.shape))
+    assert pin.shape[2] == 1 and pin.shape[3] > user, (tuple(pin.shape), user)
+    pin_rows = pin.shape[3]
+    pin_slot = _round_up(pin_rows * 4, 64)
+    tile_rows = width // 32
+    chunk = RANGE_CHUNK
+    nrows, _, per_row, row_width = split_geometry(width, rows)
+    device = q.device()
+    coords, core_set = _cores(device, nrows)
+    assert len(coords) == nrows, (len(coords), nrows)
+    out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, nrows, row_width]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    reader_args, writer_args, compute_args = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+    for i, (cx, cy) in enumerate(coords):
+        reader_args[cx][cy] = [
+            q.buffer_address(),
+            w.buffer_address(),
+            k.buffer_address(),
+            pin.buffer_address(),
+            user,
+            i,
+        ]
+        writer_args[cx][cy] = [out.buffer_address(), pin.buffer_address(), user, i]
+        compute_args[cx][cy] = [i]
+    kernels = [
+        ttnn.KernelDescriptor(
+            kernel_source=f"{_KERNEL_DIR}/rangescore_reader.cpp",
+            core_ranges=core_set,
+            compile_time_args=[0, 1, 2, 3, chunk, tile_rows, nrows, pin_rows]
+            + ttnn.TensorAccessorArgs(q).get_compile_time_args()
+            + ttnn.TensorAccessorArgs(w).get_compile_time_args()
+            + ttnn.TensorAccessorArgs(k).get_compile_time_args()
+            + ttnn.TensorAccessorArgs(pin).get_compile_time_args(),
+            runtime_args=reader_args,
+            config=ttnn.ReaderConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=f"{_KERNEL_DIR}/rangescore_writer.cpp",
+            core_ranges=core_set,
+            compile_time_args=[16, 8, chunk, tile_rows, nrows, pin_rows, per_row]
+            + ttnn.TensorAccessorArgs(out).get_compile_time_args()
+            + ttnn.TensorAccessorArgs(pin).get_compile_time_args(),
+            runtime_args=writer_args,
+            config=ttnn.WriterConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=f"{_KERNEL_DIR}/rangescore_compute.cpp",
+            core_ranges=core_set,
+            compile_time_args=[chunk, tile_rows, nrows],
+            runtime_args=compute_args,
+            config=ttnn.ComputeConfigDescriptor(
+                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False
+            ),
+        ),
+    ]
+    meta = 64 + pin_slot  # the reader aligns the pin page inside it; word 0 is the visible tile-row count
+    writer_scratch = 64 + pin_slot + 2 * chunk * 64  # 64: the writer aligns the pin page; two chunk buffers
+    cbs = [
+        _cb(0, 4 * _TILE_BYTES, core_set),  # the query's row-major [32 heads, 128] block (4 tile-sized pages)
+        _cb(1, 2 * _TILE_BYTES, core_set),  # head-weight row page (row 0; rows 1-31 zero)
+        _cb(2, 2 * 4 * chunk * _TILE_BYTES, core_set),  # K tiles [rows, dims] of two chunks
+        _cb(3, meta, core_set, dtype=ttnn.uint32, page=meta),  # reader -> compute: the visible tile rows
+        _cb(4, 4 * _TILE_BYTES, core_set),  # Q tiles [heads, dims]
+        _cb(5, _TILE_BYTES, core_set),  # W tile
+        _cb(7, chunk * _TILE_BYTES, core_set),  # S = relu(Q K^T) [heads, rows]
+        _cb(16, 2 * chunk * _TILE_BYTES, core_set),  # O = W S (row 0)
+        _cb(8, writer_scratch, core_set, page=writer_scratch),  # writer: pin | two chunk buffers
+    ]
+    return ttnn.generic_op([q, w, k, pin, out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
