@@ -1166,7 +1166,7 @@ def test_eltwise_binary_sfpu_isclose_nan(formats, dest_acc, mathop):
     # Both-NaN, one-sided-NaN and mixed-sign-NaN pairs, which is where EQUAL_NAN changes the
     # answer; see _isclose_nan_stimuli_specs for the lane table. Only on pipelines that deliver
     # a NaN operand to the SFPU intact.
-    _skip_fp32_no_dest_acc(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
     if not specials_safe(formats.input_format, formats.output_format, dest_acc):
         pytest.skip("this pipeline does not deliver a NaN operand to the SFPU intact")
 
