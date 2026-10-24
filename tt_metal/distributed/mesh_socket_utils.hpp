@@ -7,7 +7,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <cstdint>
 
 #include <cerrno>

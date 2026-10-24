@@ -19,7 +19,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::data_movement {

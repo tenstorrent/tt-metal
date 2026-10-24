@@ -9,7 +9,7 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::send_recv_utils {
 

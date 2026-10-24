@@ -32,7 +32,7 @@
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <cstring>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include <tt-umd/io_window/io_window.hpp>
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"

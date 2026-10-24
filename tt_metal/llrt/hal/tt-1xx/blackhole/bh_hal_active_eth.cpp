@@ -5,7 +5,7 @@
 #define HAL_BUILD tt::tt_metal::blackhole::active_eth
 #define COMPILE_FOR_ERISC
 
-#include "tt_align.hpp"
+#include <tt-metalium/math.hpp>
 #include "hostdev/dev_msgs.h"
 #include "hostdevcommon/fabric_telemetry_msgs.h"
 #include "hostdev/realtime_profiler_msgs.h"

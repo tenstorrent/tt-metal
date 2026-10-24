@@ -17,7 +17,7 @@
 #include "impl/context/context_types.hpp"
 #include "tt_metal/api/tt-metalium/hal_types.hpp"
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
-#include <tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <algorithm>
 #include <atomic>
 #include <cstdint>

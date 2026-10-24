@@ -19,7 +19,7 @@
 #include "impl/context/metal_context.hpp"
 #include "memcpy.hpp"
 #include <tt_stl/span.hpp>
-#include "tt_align.hpp"
+#include <tt-metalium/math.hpp>
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "vector_aligned.hpp"
 

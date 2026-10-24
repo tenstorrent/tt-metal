@@ -24,12 +24,11 @@
 #include <utility>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/math.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"

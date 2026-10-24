@@ -21,7 +21,7 @@
 #include "impl/emulation/host_sanitizers.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tracy/Tracy.hpp"
-#include "tt_align.hpp"
+#include <tt-metalium/math.hpp>
 
 namespace tt::tt_metal::slow_dispatch {
 

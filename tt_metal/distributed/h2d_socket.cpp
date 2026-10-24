@@ -22,7 +22,7 @@
 #ifdef TT_METAL_USE_EMULE
 #include "emulated_program_runner.hpp"  // emule::pump_device
 #endif
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-umd/io_window/io_window.hpp>

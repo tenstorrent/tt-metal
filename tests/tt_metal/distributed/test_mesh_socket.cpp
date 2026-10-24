@@ -21,7 +21,7 @@
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
 #include <tt-metalium/system_mesh.hpp>
 #include <cstring>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal::distributed {

@@ -15,7 +15,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/impl/context/context_types.hpp"
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/host_api/temp_quasar_api.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"

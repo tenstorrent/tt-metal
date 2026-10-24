@@ -16,7 +16,7 @@
 #include "impl/device/mock_allocator.hpp"
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt_metal.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>

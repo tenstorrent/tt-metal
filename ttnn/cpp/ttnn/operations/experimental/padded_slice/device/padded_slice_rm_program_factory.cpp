@@ -24,7 +24,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <vector>
-#include <tt-metalium/tt_align.hpp>
 
 using namespace tt::tt_metal;
 

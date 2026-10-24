@@ -33,7 +33,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "distributed/mesh_device_impl.hpp"
 

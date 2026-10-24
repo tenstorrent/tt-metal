@@ -20,7 +20,7 @@
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
-#include "tt_align.hpp"
+#include <tt-metalium/math.hpp>
 #include <bit>
 #include <algorithm>
 #include <utility>
