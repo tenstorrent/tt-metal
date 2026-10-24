@@ -108,6 +108,7 @@ struct WatcherSettings {
     bool text_start = false;
     bool skip_logging = false;
     bool noc_sanitize_linked_transaction = false;
+    bool dram_noc_mix_check = false;
     std::atomic<int> interval_ms = 0;
 };
 
@@ -537,6 +538,7 @@ public:
     void set_watcher_noc_sanitize_linked_transaction(bool enabled) {
         watcher_settings.noc_sanitize_linked_transaction = enabled;
     }
+    bool get_watcher_dram_noc_mix_check() const { return watcher_settings.dram_noc_mix_check; }
     const std::set<std::string>& get_watcher_disabled_features() const { return watcher_disabled_features; }
     bool watcher_status_disabled() const { return watcher_feature_disabled(watcher_waypoint_str); }
     bool watcher_assert_disabled() const { return watcher_feature_disabled(watcher_assert_str); }

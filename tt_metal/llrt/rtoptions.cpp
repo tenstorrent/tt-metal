@@ -189,6 +189,7 @@ enum class EnvVarID {
     TT_METAL_WATCHER_DISABLE_ETH,                             // Disable watcher on ethernet cores
     TT_METAL_WATCHER_DISABLE_CB_SANITIZE,                     // Disable watcher circular buffer sanitization
     TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION,  // Enable NoC linked transaction sanitization
+    TT_METAL_WATCHER_ENABLE_DRAM_NOC_MIX_CHECK,              // Flag a Blackhole kernel reading/writing DRAM on one NoC
 
     // ========================================
     // INSPECTOR
@@ -1565,6 +1566,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->watcher_settings.noc_sanitize_linked_transaction = true;
             break;
 
+        // Opt-in, conservative Blackhole check: both DRAM transfer directions within one kernel
+        // on one NoC are flagged, even if barriers or small transfers avoid a stall in that run.
+        case EnvVarID::TT_METAL_WATCHER_ENABLE_DRAM_NOC_MIX_CHECK:
+            this->watcher_settings.dram_noc_mix_check = true;
+            break;
+
         // ========================================
         // INSPECTOR
         // ========================================
@@ -2517,6 +2524,7 @@ std::string RunTimeOptions::get_watcher_hash() const {
     hash_str += std::to_string(watcher_feature_disabled(watcher_eth_str));
     hash_str += std::to_string(watcher_feature_disabled(watcher_cb_sanitize_str));
     hash_str += std::to_string(get_watcher_noc_sanitize_linked_transaction());
+    hash_str += std::to_string(get_watcher_dram_noc_mix_check());
     hash_str += std::to_string(get_watcher_enabled());
     hash_str += std::to_string(get_lightweight_kernel_asserts());
     hash_str += std::to_string(get_llk_asserts());

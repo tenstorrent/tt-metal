@@ -276,6 +276,20 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
         }
     }
 
+    // ---------------- Kernel NOCs ----------------
+
+    // On Blackhole, DRAM reads issued while non-posted DRAM writes are in flight on the same NOC can deadlock inside
+    // the DRAM path, and the chip hangs until it is reset. The writer kernel reads DRAM (page table, batch_idx,
+    // valid_seq_len) and writes DRAM (the cache tiles); as a dedicated-NOC kernel it would do both on its one NOC.
+    // Dynamic NOC mode lets it issue its reads on the other NOC, so that all of this program's DRAM reads are on
+    // NOC 0 and all of its DRAM writes on NOC 1. The mode has to be the same for both data movement kernels of a node.
+    auto reader_hw_config = create_reader_datamovement_config();
+    auto writer_hw_config = create_writer_datamovement_config();
+    if (device->arch() == tt::ARCH::BLACKHOLE) {
+        reader_hw_config.config_1xx->noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
+        writer_hw_config.config_1xx->noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
+    }
+
     // ---------------- Reader ----------------
 
     KernelSpec reader{
@@ -300,7 +314,7 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
             },
         .compile_time_args = {{"Wt", Wt}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_tile_id", "num_rows", "noop"}},
-        .hw_config = create_reader_datamovement_config(),
+        .hw_config = std::move(reader_hw_config),
     };
 
     // ---------------- Writer ----------------
@@ -419,7 +433,7 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
         .tensor_bindings = std::move(writer_tensor_bindings),
         .compile_time_args = std::move(writer_compile_time_args),
         .runtime_arg_schema = {.runtime_arg_names = std::move(writer_runtime_arg_names)},
-        .hw_config = create_writer_datamovement_config(),
+        .hw_config = std::move(writer_hw_config),
     };
 
     // ---------------- Tensor parameters ----------------

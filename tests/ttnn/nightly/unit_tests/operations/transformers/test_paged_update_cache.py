@@ -2,10 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+import threading
+import time
+
 import torch
 import pytest
 import ttnn
 from loguru import logger
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
 
 
@@ -1442,3 +1447,57 @@ def test_paged_update_cache_preserves_fp32_neighbors(input_dtype, device):
             expected[user, 0, index, :] = 3.0
         assert torch.equal(ttnn.to_torch(cache_tt), expected)
     assert device.num_program_cache_entries() - entries_before == 1
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="Blackhole DRAM read/write deadlock")
+def test_paged_fill_cache_dram_noc_separation(device):
+    """Exercise concurrent DRAM metadata reads and cache writes on one chip for three seconds after compilation.
+
+    The watchdog exits 1 if a call stalls (600 s for compilation, then 10 s). A hung chip needs a reset before reuse.
+    Run stock under an outer process timeout as well; the watchdog needs the host wait to release the GIL.
+    """
+    torch.manual_seed(52270)
+    batch, heads, seq, dim, block = 32, 8, 1024, 128, 32
+    blocks = batch * seq // block
+    page_table_host = torch.zeros(batch, 4096, dtype=torch.int32)
+    for b in range(batch):
+        page_table_host[b, : seq // block] = torch.arange(b * (seq // block), (b + 1) * (seq // block))
+    cache = ttnn.from_torch(
+        torch.zeros(blocks, heads, block, dim), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
+    )
+    inp = ttnn.from_torch(
+        torch.randn(batch, heads, seq, dim), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
+    )
+    page_table = ttnn.from_torch(page_table_host, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+    batch_idx = ttnn.from_torch(
+        torch.arange(batch, dtype=torch.int32), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32
+    )
+    progress = (0, time.monotonic())
+    stop = threading.Event()
+
+    def watch():
+        while not stop.wait(1):
+            calls, last = progress
+            if time.monotonic() - last > (600 if calls == 0 else 10):
+                print(f"STALL: paged_fill_cache stopped after {calls} calls; reset the chip before reuse.", flush=True)
+                os._exit(1)
+
+    watchdog = threading.Thread(target=watch, daemon=True)
+    watchdog.start()
+    try:
+        start = None
+        while start is None or time.monotonic() - start < 3:
+            ttnn.experimental.paged_fill_cache(cache, inp, page_table, batch_idx_tensor=batch_idx, batch_idx=0)
+            ttnn.synchronize_device(device)
+            progress = (progress[0] + 1, time.monotonic())
+            if start is None:
+                start = progress[1]  # exclude the first call, which compiles the kernels
+        seconds = time.monotonic() - start
+    finally:
+        stop.set()
+        watchdog.join()
+
+    expected = ttnn.to_torch(inp).reshape(batch, heads, seq // block, block, dim)
+    expected = expected.permute(0, 2, 1, 3, 4).reshape(blocks, heads, block, dim)
+    assert torch.equal(ttnn.to_torch(cache), expected)
+    print(f"paged_fill_cache: {progress[0]} calls in {seconds:.3f} s; cache equals input", flush=True)

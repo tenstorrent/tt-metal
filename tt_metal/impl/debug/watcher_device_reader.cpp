@@ -920,6 +920,10 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (NOC transaction overflows a circular buffer).";
             break;
+        case dev_msgs::DebugSanitizeDramNocMix:
+            error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
+            error_msg += " (kernel uses both DRAM reads and writes on one NoC; separate the NoCs to avoid possible stalls).";
+            break;
         case dev_msgs::DebugSanitizeNocInvalidTxnId:
             error_msg = fmt::format(
                 "{} used invalid NoC transaction id {} (exceeds max {}).",

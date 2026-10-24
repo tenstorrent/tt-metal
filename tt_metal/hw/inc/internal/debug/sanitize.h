@@ -649,6 +649,17 @@ uint32_t debug_sanitize_noc_addr(
             DEBUG_SANITIZE_NOC_TARGET,
             debug_valid_pcie_addr(noc_local_addr, noc_len));
     } else if (core_type == AddressableCoreType::DRAM) {
+#if defined(ARCH_BLACKHOLE) && defined(WATCHER_ENABLE_DRAM_NOC_MIX_CHECK) && !defined(FW_BUILD) && \
+    !defined(DISPATCH_KERNEL) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC))
+        // Kernel-local BSS is cleared by do_crt1 on every launch, independently for each RISC.
+        // This deliberately checks directions used by the kernel, not transactions still in flight.
+        static uint8_t dram_directions[NUM_NOCS] = {};
+        dram_directions[noc_id] |= dir == DEBUG_SANITIZE_NOC_READ ? 1 : 2;
+        if (dram_directions[noc_id] == 3) {
+            debug_sanitize_post_addr_and_hang(
+                noc_id, noc_addr, l1_addr, noc_len, multicast, dir, DEBUG_SANITIZE_NOC_TARGET, DebugSanitizeDramNocMix);
+        }
+#endif
         alignment_mask =
             (dir == DEBUG_SANITIZE_NOC_READ ? NOC_DRAM_READ_ALIGNMENT_BYTES : NOC_DRAM_WRITE_ALIGNMENT_BYTES) - 1;
         debug_sanitize_post_addr_and_hang(
