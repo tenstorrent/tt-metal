@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import zlib
+
 import pytest
 import torch
 
@@ -483,3 +485,62 @@ def test_clone_sharded_dtype_conversion(
         compute_kernel_options=None,
         device=device,
     )
+
+
+def _two_shard_memory_config(shard_layout, buffer_type, shard_shape):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    return ttnn.MemoryConfig(
+        shard_layout, buffer_type, ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    )
+
+
+@pytest.mark.parametrize("tilized", [True, False])
+@pytest.mark.parametrize(
+    "shape, shard_layout, shard_shape",
+    [
+        ([1, 1, 128, 256], ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [64, 256]),
+        ([1, 1, 128, 256], ttnn.TensorMemoryLayout.WIDTH_SHARDED, [128, 128]),
+        ([1, 1, 128, 256], ttnn.TensorMemoryLayout.BLOCK_SHARDED, [128, 128]),
+        ([1, 1, 96, 96], ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [64, 96]),
+        ([1, 1, 64, 96], ttnn.TensorMemoryLayout.WIDTH_SHARDED, [64, 64]),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_buffer_type, output_buffer_type",
+    [
+        (ttnn.BufferType.DRAM, ttnn.BufferType.DRAM),
+        (ttnn.BufferType.DRAM, ttnn.BufferType.L1),
+        (ttnn.BufferType.L1, ttnn.BufferType.DRAM),
+    ],
+)
+@pytest.mark.parametrize("input_dtype, output_dtype", [("bfloat16", None), ("float32", None), ("bfloat16", "float32")])
+def test_clone_dram_sharded(
+    tilized,
+    shape,
+    shard_layout,
+    shard_shape,
+    input_buffer_type,
+    output_buffer_type,
+    input_dtype,
+    output_dtype,
+    request,
+    device,
+):
+    if output_dtype and not tilized:
+        pytest.skip("When not tilized, dtype conversion is not supported.")
+    torch.manual_seed(zlib.crc32(request.node.name.encode()))
+    torch_input = torch.randn(shape, dtype=get_lib_dtype(torch, input_dtype))
+    ttnn_input = ttnn.from_torch(
+        torch_input,
+        device=device,
+        dtype=get_lib_dtype(ttnn, input_dtype),
+        layout=ttnn.TILE_LAYOUT if tilized else ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=_two_shard_memory_config(shard_layout, input_buffer_type, shard_shape),
+    )
+    ttnn_output = ttnn.clone(
+        ttnn_input,
+        dtype=get_lib_dtype(ttnn, output_dtype),
+        memory_config=_two_shard_memory_config(shard_layout, output_buffer_type, shard_shape),
+    )
+    expected = torch_input.to(get_lib_dtype(torch, output_dtype or input_dtype))
+    assert torch.equal(ttnn.to_torch(ttnn_output), expected)
