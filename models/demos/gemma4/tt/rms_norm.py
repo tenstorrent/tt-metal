@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 from torch import nn
 
 import ttnn
@@ -9,6 +11,34 @@ from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.custom_ops.fused_norm_decode import FusedNormDecode
 from models.demos.gemma4.tt.mesh_orientation import decode_flag
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
+
+
+def sharded_layout_program_config(mem, max_block_w=None):
+    """The width-sharded LayerNorm program config running on the grid of ``mem``, a consumer's L1 width-sharded
+    one-row-tile activation layout (a DRAM-sharded decode matmul's ``act_memory_config``): the norm's output is
+    left in that layout and the matmul reads it without its own reshard (GEMMA4_NORM_SHARDED_OUT=1 on the native
+    norm path). None when the layout is not one rectangular grid from (0, 0) of whole column tiles, or when a
+    shard is wider than ``max_block_w`` tiles (GEMMA4_NORM_SHARDED_OUT_MAX_W, default 4): a matmul grid of few wide
+    shards (the 12B wqkv: 8 cores x 15 tiles) keeps the norm on its own grid and the matmul's reshard."""
+    if not mem.is_sharded() or mem.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        return None
+    spec = mem.shard_spec
+    if int(spec.shape[0]) != ttnn.TILE_SIZE or int(spec.shape[1]) % ttnn.TILE_SIZE != 0:
+        return None
+    ranges = list(spec.grid.ranges())
+    if len(ranges) != 1 or (ranges[0].start.x, ranges[0].start.y) != (0, 0):
+        return None
+    gx, gy = ranges[0].end.x + 1, ranges[0].end.y + 1
+    block_w = int(spec.shape[1]) // ttnn.TILE_SIZE
+    cap = int(os.environ.get("GEMMA4_NORM_SHARDED_OUT_MAX_W", "4")) if max_block_w is None else int(max_block_w)
+    if block_w > cap:
+        return None
+    subblock_w = 4
+    while subblock_w > 1 and block_w % subblock_w != 0:
+        subblock_w -= 1
+    return ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[gx, gy], subblock_w=subblock_w, block_h=1, block_w=block_w, inplace=False
+    )
 
 
 class RMSNorm(nn.Module):
@@ -122,9 +152,20 @@ class RMSNorm(nn.Module):
         out.deallocate(True)
         return out_interleaved
 
+    def _forward_sharded_out(self, x, mem, program_config):
+        """Width-sharded decode RMSNorm on a consumer's L1 activation layout: I2S into it, the sharded rms_norm, and
+        the output left in that layout (no S2I; the DRAM-sharded decode matmul reads it without its own reshard)."""
+        x_sh = ttnn.to_memory_config(x, mem)
+        out = ttnn.rms_norm(
+            x_sh, weight=self.tt_weight, epsilon=self.eps, program_config=program_config, memory_config=mem
+        )
+        x_sh.deallocate(True)
+        return out
+
     def forward(self, x, out_memory_config=None):
-        """``out_memory_config``: a width-sharded decode-matmul activation layout for the fused decode norm's output
-        (GEMMA4_NORM_FUSED=2 rows only; ignored on the other paths)."""
+        """``out_memory_config``: a width-sharded decode-matmul activation layout for the decode norm's output: the
+        fused decode norm (GEMMA4_NORM_FUSED=2) writes it; the native width-sharded LayerNorm runs on its grid when
+        ``sharded_layout_program_config`` accepts it; the other paths ignore it (interleaved output)."""
         if self.is_distributed:
             activation_grid_bounding_box_size = x.memory_config().shard_spec.grid.bounding_box().grid_size()
             shard_height, shard_width = x.memory_config().shard_spec.shape
@@ -206,6 +247,12 @@ class RMSNorm(nn.Module):
                 and not x.is_sharded()
             ):
                 dim = x.shape[-1]
+                if out_memory_config is not None and dim % ttnn.TILE_SIZE == 0:
+                    # GEMMA4_NORM_SHARDED_OUT=1: the native kernel on the consumer matmul's activation grid, output
+                    # left there (the base path's S2I + the matmul's I2S are not run)
+                    pc = sharded_layout_program_config(out_memory_config)
+                    if pc is not None:
+                        return self._forward_sharded_out(x, out_memory_config, pc)
                 if self._sharded_cfg is None or self._sharded_dim != dim:
                     self._sharded_dim = dim
                     self._sharded_cfg = self._build_sharded_cfg(dim)

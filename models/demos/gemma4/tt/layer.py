@@ -258,11 +258,13 @@ class Gemma4DecoderLayer:
         )
 
     def _sharded_act_layout(self, proj, rows, is_decode):
-        """The L1 width-sharded activation layout of a DRAM-sharded decode matmul for the fused norm to write
-        (GEMMA4_NORM_SHARDED_OUT=1 on dense decode rows with GEMMA4_NORM_FUSED=2), else None."""
+        """The L1 width-sharded activation layout of a DRAM-sharded decode matmul for the norm before it to write
+        (GEMMA4_NORM_SHARDED_OUT=1 on dense decode rows: the fused norm with GEMMA4_NORM_FUSED=2, the native
+        width-sharded LayerNorm on the matmul's grid otherwise; a path that cannot honour it returns interleaved
+        rows and the matmul reshards as before), else None."""
         if not (is_decode and not self.enable_moe_block and decode_flag("GEMMA4_NORM_SHARDED_OUT") == "1"):
             return None
-        if decode_flag("GEMMA4_NORM_FUSED") != "2" or not is_decode_rows(rows) or rows.is_sharded():
+        if not is_decode_rows(rows) or rows.is_sharded():
             return None
         if not isinstance(proj, DramShardedLinear) or not proj.accepts_sharded_rows():
             return None
@@ -531,7 +533,14 @@ class Gemma4DecoderLayer:
 
         # 2. MLP + MoE block
         residual = hidden_states
-        normed = self.pre_feedforward_layernorm.forward(hidden_states)
+        # GEMMA4_NORM_SHARDED_OUT=1 (dense decode rows): the normed rows land in the DRAM-sharded gate_up matmul's
+        # L1 activation layout (the fused tail above does the same for its pre-FF norm)
+        gate_up_act = self._sharded_act_layout(self.shared_mlp.gate_up_proj, hidden_states, is_decode)
+        normed = (
+            self.pre_feedforward_layernorm.forward(hidden_states, out_memory_config=gate_up_act)
+            if gate_up_act is not None
+            else self.pre_feedforward_layernorm.forward(hidden_states)
+        )
         mlp_output = self.shared_mlp(normed)
         normed.deallocate(True)
 
