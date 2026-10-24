@@ -2335,6 +2335,51 @@ class ChunkedPrefillPageTableGuardMixin:
                 levels.append(0)
         return tuple(levels)
 
+    # When the allocator walk runs (``_g4_alloc_levels``: two get_memory_view block tables, 15-20 ms of host on
+    # the decode step that follows a prefill at the 26B's allocation count). GEMMA4_TRACE_ALLOC_GUARD_ARM:
+    #   prefill (default) - every prefill arms the next replay's check (today's rule);
+    #   alloc             - only allocation events arm it: a per-layer page-table buffer allocated or grown
+    #                       (``Gemma4Model._page_tables_to_ttnn``), a prefill trace (re)captured, a chunked or
+    #                       continuation prefill (its sliding-tail stash), a multimodal prefill (encoder
+    #                       allocations), plus a periodic check every GEMMA4_TRACE_ALLOC_GUARD_PERIOD replays
+    #                       (default 32; 0 = events only). The decision on the levels is the same in both modes.
+    def _g4_guard_arm_mode(self) -> str:
+        mode = os.environ.get("GEMMA4_TRACE_ALLOC_GUARD_ARM", "prefill")
+        return mode if mode in ("prefill", "alloc") else "prefill"
+
+    def _g4_arm_alloc_check(self, reason: str) -> bool:
+        """Arm the next decode replay's allocator check; ``prefill`` (a prefill ran, nothing known allocated) arms
+        only in the ``prefill`` mode, every other reason is an allocation event and arms in both modes."""
+        if reason == "prefill" and self._g4_guard_arm_mode() == "alloc":
+            return False
+        self._g4_alloc_check_pending = True
+        self._g4_alloc_check_reason = reason
+        return True
+
+    @staticmethod
+    def _g4_prefill_trace_ids(generator):
+        ids = getattr(generator, "trace_id_prefill", None) or {}
+        return {k: v for k, v in dict(ids).items() if v is not None}
+
+    def _g4_arm_after_prefill(self, *, prefill_trace_ids_before, chunked: bool, multimodal: bool) -> list:
+        """The allocation events of one prefill call (both modes): page-table buffers allocated or grown on any
+        model, a prefill trace (re)captured, a chunked / continuation prefill, a multimodal prefill."""
+        reasons = []
+        for m in self.model:
+            event = getattr(m, "_g4_persistent_alloc_event", None)
+            if event:
+                m._g4_persistent_alloc_event = None
+                reasons.append(f"page tables {event}")
+        if self._g4_prefill_trace_ids(self) != (prefill_trace_ids_before or {}):
+            reasons.append("prefill trace capture")
+        if chunked:
+            reasons.append("chunked prefill")
+        if multimodal:
+            reasons.append("multimodal prefill")
+        for reason in reasons:
+            self._g4_arm_alloc_check(reason)
+        return reasons
+
     def _g4_trace_guard_should_recapture(self, decode_trace_key) -> bool:
         if os.environ.get("GEMMA4_TRACE_ALLOC_GUARD", "1") == "0":
             return False
@@ -2344,8 +2389,15 @@ class ChunkedPrefillPageTableGuardMixin:
             self._g4_trace_alloc_baseline[decode_trace_key] = self._g4_alloc_levels()
             return False
         if not getattr(self, "_g4_alloc_check_pending", True):
-            return False  # nothing but replays since the last check: no new persistent allocation
+            # nothing but replays since the last check: no new persistent allocation (the ``alloc`` arming
+            # mode still walks the allocator every GEMMA4_TRACE_ALLOC_GUARD_PERIOD replays)
+            self._g4_replays_since_check = int(getattr(self, "_g4_replays_since_check", 0)) + 1
+            period = int(os.environ.get("GEMMA4_TRACE_ALLOC_GUARD_PERIOD", "32"))
+            if self._g4_guard_arm_mode() != "alloc" or period <= 0 or self._g4_replays_since_check < period:
+                return False
+            self._g4_alloc_check_reason = "periodic"
         self._g4_alloc_check_pending = False
+        self._g4_replays_since_check = 0
         current = self._g4_alloc_levels()
         if all(c <= b for b, c in zip(baseline, current)):
             # The level right after the capture can still include tensors the warmup frees later; the
@@ -2640,7 +2692,52 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         warmup_prefill=True,
         **kwargs,
     ):
-        self._g4_alloc_check_pending = True  # a prefill may leave persistent allocations behind
+        """Demo entry: arms the decode-trace guard (``_g4_arm_alloc_check``: every prefill in the default mode, the
+        allocation events of the call in the ``alloc`` mode) around :meth:`_prefill_forward_text_demo`."""
+        self._g4_arm_alloc_check("prefill")  # a prefill may leave persistent allocations behind
+        ids_before = self._g4_prefill_trace_ids(self)
+        try:
+            return self._prefill_forward_text_demo(
+                tokens,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                prompt_lens=prompt_lens,
+                empty_slots=empty_slots,
+                enable_trace=enable_trace,
+                model_id_warmup=model_id_warmup,
+                sampling_params=sampling_params,
+                start_pos=start_pos,
+                return_hidden_states=return_hidden_states,
+                warmup_prefill=warmup_prefill,
+                **kwargs,
+            )
+        finally:
+            lens = prompt_lens if prompt_lens is not None else [int(tokens.shape[1])]
+            lens = lens.tolist() if hasattr(lens, "tolist") else list(lens)
+            max_chunk = int(getattr(self.model_args[0], "max_prefill_chunk_size", 1 << 30) or 1 << 30)
+            chunked = any(int(n) > max_chunk for n in lens) or (
+                start_pos is not None and any(int(p) > 0 for p in list(start_pos))
+            )
+            multimodal = any(
+                kwargs.get(k) is not None for k in ("pixel_values", "mm_embeddings", "prompt_embeds", "stage_inputs")
+            )
+            self._g4_arm_after_prefill(prefill_trace_ids_before=ids_before, chunked=chunked, multimodal=multimodal)
+
+    def _prefill_forward_text_demo(
+        self,
+        tokens: torch.Tensor,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        empty_slots=None,
+        enable_trace=True,
+        model_id_warmup=None,
+        sampling_params=None,
+        start_pos: list[int] = None,
+        return_hidden_states=False,
+        warmup_prefill=True,
+        **kwargs,
+    ):
         if model_id_warmup is not None:
             warmup_prefill = False
 

@@ -1799,6 +1799,9 @@ class Gemma4Model:
                     needs_grow = True
                     break
         if needs_alloc or needs_grow:
+            # An allocation event for the decode-trace guard's ``alloc`` arming mode (read and cleared by the
+            # generator after the prefill call).
+            self._g4_persistent_alloc_event = "grown" if needs_grow else f"allocated for batch key {batch_key}"
             if needs_grow or by_batch:
                 # Growing after decode-trace capture would leave execute_trace reading stale
                 # addresses, and a batch key first seen after the capture (a lane group, a wider

@@ -2173,7 +2173,8 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         for m in self.model:
             m._g4_pf_ms = {}  # host phases of this call (install / trace / lm_head / readback), see the perf line
         self._g4_alloc_dump("prefill_")
-        self._g4_alloc_check_pending = True
+        self._g4_arm_alloc_check("prefill")
+        prefill_trace_ids_before = self._g4_prefill_trace_ids(self)
         tokens = kwargs.get("tokens")
         if tokens is None and args:
             tokens = args[0]
@@ -2452,10 +2453,19 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         ttft_ms = dt * 1000.0
         prefill_tok_s = (float(seq_len) / dt) if (seq_len and dt > 0) else 0.0
         chunk = getattr(self.model_args[0], "max_prefill_chunk_size", None)
+        # Allocation events of this call for the decode-trace guard (chunked = a chunk walk or a continuation
+        # of cached tokens: the sliding-tail stash lives across chunks).
+        start_pos_after = kwargs.get("start_pos")
+        chunked = any(int(n) > int(chunk or 1 << 30) for n in (prefill_seq_lens or [])) or (
+            start_pos_after is not None and any(int(p) > 0 for p in list(start_pos_after))
+        )
+        guard_reasons = self._g4_arm_after_prefill(
+            prefill_trace_ids_before=prefill_trace_ids_before, chunked=chunked, multimodal=mm_users > 0
+        )
         logger.info(
             "[gemma4-vllm-perf] prefill TTFT={:.1f} ms | prefill_tok/s={:.2f} | "
             "seq_len={} | max_prefill_chunk_size={} | bounded_sliding={} | batch={} | multimodal_users={} | "
-            "mm_stage_ms={:.1f} | phases: {}",
+            "mm_stage_ms={:.1f} | phases: {} | guard_arm={}",
             ttft_ms,
             prefill_tok_s,
             seq_len,
@@ -2465,6 +2475,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             mm_users,
             mm_stage_ms,
             self._g4_prefill_phases(t_entry, t0, clear_ms),
+            ",".join(guard_reasons)
+            if guard_reasons
+            else ("prefill" if self._g4_guard_arm_mode() == "prefill" else "-"),
         )
         # Reset decode accumulators at the start of each new generate.
         self._perf_decode_tokens = 0
