@@ -382,6 +382,12 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
             *attributes.dtype == output_tensor->dtype(),
             "If both output dtype and output tensor provided dtype should match");
     }
+    const auto output_dtype =
+        output_tensor.has_value() ? output_tensor->dtype() : attributes.dtype.value_or(input_tensor_a.dtype());
+    TT_FATAL(
+        !(output_dtype == DataType::INT8 && input_tensor_a.device()->arch() == tt::ARCH::QUASAR &&
+          !binary::utils::is_quant_op(attributes.binary_op_type)),
+        "INT8 output typecast is not supported on Quasar");
 
     TT_FATAL(
         input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR,
