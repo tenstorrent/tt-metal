@@ -139,6 +139,35 @@ class MATMUL_STREAM_NARROW(TemplateParameter):
         )
 
 
+# Operand formats whose tile is its faces back to back in L1 (the Z counter steps a tile at a time).
+MATMUL_DENSE_STREAM_FORMATS = (DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32)
+
+
+@dataclass
+class MATMUL_STREAM_Z(TemplateParameter):
+    """Blackhole matmul unpack that steps the streamed in1 tile by the unpacker Z counter instead of a config read and write."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_STREAM_Z"
+
+    @staticmethod
+    def for_block(formats, dest_acc, dest_sync, ct_dim: int, rt_dim: int, in0_r_dim: int = 32, math_fidelity=None, in1_faces: int = 4, in1_partial: bool = False) -> list:
+        """[MATMUL_STREAM_Z()] at LoFi where in1 streams (ct_dim >= rt_dim, 4 or more output tiles), is a dense 4-face format and the narrow stream is off, else []."""
+        if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+            return []
+        if ct_dim < rt_dim or in1_faces != 4 or in1_partial:
+            return []
+        # measured: only LoFi rows of 4 or more output tiles never lose; the fidelities above it, 1x1 and 1x2 are pack or hand-off bound
+        if math_fidelity != MathFidelity.LoFi or ct_dim * rt_dim < 4:
+            return []
+        # 32-bit input at half sync loses 1 percent on 1x4 with 4 blocks
+        if formats.input_format == DataFormat.Float32 and dest_sync == DestSync.Half:
+            return []
+        if MATMUL_STREAM_NARROW.for_block(formats, dest_acc, dest_sync, ct_dim, rt_dim, in0_r_dim, math_fidelity):
+            return []
+        return [MATMUL_STREAM_Z()] if formats.input_format in MATMUL_DENSE_STREAM_FORMATS else []
+
+
 @dataclass
 class MATMUL_K_LOOP(TemplateParameter):
     """Blackhole matmul unpack of the whole inner dimension in one _llk_unpack_AB_matmul_k_ call."""
