@@ -139,3 +139,28 @@ def test_adaptive_dram_pool2d(
         pool_type=pool_type,
         dram_slice_config=dram_slice_config,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("in_c", [128, 160, 256, 288, 384])
+@pytest.mark.parametrize("input_hw, output_hw", [(64, 16), (128, 32)])
+@pytest.mark.parametrize("dst_full_sync_en", [False, True])
+def test_adaptive_avg_pool2d_fp32_dest_acc(device, tensor_map, in_c, input_hw, output_hw, dst_full_sync_en):
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi3,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+        dst_full_sync_en=dst_full_sync_en,
+    )
+    run_adaptive_pool2d(
+        device=device,
+        tensor_map=tensor_map,
+        input_shape=(1, in_c, input_hw, input_hw),
+        output_size=(output_hw, output_hw),
+        dtype=ttnn.bfloat16,
+        pool_type="avg",
+        sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        compute_kernel_config=compute_kernel_config,
+    )
