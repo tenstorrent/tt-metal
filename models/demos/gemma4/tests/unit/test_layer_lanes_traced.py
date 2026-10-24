@@ -79,6 +79,16 @@ def _engine_mesh_config(mesh_device):
 )
 @pytest.mark.parametrize("layer_idx", [0], ids=["sliding_layer0"])
 def test_layer_lanes_traced_step(mesh_device, layer_idx, reset_seeds, monkeypatch):
+    # CI runs the whole dir on 4-chip, 1-chip and Wormhole boxes: skip, never error, off the lane engine's shapes
+    shape = tuple(int(x) for x in mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
+    if shape not in ((2, 4), (8, 4)):
+        pytest.skip(f"the lane engine's shapes are (2,4) and (8,4); got {shape}")
+    try:
+        fabric = str(ttnn.get_fabric_config())
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"fabric config unavailable: {exc}")
+    if "FABRIC_1D" not in fabric:
+        pytest.skip(f"lanes fabric (FABRIC_1D / FABRIC_1D_RING) not active: {fabric}")
     monkeypatch.setenv("GEMMA4_MOE_DECODE_KERNEL", os.environ.get("GEMMA4_MOE_DECODE_KERNEL", "1"))
     monkeypatch.setenv("GEMMA4_GALAXY_FRACTURE", "1")
     monkeypatch.setenv("GEMMA4_GALAXY_LANES", "1")
@@ -145,11 +155,31 @@ def test_layer_lanes_traced_step(mesh_device, layer_idx, reset_seeds, monkeypatc
             token_index=CACHE_LEN,
         )
 
-    # warm (compiles every program), then the eager reference output
+    # warm (compiles every program), then one graph-captured eager step: the program count and the collectives of
+    # this arm (the inert-knob rule: an arm that leaves the collectives unchanged says so), and the eager reference
     out = step()
     ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(out)
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    out = step()
+    ttnn.synchronize_device(mesh_device)
+    captured = ttnn.graph.end_graph_capture()
     eager = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float()
     ttnn.deallocate(out)
+    dev_ops = [
+        n["params"].get("name", "?")
+        for n in captured
+        if n["node_type"] == "function_start" and str(n["params"].get("name", "")).endswith("DeviceOperation")
+    ]
+    ccl_ops = [n for n in dev_ops if any(k in n for k in ("AllGather", "ReduceScatter", "AllReduce", "AllToAll"))]
+    ccl_counts = {}
+    for n in ccl_ops:
+        ccl_counts[n] = ccl_counts.get(n, 0) + 1
+    knobs = " ".join(f"{k}={os.environ.get(k, '-')}" for k in KNOBS)
+    logger.info(
+        f"LANE_LAYER programs/step={len(dev_ops)} ccl_ops={len(ccl_ops)} "
+        f"{' '.join(f'{k.replace('DeviceOperation', '')}={v}' for k, v in sorted(ccl_counts.items()))} | {knobs}"
+    )
 
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     out_tr = step()
@@ -163,7 +193,6 @@ def test_layer_lanes_traced_step(mesh_device, layer_idx, reset_seeds, monkeypatc
     ttnn.synchronize_device(mesh_device)
     ms = (time.perf_counter() - t0) / REPLAYS * 1e3
     traced = ttnn.to_torch(ttnn.get_device_tensors(out_tr)[0]).float()
-    knobs = " ".join(f"{k}={os.environ.get(k, '-')}" for k in KNOBS)
     logger.info(
         f"LANE_LAYER layer={layer_idx} mesh={mesh_device.shape[0]}x{mesh_device.shape[1]} users={users}: "
         f"{ms:.3f} ms/replay over {REPLAYS} replays (x30 layers = {30 * ms:.1f} ms) | {knobs}"
