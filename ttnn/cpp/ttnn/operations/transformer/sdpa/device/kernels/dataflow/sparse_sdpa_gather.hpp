@@ -91,7 +91,10 @@ FORCE_INLINE void trid_ring_gather(
         const uint32_t page =
             tt::block_cyclic::logical_to_physical_page<BlockCyclic, ChunkLocal, Sp, ShardStrideGap, SlabStrideGap>(
                 idx_ptr[base + p]);
-        noc.async_read(kv, local_l1, k_row_bytes, {.page_id = page_offset + page}, {.addr = dst_l1 + p * k_row_bytes});
+        if constexpr (!(dbg::MASK & dbg::NO_GATHER)) {
+            noc.async_read(
+                kv, local_l1, k_row_bytes, {.page_id = page_offset + page}, {.addr = dst_l1 + p * k_row_bytes});
+        }
     }
     const uint32_t to_drain = (cnt < D) ? cnt : D;
     for (uint32_t d = 0; d < to_drain; ++d) {
