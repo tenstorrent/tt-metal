@@ -45,6 +45,9 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
         "First two dimensions for the weights must be 1 but got {} and {}",
         weights.padded_shape()[0],
         weights.padded_shape()[1]);
+    const auto& output_mem_config = tensor_args.optional_output_tensor.has_value()
+                                        ? tensor_args.optional_output_tensor->memory_config()
+                                        : operation_attributes.output_mem_config;
     if (operation_attributes.tilized) {
         TT_FATAL(
             a.padded_shape()[-1] % TILE_HEIGHT == 0,
@@ -56,8 +59,8 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
             "Number of columns in table {} must be factor of tile width {}",
             weights.padded_shape()[-1],
             TILE_WIDTH);
-        if (is_sharded(operation_attributes.output_mem_config.memory_layout())) {
-            const auto& shard_spec = operation_attributes.output_mem_config.shard_spec();
+        if (is_sharded(output_mem_config.memory_layout())) {
+            const auto& shard_spec = output_mem_config.shard_spec();
             TT_FATAL(shard_spec.has_value(), "Sharded memory config must have a shard spec");
             TT_FATAL(
                 shard_spec->shape[0] % TILE_HEIGHT == 0,
@@ -81,12 +84,12 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
                 shard_spec->shape[1]);
         }
     } else {
-        if (is_sharded(operation_attributes.output_mem_config.memory_layout())) {
+        if (is_sharded(output_mem_config.memory_layout())) {
             TT_FATAL(
-                operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+                output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
                 "Embedding only supports height sharded Row Major outputs");
             TT_FATAL(
-                operation_attributes.output_mem_config.is_l1(),
+                output_mem_config.is_l1(),
                 "Embedding sharded Row Major output must be in L1: the reader writes rows straight into its own "
                 "shard");
         }
@@ -108,6 +111,34 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 !operation_attributes.pad_token.has_value(),
                 "Pad token must not be specified when PADDED Embeddings Type is not specified");
+    }
+
+    if (tensor_args.optional_output_tensor.has_value()) {
+        const auto& output = tensor_args.optional_output_tensor.value();
+        const auto output_layout =
+            (operation_attributes.tilized && a.layout() != Layout::TILE) ? Layout::TILE : Layout::ROW_MAJOR;
+        TT_FATAL(
+            output.layout() == output_layout,
+            "Embedding: the output tensor must be in {} layout, but is in {}",
+            output_layout,
+            output.layout());
+        TT_FATAL(
+            output_layout == Layout::TILE || output.dtype() == weights.dtype(),
+            "Embedding: a ROW_MAJOR output tensor must have the weights' dtype {}, but has {}",
+            weights.dtype(),
+            output.dtype());
+        TT_FATAL(
+            output.padded_shape()[-1] == weights.padded_shape()[-1],
+            "Embedding: the output tensor's last dimension must be {}, but is {}",
+            weights.padded_shape()[-1],
+            output.padded_shape()[-1]);
+        const uint64_t expected_volume =
+            static_cast<uint64_t>(a.logical_shape()[0]) * a.logical_shape()[-1] * weights.logical_shape()[-1];
+        TT_FATAL(
+            output.logical_shape().volume() == expected_volume,
+            "Embedding: the output tensor has {} elements, but the op writes {}",
+            output.logical_shape().volume(),
+            expected_volume);
     }
 }
 
