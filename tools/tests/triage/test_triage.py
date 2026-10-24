@@ -19,6 +19,7 @@ import threading
 import time
 
 import pytest
+from rich.text import Text
 
 
 metal_home = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -48,6 +49,7 @@ def logged_errors() -> list[str]:
 
 # Mapping of hang application paths to their expected test results
 HANG_APP_ADD_2_INTEGERS = "tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang"
+HANG_APP_ADD_2_INTEGERS_LIGHTWEIGHT_ASSERT = f"{HANG_APP_ADD_2_INTEGERS} with lightweight asserts"
 HANG_APP_TTNN_ADD_INTEGERS = (
     "tools/tests/triage/hang_apps/ttnn_add_integers_hang/triage_hang_app_ttnn_add_integers_hang"
 )
@@ -65,7 +67,7 @@ HANG_APP_EXPECTED_RESULTS = {
             "kernel_name": "add_2_tiles_hang",
             "compute_cores_hang": True,
             "first_callstack_file": "add_2_tiles_hang.cpp",
-            "first_callstack_line": 40,
+            "first_callstack_line": 46,
         },
         "callstacks": {
             "device_to_check": 0,
@@ -73,15 +75,15 @@ HANG_APP_EXPECTED_RESULTS = {
             "cores_to_check": {
                 "trisc0": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
                 "trisc1": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
                 "trisc2": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
             },
         },
@@ -91,7 +93,7 @@ HANG_APP_EXPECTED_RESULTS = {
             "kernel_name": "add_2_tiles_hang",
             "compute_cores_hang": True,
             "first_callstack_file": "add_2_tiles_hang.cpp",
-            "first_callstack_line": 40,
+            "first_callstack_line": 46,
         },
         "callstacks": {
             "device_to_check": 0,
@@ -99,21 +101,47 @@ HANG_APP_EXPECTED_RESULTS = {
             "cores_to_check": {
                 "trisc0": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
                 "trisc1": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
                 "trisc2": {
                     "file": "add_2_tiles_hang.cpp",
-                    "line": 40,
+                    "line": 46,
                 },
             },
         },
         "running_operations": {
             "expected_op_name_contains": "AddIntegersHang",
             "assert_no_na": True,
+        },
+    },
+    HANG_APP_ADD_2_INTEGERS_LIGHTWEIGHT_ASSERT: {
+        "lightweight_asserts": {
+            "kernel_name": "add_2_tiles_hang",
+            "compute_cores_hang": True,
+            "first_callstack_file": "assert_common.h",
+            "assert_code": "ASSERT(magic == n)",
+        },
+        "callstacks": {
+            "device_to_check": 0,
+            "location_to_check": "0,0",
+            "cores_to_check": {
+                "trisc0": {
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 43,
+                },
+                "trisc1": {
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 43,
+                },
+                "trisc2": {
+                    "file": "add_2_tiles_hang.cpp",
+                    "line": 43,
+                },
+            },
         },
     },
 }
@@ -229,11 +257,13 @@ def cause_hang_with_app(request):
         cmd = [sys.executable, os.path.join(metal_home, app)]
     else:
         cmd = [os.path.join(metal_home, "build", app)]
+    # Pull TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS out of the outside env, so only configurations that set it get it.
+    env = {key: value for key, value in os.environ.items() if key != "TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS"}
     proc = subprocess.Popen(
         cmd + args,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env={**os.environ, **app_configuration.get("env", {})},
+        env={**env, **app_configuration.get("env", {})},
     )
 
     output = AppOutput(proc)
@@ -293,6 +323,7 @@ def cause_hang_with_app(request):
         ),
         (
             # Automatic hang detection with timeout inside the app and serialization of Inspector RPC data, fast dispatch
+            # with lightweight asserts on
             HANG_APP_ADD_2_INTEGERS,
             [],
             {
@@ -300,8 +331,10 @@ def cause_hang_with_app(request):
                 "env": {
                     "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
                     "TT_METAL_LOGS_PATH": "/tmp/tt-metal/triage-test",
+                    "TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS": "1",
+                    "TT_METAL_WATCHER_DISABLE_ASSERT": "1",
                 },
-                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS],
+                "expected_results": HANG_APP_EXPECTED_RESULTS[HANG_APP_ADD_2_INTEGERS_LIGHTWEIGHT_ASSERT],
             },
             60,
         ),
@@ -596,6 +629,14 @@ class TestTriage:
                 assert (
                     first_entry.file_info.line == expected_line
                 ), f"{check.risc_name}: Expected line {expected_line}, got {first_entry.file_info.line}"
+
+            # Verify the quoted ASSERT if specified
+            expected_assert_code = expected.get("assert_code")
+            if expected_assert_code:
+                code = Text.from_markup(check.result.kernel_callstack_with_message.code_line).plain  # drops [info]..[/]
+                assert (
+                    code == expected_assert_code
+                ), f"{check.risc_name}: Expected {expected_assert_code!r}, got {code!r}"
 
     def test_dump_configuration(self):
         result = self.run_triage_script("dump_configuration.py")
