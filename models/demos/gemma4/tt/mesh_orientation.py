@@ -120,6 +120,11 @@ DECODE_FUSION_ON = {
     "GEMMA4_NORM_FUSED": "2",
     "GEMMA4_LAYER_NORM_FUSED": "1",
     "GEMMA4_QKV_NORM_ROPE_FUSED": "1",
+    # 32..128-token prefill calls: the small-row expert path on its 128-row plan instead of the fabric dispatch
+    # (replay kernel sum 76.7 -> 45.7 ms on the 128 bucket; served quiet-box A/B/A/B 2026-10-24, devq 0401: c1 128/128
+    # TTFT 141 / 142 -> 112 / 112.5 ms, c32 TTFT 1294 / 1300 -> 1388 / 1358 ms with TPOT 34.5 / 31.0 -> 32.7 / 32.6);
+    # inert on the (1,4) row mesh (masked-dense experts there); GEMMA4_SMALL_ROW_MIN/MAX_TOKENS bound it (32..128)
+    "GEMMA4_SMALL_ROW_EXPERTS": "1",
 }
 # The dense models (31B / 12B) on the same 4-chip Blackhole meshes default to the combined dense configuration
 # measured in the layer lab and the model-level A/B (row view, QKV heads + norms + RoPE as one program, concat heads

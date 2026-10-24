@@ -26,13 +26,13 @@ alignment per local expert); it is fixed at construction (``ExpertGatherSmall(T,
 outputs have fixed shapes, so a call is trace-safe (no host reads, no data-dependent shapes).
 """
 
-import os
 from pathlib import Path
 
 import torch
 
 import ttnn
 from models.demos.gemma4.custom_ops.grid import compute_grid
+from models.demos.gemma4.tt.mesh_orientation import decode_flag
 
 KERNEL_DIR = Path(__file__).resolve().parent / "kernels"
 TILE = 32
@@ -46,8 +46,9 @@ class ExpertGatherSmall:
 
     @staticmethod
     def enabled() -> bool:
-        """``GEMMA4_SMALL_ROW_EXPERTS=1`` (opt-in): the small-row expert path for chunks of <= 256 tokens."""
-        return os.environ.get("GEMMA4_SMALL_ROW_EXPERTS", "0") == "1"
+        """``GEMMA4_SMALL_ROW_EXPERTS`` through the decode-fusion resolver (env wins, else the build's profile: on
+        for the 4-chip Blackhole MoE build, off elsewhere): the small-row expert path for short prefill chunks."""
+        return decode_flag("GEMMA4_SMALL_ROW_EXPERTS") == "1"
 
     @staticmethod
     def capacity(T: int, K: int, E_loc: int) -> int:
