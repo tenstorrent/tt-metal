@@ -374,8 +374,8 @@ models:
     bh_sc1: 215
     # Wan2.2 T2V/I2V single galaxy legs (perf-gated, 65 + 75 min), moved from bh_sc1.
     bh_sc1_high_power: 140
-    # Wan2.2 T2V/I2V quad pipeline legs (40 + 20 min); their perf legs moved to bh_sc4_high_power.
-    bh_sc4: 60
+    # Wan2.2 T2V/I2V quad pipeline legs (40 + 35 min); their perf legs moved to bh_sc4_high_power.
+    bh_sc4: 75
     # Wan2.2 T2V/I2V quad perf legs (75 + 50 min) incl. the multi-seed VBench gate (#60481).
     bh_sc4_high_power: 125
   e2e_tier2:
