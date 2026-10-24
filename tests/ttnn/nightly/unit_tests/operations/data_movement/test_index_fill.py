@@ -541,3 +541,26 @@ def test_index_fill_program_cache_hit_new_addresses(index_fill_op, device, in_la
     assert device.num_program_cache_entries() == num_entries
     for a, b in zip(first, second):
         assert a.buffer_address() != b.buffer_address()
+
+
+# A TILE index is padded to a full tile with zeros. Indices without 0, and more than one tile row of them.
+@pytest.mark.parametrize(
+    "shape, dim, indices",
+    [
+        ([4, 8], 1, [3, 5]),
+        ([6, 8], 0, [3, 5]),
+        ([2, 3, 40, 64], 2, [1, 2, 39]),
+        ([4, 64], 1, list(range(1, 41))),
+    ],
+)
+def test_index_fill_tile_index(index_fill_op, shape, dim, indices, device):
+    torch.manual_seed(2025)
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    torch_index = torch.tensor(indices)
+    torch_output = torch.index_fill(torch_input, dim, torch_index, 1.5)
+
+    tt_input = ttnn.from_torch(torch_input, device=device)
+    tt_index = ttnn.from_torch(torch_index, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.to_torch(index_fill_op(tt_input, dim, tt_index, 1.5))
+
+    assert_equal(tt_output, torch_output)
