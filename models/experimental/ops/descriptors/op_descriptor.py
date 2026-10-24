@@ -6,10 +6,10 @@ import functools
 import inspect
 import os
 from collections import OrderedDict
-from typing import Callable, Optional
+from dataclasses import dataclass
+from typing import Any, Callable, Hashable, Optional
 
 import ttnn
-
 
 # ---------------------------------------------------------------------------
 # Program key cache — LRU helpers
@@ -82,25 +82,64 @@ def extend_branch_program_cache_key(device_program_hash: int, *extras) -> int:
     return hash((base, *extras))
 
 
+@dataclass(frozen=True)
+class _BoundOutputSpec:
+    """Value key: TensorSpec equality plus the tile flags it omits."""
+
+    spec: Any
+    transpose_within_face: bool
+    transpose_of_faces: bool
+
+    def __hash__(self):
+        # TensorSpec has no content-based Python hash. Equality still checks
+        # the whole spec, including memory config and alignment, on collisions.
+        return hash((tuple(self.spec.shape), self.spec.dtype, self.spec.layout))
+
+
+def _fold_bound_output_specs(program_cache_key, bound):
+    """Use the same key before and after a factory consumes explicit bindings."""
+    if not bound:
+        return program_cache_key
+    specs = []
+    for index, tensor in bound:
+        spec = tensor.spec
+        tile = spec.tile
+        specs.append((index, _BoundOutputSpec(spec, tile.transpose_within_face, tile.transpose_of_faces)))
+    # Keep value equality as well as the hash, including both tile flags.
+    return (program_cache_key, tuple(specs))
+
+
 class LazyOutputList:
     """List-like container whose slots are allocated on first read.
 
     On ``__getitem__``: if the slot is ``None``, calls the ``_alloc_fn`` once to
     fill all slots, then returns the requested one.
 
-    On ``__setitem__`` / slice assignment (``[:] = [...]``): writes directly
-    without triggering allocation — hidden rebind patches cached tensors in.
+    ``__setitem__`` records a caller binding without allocating other slots.
+    Assigning ``None`` removes that binding.
+    Initial slots, including ``LazyOutputList([tensor])``, are factory outputs,
+    not caller bindings. An undecorated eager descriptor's plain ``[tensor]``
+    list instead contains caller bindings.
     """
 
-    __slots__ = ("_slots", "_alloc_fn")
+    __slots__ = ("_slots", "_alloc_fn", "_explicit_bindings", "_any_explicit")
 
     def __init__(self, slots: list, alloc_fn: Optional[Callable] = None):
-        self._slots = slots
+        self._slots = slots if isinstance(slots, list) else list(slots)
         self._alloc_fn = alloc_fn
+        self._explicit_bindings = None
+        self._any_explicit = False
 
     def _materialize(self):
         if self._alloc_fn is not None:
-            self._alloc_fn(self._slots)
+            if self._any_explicit:
+                allocated = list(self._slots)
+                self._alloc_fn(allocated)
+                for index in range(len(allocated)):
+                    if index >= len(self._explicit_bindings) or not self._explicit_bindings[index]:
+                        self._slots[index] = allocated[index]
+            else:
+                self._alloc_fn(self._slots)
             self._alloc_fn = None
 
     def __getitem__(self, idx):
@@ -113,8 +152,17 @@ class LazyOutputList:
         return self._slots[idx]
 
     def __setitem__(self, idx, value):
+        bindings = self._explicit_bindings
+        if bindings is None:
+            bindings = [False] * len(self._slots)
+        else:
+            bindings = bindings[: len(self._slots)] + [False] * max(0, len(self._slots) - len(bindings))
+        if isinstance(idx, slice):
+            value = list(value)
         self._slots[idx] = value
-        self._alloc_fn = None
+        bindings[idx] = [item is not None for item in value] if isinstance(idx, slice) else value is not None
+        self._explicit_bindings = bindings
+        self._any_explicit = any(bindings)
 
     def __len__(self):
         return len(self._slots)
@@ -191,6 +239,9 @@ class OpDescriptor:
         "_input_names",
         "_complete_fn",
         "_updated_indices",
+        "_descriptor_output_buffers",
+        "_descriptor_input_buffers",
+        "__weakref__",
     )
 
     def __init__(
@@ -201,7 +252,7 @@ class OpDescriptor:
         name: str = "",
         *,
         factory_fn: Optional[Callable] = None,
-        program_cache_key: Optional[int] = None,
+        program_cache_key: Optional[Hashable] = None,
         input_names: Optional[tuple] = None,
     ):
         if descriptor is not None and factory_fn is not None:
@@ -219,7 +270,13 @@ class OpDescriptor:
             self.input_tensors = input_tensors if input_tensors is not None else []
             self._input_names = dict(input_names) if input_names else None
         self.output_tensors = output_tensors if output_tensors is not None else []
+        if descriptor is None and not isinstance(self.output_tensors, LazyOutputList):
+            # Keep a factory's mutable list, but do not claim its initial outputs.
+            self.output_tensors = LazyOutputList(self.output_tensors)
         self.name = name
+        if descriptor is not None and isinstance(self.output_tensors, LazyOutputList):
+            if all(slot is not None for slot in self.output_tensors._slots):
+                self.output_tensors._alloc_fn = None
 
         if program_cache_key is not None:
             self.program_cache_key = program_cache_key
@@ -229,6 +286,8 @@ class OpDescriptor:
             raise ValueError("Deferred OpDescriptor requires program_cache_key")
 
         self._updated_indices = []
+        self._descriptor_output_buffers = self._tensor_buffers(self.output_tensors) if descriptor is not None else None
+        self._descriptor_input_buffers = self._tensor_buffers(self.input_tensors) if descriptor is not None else None
 
     @classmethod
     def _persistent(cls, input_tensors, output_tensors, name, complete_fn, input_names):
@@ -249,6 +308,8 @@ class OpDescriptor:
         obj.name = name
         obj.program_cache_key = None
         obj._updated_indices = []
+        obj._descriptor_output_buffers = None
+        obj._descriptor_input_buffers = None
         return obj
 
     def update(self, *args, **kwargs):
@@ -306,24 +367,171 @@ class OpDescriptor:
         :meth:`update` when all inputs are real tensors, or by
         ``_materialize_chain`` during Sequential auto-wiring.
         """
-        full = self._complete_fn(self.input_tensors)
+        previous = self.output_tensors
+        bound = self._snapshot_output_bindings(previous)
+        state = self._save_output_slots(previous)
+        try:
+            full = self._complete_fn(self.input_tensors)
+            self._forward_pending_bindings(bound, full)
+            descriptor = full.descriptor
+            outputs = self._check_output_replacement(full.output_tensors, bound)
+        except Exception:
+            self._restore_output_slots(previous, state)
+            raise
         self.program_cache_key = full.program_cache_key
-        self._factory_fn = full._factory_fn
-        self._descriptor = full._descriptor
-        self.output_tensors = full.output_tensors
+        self._factory_fn = None
+        self._descriptor = descriptor
+        self.output_tensors = outputs
+        self._descriptor_output_buffers = full._descriptor_output_buffers
+        self._descriptor_input_buffers = self._tensor_buffers(self.input_tensors)
         self._complete_fn = None
-        if self._descriptor is None and self._factory_fn is not None:
-            _ = self.descriptor
+
+    @staticmethod
+    def _tensor_buffers(tensors):
+        # Root IDs can be read without dereferencing descriptor CB pointers.
+        # Host, freed and remote-only tensors have no local backing ID.
+        slots = tensors._slots if isinstance(tensors, LazyOutputList) else tensors
+        buffers = []
+        for tensor in slots:
+            root = tensor.buffer_unique_id() if isinstance(tensor, ttnn.Tensor) else None
+            try:
+                buffers.append((root, tensor.buffer_address()) if root is not None else None)
+            except RuntimeError:
+                # A remote-only view may have a live root but no local buffer.
+                # Construction is metadata-only; cold launch validates it later.
+                buffers.append(None)
+        return tuple(buffers)
+
+    def _validate_cold_outputs(self):
+        """Cold launches use the buffers the descriptor was constructed with."""
+        descriptor = self.descriptor
+        if self._tensor_buffers(self.input_tensors) != self._descriptor_input_buffers:
+            raise RuntimeError(
+                "An update() after the descriptor was built changed an input buffer and cannot be rebuilt cold; "
+                "construct a new descriptor. Cached run() can use updated inputs."
+            )
+        outputs = self.output_tensors
+        slots = list(outputs)
+        explicit = outputs._explicit_bindings if isinstance(outputs, LazyOutputList) else None
+        current = self._tensor_buffers(self.output_tensors)
+        for index, tensor in enumerate(slots):
+            if tensor is None:
+                raise RuntimeError(
+                    "Cold fusion output is empty after cleanup or an unbound None assignment; "
+                    "construct a new descriptor before rebuilding."
+                )
+            if isinstance(outputs, LazyOutputList) and (
+                explicit is None or index >= len(explicit) or not explicit[index]
+            ):
+                continue
+            if not isinstance(tensor, ttnn.Tensor):
+                continue
+            if current[index] is None:
+                raise RuntimeError(
+                    "Cold fusion output binding has no live local buffer (the tensor or its root may be freed); "
+                    "construct a new descriptor with an allocated output tensor."
+                )
+            original = self._descriptor_output_buffers[index] if index < len(self._descriptor_output_buffers) else None
+            if original is None:
+                # Eager descriptors may fill an initially empty output slot.
+                # Check raw references without dereferencing cached CB pointers.
+                if ttnn._ttnn.operations.experimental._descriptor_references_tensor(descriptor, tensor):
+                    continue
+            if current[index] != original:
+                raise RuntimeError(
+                    "Cold fusion binding changed after the descriptor was built; this binding takes effect on cached runs. "
+                    "For a cold run, bind the output before the op materializes "
+                    "or construct a new descriptor for a different output tensor."
+                )
+        return descriptor
+
+    @staticmethod
+    def _snapshot_output_bindings(outputs):
+        if isinstance(outputs, LazyOutputList):
+            flags = outputs._explicit_bindings or ()
+            return [
+                (i, t)
+                for i, t in enumerate(outputs._slots)
+                if i < len(flags) and flags[i] and isinstance(t, ttnn.Tensor)
+            ]
+        return [(i, t) for i, t in enumerate(outputs) if isinstance(t, ttnn.Tensor)]
+
+    @staticmethod
+    def _save_output_slots(outputs):
+        if isinstance(outputs, LazyOutputList):
+            flags = outputs._explicit_bindings
+            return (
+                list(outputs._slots),
+                None if flags is None else list(flags),
+                outputs._any_explicit,
+                outputs._alloc_fn,
+            )
+        return (list(outputs),)
+
+    @staticmethod
+    def _restore_output_slots(outputs, state):
+        if isinstance(outputs, LazyOutputList):
+            outputs._slots[:] = state[0]
+            outputs._explicit_bindings, outputs._any_explicit, outputs._alloc_fn = state[1:]
+        else:
+            outputs[:] = state[0]
+
+    @staticmethod
+    def _forward_pending_bindings(bound, full):
+        """Supply bindings before a deferred factory allocates its outputs."""
+        target = full.output_tensors
+        slots = target._slots if isinstance(target, LazyOutputList) else target
+        for index, tensor in bound:
+            if index >= len(slots):
+                continue
+            pending = slots[index]
+            if isinstance(pending, _DeferredOutput) or (isinstance(target, LazyOutputList) and pending is None):
+                target[index] = tensor
+
+    @staticmethod
+    def _factory_outputs(outputs):
+        """A factory's assignments are allocations, not caller bindings."""
+        if not isinstance(outputs, LazyOutputList):
+            outputs = LazyOutputList(outputs)
+        outputs._explicit_bindings = None
+        outputs._any_explicit = False
+        return outputs
+
+    @staticmethod
+    def _check_output_replacement(outputs, bound):
+        """Compare against bindings saved before the factory could mutate its list."""
+        slots = outputs._slots if isinstance(outputs, LazyOutputList) else outputs
+        if any(i >= len(slots) or slots[i] is not tensor for i, tensor in bound):
+            raise RuntimeError(
+                "The factory allocates its own outputs; bind output_tensors after the op's first run. "
+                "Materialization would replace a binding."
+            )
+        outputs = OpDescriptor._factory_outputs(outputs)
+        for index, tensor in bound:
+            outputs[index] = tensor
+        return outputs
 
     @property
     def descriptor(self):
         if self._descriptor is None:
-            result = self._factory_fn()
-            if isinstance(result, tuple):
-                self._descriptor, self.output_tensors = result
-            else:
-                self._descriptor = result
+            previous = self.output_tensors
+            bound = self._snapshot_output_bindings(previous)
+            state = self._save_output_slots(previous)
+            try:
+                result = self._factory_fn()
+                descriptor, outputs = result if isinstance(result, tuple) else (result, previous)
+                outputs = self._check_output_replacement(outputs, bound)
+            except Exception:
+                self._restore_output_slots(previous, state)
+                raise
+            self.program_cache_key = _fold_bound_output_specs(self.program_cache_key, bound)
+            if all(slot is not None for slot in outputs._slots):
+                outputs._alloc_fn = None
+            self.output_tensors = outputs
+            self._descriptor = descriptor
             self._factory_fn = None
+            self._descriptor_output_buffers = self._tensor_buffers(self.output_tensors)
+            self._descriptor_input_buffers = self._tensor_buffers(self.input_tensors)
         return self._descriptor
 
     @property
@@ -333,7 +541,7 @@ class OpDescriptor:
 
     def launch(self):
         """Dispatch via ``generic_op`` (materializes ``descriptor`` if needed)."""
-        d = self.descriptor
+        d = self._validate_cold_outputs()
         io_tensors = list(self.input_tensors) + list(self.output_tensors)
         ttnn.generic_op(io_tensors, d)
         return self.output_tensors
@@ -505,22 +713,29 @@ class OpDescriptor:
                             else:
                                 tensors.append(kwargs[src])
 
+                        shell_outputs = LazyOutputList([_DeferredOutput()])
+
                         def _lazy_factory():
+                            bound = OpDescriptor._snapshot_output_bindings(shell_outputs)
                             full = fn(*args, **kwargs)
+                            full.output_tensors = OpDescriptor._factory_outputs(full.output_tensors)
+                            OpDescriptor._forward_pending_bindings(bound, full)
                             return full.descriptor, full.output_tensors
 
-                        return OpDescriptor(
+                        shell = OpDescriptor(
                             factory_fn=_lazy_factory,
                             input_tensors=tensors,
-                            output_tensors=[_DeferredOutput()],
+                            output_tensors=shell_outputs,
                             name=name,
                             program_cache_key=program_cache_key,
                             input_names=input_names_tuple,
                         )
+                        return shell
 
                     # Cache miss — full construction.  The decorator
                     # owns the name; override whatever the factory set.
                     desc = fn(*args, **kwargs)
+                    desc.output_tensors = OpDescriptor._factory_outputs(desc.output_tensors)
                     if name:
                         desc.name = name
 
