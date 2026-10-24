@@ -822,9 +822,16 @@ constants.
     Vec subvec_shflror1(Vec& v)
     Vec subvec_shflshr1(Vec& v)
 
+Two sets of 4 vectors may be transposed as by the ``sfptransp``
+instruction. These routines use __all__ the available LRegs, and thus
+there must be no other live values. Compilation will fail if that is
+not true.
+
 .. code-block:: c++
 
-    void subvec_transp(Vec& A, Vec& B, Vec& C, Vec& D)
+    void subvec_transp(vFloat& a, vFloat& b, vFloat& c, vFloat& d, vFloat &e, vFloat &f, vFloat &g, vFloat &h)
+    void subvec_transp(vInt& a, vInt& b, vInt& c, vInt& d, vInt &e, vInt &f, vInt &g, vInt &h)
+    void subvec_transp(vUInt& a, vUInt& b, vUInt& c, vUInt& d, vUInt &e, vUInt &f, vUInt &g, vUInt &h)
 
 Assigning and Using Constant Registers
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

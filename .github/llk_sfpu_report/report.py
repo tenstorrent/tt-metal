@@ -374,7 +374,7 @@ def accuracy_section(summaries):
         "### Accuracy",
         "",
         "ULP steps against the correctly rounded reference (the golden of the functional tests). "
-        "Unary ops: every finite input of the format (fp32: every 65,536th value). Binary ops: "
+        "Unary ops: every normal input of the format, and zero (fp32: every 65,536th value). Binary ops: "
         "the operand pairs of the op's functional test (random over its domain; crafted pairs, "
         "ties included, for comparisons), the same on both sides. "
         "Lanes a step count cannot describe (NaN, subnormal input, padding) are left out here and "

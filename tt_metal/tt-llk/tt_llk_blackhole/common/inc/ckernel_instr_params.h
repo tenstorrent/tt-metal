@@ -330,11 +330,6 @@ struct p_zeroacc
     constexpr static std::uint32_t CLR_ALL      = 0b011;
     constexpr static std::uint32_t CLR_HALF_32B = 0b110;
     constexpr static std::uint32_t CLR_ALL_32B  = 0b111;
-    // Value for the row-select operand -- `where` on Blackhole, `dst` on Wormhole -- meant to clear nothing, leaving
-    // the instruction a no-op apart from applying its AddrMode. That holds only on Wormhole, and only as
-    // non-contractual behavior: on Blackhole CLR_16 clears the 16-row face 0xff selects, which wraps to Dst rows
-    // 496-511 or 1008-1023. Step the counters with SETRWC / INCRWC instead.
-    constexpr static std::uint32_t WHERE_NOP = 0xff;
 };
 
 struct p_zerosrc
