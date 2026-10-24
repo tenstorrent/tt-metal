@@ -97,7 +97,8 @@ constexpr auto kAdditiveFastApproxPostNote =
         `False` is only accepted when the output dtype is BFLOAT16, since the accurate path exists to round the bfloat16 result; requesting it for any other output dtype raises an error. Leave the flag unset (or pass `True`) for those.)doc";
 constexpr auto kMultiplyFastApproxPostNote =
     R"doc(When :attr:`fast_and_approximate_mode` is `True` for bfloat16 datatype, the operation uses FPU implementation for better performance.
-        When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).)doc";
+        When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).
+        When it is left unset, block-float operands use the FPU implementation and every other dtype uses the SFPU one.)doc";
 constexpr auto kBiasGeluFastApproxPostNote =
     R"doc(When :attr:`fast_and_approximate_mode` is `True`, the gelu is computed with the fast lookup-table approximation.
         When it is `False` (default), the accurate gelu is used, matching the default of :attr:`ttnn.gelu`.)doc";
@@ -113,6 +114,7 @@ constexpr auto kDivFastApproxPostNote =
 constexpr auto kMultiplyInplaceFastApproxPostNote =
     R"doc(When :attr:`fast_and_approximate_mode` is `True` for bfloat16 datatype, the operation uses FPU implementation for better performance.
         When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).
+        When it is left unset, block-float operands use the FPU implementation and every other dtype uses the SFPU one.
         The operation is not supported for INT32 inputs since the outputs are returned as FLOAT32.)doc";
 constexpr auto kDivideInplaceFastApproxPostNote =
     R"doc(When :attr:`fast_and_approximate_mode` is `True`, the operation uses FPU+SFPU implementation for better performance.
@@ -1396,7 +1398,7 @@ TTNN_FAST_APPROX_BINDING_WRAPPERS(subtract, ttnn::subtract)
 Tensor multiply_fast_approx_tensor_scalar(
     const Tensor& input_tensor_a,
     unary::ScalarVariant value,
-    bool fast_and_approximate_mode,
+    const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<const DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& output_tensor,
@@ -1424,7 +1426,7 @@ Tensor multiply_fast_approx_tensor_scalar(
 Tensor multiply_fast_approx_scalar_tensor(
     unary::ScalarVariant value,
     const Tensor& input_tensor_b,
-    bool fast_and_approximate_mode,
+    const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<const DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& output_tensor,
@@ -1450,7 +1452,7 @@ Tensor multiply_fast_approx_scalar_tensor(
 Tensor multiply_fast_approx_tensor_tensor(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    bool fast_and_approximate_mode,
+    const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<const DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& output_tensor,
@@ -1534,7 +1536,7 @@ Tensor bias_gelu_fast_approx_tensor_tensor(
 Tensor divide_fast_approx_tensor_scalar(
     const Tensor& input_tensor_a,
     unary::ScalarVariant value,
-    bool fast_and_approximate_mode,
+    const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<const DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& output_tensor,
@@ -1562,7 +1564,7 @@ Tensor divide_fast_approx_tensor_scalar(
 Tensor divide_fast_approx_scalar_tensor(
     unary::ScalarVariant value,
     const Tensor& input_tensor_b,
-    bool fast_and_approximate_mode,
+    const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<const DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& output_tensor,
@@ -1588,7 +1590,7 @@ Tensor divide_fast_approx_scalar_tensor(
 Tensor divide_fast_approx_tensor_tensor(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    bool fast_and_approximate_mode,
+    const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<const DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& output_tensor,
@@ -1626,7 +1628,9 @@ void bind_binary_operation_with_fast_approx(
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = " ",
     const std::string& post_note = " ",
-    bool fast_approx_default = false) {
+    // std::nullopt binds None, so the op picks its own default: multiply takes the FPU path for
+    // block-float operands unless the caller passes the flag.
+    std::optional<bool> fast_approx_default = false) {
     constexpr bool has_scalar_first = !std::is_null_pointer_v<ScalarTensorFn>;
     auto doc = fmt::format(
         R"doc(
@@ -1676,7 +1680,7 @@ void bind_binary_operation_with_fast_approx(
         note,
         BINARY_BROADCAST_DOC,
         post_note,
-        fast_approx_default ? "True" : "False",
+        fast_approx_default.has_value() ? (*fast_approx_default ? "True" : "False") : "None",
         has_scalar_first
             ? R"doc(input_tensor_a (ttnn.Tensor or Number): the input tensor, or the left operand when a Number.
             input_tensor_b (ttnn.Tensor or Number): the input tensor. At least one of the two operands must be a tensor; there is no scalar-scalar overload.)doc"
@@ -1956,7 +1960,9 @@ void bind_inplace_operation_with_fast_approx(
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = " ",
     const std::string& post_note = " ",
-    bool fast_approx_default = false,
+    // std::nullopt binds None, so the op picks its own default: multiply takes the FPU path for
+    // block-float operands unless the caller passes the flag.
+    std::optional<bool> fast_approx_default = false,
     // Operand keyword names differ across the ops bound here; they are parameterized so each op
     // keeps the names it already exposed to Python.
     const char* lhs_arg_name = "input_a",
@@ -2007,7 +2013,7 @@ void bind_inplace_operation_with_fast_approx(
         note,
         BINARY_BROADCAST_DOC,
         post_note,
-        fast_approx_default ? "True" : "False");
+        fast_approx_default.has_value() ? (*fast_approx_default ? "True" : "False") : "None");
 
     ttnn::bind_function<Name>(
         mod,
@@ -2347,7 +2353,8 @@ void py_module(nb::module_& mod) {
         &detail::multiply_fast_approx_scalar_tensor,
         detail::kArithmeticFpuDtypes,
         detail::kMulDtypeFootnote,
-        detail::kMultiplyFastApproxPostNote);
+        detail::kMultiplyFastApproxPostNote,
+        /*fast_approx_default*/ std::nullopt);
     detail::bind_binary_operation_with_fast_approx<"divide">(
         mod,
         R"doc(Divides :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`, or as the tensor operand when :attr:`input_tensor_a` is a Number)doc",
@@ -2357,7 +2364,8 @@ void py_module(nb::module_& mod) {
         &detail::divide_fast_approx_scalar_tensor,
         detail::kFloatAndInt32Dtypes,
         detail::kDivideDtypeFootnote,
-        detail::kDivideFastApproxPostNote);
+        detail::kDivideFastApproxPostNote,
+        /*fast_approx_default*/ std::nullopt);
 
     detail::bind_binary_operation<"xlogy">(
         mod,
@@ -2778,7 +2786,8 @@ void py_module(nb::module_& mod) {
         static_cast<detail::InplaceFastApproxTensorFn>(&ttnn::multiply_),
         detail::kMultiplyInplaceDtypes,
         detail::kMulDtypeFootnote,
-        detail::kMultiplyInplaceFastApproxPostNote);
+        detail::kMultiplyInplaceFastApproxPostNote,
+        /*fast_approx_default*/ std::nullopt);
     detail::bind_inplace_operation_with_fast_approx<"divide_">(
         mod,
         R"doc(Performs in-place division operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
@@ -2787,7 +2796,8 @@ void py_module(nb::module_& mod) {
         static_cast<detail::InplaceFastApproxTensorFn>(&ttnn::divide_),
         detail::kDivideInplaceDtypes,
         detail::kDivideDtypeFootnote,
-        detail::kDivideInplaceFastApproxPostNote);
+        detail::kDivideInplaceFastApproxPostNote,
+        /*fast_approx_default*/ std::nullopt);
 
     detail::bind_inplace_operation_with_fast_approx<"rsub_">(
         mod,

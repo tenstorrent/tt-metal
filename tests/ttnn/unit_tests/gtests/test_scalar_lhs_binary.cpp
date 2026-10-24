@@ -6,8 +6,6 @@
 #include <array>
 #include <functional>
 #include <optional>
-#include <random>
-#include <vector>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -24,9 +22,9 @@
 namespace ttnn::operations::binary::test {
 
 // Coverage the Python suite cannot reach: ttnn.divide is rebound to the composite div, so the
-// scalar-first ttnn::divide overload has no Python caller, and the bindings take a plain bool
-// for fast_and_approximate_mode, so an unset flag is unexpressible there. The block-float tests
-// share this fixture and its FPU-only constraint.
+// scalar-first ttnn::divide overload has no Python caller, and subtract's binding takes a plain
+// bool for fast_and_approximate_mode, so an unset flag is unexpressible there. The block-float
+// tests share this fixture.
 class ScalarLhsBinaryFixture : public TTNNFixtureWithSuiteDevice<ScalarLhsBinaryFixture> {};
 
 TEST_F(ScalarLhsBinaryFixture, DivideScalarByTensorIsNotCommutative) {
@@ -50,51 +48,49 @@ TEST_F(ScalarLhsBinaryFixture, DivideScalarByTensorIsNotCommutative) {
         "divide(full(4), 2) should be 2.0");
 }
 
-TEST_F(ScalarLhsBinaryFixture, MultiplyScalarByBlockFloatIgnoresFastApproximateMode) {
+TEST_F(ScalarLhsBinaryFixture, MultiplyScalarByBlockFloatHonoursFastApproximateMode) {
     auto& device = *device_;
     std::array<uint32_t, 2> dimensions = {32, 64};
     ttnn::Shape shape(dimensions);
 
-    // Varied values are required: a constant times a constant is exact on either unit and
-    // would agree even with the wrong kernel selected.
-    std::mt19937 rng(6);
-    std::uniform_real_distribution<float> dist(0.5f, 1.5f);
-    std::vector<float> values(shape.volume());
-    for (auto& v : values) {
-        v = dist(rng);
-    }
-    const tt::tt_metal::TensorSpec spec(
-        shape, tt::tt_metal::TensorLayout(DataType::BFLOAT8_B, tt::tt_metal::PageConfig(Layout::TILE), MemoryConfig{}));
-    const auto input_tensor = Tensor::from_vector(values, spec).to_device(&device, MemoryConfig{}, ttnn::QueueId(0));
+    // Block float keeps the FPU kernel as its default, but an explicit flag is honoured, and both
+    // halves are asserted on program-cache entries rather than on values. The mode selects a
+    // different compiled kernel, so a shared entry is exact evidence that an unset flag resolved
+    // to true and a new entry is exact evidence that a false one reached the SFPU. Values could
+    // show neither: on Wormhole the scalar-first FPU kernel takes SrcA's format from the scalar
+    // circular buffer instead of from the block-float tensor, so that operand order already
+    // computes at bfloat16 precision and the two kernels return the same answer.
+    device.enable_program_cache();
+    device.clear_program_cache();
 
-    // Block float runs on the FPU only, so the block format overrides the caller's flag and the
-    // result must not depend on it. Without that override an unset or false flag picks the SFPU.
-    // Comparing the two flag values rather than the two operand orders is deliberate: swapping
-    // the operands swaps the FPU's srcA/srcB, which perturbs rounding for any dtype, so the two
-    // orders are not bit-identical even when both are correct.
-    const auto forced = ttnn::multiply(
-        operations::unary::ScalarVariant{3.7f},
-        input_tensor,
-        DataType::BFLOAT16,
-        std::nullopt,
-        std::nullopt,
-        {},
-        {},
-        {},
-        /*fast_and_approximate_mode=*/true);
-    const auto defaulted = ttnn::multiply(
-        operations::unary::ScalarVariant{3.7f},
-        input_tensor,
-        DataType::BFLOAT16,
-        std::nullopt,
-        std::nullopt,
-        {},
-        {},
-        {},
-        /*fast_and_approximate_mode=*/false);
-    TT_FATAL(
-        ttnn::allclose<::bfloat16>(ttnn::from_device(forced), ttnn::from_device(defaulted)),
-        "block-float multiply must select the FPU kernel regardless of fast_and_approximate_mode");
+    const operations::unary::ScalarVariant scalar{3.7f};
+    for (const auto dtype : {DataType::BFLOAT8_B, DataType::BFLOAT4_B}) {
+        const auto input_tensor = ttnn::full(shape, 1.25f, dtype, ttnn::TILE_LAYOUT, device);
+        const auto multiply_with = [&](const std::optional<bool>& mode) {
+            ttnn::multiply(scalar, input_tensor, DataType::BFLOAT16, std::nullopt, std::nullopt, {}, {}, {}, mode);
+        };
+
+        multiply_with(true);
+        const auto after_explicit_true = device.num_program_cache_entries();
+
+        multiply_with(std::nullopt);
+        TT_FATAL(
+            device.num_program_cache_entries() == after_explicit_true,
+            "block-float multiply on {} must still default to the FPU kernel, got {} entries vs {}",
+            dtype,
+            device.num_program_cache_entries(),
+            after_explicit_true);
+
+        multiply_with(false);
+        TT_FATAL(
+            device.num_program_cache_entries() == after_explicit_true + 1,
+            "an explicit false on {} must compile the SFPU kernel, got {} entries vs {}",
+            dtype,
+            device.num_program_cache_entries(),
+            after_explicit_true + 1);
+    }
+
+    device.disable_and_clear_program_cache();
 }
 
 TEST_F(ScalarLhsBinaryFixture, SubtractScalarFromBlockFloatTensorKeepsOperandOrder) {

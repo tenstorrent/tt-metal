@@ -79,8 +79,8 @@
 // One macro serves all four ops because the declarations are identical,
 // fast_and_approximate_mode included; the ops differ only in how the impl defaults it, each
 // matching its own tensor-first overload: add and subtract resolve unset to the FPU kernel,
-// divide passes it through, and multiply passes it through except on block float, which runs
-// on the FPU only and so forces the mode regardless of the argument.
+// divide passes it through, and multiply passes it through, resolving unset to the FPU kernel
+// on block float and to the SFPU kernel otherwise.
 #define TTNN_BINARY_OP_SCALAR_TENSOR(NAME, OP_TYPE)                                       \
     Tensor NAME(                                                                          \
         operations::unary::ScalarVariant lhs,                                             \
