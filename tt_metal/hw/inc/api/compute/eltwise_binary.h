@@ -264,7 +264,7 @@ ALWI void mul_tiles(
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void add_tiles(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, bool acc_to_dest = false) {
-    reconfig_data_format(icb0, icb1);
+    reconfig_full_operand(icb0, icb1);
     add_init(icb0, icb1, acc_to_dest);
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
     MATH((llk_math_eltwise_binary<

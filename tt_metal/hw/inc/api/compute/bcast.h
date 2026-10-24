@@ -278,7 +278,7 @@ ALWI void add_tiles_bcast_rows(
 #ifdef ARCH_QUASAR
     LLK_ASSERT(bcast_row_idx == 0, "non-default bcast_row_idx not supported on Quasar");
 #else
-    reconfig_data_format(icb0, icb1);
+    reconfig_full_operand(icb0, icb1);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWADD, BroadcastType::ROW, MathFidelity::LoFi>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1)));
 #endif
