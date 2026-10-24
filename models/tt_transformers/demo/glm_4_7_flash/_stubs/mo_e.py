@@ -80,9 +80,9 @@ class TtMoE:
 
         # Routed experts, expert-parallel. HF: gate_up_proj [E, 2I, H] (gate rows first), down_proj [E, H, I]
         self._w_gate_up = put(
-            sd["experts.gate_up_proj"].transpose(1, 2).contiguous(), ttnn.bfloat8_b, 0, cname("gate_up_bf8")
+            sd["experts.gate_up_proj"].transpose(1, 2).contiguous(), ttnn.bfloat4_b, 0, cname("gate_up_bf4")
         )
-        self._w_down = put(sd["experts.down_proj"].transpose(1, 2).contiguous(), ttnn.bfloat8_b, 0, cname("down_bf8"))
+        self._w_down = put(sd["experts.down_proj"].transpose(1, 2).contiguous(), ttnn.bfloat4_b, 0, cname("down_bf4"))
 
         self.router = router
         self.shared_expert = shared_expert
