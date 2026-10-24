@@ -23,8 +23,6 @@ from .sharding import ReplicaMismatchError, Sharding
 
 FORMAT_VERSION = 1
 
-NATIVE = ttml.autograd.PreferredPrecision.NATIVE
-
 # What to do about a refused tensor, shared by the refusals of a save and of a load respectively.
 _SAVE_REMEDY = (
     "Nothing was written. Fix the label where the tensor was produced (the op that relabelled it), not the checkpoint."
@@ -62,7 +60,7 @@ def _progress(iterable, *, total: int, desc: str, enabled: bool):
 
 def _tensor_meta(tensor: ttml.autograd.Tensor) -> dict:
     """Per-tensor header metadata (layout + dtype); the gathered data is streamed as a separate record."""
-    val = tensor.get_value(NATIVE)
+    val = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
     if val.dtype == ttnn.DataType.FLOAT32:
         dtype = "FLOAT32"
     elif val.dtype == ttnn.DataType.BFLOAT16:
