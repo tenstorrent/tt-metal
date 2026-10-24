@@ -1,0 +1,75 @@
+name: "[post-commit] l2cpu firmware and sampling - QEMU tests"
+
+# Hermetic tests of tools/l2cpu: the bare-metal firmware logic and the sampling library run under QEMU
+# (qemu-system-riscv64), the host package under pytest. No Tenstorrent hardware needed; the chip test
+# is skipped when no device is present. Path-filtered so it only runs when tools/l2cpu changes.
+# tools/l2cpu/sampling exists from the sampling PR on; its step is skipped while the directory is absent.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - "main"
+    paths:
+      - "tools/l2cpu/**"
+      - ".github/workflows/l2cpu-qemu.yaml"
+  push:
+    branches:
+      - "main"
+    paths:
+      - "tools/l2cpu/**"
+      - ".github/workflows/l2cpu-qemu.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: l2cpu-qemu-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  l2cpu-qemu:
+    name: Build and test l2cpu under QEMU
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 10
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install RISC-V toolchain and QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf qemu-system-misc
+      - name: Install Python dependencies
+        run: python3 -m pip install --no-cache-dir numpy pytest
+      - name: Firmware build and QEMU tests
+        timeout-minutes: 10
+        run: make -C tools/l2cpu/fw clean all qemu-test
+      - name: Host package tests
+        timeout-minutes: 10
+        # --noconftest: the repo-root conftest imports torch and models/, which are not installed here.
+        run: python3 -m pytest tools/l2cpu/tests -q --noconftest -rs
+      - name: Sampling library and firmware tests
+        timeout-minutes: 20
+        run: |
+          if [ -d tools/l2cpu/sampling ]; then
+            make -C tools/l2cpu/sampling clean all test PY=python3
+          else
+            echo "tools/l2cpu/sampling not present, skipped"
+          fi
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: l2cpu-qemu-logs
+          path: |
+            tools/l2cpu/fw/build/logs/
+            tools/l2cpu/sampling/build/logs/
+            tools/l2cpu/sampling/lib/build/logs/
+          if-no-files-found: ignore
+          retention-days: 7
