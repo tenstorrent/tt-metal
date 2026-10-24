@@ -335,6 +335,93 @@ def test_convt2d_dram(
     )
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout",
+    (
+        # Stride = 1
+        (1, 8, 8, 256, 256, 3, 3, 1, 1, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+        (1, 16, 16, 256, 256, 3, 3, 1, 1, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+        (1, 256, 256, 32, 32, 3, 3, 1, 1, 1, 1, 0, 0, {"act_block_h": 64}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (1, 256, 256, 32, 32, 1, 1, 1, 1, 0, 0, 0, 0, {"act_block_h": 64}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        # Stride = 2
+        (1, 8, 8, 32, 64, 3, 3, 2, 2, 1, 1, 1, 1, None, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        (1, 128, 128, 32, 64, 3, 3, 2, 2, 1, 1, 1, 1, {"act_block_h": 64}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (1, 16, 16, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+        (1, 16, 16, 32, 32, 3, 3, 2, 2, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        # Vanilla Unet
+        # Filter Size = 2 not supported in Block sharded
+        (1, 30, 40, 512, 256, 3, 3, 2, 2, 1, 1, 1, 1, {"act_block_h": 64}, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+    ),
+)
+# Full weights_dtype x activations_dtype x preprocess_weights x mirror_kernel grid; the unit test
+# (tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py) runs a pairwise subset.
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize("preprocess_weights", [True, False])
+@pytest.mark.parametrize("mirror_kernel", [True, False])
+def test_simple_conv_t2d_full_grid(
+    device,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    out_pad_h,
+    out_pad_w,
+    config,
+    shard_layout,
+    mirror_kernel,
+    preprocess_weights,
+):
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 Grid for Wormhole_b0")
+    run_conv_transpose2d(
+        device,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        activations_dtype=activations_dtype,
+        weights_dtype=weights_dtype,
+        batch_size=batch_size,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=filter_height,
+        filter_width=filter_width,
+        stride_h=stride_h,
+        stride_w=stride_w,
+        pad_h=pad_h,
+        pad_w=pad_w,
+        out_pad_h=out_pad_h,
+        out_pad_w=out_pad_w,
+        config_override=config,
+        shard_layout=shard_layout,
+        auto_shard=True,
+        mirror_kernel=mirror_kernel,
+        preprocess_weights_bias=preprocess_weights,
+    )
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_conv_transpose2d_fp32_accum_auto_default(device):
     """
