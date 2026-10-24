@@ -13,6 +13,8 @@
 
 namespace ckernel {
 
+ALWI void polygamma_tile_init();
+
 // clang-format off
 /**
  * Performs the elementwise polygamma function ψ^(n)(x) using a finite-sum plus
@@ -40,6 +42,7 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void polygamma_tile(std::uint32_t idst, std::uint32_t n_packed, std::uint32_t scale_packed) {
+    polygamma_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

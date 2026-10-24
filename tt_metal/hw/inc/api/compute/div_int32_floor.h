@@ -12,6 +12,10 @@
 
 namespace ckernel {
 
+ALWI void div_int32_floor_tile_init();
+
+ALWI void div_int32_trunc_tile_init();
+
 // clang-format off
 /**
  * Performs an elementwise division operation with the two 32-bit integer inputs: y = divide(x0,x1)
@@ -31,6 +35,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void div_int32_floor_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    div_int32_floor_tile_init();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -42,6 +47,7 @@ ALWI void div_int32_floor_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         VectorMode::RC)));
 }
 ALWI void div_int32_trunc_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    div_int32_trunc_tile_init();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,

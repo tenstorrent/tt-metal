@@ -73,8 +73,6 @@ struct RuntimeConditionalBranchTraits;
 template <class... Elements>
 struct RuntimeConditionalBranchTraits<RuntimeConditionalBranch<Elements...>> {
     static constexpr bool any_reader = (is_cb_reader_op_v<Elements> || ...);
-    static constexpr bool touches_srca = ((dfb_for_side<Side::SrcA, Elements>() != NO_PREV_DFB) || ...);
-    static constexpr bool touches_srcb = ((dfb_for_side<Side::SrcB, Elements>() != NO_PREV_DFB) || ...);
     static constexpr uint32_t lane_width = []() {
         uint32_t result = 1;
         ((result = result < elem_lane_width_v<Elements> ? elem_lane_width_v<Elements> : result), ...);
@@ -85,8 +83,6 @@ struct RuntimeConditionalBranchTraits<RuntimeConditionalBranch<Elements...>> {
 template <class... Branches>
 struct RuntimeConditionalSequenceTraits {
     static constexpr bool any_reader = (RuntimeConditionalBranchTraits<Branches>::any_reader || ...);
-    static constexpr bool touches_srca = (RuntimeConditionalBranchTraits<Branches>::touches_srca || ...);
-    static constexpr bool touches_srcb = (RuntimeConditionalBranchTraits<Branches>::touches_srcb || ...);
     static constexpr uint32_t lane_width = []() {
         uint32_t result = 1;
         ((result = result < RuntimeConditionalBranchTraits<Branches>::lane_width
@@ -128,10 +124,6 @@ struct RuntimeConditionalSequence
 
     using Traits = detail::RuntimeConditionalSequenceTraits<Branches...>;
 
-    // A conditional reader may or may not change each input-side format. Poison the
-    // outer previous-CB fold so a following reader reconfigures conservatively.
-    static constexpr uint32_t reconfig_srca_dfb = Traits::touches_srca ? CONDITIONAL_DFB : NO_PREV_DFB;
-    static constexpr uint32_t reconfig_srcb_dfb = Traits::touches_srcb ? CONDITIONAL_DFB : NO_PREV_DFB;
     static constexpr uint32_t lane_width = Traits::lane_width;
 
     uint32_t selected_branch;
@@ -139,7 +131,7 @@ struct RuntimeConditionalSequence
 
     constexpr RuntimeConditionalSequence(uint32_t selected_branch_, std::tuple<Branches...> branches_) noexcept;
 
-    template <uint32_t SlotBase, uint32_t PrevA, uint32_t PrevB, uint32_t PrevP, bool PackHetero>
+    template <uint32_t SlotBase>
     ALWI void apply(
         uint32_t i_flat,
         uint32_t ht,
@@ -150,13 +142,7 @@ struct RuntimeConditionalSequence
         uint32_t Wt) const;
 
 private:
-    template <
-        std::size_t BranchIndex,
-        uint32_t SlotBase,
-        uint32_t PrevA,
-        uint32_t PrevB,
-        uint32_t PrevP,
-        bool PackHetero>
+    template <std::size_t BranchIndex, uint32_t SlotBase>
     ALWI void apply_selected(
         uint32_t i_flat,
         uint32_t ht,

@@ -12,6 +12,10 @@
 
 namespace ckernel {
 
+ALWI void bitwise_and_tile_init();
+ALWI void bitwise_or_tile_init();
+ALWI void bitwise_xor_tile_init();
+
 // clang-format off
 /**
  * Performs an element-wise bitwise AND between each element of a tile in the DST register at index idst and an
@@ -29,6 +33,7 @@ namespace ckernel {
 // clang-format on
 template <DataFormat data_format>
 ALWI void bitwise_and_tile(uint32_t idst, uint32_t param0) {
+    bitwise_and_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -56,6 +61,7 @@ ALWI void bitwise_and_tile(uint32_t idst, uint32_t param0) {
 // clang-format on
 template <DataFormat data_format>
 ALWI void bitwise_or_tile(uint32_t idst, uint32_t param0) {
+    bitwise_or_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -83,6 +89,7 @@ ALWI void bitwise_or_tile(uint32_t idst, uint32_t param0) {
 // clang-format on
 template <DataFormat data_format>
 ALWI void bitwise_xor_tile(uint32_t idst, uint32_t param0) {
+    bitwise_xor_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,

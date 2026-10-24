@@ -46,7 +46,6 @@ void kernel_main() {
         }
 
         // Fill scalar value to appropriate dst register
-        fill_tile_init();
         const auto scalar_val = reinterpret_cast<const float*>(&scalar_value);
         if constexpr (scalar_is_true) {
             // TST: scalar is true value, goes to dst reg 1

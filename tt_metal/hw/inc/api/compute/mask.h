@@ -41,6 +41,7 @@ ALWI void mask_tile_init() {
  */
 // clang-format on
 ALWI void mask_tile(uint32_t idst_data, uint32_t idst2_mask, DataFormat data_format = DataFormat::Float16_b) {
+    mask_tile_init();
     if (data_format == DataFormat::Float16_b || data_format == DataFormat::Float16) {
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, calculate_mask, (true /* APPROXIMATE */), idst_data, VectorMode::RC));
@@ -51,6 +52,7 @@ ALWI void mask_tile(uint32_t idst_data, uint32_t idst2_mask, DataFormat data_for
 }
 
 ALWI void mask_posinf_tile(uint32_t idst_data, uint32_t idst2_mask) {
+    mask_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_mask_posinf, (true /* APPROXIMATE */), idst_data, VectorMode::RC));
 }

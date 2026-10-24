@@ -12,6 +12,8 @@
 
 namespace ckernel {
 
+ALWI void cbrt_tile_init();
+
 // clang-format off
 /**
  * Performs element-wise cube root computation on input x , where x is each element of a tile
@@ -28,6 +30,7 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void cbrt_tile(uint32_t idst) {
+    cbrt_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

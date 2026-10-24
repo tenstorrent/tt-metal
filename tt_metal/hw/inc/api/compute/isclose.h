@@ -12,6 +12,8 @@
 
 namespace ckernel {
 
+ALWI void isclose_binary_tile_init();
+
 // clang-format off
 /**
  * Performs an elementwise isclose operation: result = |a - b| <= atol + rtol * |b|
@@ -58,6 +60,7 @@ namespace ckernel {
 // clang-format on
 template <bool EQUAL_NAN = false>
 ALWI void isclose_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, uint32_t rtol_bits, uint32_t atol_bits) {
+    isclose_binary_tile_init();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,

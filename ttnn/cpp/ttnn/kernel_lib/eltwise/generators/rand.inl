@@ -15,8 +15,7 @@ namespace compute_kernel_lib {
 /// `rand_tile_init(seed, stream_id)` is rand's per-op SFPU init (it seeds and domain-separates the PRNG) — the rand
 /// analogue of every other op's `*_tile_init`, except it takes the runtime seed. So
 /// `init()` is a normal instance method (non-static, like `exec`) that reads the
-/// element's `seed_` and `stream_id_`; the chain dispatches init on the instance, emitting it once at
-/// boot-hoist — the once-per-kernel seeding the kernel used to do out-of-band. The
+/// element's `seed_` and `stream_id_`; the chain calls it once per chain call, before the walk. The
 /// per-instance `from` / `scale` (uniform [from, from+scale] range), `seed`, and `stream_id` are all
 /// passed at construction (same pattern as `Dropout<Slot>`).
 ///

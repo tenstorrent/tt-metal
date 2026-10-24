@@ -12,6 +12,8 @@
 
 namespace ckernel {
 
+ALWI void gcd_tile_init();
+
 // clang-format off
 /**
  * Performs an elementwise GCD operation on two inputs: y = gcd(x0, x1).
@@ -31,6 +33,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void gcd_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    gcd_tile_init();
     MATH((SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sfpu_gcd, idst0, idst1, odst, VectorMode::RC)));
 }

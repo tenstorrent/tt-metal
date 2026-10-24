@@ -12,6 +12,8 @@
 
 namespace ckernel {
 
+ALWI void logsigmoid_tile_init();
+
 // clang-format off
 /**
  * Performs logsigmoid operation: logsigmoid(x) = -softplus(-x) = -log(1 + exp(-x))
@@ -26,6 +28,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void logsigmoid_tile(uint32_t idst_in0, uint32_t idst_in1, uint32_t idst_out) {
+    logsigmoid_tile_init();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,

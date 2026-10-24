@@ -12,6 +12,8 @@
 
 namespace ckernel {
 
+ALWI void i1_tile_init();
+
 // clang-format off
 /**
  * Performs element-wise computation of the first order modified Bessel function of the first kind on each element of a
@@ -26,6 +28,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void i1_tile(uint32_t idst) {
+    i1_tile_init();
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_i1, (APPROX), idst, VectorMode::RC));
 }
 

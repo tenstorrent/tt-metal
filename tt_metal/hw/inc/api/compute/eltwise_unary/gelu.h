@@ -49,6 +49,7 @@ ALWI void gelu_tile_init_pack() {
 
 template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tile_pack(uint32_t idst) {
+    gelu_tile_init_pack<fast_and_approx, is_fp32_dest_acc_en>();
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu, (fast_and_approx, is_fp32_dest_acc_en), idst, VectorMode::RC));
 }
@@ -87,6 +88,7 @@ ALWI void gelu_tanh_tile(uint32_t idst) {
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tanh_tile_pack(uint32_t idst) {
+    gelu_tanh_tile_init_pack();
     PACK(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh, (is_fp32_dest_acc_en), idst, VectorMode::RC));
 }
 
@@ -122,6 +124,7 @@ ALWI void gelu_derivative_tile_init() {
 // clang-format on
 template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_derivative_tile(uint32_t idst) {
+    gelu_derivative_tile_init<fast_and_approx>();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

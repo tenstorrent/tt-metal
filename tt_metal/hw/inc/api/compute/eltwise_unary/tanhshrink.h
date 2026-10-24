@@ -12,8 +12,12 @@
 
 namespace ckernel {
 
+template <bool is_fp32_dest_acc_en>
+ALWI void tanhshrink_tile_init();
+
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tanhshrink_tile(uint32_t idst) {
+    tanhshrink_tile_init<is_fp32_dest_acc_en>();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

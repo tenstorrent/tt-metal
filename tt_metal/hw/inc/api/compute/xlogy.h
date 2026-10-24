@@ -12,6 +12,8 @@
 
 namespace ckernel {
 
+ALWI void xlogy_binary_tile_init();
+
 // clang-format off
 /**
  * Performs element-wise xlogy operation y = xlogy(x0, x1) with x0 as first operand and x1 as second operand.
@@ -30,6 +32,7 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void xlogy_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    xlogy_binary_tile_init();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

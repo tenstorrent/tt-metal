@@ -12,6 +12,13 @@
 
 namespace ckernel {
 
+template <bool is_fp32_dest_acc_en>
+ALWI void asin_tile_init();
+template <bool is_fp32_dest_acc_en>
+ALWI void atan_tile_init();
+template <bool is_fp32_dest_acc_en>
+ALWI void acos_tile_init();
+
 /**
  * Please refer to documentation for any_init.
  */
@@ -98,6 +105,7 @@ ALWI void acosh_tile_init() {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void acosh_tile(uint32_t idst) {
+    acosh_tile_init<is_fp32_dest_acc_en>();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -128,6 +136,7 @@ ALWI void tan_tile_init() { MATH(SFPU_UNARY_INIT_FN(tan, ckernel::sfpu::tangent_
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tan_tile(uint32_t idst) {
+    tan_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -161,6 +170,7 @@ ALWI void asinh_tile_init() {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void asinh_tile(uint32_t idst) {
+    asinh_tile_init<is_fp32_dest_acc_en>();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -192,6 +202,7 @@ ALWI void atanh_tile_init() { MATH(SFPU_UNARY_INIT_FN(atanh, ckernel::sfpu::init
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void atanh_tile(uint32_t idst) {
+    atanh_tile_init<is_fp32_dest_acc_en>();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -217,6 +228,7 @@ ALWI void atanh_tile(uint32_t idst) {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void asin_tile(uint32_t idst) {
+    asin_tile_init<is_fp32_dest_acc_en>();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -248,6 +260,7 @@ ALWI void asin_tile_init() { MATH(SFPU_UNARY_INIT_FN(asin, sfpu::asin_acos_init,
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void atan_tile(uint32_t idst) {
+    atan_tile_init<is_fp32_dest_acc_en>();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -281,6 +294,7 @@ ALWI void atan_tile_init() {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void acos_tile(uint32_t idst) {
+    acos_tile_init<is_fp32_dest_acc_en>();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -318,6 +332,7 @@ ALWI void cosh_tile_init() { MATH(SFPU_UNARY_INIT_FN(cosh, ckernel::sfpu::cosh_i
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void cosh_tile(uint32_t idst) {
+    cosh_tile_init<is_fp32_dest_acc_en>();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -349,6 +364,7 @@ ALWI void sinh_tile_init() { MATH(SFPU_UNARY_INIT_FN(sinh, ckernel::sfpu::sinh_i
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sinh_tile(uint32_t idst) {
+    sinh_tile_init<is_fp32_dest_acc_en>();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

@@ -12,6 +12,8 @@
 
 namespace ckernel {
 
+ALWI void copy_dest_values_init();
+
 // clang-format off
 /**
  * Copies all values from the tile in idst_in to the tile in idst_out in the DST register buffer.
@@ -31,6 +33,7 @@ namespace ckernel {
 // clang-format on
 template <DataFormat DATA_FORMAT>
 ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
+    copy_dest_values_init();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -59,6 +62,7 @@ ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
 // clang-format on
 [[deprecated("Use copy_dest_values<DataFormat> instead")]]
 ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
+    copy_dest_values_init();
     // Routes through the deprecated 1-template-arg `copy_dest_value<APPROXIMATE>` overload in
     // ckernel::sfpu (the format-agnostic sfpi::vFloat path). New code should use the
     // DataFormat-templated overload above.

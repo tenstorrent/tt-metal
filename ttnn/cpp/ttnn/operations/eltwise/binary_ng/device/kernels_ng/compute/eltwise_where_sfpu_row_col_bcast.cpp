@@ -45,17 +45,11 @@ ALWI void process_tile(
     DataflowBuffer exp_dfb_other(CB_OTHER);
     DataflowBuffer exp_dfb_llk_post(cb_llk_post);
 
-    // compute_kernel_hw_startup is hoisted to kernel_main (must be the first Compute API call and run
-    // exactly once); process_tile is called per iteration, so it only re-inits the op here.
-    BINARY_SFPU_INIT
-
     exp_dfb_bcast.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
         exp_dfb_other.wait_front(num_tiles_per_cycle);
         exp_dfb_llk_post.reserve_back(num_tiles_per_cycle);
-        reconfig_data_format(CB_OTHER, CB_OTHER);
-        unary_bcast_init<BroadcastType::ROW>(CB_OTHER);
 
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(CB_OTHER, 0, 0);
@@ -81,7 +75,6 @@ ALWI void process_tile(
 // TTS: tensor is true value, goes to dst_reg 1
 #if WHERE_TTS
             copy_tile(cb_right, i, i * 3 + 1);  // Copy true tensor to dst_reg 1
-            fill_tile_init();
 // TTS: scalar is false value, goes to dst_reg 2
 #ifdef FILL_WITH_VALUE_FLOAT
             FILL_LLK(i * 3 + 2, *scalar_val);
@@ -94,7 +87,6 @@ ALWI void process_tile(
 // TST: tensor is false value, goes to dst_reg 2
 #if WHERE_TST
             copy_tile(cb_right, i, i * 3 + 2);  // Copy false tensor to dst_reg 2
-            fill_tile_init();
 // TST: scalar is true value, goes to dst_reg 1
 #ifdef FILL_WITH_VALUE_FLOAT
             FILL_LLK(i * 3 + 1, *scalar_val);

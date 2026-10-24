@@ -12,6 +12,8 @@
 
 namespace ckernel {
 
+ALWI void hardmish_tile_init();
+
 // clang-format off
 /**
  * Performs element-wise computation of hardmish(x) = x * clamp(x + 2, 0, 2) / 2
@@ -35,6 +37,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void hardmish_tile(uint32_t idst) {
+    hardmish_tile_init();
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, hardmish, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC));
 }
 

@@ -54,7 +54,6 @@ ALWI void process_tile(
         copy_tile(predicate_dfb.get_id(), 0, 0);
 
         // Fill scalar and copy tensor based on variant
-        fill_tile_init();
 
         // TTS: scalar=false (reg 2), tensor=true (reg 1)
         // TST: scalar=true (reg 1), tensor=false (reg 2)

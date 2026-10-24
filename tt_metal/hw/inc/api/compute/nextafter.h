@@ -12,6 +12,8 @@
 
 namespace ckernel {
 
+ALWI void nextafter_binary_tile_init();
+
 // clang-format off
 /**
  * Performs the element-wise nextafter operation y = nextafter(x0, x1): the representable value
@@ -40,6 +42,7 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void nextafter_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    nextafter_binary_tile_init();
     // One float32 ULP is a step of 1 in the dest register, which sits below bfloat16 precision and
     // is discarded when a 16-bit DEST is packed -- the op would silently return its input. That
     // case needs is_fp32_dest_acc_en, but it is not the whole rule: which entry point to call is
@@ -68,6 +71,8 @@ ALWI void nextafter_binary_tile_init() {
     MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, BinaryOp::NEXTAFTER))));
 }
 
+ALWI void nextafter_bf16_binary_tile_init();
+
 // clang-format off
 /**
  * bfloat16 tile variant of nextafter_binary_tile. A bfloat16 tile keeps its mantissa in the
@@ -83,6 +88,7 @@ ALWI void nextafter_binary_tile_init() {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void nextafter_bf16_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    nextafter_bf16_binary_tile_init();
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

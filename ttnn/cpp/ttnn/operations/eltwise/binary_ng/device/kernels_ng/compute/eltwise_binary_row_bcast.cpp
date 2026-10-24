@@ -52,8 +52,6 @@ void kernel_main() {
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         exp_cb_bcast.wait_front(num_tiles_per_cycle);
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
-        reconfig_data_format(cb_bcast, cb_bcast);
-        unary_bcast_init<BroadcastType::ROW>(cb_bcast);
 
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(cb_bcast, 0, 0);

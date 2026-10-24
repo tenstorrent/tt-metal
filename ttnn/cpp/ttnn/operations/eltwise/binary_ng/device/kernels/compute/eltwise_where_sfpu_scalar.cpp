@@ -24,8 +24,6 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_in0.get_id(), dfb_out.get_id());
 
-    BINARY_SFPU_INIT
-
     dfb_in1.wait_front(num_tiles_per_cycle);
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
@@ -41,8 +39,7 @@ void kernel_main() {
             // TTS: tensor is true value, goes to dst_reg 1
 #if WHERE_TTS
             copy_tile(dfb_in1.get_id(), i, i * 3 + 1);  // Copy true tensor to dst_reg 1
-            fill_tile_init();
-            // TTS: scalar is false value, goes to dst_reg 2
+                                                        // TTS: scalar is false value, goes to dst_reg 2
 #ifdef FILL_WITH_VALUE_FLOAT
             FILL_LLK(i * 3 + 2, *scalar_val);
 #endif
@@ -54,8 +51,7 @@ void kernel_main() {
 // TST: tensor is false value, goes to dst_reg 2
 #if WHERE_TST
             copy_tile(dfb_in1.get_id(), i, i * 3 + 2);  // Copy false tensor to dst_reg 2
-            fill_tile_init();
-            // TST: scalar is true value, goes to dst_reg 1
+                                                        // TST: scalar is true value, goes to dst_reg 1
 #ifdef FILL_WITH_VALUE_FLOAT
             FILL_LLK(i * 3 + 1, *scalar_val);
 #endif

@@ -16,6 +16,8 @@
 
 namespace ckernel {
 
+ALWI void binop_with_scalar_tile_init();
+
 // clang-format off
 /**
  * Performs a simple elementwise binop with scalar operation on the input: y = binop(x,scalar)
@@ -46,6 +48,7 @@ ALWI void add_unary_tile(uint32_t idst, uint32_t param1) {
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sub_unary_tile(uint32_t idst, uint32_t param1) {
+    binop_with_scalar_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -77,6 +80,7 @@ ALWI void mul_unary_tile(uint32_t idst, uint32_t param1) {
 #ifndef ARCH_QUASAR
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void div_unary_tile(uint32_t idst, uint32_t param1) {
+    binop_with_scalar_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -89,6 +93,7 @@ ALWI void div_unary_tile(uint32_t idst, uint32_t param1) {
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void rsub_unary_tile(uint32_t idst, uint32_t param1) {
+    binop_with_scalar_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -115,6 +120,7 @@ ALWI void rsub_unary_tile(uint32_t idst, uint32_t param1) {
 // clang-format on
 
 ALWI void add_unary_tile_int32(uint32_t idst, uint32_t param1) {
+    binop_with_scalar_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -141,6 +147,7 @@ ALWI void add_unary_tile_int32(uint32_t idst, uint32_t param1) {
 // clang-format on
 
 ALWI void sub_unary_tile_int32(uint32_t idst, uint32_t param1) {
+    binop_with_scalar_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
