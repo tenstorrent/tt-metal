@@ -106,6 +106,8 @@ DB_SCHEMA = [
     Column("in0_face_c_dim", "int64", True, "configuration"),
     Column("in0_face_r_dim", "int64", True, "configuration"),
     Column("in0_r_dim", "int64", True, "configuration"),
+    Column("h16_tile_index", "int64", True, "configuration"),
+    Column("hadamard_normalize", "bool", True, "configuration"),
     Column("in1_c_dim", "int64", True, "configuration"),
     Column("in1_face_c_dim", "int64", True, "configuration"),
     Column("in1_face_r_dim", "int64", True, "configuration"),
