@@ -14,8 +14,10 @@
 namespace ckernel {
 namespace sfpu {
 
-template <bool is_fp32_acc_to_dest_mode = true>
-sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
+// exp_constants supplies the constants of the FP32 exponential (ExpFp32Constants, or ExpFp32PreloadedConstants the
+// caller loads once before its row loop); the BF16 path does not use it.
+template <bool is_fp32_acc_to_dest_mode = true, typename ExpConstants = ExpFp32Constants>
+sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x, const ExpConstants& exp_constants = ExpConstants{}) {
     // Compute sigmoid as:
     // sigmoid(x) = 1 / (1 + exp(-x))
 
@@ -23,7 +25,7 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
     // If fp32 then use higher accuracy exp function
     // Otherwise, use exp_21f (~1 ULP on bfloat16)
     if constexpr (is_fp32_acc_to_dest_mode) {
-        exp_neg_x = _sfpu_exp_accurate_<true>(-x);
+        exp_neg_x = _sfpu_exp_fp32_accurate_(-x, exp_constants);
     } else {
         exp_neg_x = _sfpu_exp_21f_bf16_<true>(-x);
     }
@@ -78,14 +80,12 @@ inline void calculate_sigmoid() {
             sfpi::dst_reg++;
         }
     } else if constexpr (!APPROXIMATION_MODE) {
+        // The FP32-accurate sigmoid, with the exponential's range-reduction constants loaded once per call.
+        const ExpFp32PreloadedConstants exp_constants;
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
-            sfpi::vFloat result = _sfpu_sigmoid_<is_fp32_dest_acc_en>(val);
-            if constexpr (!is_fp32_dest_acc_en) {
-                result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
-            }
-
+            sfpi::vFloat result = _sfpu_sigmoid_<is_fp32_dest_acc_en>(val, exp_constants);
             sfpi::dst_reg[0] = result;
             sfpi::dst_reg++;
         }
