@@ -768,7 +768,7 @@ extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsign
 #define TT_SFPMAD_VALID(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)                                                                  \
     (ckernel::is_valid(lreg_src_a, 8) && ckernel::is_valid(lreg_src_b, 4) && ckernel::is_valid(lreg_src_c, 4) && ckernel::is_valid(lreg_dest, 4) && \
      ckernel::is_valid(instr_mod1, 4))
-#define TT_IP_SFPMAD(IP, lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_OCmod1) \
+#define TT_IP_SFPMAD(IP, lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
     TT_IP_INSN(IP, TT_OP_SFPMAD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1))
 #define TT_SFPMAD(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
     TT_IP_SFPMAD(::ckernel::instrn_buffer, lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1)
