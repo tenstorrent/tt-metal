@@ -1,0 +1,16 @@
+{
+  "current": {
+    "ms": 1.8751083873212337,
+    "pcc_vs_torch": 0.999964349979341
+  },
+  "decoder": {
+    "ms": 2.2739870008081198,
+    "pcc_vs_torch": 0.9999629616335735,
+    "keys": 1056
+  },
+  "decoder_sdpa_without_concat_ms": 0.715447636321187,
+  "gate": {
+    "ms_limit": 2.0,
+    "pass": false
+  }
+}
