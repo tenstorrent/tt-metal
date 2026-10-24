@@ -25,11 +25,12 @@ FORMAT_VERSION = 1
 
 NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 
-# What to do about a refused tensor, shared by every refusal of a save and of a load respectively.
+# What to do about a refused tensor, shared by the refusals of a save and of a load respectively.
 _SAVE_REMEDY = (
     "Nothing was written. Fix the label where the tensor was produced (the op that relabelled it), not the checkpoint."
 )
-_LOAD_REMEDY = "Nothing was restored past this point; re-save from a run whose tensors gather to their full shape."
+_NOTHING_RESTORED = "Nothing was restored past this point"
+_LOAD_REMEDY = f"{_NOTHING_RESTORED}; re-save from a run whose tensors gather to their full shape."
 
 
 class CheckpointShapeError(ValueError):
@@ -75,8 +76,9 @@ def _load_into(path: tuple, name: str, live: ttml.autograd.Tensor, meta: dict, d
     """Load header `meta` + its streamed `data` into the `live` tensor in place. The live tensor decides the sharding
     (its mapper distributes the data; see `Sharding.derive_mapper`) and the dtype (see `assign_numpy`).
 
-    A record that does not land at the live tensor's per-device shape -- one shard saved as if it were the full
-    tensor, redistributed by the live mapper -- is refused as `CheckpointShapeError`, the live tensor untouched."""
+    A record that does not land at the live tensor's per-device shape is refused as `CheckpointShapeError`, the live
+    tensor untouched. Two causes look the same here: a checkpoint saved from a model of another configuration, and a
+    record that holds one device's shard saved as if it were the full tensor."""
     layout = ttnn.Layout.ROW_MAJOR if meta["layout"] == "ROW_MAJOR" else ttnn.Layout.TILE
     sharding = Sharding.from_tensor(live)
     try:
@@ -84,9 +86,11 @@ def _load_into(path: tuple, name: str, live: ttml.autograd.Tensor, meta: dict, d
     except ttml.autograd.ShapeMismatchError as e:
         raise CheckpointShapeError(
             f"checkpointing: {_leaf_label(path, name)} record of shape {tuple(data.shape)} does not redistribute to "
-            f"the live per-device shape ({e}). The record does not hold a full tensor of the layout "
-            f"{sharding.describe()}; most likely it was saved as one device's shard through a wrong topology label. "
-            f"{_LOAD_REMEDY}"
+            f"the live per-device shape ({e}) of the layout {sharding.describe()}. Either the checkpoint was saved "
+            f"from a model of another configuration (a different hidden or vocab size, say), and has to be loaded "
+            f"into a model built with that configuration, or the record holds one device's shard saved through a "
+            f"wrong topology label, and the checkpoint has to be re-saved from a run whose tensors gather to their "
+            f"full shape. {_NOTHING_RESTORED}."
         ) from e
 
 

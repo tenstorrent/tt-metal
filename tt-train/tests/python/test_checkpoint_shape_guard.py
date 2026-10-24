@@ -431,3 +431,24 @@ def test_load_rejects_truncated_model_record(tp_mesh, tmp_path, expect_error):
     with expect_error(CheckpointShapeError, rf"model\[{name}\] record of shape .* per-device"):
         checkpointing.load_checkpoint(bad, model_params=fresh_params)
     assert tuple(fresh_params[name].get_value(NATIVE).shape) == live_shape, "a refused load must not assign"
+
+
+def test_load_into_a_model_of_another_width_names_both_causes(tp_mesh, tmp_path, expect_error):
+    """A checkpoint loaded into a model of another configuration (here half the width) is refused by the same
+    per-device check as a truncated record, so the message names both causes rather than sending the user to re-save
+    a checkpoint that is fine. Every live parameter keeps its shape.
+
+    Negative control: before ``assign_numpy`` refused a resize, this load replaced the live parameters with the
+    checkpoint's wider ones."""
+    params, opt = trained_tp(DIM)
+    path = str(tmp_path / "wide.ckpt")
+    checkpointing.save_checkpoint(path, header={}, model_params=params, optimizer=opt)
+
+    _, narrow_params, _ = fresh_tp(DIM // 2)
+    shapes = {name: tuple(t.get_value(NATIVE).shape) for name, t in narrow_params.items()}
+    with expect_error(CheckpointShapeError, r"model\[.*\] record of shape .* per-device") as excinfo:
+        checkpointing.load_checkpoint(path, model_params=narrow_params)
+    for fragment in ("another configuration", "one device's shard"):
+        assert fragment in str(excinfo.value), str(excinfo.value)
+    after = {name: tuple(t.get_value(NATIVE).shape) for name, t in narrow_params.items()}
+    assert after == shapes, "a refused load must not assign"
