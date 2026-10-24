@@ -315,6 +315,22 @@ def test_single_layer_model(mesh_device, layer_group, reset_seeds, request):
 
 
 @pytest.mark.gemma4_hf_direct_parity
+def _hf_forward(model_path, input_ids_padded):
+    """The bf16 HF reference forward on the host (the test's original reference), fp32 logits."""
+    import gc
+
+    from transformers import AutoModelForCausalLM
+
+    logger.info(f"Loading HF reference model from {model_path}...")
+    hf_model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True)
+    hf_model.eval()
+    with torch.no_grad():
+        logits = hf_model(input_ids_padded).logits.float()  # [1, padded_len, vocab_size]
+    del hf_model
+    gc.collect()
+    return logits
+
+
 @parametrize_mesh_with_fabric()
 def test_full_model(mesh_device, reset_seeds, request):
     """Test full model (all layers, real weights) against HuggingFace reference.
@@ -328,8 +344,9 @@ def test_full_model(mesh_device, reset_seeds, request):
     import os
 
     import torch.nn.functional as F
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
 
+    from models.demos.gemma4.tests.hf_reference_cache import hf_reference_logits
     from models.demos.gemma4.tt.common import create_tt_model
 
     model_path = os.getenv("HF_MODEL") or os.getenv(
@@ -347,9 +364,6 @@ def test_full_model(mesh_device, reset_seeds, request):
         pytest.skip(f"Model too large for single device (hidden={hf_config_check.hidden_size})")
 
     # ── HF reference ─────────────────────────────────────────────────
-    logger.info(f"Loading HF reference model from {model_path}...")
-    hf_model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True)
-    hf_model.eval()
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
     prompt = os.environ.get("GEMMA4_TEST_PROMPT_TEXT") or "The capital of France is"  # another base sentence on request
@@ -370,20 +384,15 @@ def test_full_model(mesh_device, reset_seeds, request):
 
     logger.info(f"Prompt: '{prompt}' -> {seq_len} tokens (padded to {padded_len})")
 
-    with torch.no_grad():
-        hf_out = hf_model(input_ids_padded)
-        hf_logits = hf_out.logits.float()  # [1, padded_len, vocab_size]
+    # The bf16 HF forward of the 31B on the CI runner's CPU is ~8 min per run (the TT side is ~20 s), so the reference
+    # logits are cached by (model, exact padded token ids, dtype) under GEMMA4_HF_REF_CACHE, default
+    # TT_CACHE_PATH/hf_reference (the shared weight cache the CI jobs mount); no cache dir means compute every time.
+    hf_logits = hf_reference_logits(model_path, input_ids_padded, lambda: _hf_forward(model_path, input_ids_padded))
 
     # Note: HF Gemma4ForConditionalGeneration already applies softcapping internally,
     # so no need to apply it again here. TT model also applies it internally.
 
     logger.info(f"HF logits shape: {hf_logits.shape}, range: [{hf_logits.min():.4f}, {hf_logits.max():.4f}]")
-
-    # Free HF model GPU memory (we only need state_dict for TT)
-    del hf_model
-    import gc
-
-    gc.collect()
 
     # ── TT model ─────────────────────────────────────────────────────
     tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
