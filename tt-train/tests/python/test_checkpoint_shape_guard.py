@@ -206,9 +206,9 @@ def test_save_rejects_param_whose_replicate_label_hides_different_data(tp_mesh, 
 
 
 def test_save_rejects_collapsed_replicate_label_over_different_data(tp_mesh, tmp_path, expect_error):
-    """The default mappers' collapsed 1-D label (``[2] / (Replicate,)``) goes through the same check: a tensor whose
-    two devices hold different halves under that label is refused; a truly replicated tensor under the same label
-    (the default ``replicate_tensor_to_mesh_mapper``) saves.
+    """ttnn's mappers' collapsed 1-D label (``[2] / (Replicate,)``) goes through the same check: a tensor whose two
+    devices hold different halves under that label is refused; a truly replicated tensor under the same label
+    (``ttnn.replicate_tensor_to_mesh_mapper``) saves.
 
     Negative control: before this check the first save wrote the first device's half silently."""
     device = ttml.autograd.AutoContext.get_instance().get_device()
@@ -227,11 +227,12 @@ def test_save_rejects_collapsed_replicate_label_over_different_data(tp_mesh, tmp
     _assert_nothing_written(path)
 
     same = ttml.autograd.Tensor.from_numpy(
-        wide[..., :32],
+        np.ascontiguousarray(wide[..., :32]),
         ttnn.Layout.TILE,
         ttnn.DataType.BFLOAT16,
-        ttml.core.distributed.replicate_tensor_to_mesh_mapper(device),
+        ttnn.replicate_tensor_to_mesh_mapper(device),
     )
+    assert len(ttml.Sharding.from_tensor(same).dist_shape) == 1, "precondition: a collapsed 1-D label"
     replicated = ttml.NamedParameters()
     replicated["same"] = same
     checkpointing.save_checkpoint(path, header={}, model_params=replicated)
