@@ -1642,7 +1642,7 @@
   model_family: Wan
   skus:
     bh_sc4:
-      # single clip ~28 min on main, ~25 of it VBench
+      # Standalone test step took 23.6 min on 2026-10-24 (weight conversion + single clip + VBench).
       timeout: 40
       tier: 1
       release_ready: false
@@ -1718,8 +1718,9 @@
   model_family: Wan
   skus:
     bh_sc4:
-      # single clip ~4 min on main
-      timeout: 20
+      # Standalone it converts the weights itself (on main the perf step did): 20 min was killed at the
+      # start of inference on 2026-10-24 after ~6.5 min of conversion and ~4 min of mesh setup.
+      timeout: 35
       tier: 1
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
