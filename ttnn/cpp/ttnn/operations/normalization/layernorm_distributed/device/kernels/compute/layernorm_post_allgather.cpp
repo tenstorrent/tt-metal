@@ -216,7 +216,7 @@ void kernel_main() {
         pack_tile(1, dfb::stats_reduced);
         tile_regs_release();
         dfb_stats_reduced.push_back(stats_tile_stride);
-        reduce_uninit();
+        reduce_uninit<PoolType::AVG, ReduceDim::REDUCE_ROW>();
 
         dfb_stats_reduced.wait_front(stats_tile_stride);
 

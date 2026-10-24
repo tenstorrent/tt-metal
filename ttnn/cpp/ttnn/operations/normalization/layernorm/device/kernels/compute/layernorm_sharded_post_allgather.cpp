@@ -178,7 +178,7 @@ void kernel_main() {
         pack_tile(dst1, dfb_ex2);
 #endif
         tile_regs_release();
-        reduce_uninit();
+        reduce_uninit<PoolType::AVG, ReduceDim::REDUCE_ROW>();
 #ifdef RMSNORM
         dfb_var_obj.push_back(stats_tiles);
 #else

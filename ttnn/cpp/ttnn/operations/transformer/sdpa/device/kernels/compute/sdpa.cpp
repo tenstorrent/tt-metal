@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#define REDUCE_ROW_MAX_BLOCK
 #define REDUCE_OP (PoolType::MAX)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 

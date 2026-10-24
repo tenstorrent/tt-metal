@@ -70,9 +70,10 @@ class ReduceUnpacker(Unpacker):
     ) -> str:
         reduce_dim = self.reduce_dim.cpp_enum_value
         pool_type = self.reduce_pool.cpp_enum_value
+        math_fidelity = compute_unit.math_fidelity.cpp_enum_value
 
         return (
-            f"_llk_unpack_AB_reduce_init_<{pool_type}, {reduce_dim}>(\n"
+            f"_llk_unpack_AB_reduce_init_<{pool_type}, {reduce_dim}, ({math_fidelity} != ckernel::MathFidelity::LoFi)>(\n"
             f"{compute_unit.src_a.tile_shape.cpp_value});\n"
         )
 

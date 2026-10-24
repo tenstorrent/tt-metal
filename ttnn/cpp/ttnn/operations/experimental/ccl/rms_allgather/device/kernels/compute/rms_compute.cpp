@@ -135,7 +135,7 @@ void kernel_main() {
     pack_tile(dst0, cb_ex_partial2);
     tile_regs_release();
     index_h_offset += block_w;
-    reduce_uninit();
+    reduce_uninit<PoolType::AVG, ReduceDim::REDUCE_ROW>();
     cb_x2_obj.pop_front(num_tiles_per_block);
     cb_ex_partial2_obj.push_back(1);
 
