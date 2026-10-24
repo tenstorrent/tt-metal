@@ -64,3 +64,32 @@ def test_level2_polar_bw(bs, hw, memcfg, dtype, device, function_level_defaults)
             passing, output = comp_pcc(golden_tensor[i], tt_dev[i])
         logger.info(output)
         assert passing
+
+
+@pytest.mark.parametrize("dtype", (ttnn.float32, ttnn.bfloat16))
+@pytest.mark.parametrize("r_scale", (1e20, -1e20, 1e-20, -1e-20, 0.0))
+def test_polar_bw_extreme_exponent_range(dtype, r_scale, device):
+    shape = torch.Size([1, 1, 32, 32])
+    r = torch.full(shape, r_scale, dtype=torch.float32)
+    theta = torch.full(shape, 0.6, dtype=torch.float32)
+    in_data = torch.complex(r, theta).requires_grad_(True)
+
+    grad_r = torch.ones(shape, dtype=torch.float32)
+    grad_i = torch.full(shape, 2.0, dtype=torch.float32)
+    grad_data = torch.complex(grad_r, grad_i)
+
+    input_tensor = ttnn.complex_tensor(
+        ttnn.from_torch(in_data.real, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device),
+        ttnn.from_torch(in_data.imag, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device),
+    )
+    grad_tensor = ttnn.complex_tensor(
+        ttnn.from_torch(grad_data.real, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device),
+        ttnn.from_torch(grad_data.imag, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device),
+    )
+
+    tt_dev = convert_to_torch_tensor(ttnn.polar_bw(grad_tensor, input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+    golden_tensor = ttnn.get_golden_function(ttnn.polar_bw)(grad_data, in_data)
+
+    passing, output = comp_allclose(golden_tensor[0].real, tt_dev[0].real, rtol=1e-2, atol=1e-2)
+    logger.info(output)
+    assert passing
