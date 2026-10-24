@@ -29,8 +29,17 @@ inline void llk_pack_init(const std::uint32_t pack_output) {
 
     const std::uint8_t bfd_id = llk_pack_program_bfd(output_id);
     _llk_pack_init_(bfd_id, tensor_shape);
+    llk_pack_default_mop_output = pack_output;
     // DEST bank tracking is deliberately not touched here: this per-op init may run inside a tile loop (pack_init,
     // binary_op_init_common etc). The once-per-program bank-0 reset lives in llk_pack_dest_init.
+}
+
+// Re-aims the default pack MOP at pack_output if it points elsewhere: kernels written to the Wormhole/Blackhole model
+// switch outputs with only a format reconfig in between (e.g. the compute_kernel_lib reduce and eltwise-chain helpers).
+inline void llk_pack_aim_default_mop(const std::uint32_t pack_output) {
+    if (llk_pack_default_mop_output != pack_output) {
+        llk_pack_init(pack_output);
+    }
 }
 
 /**
@@ -87,6 +96,7 @@ template <bool out_of_order_output = false>
 inline void llk_pack(
     const std::uint32_t tile_index, const std::uint32_t pack_output, const std::uint32_t output_tile_index = 0) {
     LLK_TDMA_GUARD_NOTE_TDMA(pack_output);  // TEN-4746: real pack (PACR) disarms this dfb
+    llk_pack_aim_default_mop(pack_output);
     LLK_REINIT_GUARD_ASSERT_MATCHES(
         pack_bfd_resource, pack_output, "pack_tile pack_output DFB differs from the one llk_pack_init programmed");
     const std::uint8_t output_id = get_output_id(pack_output);
@@ -146,6 +156,7 @@ inline void llk_pack_dummy(const std::uint32_t pack_output) {
 // TODO: AM; Optimize block calls by using ntiles per pack, issue #40798
 inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t pack_output, std::uint32_t ntiles) {
     LLK_TDMA_GUARD_NOTE_TDMA(pack_output);  // TEN-4746: real pack (PACR) disarms this dfb
+    llk_pack_aim_default_mop(pack_output);
     LLK_REINIT_GUARD_ASSERT_MATCHES(
         pack_bfd_resource, pack_output, "pack_block pack_output DFB differs from the one llk_pack_init programmed");
     std::uint8_t output_id = get_output_id(pack_output);

@@ -28,6 +28,14 @@ inline constexpr ckernel::trisc::BfdResource pack_bfd_resource =
  * LLK PACK COMMON
  *************************************************************************/
 
+constexpr std::uint32_t INVALID_PACK_OUTPUT = 0xFFFFFFFFU;
+
+// The output DFB the default pack MOP is aimed at; INVALID_PACK_OUTPUT when it is aimed at none (before any
+// llk_pack_init, or after an init that programmed the MOP for another kind of pack, such as untilize). Quasar
+// bakes the pack target into the MOP at init, where Wormhole and Blackhole take it from each pack_tile call, so
+// llk_pack compares against this and re-aims the packer when the kernel packs into a different DFB.
+inline thread_local std::uint32_t llk_pack_default_mop_output = INVALID_PACK_OUTPUT;
+
 /**
  * @brief Allocate a BFD id from the pack partition, program its table entry from the output's
  * DFB info (shape, L1 base, formats), and record the id in the pack engine's current slot. The DFB
