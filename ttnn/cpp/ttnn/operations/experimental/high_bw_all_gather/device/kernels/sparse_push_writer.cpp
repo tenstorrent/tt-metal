@@ -30,7 +30,7 @@ using namespace ttnn::operations::ccl::common;
 
 namespace {
 constexpr uint32_t kData = 0, kMeta = 1, kHeaders = 4;
-constexpr uint32_t kBatch = 4;                // packets in flight per flush; matches the reader's push batches
+constexpr uint32_t kBatch = 4;  // packets in flight per flush: half the packet slots, so a batch never wraps
 constexpr uint32_t kMulticast = 0xFFFFFFFFu;  // packet destination: every chip (see the reader)
 
 template <typename Sender>

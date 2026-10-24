@@ -33,7 +33,7 @@ constexpr uint8_t kMuxBuffersPerChannel = 2;
 constexpr uint32_t kPacketSlots = 8;
 constexpr uint32_t kMetaEntryBytes = 16;
 constexpr uint32_t kScalarCbBytes = 64;
-// A window of 64 bitmap blocks (128 B each), then per requester its header (384 B) and first block window.
+// Two fills of 32 bitmap windows (128 B each), then per requester its header (384 B) and first block window.
 constexpr uint32_t kTableCbBytes = 64 * 128 + 32 * (384 + 128);
 constexpr uint32_t kHeaderSlots = 1 + 4;  // semaphore increments + one per packet in flight
 
