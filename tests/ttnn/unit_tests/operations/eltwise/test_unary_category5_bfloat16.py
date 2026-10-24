@@ -181,3 +181,20 @@ def test_geglu_op(device, dim, variant):
         f"geglu golden with variant={variant!r} differs from explicit variant={expected_variant} "
         f"for {int((golden != golden_explicit).sum().item())} of {golden.numel()} elements"
     )
+
+
+@pytest.mark.parametrize("op", ["glu", "reglu", "geglu", "swiglu"])
+def test_glu_family_logical_width_not_tile_aligned(device, op):
+    torch.manual_seed(0)
+    x = torch.randn((1, 1, 40, 100), dtype=torch.bfloat16)
+    a, b = x.float().chunk(2, dim=-1)
+    gate = {
+        "glu": torch.sigmoid,
+        "reglu": torch.relu,
+        "geglu": torch.nn.functional.gelu,
+        "swiglu": torch.nn.functional.silu,
+    }[op]
+    expected = a * gate(b)
+    output = ttnn.to_torch(getattr(ttnn, op)(ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device), -1))
+    assert list(output.shape) == list(expected.shape)
+    assert_with_pcc(expected, output.float(), 0.999)
