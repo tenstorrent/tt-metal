@@ -9,6 +9,8 @@
     token-identical up to the first near-tie. Also: the spec short traces exist, no program compiles after capture.
   * test_fast_prefill_timing: eng.prefill wall time at ISL 1600 and 16384 under both flags (B = 8 engine), logged;
     asserts the fast path under 0.6x of the eager path at 1600 (the eager path is host-bound) and not slower at 16k.
+  * test_big_chunk_parity: QWEN36_PREFILL_BIG_CHUNK=8192, B = 8 engine, ONE engine: the long prompts prefilled with the
+    big chunk trace vs with it masked off (2048-row chunks only): first token, MTP K/V rows, GDN state, spec decode.
 
 Run (one test at a time, full model unless QWEN36_SPEC_TEST_N_LAYERS is set; ~25 GB free disk, see work/notes/11):
   source work/env.sh; cd $TT_METAL_HOME  (or the worktree with PYTHONPATH=<worktree>:$TT_METAL_HOME/ttnn:...)
@@ -292,6 +294,148 @@ def test_fast_prefill_parity(mesh_device, monkeypatch):
     assert (
         not problems or not strict
     ), f"{len(problems)} parity problem(s) (QWEN36_FAST_PREFILL_STRICT=0 to log only):\n" + "\n".join(problems)
+    eng.shutdown()
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_big_chunk_parity(mesh_device, monkeypatch):
+    """QWEN36_PREFILL_BIG_CHUNK=8192 on the fast path, ONE engine: every prompt prefilled with the big chunk trace (the
+    full 8192-row blocks first) vs with it masked off (big_chunk_rows() -> 0: 2048-row chunks only, the off numerics).
+    First token, MTP K/V rows, GDN slot state and the spec decode must match; the big trace must really replay."""
+    big = 8192
+    monkeypatch.setenv("QWEN36_PREFILL_BIG_CHUNK", str(big))
+    nb = 352  # 22528 tokens per row; a multiple of 32 blocks (else the paged SDPA pads the page table in the capture)
+    num_blocks = 1 + B * nb + 1
+    model, tokenizer = _build(mesh_device, nb, num_blocks)
+    pool = _prompt_pool(tokenizer, 32768)
+    # 2 big + tail; 1 big exactly; 1 big + 1 small + tail; 2 big + 2 small exactly; four prompts < 8192.
+    lens = (2 * big + 300, big, big + 2048 + 700, 2 * big + 2 * 2048, 1600, 300, 7, 513)
+    prompts = [pool[131 * i : 131 * i + n] for i, n in enumerate(lens)]
+    assert all(len(p) == n for p, n in zip(prompts, lens))
+
+    eng = _engine(model, nb, "1", monkeypatch)
+    assert model.big_chunk_rows() == big, "big chunk trace not recorded"
+    replays = []
+    real_replay = model._replay_chunks
+
+    def _spy(token_ids, page_table, pt_host, start, n_chunks, chunk_size, *args, **kwargs):
+        replays.append((int(chunk_size), int(n_chunks)))
+        return real_replay(token_ids, page_table, pt_host, start, n_chunks, chunk_size, *args, **kwargs)
+
+    def _small_only(on):
+        if on:
+            model.big_chunk_rows = lambda: 0  # instance attribute shadows the method
+        elif "big_chunk_rows" in model.__dict__:
+            del model.big_chunk_rows
+
+    runs = {}
+    model._replay_chunks = _spy
+    n_prog = mesh_device.num_program_cache_entries()
+    mesh_device.set_program_cache_misses_allowed(False)
+    try:
+        for mode in ("small", "big"):
+            _small_only(mode == "small")
+            replays.clear()
+            pre = _prefill_all(eng, model, mesh_device, prompts, nb)
+            for u in range(B):
+                eng.release(u)
+            used = sorted(set(replays))
+            toks, drv = _decode_all(eng, prompts, nb, num_blocks, seed=1)
+            runs[mode] = dict(pre=pre, toks=toks, used=used)
+            logger.info(
+                f"[bigchunk {mode}] prefill ms per slot: {[round(p['ms'], 1) for p in pre]}; replays (chunk, n): {used}; "
+                f"committed/row-step {tsc._accept_rate(drv):.3f}"
+            )
+        _small_only(False)
+        pre2 = _prefill_all(eng, model, mesh_device, prompts, nb, order=range(B - 1, -1, -1))
+        for u in range(B):
+            eng.release(u)
+        assert mesh_device.num_program_cache_entries() == n_prog, "a program compiled after capture"
+    finally:
+        mesh_device.set_program_cache_misses_allowed(True)
+        _small_only(False)
+        del model._replay_chunks
+
+    problems = []
+    if not any(c == big and n > 0 for c, n in runs["big"]["used"]):
+        problems.append(f"big mode never replayed the {big}-row trace: {runs['big']['used']}")
+    if any(c == big and n > 0 for c, n in runs["small"]["used"]):
+        problems.append(f"small mode replayed the {big}-row trace: {runs['small']['used']}")
+    for u in range(B):
+        a, b = runs["small"]["pre"][u], runs["big"]["pre"][u]
+        if a["tok"] != b["tok"]:
+            msg = f"slot {u} (Tp {lens[u]}): first token {a['tok']} (small) vs {b['tok']} (big), gap {a['gap']:.4f}"
+            if a["gap"] >= NEAR_TIE_GAP:
+                problems.append(msg)
+            logger.info(f"near-tie flip: {msg}")
+        kv_summary = []
+        for name, ra, rb in (("K", a["kv"][0], b["kv"][0]), ("V", a["kv"][1], b["kv"][1])):
+            assert ra.shape == rb.shape
+            if torch.equal(ra, rb):
+                kv_summary.append(f"{name} bit-identical ({ra.shape[0]} rows)")
+                continue
+            d = (ra.float() - rb.float()).abs()
+            bad = (ra != rb).flatten(1).any(dim=1).nonzero().flatten().tolist()
+            p = _pcc(ra, rb)
+            kv_summary.append(
+                f"{name} {len(bad)}/{ra.shape[0]} rows differ (rows {bad[0]}..{bad[-1]}) PCC {p:.6f} "
+                f"max|d| {float(d.max()):.4f} [{_row_profile(d)}]"
+            )
+            if p < PCC:
+                problems.append(f"slot {u}: MTP {name} PCC {p:.6f}")
+        rec_min, conv_min, state_exact = 1.0, 1.0, True
+        for li, ((rr, rc), (gr, gc)) in enumerate(zip(a["state"], b["state"])):
+            state_exact = state_exact and torch.equal(rr, gr) and all(torch.equal(x, y) for x, y in zip(rc, gc))
+            pr = _pcc(rr, gr)
+            rec_min = min(rec_min, pr)
+            if pr < PCC:
+                problems.append(f"slot {u} GDN layer {li}: rec_state PCC {pr:.6f}")
+            for j in range(1, len(rc)):
+                if float(rc[j].abs().max()) > 0:
+                    pc = _pcc(rc[j], gc[j])
+                    conv_min = min(conv_min, pc)
+                    if pc < PCC:
+                        problems.append(f"slot {u} GDN layer {li}: conv tap {j} PCC {pc:.6f}")
+        got, ref = runs["big"]["toks"][u], runs["small"]["toks"][u]
+        if got != ref:
+            i = next((j for j in range(min(len(got), len(ref))) if got[j] != ref[j]), min(len(got), len(ref)))
+            dec = f"spec decode diverges at new token {i}: big {got[i:i+4]} vs small {ref[i:i+4]}"
+            seq = list(prompts[u]) + [int(t) for t in ref[:i]]
+            need = (len(seq) + 2 * (K + 1) + BLOCK_SIZE - 1) // BLOCK_SIZE
+            blocks = list(range(1 + u * nb, 1 + u * nb + need))
+            row = torch.tensor([blocks + [0] * (nb - need)], dtype=torch.int32)
+            gaps = {}
+            for mode in ("small", "big"):
+                _small_only(mode == "small")
+                try:
+                    lg = eng.prefill(u, seq, row)
+                    eng.release(u)
+                finally:
+                    _small_only(False)
+                gaps[mode] = (int(lg.argmax()), _top2_gap(lg))
+            dec += (
+                f"; at {i}: small argmax {gaps['small'][0]} gap {gaps['small'][1]:.3f}, "
+                f"big argmax {gaps['big'][0]} gap {gaps['big'][1]:.3f}"
+            )
+            if gaps["small"][1] >= NEAR_TIE_GAP:
+                problems.append(f"request {u}: decode tokens differ at {i} with a CONFIDENT small-chunk gap")
+            else:
+                dec += " (near-tie: accepted)"
+        else:
+            dec = f"{len(got)} spec decode tokens identical"
+        same_tok, same_kv, same_state = _same_prefill(b, pre2[u])
+        logger.info(
+            f"[bigchunk] slot {u} (Tp {lens[u]}): first token {a['tok']}/{b['tok']}; {'; '.join(kv_summary)}; "
+            f"GDN rec_state min PCC {rec_min:.6f}, conv taps min PCC {conv_min:.6f}, "
+            f"{'bit-identical' if state_exact else 'not bit-identical'}; {dec}; prefill ms small {a['ms']:.1f} "
+            f"big {b['ms']:.1f}; big repeat (reverse order): tok {same_tok} kv {same_kv} state {same_state}"
+        )
+    for msg in problems:
+        logger.warning(f"[bigchunk] {msg}")
+    assert not problems, f"{len(problems)} big-chunk parity problem(s):\n" + "\n".join(problems)
     eng.shutdown()
 
 

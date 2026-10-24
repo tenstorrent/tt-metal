@@ -6,6 +6,7 @@ tok_embeddings -> 32 x Qwen36DecoderLayer -> RMSNorm -> LM Head.
 Hybrid state: KV cache (8 attn layers) + recurrent state (24 DeltaNet layers).
 """
 
+import contextlib
 import math
 import os
 from collections import OrderedDict
@@ -407,6 +408,14 @@ class Qwen36Model:
         self._chunk_full_page_table_buf = None
         self._chunk_cos_buf = None
         self._chunk_sin_buf = None
+        # QWEN36_PREFILL_BIG_CHUNK (default 0 = off): a second chunk trace of this many rows (a multiple of 2048) that
+        # replays the full blocks of a prefill segment before the 2048-row chunks; the paged SDPA splits its work over
+        # heads x Q-chunks only, so the bigger chunk keeps far more cores busy at depth. The 2048 set stays active.
+        self._prefill_big_chunk = int(os.environ.get("QWEN36_PREFILL_BIG_CHUNK", "0") or 0)
+        assert self._prefill_big_chunk % 2048 == 0, "QWEN36_PREFILL_BIG_CHUNK must be 0 or a multiple of 2048"
+        self._chunk_sets = {}  # inactive chunk-trace state by label ("small" / "big"); the active one is on self
+        self._chunk_set_active = "small"
+        self._last_chunk = None  # (trace output, rows) of the last replayed chunk (either set)
         # Traced batched short-prompt (bucket) prefill: one B=1 full-bucket trace replayed
         # once per user (see capture_prefill_trace_bucket / prefill_traced_bucket_batched).
         self._bucket_trace_id = None
@@ -3563,6 +3572,85 @@ class Qwen36Model:
             x = x_new
         return x
 
+    _CHUNK_SET_ATTRS = (
+        "_chunk_token_buf",
+        "_chunk_start_idx_tensor",
+        "_chunk_full_page_table_buf",
+        "_chunk_page_table_buf",
+        "_chunk_cos_buf",
+        "_chunk_sin_buf",
+        "_chunked_trace_id",
+        "_chunked_trace_output",
+        "_chunked_chunk_size",
+        "_chunked_prepared_key",
+    )
+
+    def _activate_chunk_set(self, label):
+        """Swap the chunk-trace state on self to the set `label` ("small" = the 2048 serving set, "big")."""
+        if label == self._chunk_set_active:
+            return
+        self._chunk_sets[self._chunk_set_active] = {a: getattr(self, a) for a in self._CHUNK_SET_ATTRS}
+        for a, v in self._chunk_sets.pop(label, dict.fromkeys(self._CHUNK_SET_ATTRS)).items():
+            setattr(self, a, v)
+        self._chunk_set_active = label
+
+    @contextlib.contextmanager
+    def _big_chunk_set(self):
+        self._activate_chunk_set("big")
+        try:
+            yield
+        finally:
+            self._activate_chunk_set("small")
+
+    def big_chunk_rows(self):
+        """Rows of the recorded big chunk trace, or 0 (off / not recorded)."""
+        big = self._chunk_sets.get("big") if self._chunk_set_active == "small" else None
+        return int(big["_chunked_chunk_size"]) if big and big["_chunked_trace_id"] is not None else 0
+
+    def prepare_prefill_trace_chunked_big(self, device, page_table, warm_cb=None):
+        """Allocate + compile the QWEN36_PREFILL_BIG_CHUNK chunk set (after the 2048 one, before any capture). One more
+        eager big-chunk forward then compiles the tail-free last-row logits program on its real output and hands that
+        output to ``warm_cb(hidden)`` (the spec engine compiles its per-chunk drafter warm at this size). No-op when off.
+        The masked buckets are warmed by the 2048 prepare."""
+        if not self._prefill_big_chunk:
+            return
+        block_size = get_block_size(self._paged_kv_caches)
+        if page_table.shape[-1] * block_size < self._prefill_big_chunk:
+            # A table shorter than one big chunk makes the paged SDPA pad it with a device ttnn.zeros: a host write,
+            # illegal inside the capture. Such a context never has a full big block, so the set is not needed.
+            logger.info(
+                f"Big prefill chunk set skipped: the page table holds {page_table.shape[-1] * block_size} tokens "
+                f"< {self._prefill_big_chunk}"
+            )
+            return
+        tp = self.num_devices > 1
+        with self._big_chunk_set():
+            self.prepare_prefill_trace_chunked(device, page_table, self._prefill_big_chunk, warmup_masked_buckets=False)
+            if tp:
+                out = self._forward_prefill_chunk_tp(
+                    self._chunk_token_buf,
+                    self._chunk_cos_buf,
+                    self._chunk_sin_buf,
+                    self._chunk_start_idx_tensor,
+                    self._chunk_full_page_table_buf,
+                    self._chunk_page_table_buf,
+                )
+                big = self._prefill_big_chunk
+                ttnn.deallocate(self._masked_bucket_logits_tp(out, big, big))
+                if warm_cb is not None:
+                    warm_cb(out)
+                ttnn.deallocate(out)
+                ttnn.synchronize_device(device)
+            self._reset_gdn_state_for_new_sequence()
+        logger.info(f"Big prefill chunk set prepared: {self._prefill_big_chunk} rows")
+
+    def record_prefill_trace_chunked_big(self, device):
+        """Capture the big chunk trace (after record_prefill_trace_chunked). No-op when off or not prepared."""
+        if "big" not in self._chunk_sets:  # off, or prepare skipped it
+            return
+        with self._big_chunk_set():
+            self.record_prefill_trace_chunked(device)
+
     def capture_prefill_trace_chunked(
         self, device, page_table, chunk_size=2048, warmup_masked_buckets=True, capture_chunk_trace=True
     ):
@@ -3693,7 +3781,7 @@ class Qwen36Model:
         # Allocate the hidden-sharded vision-splice buffers BEFORE warmup so the fixed-shape
         # ttnn.where in the TP forwards compiles in the warmup pass (and is captured), never at
         # request time. Zero-initialised -> identity for text-only.
-        self._alloc_vision_merge_buffers(device, chunk_size)
+        self._alloc_vision_merge_buffers(device, max(chunk_size, self._prefill_big_chunk))
 
         rep = ttnn.ReplicateTensorToMesh(device)
         B = 1
@@ -6282,60 +6370,18 @@ class Qwen36Model:
         ttnn.deallocate(last_hidden)
         return logits
 
-    def _prefill_traced_chunked_tp(
-        self,
-        token_ids,
-        page_table,
-        actual_len,
-        num_full,
-        chunk_size,
-        tail_real,
-        vision_tokens=None,
-        start=0,
-        reset_gdn=True,
-        save_cb=None,
-        run_tail=True,
-        on_chunk=None,
+    def _replay_chunks(
+        self, token_ids, page_table, pt_host, start, n_chunks, chunk_size, vision_tokens, save_cb, on_chunk
     ):
-        """TP traced chunk-outer prefill: replay the captured per-chunk trace
-        (_forward_prefill_chunk_tp) for each FULL chunk, then run the partial tail through the
-        masked bucket. The TP analog of the single-device loop in prefill_traced_chunked: each
-        chunk's inputs are DMA'd into the REPLICATED persistent buffers via
-        copy_host_to_device_tensor (no per-chunk program dispatch / device allocation — only one
-        execute_trace per chunk), so GDN recurrent/conv + paged-KV state carry in place across
-        replays and host pressure stays bounded at 128K. The tail's chunk_start>0 skips the GDN
-        reset so the carried state continues. Returns logits [1, 1, vocab] at actual_len-1.
-
-        Resumable prefill (prefix cache, _prefill_range): `start` is the ABSOLUTE position of the first chunk (a
-        multiple of 128; token_ids / page_table are the request's full rows, chunk c covers [start + c*chunk_size, ...)),
-        reset_gdn=False continues the bound GDN state instead of re-zeroing, save_cb(p) is called right after the
-        replay of the chunk ending at absolute position p, and run_tail=False stops after the full chunks (returns
-        None; the caller runs the tail). Defaults reproduce the original behaviour exactly."""
+        """Replay the ACTIVE chunk set's trace for n_chunks chunks of chunk_size rows from absolute position start;
+        returns (trace output, chunk_size) of the last replayed chunk, or None when n_chunks == 0."""
+        if n_chunks == 0:
+            return None
         block_size = get_block_size(self._paged_kv_caches)
         blocks_per_chunk = chunk_size // block_size
         rep = ttnn.ReplicateTensorToMesh(self.device)
-
-        # Re-zero GDN once; carries across replays + tail (chunk_start>0 skips reset).
-        if reset_gdn:
-            self._reset_gdn_state_for_new_sequence()
-
-        # Pad/clip page_table to captured width; write once (constant across chunks).
-        buf_blocks = int(self._chunk_full_page_table_buf.shape[-1])
-        if page_table.shape[1] < buf_blocks:
-            page_table = torch.cat(
-                [
-                    page_table,
-                    torch.zeros(page_table.shape[0], buf_blocks - page_table.shape[1], dtype=page_table.dtype),
-                ],
-                dim=1,
-            )
-        elif page_table.shape[1] > buf_blocks:
-            page_table = page_table[:, :buf_blocks]
-        pt_host = ttnn.from_torch(
-            page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep
-        )
+        num_full = n_chunks
         ttnn.copy_host_to_device_tensor(pt_host, self._chunk_full_page_table_buf)
-
         # Replay trace per full chunk. Host input-prep (from_torch tilize of cos/sin + DMA copies) and
         # device trace exec share cq_id=0, so the queue already ORDERS each chunk's copies AFTER the
         # prior chunk's trace reads them (no double-buffering needed). The old code did a full
@@ -6419,6 +6465,89 @@ class Qwen36Model:
         if _host_refs:
             ttnn.synchronize_device(self.device)
             _host_refs.clear()
+        return self._chunked_trace_output, chunk_size
+
+    def _prefill_traced_chunked_tp(
+        self,
+        token_ids,
+        page_table,
+        actual_len,
+        num_full,
+        chunk_size,
+        tail_real,
+        vision_tokens=None,
+        start=0,
+        reset_gdn=True,
+        save_cb=None,
+        run_tail=True,
+        on_chunk=None,
+        allow_big=False,
+    ):
+        """TP traced chunk-outer prefill: replay the captured per-chunk trace
+        (_forward_prefill_chunk_tp) for each FULL chunk, then run the partial tail through the
+        masked bucket. The TP analog of the single-device loop in prefill_traced_chunked: each
+        chunk's inputs are DMA'd into the REPLICATED persistent buffers via
+        copy_host_to_device_tensor (no per-chunk program dispatch / device allocation — only one
+        execute_trace per chunk), so GDN recurrent/conv + paged-KV state carry in place across
+        replays and host pressure stays bounded at 128K. The tail's chunk_start>0 skips the GDN
+        reset so the carried state continues. Returns logits [1, 1, vocab] at actual_len-1.
+
+        Resumable prefill (prefix cache, _prefill_range): `start` is the ABSOLUTE position of the first chunk (a
+        multiple of 128; token_ids / page_table are the request's full rows, chunk c covers [start + c*chunk_size, ...)),
+        reset_gdn=False continues the bound GDN state instead of re-zeroing, save_cb(p) is called right after the
+        replay of the chunk ending at absolute position p, and run_tail=False stops after the full chunks (returns
+        None; the caller runs the tail). Defaults reproduce the original behaviour exactly.
+
+        allow_big: the full blocks of big_chunk_rows() rows (QWEN36_PREFILL_BIG_CHUNK) replay the big chunk trace
+        first, then the rest the 2048 one; same rows covered, so the tail is unchanged. self._last_chunk names the last
+        replayed chunk (output, rows) for callers that read its output."""
+        rep = ttnn.ReplicateTensorToMesh(self.device)
+
+        # Re-zero GDN once; carries across replays + tail (chunk_start>0 skips reset).
+        if reset_gdn:
+            self._reset_gdn_state_for_new_sequence()
+
+        # Pad/clip page_table to captured width; write once (constant across chunks).
+        buf_blocks = int(self._chunk_full_page_table_buf.shape[-1])
+        if page_table.shape[1] < buf_blocks:
+            page_table = torch.cat(
+                [
+                    page_table,
+                    torch.zeros(page_table.shape[0], buf_blocks - page_table.shape[1], dtype=page_table.dtype),
+                ],
+                dim=1,
+            )
+        elif page_table.shape[1] > buf_blocks:
+            page_table = page_table[:, :buf_blocks]
+        pt_host = ttnn.from_torch(
+            page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep
+        )
+
+        rows = num_full * chunk_size
+        big = self.big_chunk_rows() if allow_big else 0
+        n_big = rows // big if big else 0
+        last = None
+        if n_big:
+            with self._big_chunk_set():
+                last = self._replay_chunks(
+                    token_ids, page_table, pt_host, start, n_big, big, vision_tokens, save_cb, on_chunk
+                )
+        n_small = (rows - n_big * big) // chunk_size
+        last = (
+            self._replay_chunks(
+                token_ids,
+                page_table,
+                pt_host,
+                start + n_big * big,
+                n_small,
+                chunk_size,
+                vision_tokens,
+                save_cb,
+                on_chunk,
+            )
+            or last
+        )
+        self._last_chunk = last
 
         if not run_tail:
             return None
@@ -6447,7 +6576,8 @@ class Qwen36Model:
                 vision_tokens=vision_tokens,
                 vis_row_offset=self._vis_row_offset_for(token_ids, cs),
             )
-        return self._masked_bucket_logits_tp(self._chunked_trace_output, chunk_size, chunk_size)
+        out, last_rows = self._last_chunk
+        return self._masked_bucket_logits_tp(out, last_rows, last_rows)
 
     def reset_state(self):
         """Reset layer state for a new sequence."""

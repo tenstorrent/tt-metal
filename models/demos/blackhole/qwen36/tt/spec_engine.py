@@ -728,6 +728,8 @@ def spec_memory_costs(
             verify_io += _tile_bytes([1, 1, rb, vocab // tp], bf)  # shard logits
     block_bytes = 2 * n_local_kv * int(block_size) * head_dim * int(kv_dtype_bytes)
     sel_buckets = _MASK_BUCKETS_DEFAULT if mask_buckets is None else mask_buckets
+    _big = int(os.environ.get("QWEN36_PREFILL_BIG_CHUNK", "0") or 0)
+    sel_buckets = tuple(sel_buckets) + ((_big,) if _big else ())
     engine = (
         sum(_tile_bytes([1, 1, b, dim_frac], bf) for b in row_bks)  # _hp_bufs
         + sum(_tile_bytes([1, 1, 1, b], bf) for b in sel_buckets)  # _last_sel
@@ -1497,11 +1499,12 @@ class MTPSpecEngine:
             )
             for _ in range(B)
         ]
+        big = getattr(model, "_prefill_big_chunk", 0)
         self._last_sel = {
             b: self._alloc_host_replicated(
                 torch.zeros(1, 1, 1, b, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT
             )
-            for b in model._PREFILL_MASK_BUCKETS
+            for b in tuple(model._PREFILL_MASK_BUCKETS) + ((big,) if big else ())
         }
         self._mtp_pt = self._alloc_host_replicated(pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         self._mtp_pt_rows = [
@@ -1535,6 +1538,11 @@ class MTPSpecEngine:
             try:
                 if B > 1:
                     model.prepare_prefill_trace_chunked(self.mesh, pt_prefill, chunk_size=2048)
+                # QWEN36_PREFILL_BIG_CHUNK: the big chunk set, its drafter warm and last-row capture compiled on a real
+                # big-chunk output (the replay loop runs them per big chunk; nothing may compile after capture).
+                prep_big = getattr(model, "prepare_prefill_trace_chunked_big", None)  # absent on test fakes
+                if prep_big is not None:
+                    prep_big(self.mesh, pt_prefill, warm_cb=lambda h: self._warm_big_chunk(h, pt[0:1]))
                 # vLLM's null block absorbs the base's padded K/V (the MTP padding rows go to the MTP scratch block).
                 model.prefill_trash_block = 0
                 model.prepare_prefill_traces_short(self.mesh, pt_prefill, spec=True)
@@ -1560,6 +1568,9 @@ class MTPSpecEngine:
             prev = model._bind_gdn_prefill_scratch() if self.B > 1 else None
             try:
                 model.record_prefill_trace_chunked(self.mesh)
+                rec_big = getattr(model, "record_prefill_trace_chunked_big", None)  # absent on test fakes
+                if rec_big is not None:
+                    rec_big(self.mesh)
                 model.record_prefill_traces_short(self.mesh)
             finally:
                 if prev is not None:
@@ -2758,7 +2769,7 @@ class MTPSpecEngine:
             # The uncached long-prompt path: the chunk trace replays every full chunk and the eager masked-bucket tail
             # runs inside it (its tail slice is right for start == 0).
             logits = model._prefill_traced_chunked_tp(
-                prompt, pt_rec, b, num_full, chunk, tail, on_chunk=on_chunk, run_tail=True, **vis_kw
+                prompt, pt_rec, b, num_full, chunk, tail, on_chunk=on_chunk, run_tail=True, allow_big=True, **vis_kw
             )
             return self._read_replicated_logits(logits)
         model._prefill_traced_chunked_tp(
@@ -2772,6 +2783,7 @@ class MTPSpecEngine:
             run_tail=False,
             start=a,
             reset_gdn=not carry,
+            allow_big=True,
             **vis_kw,
         )
         if tail == 0:
@@ -2780,8 +2792,10 @@ class MTPSpecEngine:
             ):  # on_chunk already saw the last chunk in the replay loop; a mid-prompt segment has no logits use
                 return torch.zeros(0)
             # Exact multiple: the last chunk's output gives the logits and the slot b-1 feed row.
-            logits = model._masked_bucket_logits_tp(model._chunked_trace_output, chunk, chunk)
-            on_chunk(model._chunked_trace_output, cs - chunk, chunk)
+            last = getattr(model, "_last_chunk", None)  # (output, rows); fakes leave it unset
+            out, rows = last if last is not None else (model._chunked_trace_output, chunk)
+            logits = model._masked_bucket_logits_tp(out, rows, rows)
+            on_chunk(out, cs - rows, rows)
             return self._read_replicated_logits(logits)
         host = None
         if tail_tr is not None:
@@ -5597,6 +5611,16 @@ class MTPSpecEngine:
     # --------------------------------------------------------------------- #
     # Anchor
     # --------------------------------------------------------------------- #
+    def _warm_big_chunk(self, hidden, page_table_torch):
+        """Compile the per-chunk drafter warm and the last-row capture at the big chunk size on a real big-chunk output
+        (engine row 0 scratch writes, as the warm prompts do)."""
+        big = int(hidden.shape[-2])
+        feed = self.model.spec_feed_rows(hidden)
+        self._warm_mtp_chunk(feed, 0, big, [1] * (big + 2), page_table_torch)
+        self._capture_last_row(feed, big - 1, 0)
+        if feed is not hidden:
+            ttnn.deallocate(feed)
+
     def _anchor_warmup(self, dim_frac, dtype):
         """Allocate the persistent anchor buffers and compile the refill matmul before capture (a per-iteration
         clone could land on trace-owned memory). One program serves every m."""
