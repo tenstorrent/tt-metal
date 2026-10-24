@@ -48,13 +48,19 @@ class PplxDeciderModelArgs(Qwen36ModelArgs):
         # (tests/test_conv_bench.py): C=1280, chunk 128 vs default 320: T=256 25.9 vs 31.8 us, T=1024 57.3 vs 74.6 us,
         # bit-exact. PPLX_KDA_CONV_CHUNK overrides.
         self.kda_conv_chunk_cap = int(os.environ.get("PPLX_KDA_CONV_CHUNK", "128"))
+        # Dense-MLP precision: BFP4 gate/up + LoFi, the point this model's latency and decision accuracy were validated
+        # at. qwen36's own default (BFP8 + HiFi2, for Qwen3.8 accuracy) costs up to ~12% prefill here (4x8, 4096 tokens).
+        # QWEN36_MLP_GATEUP_BFP8=1 / QWEN36_MLP_FIDELITY=<lofi|hifi2|hifi3|hifi4> override.
+        self.mlp_gateup_dtype = ttnn.bfloat8_b if os.environ.get("QWEN36_MLP_GATEUP_BFP8") == "1" else ttnn.bfloat4_b
+        self.mlp_math_fidelity = None if os.environ.get("QWEN36_MLP_FIDELITY") else ttnn.MathFidelity.LoFi
         if self.num_devices > 1:
             logger.info(
                 f"pplx prefill CCL: fused_dist_norm={self.prefill_fused_dist_norm} agmm_bf8={self.prefill_agmm_bf8} "
                 f"ccl_topology={self.ccl_topology()} (num_devices={self.num_devices}, "
                 f"fabric={ttnn.get_fabric_config()}) tuned sdpa={self.prefill_sdpa_config_fn is not None} "
                 f"agmm={self.prefill_agmm_config_fn is not None} rs={self.prefill_rs_hparams} "
-                f"rs_bf8={self.prefill_rs_bf8} small_m_max={self.prefill_small_m_max}"
+                f"rs_bf8={self.prefill_rs_bf8} small_m_max={self.prefill_small_m_max} "
+                f"mlp={self.mlp_gateup_dtype}/{self.mlp_math_fidelity or 'QWEN36_MLP_FIDELITY'}"
             )
 
     def ccl_topology(self):

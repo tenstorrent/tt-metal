@@ -619,6 +619,7 @@ class ModelArgs:
             "Meta-Llama-3-8B": "models/tt_transformers/model_params/Meta-Llama-3-8B",
             "Meta-Llama-3-8B-Instruct": "models/tt_transformers/model_params/Meta-Llama-3-8B",
             "Qwen3.6-27B": "models/tt_transformers/model_params/Qwen3.6-27B",
+            "Qwen3.8-27B": "models/tt_transformers/model_params/Qwen3.8-27B",
             "LFM2.5-VL-1.6B": "models/tt_transformers/model_params/LFM2.5-VL-1.6B",
         }.items()
     }

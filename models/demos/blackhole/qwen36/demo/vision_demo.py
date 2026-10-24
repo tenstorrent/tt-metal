@@ -359,7 +359,7 @@ def test_demo_vision(mesh_device, prompt_file, use_trace, max_generated_tokens, 
     # Prompt length, not max_seq_len: the text-demo targets are keyed on the text
     # sequence, and a vision TTFT must not be checked against those.
     report_e2e_metrics(
-        "qwen3.6-27b",
+        model.args.base_model_name,
         {
             "prefill_time_to_first_token": perf["ttft"],
             "decode_t/s": perf["decode_tok_s"],
@@ -545,6 +545,8 @@ def _run_tp_vision_generation(model, tokenizer, token_ids, vision_inputs, max_ge
             (
                 ttnn.to_torch(dn.rec_state, mesh_composer=comp),
                 [ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states],
+                # Fused single-user decode keeps its conv history outside conv_states (None when the fused path is off).
+                dn.snapshot_fused_decode_state(),
             )
             for dn in _gdn
         ]
@@ -555,7 +557,7 @@ def _run_tp_vision_generation(model, tokenizer, token_ids, vision_inputs, max_ge
         def _back(t, dtype):
             return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=mapper)
 
-        for dn, (rec, convs) in zip(_gdn, snap):
+        for dn, (rec, convs, hist) in zip(_gdn, snap):
             r = _back(rec, dn.rec_state.dtype)
             ttnn.copy(r, dn.rec_state)
             ttnn.deallocate(r)
@@ -563,6 +565,7 @@ def _run_tp_vision_generation(model, tokenizer, token_ids, vision_inputs, max_ge
                 cc = _back(c, dn.conv_states[j].dtype)
                 ttnn.copy(cc, dn.conv_states[j])
                 ttnn.deallocate(cc)
+            dn.restore_fused_decode_state(hist)  # no-op when hist is None (fused path off)
 
     dev = model.prepare_inputs_decode(
         torch.tensor([[nxt]], dtype=torch.int32), torch.tensor([T], dtype=torch.int32), page_table=page_table

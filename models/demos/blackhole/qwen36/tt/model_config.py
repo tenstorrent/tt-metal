@@ -163,6 +163,11 @@ class Qwen36ModelArgs(ModelArgs):
         # cap (channels) for the GDN prefill conv's channel_chunk_size (gdn/tp.py kda_channel_chunk_size); smaller chunks
         # spread work over more cores (bit-exact)
         self.kda_conv_chunk_cap = 512
+        # Dense-MLP precision of this model; None = the qwen36 default (BFP8 gate/up + HiFi2, tuned for Qwen3.8 accuracy;
+        # QWEN36_MLP_GATEUP_BFP8 / QWEN36_MLP_FIDELITY, see tpc.resolve_mlp_gateup_dtype / tpc.mlp_fidelity). A derived
+        # model config sets its own (pplx_decider_v1_27b: BFP4 + LoFi).
+        self.mlp_gateup_dtype = None
+        self.mlp_math_fidelity = None
 
         # TP config (num_devices>1 only). 27B (1,4) sharded dims + DRAM matmul cfgs; see tp_common.py.
         self.num_devices = mesh_device.get_num_devices() if mesh_device is not None else 1
@@ -267,6 +272,10 @@ class Qwen36ModelArgs(ModelArgs):
         self.mlp_1d_decode = True
         # gate/up: num_cores=44 -> 11x4 on BH, the fastest measured config (wide1d_11x4c, 42.8us vs
         # 43.9us for the old 8x4=forced1d_32c). On WH (decode_grid_w=8) this falls back to 8x6.
+        # in0_block_w=16 (vs the helper's cap of 8) is ~10-12% faster on gate/up (K=5120 -> 160 k-tiles,
+        # divisible by 16) in the single-chip trace microbench; larger is slower. QWEN36_MLP_DECODE_IBW=8
+        # restores the old value. Gate/up only.
+        mlp_decode_ibw = int(os.environ.get("QWEN36_MLP_DECODE_IBW", "16"))
         self.mlp_w1_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M,
             self.dim,
@@ -274,38 +283,87 @@ class Qwen36ModelArgs(ModelArgs):
             num_cores=44,
             fused_activation=ttnn.UnaryOpType.SILU,
             grid_w=self.decode_grid_w,
+            max_in0_block_w=mlp_decode_ibw,
         )
         self.mlp_w3_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.dim, self.hidden_dim // tp, num_cores=44, grid_w=self.decode_grid_w
+            M,
+            self.dim,
+            self.hidden_dim // tp,
+            num_cores=44,
+            grid_w=self.decode_grid_w,
+            max_in0_block_w=mlp_decode_ibw,
         )
+        # TP=8 per-device shapes are half as wide (column-parallel) or half as deep (row-parallel) as TP=4's, and
+        # want more cores: single-chip trace microbench on the 12x10 BH grid, BFP8 HiFi2, M=32 (us/matmul):
+        # down 2176x5120 33c 33.6 -> 84c 30.9; GDN in 5120x2080 44c 31.7 -> 84c 30.9; GDN out / attn wo 768x5120
+        # 33c 14.7 -> 84c 12.3; attn qkv 5120x2048 64c 8-wide 39.6 -> 60c device-wide 30.2. Gate/up keep 44c (34.0
+        # vs a best of 33.5). TP=4 keeps its tuned grids.
+        tp8 = tp == 8
         # down: num_cores=33 -> 11x3 on BH, the fastest measured config (wide1d_11x3c, ~63us, +28% vs
         # the old 8x2). On WH (decode_grid_w=8) this falls back to 8x5.
         self.mlp_w2_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.hidden_dim // tp, self.dim, num_cores=33, grid_w=self.decode_grid_w
+            M, self.hidden_dim // tp, self.dim, num_cores=84 if tp8 else 33, grid_w=self.decode_grid_w
+        )
+
+        # DRAM-sharded decode gate/up (QWEN36_MLP_DECODE_DSHARD=1, dense TP layers): 3 reader cores per DRAM bank,
+        # 40 compute cores, in0_block_w=4; N padded to a multiple of banks*readers*32 (4352 -> 4608 at TP=4). Measured
+        # on one BH chip (bf8, HiFi2): gate 76.6 -> 66.5 us, up 71.5 -> 59.9 us vs the 1D mcast configs above.
+        # Output stays L1 width-sharded (padded width); the MLP crops it back to hidden_dim//tp after the mul.
+        _dsh_banks = mesh_device.dram_grid_size().x
+        self.mlp_dsh_readers = 3
+        self.mlp_dsh_cores = 40
+        self.mlp_dsh_in0_block_w = 4
+        self.mlp_dsh_n = self.hidden_dim // tp
+        self.mlp_dsh_n_padded = tpc._roundup(self.mlp_dsh_n, _dsh_banks * self.mlp_dsh_readers * tpc.TILE_SIZE)
+        _dsh_width = self.mlp_dsh_n_padded // _dsh_banks  # padded columns per DRAM bank
+        self.mlp_dsh_w_memcfg = tpc.dram_width_sharded_config(mesh_device, self.dim, _dsh_width)
+        self.mlp_dsh_act_memcfg = tpc.l1_width_sharded_config(
+            mesh_device,
+            self.mlp_dsh_cores,
+            -(-(self.dim // tpc.TILE_SIZE) // self.mlp_dsh_cores) * tpc.TILE_SIZE,
+        )
+        _dsh_per_core_n = -(-(self.mlp_dsh_n_padded // tpc.TILE_SIZE) // self.mlp_dsh_cores)
+        self.mlp_w1_dsh_progcfg = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=self.mlp_dsh_in0_block_w,
+            per_core_M=1,
+            per_core_N=_dsh_per_core_n,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            num_workers_per_dram_bank=self.mlp_dsh_readers,
+        )
+        self.mlp_w3_dsh_progcfg = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=self.mlp_dsh_in0_block_w,
+            per_core_M=1,
+            per_core_N=_dsh_per_core_n,
+            fused_activation=None,
+            num_workers_per_dram_bank=self.mlp_dsh_readers,
         )
 
         # Input-projection 1D decode (DEFAULT): same idea for attn QKV+gate and GDN QKVZAB in-projections.
         # Weights load interleaved (prefill AGMM verified bit-identical); tuned grids per test_mlp_matmul_sweep.
         self.proj_1d_decode = True
-        self.attn_qkv_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.dim, self.attn_qkv_fused_dim_tp, num_cores=64
+        self.attn_qkv_decode_1d_progcfg = (
+            tpc.create_matmul_1d_decode_progcfg(
+                M, self.dim, self.attn_qkv_fused_dim_tp, num_cores=60, grid_w=self.decode_grid_w
+            )
+            if tp8
+            else tpc.create_matmul_1d_decode_progcfg(M, self.dim, self.attn_qkv_fused_dim_tp, num_cores=64)
         )
         # gdn_qkvz: num_cores=44 -> 11x4 on BH, the fastest measured config (wide1d_11x4c, ~59us, +22%
         # vs the old 8x5). On WH (decode_grid_w=8) this falls back to 8x6.
         self.gdn_qkvz_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.dim, self.gdn_qkvzab_dim_tp, num_cores=44, grid_w=self.decode_grid_w
+            M, self.dim, self.gdn_qkvzab_dim_tp, num_cores=84 if tp8 else 44, grid_w=self.decode_grid_w
         )
         # Output projections (attn wo, GDN o_proj): already interleaved+auto (no weight relayout, not in
         # the prefill AGMM fusion), so this just swaps ttnn-auto for a tuned ~32-core 1D decode grid.
         # attn_wo: num_cores=33 -> 11x3 on BH, the fastest measured config (wide1d_11x3c, ~24us, +25%
         # vs the old 8x4). On WH (decode_grid_w=8) this falls back to 8x5.
         self.attn_wo_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.attn_out_dim_tp, self.dim, num_cores=33, grid_w=self.decode_grid_w
+            M, self.attn_out_dim_tp, self.dim, num_cores=84 if tp8 else 33, grid_w=self.decode_grid_w
         )
         # gdn_out: num_cores=33 -> 11x3 on BH, the fastest measured config (wide1d_11x3c, ~24us, +25%
         # vs the old 8x4; same 1536x5120 shape as attn_wo). On WH (decode_grid_w=8) this falls back to 8x5.
         self.gdn_out_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.gdn_value_dim_tp, self.dim, num_cores=33, grid_w=self.decode_grid_w
+            M, self.gdn_value_dim_tp, self.dim, num_cores=84 if tp8 else 33, grid_w=self.decode_grid_w
         )
 
         # Prefill matmul factory (M = seq_len)
