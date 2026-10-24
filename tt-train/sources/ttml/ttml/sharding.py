@@ -111,7 +111,7 @@ class Sharding:
         dtype = value.dtype
         if self._is_single_device():
             return tensor.to_numpy(dtype, precision=ttml.autograd.PreferredPrecision.NATIVE)
-        host = value if value.storage_type() == ttnn.StorageType.HOST else value.cpu()
+        host = value.cpu()  # a host tensor comes back as is
         if verify_replicas:
             try:
                 ttnn.verify_shards_match_topology(host)
