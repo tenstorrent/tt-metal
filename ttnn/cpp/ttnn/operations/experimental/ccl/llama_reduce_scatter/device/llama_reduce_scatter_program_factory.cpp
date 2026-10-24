@@ -375,7 +375,7 @@ LlamaReduceScatterPlan make_llama_reduce_scatter_plan(
     plan.input_grid = input_shard_spec.grid;
     plan.output_grid = output_shard_spec.grid;
 
-    const auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*input_tensor.device());
     size_t packet_size_bytes =
         input_tensor.dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size) : fabric_max_packet_size;
     plan.num_pages_per_packet = packet_size_bytes / plan.input_page_size;
@@ -577,7 +577,7 @@ std::tuple<CoreRangeSet, CoreRangeSet> LlamaReduceScatterDeviceOperation::get_rs
         ncores_input = ((ncores_input + num_devices - 1) / num_devices) * num_devices;
     }
     uint32_t input_shard_cores_per_device = ncores_input / num_devices;
-    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*input_tensor.device());
     size_t packet_size_bytes =
         input_tensor.dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size) : fabric_max_packet_size;
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
