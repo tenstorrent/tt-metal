@@ -92,23 +92,17 @@ def main():
         *_, device = load(args.device_from)
     *_, base = load(args.baseline) if args.baseline else (None, None, None, {})
 
-    def cell(model, traffic, layout):
-        """Device spread over chips, then the host wall clock per launch, traced and untraced.
-
-        `<br>` rather than a newline: a raw newline inside a cell ends the row, and every renderer
-        then reads the rest of the table against the wrong header.
-        """
+    def metric(model, traffic, layout, which):
         name = next((p for p in phases if re.fullmatch(rf"{model}-{traffic}-{layout}-cmb_\w+", p)), None)
         if name is None:
             return ""
         if outcome.get(name) != "pass":
-            return outcome.get(name, "?")
-        span = device.get(name)
-        host = measured.get(name, {})
-        lines = [f"{span[0]:.0f} - {span[1]:.0f}" if span else "-"]
-        for key, label in (("traced_us", "ht"), ("untraced_us", "hu")):
-            lines.append(f"{label}: {float(host[key]):.0f}" if key in host else f"{label}: -")
-        return "<br>".join(lines)
+            return outcome.get(name, "?") if which == "dev" else ""
+        if which == "dev":
+            span = device.get(name)
+            return f"{span[0]:.0f} - {span[1]:.0f}" if span else "-"
+        value = measured.get(name, {}).get("traced_us" if which == "ht" else "untraced_us")
+        return f"{float(value):.0f}" if value else "-"
 
     def alloc_mb(model):
         mb = sorted(
@@ -121,7 +115,7 @@ def main():
         return "" if not mb else f"{mb[0]:.0f}" if round(mb[0]) == round(mb[-1]) else f"{mb[0]:.0f} - {mb[-1]:.0f}"
 
     models = list(dict.fromkeys(p.split("-")[0] for p in phases))
-    cases = [(t, l, label) for t in TRAFFIC for l, label in LAYOUT if any(cell(m, t, l) for m in models)]
+    cases = [(t, l, label) for t in TRAFFIC for l, label in LAYOUT if any(metric(m, t, l, "dev") for m in models)]
     counts = Counter(outcome.values())
     failed = counts["FAIL"] + counts["HANG"] + counts["?"]
     factors = {f["fwd_reduction"] for f in measured.values() if "fwd_reduction" in f}
@@ -131,16 +125,24 @@ def main():
         "",
         f"target reduction factor {', '.join(sorted(f + 'x' for f in factors)) if factors else 'unknown'}",
         "",
-        "Per cell: device op time per chip, min - max over the 32 chips; ht and hu are the host wall",
-        "clock per launch, traced and untraced, in us.",
+        "dev is the device op time per chip, min - max over the 32 chips. ht and hu are the host wall",
+        "clock per launch, traced and untraced. All in us.",
         "",
     ]
-    head = ["model"] + [f"{t} {label}" for t, _, label in cases] + ["op alloc MB"]
-    body = [[m] + [cell(m, t, l) for t, l, _ in cases] + [alloc_mb(m)] for m in models]
+    head = ["model", ""] + [f"{t} {label}" for t, _, label in cases] + ["op alloc MB"]
+    body = [
+        row
+        for m in models
+        for row in (
+            [m, "dev"] + [metric(m, t, l, "dev") for t, l, _ in cases] + [alloc_mb(m)],
+            ["", "ht"] + [metric(m, t, l, "ht") for t, l, _ in cases] + [""],
+            ["", "hu"] + [metric(m, t, l, "hu") for t, l, _ in cases] + [""],
+        )
+    ]
     width = [max(3, *(len(row[i]) for row in [head] + body)) for i in range(len(head))]
-    rule = [":" + "-" * (width[0] - 1)] + ["-" * (w - 1) + ":" for w in width[1:]]
+    rule = [":" + "-" * (width[0] - 1), ":" + "-" * (width[1] - 1)] + ["-" * (w - 1) + ":" for w in width[2:]]
     report += [
-        "| " + " | ".join(x.ljust(width[i]) if i == 0 else x.rjust(width[i]) for i, x in enumerate(row)) + " |"
+        "| " + " | ".join(x.ljust(width[i]) if i < 2 else x.rjust(width[i]) for i, x in enumerate(row)) + " |"
         for row in [head, rule] + body
     ]
 
