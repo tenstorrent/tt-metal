@@ -4,7 +4,6 @@
 from typing import List
 
 import pytest
-import torch
 from helpers.constraints import is_valid_quasar_dest_mode_conversion
 from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, FormatConfig
@@ -18,7 +17,6 @@ from helpers.llk_params import (
     DestSync,
     PerfRunType,
     ReluConfig,
-    format_dict,
 )
 from helpers.param_config import (
     BlocksCalculationAlgorithm,
@@ -44,7 +42,7 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 INPUT_DIMENSIONS = [[512, 64], [192, 512]]
 TILE_DIMENSIONS = [32, 32]
@@ -253,12 +251,7 @@ def test_pack_l1_acc_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     test_passed = passed_test(
         golden_tensor,

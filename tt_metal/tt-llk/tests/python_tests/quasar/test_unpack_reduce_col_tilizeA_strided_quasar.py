@@ -25,7 +25,6 @@ from helpers.llk_params import (
     PerfRunType,
     ReduceDimension,
     ReducePool,
-    format_dict,
 )
 from helpers.param_config import (
     generate_perf_input_dimensions,
@@ -53,7 +52,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_constants import is_mx_unsupported_tile_dims
 from helpers.tile_shape import TileShape, construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # 32x32 uses the four face MOP; the Nx32 tiles (N <= 8) use the tiny tile MOP in
 # llk_unpack_reduce_col_tilizeA_strided.h, where one strided unpack covers a whole face.
@@ -327,12 +326,7 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format, tile_shape=tile_shape

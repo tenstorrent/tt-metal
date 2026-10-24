@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, is_dest_acc_needed
@@ -27,7 +26,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
 )
 from helpers.tilize_untilize import tilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # Throttle levels supported by the no-mop matmul math LLK. Throttle only inserts
 # NOPs between MVMULs to cap compute throughput, so the numeric result is IDENTICAL
@@ -143,11 +142,7 @@ def _run_matmul_custom(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format

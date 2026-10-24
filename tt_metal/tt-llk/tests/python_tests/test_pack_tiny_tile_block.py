@@ -36,7 +36,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
 )
 from helpers.tile_constants import calculate_tile_size_bytes, get_tile_params
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
 
@@ -250,9 +250,5 @@ def test_pack_tiny_tile_reconfig(formats, dest_acc, tile_dims, num_tiles):
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), f"Length mismatch: got {len(res_from_L1)}, expected {len(golden_tensor)}"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
     assert passed_test(golden_tensor, res_tensor, formats.output_format)

@@ -25,7 +25,6 @@ from helpers.llk_params import (
     PerfRunType,
     Transpose,
     UnpackerEngine,
-    format_dict,
 )
 from helpers.param_config import (
     generate_perf_input_dimensions,
@@ -64,7 +63,7 @@ from helpers.tile_constants import (
     is_mx_unsupported_tile_dims,
 )
 from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 
 def generate_unpack_unary_operand_combinations(
@@ -345,12 +344,7 @@ def test_unpack_unary_operand_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format, tile_shape=tile_shape

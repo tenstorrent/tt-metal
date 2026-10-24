@@ -45,7 +45,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 pytestmark = blackhole_only
 
@@ -160,11 +160,7 @@ def _run_fast_untilize_correctness(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), f"Result length {len(res_from_L1)} != golden length {len(golden_tensor)}"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     # Float32 uses the current SrcA/SrcB route, which narrows L1 Float32 input
     # to Tf32 before math. Validate tolerance here; bit-exact Float32->Float32

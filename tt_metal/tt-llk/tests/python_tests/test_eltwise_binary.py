@@ -56,7 +56,7 @@ from helpers.test_variant_parameters import (
 from helpers.tile_constants import FACE_C_DIM, SUPPORTED_TILE_SIZES, get_tile_params
 from helpers.tile_shape import construct_tile_shape
 from helpers.tilize_untilize import tilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 ALL_TILE_DIMENSIONS = [list(td) for td in SUPPORTED_TILE_SIZES]
 
@@ -493,12 +493,7 @@ def _run_eltwise_binary_test(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), f"Result tensor ({len(res_from_L1)}) and golden tensor ({len(golden_tensor)}) are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor,

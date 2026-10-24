@@ -13,7 +13,7 @@ import torch
 from conftest import blackhole_only
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, PerfRunType, format_dict
+from helpers.llk_params import DestAccumulation, PerfRunType
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -26,7 +26,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 pytestmark = blackhole_only
 
@@ -105,11 +105,7 @@ def test_fast_tilize_full(formats, dest_acc, dimensions):
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), f"Result length {len(res_from_L1)} != golden length {len(golden_tensor)}"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     # For Bfp4_b, _bfp_block_aware_compare inside passed_test tilizes its
     # inputs to align BFP blocks, but our golden/result are already tilized.
@@ -210,10 +206,7 @@ def test_fast_tilize_large(formats, dest_acc, dimensions):
     )
 
     res_from_L1 = configuration.run().result
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), f"Result length {len(res_from_L1)} != golden length {len(golden_tensor)}"
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), f"Output doesn't match TilizeGolden for {dimensions}"

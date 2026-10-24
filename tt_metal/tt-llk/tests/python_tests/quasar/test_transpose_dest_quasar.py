@@ -21,7 +21,6 @@ from helpers.llk_params import (
     PerfRunType,
     Transpose,
     UnpackerEngine,
-    format_dict,
 )
 from helpers.param_config import (
     BlocksCalculationAlgorithm,
@@ -52,7 +51,7 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.tile_constants import FACE_C_DIM, get_tile_params
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 TILE_DIMENSIONS = [32, 32]
 
@@ -362,11 +361,7 @@ def test_transpose_dest_quasar(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor,

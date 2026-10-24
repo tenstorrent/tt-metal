@@ -65,7 +65,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # The no-MOP LLK replays a four-face MVMUL walk, so it is full-32x32-tile only (the same
 # restriction the regular Quasar matmul carries, tt-metal #45208).
@@ -194,11 +194,7 @@ def _run_matmul_custom_no_mop(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     # For MX outputs, model the packer: quantize the golden onto the MX lattice (from the math /
     # pack_src format the result was produced in) so the comparison validates the device's MX output
