@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "dataflow_common.hpp"
 
@@ -52,6 +53,10 @@ void kernel_main() {
     const auto cat_v_generator =
         CatAddrGenerator(v_reader, input_tile_logical, padded_Nkt, joint_v_reader, joint_tile_logical, padded_Lkt);
 
+    DataflowBuffer dfb_q(dfb::q_in);
+    DataflowBuffer dfb_k(dfb::k_in);
+    DataflowBuffer dfb_v(dfb::v_in);
+
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
             for (uint32_t q_chunk = local_q_start; q_chunk < local_q_end; ++q_chunk) {
@@ -60,7 +65,7 @@ void kernel_main() {
                 const auto q_slice = Slice(nb, nq, q_row_start_tile, q_row_end_tile, 0, DHt);
 
                 read_block(
-                    cat_q_generator, q_slice, q_row_end_tile, dfb::q_in, q_tile_bytes, false /*transpose*/
+                    cat_q_generator, q_slice, q_row_end_tile, dfb_q, q_tile_bytes, false /*transpose*/
                 );
 
                 for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
@@ -69,11 +74,11 @@ void kernel_main() {
                     const auto kv_slice = Slice(nb, nq, kv_row_start_tile, kv_row_end_tile, 0, DHt);
 
                     read_block(
-                        cat_k_generator, kv_slice, kv_row_end_tile, dfb::k_in, k_tile_bytes, true /*transpose*/
+                        cat_k_generator, kv_slice, kv_row_end_tile, dfb_k, k_tile_bytes, true /*transpose*/
                     );
 
                     read_block(
-                        cat_v_generator, kv_slice, kv_row_end_tile, dfb::v_in, v_tile_bytes, false /*transpose*/
+                        cat_v_generator, kv_slice, kv_row_end_tile, dfb_v, v_tile_bytes, false /*transpose*/
                     );
                 }
             }

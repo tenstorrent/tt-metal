@@ -9,7 +9,7 @@
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_exp.h"
 #include "cmath_common.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_polyval.h"
 
 namespace ckernel::sfpu {
 

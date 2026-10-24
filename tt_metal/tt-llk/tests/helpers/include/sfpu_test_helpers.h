@@ -6,9 +6,9 @@
 
 #include <cstdint>
 
+#include "llk_sfpu/ckernel_sfpu_expm1_cw.h"
 #include "llk_sfpu/ckernel_sfpu_mask.h"
 #include "llk_sfpu/ckernel_sfpu_sqrt_custom.h"
-#include "sfpu/ckernel_sfpu_expm1_cw.h"
 
 // Test-only wrappers that adapt production per-vector SFPU primitives to the
 // shared test harness. Not part of any production SFPU API; kept out of
