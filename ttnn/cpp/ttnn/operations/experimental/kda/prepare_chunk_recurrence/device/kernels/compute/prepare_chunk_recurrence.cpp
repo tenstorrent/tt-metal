@@ -221,7 +221,8 @@ inline void elementwise_binary(DFB0& a, DFB1& b, DFB2& o, uint32_t n) {
     binary_items(Op, a, 0, false, b, 0, false, o, n);
 }
 
-template <typename DFB0, typename DFB1>
+// Mode and Iterations restrict the square to the first rows, as for exponential_tiles.
+template <VectorMode Mode = VectorMode::RC, int Iterations = 8, typename DFB0, typename DFB1>
 KDA_PREP_HELPER void square_tiles(DFB0& in, DFB1& o, uint32_t n) {
     const uint32_t in_id = in.get_id();
     const uint32_t o_id = o.get_id();
@@ -236,7 +237,7 @@ KDA_PREP_HELPER void square_tiles(DFB0& in, DFB1& o, uint32_t n) {
         tile_regs_acquire();
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             copy_tile(in_id, block_start + tile, tile);
-            square_tile(tile);
+            square_tile<DST_ACCUM_MODE, Mode, Iterations>(tile);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -716,7 +717,8 @@ KDA_PREP_HELPER void prepare_gate_factors(
 }
 
 // dl [K,1] = exp(G_last) as a column: exp(G_last / 2)^2, squared in FP32 from the anchor's rows, then the transpose of
-// any replicated row. Leaves the packer in the rows' format.
+// row 0. Only the face rows holding row 0 are squared (the anchor's exponential computed only those); the rest of
+// each rows tile, and so every column of dl but column 0, is unspecified. Leaves the packer in the rows' format.
 template <uint32_t Ct, uint32_t Kt, typename DFB0, typename DFB1, typename DFB2>
 KDA_PREP_HELPER void prepare_final_decay(
     DFB0& anchor_decay,
@@ -726,7 +728,7 @@ KDA_PREP_HELPER void prepare_final_decay(
     // intermediate
     DFB2& final_decay_rows) {
     const uint32_t key_tiles = items * Ct * Kt;
-    square_tiles(anchor_decay, final_decay_rows, key_tiles);
+    square_tiles<VectorMode::R, 2>(anchor_decay, final_decay_rows, key_tiles);
     pack_reconfig_data_format(final_decay_rows.get_id(), final_decay.get_id());
     transpose_tile_row_to_column(final_decay_rows, final_decay, items * Kt);
     final_decay_rows.pop_front(key_tiles);

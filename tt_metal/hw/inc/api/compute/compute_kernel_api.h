@@ -262,14 +262,23 @@ ALWI void tanh_tile(uint32_t idst) {
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ *
+ * vec_mode selects the faces computed and iterations the SFPU iterations per face (8 cover a face; fewer, an even
+ * number, cover its first rows, as for exp_tile). Quasar computes whole tiles only.
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, VectorMode vec_mode = VectorMode::RC, int iterations = 8>
 ALWI void square_tile(uint32_t idst) {
 #ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_square, (APPROX, is_fp32_dest_acc_en), idst, VectorMode::RC));
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_square,
+        (APPROX, is_fp32_dest_acc_en, iterations),
+        idst,
+        vec_mode));
 #else
+    static_assert(vec_mode == VectorMode::RC && iterations == 8, "Quasar square_tile computes whole tiles only");
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (SFPU_ITERATIONS), idst, VectorMode::RC));
 #endif
 }
