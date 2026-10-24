@@ -18,6 +18,13 @@ inline void llk_unpack_AB_init(
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 
+    LLK_ASSERT(
+        operand_unpacks_to_src(operandA_id),
+        "operand A (SrcA) has a Dest-only unpack destination format; FPU operands must unpack to SrcA/SrcB");
+    LLK_ASSERT(
+        operand_unpacks_to_src(operandB_id),
+        "operand B (SrcB) has a Dest-only unpack destination format; FPU operands must unpack to SrcA/SrcB");
+
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
         unpack_src_format[operandA_id],
         unpack_dst_format[operandA_id],
@@ -66,6 +73,13 @@ inline void llk_unpack_AB(
 
     LLK_ASSERT(cb_access_within_bounds(operandA_id, tile_index_a, 1), "Indexed tile read exceeds CB boundary");
     LLK_ASSERT(cb_access_within_bounds(operandB_id, tile_index_b, 1), "Indexed tile read exceeds CB boundary");
+
+    LLK_ASSERT(
+        operand_unpacks_to_src(operandA_id),
+        "operand A (SrcA) has a Dest-only unpack destination format; FPU operands must unpack to SrcA/SrcB");
+    LLK_ASSERT(
+        operand_unpacks_to_src(operandB_id),
+        "operand B (SrcB) has a Dest-only unpack destination format; FPU operands must unpack to SrcA/SrcB");
 
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
         unpack_src_format[operandA_id],
