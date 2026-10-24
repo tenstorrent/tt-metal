@@ -20,11 +20,6 @@
 namespace tt::tt_metal {
 class IDevice;
 enum class TensorMemoryLayout;
-struct ReadBufferDescriptor;
-struct ReadEventDescriptor;
-struct ReadCoreDataDescriptor;
-using CompletionReaderVariant =
-    std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor, ReadCoreDataDescriptor>;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
@@ -35,14 +30,15 @@ class PinnedMemory;
 
 // Used so the host knows how to properly copy data into user space from the completion queue (in hugepages)
 struct ReadBufferDescriptor {
-    uint32_t page_size;
-    uint32_t padded_page_size;
+    uint32_t page_size = 0;
+    uint32_t padded_page_size = 0;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping;
-    const BufferCorePageMapping* core_page_mapping;
-    void* dst;
-    uint64_t dst_offset;
-    uint32_t num_pages_read;
+    const BufferCorePageMapping* core_page_mapping = nullptr;
+    void* dst = nullptr;
+    uint64_t dst_offset = 0;
+    uint32_t num_pages_read = 0;
 
+    ReadBufferDescriptor() = default;
     ReadBufferDescriptor(
         uint32_t page_size,
         uint32_t padded_page_size,
@@ -155,9 +151,9 @@ void copy_completion_queue_data_into_user_space(
 ttsl::Span<const SubDeviceId> select_sub_device_ids(
     IDevice* device, ttsl::Span<const SubDeviceId> sub_device_ids);
 
-std::shared_ptr<::tt::tt_metal::CompletionReaderVariant> generate_sharded_buffer_read_descriptor(
+ReadBufferDescriptor generate_sharded_buffer_read_descriptor(
     void* dst, ShardedBufferReadDispatchParams& dispatch_params, Buffer& buffer);
-std::shared_ptr<::tt::tt_metal::CompletionReaderVariant> generate_interleaved_buffer_read_descriptor(
+ReadBufferDescriptor generate_interleaved_buffer_read_descriptor(
     void* dst, const BufferReadDispatchParams& dispatch_params, Buffer& buffer);
 
 bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer, uint32_t num_subdevices);
