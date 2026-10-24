@@ -1451,7 +1451,7 @@ static void sdpa_inner_loop_step(
         // Per-row normalization lambda — fires on last K chunk (standard or deferred norm).
         // Takes sbh so it works for both full subblocks (qktv_h) and remainder (qktv_remainder_h).
         [[maybe_unused]] uint32_t sink_row_offset = 0;
-        [[maybe_unused]] auto normalize_row = [&](uint32_t& pushed, uint32_t sbh) {
+        [[maybe_unused]] auto normalize_row = [&, out_cb](uint32_t& pushed, uint32_t sbh) {
             MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
             CircularBuffer(cur.sum()).push_back(sbh);
             CircularBuffer(out_cb).push_back(sbh * vDHt);
@@ -1474,7 +1474,7 @@ static void sdpa_inner_loop_step(
         // SALAD correction lambda — works for both full subblocks (sbh=qktv_h) and
         // remainder (sbh=qktv_remainder_h). Normalization is independently guarded at call sites.
         // prev.out is consumed row-by-row: always read from CB front, then pop after use.
-        auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, uint32_t sbh) {
+        auto salad_correct_row = [&, out_cb](uint32_t salad_row, uint32_t w_salad, uint32_t sbh) {
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");
                 // ob_q_subblock=0: prev.out and cb_exp_max_diff are popped row-by-row (read from front).
