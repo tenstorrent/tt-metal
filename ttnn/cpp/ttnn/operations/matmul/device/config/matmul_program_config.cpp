@@ -79,8 +79,9 @@ constexpr uint32_t MAX_AUTO_IN0_BLOCK_W = 8;
 
 // On Wormhole, when each core holds at least this many tile rows of M, the all-DRAM 2D path is fastest with a K block
 // of one or two tiles: at M = 2048 on an 8x8 grid (8 rows per core), K = 896 / 1056 / 1120 and N = 512 / 1024, an
-// explicit 7-tile block took 7-11 % longer than the best one- or two-tile block. Blackhole gains from the longer block
-// at every M measured.
+// explicit 7-tile block took 5-11 % longer than the best one- or two-tile block (K = 896, 1120), and at K = 1056 the
+// 3-tile block took 2 % longer than one tile. Blackhole gains from the longer block at every M measured, up to 10 tile
+// rows of M per core.
 constexpr uint32_t WORMHOLE_TALL_PER_CORE_M = 8;
 constexpr uint32_t WORMHOLE_TALL_MAX_IN0_BLOCK_W = 2;
 
