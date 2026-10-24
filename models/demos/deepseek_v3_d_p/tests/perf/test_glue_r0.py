@@ -876,8 +876,8 @@ def test_glue_r0(mesh_device, variant, config_only):
                 dtype=ttnn.bfloat16, compute_kernel_config=hifi2,
             )
 
-        def heads(t):
-            return ttnn.experimental.nlp_create_q_heads_split(t, num_heads=HEADS_L, split_head_dim=NOPE, memory_config=DRAM)
+        def heads(t, mem=DRAM):
+            return ttnn.experimental.nlp_create_q_heads_split(t, num_heads=HEADS_L, split_head_dim=NOPE, memory_config=mem)
 
         def rope(t, prefix=None, out=None):
             return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
@@ -896,9 +896,9 @@ def test_glue_r0(mesh_device, variant, config_only):
             ttnn.deallocate(qrope)
             return out
 
-        def inplace_chain(pc, mem=DRAM):
+        def inplace_chain(pc, mem=DRAM, hmem=DRAM):
             q = qb()
-            qnope, qrope = heads(q)
+            qnope, qrope = heads(q, hmem)
             ttnn.deallocate(q)
             out = ttnn.linear(qnope, tw_b1p, program_config=pc, memory_config=mem, dtype=ttnn.bfloat16, compute_kernel_config=hifi2)
             ttnn.deallocate(qnope)
@@ -919,6 +919,18 @@ def test_glue_r0(mesh_device, variant, config_only):
         timer("H0 q chain base (q_b, heads, wkv_b1 L1, rope+concat512)", base_chain)
         for tag, pc in pcs.items():
             timer(f"H1 q chain in-place [{tag}] (q_b, heads, wkv_b1 N576 DRAM, rope in place)", lambda pc=pc: inplace_chain(pc))
+        for hm, om in (("L1", "DRAM"), ("DRAM", "L1"), ("L1", "L1")):
+            try:
+                o = inplace_chain(pcs["sw6"], mem=L1 if om == "L1" else DRAM, hmem=L1 if hm == "L1" else DRAM)
+                r2 = base_chain()
+                cmp(f"H1b in-place heads={hm} out={om} vs base", o, r2)
+                _free([o, r2])
+                timer(
+                    f"H1b q chain in-place heads->{hm} wkv_b1->{om}",
+                    lambda hm=hm, om=om: inplace_chain(pcs["sw6"], mem=L1 if om == "L1" else DRAM, hmem=L1 if hm == "L1" else DRAM),
+                )
+            except Exception as e:
+                log(f"FAIL H1b heads={hm} out={om}: {type(e).__name__}: {str(e)[:300]}")
         q = qb()
         qnope, qrope = heads(q)
         timer("H2 wkv_b1 base L1 out", lambda: ttnn.linear(qnope, tw_b1, program_config=b1pc, memory_config=L1, dtype=ttnn.bfloat16, compute_kernel_config=hifi2))
