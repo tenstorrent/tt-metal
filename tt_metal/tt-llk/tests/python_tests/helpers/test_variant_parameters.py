@@ -158,6 +158,37 @@ class MATMUL_STREAM_NARROW(TemplateParameter):
 MATMUL_DENSE_STREAM_FORMATS = (DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32)
 
 
+# (dest sync, rt, ct, kt, static throttle, input format, output format) of blocks where the Z step read slower than main or more than 0.3 cycles
+# slower than the config write and read (tt-llk sweep, A B B A on one card); the rest of the keyed blocks gain
+MATMUL_STREAM_Z_LOSES = frozenset(
+    {
+        ("Full", 1, 6, 1, 0, "Float32", "Float16_b"),
+        ("Full", 1, 7, 1, 0, "Float32", "Bfp8_b"),
+        ("Full", 1, 7, 4, 0, "Float16_b", "Bfp8_b"),
+        ("Full", 1, 7, 4, 0, "Float16_b", "Float16_b"),
+        ("Full", 1, 7, 4, 0, "Float16_b", "Float32"),
+        ("Full", 1, 7, 4, 0, "Float32", "Float32"),
+        ("Full", 1, 7, 32, 0, "Float16_b", "Bfp8_b"),
+        ("Full", 1, 7, 32, 0, "Float16_b", "Float32"),
+        ("Half", 1, 4, 1, 0, "Float16_b", "Bfp8_b"),
+        ("Half", 1, 4, 1, 0, "Float16_b", "Float16_b"),
+        ("Half", 1, 4, 32, 0, "Float16_b", "Bfp8_b"),
+        ("Half", 1, 5, 1, 0, "Float16_b", "Float32"),
+        ("Half", 1, 6, 1, 0, "Float16_b", "Bfp8_b"),
+        ("Half", 1, 7, 32, 0, "Float16_b", "Bfp8_b"),
+        ("Half", 1, 7, 32, 0, "Float16_b", "Float16_b"),
+        ("Half", 1, 7, 32, 0, "Float16_b", "Float32"),
+        ("Half", 1, 8, 32, 0, "Float16_b", "Bfp8_b"),
+        ("Half", 2, 2, 4, 5, "Float16_b", "Bfp8_b"),
+        ("Half", 2, 2, 4, 5, "Float16_b", "Float32"),
+        ("Half", 2, 3, 1, 0, "Float16_b", "Bfp8_b"),
+        ("Half", 2, 3, 4, 0, "Float16_b", "Bfp8_b"),
+        ("Half", 2, 3, 4, 0, "Float16_b", "Float16_b"),
+        ("Half", 2, 4, 4, 0, "Float16_b", "Bfp8_b"),
+    }
+)
+
+
 @dataclass
 class MATMUL_STREAM_Z(TemplateParameter):
     """Blackhole matmul unpack that steps the streamed in1 tile by the unpacker Z counter instead of a config read and write."""
@@ -184,6 +215,8 @@ class MATMUL_STREAM_Z(TemplateParameter):
         ):
             return []
         if MATMUL_STREAM_NARROW.for_block(formats, dest_acc, dest_sync, ct_dim, rt_dim, in0_r_dim, math_fidelity):
+            return []
+        if (dest_sync.name, rt_dim, ct_dim, kt_dim, throttle, formats.input_format.name, formats.output_format.name) in MATMUL_STREAM_Z_LOSES:
             return []
         return [MATMUL_STREAM_Z()] if formats.input_format in MATMUL_DENSE_STREAM_FORMATS else []
 
