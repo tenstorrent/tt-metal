@@ -89,15 +89,18 @@ class TtMoE:
         if router is None:
             self._gate_w = put(sd["gate.weight"].float().t().contiguous(), ttnn.float32)
         if shared_expert is None:
-            self._shared_gate = put(sd["shared_experts.gate_proj.weight"].t().contiguous(), ttnn.bfloat16)
-            self._shared_up = put(sd["shared_experts.up_proj.weight"].t().contiguous(), ttnn.bfloat16)
-            self._shared_down = put(sd["shared_experts.down_proj.weight"].t().contiguous(), ttnn.bfloat16)
+            self._shared_gate = put(sd["shared_experts.gate_proj.weight"].t().contiguous(), ttnn.bfloat8_b)
+            self._shared_up = put(sd["shared_experts.up_proj.weight"].t().contiguous(), ttnn.bfloat8_b)
+            self._shared_down = put(sd["shared_experts.down_proj.weight"].t().contiguous(), ttnn.bfloat8_b)
 
         self.ckc = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
         )
         self.ckc_expert = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True
+        )
+        self.ckc_shared = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True
         )
 
     @classmethod
@@ -141,9 +144,9 @@ class TtMoE:
     def _shared(self, x):
         if self.shared_expert is not None:
             return self.shared_expert(x)
-        g = ttnn.matmul(x, self._shared_gate, compute_kernel_config=self.ckc)
-        u = ttnn.matmul(x, self._shared_up, compute_kernel_config=self.ckc)
-        return ttnn.matmul(ttnn.multiply(ttnn.silu(g), u), self._shared_down, compute_kernel_config=self.ckc)
+        g = ttnn.matmul(x, self._shared_gate, compute_kernel_config=self.ckc_shared)
+        u = ttnn.matmul(x, self._shared_up, compute_kernel_config=self.ckc_shared)
+        return ttnn.matmul(ttnn.multiply(ttnn.silu(g), u), self._shared_down, compute_kernel_config=self.ckc_shared)
 
     # ---- forward ----
 
