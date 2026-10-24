@@ -23,6 +23,8 @@ from helpers.llk_params import (
 )
 from helpers.logger import logger
 from helpers.matmul_sweep import (
+    ODD_REUSE_KT_DIMS,
+    ODD_REUSE_RT_CT,
     MatmulConfig,
     generate_face_layout_config_sweep,
     generate_tile_dims,
@@ -122,9 +124,6 @@ TINY_TILE_LOW_THROTTLE = 1
 # in tt_metal/hw/inc/api/compute/matmul.h is 5, so cover 5 rather than 4.
 TINY_TILE_HIGH_THROTTLE = 5
 
-# Output blocks with min(rt_dim, ct_dim) odd and >= 3; they need the 16-tile dest.
-ODD_REUSE_RT_CT = ((3, 3), (3, 4), (4, 3), (3, 5), (5, 3))
-ODD_REUSE_KT_DIMS = (1, 2)
 ODD_REUSE_FIDELITY_THROTTLE = (
     (MathFidelity.LoFi, 0),
     (MathFidelity.HiFi4, 0),

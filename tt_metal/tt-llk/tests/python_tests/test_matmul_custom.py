@@ -9,6 +9,8 @@ from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import TILE_DIM, MatmulGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, DestSync, MathFidelity, format_dict
 from helpers.matmul_sweep import (
+    ODD_REUSE_KT_DIMS,
+    ODD_REUSE_RT_CT,
     generate_matmul_dimension_combinations,
     generate_tile_dims,
 )
@@ -64,8 +66,6 @@ MATMUL_FORMATS = input_output_formats(
 )
 DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 
-ODD_REUSE_RT_CT = ((3, 3), (3, 4), (4, 3), (3, 5), (5, 3))
-ODD_REUSE_KT_DIMS = (1, 2)
 ODD_REUSE_DIMS = [
     ([rt_dim * TILE_DIM, kt_dim * TILE_DIM], [kt_dim * TILE_DIM, ct_dim * TILE_DIM])
     for rt_dim, ct_dim in ODD_REUSE_RT_CT
