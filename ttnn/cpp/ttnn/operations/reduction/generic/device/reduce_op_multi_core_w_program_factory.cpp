@@ -482,6 +482,9 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
         compute_hw.unpack_modes.emplace(IN_DFB, UnpackMode::UnpackToDest);
         if (rm_path) {
             compute_hw.unpack_modes.emplace(ACC_DFB, UnpackMode::UnpackToDest);
+            // Same as the H factory: the RM rows are tilized from this buffer, and leaving it on
+            // SrcA truncates every fp32 input to tf32 before the accurate SFPU sum sees it.
+            compute_hw.unpack_modes.emplace(RM_DFB, UnpackMode::UnpackToDest);
         }
     }
     // Legacy left every other entry at Default (= UnpackToSrc). Metal 2.0 nonetheless requires an
