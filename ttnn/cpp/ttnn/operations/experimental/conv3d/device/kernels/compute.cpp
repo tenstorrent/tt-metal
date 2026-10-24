@@ -243,7 +243,6 @@ void bias_untilize_fullblock_math() {
     if constexpr (use_bias) {
         if constexpr (use_fp32_exact) {
             // The interm CB is UnpackToDestFp32 on this path; the FPU bcast add cannot read it.
-            reconfig_data_format(inout_cb, bias_cb);
             add_bias_inplace_sfpu<rows, cols>(inout_cb, bias_cb);
         } else {
             add_bias_inplace<rows, cols, compute_kernel_lib::DEST_AUTO_LIMIT>(inout_cb, bias_cb);
@@ -440,7 +439,6 @@ void kernel_main() {
 
                                         if constexpr (use_bias) {
                                             if constexpr (use_fp32_exact) {
-                                                reconfig_data_format(cb_matmul_interm_tiled, cb_bias_tiled);
                                                 add_bias_inplace_sfpu<subblock_h, matmul_N_t>(
                                                     cb_matmul_interm_tiled, cb_bias_tiled);
                                             } else {
