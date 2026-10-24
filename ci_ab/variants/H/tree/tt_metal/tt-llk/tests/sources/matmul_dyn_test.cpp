@@ -158,9 +158,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_common.h"
 #include "llk_math_matmul.h"
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
-constexpr bool matmul_tile_mop = !matmul_math_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_KT_PER_SECTION, MATMUL_OUT_FORMAT>();
+constexpr bool matmul_tile_mop = true;
 #else
-constexpr bool matmul_tile_mop = false;
+constexpr bool matmul_tile_mop = true;
 #endif
 
 // dynamic throttle emulation (matmul_block_math_dynamic_throttle): ARC FW scratch word at L1 16, odd = level 5
