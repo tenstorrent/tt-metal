@@ -18,7 +18,7 @@ from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.substate import rename_substate
 from ....utils.tensor import bf16_tensor
-from .agmm_config import agmm_block_size
+from .agmm_config import agmm_block_size, agmm_force_transpose
 from .attention_minimax_h3 import MiniMaxH3Attention
 from .mmrs_config import has_mmrs_config, register_mmrs_config
 
@@ -379,7 +379,7 @@ class MiniMaxH3TransformerBlock(Module):
                 compute_kernel_config=self.mm_compute_kernel_config,
                 parallel_config=self.parallel_config if self.use_fused_agmm else None,
                 default_block_size=ff1_block_size,
-                force_transpose=False,
+                force_transpose=agmm_force_transpose(),
                 use_persistent_buffer=self.use_persistent_ccl_buffers,
             )
         ff_out = self.ff(
@@ -387,7 +387,7 @@ class MiniMaxH3TransformerBlock(Module):
             compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=self.parallel_config if self.use_fused_agmm else None,
             default_block_size=ff1_block_size,
-            force_transpose=False,
+            force_transpose=agmm_force_transpose(),
             use_persistent_buffer=self.use_persistent_ccl_buffers,
         )
         return ttnn.addcmul(residual, ff_out, modulation(_GATE_MLP))

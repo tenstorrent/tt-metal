@@ -15,6 +15,32 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
 
+// ---------------------------------------------------------------------------------------------
+// Per-stage cycle accounting for the device profiler. Compiled only into profiler builds
+// (PROFILE_KERNEL); each AGMM_TIME costs two wall-clock reads, and the totals are emitted once at
+// kernel end as timestamped data (zone names agmm-*). Zero cost otherwise.
+#if defined(PROFILE_KERNEL)
+#include "api/debug/kernel_profiler.hpp"
+#define AGMM_PROF 1
+FORCE_INLINE uint32_t agmm_clock() {
+    return *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+}
+struct AgmmTimer {
+    uint64_t& acc;
+    uint32_t start;
+    FORCE_INLINE AgmmTimer(uint64_t& a) : acc(a), start(agmm_clock()) {}
+    FORCE_INLINE ~AgmmTimer() { acc += static_cast<uint32_t>(agmm_clock() - start); }
+};
+#define AGMM_CAT2(a, b) a##b
+#define AGMM_CAT(a, b) AGMM_CAT2(a, b)
+#define AGMM_TIME(acc) AgmmTimer AGMM_CAT(agmm_timer_, __LINE__)(acc)
+#define AGMM_REPORT(name, acc) DeviceTimestampedData(name, acc)
+#else
+#define AGMM_TIME(acc)
+#define AGMM_REPORT(name, acc)
+#endif
+// ---------------------------------------------------------------------------------------------
+
 #ifdef FUSE_SWIGLU
 // Fused SwiGLU output stage. The matmul produced an interleaved gate/up block in `in_cb`:
 // within each M row, column tile 2p is the gate projection and 2p+1 the up projection (the
@@ -33,36 +59,48 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
 #endif
     pack_reconfig_data_format(out_cb);
 
-    constexpr uint32_t GATE_DST = 0;
-    constexpr uint32_t UP_DST = 1;
     const uint32_t out_N_block_tiles = N_block_tiles >> 1;
 
+    // Two gate/up pairs per DST round trip: 4 fp32 DST tiles are available in both half- and
+    // full-sync mode, and the unpack init plus the silu and mul SFPU programs are then set once
+    // per batch instead of once per output tile. Pair i uses DST 2i (gate, becomes the output)
+    // and 2i+1 (up).
+    constexpr uint32_t PAIRS_PER_BATCH = 2;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         const uint32_t row_base = m * N_block_tiles;
-        for (uint32_t p = 0; p < out_N_block_tiles; p++) {
-            const uint32_t gate_n = p << 1;
-            const uint32_t up_n = gate_n + 1;
-            const uint32_t gate_tile_id = row_base + gate_n;
-            const uint32_t up_tile_id = gate_tile_id + 1;
-
+        for (uint32_t p0 = 0; p0 < out_N_block_tiles; p0 += PAIRS_PER_BATCH) {
+            const uint32_t np = (out_N_block_tiles - p0 < PAIRS_PER_BATCH) ? (out_N_block_tiles - p0) : PAIRS_PER_BATCH;
             tile_regs_acquire();
 #ifdef FUSE_BIAS
             add_bcast_rows_init(in_cb, bias_cb);
-            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, gate_tile_id, gate_n, GATE_DST);
-            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, up_tile_id, up_n, UP_DST);
 #else
             copy_init(in_cb);
-            copy_tile(in_cb, gate_tile_id, GATE_DST);
-            copy_tile(in_cb, up_tile_id, UP_DST);
 #endif
+            for (uint32_t i = 0; i < np; i++) {
+                const uint32_t gate_n = (p0 + i) << 1;
+                const uint32_t gate_tile_id = row_base + gate_n;
+#ifdef FUSE_BIAS
+                add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, gate_tile_id, gate_n, 2 * i);
+                add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, gate_tile_id + 1, gate_n + 1, 2 * i + 1);
+#else
+                copy_tile(in_cb, gate_tile_id, 2 * i);
+                copy_tile(in_cb, gate_tile_id + 1, 2 * i + 1);
+#endif
+            }
             silu_tile_init();
-            silu_tile(GATE_DST);
+            for (uint32_t i = 0; i < np; i++) {
+                silu_tile(2 * i);
+            }
             mul_binary_tile_init();
-            mul_binary_tile(GATE_DST, UP_DST, GATE_DST);
+            for (uint32_t i = 0; i < np; i++) {
+                mul_binary_tile(2 * i, 2 * i + 1, 2 * i);
+            }
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile(GATE_DST, out_cb);
+            for (uint32_t i = 0; i < np; i++) {
+                pack_tile(2 * i, out_cb);
+            }
             tile_regs_release();
         }
         cb_push_back(out_cb, out_N_block_tiles);
@@ -77,13 +115,13 @@ void copy_block(CircularBuffer& in_cb, CircularBuffer& out_cb, uint32_t M_block_
     uint32_t fused_act_dst_id = 0;
 
     uint32_t tile_id = 0;
+#ifdef SFPU_OP_INIT_ACTIVATION
+    // The fused-activation macro operates on DST 0, so keep one tile per round trip here.
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             tile_regs_acquire();
             copy_tile(in_cb.get_cb_id(), tile_id, fused_act_dst_id /*dst*/);
-#ifdef SFPU_OP_INIT_ACTIVATION
             SFPU_OP_FUNC_ACTIVATION
-#endif
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(fused_act_dst_id, out_cb.get_cb_id());
@@ -92,6 +130,27 @@ void copy_block(CircularBuffer& in_cb, CircularBuffer& out_cb, uint32_t M_block_
         }
         out_cb.push_back(N_block_tiles);
     }
+#else
+    // Four tiles per DST round trip (4 fp32 DST tiles are available in half- and full-sync mode).
+    constexpr uint32_t TILES_PER_BATCH = 4;
+    for (uint32_t m = 0; m < M_block_tiles; m++) {
+        for (uint32_t n0 = 0; n0 < N_block_tiles; n0 += TILES_PER_BATCH) {
+            const uint32_t nb = (N_block_tiles - n0 < TILES_PER_BATCH) ? (N_block_tiles - n0) : TILES_PER_BATCH;
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < nb; i++) {
+                copy_tile(in_cb.get_cb_id(), tile_id + i, i /*dst*/);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t i = 0; i < nb; i++) {
+                pack_tile(i, out_cb.get_cb_id());
+            }
+            tile_regs_release();
+            tile_id += nb;
+        }
+        out_cb.push_back(N_block_tiles);
+    }
+#endif
 }
 
 // For caller: if FUSE_TERNARY defined then out_cb == in_cb
@@ -115,14 +174,14 @@ void add_bias_block(
     uint32_t fused_act_dst_id = 0;
 
     uint32_t tile_id = 0;
+#ifdef SFPU_OP_INIT_ACTIVATION
+    // The fused-activation macro operates on DST 0, so keep one tile per round trip here.
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             tile_regs_acquire();
             add_tiles_bcast<BroadcastType::ROW>(
                 in_cb.get_cb_id(), bias_cb.get_cb_id(), tile_id, n, fused_act_dst_id /*dst*/);
-#ifdef SFPU_OP_INIT_ACTIVATION
             SFPU_OP_FUNC_ACTIVATION
-#endif
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(fused_act_dst_id, out_cb.get_cb_id());
@@ -131,6 +190,28 @@ void add_bias_block(
         }
         out_cb.push_back(N_block_tiles);
     }
+#else
+    // Four tiles per DST round trip (4 fp32 DST tiles are available in half- and full-sync mode).
+    constexpr uint32_t TILES_PER_BATCH = 4;
+    for (uint32_t m = 0; m < M_block_tiles; m++) {
+        for (uint32_t n0 = 0; n0 < N_block_tiles; n0 += TILES_PER_BATCH) {
+            const uint32_t nb = (N_block_tiles - n0 < TILES_PER_BATCH) ? (N_block_tiles - n0) : TILES_PER_BATCH;
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < nb; i++) {
+                add_tiles_bcast<BroadcastType::ROW>(
+                    in_cb.get_cb_id(), bias_cb.get_cb_id(), tile_id + i, n0 + i, i /*dst*/);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t i = 0; i < nb; i++) {
+                pack_tile(i, out_cb.get_cb_id());
+            }
+            tile_regs_release();
+            tile_id += nb;
+        }
+        out_cb.push_back(N_block_tiles);
+    }
+#endif
 }
 
 void add_bias_and_addcmul_block(
@@ -451,6 +532,7 @@ void kernel_main() {
     constexpr uint32_t N_num_subblocks = N_block_tiles / subblock_w;
 
     bool reuse_in0_block = false;
+    uint64_t agmm_t_wait = 0, agmm_t_mm = 0, agmm_t_epi = 0;
 
     uint32_t current_M_block_tiles = M_block_tiles;
     uint32_t current_N_block_tiles = N_block_tiles;
@@ -481,19 +563,24 @@ void kernel_main() {
             // Accumulation buffer
             intermediate_cb.reserve_back(out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
-                in0_cb.wait_front(in0_block_num_tiles);
-                in1_cb.wait_front(in1_block_num_tiles);
-
-                matmul_blocks(
-                    in0_cb,
-                    in1_cb,
-                    intermediate_cb,
-                    current_M_block_tiles,
-                    current_N_block_tiles,
-                    N_block_tiles,
-                    K_block_tiles,
-                    current_subblock_h,
-                    current_subblock_w);
+                {
+                    AGMM_TIME(agmm_t_wait);
+                    in0_cb.wait_front(in0_block_num_tiles);
+                    in1_cb.wait_front(in1_block_num_tiles);
+                }
+                {
+                    AGMM_TIME(agmm_t_mm);
+                    matmul_blocks(
+                        in0_cb,
+                        in1_cb,
+                        intermediate_cb,
+                        current_M_block_tiles,
+                        current_N_block_tiles,
+                        N_block_tiles,
+                        K_block_tiles,
+                        current_subblock_h,
+                        current_subblock_w);
+                }
 
                 if (k_block == K_num_blocks - 1) {
                     /**
@@ -522,6 +609,8 @@ void kernel_main() {
 
             intermediate_cb.push_back(out_block_num_tiles);
             PACK((llk_pack_reconfig_l1_acc(0)));
+            {
+                AGMM_TIME(agmm_t_epi);
 
 #ifdef FUSE_SWIGLU
             // SwiGLU collapses the interleaved gate/up block to half its N width.
@@ -562,6 +651,10 @@ void kernel_main() {
                 N_block_tiles,
                 broadcast_ternary_b);
 #endif  // FUSE_TERNARY
+            }  // epilogue timer
         }
     }
+    AGMM_REPORT("agmm-c-wait", agmm_t_wait);
+    AGMM_REPORT("agmm-c-mm", agmm_t_mm);
+    AGMM_REPORT("agmm-c-epi", agmm_t_epi);
 }

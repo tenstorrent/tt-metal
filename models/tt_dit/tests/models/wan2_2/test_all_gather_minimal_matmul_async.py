@@ -646,6 +646,9 @@ def run_test_linear(
     "M, K, N, force_transpose, use_bias, activation, chunks, fuse_addcmul, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [
         (32768, 4096, 4096, True, False, None, 1, False, 8, 8, 8, 2, 2),
+        # MiniMax-H3 ff1 shape with K_block 3: one half of every K block is a single tile per row, so the
+        # fabric sender reuses its unicast header on every row (regression for the missing flush).
+        (38912, 5376, 7168, True, False, None, 1, False, 8, 3, 8, 2, 2),
         (75776, 5120, 3840, True, True, None, 3, False, 7, 5, 16, 1, 2),
         (75776, 5120, 1280, True, True, None, 1, True, 10, 8, 8, 2, 1),
         (75776, 5120, 1280, True, True, None, 1, False, 10, 8, 8, 2, 1),
@@ -672,6 +675,7 @@ def run_test_linear(
     ],
     ids=[
         "4k4k4k",
+        "h3ff1_kblock3",
         "1xqkv",
         "1xdenseattn1",
         "1xdenseattn2",
@@ -1452,8 +1456,25 @@ def test_linear_k_tail(
             9,
             0,
         ],
+        # WH Galaxy: 4 links x 2 workers, 8x8 worker grid (row 9 = muxes).
+        [
+            (4, 8),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(4096),
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Ring,
+            4,
+            2,
+            1,
+            0,
+            8,
+            8,
+            0,
+        ],
     ],
-    ids=["bh4x8links2"],
+    ids=["bh4x8links2", "wh4x8links4_ring"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_bias", [False, True], ids=["no_bias", "bias"])

@@ -19,7 +19,7 @@ from ....parallel.manager import CCLManager
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
-from .agmm_config import agmm_block_size
+from .agmm_config import agmm_block_size, agmm_force_transpose
 
 
 def rope_channel_permutation(head_dim: int, rotary_dim: int) -> torch.Tensor:
@@ -517,7 +517,7 @@ class MiniMaxH3Attention(Module):
                 if self.use_fused_agmm
                 else None
             ),
-            force_transpose=False,
+            force_transpose=agmm_force_transpose(),
             use_persistent_buffer=self.use_persistent_ccl_buffers,
         )
 
@@ -637,7 +637,7 @@ class MiniMaxH3Attention(Module):
                 if self.use_fused_agmm
                 else None
             ),
-            force_transpose=False,
+            force_transpose=agmm_force_transpose(),
             addcmul_a=addcmul_residual if fuse_gate else None,
             addcmul_b=addcmul_gate if fuse_gate else None,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
