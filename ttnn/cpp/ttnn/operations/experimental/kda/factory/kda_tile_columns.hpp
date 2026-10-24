@@ -19,8 +19,10 @@
 namespace ttnn::experimental::prim::kda_factory_detail {
 
 // output[..., output_column + c] = op_chain(input[..., input_column + c]) for the `columns` tile columns c of two TILE
-// tensors with the same rows: the eltwise unary chain as ttnn's unary ops run it (copy into DST, the chain, pack), at
-// the output's format. An empty chain copies the columns, converting their format.
+// tensors with the same rows: the eltwise unary chain as ttnn's unary ops run it (copy into DST, the chain, pack, the
+// input unpacked as ttnn::unary unpacks it), at the output's format and compute_kernel_config's DST width (ttnn::unary
+// instead forces a 32-bit DST for a FLOAT32 input or output). An empty chain copies the columns, converting their
+// format.
 struct TileColumnActivationParams {
     std::vector<ttnn::operations::unary::EltwiseUnaryWithParam> op_chain;
     uint32_t input_column = 0;

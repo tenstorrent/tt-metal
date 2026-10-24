@@ -141,7 +141,11 @@ void add_tile_column_activation(
     ttnn::operations::unary::utils::add_input_dtype_defines(input.dtype(), defines);
     auto compute_hw = ttnn::to_compute_hardware_config(params.compute_kernel_config);
     if (input_format == tt::DataFormat::Float32) {
-        // An FP32 input reaches a 32-bit DST unrounded.
+        // ttnn::unary's rule (unary.cpp sets preserve_fp32_precision exactly for a FLOAT32 input, and the unary
+        // program factory then unpacks it to DST under fp32_dest_acc_en, else to the source registers): an FP32 input
+        // reaches a 32-bit DST unrounded, a 16-bit one through the source registers. Unlike ttnn::unary, which forces
+        // fp32_dest_acc_en on for a FLOAT32 input or output, the DST width is the caller's compute_kernel_config. A
+        // BFLOAT16 input takes the default (source registers) either way, as in ttnn::unary.
         compute_hw.unpack_modes[in_dfb] = params.compute_kernel_config.fp32_dest_acc_en
                                               ? tt::tt_metal::UnpackMode::UnpackToDest
                                               : tt::tt_metal::UnpackMode::UnpackToSrc;
