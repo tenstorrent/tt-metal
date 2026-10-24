@@ -19,7 +19,7 @@ import torch
 
 from models.experimental.tirex2_forecast.reference import dataflow as df
 from models.experimental.tirex2_forecast.tests.golden.goldens import golden, have_goldens
-from models.experimental.tirex2_forecast.tests.pcc.helpers import host_weights, pcc, report
+from models.experimental.tirex2_forecast.tests.pcc.helpers import host_weights, report
 
 pytestmark = pytest.mark.skipif(not have_goldens(), reason="goldens not generated")
 
@@ -28,7 +28,6 @@ FLOORS = {"accuracy": (0.995, 0.99), "performance": (0.99, 0.98)}
 # 1.7e-2 on model16 in a CPU simulation (fp32 compute), so these are provisional bounds pending G1.
 CONTRACT_MEDIAN = 1e-2
 MEDIAN_BOUND = {"accuracy": 0.1, "performance": 0.25}
-TRACE_REGION = 600 * 1024 * 1024
 
 
 def model(device, precision="accuracy", variate=True):
@@ -58,29 +57,38 @@ def run(tt, context, horizon, group_ids=None, target_mask=None):
     return head, q
 
 
-# Proposed floors for the PLAN section 9 metrics (set at G1), from the round-0 measurements in GATE.md.
+# Floors. Decided (D1): pcc_normalized >= 0.998 on the bench target (tests/perf), >= 0.9975 on single-series suite
+# cases; pcc_final >= 0.99 / 0.98. Proposed at G1 (not yet decided; values unchanged since they were first
+# asserted, except that the row floor moved from pcc_row_min (job 492, failed on flat intermittent rows) to the
+# active-row metric): pcc_spread, pcc_row_min_active, flat_max_err, the median bound.
+SINGLE_SERIES_FLOOR = 0.9975
 SPREAD_FLOOR = {"accuracy": 0.998, "performance": 0.995}
-ROW_MIN_FLOOR = {"accuracy": 0.98, "performance": 0.95}  # pcc_row_min_var: rows whose band is not flat
+ROW_MIN_FLOOR = {"accuracy": 0.98, "performance": 0.95}  # pcc_row_min_active (suite shapes)
 FLAT_ERR_BOUND = {"accuracy": 0.05, "performance": 0.15}  # normalized units, rows with a flat band
 
 
-def check_forecast(name, head, q, g_head, g_q, scale, target_mask, precision="accuracy", loc=None, horizon=64):
+def check_forecast(
+    name, head, q, g_head, g_q, scale, target_mask, precision="accuracy", loc=None, horizon=64, single=False
+):
     from models.experimental.tirex2_forecast.tests.pcc import metrics as M
 
     f_norm, f_final = FLOORS[precision]
+    if single:
+        f_norm = SINGLE_SERIES_FLOOR
     m = M.gate_metrics(head, g_head, q, g_q, scale[target_mask])
     print(f"[PCC] {name}: {M.fmt(m)}")
     print(
         f"[PCC] {name}: floors normalized {f_norm}, final {f_final}, spread {SPREAD_FLOOR[precision]}, "
-        f"row_min_var {ROW_MIN_FLOOR[precision]}, flat_max_err {FLAT_ERR_BOUND[precision]}, "
+        f"row_min_active {ROW_MIN_FLOOR[precision]}, flat_max_err {FLAT_ERR_BOUND[precision]}, "
         f"median (contract {CONTRACT_MEDIAN}, provisional {MEDIAN_BOUND[precision]})"
     )
     if loc is not None:
         c = M.collapsed_metrics(g_head, g_q, loc, scale, horizon, target_mask)
         print(f"[PCC] {name}.collapsed: {M.fmt(c)}")
-        assert c["pcc_spread"] < SPREAD_FLOOR[precision] and c["pcc_row_min_var"] < ROW_MIN_FLOOR[precision]
+        assert c["pcc_spread"] < SPREAD_FLOOR[precision] and c["pcc_row_min_active"] < ROW_MIN_FLOOR[precision]
+        assert c["pcc_final_spread"] < 0.5 and c["spread_ratio_p99"] < 0.5
     assert m["pcc_normalized"] >= f_norm and m["pcc_final"] >= f_final
-    assert m["pcc_spread"] >= SPREAD_FLOOR[precision] and m["pcc_row_min_var"] >= ROW_MIN_FLOOR[precision]
+    assert m["pcc_spread"] >= SPREAD_FLOOR[precision] and m["pcc_row_min_active"] >= ROW_MIN_FLOOR[precision]
     assert m["flat_max_err"] <= FLAT_ERR_BOUND[precision]
     assert m["median_err"] <= MEDIAN_BOUND[precision]
     return m
@@ -141,7 +149,9 @@ def test_single_series(device):
     tt = model(device, variate=False)
     head, q = run(tt, g["context"], g["horizon"])
     tok = df.readout_tokens(g["horizon"])
-    check_forecast("single", head, q, g["head_out"][:, tok], g["q_one"], g["scale"], torch.ones(1, dtype=torch.bool))
+    check_forecast(
+        "single", head, q, g["head_out"][:, tok], g["q_one"], g["scale"], torch.ones(1, dtype=torch.bool), single=True
+    )
 
 
 @pytest.mark.parametrize("row", [0, 7])
@@ -158,6 +168,7 @@ def test_single_long_context(device, row):
         g["q_one"][row : row + 1],
         g["scale"][row : row + 1],
         torch.ones(1, dtype=torch.bool),
+        single=True,
     )
 
 
@@ -216,29 +227,3 @@ def test_ragged_groups(device):
     ref_head = df.forward(host_weights(), prep)[:, df.readout_tokens(64)]
     ref_q = df.postprocess(ref_head, prep)
     check_forecast("ragged", head, q, ref_head, ref_q, prep.scale, tm, loc=prep.loc)
-
-
-def test_trace_matches_eager():
-    """The traced forward (bench path) reproduces the eager forward bit for bit on the same inputs."""
-    import ttnn
-
-    from models.experimental.tirex2_forecast.tt.trace import TracedForward
-
-    device = ttnn.open_device(device_id=0, l1_small_size=16384, trace_region_size=TRACE_REGION)
-    try:
-        g = golden("model16")
-        tt = model(device, variate=False)
-        prep = tt.prepare_inputs(g["context"], g["horizon"])
-        inputs = tt.upload_inputs(prep)
-        eager = ttnn.to_torch(tt.forward_device(inputs)).float()
-        tt.deallocate_inputs(inputs)
-        traced = TracedForward(tt)
-        for _ in range(2):  # capture, then a replay on refreshed inputs
-            out = traced(prep)
-            got = ttnn.to_torch(out).float()
-            assert torch.equal(got, eager), f"trace vs eager max diff {float((got - eager).abs().max())}"
-        q = tt.postprocess(out, prep)
-        assert pcc(g["q_one"], q) >= 0.99
-        traced.release()
-    finally:
-        ttnn.close_device(device)

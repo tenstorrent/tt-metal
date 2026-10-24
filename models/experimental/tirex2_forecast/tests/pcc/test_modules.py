@@ -35,7 +35,9 @@ def tt_model(request):
     device = request.getfixturevalue("_device_module_impl")
     from models.experimental.tirex2_forecast.tt.model import TtTiRex2
 
-    return TtTiRex2(device, host_weights())
+    model = TtTiRex2(device, host_weights())
+    yield model
+    model.release()
 
 
 def _block_input(g, b):
@@ -93,7 +95,7 @@ def test_mlstm_cell(device, tt_model, b):
         to_device_seq(device, x, SEQ),
         tt_model.weights.blocks[b].cell,
         tt_model.precision,
-        tt_model.mlstm_consts,
+        tt_model.consts,
         debug=dbg,
     )
     got = dbg["y"][:1, 0, :T]  # the cell output before the (bf16) residual add
@@ -128,7 +130,7 @@ def test_slstm_short_states(device, tt_model, b):
     xT = upload(device, torch.cat([x, torch.zeros(32 - rows, steps, 512)]).transpose(0, 1).reshape(steps, 1, 32, 512))
     WxT = ttnn.add(layers.linear(xT, cell.w_in, tt_model.precision, dtype=ttnn.float32), cell.bias)
     record = []
-    layers.slstm_recurrence(device, WxT, cell.r, steps, record=record)
+    layers.slstm_recurrence(device, WxT, cell.r, steps, tt_model.consts, record=record)
     gs = g[f"block{b}.states"]  # [4, rows, steps, 4, 128]
     worst = 1.0
     for j, nm in enumerate("ycnm"):
@@ -154,6 +156,7 @@ def test_slstm_cell(device, tt_model, b):
         tt_model.precision,
         tt_model.weights.head_mean,
         T,
+        tt_model.consts,
         debug=dbg,
     )
     got = dbg["y"][:1, 0, :T]  # the cell output (group-normed) before the residual add

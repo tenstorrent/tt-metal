@@ -56,7 +56,10 @@ class DeviceInputs:
 
 def pack_rows(group_ids: torch.Tensor, block: int = ROW_BLOCK) -> torch.Tensor:
     """Device row order (source index or -1): groups kept whole inside ``block``-row blocks, total a multiple
-    of ``block``. ``group_ids`` must list each group's rows consecutively."""
+    of ``block``. ``group_ids`` must list each group's rows consecutively.
+
+    Limit: a group (target rows plus covariates) may have at most 32 rows, because variate attention runs on
+    32 x 32 row blocks; larger groups raise ``ValueError``."""
     rows = group_ids.numel()
     _, counts = torch.unique_consecutive(group_ids, return_counts=True)
     if bool((counts == 1).all()):
@@ -101,7 +104,7 @@ class TtTiRex2:
         self.precision = precision or Precision.accuracy()
         self.host = host_weights
         self.weights = tw.build(device, host_weights, self.precision, variate=variate)
-        self.mlstm_consts = layers.MLSTMConsts(device, SEQ_CHUNK)
+        self.consts = layers.DeviceConsts(device, SEQ_CHUNK)
         self.step_hook = None  # profiling: called after every sLSTM step
 
     @classmethod
@@ -152,12 +155,16 @@ class TtTiRex2:
 
     # ------------------------------------------------------------------------------------ device side
 
+    def release(self):
+        """Free the per-device constants (call before closing the device if the process keeps running)."""
+        self.consts.release()
+
     def embed(self, inputs: DeviceInputs):
-        return layers.residual_block(inputs.tokens, self.weights.embed, self.precision)
+        return layers.residual_block(inputs.tokens, self.weights.embed, self.precision, "embed")
 
     def run_block(self, block: tw.TtBlock, x, inputs: DeviceInputs):
         if df.is_mlstm(block.index):
-            y = layers.mlstm_layer(self.device, x, block.cell, self.precision, self.mlstm_consts)
+            y = layers.mlstm_layer(self.device, x, block.cell, self.precision, self.consts)
         else:
             y = layers.slstm_layer(
                 self.device,
@@ -166,6 +173,7 @@ class TtTiRex2:
                 self.precision,
                 self.weights.head_mean,
                 df.NUM_TOKENS,
+                self.consts,
                 step_hook=self.step_hook,
             )
         out = layers.ffn_residual(y, block.ffn, self.precision)
@@ -180,7 +188,7 @@ class TtTiRex2:
         import ttnn
 
         xn = layers.rms_norm(x, df.OUT_NORM_EPS)
-        h = layers.residual_block(xn, self.weights.head, self.precision)
+        h = layers.residual_block(xn, self.weights.head, self.precision, "head")
         layers.free(xn)
         B = h.shape[0]
         out = ttnn.slice(h, (0, 0, WINDOW[0], 0), (B, 1, WINDOW[1], h.shape[-1]))

@@ -27,7 +27,7 @@ def have_goldens() -> bool:
 @functools.lru_cache(maxsize=4)
 def golden(name: str) -> dict:
     """``torch.load`` of ``<GOLDEN_DIR>/<name>.pt`` (cached; treat the result as read-only)."""
-    return torch.load(GOLDEN_DIR / f"{name}.pt", map_location="cpu", weights_only=False)
+    return torch.load(GOLDEN_DIR / f"{name}.pt", map_location="cpu", weights_only=True)
 
 
 def manifest() -> dict:

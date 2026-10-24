@@ -15,7 +15,14 @@ All head metrics use the head output at the read-out tokens in normalized space,
                     row (e.g. an intermittent series forecast as a constant band, std ~0.003) has a per-row PCC
                     set by rounding noise, so it is checked by ``flat_max_err`` instead
     flat_max_err    worst absolute error (normalized units) over the flat rows (0 when there are none)
+    pcc_row_p01_active, pcc_row_min_active
+                    per-row PCC over the active rows only: rows whose golden head std is >= ACTIVE_FRAC of the
+                    golden's global std (PLAN section 9 v1.2); the active set depends on the golden only
+    active_rows, excluded_rows
+    spread_ratio_p01, spread_ratio_p99
+                    per active row, |h - mean_q h| / |h_ref - mean_q h_ref| (band amplitude ratio; PLAN v1.3)
     pcc_final       PCC of the single-pass [targets, 9, H] forecast after inverse scaling and band calibration
+    pcc_final_spread  PCC of that forecast minus its mean over the quantile axis (data space)
     median_err      worst |median error| / scale over target rows
 
 ``collapsed(head)`` replaces every quantile by the mean over quantiles: the failure mode these metrics must
@@ -30,6 +37,7 @@ from models.experimental.tirex2_forecast.reference import dataflow as df
 
 Q, P = df.QUANTILES, df.PATCH
 FLAT_STD = 0.05  # normalized units: 5 % of the series' own scale
+ACTIVE_FRAC = 0.05  # active rows: golden head std >= 5 % of the golden's global std
 
 
 def pearson(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -62,21 +70,43 @@ def forecast_from_head(head: torch.Tensor, loc, scale, horizon: int, target_mask
     return q[target_mask]
 
 
+def active_rows(g_head: torch.Tensor) -> torch.Tensor:
+    """Rows whose golden head output varies: std >= ACTIVE_FRAC x the golden's global std (golden only)."""
+    flat = g_head.double().reshape(g_head.shape[0], -1)
+    return flat.std(1) >= ACTIVE_FRAC * flat.std()
+
+
+def spread_ratios(exp: torch.Tensor, got: torch.Tensor) -> torch.Tensor:
+    e = spread(exp).double().reshape(exp.shape[0], -1).norm(dim=1)
+    g = spread(got).double().reshape(got.shape[0], -1).norm(dim=1)
+    return g / e.clamp_min(1e-300)
+
+
 def gate_metrics(head, g_head, q, g_q, scale_targets) -> dict:
     rows = row_pccs(g_head, head)
     std = g_head.double().reshape(g_head.shape[0], -1).std(1)
     flat = std < FLAT_STD
+    act = active_rows(g_head)
+    ratio = spread_ratios(g_head[act], head[act])
     err = (head.double() - g_head.double()).abs().reshape(g_head.shape[0], -1).amax(1)
     med_err = (q[:, Q // 2] - g_q[:, Q // 2]).abs().amax(-1) / scale_targets.reshape(-1)
+    q_spread = lambda t: t - t.mean(1, keepdim=True)  # [targets, 9, H]: minus the quantile mean
     return {
         "pcc_normalized": pearson(g_head, head),
         "pcc_spread": pearson(spread(g_head), spread(head)),
         "pcc_row_p01": float(torch.quantile(rows, 0.01)),
         "pcc_row_min": float(rows.min()),
+        "pcc_row_p01_active": float(torch.quantile(rows[act], 0.01)),
+        "pcc_row_min_active": float(rows[act].min()),
+        "active_rows": int(act.sum()),
+        "excluded_rows": int((~act).sum()),
+        "spread_ratio_p01": float(torch.quantile(ratio, 0.01)),
+        "spread_ratio_p99": float(torch.quantile(ratio, 0.99)),
         "pcc_row_min_var": float(rows[~flat].min()) if bool((~flat).any()) else 1.0,
         "flat_rows": int(flat.sum()),
         "flat_max_err": float(err[flat].max()) if bool(flat.any()) else 0.0,
         "pcc_final": pearson(g_q, q),
+        "pcc_final_spread": pearson(q_spread(g_q), q_spread(q)),
         "median_err": float(med_err.max()),
     }
 

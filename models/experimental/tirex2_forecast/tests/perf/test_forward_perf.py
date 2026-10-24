@@ -125,8 +125,9 @@ def test_forward_perf(device, shape, precision):
         torch.save({"head": head, "q": q}, Path(dump) / f"{shape}-{precision}.pt")
     metrics = M.gate_metrics(head, g["head_out"], q, g["q_one"], prep.scale[prep.target_mask])
     collapsed = M.collapsed_metrics(g["head_out"], g["q_one"], prep.loc, prep.scale, horizon, prep.target_mask)
-    pcc_norm, pcc_final, median_err = metrics["pcc_normalized"], metrics["pcc_final"], metrics["median_err"]
+    pcc_norm, pcc_final = metrics["pcc_normalized"], metrics["pcc_final"]
     traced.release()
+    tt.release()
 
     print(
         f"\n[PERF] forward {shape} / {precision}: {prep.rows} rows ({prep.device_rows} on device) x "
@@ -164,5 +165,9 @@ def test_forward_perf(device, shape, precision):
             "traced": True,
         }
     )
+    # Decided floors (D1): the target paper/accuracy at 0.998; the other floors come from doc/optimize/gates.json
+    # once set (tests/perf/check_gates.py checks every metric and the drift against a baseline).
     floor_norm, floor_final = (0.995, 0.99) if precision == "accuracy" else (0.99, 0.98)
+    if (shape, precision) == ("paper", "accuracy"):
+        floor_norm = 0.998
     assert pcc_norm >= floor_norm and pcc_final >= floor_final

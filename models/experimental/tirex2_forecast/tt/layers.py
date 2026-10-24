@@ -16,21 +16,46 @@ from models.experimental.tirex2_forecast.tt.weights import TtFFN, TtMLSTM, TtRes
 
 MASK_NEG = -1e9
 
-# Per-shape device constants (zeros / ones), created once outside any trace and never freed by ``free``.
-_CONSTS: dict = {}
+# Device constants (zeros, ones, masks) are owned by a ``DeviceConsts`` object per model and device. They are
+# created on first use, which the warm-up forward does before any trace capture, and ``free`` never frees them.
 _CONST_IDS: set = set()
 
 
-def const(device, value: float, shape, dtype=None):
-    import ttnn
+class DeviceConsts:
+    """Per-device constants for one model: the chunkwise mLSTM causal mask and cached zero / one tensors.
 
-    dtype = ttnn.float32 if dtype is None else dtype
-    key = (id(device), float(value), tuple(shape), str(dtype))
-    if key not in _CONSTS:
-        t = upload(device, torch.full(tuple(shape), float(value)), dtype=dtype)
-        _CONSTS[key] = t
+    Owned by ``TtTiRex2`` and released with it (``release``), so nothing outlives its device."""
+
+    def __init__(self, device, chunk: int):
+        import ttnn
+
+        self.device = device
+        self.chunk = chunk
+        self._cache: dict = {}
+        m = torch.zeros(chunk, chunk)
+        m[~torch.ones(chunk, chunk, dtype=torch.bool).tril()] = MASK_NEG
+        self.mask = self._register(upload(device, m.reshape(1, 1, chunk, chunk), dtype=ttnn.float32))
+
+    def _register(self, t):
         _CONST_IDS.add(id(t))
-    return _CONSTS[key]
+        return t
+
+    def full(self, value: float, shape, dtype=None):
+        import ttnn
+
+        dtype = ttnn.float32 if dtype is None else dtype
+        key = (float(value), tuple(shape), str(dtype))
+        if key not in self._cache:
+            self._cache[key] = self._register(upload(self.device, torch.full(tuple(shape), float(value)), dtype=dtype))
+        return self._cache[key]
+
+    def release(self):
+        import ttnn
+
+        for t in (self.mask, *self._cache.values()):
+            _CONST_IDS.discard(id(t))
+            ttnn.deallocate(t)
+        self._cache.clear()
 
 
 def free(*tensors):
@@ -41,7 +66,7 @@ def free(*tensors):
             ttnn.deallocate(t)
 
 
-def linear(x, w, precision: Precision, bias=None, activation=None, dtype=None, config=None):
+def linear(x, w, precision: Precision, bias=None, activation=None, dtype=None, config=None, role=None):
     import ttnn
 
     return ttnn.linear(
@@ -50,7 +75,7 @@ def linear(x, w, precision: Precision, bias=None, activation=None, dtype=None, c
         bias=bias,
         activation=activation,
         dtype=ttnn.bfloat16 if dtype is None else dtype,
-        compute_kernel_config=precision.matmul_config() if config is None else config,
+        compute_kernel_config=precision.matmul_config(role) if config is None else config,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -62,14 +87,14 @@ def rms_norm(x, eps: float):
     return ttnn.rms_norm(x, epsilon=eps, compute_kernel_config=exact_config(), memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def residual_block(x, w: TtResidualBlock, precision: Precision):
-    """``W_o silu(W_h x + b_h) + W_r x + (b_o + b_r)``."""
+def residual_block(x, w: TtResidualBlock, precision: Precision, role: str):
+    """``W_o silu(W_h x + b_h) + W_r x + (b_o + b_r)``; ``role`` is ``embed`` or ``head``."""
     import ttnn
 
-    h = linear(x, w.w_hidden, precision, bias=w.b_hidden, activation="silu")
-    out = linear(h, w.w_out, precision, bias=w.b_out)
+    h = linear(x, w.w_hidden, precision, bias=w.b_hidden, activation="silu", role=role)
+    out = linear(h, w.w_out, precision, bias=w.b_out, role=role)
     free(h)
-    res = linear(x, w.w_res, precision)
+    res = linear(x, w.w_res, precision, role=role)
     y = ttnn.add(out, res)
     free(out, res)
     return y
@@ -80,12 +105,12 @@ def ffn_residual(x, w: TtFFN, precision: Precision):
     import ttnn
 
     xn = rms_norm(x, df.NORM_EPS)
-    gate = linear(xn, w.w_gate, precision, activation="silu")
-    up = linear(xn, w.w_up, precision)
+    gate = linear(xn, w.w_gate, precision, activation="silu", role="ffn")
+    up = linear(xn, w.w_up, precision, role="ffn")
     free(xn)
     h = ttnn.multiply(gate, up)
     free(gate, up)
-    y = linear(h, w.w_down, precision)
+    y = linear(h, w.w_down, precision, role="ffn")
     free(h)
     out = ttnn.add(x, y)
     free(y)
@@ -95,19 +120,7 @@ def ffn_residual(x, w: TtFFN, precision: Precision):
 # ------------------------------------------------------------------------------------------------- mLSTM
 
 
-class MLSTMConsts:
-    """Per-device constants of the chunkwise mLSTM (causal mask)."""
-
-    def __init__(self, device, chunk: int):
-        import ttnn
-
-        mask = torch.zeros(chunk, chunk)
-        mask[~torch.ones(chunk, chunk, dtype=torch.bool).tril()] = MASK_NEG
-        self.chunk = chunk
-        self.mask = upload(device, mask.reshape(1, 1, chunk, chunk), dtype=ttnn.float32)
-
-
-def mlstm_chunkwise(device, q, k, v, g, consts: MLSTMConsts, eps: float = df.MLSTM_EPS):
+def mlstm_chunkwise(device, q, k, v, g, consts: DeviceConsts, eps: float = df.MLSTM_EPS):
     """Stabilized chunkwise mLSTM (see ``reference/dataflow.mlstm_chunkwise``).
 
     ``q [B, H, T, 64]`` (pre-scaled by 1/8), ``k [B, H, T, 64]``, ``v [B, H, T, 128]`` bf16;
@@ -161,9 +174,9 @@ def mlstm_chunkwise(device, q, k, v, g, consts: MLSTMConsts, eps: float = df.MLS
     a4 = ttnn.reshape(amax, (BH, NC, 1, 1))
     dC4 = ttnn.reshape(dC, (BH, NC, DK, DV))
     dn4 = ttnn.reshape(dn, (BH, NC, DK, 1))
-    m = const(device, 0.0, (BH, 1, 1, 1))
-    C = const(device, 0.0, (BH, 1, DK, DV))
-    n = const(device, 0.0, (BH, 1, DK, 1))
+    m = consts.full(0.0, (BH, 1, 1, 1))
+    C = consts.full(0.0, (BH, 1, DK, DV))
+    n = consts.full(0.0, (BH, 1, DK, 1))
     Cs, ns, ms = [C], [n], [m]
     for c in range(NC - 1):  # the state after the last chunk is never read
         sl = lambda t, d1, d2: ttnn.slice(t, (0, c, 0, 0), (BH, c + 1, d1, d2))
@@ -221,13 +234,13 @@ def _keep(debug, name, t):
         debug[name] = ttnn.to_torch(t).float()
 
 
-def mlstm_layer(device, x, w: TtMLSTM, precision: Precision, consts: MLSTMConsts, debug: dict | None = None):
+def mlstm_layer(device, x, w: TtMLSTM, precision: Precision, consts: DeviceConsts, debug: dict | None = None):
     """``x + mLSTM(RMSNorm(x))`` (time mixer only; the FFN follows). ``debug`` (tests) collects host copies."""
     import ttnn
 
     xn = rms_norm(x, df.NORM_EPS)
     _keep(debug, "xn", xn)
-    qkv = linear(xn, w.w_qkv, precision)  # [B, 1, T, 1536]
+    qkv = linear(xn, w.w_qkv, precision, role="mlstm")  # [B, 1, T, 1536]
     q128, k128, v = ttnn.experimental.nlp_create_qkv_heads(qkv, num_heads=4, num_kv_heads=4, transpose_k_heads=False)
     free(qkv)
     B, H, T, _ = tuple(q128.shape)
@@ -240,7 +253,7 @@ def mlstm_layer(device, x, w: TtMLSTM, precision: Precision, consts: MLSTMConsts
         linear(xn, w.w_gates[h], precision, bias=w.b_gates[h], dtype=ttnn.float32, config=exact_config())
         for h in range(df.HEADS)
     ]
-    o = linear(xn, w.w_o, precision)
+    o = linear(xn, w.w_o, precision, role="mlstm")
     free(xn)
     g = ttnn.concat(gates, dim=1)  # [B, 4, T, 32]
     free(*gates)
@@ -261,7 +274,7 @@ def mlstm_layer(device, x, w: TtMLSTM, precision: Precision, consts: MLSTMConsts
     free(o)
     gated = ttnn.multiply(hm, so, dtype=ttnn.bfloat16)
     free(hm, so)
-    y = linear(gated, w.w_out, precision)
+    y = linear(gated, w.w_out, precision, role="mlstm")
     free(gated)
     _keep(debug, "y", y)
     out = ttnn.add(x, y)
@@ -284,12 +297,15 @@ def log_sigmoid(x):
     return out
 
 
-def slstm_recurrence(device, WxT, r, steps: int, record: list | None = None, step_hook=None):
+def slstm_recurrence(
+    device, WxT, r, steps: int, consts: DeviceConsts, record: list | None = None, step_hook=None, y_fp32: bool = False
+):
     """sLSTM time loop. ``WxT [T, 1, B, 2048]`` fp32 (bias folded), columns (gate i f z o, head, d).
 
     Returns the list of per-step ``y [1, 1, B, 512]`` fp32 and the last ``(c, n, m)``. ``record`` (tests
     only) collects host copies of ``(y, c, n, m)`` after every step; ``step_hook(t)`` (profiling) runs after
-    every step, e.g. to drain the device profiler buffers.
+    every step, e.g. to drain the device profiler buffers. ``y_fp32`` feeds the fp32 ``y`` (not its bf16 cast)
+    into the recurrent matmul.
     """
     import ttnn
 
@@ -315,7 +331,7 @@ def slstm_recurrence(device, WxT, r, steps: int, record: list | None = None, ste
             # n == 0 everywhere before the first step: m = pre_i, i = 1, c = tanh(z), n = 1
             free(pf)
             m, c = pi, tz
-            n = const(device, 1.0, (1, 1, B, D))
+            n = consts.full(1.0, (1, 1, B, D))
             y = ttnn.multiply(so, c)
         else:
             lf = log_sigmoid(pf)
@@ -343,13 +359,14 @@ def slstm_recurrence(device, WxT, r, steps: int, record: list | None = None, ste
         free(so)
         if record is not None:
             record.append(tuple(ttnn.to_torch(t).float()[0, 0] for t in (y, c, n, m)))
-        if y_bf is not None:
+        if y_bf is not None and not y_fp32:
             free(y_bf)
-        y_bf = ttnn.typecast(y, ttnn.bfloat16)
+        y_bf = y if y_fp32 else ttnn.typecast(y, ttnn.bfloat16)
         ys.append(y)
         if step_hook is not None:
             step_hook(t)
-    free(y_bf)
+    if not y_fp32:
+        free(y_bf)
     return ys, (c, n, m)
 
 
@@ -387,14 +404,14 @@ def slstm_prepare(x, w: TtSLSTM, precision: Precision):
     return WxT
 
 
-def slstm_finish(device, x, ys, w: TtSLSTM, head_mean, debug: dict | None = None):
+def slstm_finish(device, x, ys, w: TtSLSTM, head_mean, consts: DeviceConsts, debug: dict | None = None):
     """``x + GroupNorm(y)`` from the per-step outputs ``ys`` (padded with zeros to ``T``)."""
     import ttnn
 
     B, _, T, _ = tuple(x.shape)
     steps = len(ys)
     if steps < T:
-        ys = [*ys, const(device, 0.0, (T - steps, 1, B, ys[0].shape[-1]))]
+        ys = [*ys, consts.full(0.0, (T - steps, 1, B, ys[0].shape[-1]))]
     Y = ttnn.concat(ys, dim=0)  # [T, 1, B, 512] fp32
     free(*ys)
     yn = head_layer_norm(device, Y, w.w_gnorm, head_mean)
@@ -408,13 +425,21 @@ def slstm_finish(device, x, ys, w: TtSLSTM, head_mean, debug: dict | None = None
 
 
 def slstm_layer(
-    device, x, w: TtSLSTM, precision: Precision, head_mean, steps: int, debug: dict | None = None, step_hook=None
+    device,
+    x,
+    w: TtSLSTM,
+    precision: Precision,
+    head_mean,
+    steps: int,
+    consts: DeviceConsts,
+    debug: dict | None = None,
+    step_hook=None,
 ):
     """``x + GroupNorm(sLSTM(RMSNorm(x)))``; the recurrence runs time-major. ``debug`` (tests) collects host copies."""
     WxT = slstm_prepare(x, w, precision)
-    ys, (c, n, m) = slstm_recurrence(device, WxT, w.r, steps, step_hook=step_hook)
+    ys, (c, n, m) = slstm_recurrence(device, WxT, w.r, steps, consts, step_hook=step_hook, y_fp32=precision.y_fp32)
     free(WxT, c, n, m)
-    return slstm_finish(device, x, ys, w, head_mean, debug=debug)
+    return slstm_finish(device, x, ys, w, head_mean, consts, debug=debug)
 
 
 # ---------------------------------------------------------------------------------------- variate mixer
@@ -433,7 +458,7 @@ def variate_block(device, x, w: TtVariate, precision: Precision, vmask, keep, de
     xT = ttnn.transpose(x, 0, 2)  # [T, 1, B, 512]
     xb = ttnn.reshape(xT, (T * nb, 1, 32, Dm))
     xn = rms_norm(xb, df.NORM_EPS)
-    qkv = linear(xn, w.w_qkv, precision)
+    qkv = linear(xn, w.w_qkv, precision, role="variate")
     free(xn)
     q, k, v = ttnn.experimental.nlp_create_qkv_heads(qkv, num_heads=4, num_kv_heads=4, transpose_k_heads=False)
     free(qkv)
@@ -447,16 +472,16 @@ def variate_block(device, x, w: TtVariate, precision: Precision, vmask, keep, de
     free(p, v)
     am = ttnn.experimental.nlp_concat_heads(a)  # [T * nb, 1, 32, 512]
     free(a)
-    o = linear(am, w.w_o, precision)
+    o = linear(am, w.w_o, precision, role="variate")
     free(am)
     y = ttnn.add(xb, o)
     if debug is not None:
         _keep(debug, "attn", ttnn.reshape(o, (T, 1, B, Dm)))
     free(o)
     yn = rms_norm(y, df.NORM_EPS)
-    hdn = linear(yn, w.w_wi, precision, activation="silu")
+    hdn = linear(yn, w.w_wi, precision, activation="silu", role="variate")
     free(yn)
-    f = linear(hdn, w.w_wo, precision)
+    f = linear(hdn, w.w_wo, precision, role="variate")
     free(hdn)
     y2 = ttnn.add(y, f)
     free(y, f)

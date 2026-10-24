@@ -105,12 +105,14 @@ def test_profile_forward(device):
         WxT = layers.slstm_prepare(x, slstm_block.cell, tt.precision)
         mark("slstm_pre_end")
         mark("slstm_first_start")
-        ys, (c, n, m) = layers.slstm_recurrence(device, WxT, slstm_block.cell.r, PROFILED_STEPS + 1, step_hook=hook)
+        ys, (c, n, m) = layers.slstm_recurrence(
+            device, WxT, slstm_block.cell.r, PROFILED_STEPS + 1, tt.consts, step_hook=hook, y_fp32=tt.precision.y_fp32
+        )
         mark("slstm_steps_end")
         ttnn.ReadDeviceProfiler(device)
         layers.free(WxT, c, n, m)
         mark("slstm_post_start")
-        y = layers.slstm_finish(device, x, ys, slstm_block.cell, tt.weights.head_mean)
+        y = layers.slstm_finish(device, x, ys, slstm_block.cell, tt.weights.head_mean, tt.consts)
         out = layers.ffn_residual(y, slstm_block.ffn, tt.precision)
         layers.free(y, x)
         if inputs.vmask is not None:

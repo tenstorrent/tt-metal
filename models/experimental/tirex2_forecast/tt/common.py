@@ -11,7 +11,7 @@ loop runs time-major, ``[seq, 1, rows, *]``, so every step reads one tile-aligne
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import torch
 
@@ -22,19 +22,38 @@ def pad_to(n: int, m: int = TILE) -> int:
     return -(-n // m) * m
 
 
+ROLES = ("embed", "mlstm", "w_in", "ffn", "variate", "head")
+
+
 @dataclass(frozen=True)
 class Precision:
-    """Precision policy.
+    """Precision policy, per matmul role (``ROLES``).
 
-    ``accuracy``: bf16 weights and activations, HiFi2 dense matmuls, HiFi4 for the sLSTM input projection.
+    ``accuracy``: bf16 weights and activations; every dense matmul at HiFi4. (Round 0 first ran HiFi2 with only
+    ``w_in``, the sLSTM input projection that feeds the exponential gates, at HiFi4; the G1 sweep measured HiFi4
+    on every dense role at +0.4 % device time for active-row PCC 0.959 -> 0.995 and a worst median error of
+    0.165 -> 0.118 of the scale: ``doc/optimize/iter_00/precision_sweep.md``.)
     ``performance``: bfp8 weights, LoFi, bf16 activations.
-    In both: the recurrent states (mLSTM C, n, m; sLSTM c, n, m) and the exponential gating are fp32; the
-    sLSTM recurrent matmul runs at HiFi4 with ``R`` in bf16 (documented exception); the tiny mLSTM gate
-    projection (512 -> 8) keeps fp32 weights; norms run at HiFi4 with fp32 accumulation."""
+    In every policy:
+    - the recurrent states (mLSTM C, n, m; sLSTM c, n, m) and the exponential gating are fp32;
+    - the sLSTM recurrent matmul ``y @ R`` runs at HiFi4 with ``R`` in bf16 (documented exception) and fp32
+      output; its input ``y`` is cast to bf16 unless ``y_fp32``;
+    - the mLSTM gate projection (512 -> 8 per head) keeps fp32 weights, HiFi4, fp32 output;
+    - norms and the chunkwise mLSTM matmuls run at HiFi4 with fp32 accumulation;
+    - **accumulation:** every matmul accumulates in fp32 (``fp32_dest_acc_en=True``); dense matmuls also use
+      ``packer_l1_acc=True``. ``fp32_acc=False`` turns fp32 dest accumulation off for the dense roles only (for
+      the measured comparison).
+
+    ``hifi4_roles`` forces HiFi4 on dense roles; ``bf16_roles`` keeps a role's weights bf16 under bfp8.
+    """
 
     name: str = "accuracy"
     bfp8_weights: bool = False
     lofi: bool = False
+    hifi4_roles: frozenset = frozenset(ROLES)
+    bf16_roles: frozenset = frozenset()
+    fp32_acc: bool = True
+    y_fp32: bool = False
 
     @classmethod
     def accuracy(cls) -> "Precision":
@@ -42,30 +61,54 @@ class Precision:
 
     @classmethod
     def performance(cls) -> "Precision":
-        return cls(name="performance", bfp8_weights=True, lofi=True)
+        return cls(name="performance", bfp8_weights=True, lofi=True, hifi4_roles=frozenset())
+
+    @classmethod
+    def accuracy_r0(cls) -> "Precision":
+        """The first round-0 accuracy policy (HiFi2 dense, HiFi4 ``w_in``), kept for back-to-back comparisons."""
+        return cls(name="accuracy_r0", hifi4_roles=frozenset({"w_in"}))
 
     @classmethod
     def by_name(cls, name: str) -> "Precision":
-        return {"accuracy": cls.accuracy, "performance": cls.performance}[name]()
+        """``accuracy`` / ``performance``, optionally with variant suffixes joined by ``+``:
+        ``hifi4=<role,..|all>``, ``bf16=<role,..|all>``, ``y32``, ``acc16`` (no fp32 dest accumulation)."""
+        base, *mods = name.split("+")
+        p = {"accuracy": cls.accuracy, "accuracy_r0": cls.accuracy_r0, "performance": cls.performance}[base]()
+        kw = {}
+        for m in mods:
+            key, _, val = m.partition("=")
+            roles = frozenset(ROLES) if val == "all" else frozenset(r for r in val.split(",") if r)
+            if key == "hifi4":
+                kw["hifi4_roles"] = p.hifi4_roles | roles
+            elif key == "bf16":
+                kw["bf16_roles"] = p.bf16_roles | roles
+            elif key == "y32":
+                kw["y_fp32"] = True
+            elif key == "acc16":
+                kw["fp32_acc"] = False
+            else:
+                raise ValueError(f"unknown precision variant {m!r}")
+        return replace(p, name=name, **kw)
 
-    def weight_dtype(self):
+    def weight_dtype(self, role: str | None = None):
         import ttnn
 
-        return ttnn.bfloat8_b if self.bfp8_weights else ttnn.bfloat16
+        return ttnn.bfloat8_b if self.bfp8_weights and role not in self.bf16_roles else ttnn.bfloat16
 
-    def matmul_config(self):
-        """Dense projections: HiFi2 (accuracy) or LoFi (performance), fp32 accumulation."""
+    def matmul_config(self, role: str | None = None):
+        """Dense projections of ``role``: HiFi4 if listed in ``hifi4_roles``, else HiFi2 (accuracy) or LoFi."""
         import ttnn
 
-        return kernel_config(ttnn.MathFidelity.LoFi if self.lofi else ttnn.MathFidelity.HiFi2)
+        if role in self.hifi4_roles:
+            fidelity = ttnn.MathFidelity.HiFi4
+        else:
+            fidelity = ttnn.MathFidelity.LoFi if self.lofi else ttnn.MathFidelity.HiFi2
+        return kernel_config(fidelity, fp32_acc=self.fp32_acc)
 
     def gate_config(self):
-        """The sLSTM input projection ``W_in``, whose outputs feed the exponential gates: HiFi4 in ``accuracy``
-        (HiFi2 there is the largest single error source: worst paper-row median error 0.20 -> 0.05 of the
-        scale), LoFi in ``performance``."""
-        import ttnn
-
-        return kernel_config(ttnn.MathFidelity.LoFi if self.lofi else ttnn.MathFidelity.HiFi4)
+        """The sLSTM input projection ``W_in`` (role ``w_in``): HiFi4 in ``accuracy`` (at HiFi2 it was the largest
+        single error source: worst paper-row median error 0.20 -> 0.05 of the scale), LoFi in ``performance``."""
+        return self.matmul_config("w_in")
 
 
 def kernel_config(fidelity=None, fp32_acc: bool = True, packer_l1_acc: bool = True):

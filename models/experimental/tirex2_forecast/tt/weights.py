@@ -87,7 +87,7 @@ class TtTiRex2Weights:
     precision: Precision
 
 
-def _residual(device, w: df.ResidualBlockW, dtype, gain=None) -> TtResidualBlock:
+def _residual(device, w: df.ResidualBlockW, dtype, gain=None) -> TtResidualBlock:  # dtype: the role's weights
     import ttnn
 
     wh, wr = w.w_hidden, w.w_res
@@ -159,22 +159,22 @@ def build(device, host: df.TiRex2W, precision: Precision, variate: bool = True) 
     """Upload every weight. ``variate=False`` skips the 12 variate-attention blocks (univariate-only use)."""
     import ttnn
 
-    dtype = precision.weight_dtype()
+    dt = precision.weight_dtype
     blocks = []
     for b in host.blocks:
         f = b.ffn
         ffn = TtFFN(
-            upload_weight(device, _rows(b.w_norm_ffn, f.w_gate), dtype),
-            upload_weight(device, _rows(b.w_norm_ffn, f.w_up), dtype),
-            upload_weight(device, f.w_down, dtype),
+            upload_weight(device, _rows(b.w_norm_ffn, f.w_gate), dt("ffn")),
+            upload_weight(device, _rows(b.w_norm_ffn, f.w_up), dt("ffn")),
+            upload_weight(device, f.w_down, dt("ffn")),
         )
-        cell = _mlstm(device, b, dtype) if df.is_mlstm(b.index) else _slstm(device, b, dtype)
-        blocks.append(TtBlock(b.index, ffn, cell, _variate(device, b, dtype) if variate else None))
+        cell = _mlstm(device, b, dt("mlstm")) if df.is_mlstm(b.index) else _slstm(device, b, dt("w_in"))
+        blocks.append(TtBlock(b.index, ffn, cell, _variate(device, b, dt("variate")) if variate else None))
     mean = torch.block_diag(*[torch.full((128, 128), 1 / 128)] * df.HEADS)
     return TtTiRex2Weights(
-        _residual(device, host.embed, dtype),
+        _residual(device, host.embed, dt("embed")),
         blocks,
-        _residual(device, host.head, dtype, gain=host.w_out_norm),
+        _residual(device, host.head, dt("head"), gain=host.w_out_norm),
         upload_weight(device, mean, ttnn.float32),
         precision,
     )
