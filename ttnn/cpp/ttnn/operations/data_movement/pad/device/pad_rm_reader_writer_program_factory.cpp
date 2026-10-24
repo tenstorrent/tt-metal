@@ -5,6 +5,7 @@
 #include "pad_rm_reader_writer_program_factory.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -34,15 +35,16 @@ const TensorParamName RM_SC_PAD_VALUE{"pad_value_const"};
 // create_program_artifacts() can build it once on cache miss and hand its
 // MeshTensor to the framework as an op-owned tensor, deferring the device
 // deallocation until the cached Program is evicted (see #44565).
-Tensor build_pad_value_const_tensor_sc(const PadInputs& tensor_args, float pad_value) {
+// It repeats the packed pad word, so its bytes are the padding for every dtype the reader copies it into.
+Tensor build_pad_value_const_tensor_sc(const PadInputs& tensor_args, uint32_t packed_pad_value) {
     MeshDevice* device = tensor_args.input.device();
-    uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
+    uint32_t pad_value_const_buffer_size = 16;  // 64 B: the chunk size the reader copies it in
     auto pad_value_const_buffer =
-        tt::tt_metal::HostBuffer(std::vector<bfloat16>(pad_value_const_buffer_size, bfloat16(pad_value)));
+        tt::tt_metal::HostBuffer(std::vector<uint32_t>(pad_value_const_buffer_size, packed_pad_value));
     return Tensor(
                std::move(pad_value_const_buffer),
                ttnn::Shape({1, 1, 1, pad_value_const_buffer_size}),
-               DataType::BFLOAT16,
+               DataType::UINT32,
                Layout::ROW_MAJOR)
         .to_device(device, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
 }
@@ -67,15 +69,6 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
 
     TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
-    // Build the pad-value const tensor once on cache miss and release its owning MeshTensor into
-    // the artifact.  The framework parks it in the cache entry, so its address stays valid for
-    // every dispatch that hits this cached Program.
-    std::vector<tt::tt_metal::MeshTensor> op_owned;
-    op_owned.reserve(1);
-    Tensor pad_value_const_tensor = build_pad_value_const_tensor_sc(tensor_args, pad_value);
-    op_owned.push_back(pad_value_const_tensor.device_storage().release_mesh_tensor());
-    const auto& pad_value_mesh_tensor = op_owned.back();
-
     const NodeCoord node{0, 0};
 
     uint32_t dfb_pagesize =
@@ -97,14 +90,27 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
         .data_format_metadata = in_df,
     };
 
+    // The reader stores this word's halves by address and copies the const tensor built from it, so
+    // the word must hold the padding bytes: a 16-bit value in both halves, a 32-bit dtype's own pattern.
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         packed_pad_value = pad_value;
     } else if (a.dtype() == DataType::UINT16) {
-        packed_pad_value = pack_two_uint16_into_uint32({0, float_to_uint16(pad_value)});
+        packed_pad_value = pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
+    } else if (a.dtype() == DataType::FLOAT32) {
+        packed_pad_value = std::bit_cast<uint32_t>(pad_value);
     } else {
-        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(0.0f), bfloat16(pad_value)});
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
     }
+
+    // Build the pad-value const tensor once on cache miss and release its owning MeshTensor into
+    // the artifact.  The framework parks it in the cache entry, so its address stays valid for
+    // every dispatch that hits this cached Program.
+    std::vector<tt::tt_metal::MeshTensor> op_owned;
+    op_owned.reserve(1);
+    Tensor pad_value_const_tensor = build_pad_value_const_tensor_sc(tensor_args, packed_pad_value);
+    op_owned.push_back(pad_value_const_tensor.device_storage().release_mesh_tensor());
+    const auto& pad_value_mesh_tensor = op_owned.back();
 
     KernelSpec reader{
         .unique_id = RM_SC_READER,
