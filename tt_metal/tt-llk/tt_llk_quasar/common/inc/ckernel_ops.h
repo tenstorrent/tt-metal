@@ -983,8 +983,8 @@ extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsign
 
 #define TT_OP_SFPLOADI(lreg_ind, instr_mod0, imm16)     TT_OP(0x71, (((lreg_ind) << 20) + ((instr_mod0) << 16) + ((imm16) << 0)))
 #define TT_IP_SFPLOADI(IP, lreg_ind, instr_mod0, imm16) TT_IP_INSN(IP, TT_OP_SFPLOADI(lreg_ind, instr_mod0, imm16))
-#define TT_SFPLOADI(lreg_ind, instr_mod0, imm16)    TT_IP_SFPLOADI(::ckernel::instrn_buffer, lreg_ind, instr_mod0, imm16))
-#define TTI_SFPLOADI(lreg_ind, instr_mod0, imm16)   TT_IP_SFPLOADI(nullptr, lreg_ind, instr_mod0, imm16))
+#define TT_SFPLOADI(lreg_ind, instr_mod0, imm16)    TT_IP_SFPLOADI(::ckernel::instrn_buffer, lreg_ind, instr_mod0, imm16)
+#define TTI_SFPLOADI(lreg_ind, instr_mod0, imm16)   TT_IP_SFPLOADI(nullptr, lreg_ind, instr_mod0, imm16)
 
 #define TT_OP_SFPLOADMACRO(seq_id, lreg_ind_lo, instr_mod0, sfpu_addr_mode, done, dest_reg_addr, lreg_ind_hi)                                   \
     TT_OP(                                                                                                                                      \
