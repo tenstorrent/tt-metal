@@ -64,8 +64,11 @@ inline void sfpu_rope_dest_setup()
  * cos/sin for one face into LREG0/LREG1.  Every head shares them at a given width
  * tile, so the load is hoisted out of the head loop.  A single even-parity load
  * serves both x parities (see the layout note at the top).
+ *
+ * is_fp32_dest_acc_en is required, not defaulted: a 16-bit view of an FP32 DEST
+ * reads the wrong rows and stores half datums, silently.
  */
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void sfpu_rope_load_cos_sin(const std::uint32_t cos_addr, const std::uint32_t sin_addr)
 {
     // BF16 inputs can be unpacked into FP32 DEST: use the register representation.
@@ -96,7 +99,7 @@ inline void sfpu_rope_scale_cos_sin(const std::uint32_t scale_fp32)
  * (the caller's x_base/x_stride asserts guarantee it).  Only the address-bearing
  * instructions take the runtime TT_ form; the multiplies keep their inline encoding.
  */
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void sfpu_rope_face(const std::uint32_t x_addr)
 {
     constexpr std::uint32_t FMT = static_cast<std::uint32_t>(is_fp32_dest_acc_en ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B);
@@ -131,6 +134,11 @@ inline void sfpu_rope_face(const std::uint32_t x_addr)
  * scale_fp32 is required rather than defaulted: under has_scale a missing value
  * would scale cos/sin by zero and silently zero every output. Callers with
  * has_scale=false pass 0.
+ *
+ * is_fp32_dest_acc_en selects the Dest representation the loads and stores use,
+ * as in sfpu_rope_fused_all_rows: BF16 inputs unpacked into FP32 DEST need it set.
+ * No template parameter is defaulted: a caller that omits the Dest mode fails to
+ * compile instead of reading a 16-bit view of an FP32 DEST.
  */
 template <
     std::uint32_t Ht,
@@ -140,7 +148,8 @@ template <
     std::uint32_t cos_base,
     std::uint32_t sin_base,
     std::uint32_t cs_stride,
-    bool has_scale = false>
+    bool has_scale,
+    bool is_fp32_dest_acc_en>
 inline void sfpu_rope_all_rows(const std::uint32_t scale_fp32)
 {
     constexpr std::uint32_t F = rope::FACE_ROWS;
@@ -156,7 +165,7 @@ inline void sfpu_rope_all_rows(const std::uint32_t scale_fp32)
         for (std::uint32_t f = 0; f < 2; f++)
         {
             const std::uint32_t cs_off = w * cs_stride + f * F;
-            sfpu_rope_load_cos_sin(cos_base + cs_off, sin_base + cs_off);
+            sfpu_rope_load_cos_sin<is_fp32_dest_acc_en>(cos_base + cs_off, sin_base + cs_off);
             if constexpr (has_scale)
             {
                 // Amortized over the Ht heads that reuse this cos/sin pair.
@@ -165,7 +174,7 @@ inline void sfpu_rope_all_rows(const std::uint32_t scale_fp32)
             std::uint32_t x_addr = x_base + w * x_stride + f * F;
             for (std::uint32_t h = 0; h < Ht; h++)
             {
-                sfpu_rope_face(x_addr);
+                sfpu_rope_face<is_fp32_dest_acc_en>(x_addr);
                 x_addr += head_stride;
             }
         }
@@ -187,6 +196,8 @@ inline void sfpu_rope_all_rows(const std::uint32_t scale_fp32)
  *
  * ``is_fp32_dest_acc_en`` selects the DEST register representation for both
  * x and fused phases, independently of their original input memory format.
+ * No template parameter is defaulted: a caller that omits the Dest mode fails to
+ * compile instead of reading a 16-bit view of an FP32 DEST.
  *
  * x_stride is 64 when x came from copy_tile (Tile32x32 slots) and 32 when it is
  * a Dense-layout custom_mm result still sitting in DEST.
@@ -198,10 +209,10 @@ template <
     std::uint32_t x_stride,
     std::uint32_t cs_base,
     std::uint32_t cs_stride,
-    bool has_scale           = false,
-    std::uint32_t tile_h     = 1,
-    bool cos_sin_per_row     = false,
-    bool is_fp32_dest_acc_en = false>
+    bool has_scale,
+    std::uint32_t tile_h,
+    bool cos_sin_per_row,
+    bool is_fp32_dest_acc_en>
 inline void sfpu_rope_fused_all_rows(const std::uint32_t scale_fp32)
 {
     constexpr std::uint32_t F = rope::FACE_ROWS;
