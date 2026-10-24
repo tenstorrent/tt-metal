@@ -34,6 +34,13 @@
 #       - "bpc": bytes/cycle
 #       - "gbps": GB/s (requires clock frequency from device or fallback constant)
 #
+# Plot exclusion:
+#   - exclude_from_plots: Skip this test when plotting with the --plot flag
+#       Values: true | false (default)
+#       Set this for tests whose plots carry little meaning because they only
+#       produce one or a few datapoints, e.g. Directed Ideal tests. Excluded
+#       tests are still profiled, checked and reported as usual.
+#
 # These metadata fields are automatically injected into CSV files when using the --report flag.
 
 tests:
@@ -57,6 +64,7 @@ tests:
   3:
     name: "DRAM Directed Ideal"
     directory: "dram_unary"
+    exclude_from_plots: true
     comment: |
       This test shows the ideal read and write bandwidth when transferring multiple 8KB packets.
       The read bandwidth is what is expected, however write bandwidth is expected to be 64
