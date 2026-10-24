@@ -152,6 +152,11 @@ def main():
         for row in [head, rule] + body
     ]
 
+    blind = [p for p in phases if outcome.get(p) == "pass" and p not in device]
+    if blind:
+        print(f"WARNING: {len(blind)} of {counts['pass']} passing phases have no device samples:", file=sys.stderr)
+        print(f"  {', '.join(blind)}", file=sys.stderr)
+
     text = "\n".join(report) + "\n"
     (args.out.write_text(text) if args.out else sys.stdout.write(text))
     if args.score:
