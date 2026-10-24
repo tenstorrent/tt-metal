@@ -835,7 +835,7 @@
   model_family: Gemma
   skus:
     bh_quietbox_2:
-      timeout: 17  # run 40103786590: 3.3 min warm; a cold TT-cache rebuild (one-off after a cache layout change) is
+      timeout: 16  # run 40103786590: 3.3 min warm; a cold TT-cache rebuild (one-off after a cache layout change) is
                    # the shield runner's exposure, not the PR gate's
       tier: 1  # the tier-2 QB2 bucket is full (186/186); this fits the tier-1 headroom
       release_ready: false
@@ -848,10 +848,12 @@
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-12B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-12B-it
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
+    # test_prose_accuracy: 2048 prose tokens on the (1,4) mesh against the fp32 top-5 reference (skips on bh_p150)
     pytest -s --timeout 900 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
       models/demos/gemma4/tests/unit/test_packed_verify.py \
       models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      models/demos/gemma4/tests/test_prose_accuracy.py \
       --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
   model: gemma-4-12b
   model_family: Gemma
@@ -864,7 +866,7 @@
       timeout: 6
       tier: 2
     bh_quietbox_2:
-      timeout: 12  # run 40103786590: 9.7 min
+      timeout: 13  # run 40103786590: 9.7 min, plus ~1 min for test_prose_accuracy (24 s of test on a warm cache + load)
       tier: 1
       release_ready: true
   owner_id: U088413NP0Q # Ashai Reddy
