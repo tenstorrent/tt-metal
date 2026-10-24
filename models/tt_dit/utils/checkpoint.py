@@ -9,7 +9,7 @@ produces), so a repo found there loads with no hub lookup, and the directory kee
 basename that the tt_dit cache namespace is keyed on. A repo absent from the mirror resolves to the
 repo id itself, so callers fall back to the HuggingFace cache unchanged.
 
-The mirror is opt-in: it is only consulted when `$TT_DIT_WEIGHTS_ROOT` names its root. CI jobs whose
+The mirror is opt-in: it is only consulted when `$TT_DIT_LOCAL_WEIGHTS_ROOT` names its root. CI jobs whose
 runners mount a shared mirror set it in their job env.
 """
 
@@ -20,11 +20,11 @@ from pathlib import Path
 
 from loguru import logger
 
-WEIGHTS_ROOT_ENV = "TT_DIT_WEIGHTS_ROOT"
+WEIGHTS_ROOT_ENV = "TT_DIT_LOCAL_WEIGHTS_ROOT"
 
 
 def weights_root() -> Path | None:
-    """The mirror root from `$TT_DIT_WEIGHTS_ROOT`, or None (mirror disabled) when it is unset or empty."""
+    """The mirror root from `$TT_DIT_LOCAL_WEIGHTS_ROOT`, or None (mirror disabled) when it is unset or empty."""
     root = os.environ.get(WEIGHTS_ROOT_ENV)
     return Path(root) if root else None
 
