@@ -11,8 +11,17 @@ cache are bfloat8_b from the start (the prefill spec's dataformats), not switche
 
 from ._settings_base import Setting, Settings  # noqa: F401  (Setting: the entries agents add to TABLE)
 
-TABLE = {}
+TABLE = {
+    "NORM_FIDELITY": Setting(
+        "HiFi4",
+        ("HiFi4", "HiFi3", "HiFi2", "LoFi"),
+        "rule 7 default: HiFi4 for the rms_norm multiplies (C.attn_dense.attn_norm)",
+    ),
+    "NORM_FP32_ACC": Setting(
+        True, (True, False), "fp32 dest, as the reference's fp32 variance (C.attn_dense.attn_norm)"
+    ),
+}
 
-MAX_PRECISION = {}
+MAX_PRECISION = {"NORM_FIDELITY": "HiFi4", "NORM_FP32_ACC": True}
 
 settings = Settings("MIMO_V26_FLASH_RL_", TABLE, max_precision=MAX_PRECISION)
