@@ -231,6 +231,7 @@ Data manipulation and processing
   typecast_tile
   dropout_tile
   rand_tile
+  threefry_tile
 
 Quantization operations
 ^^^^^^^^^^^^^^^^^^^^^^^
