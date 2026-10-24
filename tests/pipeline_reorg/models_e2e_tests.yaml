@@ -784,10 +784,12 @@
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
     # Deselect packed-verify batch_perf (~2–3m): WH llmbox_perf SKU budget is
     # 14m; demo+lm_head+matches_sequential+full_model measure 11-13m there.
+    # test_prose_accuracy: 2048 prose tokens on the (1,4) mesh against the fp32 top-5 reference (~1.5 min with the load)
     pytest -s --timeout 900 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
       models/demos/gemma4/tests/unit/test_packed_verify.py \
       models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      models/demos/gemma4/tests/test_prose_accuracy.py \
       --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
     # Vision tower + encoder at full depth against the masked HF reference
     # (PCC >= 0.98), weight-backed; ~2.5 min on the QB2 1x4 mesh. The vision
@@ -807,6 +809,7 @@
       release_ready: false
     bh_quietbox_2:
       timeout: 26  # run 40103786590 (first full run past the SDPA grid throw): 20.7 min wall at the 19-min kill with
+                   # the prose gate (~1.5 min) added on top; the cached HF reference takes ~8 min off from the second run on
                    # the vision run not yet started; text_demo 404 s + lm_head / packed_verify / full_model 614 s (the
                    # full model is 498 s, ~8 min of it the 31B HF reference forward on the CPU) + the vision towers
       tier: 1
