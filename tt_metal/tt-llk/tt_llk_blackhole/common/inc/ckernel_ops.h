@@ -1101,15 +1101,15 @@ extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsign
 
 #define TT_OP_TBUFCMD     TT_OP(0x4b, 0)
 #define TT_IP_TBUFCMD(IP) TT_IP_INSN(IP, TT_OP_TBUFCMD)
-#define TTI_TBUFCMD       TT_OP_TBUFCMD(nullptr)
+#define TTI_TBUFCMD       TT_IP_TBUFCMD(nullptr)
 
 #define TT_OP_TRNSPSRCA     TT_OP(0x14, 0)
 #define TT_IP_TRNSPSRCA(IP) TT_IP_INSN(IP, TT_OP_TRNSPSRCA)
-#define TTI_TRNSPSRCA       TT_OP_TRNSPSRCA(nullptr)
+#define TTI_TRNSPSRCA       TT_IP_TRNSPSRCA(nullptr)
 
 #define TT_OP_TRNSPSRCB     TT_OP(0x16, 0)
 #define TT_IP_TRNSPSRCB(IP) TT_IP_INSN(IP, TT_OP_TRNSPSRCB)
-#define TTI_TRNSPSRCB       TT_OP_TRNSPSRCB(nullptr)
+#define TTI_TRNSPSRCB       TT_IP_TRNSPSRCB(nullptr)
 
 #define TT_OP_UNPACR(                                                                                                                                \
     Unpack_block_selection,                                                                                                                          \

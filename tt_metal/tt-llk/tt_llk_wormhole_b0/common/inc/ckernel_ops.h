@@ -845,7 +845,7 @@ extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsign
     TT_OP(0x82, (((imm12_math) << 12) + ((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
 #define TT_SFPSETEXP_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
-#define TT_IP_SFPSETEXP(IP, imm12_math, lreg_c, lreg_dest, instr_mod1)  TT_INSN(IP, TT_OP_SFPSETEXP(imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_IP_SFPSETEXP(IP, imm12_math, lreg_c, lreg_dest, instr_mod1)  TT_IP_INSN(IP, TT_OP_SFPSETEXP(imm12_math, lreg_c, lreg_dest, instr_mod1))
 #define TT_SFPSETEXP(imm12_math, lreg_c, lreg_dest, instr_mod1)  TT_IP_SFPSETEXP(::ckernel::instrn_buffer, imm12_math, lreg_c, lreg_dest, instr_mod1)
 #define TTI_SFPSETEXP(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_IP_SFPSETEXP(nullptr, imm12_math, lreg_c, lreg_dest, instr_mod1)
 
