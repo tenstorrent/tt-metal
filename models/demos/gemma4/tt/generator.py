@@ -2469,15 +2469,17 @@ class ChunkedPrefillPageTableGuardMixin:
 
     # When the allocator walk runs (``_g4_alloc_levels``: two get_memory_view block tables, 15-20 ms of host on
     # the decode step that follows a prefill at the 26B's allocation count). GEMMA4_TRACE_ALLOC_GUARD_ARM:
-    #   prefill (default) - every prefill arms the next replay's check (today's rule);
-    #   alloc             - only allocation events arm it: a per-layer page-table buffer allocated or grown
+    #   prefill           - every prefill arms the next replay's check (the rule before 2026-10-24);
+    #   alloc (default)   - only allocation events arm it: a per-layer page-table buffer allocated or grown
     #                       (``Gemma4Model._page_tables_to_ttnn``), a prefill trace (re)captured, a chunked or
     #                       continuation prefill (its sliding-tail stash), a multimodal prefill (encoder
     #                       allocations), plus a periodic check every GEMMA4_TRACE_ALLOC_GUARD_PERIOD replays
     #                       (default 32; 0 = events only). The decision on the levels is the same in both modes.
+    # Default flipped to ``alloc`` on 2026-10-24: QB2 26B c1 TTFT 103 -> 87 ms, c32 TTFT -84 ms (devq 0486 A/B);
+    # the Galaxy lane engine's post-eval hang reproducer (6144/2048 x128) and c128 ran without a hang in that mode.
     def _g4_guard_arm_mode(self) -> str:
-        mode = os.environ.get("GEMMA4_TRACE_ALLOC_GUARD_ARM", "prefill")
-        return mode if mode in ("prefill", "alloc") else "prefill"
+        mode = os.environ.get("GEMMA4_TRACE_ALLOC_GUARD_ARM", "alloc")
+        return mode if mode in ("prefill", "alloc") else "alloc"
 
     def _g4_arm_alloc_check(self, reason: str) -> bool:
         """Arm the next decode replay's allocator check; ``prefill`` (a prefill ran, nothing known allocated) arms

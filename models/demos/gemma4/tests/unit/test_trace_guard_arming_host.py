@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """Host-only: when the decode-trace allocation guard walks the allocator (``ChunkedPrefillPageTableGuardMixin``).
-GEMMA4_TRACE_ALLOC_GUARD_ARM=prefill (default): every prefill arms the next replay's check. ``alloc``: only the
+GEMMA4_TRACE_ALLOC_GUARD_ARM=prefill: every prefill arms the next replay's check. ``alloc`` (the default): only the
 call's allocation events arm it (page-table buffers allocated / grown, a prefill trace captured, a chunked or
 continuation prefill, a multimodal prefill) plus a periodic check every GEMMA4_TRACE_ALLOC_GUARD_PERIOD replays.
 The decision on the levels (baseline, budget) is the same in both modes. No device, no conftest."""
@@ -31,8 +31,8 @@ def _replays(g, n):
     return [g._g4_trace_guard_should_recapture("k") for _ in range(n)]
 
 
-def test_default_mode_arms_on_every_prefill(monkeypatch):
-    monkeypatch.delenv("GEMMA4_TRACE_ALLOC_GUARD_ARM", raising=False)
+def test_prefill_mode_arms_on_every_prefill(monkeypatch):
+    monkeypatch.setenv("GEMMA4_TRACE_ALLOC_GUARD_ARM", "prefill")
     g = _Guard()
     assert _replays(g, 1) == [False] and g.walks == 1  # the first replay takes the baseline
     assert _replays(g, 3) == [False] * 3 and g.walks == 2  # armed by default on the first replay after capture
@@ -96,11 +96,13 @@ def test_decision_is_the_same_in_both_modes(monkeypatch):
         assert _replays(g, 1) == [False] and g._g4_trace_alloc_baseline["k"] == (90, 10)
 
 
-def test_unknown_mode_is_the_default():
-    import os
+def test_default_mode_is_alloc(monkeypatch):
+    monkeypatch.delenv("GEMMA4_TRACE_ALLOC_GUARD_ARM", raising=False)
+    g = _Guard()
+    assert g._g4_guard_arm_mode() == "alloc"
+    assert g._g4_arm_alloc_check("prefill") is False  # a plain prefill no longer arms the walk
 
-    os.environ["GEMMA4_TRACE_ALLOC_GUARD_ARM"] = "sometimes"
-    try:
-        assert _Guard()._g4_guard_arm_mode() == "prefill"
-    finally:
-        del os.environ["GEMMA4_TRACE_ALLOC_GUARD_ARM"]
+
+def test_unknown_mode_is_the_default(monkeypatch):
+    monkeypatch.setenv("GEMMA4_TRACE_ALLOC_GUARD_ARM", "sometimes")
+    assert _Guard()._g4_guard_arm_mode() == "alloc"
