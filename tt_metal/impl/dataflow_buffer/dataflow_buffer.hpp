@@ -62,7 +62,8 @@ struct DataflowBufferConfig {
     // supplied before launch via DataflowBufferImpl::set_borrowed_memory_base_addr.
     bool borrows_memory = false;
     // When true, this local DFB is a CrossNode/PrefetcherPipe relay (borrowed ring +
-    // DM/TRISC credit bridge). Host binding generation emits RelayDFBBindingToken.
+    // DM/TRISC credit bridge). Host binding generation emits a RelayDFBBindingToken that
+    // carries both access patterns.
     bool is_relay = false;
 };
 

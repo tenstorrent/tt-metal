@@ -139,6 +139,10 @@ constexpr uint8_t get_num_faces_c_dim(const DFBBindingToken<P, C>& token) {
 // region and snap the borrowed local iface to the durable fifo_ptr checkpoint.
 // CrossNode relays omit it (NO_PREFETCHER_PIPE): CrossNode state is re-zeroed every
 // launch, so the dispatch-written local CB config is already correct.
+// The template arguments are the producer and consumer access patterns, so
+// `DataflowBuffer relay(dfb::name)` is specialized at compile time. A
+// `RelayDFBBindingToken{id}` is <UNKNOWN, UNKNOWN>.
+template <dfb::AccessPattern Pap = dfb::AccessPattern::UNKNOWN, dfb::AccessPattern Cap = dfb::AccessPattern::UNKNOWN>
 struct RelayDFBBindingToken {
     static constexpr uint8_t NO_PREFETCHER_PIPE = 0xFF;
 

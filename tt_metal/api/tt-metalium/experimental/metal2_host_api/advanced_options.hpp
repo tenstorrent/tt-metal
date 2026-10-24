@@ -256,13 +256,17 @@ struct DFBAdvancedOptions {
     //
     // Requirements (validated at MakeProgramFromSpec):
     //  - mutually exclusive with borrowed_from
-    //  - entry_size == pipe entry_size and entry_size * num_entries == pipe ring_size, for every
-    //    named pipe (all named pipes share ring_size and entry_size)
+    //  - entry_size divides the pipe entry_size (the relay may page one pipe entry as several
+    //    relay entries) and entry_size * num_entries covers the pipe ring's whole entries, for
+    //    every named pipe (all named pipes share ring_size and entry_size)
     //  - the DFB's node set (union of its bound kernels' nodes) equals the union of the named
     //    pipes' receiver nodes, and those receiver sets are pairwise disjoint
     //  - every PRODUCER kernel binds exactly this pipe set under one accessor
     //    (KernelAdvancedOptions::prefetcher_pipe_bindings); it is the pipes' receiver kernel, and
     //    its num_threads is the pipes' receiver-side credit lane count
+    //  - a BLOCKED producer's block is one pipe entry (block_size == relay entries
+    //    per pipe entry). Any other producer pattern with several relay entries per pipe entry
+    //    needs a single-threaded producer kernel. The consumer may use any pattern.
     //
     // Naming more than one pipe makes a single DFB serve several 1:N pipes whose receiver sets
     // tile the DFB's nodes (one relay for a whole grid fed by several senders), mirroring the
