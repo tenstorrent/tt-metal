@@ -96,9 +96,17 @@ def test_prefill_seed_server(mesh_device):
         expert_down_dtype=EXPERT_DOWN_DTYPE,
     )
     logger.info(f"[seed-server] model built in {time.time() - t0:.0f} s; warm-up prefill")
-    st, lg, _ = model.prefill(torch.tensor([785, 6722, 315, 9621], dtype=torch.int64), user=0)  # compile the programs
-    ttnn.deallocate(st)
-    ttnn.deallocate(lg)
+    # compile the programs at the lengths the ring will ask for (GLM53F_SEED_WARMUP, default 4 and 4092 tokens: the
+    # first request at a new length otherwise pays its compile, 4.66 s vs 1.82 s at 4092, G53F-0085)
+    for n in [int(v) for v in os.environ.get("GLM53F_SEED_WARMUP", "4,4092").split(",") if v.strip()]:
+        tw = time.perf_counter()
+        ids = torch.tensor(([785, 6722, 315, 9621] * (n // 4 + 1))[: min(n, MAX_SEQ)], dtype=torch.int64)
+        st, lg, _ = model.prefill(ids, user=0)
+        ttnn.deallocate(st)
+        ttnn.deallocate(lg)
+        for dec in model.layers:  # the export path too
+            _dsa_state_host(model, dec, len(ids)) if dec.cache is not None else _kda_state_host(model, dec)
+        logger.info(f"[seed-server] warm-up {len(ids)} tokens: {time.perf_counter() - tw:.2f} s")
     decs = {d.layer_idx: d for d in model.layers}
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

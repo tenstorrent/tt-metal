@@ -220,12 +220,15 @@ class GLMMesh:
 
     def to_host(self, x: ttnn.Tensor, *, rows: int | None = None, cols: int | None = None) -> torch.Tensor:
         """Host tensor: chip shards concatenated on ``rows`` / ``cols`` (``None`` = take the first
-        replica on that axis). Equal replicas are the caller's assertion, not checked here."""
-        shards = [ttnn.to_torch(d) for d in self.device_tensors(x)]
-        grid = [[shards[r * self.cols + c] for c in range(self.cols)] for r in range(self.rows)]
+        replica on that axis). Equal replicas are the caller's assertion, not checked here. Only the shards
+        used are read (a ``None`` axis reads its first replica only: the live seed export read 8x too much)."""
+        devs = self.device_tensors(x)
+        rs = range(self.rows) if rows is not None else range(1)
+        cs = range(self.cols) if cols is not None else range(1)
         row_parts = []
-        for r in range(self.rows):
-            row_parts.append(torch.cat(grid[r], dim=cols) if cols is not None else grid[r][0])
+        for r in rs:
+            parts = [ttnn.to_torch(devs[r * self.cols + c]) for c in cs]
+            row_parts.append(torch.cat(parts, dim=cols) if cols is not None else parts[0])
         return torch.cat(row_parts, dim=rows) if rows is not None else row_parts[0]
 
     # ------------------------------------------------------------------ collectives
