@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
+#include <array>
 #include <numbers>
 #include <cstdint>
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -363,18 +364,37 @@ std::vector<Tensor> hypot_bw(
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad;
     auto output_memory_config = output_mem_config.value_or(input_a.memory_config());
-    Tensor result_recip = ttnn::reciprocal(ttnn::hypot(input_a, other, output_memory_config), output_memory_config);
-    Tensor grad_a = ttnn::multiply(
-        grad_tensor,
-        ttnn::multiply(input_a, result_recip, std::nullopt, output_memory_config),
-        std::nullopt,
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    const std::array abs_it = {EltwiseUnaryWithParam{UnaryOpType::ABS}};
+    const std::array sign_it = {EltwiseUnaryWithParam{UnaryOpType::SIGN}};
+    const std::array rsqrt_1_plus_r2 = {
+        EltwiseUnaryWithParam{UnaryOpType::SQUARE},
+        EltwiseUnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
+        EltwiseUnaryWithParam{UnaryOpType::RSQRT}};
+
+    Tensor a_ge_b = ttnn::ge(input_a, other, std::nullopt, output_memory_config, std::nullopt, abs_it, abs_it);
+    Tensor big = ttnn::where(a_ge_b, input_a, other, output_memory_config);
+    Tensor small = ttnn::where(a_ge_b, other, input_a, output_memory_config);
+    Tensor ratio = ttnn::where(
+        ttnn::eqz(big, output_memory_config),
+        0.0f,
+        ttnn::divide(small, big, std::nullopt, output_memory_config),
         output_memory_config);
+    small.deallocate();
+    Tensor unit_big =
+        ttnn::multiply(ratio, big, std::nullopt, output_memory_config, std::nullopt, {}, rsqrt_1_plus_r2, sign_it);
+    big.deallocate();
+    Tensor grad_big = ttnn::multiply(grad_tensor, unit_big, std::nullopt, output_memory_config);
+    unit_big.deallocate();
+    Tensor grad_small = ttnn::multiply(grad_big, ratio, std::nullopt, output_memory_config);
+    ratio.deallocate();
+    Tensor grad_a = ttnn::where(a_ge_b, grad_big, grad_small, output_memory_config);
+    Tensor grad_b = ttnn::where(a_ge_b, grad_small, grad_big, output_memory_config);
+    a_ge_b.deallocate();
+    grad_big.deallocate();
+    grad_small.deallocate();
     grad.emplace_back(grad_a);
-    Tensor grad_b = ttnn::multiply(
-        grad_tensor,
-        ttnn::multiply(other, result_recip, std::nullopt, output_memory_config),
-        std::nullopt,
-        output_memory_config);
     grad.emplace_back(grad_b);
     return grad;
 }
