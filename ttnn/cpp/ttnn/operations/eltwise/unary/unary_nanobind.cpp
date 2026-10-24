@@ -923,7 +923,7 @@ void bind_gelu(nb::module_& mod) {
             variant (ttnn.GeluVariant, optional): Select GELU implementation. Defaults to `GeluVariant.Accurate`.
                 - `Accurate`: piecewise CDF (BF16) or FP32 erf — matches torch.nn.functional.gelu (exact).
                 - `FastLut`: 6-segment piecewise-linear LUT — fastest, ~1% absolute error.
-                - `Tanh`: 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))) in FP32 — matches torch.nn.functional.gelu(approximate="tanh").
+                - `Tanh`: 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))), as torch.nn.functional.gelu(approximate="tanh"); FP32 on Wormhole and with FP32 DEST accumulation, a fitted BF16 kernel (below 1 BF16 ULP) on Blackhole with BF16 DEST, so Wormhole and Blackhole give different bits there.
             fast_and_approximate_mode (bool, optional): Legacy alias. `True` maps to `variant=FastLut`, `False` to `variant=Accurate`. Defaults to `False`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
@@ -956,7 +956,9 @@ void bind_gelu(nb::module_& mod) {
             .value(
                 "Tanh",
                 GeluVariant::TANH,
-                "FP32 Hendrycks tanh approximation. Matches torch.nn.functional.gelu(approximate=\"tanh\").");
+                "Hendrycks tanh approximation, as torch.nn.functional.gelu(approximate=\"tanh\"). FP32 on Wormhole and "
+                "with FP32 DEST accumulation; a fitted BF16 kernel (below 1 BF16 ULP) on Blackhole with BF16 DEST, so "
+                "the two boards give different bits there.");
 
     ttnn::bind_function<"gelu">(
         mod,
@@ -1012,7 +1014,9 @@ void bind_geglu(nb::module_& mod) {
                 - `FastLut`: 6-segment piecewise-linear lookup table. Fastest and least accurate; over the
                   normal BF16 range the absolute error reaches 0.024 near zero, and every input at or below
                   -3 returns exactly 0.
-                - `Tanh`: 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))) evaluated in FP32.
+                - `Tanh`: 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))), evaluated in FP32 on Wormhole and with FP32
+                  DEST accumulation. On Blackhole with BF16 DEST a fitted BF16 kernel computes it, below 1 BF16 ULP
+                  of the exact value, so Wormhole and Blackhole give different bits there.
 
         Returns:
             ttnn.Tensor: the output tensor.
