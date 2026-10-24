@@ -547,3 +547,27 @@ def test_sdpa_decode_broadcast_mask_batch(device, b, nh, nkv, s, d, dtype, grid_
         grid_size=grid_size,
         mask_dtype=mask_dtype,
     )
+
+
+@pytest.mark.parametrize("nh, d", [(1, 128), (4, 64), (8, 128)])
+def test_sdpa_decode_default_config_single_kv_head(device, nh, d):
+    """Batch 1 with one KV head and no program config puts the only head on every core of the grid. On grids of more
+    than 64 cores (Blackhole) that exceeded what the tree reduction can combine, and the call raised."""
+    torch.manual_seed(0)
+    b, nkv, s = 1, 1, 2048
+    cur_pos = s // 2
+    Q = torch.randn(1, b, nh, d)
+    K = torch.randn(b, nkv, s, d)
+    V = torch.randn(b, nkv, s, d)
+    tt_q, tt_k, tt_v = (
+        ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for t in (Q, K, V)
+    )
+
+    tt_out = ttnn.transformer.scaled_dot_product_attention_decode(tt_q, tt_k, tt_v, cur_pos=[cur_pos], scale=d**-0.5)
+    out = ttnn.to_torch(tt_out)[:, :, :nh, :]
+
+    q = Q.permute(1, 2, 0, 3)
+    k = K[:, :, : cur_pos + 1].expand(b, nh, -1, d)
+    v = V[:, :, : cur_pos + 1].expand(b, nh, -1, d)
+    expected = torch.nn.functional.scaled_dot_product_attention(q, k, v, scale=d**-0.5).permute(2, 0, 1, 3)
+    assert_with_pcc(expected, out, 0.99)
