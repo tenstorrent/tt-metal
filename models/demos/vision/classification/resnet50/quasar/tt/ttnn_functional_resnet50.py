@@ -167,6 +167,11 @@ _CONV_ON_DEVICE = {"stem": True, "conv1": True, "conv2": True, "conv3": True, "d
 # addr and also tripped the z_dim=4/y_dim!=16 assert). Fixed: operandB BD reprogram re-added + line-146
 # assert disabled. Verified by test_max_pool2d.py::test_max_pool2d_resnet50_stem. Set False to host-fallback.
 _MAXPOOL_ON_DEVICE = True
+# Keep each conv's prepared (device) weights/bias resident for later runs. Off by default: the model's bf16 conv
+# weights total ~47 MB (+4 MB fc), which does not fit the emulator's single 43 MB DRAM bank, so caching them all
+# OOMs partway through layer4 (layer4_module2.conv2's 4.5 MB weights). With this off, each conv uploads its weights,
+# runs, and frees them, so DRAM only ever holds one conv's weights. Costs a weight re-prepare on every forward.
+_CACHE_DEVICE_CONV_WEIGHTS = os.environ.get("TT_METAL_QSR_RESNET_CACHE_CONV_WEIGHTS", "0") == "1"
 
 
 def _host_conv2d(
@@ -232,7 +237,7 @@ def _conv2d_or_host(
     is the per-conv conv_kwargs dict (in_channels/out_channels/batch_size/input_height/input_width/
     kernel_size/stride/padding/dilation/groups/device/conv_config)."""
     if on_device:
-        return ttnn.experimental.quasar.conv2d(
+        out, out_dims, [dev_weight, dev_bias] = ttnn.experimental.quasar.conv2d(
             input_tensor=input_tensor,
             weight_tensor=weight_tensor,
             bias_tensor=bias_tensor,
@@ -242,6 +247,13 @@ def _conv2d_or_host(
             return_weights_and_bias=True,
             **conv2d_kwargs,
         )
+        if _CACHE_DEVICE_CONV_WEIGHTS:
+            return out, out_dims, [dev_weight, dev_bias]
+        # Free the prepared device copies and hand back the caller's tensors, so the next forward prepares again.
+        for dev_t, orig_t in ((dev_weight, weight_tensor), (dev_bias, bias_tensor)):
+            if dev_t is not None and dev_t is not orig_t and ttnn.is_tensor_storage_on_device(dev_t):
+                ttnn.deallocate(dev_t)
+        return out, out_dims, [weight_tensor, bias_tensor]
     logger.warning(f"[QSR] conv '{name}' HOST bypass (on_device=False)")
     return _host_conv2d(
         input_tensor,
