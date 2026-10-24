@@ -242,6 +242,7 @@ protected:
         ttsl::Span<const SubDeviceId> sub_device_ids = {},
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt) override;
     void invalidate_prefetcher_cache_after_pinned_write() override;
+    void prepare_shard_reads() override;
 
 public:
     FDMeshCommandQueue(
