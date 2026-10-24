@@ -8,7 +8,7 @@
 #ifdef ARCH_QUASAR
 
 #include "llk_math_eltwise_binary_sfpu_macros.h"
-#include "sfpu/ckernel_sfpu_binary_comp.h"
+#include "ckernel_sfpu_binary_comp.h"
 
 namespace ckernel {
 
