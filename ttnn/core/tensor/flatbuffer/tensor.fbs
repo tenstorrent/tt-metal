@@ -26,6 +26,14 @@ table Tensor {
     mesh_shape: MeshShape;
     shards: [TensorShard];
     tensor_topology: TensorTopology;
+    // Revision of this schema that the writer followed; `kTensorFileSchemaVersion` in tensor_file_layout.hpp lists
+    // what each value guarantees. Absent (reads as 0) in files written before the field existed.
+    schema_version: uint32;
 }
 
 root_type Tensor;
+// Written by `FinishTensorBuffer` into bytes [4, 8) of the FlatBuffer, which are bytes [12, 16) of a .tensorbin file.
+// Files written before schema version 1 carry no identifier, so readers verify with `VerifyBuffer<Tensor>(nullptr)`
+// rather than with `VerifyTensorBuffer`, which requires it.
+file_identifier "TTNB";
+file_extension "tensorbin";
