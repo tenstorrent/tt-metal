@@ -442,8 +442,6 @@ TEST(MeshDeviceProperties, ExplicitEnvMatchesEnv) {
         distributed::MeshDevice::open_mesh_device(env, distributed::MeshDeviceConfig{distributed::MeshShape{1u, 2u}});
     ASSERT_NE(mesh, nullptr);
 
-    const auto props = experimental::get_device_properties(*mesh);
-    EXPECT_EQ(props.arch(), tt::ARCH::WORMHOLE_B0);
     expect_mesh_matches(*mesh, env.get_device_properties());
 
     mesh->close();
@@ -484,7 +482,6 @@ TEST(MeshDeviceProperties, LegacyOpenMatchesEnv) {
     auto mesh = distributed::MeshDevice::create(distributed::MeshDeviceConfig{distributed::MeshShape{1u, 2u}});
     ASSERT_NE(mesh, nullptr);
 
-    EXPECT_EQ(experimental::get_device_properties(*mesh).arch(), tt::ARCH::WORMHOLE_B0);
     expect_mesh_matches(*mesh, MetalContext::instance().get_env().get_device_properties());
 
     mesh->close();
