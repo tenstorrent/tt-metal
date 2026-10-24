@@ -20,7 +20,15 @@ Where it runs in the head:
 """
 
 import torch
-from ttnn.bringup.combine_rf.routing_a2a import _PLAN, PLAN_WORDS, _al16, header_bytes, routing_a2a_sizes, slot_bytes
+from ttnn.bringup.combine_rf.routing_a2a import (
+    _PLAN,
+    PLAN_WORDS,
+    _al16,
+    header_bytes,
+    routing_a2a_sizes,
+    slot_bytes,
+    worst_rows,
+)
 
 import ttnn
 
@@ -394,6 +402,10 @@ class RoutingStream:
         assert self.N * EPC <= 1024 and S <= 2048 and EPC <= 64 and S % 32 == 0 and 1 <= M <= min(EPC, A, 14)
         sz = routing_a2a_sizes(N=self.N, S=S, K=K, EPC=EPC, A=A, rows_cap=rows_cap, M=M)
         assert sz["fits"], sz["why"]
+        # (worst-case capacity: the plan tensors (DRAM) hold every row a chip can get, an instance's L1 every entry it
+        # can get - packed routing never drops a row)
+        assert rows_cap >= worst_rows(self.N, S, K, EPC), f"rows_cap {rows_cap} < {worst_rows(self.N, S, K, EPC)}"
+        self.inst_cap = sz["inst_cap"]
         self.plan_l1 = sz["plan_l1"]
         self.HBP = header_bytes(EPC, M)
         self.BB, self.BBP = _al16(2 * EPC), _al16(2 * (EPC + 1))
@@ -681,7 +693,7 @@ class RoutingStream:
             PCAP=self.PCAP,
             NPORT=len(self.serve_cache[coord]),
             ROWS_CAP=self.rows_cap,
-            ENT_CAP=self.rows_cap,
+            ENT_CAP=self.inst_cap,
             WX=int(self.wrap_x),
             WY=int(self.wrap_y),
             DCACHE=1,

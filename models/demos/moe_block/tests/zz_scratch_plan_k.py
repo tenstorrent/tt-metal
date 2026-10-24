@@ -8,6 +8,7 @@ import pytest
 import torch
 from loguru import logger
 from ttnn.bringup.combine_rf.combine_plan import combine_planner_prepare, plan_reference, port_luts
+from ttnn.bringup.combine_rf.routing_a2a import worst_rows
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
@@ -20,16 +21,18 @@ R, C, L, A = 2, 4, 2, 15
     [pytest.param((R, C), fabric2d_device_params(fabric_payload_size=7232, l1_small_size=0), id="2x4")],
     indirect=True,
 )
+@pytest.mark.parametrize("routing", ["uniform", "packed"])  # (packed: every token on chip 0's experts - the worst case)
 @pytest.mark.parametrize("pt", [32, 1])
 @pytest.mark.parametrize("K, EPC, S", [(6, 48, 128), (4, 16, 128), (8, 32, 128), (6, 48, 320)])
-def test_plan_k(mesh_device, device_params, K, EPC, S, pt):
+def test_plan_k(mesh_device, device_params, K, EPC, S, pt, routing):
     N = R * C
     g = torch.Generator().manual_seed(K)
-    ids = torch.stack([torch.randperm(N * EPC, generator=g)[:K] for _ in range(N * S)]).view(N, S, K)
+    span = EPC if routing == "packed" else N * EPC
+    ids = torch.stack([torch.randperm(span, generator=g)[:K] for _ in range(N * S)]).view(N, S, K)
     gates = torch.softmax(torch.randn(N, S, K, generator=g), -1).to(torch.bfloat16)
     wbits = gates.view(torch.int16).to(torch.int64) & 0xFFFF
     luts, nps = port_luts(mesh_device, L)
-    rows_cap = -(-N * S * K // 32) * 32 + 32 * EPC
+    rows_cap = worst_rows(N, S, K, EPC)
     run = combine_planner_prepare(
         mesh_device,
         S=S,
@@ -70,4 +73,4 @@ def test_plan_k(mesh_device, device_params, K, EPC, S, pt):
             assert (
                 bad.numel() == 0
             ), f"K {K} pt {pt} chip {ci} {k}: {bad.numel()} words differ, first {bad[:8].tolist()}"
-    logger.info(f"PLAN_K K {K} EPC {EPC} S {S} pt {pt}: every chip's plan matches the host model")
+    logger.info(f"PLAN_K K {K} EPC {EPC} S {S} pt {pt} {routing}: every chip's plan matches the host model")

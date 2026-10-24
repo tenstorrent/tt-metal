@@ -1198,6 +1198,8 @@ class TokenExchange:
         self.builds = 0
 
     def build(self):
+        from ttnn.bringup.combine_rf.routing_a2a import worst_rows
+
         from models.demos.deepseek_v3_d_p.tt.moe.tt_k3_token_split_moe import K3Dims, TtK3TokenSplitMoE
 
         g, m = self.g, self.model
@@ -1209,7 +1211,7 @@ class TokenExchange:
             d,
             S,
             cap=self.experts.cap,
-            rows_cap=-(-g.chips * S * min(m.top_k, EPC) // 32) * 32 + 32 * EPC,
+            rows_cap=worst_rows(g.chips, S, m.top_k, EPC),  # (every row a chip can get: packed routing too)
             routed_only=True,
             flat_layout=self.experts.layout_fields,
             torus=(g.tp_wraps, g.sp_wraps),

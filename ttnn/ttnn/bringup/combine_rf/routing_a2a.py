@@ -196,7 +196,8 @@ _PLAN = (
 constexpr uint32_t S = __S__, K = __K__, EPC = __EPC__, R = __R__, C = __C__, N = R * C, ME = __ME__;
 constexpr uint32_t A = __A__, L = __L__, P = __P__, TPP = __TPP__, M = __M__, NG = N * EPC, E0 = ME * EPC;
 constexpr uint32_t HBP = __HBP__, BB = __BB__, BBP = __BBP__, PCAP = __PCAP__, NPORT = __NPORT__;
-constexpr uint32_t ROWS_CAP = __ROWS_CAP__, ENT_CAP = __ENT_CAP__;
+constexpr uint32_t ROWS_CAP = __ROWS_CAP__, ENT_CAP = __ENT_CAP__;  // (ENT_CAP: an instance's entries, worst case)
+constexpr uint32_t INST_ROWS = ENT_CAP + 32 * EPC;  // (an instance's rows: its entries, each expert padded to 32)
 constexpr uint32_t ROWB = 4 * K, PB = TPP * ROWB, PSZ = (PB + 63) / 64 * 64, NPG = S / TPP;
 constexpr uint32_t NOWN = (A + M - 1) / M;  // accumulators a core owns at most
 constexpr uint32_t al16(uint32_t v) { return (v + 15) / 16 * 16; }
@@ -204,9 +205,10 @@ constexpr uint32_t al64(uint32_t v) { return (v + 63) / 64 * 64; }
 constexpr uint32_t TSM = NOWN * ((S + A - 1) / A);  // my home tokens at most
 constexpr uint32_t O_RT = 0, O_EX = al64(NPG * PSZ), O_NQ = O_EX + al64(4 * M * N), O_PRE = O_NQ + al64(4 * N);
 constexpr uint32_t O_STG = O_PRE + N * BBP, O_HDR = O_STG + al64(4 * TSM * K + 16 * N);
-constexpr uint32_t O_ENT = O_HDR + N * HBP, O_ET = O_ENT + al64(4 * ENT_CAP + 64 * N);
-constexpr uint32_t O_TIDX = O_ET + al64(2 * EPC * S), O_TAB = O_TIDX + al64(4 * ROWS_CAP);
-constexpr uint32_t O_WANT = O_TAB + al64(8 * ROWS_CAP), O_PIN = O_WANT + al64(128 * NOWN);
+constexpr uint32_t O_ENT = O_HDR + N * HBP, O_RUN = O_ENT + al64(4 * ENT_CAP + 128 * N * M);
+constexpr uint32_t O_ET = O_RUN + al64(4 * N * M);
+constexpr uint32_t O_TIDX = O_ET + al64(2 * EPC * S), O_TAB = O_TIDX + al64(4 * INST_ROWS);
+constexpr uint32_t O_WANT = O_TAB + al64(8 * INST_ROWS), O_PIN = O_WANT + al64(128 * NOWN);
 constexpr uint32_t O_PLAN = O_PIN + M * 64, O_CNT = O_PLAN + 128, O_RGN = O_CNT + al64(4 * (EPC + 32));
 constexpr uint32_t O_ROWS = O_RGN + al64(4 * (EPC + 32));
 constexpr uint32_t NOWND = (N + M - 1) / M;  // (destinations an instance owns the header totals of: d % M == q)
@@ -418,19 +420,9 @@ void kernel_main() {
     constexpr uint32_t EW = (EPC + 1) / 2;
     uint32_t tw[EW];
     for (uint32_t i = 0; i < EW; ++i) tw[i] = 0;
-    uint32_t nall = 0, pos = B + O_ENT;
     for (uint32_t o = 0; o < N; ++o) {
-        const uint32_t hb = B + O_HDR + o * HBP;
-        const uint32_t* ht = reinterpret_cast<const uint32_t*>(hb + 64);  // (EPC uint16, padded: BB >= 2 EW words)
+        const uint32_t* ht = reinterpret_cast<const uint32_t*>(B + O_HDR + o * HBP + 64);  // (EPC uint16: BB >= 2 EW words)
         for (uint32_t i = 0; i < EW; ++i) tw[i] += ht[i];
-        uint32_t n = 0;
-        for (uint32_t r = 0; r < M; ++r) n += reinterpret_cast<const uint32_t*>(hb)[r];
-        ent[o] = 0;
-        if (!n || nall + n > ENT_CAP) continue;  // (overflow: its rows are dropped - off > ROWS_CAP sets P_OVER)
-        ent[o] = pos;  // (64-byte aligned, as the read's source: the packet's header end)
-        noc_async_read(sl.get_noc_addr(par * N + o) + HBP, pos, (4 * n + 63) & ~63u);
-        pos += (4 * n + 63) & ~63u;
-        nall += n;
     }
     for (uint32_t e = 0; e < EPC; ++e) tot[e] = (tw[e / 2] >> (16 * (e & 1))) & 0xFFFF;
     uint32_t off = 0, T = 0;
@@ -453,6 +445,31 @@ void kernel_main() {
     };
     const uint32_t e0 = bound(q), e1 = bound(q + 1);
     const uint32_t R0 = e0 < EPC ? reg[e0] : off, R1 = e1 < EPC ? reg[e1] : off;
+    // my experts' entries only: per source, per slice, its run of my experts (a slice is sorted by expert) - each read
+    // keeps its source's 64 B alignment; run (o, r)'s entry x at run[o M + r] + 4 x. An instance's entries are at most
+    // T / M + one expert's (the boundaries are the nearest expert edges): ENT_CAP, the build's worst case - packed
+    // routing included (the rest of the chip's entries are other instances')
+    uint32_t* run = reinterpret_cast<uint32_t*>(B + O_RUN);
+    {
+        uint32_t nall = 0, pos = B + O_ENT;
+        for (uint32_t o = 0; o < N; ++o) {
+            const uint32_t hb = B + O_HDR + o * HBP;
+            const uint32_t* nqo = reinterpret_cast<const uint32_t*>(hb);
+            ent[o] = 0;
+            for (uint32_t r = 0, base = 0; r < M; base += nqo[r], ++r) {
+                const uint16_t* pre = reinterpret_cast<const uint16_t*>(hb + 64 + BB + r * BBP);
+                const uint32_t x0 = base + pre[e0], n = pre[e1] - pre[e0];
+                run[o * M + r] = 0;
+                if (!n || nall + n > ENT_CAP) continue;  // (past the worst case: dropped - off > ROWS_CAP or P_OVER)
+                const uint32_t src = HBP + 4 * x0, a0 = src & ~63u, len = (src - a0 + 4 * n + 63) & ~63u;
+                noc_async_read(sl.get_noc_addr(par * N + o) + a0, pos, len);
+                run[o * M + r] = pos + (src - a0) - 4 * x0;
+                ent[o] = 1;
+                pos += len;
+                nall += n;
+            }
+        }
+    }
     // my experts' counts / regions (core 0: the 64-byte span of the page that holds them, the rest of the span other
     // chips' experts: zero) - now, under the entries' reads and the fill
     const uint32_t b0 = (E0 * 4) & ~63u, b1 = ((E0 + EPC) * 4 + 63) & ~63u;
@@ -469,7 +486,7 @@ void kernel_main() {
         noc_async_write(B + O_CNT, get_noc_addr(0, cgg) + b0, b1 - b0);
         noc_async_write(B + O_RGN, get_noc_addr(0, rgg) + b0, b1 - b0);
     }
-    const uint32_t W1 = R1 < ROWS_CAP ? R1 : ROWS_CAP;
+    const uint32_t W1c = R1 < ROWS_CAP ? R1 : ROWS_CAP, W1 = W1c < R0 + INST_ROWS ? W1c : R0 + INST_ROWS;
     const uint32_t ER = e1 - e0;
     uint16_t* et = ER * S <= LMW ? lm : reinterpret_cast<uint16_t*>(B + O_ET);  // per (my expert, token)
     {  // (32-bit stores: et is 4-byte aligned, S even)
@@ -486,8 +503,9 @@ void kernel_main() {
         if (!ent[o]) continue;
         const uint32_t hb = B + O_HDR + o * HBP;
         const uint32_t* nqo = reinterpret_cast<const uint32_t*>(hb);
-        const uint32_t* eo = reinterpret_cast<const uint32_t*>(ent[o]);
         for (uint32_t r = 0, base = 0; r < M; base += nqo[r], ++r) {
+            if (!run[o * M + r]) continue;
+            const uint32_t* eo = reinterpret_cast<const uint32_t*>(run[o * M + r]);
             const uint16_t* pre = reinterpret_cast<const uint16_t*>(hb + 64 + BB + r * BBP);
             const uint32_t x1 = base + pre[e1];
             for (uint32_t x = base + pre[e0]; x < x1; ++x) {
@@ -513,17 +531,18 @@ void kernel_main() {
         if (!ent[o]) continue;
         const uint32_t hb = B + O_HDR + o * HBP;
         const uint32_t* nqo = reinterpret_cast<const uint32_t*>(hb);
-        const uint32_t* eo = reinterpret_cast<const uint32_t*>(ent[o]);
         const uint32_t os = o * S, lk = ME + o;
         uint32_t hp[L];  // (the port toward home o, per link)
         for (uint32_t l = 0; l < L; ++l) hp[l] = o == ME ? 0 : lut[first_hop(ME, o) * 2 + l];
         for (uint32_t r = 0, base = 0; r < M; base += nqo[r], ++r) {
+            if (!run[o * M + r]) continue;
+            const uint32_t* eo = reinterpret_cast<const uint32_t*>(run[o * M + r]);
             const uint16_t* pre = reinterpret_cast<const uint16_t*>(hb + 64 + BB + r * BBP);
             const uint32_t x1 = base + pre[e1];
             for (uint32_t x = base + pre[e0]; x < x1; ++x) {
                 const uint32_t w = eo[x], t = w & 0x7FF, e = (w >> 11) & 63;
                 const uint32_t rr = et[(e - e0) * S + t]++;
-                if (R0 + rr >= ROWS_CAP) continue;
+                if (rr >= INST_ROWS || R0 + rr >= ROWS_CAP) continue;  // (past the worst case only: never)
                 const uint32_t aa = t % A;
                 uint32_t dest;
                 if (o == ME) {
@@ -623,6 +642,17 @@ def _sub(src, **kw):
     return src
 
 
+def inst_cap(N, S, K, EPC, M):
+    """A planner instance's entries at most, whatever the routing: the chip's T <= N S min(K, EPC) split at the expert
+    edges nearest j T / M - an instance's share plus one expert's (<= N S: a token picks an expert once)."""
+    return (-(-N * S * min(K, EPC) // M) + N * S + 31) // 32 * 32
+
+
+def worst_rows(N, S, K, EPC):
+    """A chip's plan rows at most (every source's tokens on its experts), each expert padded to 32."""
+    return (N * S * min(K, EPC) + 31) // 32 * 32 + 32 * EPC
+
+
 def routing_a2a_sizes(*, N, S, K, EPC, A, rows_cap, M=None, TPP=32, port_dests=None):
     """Pure (no device): what one call needs. M planner cores (default min(8, EPC, A)); port_dests: the most
     destinations one port core serves (default N, an upper bound). Returns dict(M, plan_l1 (a planner core's CB),
@@ -635,6 +665,8 @@ def routing_a2a_sizes(*, N, S, K, EPC, A, rows_cap, M=None, TPP=32, port_dests=N
     NOWN = (A + M - 1) // M
     TSM = NOWN * ((S + A - 1) // A)
     BBP = _al16(2 * (EPC + 1))
+    IC = inst_cap(N, S, K, EPC, M)  # (an instance's entries and rows: worst case, rows_cap only sizes DRAM)
+    IR = IC + 32 * EPC
     plan_l1 = (
         _al64((S // TPP) * _al64(TPP * 4 * K))
         + _al64(4 * M * N)
@@ -642,10 +674,11 @@ def routing_a2a_sizes(*, N, S, K, EPC, A, rows_cap, M=None, TPP=32, port_dests=N
         + N * BBP
         + _al64(4 * TSM * K + 16 * N)
         + N * HBP
-        + _al64(4 * rows_cap + 64 * N)
+        + _al64(4 * IC + 128 * N * M)
+        + _al64(4 * N * M)
         + _al64(2 * EPC * S)
-        + _al64(4 * rows_cap)
-        + _al64(8 * rows_cap)
+        + _al64(4 * IR)
+        + _al64(8 * IR)
         + _al64(128 * NOWN)
         + M * 64
         + 128
@@ -669,6 +702,7 @@ def routing_a2a_sizes(*, N, S, K, EPC, A, rows_cap, M=None, TPP=32, port_dests=N
         why.append(f"L1: planner {plan_l1 >> 10} KB, port {port_l1 >> 10} KB")
     return dict(
         M=M,
+        inst_cap=IC,
         plan_l1=plan_l1,
         port_l1=port_l1,
         packet=PCAP,
@@ -795,9 +829,10 @@ def routing_a2a_planner_prepare(
             return 0 if 2 * ((dc - sc) % C) <= C else 1
         return 0 if dc > sc else 1
 
-    ENT_CAP = rows_cap  # (the entries for my experts this chip can hold: the plan's rows at most)
     sz = routing_a2a_sizes(N=N, S=S, K=K, EPC=EPC, A=A, rows_cap=rows_cap, M=M, TPP=TPP)
     assert sz["fits"], sz["why"]
+    ENT_CAP = sz["inst_cap"]  # (an instance's entries, the worst case: packed routing never drops a row)
+    assert rows_cap >= worst_rows(N, S, K, EPC), f"rows_cap {rows_cap} < the worst case {worst_rows(N, S, K, EPC)}"
     pl_bytes = sz["plan_l1"]
 
     def build(rt_t):

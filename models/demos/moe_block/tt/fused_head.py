@@ -37,7 +37,7 @@ class RouterSpec:
 @dataclass(frozen=True)
 class RoutingSpec:
     """The fused head's routing exchange + combine planner: A combine accumulators, L links of the combine's ports
-    (its port tables), rows_cap the plan's row capacity (default 2 S K + 32 EPC). prep: dispatch prep in the program
+    (its port tables), rows_cap the plan's row capacity (default the worst case: N S min(K, EPC) + 32 EPC). prep: dispatch prep in the program
     (the owned tokens' route words, self.outputs["route"]); torus: (wrap X, wrap Y) of the dispatch's mesh."""
 
     A: int
@@ -347,6 +347,7 @@ class HeadSE3:
         self.routing = None
         if routing is not None:
             from ttnn.bringup.combine_rf.combine_plan import port_luts
+            from ttnn.bringup.combine_rf.routing_a2a import worst_rows
 
             from models.demos.moe_block.tt.routing_stream import RoutingStream
 
@@ -354,7 +355,7 @@ class HeadSE3:
             luts, nps = port_luts(mesh_device, routing.L, tuple(routing.torus))  # (the combine's ports: its torus)
             S_ = rows // G
             EPC = router.E // router.fold // (R_ * C_)
-            rows_cap = routing.rows_cap or (2 * S_ * router.K + 32 * EPC + 31) // 32 * 32
+            rows_cap = routing.rows_cap or worst_rows(R_ * C_, S_, router.K, EPC)  # (every row a chip can get)
             off0 = (max(self.router.bytes, self.router.pbuf_sub) + 63) // 64 * 64
             self.routing = RoutingStream(
                 mesh_device,

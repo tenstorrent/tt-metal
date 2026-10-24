@@ -437,8 +437,11 @@ constexpr uint32_t XP = al64((M + 2) * 4);                  // per expert: total
 constexpr uint32_t O_XP = O_CIN + M * CNT;                  // EPC x XP: filled by the experts' owner cores
 constexpr uint32_t O_STG = O_XP + EPC * XP;
 constexpr uint32_t O_PART = O_STG + al64(STG);              // home partial (plan words 0..544)
-constexpr uint32_t O_TIDX = O_PART + al64(544 * 4), O_TAB = O_TIDX + al64(ROWS_CAP * 4);
-constexpr uint32_t O_PLAN = O_TAB + al64(ROWS_CAP * 8), O_CNT = O_PLAN + 4096, O_REG = O_CNT + al64(NG * 4);
+// (a core's rows [R0, R1): the plan's 32-row tiles split M ways - at most INSTR, the worst case's share; the plan
+// tensors in DRAM hold ROWS_CAP, every row a chip can get)
+constexpr uint32_t INSTR = (ROWS_CAP / 32 + M - 1) / M * 32;
+constexpr uint32_t O_TIDX = O_PART + al64(544 * 4), O_TAB = O_TIDX + al64(INSTR * 4);
+constexpr uint32_t O_PLAN = O_TAB + al64(INSTR * 8), O_CNT = O_PLAN + 4096, O_REG = O_CNT + al64(NG * 4);
 constexpr uint32_t O_DBG = O_REG + al64(NG * 4);  // 64 bytes of timestamps, then 512 slice records
 // deterministic combine (DET): per owned accumulator, per home token, the source chips of its rows in a fixed order -
 // the order the accumulator adds them in, whatever the arrival timing (combine_plan docstring)
@@ -732,7 +735,8 @@ void kernel_main() {
         reg[e] = off;
         off += (s_ + 31) / 32 * 32;
     }
-    const uint32_t NT = off / 32, R0 = (p * NT / M) * 32, R1 = ((p + 1) * NT / M) * 32;
+    const uint32_t NT = (off < ROWS_CAP ? off : ROWS_CAP) / 32;  // (past the worst case: flagged, plan word 601)
+    const uint32_t R0 = (p * NT / M) * 32, R1 = ((p + 1) * NT / M) * 32;
     uint32_t* tidx = reinterpret_cast<uint32_t*>(B + O_TIDX);
     uint32_t* tab = reinterpret_cast<uint32_t*>(B + O_TAB);
     // (slices: issue every read, one barrier, then copy)
@@ -1002,6 +1006,11 @@ def _bucket_bytes(CH, K, row_pages=False, joint=False):
     return max(CH * 8, 64 * (1 if joint else 2) * CH // K if row_pages else 0)
 
 
+def _mc2_inst_rows(rows_cap, M):
+    """A multi-core planner core's rows at most: the plan's 32-row tiles (rows_cap / 32 at most) split M ways."""
+    return (rows_cap // 32 + M - 1) // M * 32
+
+
 def _mc2_l1_bytes(M, CH, HS, EPC, NG, rows_cap, home_rows=0, idb=None, K=8, row_pages=False, joint=False):
     al = lambda v: (v + 63) // 64 * 64  # noqa: E731
     CNT = al(2 * EPC * 4)
@@ -1016,8 +1025,8 @@ def _mc2_l1_bytes(M, CH, HS, EPC, NG, rows_cap, home_rows=0, idb=None, K=8, row_
         + EPC * XP
         + _mc2_stg(M, EPC, rows_cap, home_rows)
         + al(544 * 4)
-        + al(rows_cap * 4)
-        + al(rows_cap * 8)
+        + al(_mc2_inst_rows(rows_cap, M) * 4)
+        + al(_mc2_inst_rows(rows_cap, M) * 8)
         + 4096
         + 2 * al(NG * 4)
         + 64

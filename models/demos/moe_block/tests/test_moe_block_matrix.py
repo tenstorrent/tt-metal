@@ -50,7 +50,6 @@ from models.demos.moe_block.tests.test_moe_block import (
 BASE = {"k3": KIMI_K3, "glm53_flash": GLM_53_FLASH, "glm53": GLM_53, "m3": MINIMAX_M3, "dsv41_flash": DSV41_FLASH}
 ROUTINGS = ("uniform", "zipf_spread", "zipf_packed", "one_hot", "empty_experts", "zero_chip", "ties")
 EPC_MAX = 64  # (the flat op's experts a chip)
-PACKED = ("zipf_packed", "ties")  # (every token on a few chips' experts: past the planner's rows_cap)
 
 
 def mesh_model(name: str, chips: int) -> MoEModel:
@@ -213,11 +212,6 @@ def test_moe_block_matrix(mesh_device, device_params, case: Case):
         logger.error(f"MATRIX {case.id}: does not build: {type(e).__name__}: {msg}")
         pytest.xfail(f"does not build: {type(e).__name__}: {msg[:300]}")
     logger.info(f"MATRIX {case.id}: {m.num_experts} experts (fold {m.router.fold}), {block.summary}")
-    if case.routing in PACKED and block.head_mode == "fused":
-        pytest.skip(
-            "packed routing: the fused head's planner rows_cap (2 x the average a chip) overflows - a hang; the "
-            "token-dropping policy is pending"
-        )
     stats = run_checked(mesh_device, block, m, w, case.id, eager=2, replays=case.replays)
     logger.info(
         f"MATRIX_RESULT {case.id}: PCC min {min(stats['pcc']):.5f} median {statistics.median(stats['pcc']):.5f}; "
