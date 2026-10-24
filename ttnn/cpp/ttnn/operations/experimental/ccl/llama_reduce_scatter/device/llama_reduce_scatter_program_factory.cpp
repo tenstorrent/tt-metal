@@ -956,6 +956,7 @@ tt::tt_metal::ProgramDescriptor LlamaReduceScatterDeviceOperation::LlamaReduceSc
             if (plan.forward_fabric_node_id.has_value()) {
                 const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(coord);
                 tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
+                    *mesh_device,
                     target_device_fabric_node_id,
                     plan.forward_fabric_node_id.value(),
                     core_args.link_idx,
@@ -967,6 +968,7 @@ tt::tt_metal::ProgramDescriptor LlamaReduceScatterDeviceOperation::LlamaReduceSc
             if (plan.backward_fabric_node_id.has_value()) {
                 const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(coord);
                 tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
+                    *mesh_device,
                     target_device_fabric_node_id,
                     plan.backward_fabric_node_id.value(),
                     core_args.link_idx,
