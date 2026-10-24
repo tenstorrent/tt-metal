@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dispatch.hpp"
+#include <algorithm>
 #include <cstdint>
+#include <limits>
 #include "allocator/allocator.hpp"
 #include "context/context_types.hpp"
 #include "impl/context/metal_context.hpp"
@@ -70,7 +72,9 @@ DeviceAddr add_bank_offset_to_address(IDevice* device, const CoreCoord& virtual_
     return address;
 }
 
-void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_params) {
+namespace {
+void issue_write_command_sequence(
+    const CoreWriteDispatchParams& dispatch_params, uint32_t noc_xy_encoding, uint8_t num_mcast_dests) {
     const uint32_t num_worker_counters = dispatch_params.sub_device_ids.size();
 
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(dispatch_params.device));
@@ -96,8 +100,8 @@ void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_p
     }
 
     command_sequence.add_dispatch_write_linear<true, true>(
-        0,
-        dispatch_params.device->get_noc_unicast_encoding(k_dispatch_downstream_noc, dispatch_params.virtual_core),
+        num_mcast_dests,
+        noc_xy_encoding,
         dispatch_params.address,
         dispatch_params.size_bytes,
         (uint8_t*)dispatch_params.src);
@@ -105,6 +109,14 @@ void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_p
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
     sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
     sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
+}
+}  // namespace
+
+void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_params) {
+    issue_write_command_sequence(
+        dispatch_params,
+        dispatch_params.device->get_noc_unicast_encoding(k_dispatch_downstream_noc, dispatch_params.virtual_core),
+        0);
 }
 
 namespace {
@@ -172,6 +184,56 @@ void write_to_core_unchecked(
     // check would reject programmable DRAM-core (DRISC) L1.
     write_to_core_impl(
         device, virtual_core, src, address, size_bytes, cq_id, expected_num_workers_completed, sub_device_ids);
+}
+
+void write_to_core_range(
+    IDevice* device,
+    const CoreRange& logical_worker_range,
+    const void* src,
+    DeviceAddr address,
+    uint32_t size_bytes,
+    uint32_t cq_id,
+    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    ttsl::Span<const SubDeviceId> sub_device_ids) {
+    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    const CoreType dispatch_core_type = metal_ctx.get_dispatch_core_manager().get_dispatch_core_type();
+    TT_FATAL(
+        size_bytes <= calculate_max_prefetch_data_size_bytes(metal_ctx, dispatch_core_type, sub_device_ids.size()),
+        "write_to_core_range: {} bytes exceeds the max prefetch payload",
+        size_bytes);
+
+    // WRITE_LINEAR carries the destination count in 8 bits, so wide rectangles go out in row bands.
+    constexpr uint32_t max_mcast_dests = std::numeric_limits<uint8_t>::max();
+    const uint32_t width = logical_worker_range.end_coord.x - logical_worker_range.start_coord.x + 1;
+    TT_FATAL(width <= max_mcast_dests, "write_to_core_range: range is wider than {} cores", max_mcast_dests);
+    const uint32_t rows_per_band = max_mcast_dests / width;
+
+    for (uint32_t y = logical_worker_range.start_coord.y; y <= logical_worker_range.end_coord.y; y += rows_per_band) {
+        const uint32_t y_end = std::min<uint32_t>(y + rows_per_band - 1, logical_worker_range.end_coord.y);
+        const CoreRange band({logical_worker_range.start_coord.x, y}, {logical_worker_range.end_coord.x, y_end});
+        const CoreCoord virtual_start = device->virtual_core_from_logical_core(band.start_coord, CoreType::WORKER);
+        validate_core_read_write_bounds(device, virtual_start, address, size_bytes);
+
+        CoreWriteDispatchParams dispatch_params{
+            {virtual_start,
+             address,
+             size_bytes,
+             device,
+             cq_id,
+             dispatch_core_type,
+             expected_num_workers_completed,
+             sub_device_ids},
+            src};
+        if (band.size() == 1) {
+            issue_core_write_command_sequence(dispatch_params);
+            continue;
+        }
+        const CoreCoord virtual_end = device->virtual_core_from_logical_core(band.end_coord, CoreType::WORKER);
+        issue_write_command_sequence(
+            dispatch_params,
+            device->get_noc_multicast_encoding(k_dispatch_downstream_noc, CoreRange(virtual_start, virtual_end)),
+            static_cast<uint8_t>(band.size()));
+    }
 }
 
 void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_params) {

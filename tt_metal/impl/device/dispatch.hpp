@@ -67,6 +67,19 @@ void write_to_core_unchecked(
     ttsl::Span<const uint32_t> expected_num_workers_completed,
     ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
+// Writes the same payload to every core in a rectangle of logical worker cores, as one wait plus
+// one multicast WRITE_LINEAR (more if the rectangle exceeds the multicast destination limit).
+// The payload must fit in a single prefetch command.
+void write_to_core_range(
+    IDevice* device,
+    const CoreRange& logical_worker_range,
+    const void* src,
+    DeviceAddr address,
+    uint32_t size_bytes,
+    uint32_t cq_id,
+    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    ttsl::Span<const SubDeviceId> sub_device_ids = {});
+
 void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_params);
 
 void read_core_data_from_completion_queue(
