@@ -283,7 +283,17 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
                 cfg.compute_with_storage_grid_size.y <= device_grid.y,
             "compute_with_storage_grid_size must be <= device grid size");
 
-        const uint32_t max_dest_volume = get_dest_reg_count(operation_attributes.compute_kernel_config);
+        // The program factory pins compute_hw.double_buffer_dest = true, so the compute kernel always runs with
+        // the half-sync DEST register count (8 tiles for bf16, 4 with fp32_dest_acc_en) regardless of
+        // dst_full_sync_en. get_dest_reg_count() returns the full-sync count (16 / 8) when dst_full_sync_en is set,
+        // so without this adjustment validation would admit explicit subblocks the kernel then computes silently
+        // wrong. Cap at the half-sync count the kernel actually has available.
+        uint32_t max_dest_volume = get_dest_reg_count(operation_attributes.compute_kernel_config);
+        const bool dst_full_sync_en = std::get<4>(
+            get_compute_kernel_config_args(act_tensor.device()->arch(), operation_attributes.compute_kernel_config));
+        if (dst_full_sync_en) {
+            max_dest_volume /= 2;
+        }
         TT_FATAL(
             cfg.subblock_h * cfg.subblock_w <= max_dest_volume, "subblock_h * subblock_w must be <= max_dest_volume");
     }
