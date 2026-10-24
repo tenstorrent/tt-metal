@@ -37,6 +37,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
+from models.demos.gemma4.custom_ops.grid import compute_grid
 
 KERNEL_DIR = Path(__file__).resolve().parent / "kernels"
 TILE = 32
@@ -74,9 +75,27 @@ class GegluRoutedExpert:
     region_offsets)``: see the module docstring for the contract."""
 
     # The worker rectangle the program always runs on (the shared op's kCoreGridX x kCoreGridY): the K-axis split,
-    # the activated L1 multicast and the padded per_core_N all assume it.
+    # the activated L1 multicast and the padded per_core_N all assume it. The kernel family is Blackhole-only; the
+    # rectangle is taken from the device grid (``custom_ops/grid.compute_grid``, capped by GEMMA4_TEST_GRID), and a
+    # grid that cannot host it (Wormhole 8x8) makes ``unsupported_reason`` non-None: callers and the unit tests skip
+    # with that reason instead of failing.
     GRID_X = 11
     GRID_Y = 8
+
+    @classmethod
+    def grid_reason(cls, gx: int, gy: int, blackhole: bool) -> str | None:
+        """None when the op can run on a ``gx`` x ``gy`` compute grid of a Blackhole (or not) device, else why not."""
+        if not blackhole:
+            return "Blackhole-only: the GeGLU routed-expert kernels assume the Blackhole compute grid"
+        if gx < cls.GRID_X or gy < cls.GRID_Y:
+            return f"Blackhole-only: needs an {cls.GRID_X}x{cls.GRID_Y} compute rectangle, the grid is {gx}x{gy}"
+        return None
+
+    @classmethod
+    def unsupported_reason(cls, mesh_device) -> str | None:
+        gx, gy = compute_grid(mesh_device)
+        return cls.grid_reason(gx, gy, mesh_device.arch() == ttnn.Arch.BLACKHOLE)
+
     # CB index allocation (shared across the three kernels through compile-time args).
     CB_IN0_X = 0
     CB_IN1_GATE = 1
@@ -117,8 +136,20 @@ class GegluRoutedExpert:
         min_active_tokens: int = 0,
         max_active_tokens: int = U32_MAX,
         writer_mcasts_in1: bool | None = None,
+        per_core_m_max: int | None = None,
+        in0_block_w_gu: int | None = None,
     ):
-        assert mesh_device.arch() == ttnn.Arch.BLACKHOLE, "GegluRoutedExpert assumes the Blackhole compute grid"
+        reason = self.unsupported_reason(mesh_device)
+        assert reason is None, reason
+        # Plan knobs (per instance; env = the lab override): the per-core M the CBs are sized for (4 tile rows = a
+        # 32-row chunk per M-row core; 1 fits the <= 256-row small-row chunk in one chunk and frees L1 for wider
+        # K-blocks) and the requested gate/up K-block width (narrowed to a divisor of K that fits L1).
+        if per_core_m_max is None:
+            per_core_m_max = int(os.environ.get("GEMMA4_GEGLU_PER_CORE_M_MAX", self.PER_CORE_M_MAX))
+        if in0_block_w_gu is None:
+            in0_block_w_gu = int(os.environ.get("GEMMA4_GEGLU_IN0_BLOCK_W", self.IN0_BLOCK_W_GU_REQUEST))
+        assert per_core_m_max >= 1 and in0_block_w_gu >= 1, (per_core_m_max, in0_block_w_gu)
+        self.per_core_m_max, self.in0_block_w_request = per_core_m_max, in0_block_w_gu
         assert len(gate_projs) == len(up_projs) == len(down_projs) > 0, "one gate/up/down tensor per local expert"
         self.device = mesh_device
         self.gate_projs, self.up_projs, self.down_projs = list(gate_projs), list(up_projs), list(down_projs)
@@ -239,10 +270,10 @@ class GegluRoutedExpert:
         N_down_tiles_full = list(d0.padded_shape)[-1] // TILE
         assert list(g0.padded_shape)[-2] // TILE == K_gate_tiles, "gate K must equal x K"
         assert M_tiles_full <= list(x.padded_shape)[-2] // TILE, "max_tokens exceeds the buffer"
-        grid = self.device.compute_with_storage_grid_size()
-        assert grid.x >= GRID_X and grid.y >= GRID_Y, f"need a {GRID_X}x{GRID_Y} compute grid, got {grid.x}x{grid.y}"
+        gx, gy = compute_grid(self.device)  # the rectangle lives at the grid origin; the cap may shrink the grid
+        assert gx >= GRID_X and gy >= GRID_Y, self.grid_reason(gx, gy, True)
 
-        in0_block_w_gu = self.IN0_BLOCK_W_GU_REQUEST
+        in0_block_w_gu = min(self.in0_block_w_request, K_gate_tiles)
         while in0_block_w_gu > 1 and K_gate_tiles % in0_block_w_gu != 0:
             in0_block_w_gu -= 1
         per_core_N_gu = _ceil_div(N_gate_tiles_full, GRID_X)
@@ -311,12 +342,12 @@ class GegluRoutedExpert:
                         return M, w
             return 0, 0
 
-        per_core_M, fit_w = fit_config(self.PER_CORE_M_MAX)
+        per_core_M, fit_w = fit_config(self.per_core_m_max)
         assert per_core_M != 0, f"the per-core CBs do not fit L1 (need {cb_footprint(1, 1)} B of {l1_budget} B)"
         # Doubling per_core_M halves the chunk count (every chunk re-reads the full weights) but narrows the K-block
         # width that still fits; take it only when each extra K-block buys enough avoided weight traffic.
-        wide_M, wide_w = fit_config(self.PER_CORE_M_MAX * 2)
-        if wide_M == self.PER_CORE_M_MAX * 2 and wide_w < fit_w:
+        wide_M, wide_w = fit_config(self.per_core_m_max * 2)
+        if wide_M == self.per_core_m_max * 2 and wide_w < fit_w:
             extra_blocks = K_gate_tiles // wide_w - K_gate_tiles // fit_w
             weight_tiles = 2 * K_gate_tiles * N_gate_tiles_full + K_down_tiles * N_down_tiles_full
             if extra_blocks > 0 and weight_tiles // extra_blocks >= self.WIDEN_M_MIN_TILES_PER_BLOCK:

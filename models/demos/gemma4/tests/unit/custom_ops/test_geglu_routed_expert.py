@@ -38,8 +38,11 @@ def _round(t: torch.Tensor, dtype) -> torch.Tensor:
 class _Fixture:
     """The per-chip inputs of one op call on the whole mesh plus the per-chip torch golden."""
 
-    def __init__(self, mesh_device, emb, hidden, E, max_tokens, counts_per_chip, x_layout, seed=0):
+    def __init__(
+        self, mesh_device, emb, hidden, E, max_tokens, counts_per_chip, x_layout, seed=0, weights_dtype=ttnn.bfloat4_b
+    ):
         torch.manual_seed(seed)
+        self.weights_dtype = weights_dtype
         rows, cols = mesh_device.shape
         self.D = D = rows * cols
         self.E, self.max_tokens, self.emb, self.hidden = E, max_tokens, emb, hidden
@@ -75,7 +78,7 @@ class _Fixture:
             max_tokens=max_tokens,
             torch_weights=self.torch_weights,
             activations_dtype=ttnn.bfloat8_b,
-            weights_dtype=ttnn.bfloat4_b,
+            weights_dtype=weights_dtype,
             activation=ttnn.RoutedExpertActivation.Silu,  # loader only; its fused op is never run
             hybrid_token_threshold=None,
         )
@@ -110,7 +113,7 @@ class _Fixture:
     def golden(self, d):
         """Chip d's expected output and the mask of the rows the op writes."""
         w = lambda name, e: _round(
-            self.torch_weights[self.idx_per_chip[d][e]][name].T.contiguous(), ttnn.bfloat4_b
+            self.torch_weights[self.idx_per_chip[d][e]][name].T.contiguous(), self.weights_dtype
         )  # noqa: E731
         out = GegluRoutedExpert.golden(
             self.x_rounded[d],
@@ -149,6 +152,13 @@ class _Fixture:
         return [ttnn.to_torch(t).float().reshape(self.M_buf, self.emb) for t in ttnn.get_device_tensors(tt_out)]
 
 
+def skip_unless_supported(mesh_device):
+    """The op is a Blackhole kernel family on an 11x8 rectangle: skip (never fail) where the grid cannot host it."""
+    reason = GegluRoutedExpert.unsupported_reason(mesh_device)
+    if reason is not None:
+        pytest.skip(reason)
+
+
 def _check(fx, custom, tag, golden_pcc=0.98):
     worst_golden = 1.0
     for d in range(fx.D):
@@ -178,6 +188,7 @@ def _time_ms(mesh_device, fn, iters):
 @pytest.mark.parametrize("mesh_device, device_params", MESHES, indirect=True)
 def test_geglu_routed_expert_small(mesh_device, device_params, x_layout):
     """emb 256 / hidden 512, 2 local experts of 256 rows: one full region, one 100-row tail (4 tile rows)."""
+    skip_unless_supported(mesh_device)
     D = mesh_device.get_num_devices()
     counts = [[256 if (d + e) % 2 == 0 else 100 for e in range(2)] for d in range(D)]
     fx = _Fixture(mesh_device, 256, 512, 2, 256, counts, x_layout, seed=1)
@@ -189,6 +200,7 @@ def test_geglu_routed_expert_small(mesh_device, device_params, x_layout):
 @pytest.mark.parametrize("x_layout", ["row_major", "tile"])
 @pytest.mark.parametrize("mesh_device, device_params", MESHES, indirect=True)
 def test_geglu_routed_expert_gemma_shapes(mesh_device, device_params, x_layout):
+    skip_unless_supported(mesh_device)
     """The 26B-A4B dispatch-prefill shapes (hidden 2816, intermediate 704, 4 local experts, 4096 max tokens): a
     full region, a multi-chunk tail (1500 rows = 46 full + 1 partial tile rows), one partial tile (37 rows) and an
     empty expert, rotated per chip; then the warm per-call time of the op."""
@@ -214,3 +226,21 @@ def test_geglu_routed_expert_gemma_shapes(mesh_device, device_params, x_layout):
     )
     if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
         ttnn.ReadDeviceProfiler(mesh_device)
+
+
+@pytest.mark.parametrize("mesh_device, device_params", MESHES[:1], indirect=True)
+def test_geglu_grid_rule(mesh_device, device_params, monkeypatch):
+    """A grid that cannot host the 11x8 rectangle (the Wormhole 8x8, forced here) reports Blackhole-only and the
+    constructor refuses; the real grid of a Blackhole device reports None."""
+    assert GegluRoutedExpert.grid_reason(13, 10, True) is None
+    assert "Blackhole-only" in GegluRoutedExpert.grid_reason(8, 8, True)
+    assert "Blackhole-only" in GegluRoutedExpert.grid_reason(13, 10, False)
+    monkeypatch.setenv("GEMMA4_TEST_GRID", "8x8")
+    reason = GegluRoutedExpert.unsupported_reason(mesh_device)
+    assert reason is not None and "8x8" in reason, reason
+    refused = False
+    try:
+        _Fixture(mesh_device, 256, 512, 2, 256, [[32, 32]] * mesh_device.get_num_devices(), "tile", seed=1).custom_op()
+    except AssertionError as e:
+        refused = "Blackhole-only" in str(e)
+    assert refused, "the constructor must refuse a grid that cannot host the rectangle"

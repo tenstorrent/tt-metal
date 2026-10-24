@@ -128,6 +128,16 @@ class _RoutingSetupOnAxis(TtMoERoutingSetup):
         )
 
 
+def _small_plan_knobs(max_tok: int) -> dict:
+    """Lab knob (opt-in, ``GEMMA4_GEGLU_SMALL_PLAN=1``): GeGLU op plan for a plan whose experts hold <= 256 rows (the
+    fitted small chunk) with one tile row per M-row core and a wide gate/up K-block (``GEMMA4_GEGLU_SMALL_W``).
+    Measured null on 0451 (~40 us per active expert whatever the K-block count: the per-expert cost is bytes at
+    ~480 GB/s plus a ~27 us part that is not the gate/up rounds), so the default plan stays."""
+    if max_tok > 256 or os.environ.get("GEMMA4_GEGLU_SMALL_PLAN", "0") != "1":
+        return {}
+    return dict(per_core_m_max=1, in0_block_w_gu=int(os.environ.get("GEMMA4_GEGLU_SMALL_W", "44")))
+
+
 class _DispatchChunkPlan:
     """The chunk-size-dependent half of the dispatch stack for one chunk size: per-chip rows, the dispatch buffer
     bounds, the dispatch / combine modules sized for them and the GeGLU op bound to those buffers. The routing
@@ -194,6 +204,7 @@ class _DispatchChunkPlan:
             owner.routed_expert.down_projs,
             owner.global_idx,
             max_tokens=self.max_tok,
+            **_small_plan_knobs(self.max_tok),
         )
         # GEMMA4_SMALL_ROW_EXPERTS=1 on a chunk of <= 256 tokens: the gemma4 small-row path (no fabric dispatch;
         # custom_ops/expert_gather_small + the GeGLU op on a persistent zero-initialized output + W @ expert_out +

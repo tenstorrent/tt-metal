@@ -11,6 +11,12 @@ activation baked into its own compute kernel, so no Gemma 4 activation variant h
 `ttnn.ProgramDescriptor` (11x8 worker grid, 13 semaphores, 16 circular buffers, three kernels) and
 `__call__(x, counts, region_offsets, output=None)` runs it; `golden(...)` is the torch reference.
 
+The kernel family is Blackhole-only: the 11x8 rectangle is taken from `custom_ops/grid.compute_grid` (capped by
+`GEMMA4_TEST_GRID`), and a grid that cannot host it (the Wormhole 8x8) makes `GegluRoutedExpert.unsupported_reason(device)`
+non-None; the constructor refuses with that reason and the unit tests skip on it (never fail). Plan knobs
+`per_core_m_max` / `in0_block_w_gu` (lab env `GEMMA4_GEGLU_PER_CORE_M_MAX` / `GEMMA4_GEGLU_IN0_BLOCK_W`) exist for
+experiments; the 0451 scan found the per-expert cost independent of the gate/up K-block count.
+
 ## Contract (per device; the same program runs on every chip of the mesh with that chip's weights and buffer)
 
 | tensor | shape / dtype / layout | role |
