@@ -60,7 +60,8 @@ void kernel_main() {
 
     if constexpr (split_reader_enabled) {
         if constexpr (needs_act_block_zero_out) {
-            zero_out_tiles<cb_id_act_second_reader>(noc, experimental::CB(cb_id_act_second_reader));
+            experimental::CB cb_act_second_zero_obj(cb_id_act_second_reader);
+            zero_out_tiles<cb_id_act_second_reader>(noc, cb_act_second_zero_obj);
         }
     }
 

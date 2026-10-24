@@ -43,7 +43,8 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
+    DataflowBuffer cb_scaler(cb_id_in2);
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2, REDUCE_OP, REDUCE_DIM>(cb_scaler, scaler_f);
 
     constexpr auto tensor_args = TensorAccessorArgs<5>();
     auto tensor_accessor = TensorAccessor(tensor_args, src_addr);

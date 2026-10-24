@@ -10,6 +10,8 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "ckernel.h"
+#include <type_traits>
+#include "ttnn/cpp/ttnn/kernel_lib/id_only_helpers.hpp"
 
 namespace dataflow_kernel_lib {
 
@@ -34,16 +36,17 @@ namespace dataflow_kernel_lib {
  * T selects the index width, which must match the top-k LLK's dest mode: uint16_t for the
  * UInt16 index tile (LO16 dest, WH/BH), uint32_t for the Int32 index tile (INT32 dest, Quasar).
  *
- * @param dfb_id Dataflow buffer to write the generated index tile to
- * @param wt     Width tile position [0, Wt)
+ * @param dfb The kernel's dataflow buffer to write the generated index tile to. Construct it once at
+ *            kernel scope and pass it by reference: on Quasar a DataflowBuffer drains when it goes out
+ *            of scope, so a helper-owned one would block here until the consumer pops the tile.
+ * @param wt  Width tile position [0, Wt)
  */
-template <typename T = uint16_t>
-FORCE_INLINE void generate_index_tile(const uint32_t dfb_id, const uint32_t wt) {
+template <typename T = uint16_t, typename DFB, std::enable_if_t<is_dataflow_buffer_v<std::remove_cv_t<DFB>>, int> = 0>
+FORCE_INLINE void generate_index_tile(DFB& dfb, const uint32_t wt) {
     constexpr uint32_t one_tile = 1;
     constexpr uint32_t tile_faces = 2;
     constexpr uint32_t face_size = 16;
 
-    DataflowBuffer dfb(dfb_id);
     dfb.reserve_back(one_tile);
 
     const uint32_t tile_addr = dfb.get_write_ptr();
@@ -131,6 +134,13 @@ FORCE_INLINE void generate_index_tile(const uint32_t dfb_id, const uint32_t wt) 
         }
     }
     dfb.push_back(one_tile);
+}
+
+// The id-only form: builds the DataflowBuffer from the id and runs the form above. See id_only_helpers.hpp.
+template <typename T = uint16_t>
+KERNEL_LIB_ID_ONLY_HELPER FORCE_INLINE void generate_index_tile(const uint32_t dfb_id, const uint32_t wt) {
+    DataflowBuffer dfb(dfb_id);
+    generate_index_tile<T>(dfb, wt);
 }
 
 }  // namespace dataflow_kernel_lib
