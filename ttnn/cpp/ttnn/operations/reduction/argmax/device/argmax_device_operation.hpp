@@ -23,12 +23,19 @@ struct ArgMaxMultiCoreProgramFactory {
         const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);
 };
 
+// TILE input reduced over the last dim, read from the tile bytes on several cores.
+struct ArgMaxTileMultiCoreProgramFactory {
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);
+};
+
 struct ArgMaxDeviceOperation {
     using operation_attributes_t = ArgmaxParams;
     using tensor_args_t = ArgmaxInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<ArgMaxSingleCoreProgramFactory, ArgMaxMultiCoreProgramFactory>;
+    using program_factory_t =
+        std::variant<ArgMaxSingleCoreProgramFactory, ArgMaxMultiCoreProgramFactory, ArgMaxTileMultiCoreProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
