@@ -33,6 +33,10 @@ protected:
         dispatch_thread_pool_;  // Thread pool used to dispatch to the Mesh (used by main thread)
     std::function<std::lock_guard<std::mutex>()> lock_api_function_;
 
+    // Bytes a shard write copies from host: with a core filter, only the pages bound for cores in it.
+    static uint64_t host_bytes_written(
+        Buffer& shard_view, uint64_t region_size, const tt::tt_metal::CoreRangeSet* logical_core_filter);
+
     // Helper functions for reading and writing individual shards
     // Returns true if pinned memory was used for the transfer
     virtual bool write_shard_to_device(

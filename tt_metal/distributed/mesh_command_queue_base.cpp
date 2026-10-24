@@ -25,6 +25,30 @@
 
 namespace tt::tt_metal::distributed {
 
+uint64_t MeshCommandQueueBase::host_bytes_written(
+    Buffer& shard_view, uint64_t region_size, const tt::tt_metal::CoreRangeSet* logical_core_filter) {
+    if (logical_core_filter == nullptr) {
+        return region_size;
+    }
+    // Filtered writes are sharded only; an interleaved one writes nothing or fails.
+    if (!is_sharded(shard_view.buffer_layout())) {
+        return 0;
+    }
+    const auto& mapping = *shard_view.get_buffer_page_mapping();
+    uint64_t pages = 0;
+    for (uint32_t core_id = 0; core_id < mapping.all_cores.size(); ++core_id) {
+        if (!logical_core_filter->contains(mapping.all_cores[core_id])) {
+            continue;
+        }
+        for (const auto& core_mapping : mapping.core_page_mappings[core_id]) {
+            for (const auto& host_range : core_mapping.host_ranges) {
+                pages += host_range.num_pages;
+            }
+        }
+    }
+    return pages * shard_view.page_size();
+}
+
 tt::TargetDevice MeshCommandQueueBase::get_target_device_type() const {
     return tt::tt_metal::MetalContext::instance(this->device()->impl().get_context_id())
         .get_cluster()
