@@ -1,0 +1,168 @@
+name: "[eltwise] Determinism and correctness (daily)"
+
+# Runs every eltwise op N times on identical inputs and requires that every run is bit-identical
+# to the first, and that the first matches the golden. Run 1 populates the program cache and the
+# rest hit it, so a cache-path divergence surfaces here rather than as an intermittent failure
+# somewhere downstream.
+#
+# A plain pytest file rather than a sweep module: the sweep runner isolates every vector in its own
+# process for hang detection, so a 192-op run pays device setup and cache warmup 192 times over and
+# overruns the job timeout. These results are not published to the dashboard, so that isolation buys
+# nothing here. One process covers the whole table at both float dtypes in about five minutes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dtypes:
+        description: "Comma-separated dtypes to run every op at."
+        type: choice
+        options:
+          - bfloat16,float32
+          - bfloat16
+          - float32
+        default: bfloat16,float32
+      shape:
+        description: "Input shape, e.g. 1x1x32x32. GLU-family ops pin their own shape and ignore this."
+        type: string
+        default: 1x1x32x32
+      memory-config:
+        description: "Where the operands live."
+        type: choice
+        options:
+          - dram
+          - l1
+        default: dram
+      runs:
+        description: "Times each op runs. Run 1 is uncached, the rest hit the program cache."
+        type: string
+        default: "3"
+      runner-label:
+        description: "Which card to run on. The arch follows from this rather than being a separate input, so the two cannot disagree."
+        type: choice
+        options:
+          - N150
+          - N300
+          - P150b
+        default: N150
+  schedule:
+    # 05:00 UTC daily. ttnn-run-sweeps already occupies 02:00 and 03:00.
+    - cron: "0 5 * * *"
+
+run-name: "eltwise determinism [${{ inputs.dtypes || 'bfloat16,float32' }} ${{ inputs.shape || '1x1x32x32' }} ${{ inputs.memory-config || 'dram' }}] (${{ inputs.runner-label || 'N150' }})"
+
+# Read-only by default: the hardware job only pulls an image and runs tests, and inheriting a
+# package-write token would expose it inside that container for nothing. build-artifact re-grants
+# packages: write on its own job, which is the only one that publishes.
+permissions:
+  contents: read
+
+# Two dispatches at the same runner label would contend for one device, so the later one wins. The run_id
+# keeps every run on a protected branch in its own group, so the daily runs never cancel each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.runner-label || 'N150' }}-${{
+    github.ref_protected && github.run_id || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  build-artifact:
+    needs: check-harbor
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-type: Release
+      build-inplace-wheel: true
+
+  eltwise-determinism:
+    name: "eltwise determinism [${{ inputs.dtypes || 'bfloat16,float32' }}]"
+    needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ inputs.runner-label == 'P150b' && 'blackhole' || 'wormhole_b0' }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+        ELTWISE_DETERMINISM_DTYPES: ${{ inputs.dtypes || 'bfloat16,float32' }}
+        ELTWISE_DETERMINISM_SHAPE: ${{ inputs.shape || '1x1x32x32' }}
+        ELTWISE_DETERMINISM_MEMORY: ${{ inputs.memory-config || 'dram' }}
+        ELTWISE_DETERMINISM_RUNS: ${{ inputs.runs || '3' }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    timeout-minutes: 45
+    runs-on: tt-ubuntu-2204-${{ inputs.runner-label || 'N150' }}-viommu-stable
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      # The test writes the job summary itself, via GITHUB_STEP_SUMMARY, because the counts worth
+      # reporting -- how many output tensors were compared and how many matched -- are per-output
+      # and so are not recoverable from the junit XML, which only records pass/fail per case.
+      - name: Run eltwise determinism and correctness
+        run: |
+          pytest tests/ttnn/unit_tests/operations/eltwise/test_eltwise_determinism.py \
+            -v --junit-xml=/work/eltwise-determinism-report.xml
+      - name: Upload test report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: eltwise-determinism-report-${{ inputs.runner-label || 'N150' }}
+          # /docker-job/ is the host-side mount of the container's /work/. pytest writes the report
+          # to /work inside the container; this host path is what upload-artifact can actually see.
+          path: ${{ github.workspace }}/docker-job/eltwise-determinism-report.xml
+          # warn, not error: a crash before pytest writes the report is a real failure already, and
+          # failing here on top of it would just bury the cause. The warning is what caught the
+          # container-path mistake this line fixes.
+          if-no-files-found: warn
+          retention-days: 7
+
+  # A scheduled failure is otherwise visible only to whoever happens to open the Actions tab, which
+  # for a daily job means it can sit red for days. Scheduled runs only: a dispatch already has
+  # someone watching it. Skips itself when the token is unset, so the workflow stays usable in a
+  # fork and a missing secret cannot turn a passing run red.
+  report-status:
+    name: "Report status"
+    runs-on: ubuntu-slim
+    needs: eltwise-determinism
+    if: ${{ always() && github.event_name == 'schedule' && needs.eltwise-determinism.result != 'success' }}
+    env:
+      SLACK_BOT_TOKEN: ${{ secrets.ELTWISE_SLACK_REPORTING_BOT_TOKEN }}
+    steps:
+      - name: Checkout repository
+        if: ${{ env.SLACK_BOT_TOKEN != '' }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+      - name: Report status
+        if: ${{ env.SLACK_BOT_TOKEN != '' }}
+        uses: ./.github/actions/report-failure
+        with:
+          test_name: "eltwise determinism and correctness"
+          slack_bot_token: ${{ secrets.ELTWISE_SLACK_REPORTING_BOT_TOKEN }}
+          slack_channel_id: ${{ secrets.ELTWISE_CI_STATUS_CHANNEL_ID }}
+          status: ${{ needs.eltwise-determinism.result }}
