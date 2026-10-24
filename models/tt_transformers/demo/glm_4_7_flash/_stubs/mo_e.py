@@ -172,7 +172,9 @@ class TtMoE:
 
         # ---- local experts: one batched SwiGLU over all tokens ----
         xe = ttnn.repeat(ttnn.reshape(x, [1, N, H]), ttnn.Shape([E, 1, 1]))  # [E, N, H]
-        gu = ttnn.matmul(xe, self._w_gate_up, compute_kernel_config=self.ckc_expert)  # [E, N, 2I]
+        gu = ttnn.matmul(
+            xe, self._w_gate_up, compute_kernel_config=self.ckc_expert, core_grid=ttnn.CoreGrid(y=8, x=8)
+        )  # [E, N, 2I]
         ttnn.deallocate(xe)
         g = ttnn.slice(gu, [0, 0, 0], [E, N, I])
         u = ttnn.slice(gu, [0, 0, I], [E, N, 2 * I])
@@ -180,7 +182,13 @@ class TtMoE:
         inter = ttnn.multiply(ttnn.silu(g), u)
         ttnn.deallocate(g)
         ttnn.deallocate(u)
-        y = ttnn.matmul(inter, self._w_down, compute_kernel_config=self.ckc_expert, dtype=ttnn.float32)  # [E, N, H]
+        y = ttnn.matmul(
+            inter,
+            self._w_down,
+            compute_kernel_config=self.ckc_expert,
+            dtype=ttnn.float32,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+        )  # [E, N, H]
         ttnn.deallocate(inter)
         y = ttnn.multiply(y, w_loc)
         routed = ttnn.sum(y, dim=0, keepdim=True)  # [1, N, H] fp32
