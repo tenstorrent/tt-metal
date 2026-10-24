@@ -5,7 +5,10 @@ from typing import List
 
 import pytest
 import torch
-from helpers.constraints import is_valid_data_format_conversion
+from helpers.constraints import (
+    is_valid_data_format_conversion,
+    is_valid_quasar_dest_mode_conversion,
+)
 from helpers.data_format_inference import infer_data_formats, unpacks_to_dest
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
@@ -87,28 +90,6 @@ def generate_qsr_pack_combinations(
             return (DestAccumulation.Yes,)
         return (DestAccumulation.No, DestAccumulation.Yes)
 
-    def is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
-        """Check if the format conversion is supported by packer. These format conversions are dependent on the dest register mode."""
-        # Upcasting to Float32/Int32 requires dest_acc enabled
-        if (
-            out_fmt.is_32_bit()
-            and not in_fmt.is_32_bit()
-            and dest_acc == DestAccumulation.No
-        ):
-            return False
-        # Int8<->UInt8 conversion requires dest_acc enabled.
-        src_reg_fmt = {
-            DataFormat.Int4: DataFormat.Int8,
-            DataFormat.UInt4: DataFormat.UInt8,
-        }.get(in_fmt, in_fmt)
-        if (
-            dest_acc == DestAccumulation.No
-            and src_reg_fmt in (DataFormat.Int8, DataFormat.UInt8)
-            and src_reg_fmt != out_fmt
-        ):
-            return False
-        return True
-
     all_relu_types = [
         PackerReluType.NoRelu,
         PackerReluType.ZeroRelu,
@@ -135,7 +116,7 @@ def generate_qsr_pack_combinations(
         else:
             relu_types = all_relu_types
         for dest_acc in get_dest_acc_modes(in_fmt):
-            if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
+            if is_valid_quasar_dest_mode_conversion(in_fmt, out_fmt, dest_acc):
                 tile_sizes = (
                     select_perf_tile_sizes(SUPPORTED_TILE_SIZES)
                     if is_perf

@@ -5,6 +5,7 @@ from typing import List
 
 import pytest
 import torch
+from helpers.constraints import is_valid_quasar_dest_mode_conversion
 from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
@@ -92,24 +93,6 @@ def generate_qsr_pack_l1_acc_combinations(
             return (DestAccumulation.Yes,)
         return (DestAccumulation.No, DestAccumulation.Yes)
 
-    def is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
-        """Check if the format conversion is supported by packer. These format conversions are dependent on the dest register mode."""
-        # Upcasting to Float32/Int32 requires dest_acc enabled
-        if (
-            out_fmt.is_32_bit()
-            and not in_fmt.is_32_bit()
-            and dest_acc == DestAccumulation.No
-        ):
-            return False
-        # Int8<->UInt8 conversion requires dest_acc enabled
-        if (
-            dest_acc == DestAccumulation.No
-            and in_fmt in (DataFormat.Int8, DataFormat.UInt8)
-            and in_fmt != out_fmt
-        ):
-            return False
-        return True
-
     combinations = []
     for fmt in formats_list:
         in_fmt, out_fmt = fmt.input_format, fmt.output_format
@@ -118,7 +101,7 @@ def generate_qsr_pack_l1_acc_combinations(
             continue
 
         for dest_acc in get_dest_acc_modes(in_fmt):
-            if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
+            if is_valid_quasar_dest_mode_conversion(in_fmt, out_fmt, dest_acc):
                 combinations.append((fmt, dest_acc))
 
     return combinations

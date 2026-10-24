@@ -5,7 +5,10 @@ from typing import List
 
 import pytest
 import torch
-from helpers.constraints import is_valid_data_format_conversion
+from helpers.constraints import (
+    is_valid_data_format_conversion,
+    is_valid_quasar_dest_mode_conversion,
+)
 from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
@@ -111,23 +114,8 @@ def generate_unpack_unary_operand_combinations(
             )
 
         for dest_acc in dest_acc_modes:
-            if (
-                not in_fmt.is_32_bit()
-                and fmt.output_format.is_32_bit()
-                and dest_acc == DestAccumulation.No
-            ):
-                # Skip if input format is not 32-bit and output format is 32-bit and dest_acc is No
-                # This combination is not supported in the Quasar Packer format conversions
-                continue
-            # Int8<->UInt8 conversion requires dest_acc enabled.
-            src_reg_fmt = {
-                DataFormat.Int4: DataFormat.Int8,
-                DataFormat.UInt4: DataFormat.UInt8,
-            }.get(in_fmt, in_fmt)
-            if (
-                dest_acc == DestAccumulation.No
-                and src_reg_fmt in (DataFormat.Int8, DataFormat.UInt8)
-                and src_reg_fmt != fmt.output_format
+            if not is_valid_quasar_dest_mode_conversion(
+                in_fmt, fmt.output_format, dest_acc
             ):
                 continue
             for dest_sync in dest_sync_modes:
