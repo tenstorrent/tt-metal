@@ -74,6 +74,32 @@ Global layers use tied QK projection; sliding layers use QKV. Weight caches are 
 
 Each model call prefills one user's chunk and returns post-norm hidden states. `max_batch_size` controls the number of durable user cache slots; `user_id` selects a slot. The constructor returns the ring caches, also exposed through `model.tt_kv_cache`. Physical capacity is at least two chunks so single-chunk prompts use the same ring SDPA path. External allocations accept `prefill_chunk_size`; `Gemma4KvCaches.max_seq_len` reports physical capacity for migration offsets. Callers can supply external caches and receive per-layer migration acknowledgements through callbacks, segmented traces, or a D2H socket service. Traced callers stage ring metadata and absolute RoPE positions before replay. This prefill model does not expose a logits projection API.
 
+## Bounded sliding-window cache
+
+`GEMMA4_D_P_BOUNDED_SWA=1` sizes every sliding-layer KV cache at two prefill chunks instead of `max_seq_len`. Unset or `0` keeps the full-context cache. `create_tt_model(bounded_sliding_window_attention=...)` overrides the variable. Global layers are unchanged.
+
+Ring SDPA requires a chunk of at least the 1024-token window, so a sliding query never reaches past the previous chunk. The cache holds two chunk slabs and is written circularly: chunk `g` goes to slab `g % 2`, overwriting chunk `g - 2`. With chunk size `C` and `L = C / CP`, on CP rank `r`:
+
+```
+local row ((g % 2) * L + j)  ->  global token (g * C + r * L + j)
+```
+
+The cache write uses `PrefillMetadata.wrapped_kv_actual_global`, the chunk start modulo the cache capacity. Ring SDPA gets `circular_kv_cache=True` and the absolute `kv_actual_global`, so RoPE and the causal and window masks use absolute positions.
+
+Constraints: the same as for the unbounded cache (8×4 or 4×8 Galaxy, chunks of at least 1024 tokens that start at multiples of the chunk size), plus:
+
+- Every chunk is the `prefill_chunk_size` the caches were allocated with, since it sets their capacity.
+- No KV migration yet: `kv_migration_stages` returns no stages and `build_kv_chunk_address_table` raises.
+
+Sliding-cache memory per device is constant in `max_seq_len` and the same on 8×4 and 4×8: 4.25 MiB per layer and user slot at chunk 8192 and 1.06 MiB at chunk 2048, against 68 MiB unbounded at 256k.
+
+`tests/test_bounded_swa.py` checks the ring attention op against the unbounded cache and a torch reference at chunks 1024 and 2048. `tests/test_bounded_swa_model.py` checks the whole model against the unbounded one bit for bit, on 8×4 at chunk 8192 and 4×8 at chunk 2048. Both replay one trace over interleaved requests on two slots, with repeated wraps, partial final chunks and reused slots:
+
+```bash
+pytest models/demos/gemma4_d_p/tests/test_bounded_swa.py models/demos/gemma4_d_p/tests/test_bounded_swa_model.py -sv
+GEMMA4_D_P_BOUNDED_SWA=1 pytest models/demos/gemma4_d_p/tests/test_sanity_glx.py -sv
+```
+
 ## Host verification
 
 ```bash

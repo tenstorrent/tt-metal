@@ -38,6 +38,11 @@ def weight_cache_identity(hf_model_id, num_layers, mesh_shape, precision):
     )
 
 
+def bounded_swa_enabled():
+    """GEMMA4_D_P_BOUNDED_SWA=1 bounds every sliding-layer cache to two chunks, written circularly."""
+    return os.environ.get("GEMMA4_D_P_BOUNDED_SWA", "0").lower() in ("1", "true", "yes")
+
+
 def create_tt_model(
     mesh_config,
     prefill_chunk_size,
@@ -50,6 +55,7 @@ def create_tt_model(
     ring_kv_caches=None,
     force_rebuild=False,
     tt_cache_path=None,
+    bounded_sliding_window_attention=None,
 ):
     """
     Create Gemma4 model with all weights loaded to device.
@@ -57,6 +63,8 @@ def create_tt_model(
     Returns:
         (model_args, model, tt_kv_cache, state_dict)
     """
+    if bounded_sliding_window_attention is None:
+        bounded_sliding_window_attention = bounded_swa_enabled()
     mesh_device = mesh_config.device
     geometry_error = prefill_chunk_geometry_error(
         prefill_chunk_size, mesh_config.cp_degree, max_seq_len, tp_degree=mesh_config.tp_degree
@@ -114,6 +122,7 @@ def create_tt_model(
         max_local_batch_size=max_batch_size,
         num_layers=num_layers,
         ring_kv_caches=ring_kv_caches,
+        bounded_sliding_window_attention=bounded_sliding_window_attention,
     )
 
     # After a full cold build, record completion (+ capture host-consumed weights to the sidecar)
