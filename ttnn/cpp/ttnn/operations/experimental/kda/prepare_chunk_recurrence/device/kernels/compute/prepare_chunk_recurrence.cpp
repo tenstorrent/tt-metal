@@ -935,12 +935,10 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     DataflowBuffer workspace_2(dfb::workspace_2);
 
     compute_kernel_hw_startup(dfb::q, dfb::k, dfb::workspace_0);
-    // The reader generates the constants after publishing the first work item, the inverse's last; those are
-    // awaited just before the batched inverse.
-    ones.wait_front(chunk_matrix_tiles);
+    // The reader generates each constant with the first batch's input that first needs it: the gate matrices with g,
+    // the L2 norm's ones and the causal mask with q, the inverse's after the batch. Each is awaited before first use.
     gate_tril.wait_front(chunk_matrix_tiles);
     gate_ones.wait_front(chunk_matrix_tiles);
-    tril.wait_front(chunk_matrix_tiles);
 
     uint32_t inverse_items = 0;
     for (uint32_t work_item = 0; work_item < work_item_count; ++work_item) {
@@ -981,6 +979,8 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
         // q and k normalize through the same squared and normalized buffers, so one copy of the row reduction serves
         // both.
         auto& q_pairwise = workspace_1;
+        ones.wait_front(chunk_matrix_tiles);
+        tril.wait_front(chunk_matrix_tiles);
         q.wait_front(key_tiles);
         prepare_q_terms<Ct, Kt, dfb::workspace_2, dfb::inverse_norms, SCALE_BITS, EPS_BITS>(
             q,

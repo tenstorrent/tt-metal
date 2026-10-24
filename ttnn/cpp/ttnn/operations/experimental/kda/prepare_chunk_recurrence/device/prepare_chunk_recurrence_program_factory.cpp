@@ -210,7 +210,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
              {"beta_width_tiles", static_cast<uint32_t>(in.beta.padded_shape()[-1]) / tt::constants::TILE_WIDTH},
              {"beta_offset_tiles", attrs.beta_logits_column_offset / tt::constants::TILE_WIDTH},
              {"GATE_SCALE_BITS", std::bit_cast<uint32_t>(attrs.gate_scale)},
-             {"GATE_HALF_SCALE_BITS", std::bit_cast<uint32_t>(attrs.gate_scale * 0.5F)}},
+             {"GATE_HALF_SCALE_BITS", std::bit_cast<uint32_t>(attrs.gate_scale * 0.5F)},
+             {"batch_items", batch}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks", "num_heads"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
