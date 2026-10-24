@@ -5,8 +5,8 @@
 """Helpers shared by the BEVFormer tests: camera rigs and dataset presets, dummy weights with
 realistic statistics, random inputs shaped like the model's, and PCC checks.
 
-BEVFormer-base's own configuration is ``model_config.py``'s; this module holds what only the tests
-use.
+The model's own configuration, for the variant ``BEVFORMER_VARIANT`` selects, is
+``model_config.py``'s; this module holds what only the tests use.
 """
 
 import math
@@ -22,12 +22,11 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.bevformer.model_config import (
-    BEV_H,
-    BEV_W,
     BOX_CENTER,
     BOX_SIZE,
     BOX_VELOCITY,
     BOX_YAW,
+    CAMERA_IMAGE_SIZE,
     CAN_BUS_DIMS,
     CENTERS_FIRST,
     CODE_CENTERS,
@@ -43,20 +42,21 @@ from models.experimental.bevformer.model_config import (
     FEEDFORWARD_CHANNELS,
     FPN_KWARGS,
     IMAGE_HEIGHT,
-    IMAGE_MEAN_BGR,
+    IMAGE_MEAN,
+    IMAGE_STD,
     IMAGE_WIDTH,
     NUM_CAMS,
     NUM_CLASSES,
     NUM_HEADS,
-    NUM_LEVELS,
     NUM_POINTS_IN_PILLAR,
     NUM_QUERY,
     PC_RANGE,
-    RAW_IMAGE_SIZE,
     RESNET_KWARGS,
     SCA_NUM_POINTS,
     SPATIAL_SHAPES,
     TSA_NUM_POINTS,
+    VARIANT,
+    VARIANTS,
     fpn_spatial_shapes,
     padded_image_size,
 )
@@ -72,6 +72,9 @@ from models.experimental.bevformer.reference.perception_transformer import Perce
 from models.experimental.bevformer.reference.resnet import ModulatedDeformConv2dPack, ResNet
 from models.experimental.bevformer.reference.spatial_cross_attention import MSDeformableAttention3D
 from models.experimental.bevformer.reference.temporal_self_attention import TemporalSelfAttention
+
+# The variant is fixed when model_config is first imported; the log says which one a run tests.
+logger.info(f"BEVFormer variant {VARIANT}")
 
 # --- Camera rigs ------------------------------------------------------------------------------
 
@@ -118,7 +121,7 @@ def _narrow(name: str, yaw_deg: float) -> CameraSpec:
         yaw_deg=yaw_deg,
         focal_px=(NUSCENES_NARROW_FOCAL_PX, NUSCENES_NARROW_FOCAL_PX),
         principal_px=NUSCENES_NARROW_PRINCIPAL_PX,
-        reference_size=RAW_IMAGE_SIZE,
+        reference_size=CAMERA_IMAGE_SIZE,
     )
 
 
@@ -136,7 +139,7 @@ NUSCENES_CAMERA_RIG: Tuple[CameraSpec, ...] = (
         yaw_deg=180.0,
         focal_px=(NUSCENES_WIDE_FOCAL_PX, NUSCENES_WIDE_FOCAL_PX),
         principal_px=NUSCENES_WIDE_PRINCIPAL_PX,
-        reference_size=RAW_IMAGE_SIZE,
+        reference_size=CAMERA_IMAGE_SIZE,
     ),
 )
 
@@ -292,19 +295,21 @@ class DatasetPreset:
 
 
 _CARLA_PC_RANGE = (-50.0, -50.0, -5.0, 50.0, 50.0, 3.0)
+# The tiny presets: reduced attention sizes for fast tests, not BEVFormer-tiny's.
 _TINY = dict(embed_dims=128, num_heads=4, num_levels=1, num_points=4, tsa_num_points=4)
-# The base presets: BEVFormer-base's encoder attention sizes over the four camera levels.
+# The base presets: BEVFormer-base's encoder attention sizes over its four camera levels, whatever
+# variant is selected.
 _BASE = dict(
     embed_dims=EMBED_DIMS,
     num_heads=NUM_HEADS,
-    num_levels=NUM_LEVELS,
+    num_levels=VARIANTS["base"].num_levels,
     num_points=SCA_NUM_POINTS,
     tsa_num_points=TSA_NUM_POINTS,
 )
 
 PRESETS = {
     "nuscenes_tiny": DatasetPreset("nuscenes_v1.0_full_640x360", PC_RANGE, NUM_CAMS, (640, 360), **_TINY),
-    "nuscenes_base": DatasetPreset("nuscenes_v1.0_full_1600x900", PC_RANGE, NUM_CAMS, RAW_IMAGE_SIZE, **_BASE),
+    "nuscenes_base": DatasetPreset("nuscenes_v1.0_full_1600x900", PC_RANGE, NUM_CAMS, CAMERA_IMAGE_SIZE, **_BASE),
     "carla_tiny": DatasetPreset("carla_v0.9.10_640x480", _CARLA_PC_RANGE, NUM_CAMS, (640, 480), **_TINY),
     "carla_base": DatasetPreset("carla_v0.9.10_1280x960", _CARLA_PC_RANGE, NUM_CAMS, (1280, 960), **_BASE),
 }
@@ -397,20 +402,22 @@ def init_dummy_fpn_weights(torch_model, seed=0):
 
 # --- Backbone and FPN -------------------------------------------------------------------------
 
-# Dtypes TTResNet emits for C3-C5.
-BACKBONE_OUTPUT_DTYPES = [ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16]
+# Dtypes TTResNet emits for its outputs: C3-C5 for base, C5 for small and tiny.
+BACKBONE_OUTPUT_DTYPES = [ttnn.bfloat16] * len(RESNET_KWARGS["out_indices"])
 
 # Random structure at these cell sizes and amplitudes, in pixel units, plus per-pixel noise.
 IMAGE_NOISE_SCALES = ((8, 80.0), (32, 40.0), (128, 20.0))
 IMAGE_PIXEL_NOISE = 8.0
-# The std of random_image_batch, measured over full batches; its mean is near zero. Re-measure
-# it when the noise constants change: the dummy backbone's stem is scaled by it.
-IMAGE_STD = 19.5
+# The std of random_image_batch in pixel units, measured over full batches; its mean is near zero.
+# Re-measure it when the noise constants change: the dummy backbone's stem is scaled by it.
+IMAGE_PIXEL_STD = 19.5
+# random_image_batch's std once normalized, taking the channels' mean std.
+IMAGE_BATCH_STD = IMAGE_PIXEL_STD / (sum(IMAGE_STD) / len(IMAGE_STD))
 
 
 # The references only run forward; without autograd they keep no activations for backward.
 def build_reference_backbone():
-    return init_dummy_backbone_weights(ResNet(**RESNET_KWARGS), input_std=IMAGE_STD).requires_grad_(False)
+    return init_dummy_backbone_weights(ResNet(**RESNET_KWARGS), input_std=IMAGE_BATCH_STD).requires_grad_(False)
 
 
 def build_reference_fpn():
@@ -449,9 +456,9 @@ def to_device(tensor, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
 def random_image_batch():
     """Random camera images in the range BEVFormer's normalized images take: smooth random
     structure at several scales plus pixel noise around the dataset mean, clamped to [0, 255]
-    as pixels are, minus ``IMAGE_MEAN_BGR``. Backbone error depends on the input scale, so the
-    inputs keep the real one."""
-    mean = torch.tensor(IMAGE_MEAN_BGR).view(1, 3, 1, 1)
+    as pixels are, normalized by ``IMAGE_MEAN`` and ``IMAGE_STD``. Backbone error depends on the
+    input scale, so the inputs keep the real one."""
+    mean = torch.tensor(IMAGE_MEAN).view(1, 3, 1, 1)
     images = mean.expand(NUM_CAMS, 3, IMAGE_HEIGHT, IMAGE_WIDTH).clone()
     for cell, amplitude in IMAGE_NOISE_SCALES:
         coarse = torch.rand(NUM_CAMS, 3, IMAGE_HEIGHT // cell + 1, IMAGE_WIDTH // cell + 1) - 0.5
@@ -459,12 +466,13 @@ def random_image_batch():
             coarse, size=(IMAGE_HEIGHT, IMAGE_WIDTH), mode="bilinear", align_corners=False
         )
     images += IMAGE_PIXEL_NOISE * torch.randn(images.shape)
-    return images.clamp(0, 255) - mean
+    return (images.clamp(0, 255) - mean) / torch.tensor(IMAGE_STD).view(1, 3, 1, 1)
 
 
 # --- Encoder ----------------------------------------------------------------------------------
 
-BEV_SHAPES = {"tiny": (50, 50), "base": (BEV_H, BEV_W)}
+# BEV grids: a small one for fast tests and BEVFormer-base's, whatever variant is selected.
+BEV_SHAPES = {"tiny": (50, 50), "base": (VARIANTS["base"].bev_size, VARIANTS["base"].bev_size)}
 
 # Spread of the random weights on top of upstream's init, so the offsets and attention logits vary
 # per query. Upstream's init alone has zero offset and

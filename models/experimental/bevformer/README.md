@@ -39,8 +39,11 @@ tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop
 ```sh
 pytest --disable-warnings models/experimental/bevformer/tests/pcc/
 ```
-- `test_resnet.py`: the ResNet101-DCN backbone's bottlenecks and layers against the reference.
-- `test_fpn.py`: the FPN neck on random C3-C5 in the dtypes the backbone emits.
+- `BEVFORMER_VARIANT=tiny|small|base` (default `base`) selects upstream's configuration, read once
+  when `model_config.py` is first imported. The backbone and FPN tests (`test_resnet.py`,
+  `test_fpn.py`, `test_backbone_fpn.py`) run every variant; the rest run base.
+- `test_resnet.py`: the backbone's bottlenecks and layers against the reference.
+- `test_fpn.py`: the FPN neck on random backbone outputs in the dtypes the backbone emits.
 - `test_backbone_fpn.py`: camera images through the backbone and the FPN end to end.
 - `test_ms_deformable_attention.py`, `test_fused_msda.py`: the deformable attention module and the fused MSDA op.
 - `test_point_sampling_3d_2d.py`: the BEV pillars' projection into the cameras and the visibility mask.
@@ -57,7 +60,7 @@ pytest --disable-warnings models/experimental/bevformer/tests/pcc/
 
 ```
 models/experimental/bevformer/
-├── model_config.py     # BEVFormer-base's configuration and the port's precision and memory choices
+├── model_config.py     # BEVFormer's configuration per variant and the port's precision and memory choices
 ├── reference/          # PyTorch reference implementation
 ├── tests/
 │   ├── common.py       # Test helpers: camera rigs, dataset presets, dummy weights, random inputs
@@ -68,7 +71,7 @@ models/experimental/bevformer/
 
 ## Model Structure
 
-BEVFormer-base's PyTorch reference (`reference/bevformer.py`, `build_bevformer_base(200, 200)`), the
+BEVFormer-base's PyTorch reference (`reference/bevformer.py`, `build_bevformer()` by default), the
 repeated bottlenecks folded.
 
 ```

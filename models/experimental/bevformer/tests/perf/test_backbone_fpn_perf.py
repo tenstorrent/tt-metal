@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tracy harness for the ResNet101-DCN backbone and FPN neck device path.
+"""Tracy harness for the backbone and FPN neck device path.
 
 Same inputs as ``test_backbone_fpn``: a PCC gate that doubles as the warmup, then the
 forward captured as a trace and one signposted replay, so the report covers
