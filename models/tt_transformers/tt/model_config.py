@@ -218,7 +218,8 @@ def should_pad_sampling_logits_to_power_of_2(
 
 def disables_batched_prefill(base_model_name: str, device_name: str) -> bool:
     return (base_model_name == "Qwen3-32B" and device_name == "P150x4") or (
-        base_model_name == "Llama-3.1-8B" and device_name in ("P100", "P150", "P300", "P150x4", "P150x8")
+        base_model_name in ("Llama-3.1-8B", "Llama-3.2-1B", "Qwen3-0.6B")
+        and device_name in ("P100", "P150", "P300", "P150x4", "P150x8")
     )
 
 
