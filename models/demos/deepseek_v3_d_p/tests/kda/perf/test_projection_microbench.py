@@ -5,7 +5,10 @@
 
 KDA_MM_CASES is a JSON list of cases: {"name", "M", "K", "N", "kind": "2d" | "1d", "cols", "rows", "k_block",
 "sub_h", "sub_w", "per_core_M"?, "per_core_N"?, "fidelity": "HiFi2", "wdtype": "bfloat8_b", "out": "L1" | "DRAM",
-"in0": "DRAM" | "L1"}. Each case runs replicated on all 32 chips; the slowest chip's realtime-profiler duration is
+"in0": "DRAM" | "L1", "out_block_w"?, "out_block_h"?, "activation"?}. "activation" fuses a unary op into the matmul's
+last K block: an op name ("sigmoid", the FP32-accurate RC sigmoid) or [name, params...] (e.g. ["sigmoid", 1, 0] for
+the row-vector mode). out_block_w / out_block_h below per_core_N / per_core_M shrink the in1 / in0 circular buffers,
+which lets larger k_blocks fit L1 (in1 holds 2 x k_block x out_block_w tiles). Each case runs replicated on all 32 chips; the slowest chip's realtime-profiler duration is
 reported (median of KDA_MM_RUNS runs). Results go to stdout as KDA_MM= lines and to KDA_MM_OUT as JSON.
 """
 
@@ -31,6 +34,14 @@ _OUT = Path(os.environ.get("KDA_MM_OUT", "generated/kda_mm.json"))
 _T = 32
 
 
+def _activation(case: dict) -> ttnn.UnaryWithParam | None:
+    spec = case.get("activation")
+    if spec is None:
+        return None
+    name, *params = [spec] if isinstance(spec, str) else spec
+    return ttnn.UnaryWithParam(getattr(ttnn.UnaryOpType, name.upper()), *[float(p) for p in params])
+
+
 def _program_config(case: dict):
     m_tiles, n_tiles = case["M"] // _T, case["N"] // _T
     grid = ttnn.CoreCoord(case["cols"], case["rows"])
@@ -43,12 +54,12 @@ def _program_config(case: dict):
             in0_block_w=case["k_block"],
             out_subblock_h=case["sub_h"],
             out_subblock_w=case["sub_w"],
-            out_block_h=per_core_m,
-            out_block_w=per_core_n,
+            out_block_h=case.get("out_block_h", per_core_m),
+            out_block_w=case.get("out_block_w", per_core_n),
             per_core_M=per_core_m,
             per_core_N=per_core_n,
             fuse_batch=True,
-            fused_activation=None,
+            fused_activation=_activation(case),
             mcast_in0=True,
         )
     per_core_m = case.get("per_core_M", -(-m_tiles // case["rows"]))
@@ -58,12 +69,12 @@ def _program_config(case: dict):
         in0_block_w=case["k_block"],
         out_subblock_h=case["sub_h"],
         out_subblock_w=case["sub_w"],
-        out_block_h=per_core_m,
-        out_block_w=per_core_n,
+        out_block_h=case.get("out_block_h", per_core_m),
+        out_block_w=case.get("out_block_w", per_core_n),
         per_core_M=per_core_m,
         per_core_N=per_core_n,
         transpose_mcast=case.get("transpose_mcast", False),
-        fused_activation=None,
+        fused_activation=_activation(case),
         fuse_batch=True,
     )
 
