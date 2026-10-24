@@ -38,7 +38,7 @@ struct LogPoly
  * program constant register.
  *
  * x * (x * (x * A - B) + C) - D, rminimax over [1, 2]; B and D are subtracted so the SFPMAD
- * sequence stays fixed. LN2 is deliberately the coarse 0.692871: lgamma, digamma and POW
+ * sequence stays fixed. LN2 is deliberately the coarse 0.692871: lgamma and digamma
  * results depend on it.
  */
 struct LogPolyNoInit
