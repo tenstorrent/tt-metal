@@ -1,0 +1,11 @@
+rank 0=bh-glx-120-c01u02 slot=0
+rank 1=bh-glx-120-c01u20 slot=0
+rank 2=bh-glx-120-c01u20 slot=1
+rank 3=bh-glx-120-c06u20 slot=0
+rank 4=bh-glx-120-c06u20 slot=1
+rank 5=bh-glx-120-c06u14 slot=0
+rank 6=bh-glx-120-c06u14 slot=1
+rank 7=bh-glx-120-c08u14 slot=0
+rank 8=bh-glx-120-c08u14 slot=1
+rank 9=bh-glx-120-c10u14 slot=0
+rank 10=bh-glx-120-c06u08 slot=0
