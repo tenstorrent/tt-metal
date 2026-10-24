@@ -15,7 +15,6 @@ from loguru import logger
 import ttnn
 from models.demos.gemma4.custom_ops.qkv_norm_rope_prefill import QkvNormRopePrefill
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
-from models.demos.gemma4.tt.mesh_orientation import decode_flag
 
 from .operations import (
     PREFILL_SDPA_MAX_SEQ,
@@ -779,7 +778,7 @@ def _sdpa_single_chunk(tt_q, tt_k, tt_v, config, seq_len, sliding_window, comput
 def _fused_prefill_qkv_ok(tt_q, cos_cache, weights) -> bool:
     """GEMMA4_QKV_NORM_ROPE_PREFILL=1 and the fused op's contract: bf16 TILE interleaved [B, H, S, D] heads with
     S a multiple of 32 and D of 64, the layer's sliced [1, 1, >= S, D] cos cache and the TILE gamma rows."""
-    if not (QkvNormRopePrefill.enabled() or decode_flag("GEMMA4_QKV_NORM_ROPE_PREFILL") == "1"):
+    if not QkvNormRopePrefill.enabled():
         return False
     if getattr(weights, "q_norm_tile", None) is None:
         return False
