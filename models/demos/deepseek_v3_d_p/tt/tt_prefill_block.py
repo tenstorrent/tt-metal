@@ -722,7 +722,7 @@ class TtPrefillBlock(LightweightModule):
                 return None, kv_cache, None
             return None, kv_cache
 
-        x = ttnn.add(x, mla_out)
+        x = ttnn.add(x, mla_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(mla_out)
         if _timing:
             ttnn.synchronize_device(self.mesh_device)

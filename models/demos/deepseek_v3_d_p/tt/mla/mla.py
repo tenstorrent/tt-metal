@@ -33,6 +33,8 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 
 # glue track: workers per link for the q_a (and merged q_a+kv_a) TP reduce-scatter; "0" = op default.
 _GLUE_STEM_RS_WORKERS = int(os.environ.get("GLUE_STEM_RS_WORKERS", "8")) or None
+# glue track: o_proj RS output in L1 (read once by the block's residual add).
+_GLUE_EPI_L1 = os.environ.get("GLUE_EPI_L1", "0") == "1"
 
 
 class ttMLA:
@@ -1786,7 +1788,8 @@ class ttMLA:
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
                 num_links=self.ccl_num_links,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # glue track (GLUE_EPI_L1=1): consumed at once by the residual add.
+                memory_config=ttnn.L1_MEMORY_CONFIG if _GLUE_EPI_L1 else ttnn.DRAM_MEMORY_CONFIG,
                 topology=self.tp_ccl_topology,
                 cluster_axis=self.tp_axis,
             )
