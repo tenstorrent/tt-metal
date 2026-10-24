@@ -29,13 +29,15 @@ void bind_post_combine_reduce(nb::module_& mod) {
             optional ``indices`` and ``expert_dispatch_table`` tensors are
             supplied:
 
-            * Both provided — DeepSeek path. The kernel skips experts whose
-              dispatch_table entry is -1 (non-local). Required when upstream
-              combine does not zero non-local expert outputs.
-            * Both omitted — GPT-OSS path. The kernel skips experts whose
-              routing weight is exactly zero. Requires upstream to have
-              zeroed non-local routing weights.
+            * Both provided — DeepSeek path. The kernel reads only slots whose
+              dispatch_table entry is not -1 (local); upstream combine does not
+              need to zero the non-local slots.
+            * Both omitted — GPT-OSS path. The kernel reads only slots with a
+              non-zero routing weight. Requires upstream to have zeroed
+              non-local routing weights.
             * Supplying only one raises an error.
+
+            A token with no active slot produces exact zeros.
 
             Args:
                 combine_output (ttnn.Tensor): MoE combine output in ROW_MAJOR layout.
