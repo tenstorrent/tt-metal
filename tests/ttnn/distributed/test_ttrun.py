@@ -5,6 +5,8 @@
 
 import os
 import shlex
+import shutil
+import sys
 import yaml
 import importlib
 from pathlib import Path
@@ -1206,3 +1208,128 @@ class TestNewModeFlow:
             call_args = mock_phase1.call_args
             assert call_args.kwargs["mock_rank_to_desc"] is not None
             assert len(call_args.kwargs["mock_rank_to_desc"]) == 2
+
+
+class TestLauncherSelection:
+    """tt-run must launch with the plain ``mpirun`` of the ULFM-capable install, never a ``--with-ft ulfm`` wrapper.
+
+    Regression tests for https://github.com/tenstorrent/tt-metal/issues/57698: under ``--with-ft ulfm`` a rank
+    killed by a signal is "recoverable" and mpirun can exit 0 although every rank aborted.
+    """
+
+    @staticmethod
+    def _make_executable(path: Path, content: str = "#!/bin/bash\nexit 0\n") -> Path:
+        path.write_text(content)
+        path.chmod(0o755)
+        return path
+
+    def test_wrapper_script_resolves_to_sibling_mpirun(self, temp_dir, monkeypatch):
+        """Docker image layout: mpirun-ulfm is a bash wrapper beside mpirun that injects --with-ft ulfm."""
+        bin_dir = temp_dir / "openmpi" / "bin"
+        bin_dir.mkdir(parents=True)
+        plain = self._make_executable(bin_dir / "mpirun")
+        wrapper = self._make_executable(
+            bin_dir / "mpirun-ulfm", '#!/bin/bash\nexec "$(dirname "$0")/mpirun" --with-ft ulfm "$@"\n'
+        )
+        monkeypatch.setattr(ttrun_module.shutil, "which", lambda name: str(wrapper) if name == "mpirun-ulfm" else None)
+
+        assert get_mpi_launcher() == str(plain.resolve())
+
+    def test_symlink_resolves_to_target_mpirun(self, temp_dir, monkeypatch):
+        """Debian package layout: /usr/local/bin/mpirun-ulfm is a symlink to <prefix>/bin/mpirun."""
+        bin_dir = temp_dir / "openmpi" / "bin"
+        bin_dir.mkdir(parents=True)
+        plain = self._make_executable(bin_dir / "mpirun")
+        link_dir = temp_dir / "usr_local_bin"
+        link_dir.mkdir()
+        link = link_dir / "mpirun-ulfm"
+        link.symlink_to(plain)
+        monkeypatch.setattr(ttrun_module.shutil, "which", lambda name: str(link) if name == "mpirun-ulfm" else None)
+
+        assert get_mpi_launcher() == str(plain.resolve())
+
+    def test_wrapper_without_sibling_is_used_directly(self, temp_dir, monkeypatch):
+        """No plain mpirun next to the wrapper: keep working, but with the wrapper itself."""
+        wrapper = self._make_executable(temp_dir / "mpirun-ulfm")
+        monkeypatch.setattr(ttrun_module.shutil, "which", lambda name: str(wrapper) if name == "mpirun-ulfm" else None)
+
+        assert get_mpi_launcher() == str(wrapper)
+
+    def test_falls_back_to_mpirun_when_ulfm_launcher_missing(self, monkeypatch):
+        monkeypatch.setattr(ttrun_module.shutil, "which", lambda name: None)
+
+        assert get_mpi_launcher() == "mpirun"
+
+    def test_dangling_symlink_falls_back_to_launcher_name(self, temp_dir, monkeypatch):
+        link = temp_dir / "mpirun-ulfm"
+        link.symlink_to(temp_dir / "missing-mpirun")
+        monkeypatch.setattr(ttrun_module.shutil, "which", lambda name: str(link) if name == "mpirun-ulfm" else None)
+
+        assert get_mpi_launcher() == str(link)
+
+    def test_user_with_ft_in_mpi_args_is_forwarded(self, runner, sample_rank_binding_yaml):
+        """Opting into ULFM stays possible through --mpi-args."""
+        import subprocess
+
+        with patch.object(subprocess, "run") as mock_subprocess:
+            mock_subprocess.return_value.returncode = 0
+            result = runner.invoke(
+                main,
+                [
+                    "--rank-binding",
+                    str(sample_rank_binding_yaml),
+                    "--bare",
+                    "--mpi-args",
+                    "--with-ft ulfm",
+                    "echo",
+                    "x",
+                ],
+            )
+            assert result.exit_code == 0, result.output
+            launched = mock_subprocess.call_args[0][0]
+            assert Path(launched[0]).name != "mpirun-ulfm"
+            assert launched[launched.index("--with-ft") + 1] == "ulfm"
+
+
+@pytest.mark.timeout(60)  # under the regression a surviving rank waits forever; each case normally takes ~1s
+@pytest.mark.skipif(
+    shutil.which("mpirun-ulfm") is None and shutil.which("mpirun") is None,
+    reason="requires an MPI launcher on PATH",
+)
+class TestRankFailurePropagation:
+    """CPU-only end-to-end check: crashed ranks must surface as a non-zero tt-run exit code (#57698)."""
+
+    @staticmethod
+    def _mpi_args() -> str:
+        args = ["--oversubscribe"]
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            args.append("--allow-run-as-root")
+        return " ".join(args)
+
+    def _run(self, runner, rank_binding_yaml, python_code):
+        return runner.invoke(
+            main,
+            [
+                "--rank-binding",
+                str(rank_binding_yaml),
+                "--bare",
+                "--mpi-args",
+                self._mpi_args(),
+                sys.executable,
+                "-c",
+                python_code,
+            ],
+        )
+
+    def test_all_ranks_aborted_by_signal_fails(self, runner, sample_rank_binding_yaml):
+        result = self._run(runner, sample_rank_binding_yaml, "import os; os.abort()")
+        assert result.exit_code != 0, "tt-run reported success although every rank was killed by SIGABRT"
+
+    def test_one_rank_nonzero_exit_fails(self, runner, sample_rank_binding_yaml):
+        code = "import os, sys; sys.exit(7 if os.environ.get('OMPI_COMM_WORLD_RANK') == '1' else 0)"
+        result = self._run(runner, sample_rank_binding_yaml, code)
+        assert result.exit_code != 0
+
+    def test_all_ranks_succeed_passes(self, runner, sample_rank_binding_yaml):
+        result = self._run(runner, sample_rank_binding_yaml, "pass")
+        assert result.exit_code == 0, result.output

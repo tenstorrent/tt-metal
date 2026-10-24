@@ -228,3 +228,7 @@ Both modes support:
 - `--factory-system-descriptor` – Path to a Factory System Descriptor (FSD) textproto describing the as-built/expected topology. tt-run exports it to every rank via `TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH`, so both `generate_rank_bindings` (Phase 1) and the workload (Phase 2) read it through RTOptions. The FSD content is also folded into the Phase 1 cache fingerprint. When provided, it also lets Fabric 2.0 statically reroute traffic around broken links. When omitted, tt-run uses live PSD discovery. See [issue #52859](https://github.com/tenstorrent/tt-metal/issues/52859) for the design and rollout.
 
 Run `tt-run --help` for the full list.
+
+## Launcher Selection and Exit Codes
+
+tt-run looks for `mpirun-ulfm` on `PATH` to find the ULFM-capable Open MPI installation that tt-metal links against, but it launches with that installation's plain `mpirun` (the sibling of the resolved `mpirun-ulfm`). Older Docker images shipped `mpirun-ulfm` as a wrapper that injects `--with-ft ulfm`; under that mode a rank killed by a signal is treated as recoverable and `mpirun` can exit 0 even though ranks crashed ([#57698](https://github.com/tenstorrent/tt-metal/issues/57698)). Bypassing the wrapper makes any rank that exits non-zero or dies from a signal abort the whole job, so tt-run exits non-zero. Programs that recover from rank failures themselves can opt in with `--mpi-args "--with-ft ulfm"`.
