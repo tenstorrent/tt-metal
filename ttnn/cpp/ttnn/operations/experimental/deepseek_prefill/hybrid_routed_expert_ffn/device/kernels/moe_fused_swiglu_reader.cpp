@@ -1097,7 +1097,7 @@ void kernel_main() {
             // Next expert's W_gate, on this expert's last block only (earlier blocks still re-publish
             // the resident bytes). cb_up_acc was waited above, so compute has popped every chunk.
             const uint32_t pf_target =
-                (kPrefetchNextW && block_idx + 1 == m_blocks) ? next_active(local_expert_id) : PF_NONE;
+                (kPrefetchNextW && wd_mrow && block_idx + 1 == m_blocks) ? next_active(local_expert_id) : PF_NONE;
             if (pf_target != PF_NONE) {
                 static_assert(GU_CHUNKS * WG_CHUNK_TILES == WG_BLOCK_TILES, "prefetch fills the whole W_gate CB");
                 cb_reserve_back(cb_w_gate, WG_BLOCK_TILES);
