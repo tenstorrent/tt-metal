@@ -1079,11 +1079,13 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                     f"DSV4.1 prefill (interleave): images in users {sorted(vis)} ({sum(len(v.spans) for v in vis.values())} spans)"
                 )
         run = [it for i, it in enumerate(items) if i not in skipped]
+        t_call0 = time.perf_counter()
         res = (
             self.m.prefill_interleaved(run, chunk, s_pad_max=self.s_pad_cur, want_logits=want_logits, vis=vis or None)
             if run
             else {}
         )
+        t_call1 = time.perf_counter()
         for i in skipped:  # (the scheduler discards the token of a piece that does not finish its prompt)
             res[phys[i]] = (0, None)
         for i, p in enumerate(phys):
@@ -1101,6 +1103,9 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                     self.spec_ok[p] = False  # ISL beyond the speculative range: this request decodes plain
         self.timing["prefill"] = time.perf_counter() - t0
         self._calls["prefill"] += 1
+        if isinstance(self.m.timing, dict):  # (call timeline: adapter work before / after the model call)
+            self.m.timing["adapter_pre_s"] = round(t_call0 - t0, 4)
+            self.m.timing["adapter_post_s"] = round(time.perf_counter() - t_call1, 4)
         logger.info(f"DSV4.1 prefill (interleave) done in {self.timing['prefill']:.2f} s (model: {self.m.timing})")
         if device_sampling:
             first = [int(res[p][0]) for p in phys]

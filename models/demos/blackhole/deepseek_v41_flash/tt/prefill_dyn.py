@@ -194,15 +194,28 @@ class DynCtx:
         the next ``update`` with the same starts (one entry: a different next window drops it). A wrong guess costs host time that was free.
         """
         t0 = time.perf_counter()
-        self._pre = (self._pre_key(s0), self._host_tensors(s0))
+        self._pre = (self._pre_key(s0), self._host_tensors(s0), None)
         self.t_prebuild = getattr(self, "t_prebuild", 0.0) + time.perf_counter() - t0
+
+    def enqueue_prebuilt(self, epoch):
+        """Enqueue the copies of the prebuilt tensors NOW (behind the trace of the window being replayed: the command queue is in order): the next ``update`` with the same starts, and with no other
+        window enqueued in between (``epoch``), finds them in place and copies nothing. Otherwise it copies as before (everything is rewritten: the speculative copy is harmless).
+        """
+        if self.__dict__.get("_pre") is None:
+            return
+        for host, dev in self._pre[1]:
+            h2d(host, dev)
+        self._pre = (self._pre[0], self._pre[1], epoch)
 
     def update(self, s0):
         """Refresh every per-chunk tensor for the chunk of positions [s0, s0 + C) (host work + uploads, nothing is enqueued on the compute path). ``s0``: one start, or (per_row) one per mesh row."""
         pre = self.__dict__.pop("_pre", None)
         if pre is not None and pre[0] == self._pre_key(s0):
-            for host, dev in pre[1]:
-                h2d(host, dev)
+            if pre[2] is None or pre[2] != getattr(
+                self, "cur_epoch", None
+            ):  # (not enqueued already, or another window was replayed since)
+                for host, dev in pre[1]:
+                    h2d(host, dev)
             self.pre_hits = getattr(self, "pre_hits", 0) + 1
             for hk in self.upd_hooks:
                 hk(self, s0)

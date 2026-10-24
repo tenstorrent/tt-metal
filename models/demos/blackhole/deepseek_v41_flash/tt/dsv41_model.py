@@ -29,6 +29,7 @@ from models.demos.blackhole.deepseek_v41_flash.tt.decoder import DSV41Decoder
 from models.demos.blackhole.deepseek_v41_flash.tt.device_head import DSV41DeviceEmbedding, DSV41DeviceHead
 from models.demos.blackhole.deepseek_v41_flash.tt.engram import DSV41DeviceEngram, HostEngramRows
 from models.demos.blackhole.deepseek_v41_flash.tt.engram_ragged import RaggedNgramHash
+from models.demos.blackhole.deepseek_v41_flash.tt.h2d import replay
 from models.demos.blackhole.deepseek_v41_flash.tt.indexer import pos_buckets
 from models.demos.blackhole.deepseek_v41_flash.tt.layer import DSV41Layer
 from models.demos.blackhole.deepseek_v41_flash.tt.loader import load_layer
@@ -838,22 +839,50 @@ class Model:
                 self.log(f"  export_keys layer {L}: {(time.perf_counter() - _t) * 1e3:.0f} ms")
         ttnn.synchronize_device(self.md)
 
-    def _post_chunk(self, s0, C):
-        """Host-only (no device allocation): read the ragged-head trace outputs of this chunk for the users whose last prompt token is inside it."""
-        pm, U, rows, cols = self.prefill_model, self.Up, self.rows, self.cols
-        K = C // 32
+    def _post_todo(self, u, s0, C):
+        """(mesh row, offset in the 32-token tile, decode user) of the users whose last prompt token is inside the window starting at ``s0`` (per slot ``u`` of the traced chunk)"""
+        rows, U = self.rows, self.Up
         sb = getattr(self, "_slot_b", None)  # prefill slot (r * Up + u) -> global decode user (None: identity)
-        for u in range(U):
-            lg, tk = pm.head_out[u]
-            s0s = PSG.slot_s0(s0, rows * U)  # (per-row chunk starts: one start per prefill slot)
-            todo = [
-                (r, (int(self._last_pos[r * U + u]) - s0s[r * U + u]) % 32, r * U + u if sb is None else sb[r * U + u])
-                for r in range(rows)
-                if s0s[r * U + u] <= int(self._last_pos[r * U + u]) < s0s[r * U + u] + C
-            ]
+        s0s = PSG.slot_s0(s0, rows * U)  # (per-row chunk starts: one start per prefill slot)
+        return [
+            (r, (int(self._last_pos[r * U + u]) - s0s[r * U + u]) % 32, r * U + u if sb is None else sb[r * U + u])
+            for r in range(rows)
+            if s0s[r * U + u] <= int(self._last_pos[r * U + u]) < s0s[r * U + u] + C
+        ]
+
+    def post_chunk_prefetch(self, s0, C):
+        """Enqueue the NON-blocking reads of the ragged-head outputs (tokens, and the vocab shards of the logits of the users that need them) of the window just enqueued: the command queue is in order, so
+        they run right behind its trace and the host copies are ready when ``_post_chunk`` runs after the synchronisation (the blocking reads cost about 40 ms per call with the device idle).
+        """
+        pm, cols = self.prefill_model, self.cols
+        pf = self.__dict__.setdefault("_post_pf", {})
+        pf.clear()
+        for u in range(self.Up):
+            todo = self._post_todo(u, s0, C)
             if not todo:
                 continue
-            devs = ttnn.get_device_tensors(ttnn.from_device(tk))
+            lg, tk = pm.head_out[u]
+            ent = {"tk": ttnn.from_device(tk, blocking=False)}
+            if self._want_logits:
+                lgd = ttnn.get_device_tensors(lg)
+                ent["lg"] = {
+                    (r, c): ttnn.from_device(lgd[r * cols + c], blocking=False) for r, _, _ in todo for c in range(cols)
+                }
+            pf[u] = ent
+
+    def _post_chunk(self, s0, C):
+        """Host-only (no device allocation): read the ragged-head trace outputs of this chunk for the users whose last prompt token is inside it."""
+        pm, rows, cols = self.prefill_model, self.rows, self.cols
+        pf = self.__dict__.get("_post_pf") or {}
+        for u in range(self.Up):
+            lg, tk = pm.head_out[u]
+            todo = self._post_todo(u, s0, C)
+            if not todo:
+                continue
+            ent = pf.pop(u, None)
+            t_p0 = time.perf_counter()
+            devs = ttnn.get_device_tensors(ent["tk"] if ent is not None else ttnn.from_device(tk))
+            pm.timing["post_fd"] = pm.timing.get("post_fd", 0.0) + time.perf_counter() - t_p0
             lgd = ttnn.get_device_tensors(lg) if self._want_logits else None
             for r, off, b in todo:
                 tok = int(ttnn.to_torch(devs[r * cols]).reshape(-1)[off])
@@ -862,9 +891,15 @@ class Model:
                     lgd is not None
                 ):  # only the vocab shards of the mesh row of this user (8 devices x [32, vocab / 8]), not the logits of every row / token
                     row = torch.cat(
-                        [ttnn.to_torch(lgd[r * cols + c]).reshape(32, -1)[off].float() for c in range(cols)]
+                        [
+                            ttnn.to_torch(ent["lg"][(r, c)] if ent is not None and "lg" in ent else lgd[r * cols + c])
+                            .reshape(32, -1)[off]
+                            .float()
+                            for c in range(cols)
+                        ]
                     )
                 self._res[b] = (tok, row)
+            pm.timing["post_tt"] = pm.timing.get("post_tt", 0.0) + time.perf_counter() - t_p0
 
     def prefill_forward_dyn(
         self, tokens, prompt_lens, chunk, max_new_tokens, want_logits, enable_trace, s_pad_max, active=None
@@ -1533,6 +1568,7 @@ class Model:
             pm.post_replay_hooks.append(self._post_chunk)
             self._hooks_set = pm
         pm.timing = {}
+        pm._call_t0 = t_start
         if self.__dict__.get("_kx_pending") and (
             pm.dyn is None or pm.dyn.C != C or pm.dyn.S_pad != S_pad or pm.dyn_trace is None
         ):
@@ -1576,7 +1612,9 @@ class Model:
         )  # (deferred snapshots need the asynchronous windows: their reads are ordered by the queue, not by a host wait)
         t_apc_ovl = [0.0]  # seconds of snapshot completions run while the device replays a window
         early_bk = os.environ.get("DSV41_PF_EARLY_BK", "1") == "1"
+        post_pf = async_win and os.environ.get("DSV41_PF_POST_PREFETCH", "1") == "1"
         lookahead = os.environ.get("DSV41_PF_LOOKAHEAD", "1") == "1"
+        spec_enq = os.environ.get("DSV41_PF_SPEC_ENQ", "1") == "1"
         t_first = 0.0  # host seconds of window builds that were not overlapped with a replay
         t_pre = time.perf_counter() - t_start
         per_row = (
@@ -1662,7 +1700,20 @@ class Model:
                     )  # (hashes / Engram rows of this window built during the previous call's last replay: ``_look_build``)
                     if look is not None and vw is None and look[0] == _look_key(part, k):
                         pm.timing["lookahead_hits"] = pm.timing.get("lookahead_hits", 0) + 1
-                        return part, active, lens, tok, slot_b, vw, look[1], look[2], 0.0, s0v, _UpOnly(look[3])
+                        in_place = look[4] is not None and look[4] == getattr(pm, "_win_count", None)
+                        return (
+                            part,
+                            active,
+                            lens,
+                            tok,
+                            slot_b,
+                            vw,
+                            look[1],
+                            look[2],
+                            0.0,
+                            s0v,
+                            _UpOnly(None if in_place else look[3]),
+                        )
                     th0 = time.perf_counter()
                     if self.host_rows is not None:
                         hs = self.hasher(
@@ -1771,7 +1822,14 @@ class Model:
                         rows=torch.tensor([slot_l[i] for i in idx_l.tolist()]),
                     )
                     prepped_l = pm.prep_inputs(tok_l, hs_l, idx_l, vis=None)
-                    self._look = ((C,) + tuple(sorted(key_l)), hs_l, prepped_l, pm.record_upload(prepped_l, C))
+                    ops_l = pm.record_upload(prepped_l, C)
+                    enq_l = None
+                    if (
+                        spec_enq
+                    ):  # the copies go into the queue right behind the trace being replayed: the next call's first window finds the inputs in place
+                        replay(ops_l)
+                        enq_l = pm._win_count
+                    self._look = ((C,) + tuple(sorted(key_l)), hs_l, prepped_l, ops_l, enq_l)
                     pm.timing["lookahead_build"] = pm.timing.get("lookahead_build", 0.0) + time.perf_counter() - t_l0
 
                 ahead = {}
@@ -1803,7 +1861,7 @@ class Model:
                     ):  # (the token half of the uploads was recorded during the previous call: add the position half now)
                         self.sink.set_lengths(lens)
                         self.sink.set_map(slot_b if general else None)
-                        rec_ops = rec_ops.ops + pm.record_begin(s0v if per_row else k, C, active)
+                        rec_ops = (rec_ops.ops or []) + pm.record_begin(s0v if per_row else k, C, active)
                     s0 = s0v if per_row else k
                     t_hash += th_h
                     self.sink.set_lengths(lens)
@@ -1814,6 +1872,8 @@ class Model:
                     )
 
                     def _overlap(k_s0=k_s0, lens=lens, slot_b=slot_b, part=part, k=k):
+                        if post_pf and sync_k:
+                            self.post_chunk_prefetch(s0, C)  # (head read-backs queued right behind this window's trace)
                         if (
                             apc_defer
                         ):  # (the reads of a snapshot started after the previous window precede this window's replay: finish them while it runs)
@@ -1833,6 +1893,8 @@ class Model:
                                 if it_[3] % C == 0 and it_[3] < self.max_ctx - 1:
                                     nxt[slot_of[it_[0]]] = it_[3]
                             pm.dyn.prebuild(nxt)
+                            if spec_enq:
+                                pm.dyn.enqueue_prebuilt(pm._win_count)
                             if lookahead:
                                 _look_build()
                         for kn in win_keys[k_s0 + 1 :]:

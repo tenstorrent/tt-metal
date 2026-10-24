@@ -871,6 +871,7 @@ class DSV41PrefillModel:
         """Host side of a chunk: refresh every per-chunk persistent tensor (RoPE tables, masks, latent offsets) and call the registered hooks
         (e.g. the paged-state sink's own uploads) right before the replay."""
         t0 = time.perf_counter()
+        self.dyn.cur_epoch = getattr(self, "_win_count", 0)
         act = getattr(self, "active_mask", None)
         self.dyn.active = (
             None if act is None else torch.as_tensor(act).bool()
@@ -1056,6 +1057,9 @@ class DSV41PrefillModel:
         one is awaited GIL-free before this window's copies are enqueued). The caller synchronises at the windows whose result it reads (``sync=True``: a user's last token, a snapshot boundary, the end of the call).
         """
         t0 = time.perf_counter()
+        self._win_count = (
+            getattr(self, "_win_count", 0) + 1
+        )  # (epoch: a speculative upload is only valid while no other window was enqueued since)
         wl = self.__dict__.get(
             "winlog"
         )  # DSV41_PF_WINLOG=1 (diagnostics): per-window host timestamps + the time the device finished it (a watcher thread awaits its event)
@@ -1094,6 +1098,10 @@ class DSV41PrefillModel:
             to0 = time.perf_counter()
             overlap()
             self.timing["host_overlapped"] = self.timing.get("host_overlapped", 0.0) + time.perf_counter() - to0
+        t_en = time.perf_counter()
+        c0 = self.__dict__.get("_call_t0")
+        if c0 is not None:  # (call timeline for the server log: when the first trace of the call was enqueued)
+            self.timing.setdefault("first_enq_rel", t_en - c0)
         if not sync:
             self.timing["host_per_chunk"] = self.timing.get("host_per_chunk", 0.0) + t1 - t0
             self.timing["async_windows"] = self.timing.get("async_windows", 0) + 1
@@ -1101,6 +1109,8 @@ class DSV41PrefillModel:
         ttnn.synchronize_device(self.md)
         hist.clear()
         t2 = time.perf_counter()
+        if c0 is not None:
+            self.timing["sync_done_rel"] = t2 - c0  # (last synchronised window: the device finished it)
         t_h0 = time.perf_counter()
         if w is not None:
             w["sync"] = True
