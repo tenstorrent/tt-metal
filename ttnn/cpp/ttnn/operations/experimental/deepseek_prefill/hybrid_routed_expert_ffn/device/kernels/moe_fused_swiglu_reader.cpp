@@ -1068,32 +1068,46 @@ void kernel_main() {
             } else if (is_root) {
                 h_arrivals += slice_worker_count;
             }
+            uint32_t pf_wp = 0;
+            uint32_t pf_addr = 0;
+            uint32_t pf_issued = GU_CHUNKS;
+            auto w_next_addr = [&](uint32_t e) { return get_arg_val<uint32_t>(RT_WEIGHTS + e); };
+            // Issue the next W_gate chunk under PF_W_TRID, then restore `restore_trid`.
+            auto pf_issue_one = [&](uint32_t restore_trid) {
+                if (pf_issued >= GU_CHUNKS) {
+                    return;
+                }
+                const auto wg_next = TensorAccessor(wg_args, pf_addr, W_TILE);
+                noc_async_read_set_trid(PF_W_TRID);
+                moe_fused_swiglu::read_weight_chunk<BRG>(
+                    wg_next,
+                    true,
+                    pf_issued,
+                    GU_CHUNK_W,
+                    kr_rows,
+                    kstart,
+                    hstart,
+                    hn_cols,
+                    HID_T,
+                    pf_wp + pf_issued * WG_CHUNK_TILES * W_TILE,
+                    W_TILE);
+                noc_async_read_set_trid(restore_trid);
+                ++pf_issued;
+            };
             // Next expert's W_gate, on this expert's last block only (earlier blocks still re-publish
             // the resident bytes). cb_up_acc was waited above, so compute has popped every chunk.
             const uint32_t pf_target =
                 (kPrefetchNextW && block_idx + 1 == m_blocks) ? next_active(local_expert_id) : PF_NONE;
             if (pf_target != PF_NONE) {
-                const auto wg_next = TensorAccessor(wg_args, get_arg_val<uint32_t>(RT_WEIGHTS + pf_target), W_TILE);
                 static_assert(GU_CHUNKS * WG_CHUNK_TILES == WG_BLOCK_TILES, "prefetch fills the whole W_gate CB");
                 cb_reserve_back(cb_w_gate, WG_BLOCK_TILES);
-                const uint32_t pf_wp = get_write_ptr(cb_w_gate);
-                noc_async_read_set_trid(PF_W_TRID);
-                for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
-                    moe_fused_swiglu::read_weight_chunk<BRG>(
-                        wg_next,
-                        true,
-                        c,
-                        GU_CHUNK_W,
-                        kr_rows,
-                        kstart,
-                        hstart,
-                        hn_cols,
-                        HID_T,
-                        pf_wp + c * WG_CHUNK_TILES * W_TILE,
-                        W_TILE);
-                }
-                noc_async_read_set_trid(0);
+                pf_wp = get_write_ptr(cb_w_gate);
+                pf_addr = w_next_addr(pf_target);
                 pf_expert = pf_target;
+                pf_issued = 0;
+                // Chunk 0 now; the rest one per phase-2 round, so the ~70 NoC issues are spread over rounds
+                // in which this RISC-V mostly waits on flags rather than paid in front of round 0.
+                pf_issue_one(0);
             }
             const bool p2_tagged = prefetch_next_x || (pf_target != PF_NONE);
             if (p2_tagged) {
@@ -1174,6 +1188,7 @@ void kernel_main() {
                             }
                         }
                         cb_push_back(cb_h, HROW_T);
+                        pf_issue_one(P2_READ_TRID);
                     }
                     if (!wd_mgroup) {
                         // Eight 64-tile pushes advance a 3x64-tile CB by two slots. Publish one
@@ -1327,6 +1342,7 @@ void kernel_main() {
                             wd_pending = true;
                         }
                         cb_push_back(cb_h, h_block_tiles);
+                        pf_issue_one(P2_READ_TRID);
                     }
                     // The last issue is at round HGROUPS-1-WD_AHEAD and is published at round
                     // HGROUPS-WD_AHEAD <= HGROUPS-1, so nothing is ever left pending here. Kept as an
@@ -1339,6 +1355,9 @@ void kernel_main() {
                         cb_push_back(cb_w_down, WD_BLOCK_TILES);
                     }
                 }
+            }
+            while (pf_issued < GU_CHUNKS) {
+                pf_issue_one(P2_READ_TRID);
             }
             if (p2_tagged && !prefetch_next_x) {
                 noc_async_read_set_trid(0);
