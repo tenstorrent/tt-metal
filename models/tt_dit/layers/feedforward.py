@@ -65,6 +65,7 @@ class ParallelFeedForward(Module):
         ff2_dtype=ttnn.bfloat16,
         activation_dtype=None,
         pin_output_bf16=False,
+        intermediate_dtype=None,
     ):
         super().__init__()
 
@@ -79,6 +80,9 @@ class ParallelFeedForward(Module):
         self.bias = bias
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
+        # dtype ff1 writes the intermediate in (e.g. bfloat8_b, set by a quant config): ff2 then reads half the
+        # bytes, and its output keeps bf16 (the residual dtype). None = ff1's own output dtype.
+        self.intermediate_dtype = intermediate_dtype
 
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
@@ -135,9 +139,13 @@ class ParallelFeedForward(Module):
             default_block_size=default_block_size,
             force_transpose=force_transpose,
             use_persistent_buffer=use_persistent_buffer,
+            dtype=self.intermediate_dtype,
         )
         return self.ff2(
-            ff1_out, compute_kernel_config=compute_kernel_config, use_persistent_buffer=use_persistent_buffer
+            ff1_out,
+            compute_kernel_config=compute_kernel_config,
+            use_persistent_buffer=use_persistent_buffer,
+            dtype=ttnn.bfloat16 if self.intermediate_dtype is not None else None,
         )
 
     def forward_fused_addcmul(
@@ -169,6 +177,7 @@ class ParallelFeedForward(Module):
             core_grid=core_grid,
             force_transpose=force_transpose,
             use_persistent_buffer=use_persistent_buffer,
+            dtype=self.intermediate_dtype,
         )
         return self.ff2.forward_fused_addcmul(
             ff1_out,
@@ -176,5 +185,6 @@ class ParallelFeedForward(Module):
             addcmul_b,
             scalar=scalar,
             compute_kernel_config=compute_kernel_config,
+            dtype=addcmul_a.get_dtype() if self.intermediate_dtype is not None else None,
             use_persistent_buffer=use_persistent_buffer,
         )

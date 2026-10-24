@@ -11,6 +11,18 @@ import ttnn
 from ..utils.tensor import local_device_to_torch
 
 
+def _deallocate_ping_pong_entry(entry):
+    # The cache is shared by several getters whose entries differ in nesting: a flat
+    # [ping, pong] pair, or [[intermediate, output], ...] pairs where either half may be None.
+    if entry is None:
+        return
+    if isinstance(entry, (list, tuple)):
+        for item in entry:
+            _deallocate_ping_pong_entry(item)
+    else:
+        ttnn.deallocate(entry)
+
+
 class CCLManager:
     """
     Manages parallelization of DiT model.
@@ -293,25 +305,26 @@ class CCLManager:
         including every trace-referenced one -- are untouched. Only for UNTRACED stages: freeing
         a buffer a live capture references corrupts its replays.
         """
-
-        # The cache is shared by several getters whose entries differ in nesting: a flat
-        # [ping, pong] pair, or [[intermediate, output], ...] pairs where either half may be None.
-        def deallocate_entry(entry):
-            if entry is None:
-                return
-            if isinstance(entry, (list, tuple)):
-                for item in entry:
-                    deallocate_entry(item)
-            else:
-                ttnn.deallocate(entry)
-
         before = set(self._ping_pong_buffer_cache)
         try:
             yield
         finally:
             for key in [k for k in self._ping_pong_buffer_cache if k not in before]:
-                deallocate_entry(self._ping_pong_buffer_cache.pop(key))
+                _deallocate_ping_pong_entry(self._ping_pong_buffer_cache.pop(key))
                 self._ping_pong_buffer_indices.pop(key, None)
+
+    def free_ping_pong_buffers(self):
+        """Free the cached all-gather, reduce-scatter and neighbor-pad buffers; the getters allocate them again.
+
+        For shapes that change after the buffers were sized, e.g. the Wan pipeline turning CFG batching
+        off after its allocation run. Not while a captured trace references the buffers: freeing a buffer
+        a live capture references corrupts its replays.
+        """
+        ttnn.synchronize_device(self.mesh_device)
+        for entry in self._ping_pong_buffer_cache.values():
+            _deallocate_ping_pong_entry(entry)
+        self._ping_pong_buffer_cache.clear()
+        self._ping_pong_buffer_indices.clear()
 
     def get_rs_ping_pong_semaphore(self, mesh_axis):
         """
