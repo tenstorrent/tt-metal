@@ -14,6 +14,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "two_pass_read_stats.h"
+#include "ckernel.h"
 
 void kernel_main() {
     constexpr std::uint32_t reduce_receiver_semaphore_id =
@@ -386,9 +387,18 @@ void kernel_main() {
             // per-core local, so the cross-device Chan merge sees full per-device statistics.
             stick_u16[m * 2 + 0] = global_result.mean;
             stick_u16[m * 2 + 1] = global_result.variance;
+            // A RISC-V store can retire before it lands in L1. load_blocking reads the mean and variance
+            // back, which makes those stores land before the NoC write to the forwarder reads this stick.
+            (void)ckernel::load_blocking(&stick_u16[m * 2]);
+            (void)ckernel::load_blocking(&stick_u16[m * 2 + 1]);
 #endif
 
 #ifndef GN_DISTRIBUTED_AG
+            // A RISC-V store can retire before it lands in L1. load_blocking reads the mean and variance
+            // back, which makes those stores land before the NoC multicast reads this L1.
+            (void)ckernel::load_blocking(p_global_means);
+            (void)ckernel::load_blocking(p_global_vars);
+
             if constexpr (num_mcast_cores > 1) {
                 // mcast to other cores
                 const MulticastEndpoint mcast_dst;
@@ -520,6 +530,10 @@ void kernel_main() {
             auto p_out_vars = reinterpret_cast<volatile uint16_t*>(out_ptr + single_tile_size_bytes);
             p_out_means[0] = merged.mean;
             p_out_vars[0] = merged.variance;
+            // A RISC-V store can retire before it lands in L1. load_blocking reads the mean and variance
+            // back, which makes those stores land before the multicast reads this L1.
+            (void)ckernel::load_blocking(p_out_means);
+            (void)ckernel::load_blocking(p_out_vars);
             out_ptr += 2 * single_tile_size_bytes;
         }
         dfb_stats_gathered.pop_front(ring_size);
