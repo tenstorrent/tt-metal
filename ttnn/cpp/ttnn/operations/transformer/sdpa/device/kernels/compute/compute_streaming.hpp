@@ -83,13 +83,39 @@ ALWI void cb_push_back_hold_wr_ptr(uint32_t cb_id, uint32_t num_tiles) {
 
 // Accumulator half: one side of the ping-pong buffer (sum, max, output CB indices).
 struct AccumulatorHalf {
-    uint32_t sum, max, out;
+    uint32_t sum_cb, max_cb, out_cb;
+    constexpr uint32_t sum() const { return sum_cb; }
+    constexpr uint32_t max() const { return max_cb; }
+    constexpr uint32_t out() const { return out_cb; }
+};
+
+// Ring accumulator half: each CB index is a selector into compile-time constants, so the index
+// is one of a fixed set whatever the selector holds. A, B: the ping-pong buffers. Staged: the
+// L1 state FIFO or DRAM staging triple. SumOut: the writer's sum staging CB (sum only).
+template <
+    uint32_t SA,
+    uint32_t MA,
+    uint32_t OA,
+    uint32_t SB,
+    uint32_t MB,
+    uint32_t OB,
+    uint32_t SStaged,
+    uint32_t MStaged,
+    uint32_t OStaged,
+    uint32_t SSumOut>
+struct RingAccumulatorHalf {
+    enum Sel : uint8_t { A, B, Staged, SumOut };
+    Sel sum_sel, max_sel, out_sel;
+    constexpr uint32_t sum() const { return sum_sel == A ? SA : sum_sel == B ? SB : sum_sel == Staged ? SStaged : SSumOut; }
+    constexpr uint32_t max() const { return max_sel == A ? MA : max_sel == B ? MB : MStaged; }
+    constexpr uint32_t out() const { return out_sel == A ? OA : out_sel == B ? OB : OStaged; }
 };
 
 // Persistent accumulator state for ring SDPA deferred normalization.
 // When each core processes exactly 1 Q chunk, this state carries across ring iterations.
+template <typename Half>
 struct RingAccumulatorState {
-    AccumulatorHalf prev, cur;
+    Half prev, cur;
 };
 
 // Ring-streaming lightweight-mask context. Field NAMES match LightweightMaskContext so sdpa_ring_v2's
@@ -1039,10 +1065,11 @@ template <
     bool has_q_base_tiles = false,
     // Circular sliding KV cache: mask K origins come from the work plan, not from
     // inverting local cache rows (ambiguous once chunk groups alias one local slab).
-    bool circular_kv_cache = false>
+    bool circular_kv_cache = false,
+    typename Half>
 static void sdpa_inner_loop_step(
-    AccumulatorHalf& prev,
-    AccumulatorHalf& cur,
+    Half& prev,
+    Half& cur,
     const bool is_last_iter,
     const bool is_first_iter,
     [[maybe_unused]] const bool apply_mask = false,
@@ -1086,7 +1113,7 @@ static void sdpa_inner_loop_step(
     // Use KT_stride for cb_qkt_im layout to keep CB pointers aligned across iterations
     CircularBuffer(cb_qkt_im).reserve_back(Sq_chunk_t * KT_stride);
 
-    CircularBuffer(cur.sum).reserve_back(Sq_chunk_t);
+    CircularBuffer(cur.sum()).reserve_back(Sq_chunk_t);
     if (save_max_cb != INVALID_CB) {
         CircularBuffer(save_max_cb).reserve_back(Sq_chunk_t);
     }
@@ -1138,8 +1165,8 @@ static void sdpa_inner_loop_step(
                 uint32_t prev_q_subblock = q_subblock - 1;
                 sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
                     cb_qkt_im,
-                    cur.max,
-                    cur.sum,
+                    cur.max(),
+                    cur.sum(),
                     KT_stride,
                     prev_q_subblock,
                     kt_subblock * actual_sbw,
@@ -1240,12 +1267,12 @@ static void sdpa_inner_loop_step(
         // Max reduce: reads from cb_qkt_im at q_subblock position
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "Reduce max");
-            CircularBuffer(cur.max).reserve_back(qkt_subblock_h);
+            CircularBuffer(cur.max()).reserve_back(qkt_subblock_h);
             // Use reduce_trigger to enable early reduce start (before all matmul output is ready).
             // When reduce_trigger=true, the packer signals the unpacker via semaphore after partial output.
             reduce_c_row_group<cb_qkt_im, cb_identity_scale_in, KT_stride>(
-                cur.max,
-                prev.max,
+                cur.max(),
+                prev.max(),
                 q_subblock,
                 !is_first_iter /*do_eltwise_max*/,
                 qkt_subblock_h,
@@ -1253,7 +1280,7 @@ static void sdpa_inner_loop_step(
                 reduce_trigger,
                 save_max_cb,
                 overlap_first_half);
-            CircularBuffer(cur.max).push_back(qkt_subblock_h);
+            CircularBuffer(cur.max()).push_back(qkt_subblock_h);
             if (save_max_cb != INVALID_CB) {
                 CircularBuffer(save_max_cb).push_back(qkt_subblock_h);
             }
@@ -1309,7 +1336,7 @@ static void sdpa_inner_loop_step(
 
         // When save_out_cb is set, V matmul + SALAD write to save_out_cb (cb_out) instead of cur.out.
         // Writer drains save_out_cb row-by-row to DRAM during SALAD. cur.out stays empty.
-        const uint32_t out_cb = (save_out_cb != INVALID_CB) ? save_out_cb : cur.out;
+        const uint32_t out_cb = (save_out_cb != INVALID_CB) ? save_out_cb : cur.out();
 
         // V wait deferred: don't block here. The sub_exp drain loop below
         // doesn't touch V, so the reader's V DMA can overlap with the drain.
@@ -1330,8 +1357,8 @@ static void sdpa_inner_loop_step(
                 for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
                     sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
                         cb_qkt_im,
-                        cur.max,
-                        cur.sum,
+                        cur.max(),
+                        cur.sum(),
                         KT_stride,
                         q_num_subblocks - 1,
                         kt_sub * actual_sbw,
@@ -1383,8 +1410,8 @@ static void sdpa_inner_loop_step(
                 for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
                     sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
                         cb_qkt_im,
-                        cur.max,
-                        cur.sum,
+                        cur.max(),
+                        cur.sum(),
                         KT_stride,
                         q_num_subblocks - 1,
                         kt_sub * actual_sbw,
@@ -1426,7 +1453,7 @@ static void sdpa_inner_loop_step(
         [[maybe_unused]] uint32_t sink_row_offset = 0;
         [[maybe_unused]] auto normalize_row = [&](uint32_t& pushed, uint32_t sbh) {
             MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
-            CircularBuffer(cur.sum).push_back(sbh);
+            CircularBuffer(cur.sum()).push_back(sbh);
             CircularBuffer(out_cb).push_back(sbh * vDHt);
             normalize_row_streaming<
                 profiling_enabled,
@@ -1437,7 +1464,7 @@ static void sdpa_inner_loop_step(
                 cb_normalized_out,
                 scale_fp32,
                 use_attention_sink,
-                cb_attention_sink>(cur.sum, out_cb, sbh, cur.max, sink_row_offset);
+                cb_attention_sink>(cur.sum(), out_cb, sbh, cur.max(), sink_row_offset);
             if constexpr (use_attention_sink) {
                 sink_row_offset += sbh;
             }
@@ -1455,18 +1482,18 @@ static void sdpa_inner_loop_step(
                 if constexpr (has_qktv_remainder) {
                     if (sbh == qktv_remainder_h) {
                         salad_correct_fused<qktv_remainder_h, vDHt, dst_size>(
-                            prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
+                            prev.out(), prev.sum(), cb_exp_max_diff, out_cb, cur.sum(), 0, salad_row, w_salad);
                     } else {
                         salad_correct_fused<qktv_h, vDHt, dst_size>(
-                            prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
+                            prev.out(), prev.sum(), cb_exp_max_diff, out_cb, cur.sum(), 0, salad_row, w_salad);
                     }
                 } else {
                     salad_correct_fused<qktv_h, vDHt, dst_size>(
-                        prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
+                        prev.out(), prev.sum(), cb_exp_max_diff, out_cb, cur.sum(), 0, salad_row, w_salad);
                 }
             }
             CircularBuffer(cb_exp_max_diff).pop_front(sbh);
-            CircularBuffer(prev.out).pop_front(sbh * vDHt);
+            CircularBuffer(prev.out()).pop_front(sbh * vDHt);
         };
 
         // q_subblock 1..N-1 (+ optional remainder): SALAD(prev) overlapped with matmul(cur)
@@ -1489,7 +1516,7 @@ static void sdpa_inner_loop_step(
             if (!is_first_iter) {
                 CircularBuffer(cb_exp_max_diff).reserve_back(qktv_h);
                 sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
-                    prev.max, cur.max, cb_exp_max_diff, salad_row, qktv_h);
+                    prev.max(), cur.max(), cb_exp_max_diff, salad_row, qktv_h);
                 CircularBuffer(cb_exp_max_diff).push_back(qktv_h);
             }
 
@@ -1537,14 +1564,14 @@ static void sdpa_inner_loop_step(
 
                     CircularBuffer(cb_exp_max_diff).reserve_back(drain_h);
                     sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
-                        prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
+                        prev.max(), cur.max(), cb_exp_max_diff, drain_salad_row, drain_h);
                     CircularBuffer(cb_exp_max_diff).push_back(drain_h);
 
                     salad_correct_row(salad_row, w_salad, qktv_h);
                     if (is_last_iter) {
                         normalize_row(pushed_rows, qktv_h);
                     } else {
-                        CircularBuffer(cur.sum).push_back(qktv_h);
+                        CircularBuffer(cur.sum()).push_back(qktv_h);
                         CircularBuffer(out_cb).push_back(qktv_h * vDHt);
                         pushed_rows++;
                     }
@@ -1555,7 +1582,7 @@ static void sdpa_inner_loop_step(
                     if (is_last_iter) {
                         normalize_row(pushed_rows, drain_h);
                     } else {
-                        CircularBuffer(cur.sum).push_back(drain_h);
+                        CircularBuffer(cur.sum()).push_back(drain_h);
                         CircularBuffer(out_cb).push_back(drain_h * vDHt);
                         pushed_rows++;
                     }
@@ -1564,7 +1591,7 @@ static void sdpa_inner_loop_step(
                     if (is_last_iter) {
                         normalize_row(pushed_rows, qktv_h);
                     } else {
-                        CircularBuffer(cur.sum).push_back(qktv_h);
+                        CircularBuffer(cur.sum()).push_back(qktv_h);
                         CircularBuffer(out_cb).push_back(qktv_h * vDHt);
                         pushed_rows++;
                     }
@@ -1572,7 +1599,7 @@ static void sdpa_inner_loop_step(
             } else if (is_last_iter) {
                 normalize_row(pushed_rows, qktv_h);
             } else {
-                CircularBuffer(cur.sum).push_back(qktv_h);
+                CircularBuffer(cur.sum()).push_back(qktv_h);
                 CircularBuffer(out_cb).push_back(qktv_h * vDHt);
                 pushed_rows++;
             }
@@ -1591,14 +1618,14 @@ static void sdpa_inner_loop_step(
                     constexpr uint32_t drain_salad_row = 0;
                     CircularBuffer(cb_exp_max_diff).reserve_back(drain_h);
                     sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
-                        prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
+                        prev.max(), cur.max(), cb_exp_max_diff, drain_salad_row, drain_h);
                     CircularBuffer(cb_exp_max_diff).push_back(drain_h);
                     salad_correct_row(drain_salad_row, 0, drain_h);
                 }
                 if (is_last_iter) {
                     normalize_row(pushed_rows, drain_h);
                 } else {
-                    CircularBuffer(cur.sum).push_back(drain_h);
+                    CircularBuffer(cur.sum()).push_back(drain_h);
                     CircularBuffer(out_cb).push_back(drain_h * vDHt);
                     pushed_rows++;
                 }
@@ -1609,7 +1636,7 @@ static void sdpa_inner_loop_step(
                     if (is_last_iter) {
                         normalize_row(pushed_rows, drain_h);
                     } else {
-                        CircularBuffer(cur.sum).push_back(drain_h);
+                        CircularBuffer(cur.sum()).push_back(drain_h);
                         CircularBuffer(out_cb).push_back(drain_h * vDHt);
                         pushed_rows++;
                     }
@@ -1935,12 +1962,12 @@ __attribute__((flatten)) void sdpa_standard_v2(
             // Post-iteration cleanup
             // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
             if (!is_first) {
-                sdpa_cb_pop_front_out_of_line(prev.max, Sq_chunk_t);
-                sdpa_cb_pop_front_out_of_line(prev.sum, Sq_chunk_t);
+                sdpa_cb_pop_front_out_of_line(prev.max(), Sq_chunk_t);
+                sdpa_cb_pop_front_out_of_line(prev.sum(), Sq_chunk_t);
             }
 
             if (is_last) {
-                sdpa_cb_pop_front_out_of_line(cur.max, Sq_chunk_t);
+                sdpa_cb_pop_front_out_of_line(cur.max(), Sq_chunk_t);
             } else {
                 std::swap(prev, cur);
             }
@@ -2053,7 +2080,8 @@ template <
     // Rotated Q split: map q-loop positions through the fixed base range and moving remainder.
     // Off by default (position is the flat id).
     bool rotated_q_split_enabled = false,
-    typename MaskCtx = LightweightMaskContext>
+    typename MaskCtx = LightweightMaskContext,
+    typename AccHalf>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -2069,7 +2097,7 @@ void sdpa_ring_v2(
     const uint32_t global_n_mask_chunk_id,
     const uint32_t local_n_mask_chunk_id,
     const uint32_t joint_n_mask_chunk_id,
-    RingAccumulatorState& acc_state,
+    RingAccumulatorState<AccHalf>& acc_state,
     const bool is_last_ring_iter = false,
     const uint32_t q_per_core = 1,
     const MaskCtx& lw_mask = {},
@@ -2083,6 +2111,9 @@ void sdpa_ring_v2(
     const uint32_t q_base_tiles = 0,
     // Rotated Q split only: fixed base range plus this iteration's remainder unit.
     [[maybe_unused]] const RotatedQSlots& rotated_slots = {}) {
+    constexpr AccHalf staged = {AccHalf::Staged, AccHalf::Staged, AccHalf::Staged};
+    static_assert(staged.sum() == cb_sum_in && staged.max() == cb_max_in && staged.out() == cb_prev_out);
+    static_assert(AccHalf{AccHalf::SumOut, AccHalf::A, AccHalf::A}.sum() == cb_sum_out);
     init_sdpa_streaming_semaphores();
 
     constexpr bool has_sliding_window = sliding_window_size > 0;
@@ -2139,9 +2170,9 @@ void sdpa_ring_v2(
     };
 
     auto normalize_only = [&]() {
-        AccumulatorHalf q_prev_norm = acc_state.prev;
+        AccHalf q_prev_norm = acc_state.prev;
         if (q_per_core > 1 && ring_iter > 0) {
-            q_prev_norm = {cb_sum_in, cb_max_in, cb_prev_out};
+            q_prev_norm = {AccHalf::Staged, AccHalf::Staged, AccHalf::Staged};
         }
         constexpr uint32_t norm_dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
         normalize_row_streaming<
@@ -2153,11 +2184,11 @@ void sdpa_ring_v2(
             cb_normalized_out,
             scale_fp32,
             use_attention_sink,
-            cb_attention_sink>(q_prev_norm.sum, q_prev_norm.out, Sq_chunk_t, q_prev_norm.max);
+            cb_attention_sink>(q_prev_norm.sum(), q_prev_norm.out(), Sq_chunk_t, q_prev_norm.max());
         if constexpr (use_attention_sink) {
             CircularBuffer(cb_attention_sink).pop_front(1);
         }
-        sdpa_cb_pop_front_out_of_line(q_prev_norm.max, Sq_chunk_t);
+        sdpa_cb_pop_front_out_of_line(q_prev_norm.max(), Sq_chunk_t);
         if (q_per_core > 1) {
             CircularBuffer(cb_signal).reserve_back(1);
             sdpa_cb_push_back_out_of_line(cb_signal, 1);
@@ -2294,14 +2325,14 @@ void sdpa_ring_v2(
         }
         // Use persistent accumulator state from caller (single Q-chunk),
         // restore from DRAM staging (multi Q-chunk), or pop from the L1 FIFO (head-serial passes).
-        AccumulatorHalf q_prev = acc_state.prev, q_cur = acc_state.cur;
+        AccHalf q_prev = acc_state.prev, q_cur = acc_state.cur;
 
         const bool is_first_kv_for_this_q = is_first_active_iter;
 
         // Multi Q-chunk restore: K0 reads prev accumulators directly from staging buffers
         // (cb_prev_out, cb_max_in, cb_sum_in) — no copy_block needed.
         // After K0's swap, reset q_cur to original accumulator CBs for normal ping-pong.
-        const AccumulatorHalf original_prev = q_prev;
+        const AccHalf original_prev = q_prev;
         const bool restore_from_staging = (q_per_core > 1 && !is_first_active_iter);
         ASSERT(!has_sliding_window || !restore_from_staging);
         // FIFO entry: this pass's own state sits at the front (the fixed cyclic pass order
@@ -2309,7 +2340,7 @@ void sdpa_ring_v2(
         // The staging path builds the identical triple, so both share one redirect.
         const bool fifo_entry = use_l1_state_fifo && !is_first_active_iter;
         if (restore_from_staging || fifo_entry) {
-            q_prev = {cb_sum_in, cb_max_in, cb_prev_out};
+            q_prev = {AccHalf::Staged, AccHalf::Staged, AccHalf::Staged};
         }
 
         uint32_t KV_chunks_processed = 0;
@@ -2479,9 +2510,9 @@ void sdpa_ring_v2(
             const uint32_t step_save_out_cb = save_to_staging ? cb_out : (fifo_exit ? cb_prev_out : INVALID_CB);
             const uint32_t step_save_max_cb = save_to_staging ? cb_max_out : (fifo_exit ? cb_max_in : INVALID_CB);
             if (save_to_staging) {
-                q_cur.sum = cb_sum_out;
+                q_cur.sum_sel = AccHalf::SumOut;
             } else if (fifo_exit) {
-                q_cur.sum = cb_sum_in;
+                q_cur.sum_sel = AccHalf::Staged;
             }
 
             // K start tile fed to diag stamp must share Q's coord frame (local for is_causal, global for chunked).
@@ -2603,19 +2634,19 @@ void sdpa_ring_v2(
             // Post-iteration cleanup: pop previous values and swap aliases
             // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
             if (!is_first) {
-                sdpa_cb_pop_front_out_of_line(q_prev.max, Sq_chunk_t);
-                sdpa_cb_pop_front_out_of_line(q_prev.sum, Sq_chunk_t);
+                sdpa_cb_pop_front_out_of_line(q_prev.max(), Sq_chunk_t);
+                sdpa_cb_pop_front_out_of_line(q_prev.sum(), Sq_chunk_t);
             }
 
             if (is_last_k_of_last_ring_iter) {
                 // Normalization consumed cur.sum and cur.out; pop cur.max.
-                sdpa_cb_pop_front_out_of_line(q_cur.max, Sq_chunk_t);
+                sdpa_cb_pop_front_out_of_line(q_cur.max(), Sq_chunk_t);
             } else {
                 std::swap(q_prev, q_cur);
                 // After K0's swap, q_cur holds the staging/FIFO buffers. Reset to the scratch
                 // accumulator CBs so the rest of the pass ping-pongs between scratch halves.
                 if ((restore_from_staging || fifo_entry) && KV_chunks_processed == 1) {
-                    q_cur = {original_prev.sum, original_prev.max, original_prev.out};
+                    q_cur = original_prev;
                 }
             }
         }
@@ -2638,7 +2669,7 @@ void sdpa_ring_v2(
         // after the last swap it is q_prev.max — pop it.
         if constexpr (use_l1_state_fifo) {
             if (!is_last_ring_iter) {
-                sdpa_cb_pop_front_out_of_line(q_prev.max, Sq_chunk_t);
+                sdpa_cb_pop_front_out_of_line(q_prev.max(), Sq_chunk_t);
             }
         } else if (q_per_core == 1) {
             // Single Q-chunk: persist in L1 (no DRAM round-trip)
@@ -2652,7 +2683,7 @@ void sdpa_ring_v2(
             // Pop the accumulator CB for max — dual-write doesn't replace the alias,
             // so the accumulator CB still has tiles from the last K-chunk's reduce.
             // (Sum doesn't need this because planting replaced the alias entirely.)
-            sdpa_cb_pop_front_out_of_line(q_prev.max, Sq_chunk_t);
+            sdpa_cb_pop_front_out_of_line(q_prev.max(), Sq_chunk_t);
         }
         // On last ring_iter: normalized output already in cb_out from normalize_row_streaming
     }

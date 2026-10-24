@@ -279,9 +279,20 @@ void kernel_main() {
     constexpr uint32_t straddle_chunk_id = Straddle::straddle_chunk_id;
     constexpr uint32_t straddle_num_padded_tiles = Straddle::straddle_num_padded_tiles;
 
-    RingAccumulatorState acc_state = {
-        {cb_sum_A, cb_max_A, cb_out_im_A},  // prev
-        {cb_sum_B, cb_max_B, cb_out_im_B},  // cur
+    using AccHalf = RingAccumulatorHalf<
+        cb_sum_A,
+        cb_max_A,
+        cb_out_im_A,
+        cb_sum_B,
+        cb_max_B,
+        cb_out_im_B,
+        cb_sum_in,
+        cb_max_in,
+        cb_prev_out,
+        cb_sum_out>;
+    RingAccumulatorState<AccHalf> acc_state = {
+        {AccHalf::A, AccHalf::A, AccHalf::A},  // prev
+        {AccHalf::B, AccHalf::B, AccHalf::B},  // cur
     };
 
     const uint32_t ring_index =

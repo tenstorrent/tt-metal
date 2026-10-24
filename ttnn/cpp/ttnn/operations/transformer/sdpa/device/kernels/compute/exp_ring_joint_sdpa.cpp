@@ -161,9 +161,20 @@ void kernel_main() {
     // never rewritten: cross-ring-iteration state lives in the L1 state FIFO
     // ({cb_sum_in, cb_max_in, cb_prev_out} = {c_11, c_6, c_7}), one entry per pass, so every pass
     // starts from the same scratch roles. See sdpa_ring_v2's use_l1_state_fifo.
-    RingAccumulatorState scratch_state = {
-        {cb_sum_A, cb_max_A, cb_out_im_A},  // prev-scratch
-        {cb_sum_B, cb_max_B, cb_out_im_B},  // cur-scratch
+    using AccHalf = RingAccumulatorHalf<
+        cb_sum_A,
+        cb_max_A,
+        cb_out_im_A,
+        cb_sum_B,
+        cb_max_B,
+        cb_out_im_B,
+        cb_sum_in,
+        cb_max_in,
+        cb_prev_out,
+        cb_sum_out>;
+    RingAccumulatorState<AccHalf> scratch_state = {
+        {AccHalf::A, AccHalf::A, AccHalf::A},  // prev-scratch
+        {AccHalf::B, AccHalf::B, AccHalf::B},  // cur-scratch
     };
 
     const uint32_t last_active_ring_iter =
