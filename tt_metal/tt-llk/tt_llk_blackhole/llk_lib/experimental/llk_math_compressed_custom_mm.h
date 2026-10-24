@@ -46,29 +46,6 @@ inline void _llk_math_compressed_custom_mm_mop_config_()
 }
 
 /**
- * @brief Step past a skipped weight tile that is not last in its row: what ADDR_MOD_2 does after a tile's MVMULs.
- *
- * Moves the Dst counter and its carriage return one output tile on and puts the SrcA and SrcB counters back to 0,
- * without touching DEST or the Src valids. An address-mode-only ZEROACC cannot do this on Blackhole: CLR_16 clears a
- * 16-row face of DEST whatever its row operand, even 0xff, and that face can sit in the packer's half.
- *
- * @tparam tile_rows: DEST rows per output tile, custom_mm_tile_rows of the layout.
- */
-template <std::uint32_t tile_rows>
-inline void _llk_math_compressed_custom_mm_skip_tile_()
-{
-    // The Dst field of SETRWC and INCRWC holds at most 15, so step 8 rows at a time; CR_D moves the carriage return
-    // too, as ADDR_MOD_2's dest.cr does.
-    constexpr std::uint32_t step = 8;
-    static_assert(tile_rows % step == 0, "tile_rows must be a multiple of the step");
-    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, step, 0, 0, p_setrwc::SET_ABD);
-    for (std::uint32_t rows = step; rows < tile_rows; rows += step)
-    {
-        TTI_INCRWC(p_setrwc::CR_D, step, 0, 0);
-    }
-}
-
-/**
  * @brief Configure the math thread for compressed custom_mm: programs address mods and the MVMUL replay buffer.
  *
  * @tparam transpose: Transpose in1 faces during the multiply.
@@ -128,7 +105,7 @@ inline void _llk_math_compressed_custom_mm_(
             }
             else
             {
-                _llk_math_compressed_custom_mm_skip_tile_<custom_mm_tile_rows(layout)>();
+                TTI_ADDRMOD_ONLY(ADDR_MOD_2);
             }
             index++;
             if (index == 10)
