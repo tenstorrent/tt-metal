@@ -124,7 +124,9 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
                 // Match `compute_dfb_size`: nrpb=2 only when num_chunks is even, else 1 to avoid ring-wrap straddle.
                 num_read_per_barrier = (chunking.num_chunks_per_stick % 2 == 0) ? 2 : 1;
             } else {
-                auto num_sticks_per_core_pad32 = round_up_to_mul32(num_sticks_per_core);
+                // Batch by the larger group's count, as compute_dfb_size does, so no core overruns the DFB.
+                auto num_sticks_per_core_pad32 =
+                    round_up_to_mul32(std::max(num_sticks_per_core_group_1, num_sticks_per_core_group_2));
                 num_sticks_per_core_read = tt::tt_metal::merge_num_sticks_to_read(
                     num_sticks_per_core_pad32, unpadded_row_size_bytes_offset, max_read_size);
                 num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
