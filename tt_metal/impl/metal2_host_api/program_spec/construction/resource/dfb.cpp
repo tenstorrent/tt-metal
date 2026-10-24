@@ -118,8 +118,13 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
         }
         // Borrowed-memory DFB: remember the tensor it is and this kernel's side, for op-to-op R/W inference.
         if (const auto& borrowed_from = dfb_by_name.at(dfb_binding.dfb_spec_name)->borrowed_from) {
+            const auto* tensor_name = std::get_if<TensorParamName>(&*borrowed_from);
+            TT_FATAL(
+                tensor_name != nullptr,
+                "DFB '{}' borrowing from RawAllocation is not implemented",
+                dfb_binding.dfb_spec_name);
             handle.borrowed_dfb_id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
-            handle.borrowed_tensor_parameter_name = borrowed_from->get();
+            handle.borrowed_tensor_parameter_name = tensor_name->get();
             handle.produces = dfb_binding.endpoint_type == DFBEndpointType::PRODUCER;
             handle.consumes = !handle.produces;
         }
@@ -276,7 +281,9 @@ DataflowBufferHandles RegisterDataflowBuffers(
         // SetProgramRunArgs / UpdateTensorArgs can resolve and attach the actual L1 Buffer
         // at runtime (analog of dynamic CB's UpdateDynamicCircularBufferAddress).
         if (dfb_spec.borrowed_from.has_value()) {
-            program_impl.register_dfb_borrowed_binding(dfb_id, dfb_spec.borrowed_from->get());
+            const auto* tensor_name = std::get_if<TensorParamName>(&*dfb_spec.borrowed_from);
+            TT_FATAL(tensor_name != nullptr, "DFB '{}' borrowing from RawAllocation is not implemented", dfb_name);
+            program_impl.register_dfb_borrowed_binding(dfb_id, tensor_name->get());
         }
     }
     return DataflowBufferHandles{
