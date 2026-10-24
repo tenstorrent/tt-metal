@@ -23,15 +23,18 @@ void MaskedBincountDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         "Input tensor must be interleaved!");
-    // The op splits the token rows across a fixed 8x8 (64-core) grid, so the token count must be
-    // divisible by 64 (which also keeps every core's row range tile-aligned in aggregate).
-    constexpr uint32_t kNumCores = 64;
+    // The program factory sizes the grid from the token count: the fewest cores (up to 8x8 = 64)
+    // that split the rows evenly at <= 128 rows each, or all 64 above 8192 tokens. Requiring a
+    // multiple of 64 is deliberate: it keeps that 64-core fallback an even split, and keeps the
+    // logical row count equal to the TILE-padded one the factory divides. Every caller already
+    // passes a multiple of 64; the per-core row ranges need not be tile-aligned.
+    constexpr uint32_t kTokenMultiple = 64;
     const uint32_t tokens = input_tensor.logical_shape()[0];
     TT_FATAL(
-        tokens % kNumCores == 0,
-        "Token count ({}) must be divisible by the {}-core grid used by masked_bincount",
+        tokens % kTokenMultiple == 0,
+        "Token count ({}) must be a multiple of {} for masked_bincount",
         tokens,
-        kNumCores);
+        kTokenMultiple);
     TT_FATAL(args.n_routed_experts > 0, "n_routed_experts must be > 0");
 
     // Reader geometry contract (see kernels/reader_masked_bincount.cpp): the reader treats a page id as

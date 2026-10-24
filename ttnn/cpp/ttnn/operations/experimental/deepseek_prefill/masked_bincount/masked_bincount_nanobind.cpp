@@ -23,8 +23,8 @@ void bind_experimental_masked_bincount_operation(nb::module_& mod) {
                 * :attr:`input_tensor`: 2D UINT16 TILE, interleaved tensor of shape [sp_dim, topk_dim]
                   containing the expert indices selected for each token. This is the gate's expert-index
                   output consumed directly (no untilize/reshard needed): the op untiles in-kernel and
-                  splits the token rows across a fixed 8x8 (64-core) grid internally. sp_dim must be a
-                  multiple of 64. Both DRAM- and L1-interleaved inputs are accepted (the gate emits L1).
+                  splits the token rows across up to 64 cores (an 8x8 grid), sized from sp_dim. sp_dim
+                  must be a multiple of 64. Both DRAM- and L1-interleaved inputs are accepted (the gate emits L1).
                 * :attr:`expert_mask`: INT32 ROW_MAJOR tensor of shape [N] or [1, N] where N >= n_routed_experts,
                   mapping experts to chip IDs. Negative (-1) means the expert is absent (belongs to different dispatch
                   groups); non-negative values (chip IDs) mean the expert is present in this dispatch group and will
