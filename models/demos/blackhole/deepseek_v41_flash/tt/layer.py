@@ -21,7 +21,7 @@ import os
 import time
 
 import ttnn
-from models.demos.blackhole.deepseek_v41_flash.tt.mhc import DSV41MHC
+from models.demos.blackhole.deepseek_v41_flash.tt.mhc import DSV41MHC, _odd_t, _pad_rows, _slice_rows
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_block import DSV41MoEBlock
 from models.demos.blackhole.deepseek_v41_flash.tt.shared_expert_v2 import (
     DSV41SharedExpertV2 as DSV41SharedExpert,  # 155 -> 112 us/layer (tuned 1D mcast configs)
@@ -197,10 +197,25 @@ class DSV41Layer:
                     )
                 t0[0] = time.perf_counter()
 
-        attn_pre, attn_post, attn_comb = self.mhc_attn.mixes(x)
+        # T = 5..7 (the B=4 spec drafter's 5 rows per user) runs the T=8 mHC kernels. Pad the stream ONCE here
+        # instead of letting every mhc entry point pad its own operands again: six [T,1,4,D] fp32 pads (plus their
+        # FillPads) per layer become one, and the mixes coefficients stay 8-row so expand needs no pad either.
+        # Branch taken only on this decode path: _odd_t(T) is None for T in (4, 8, 16, 32) and for DSV41_MHC_PAD8=0,
+        # where P*/S* are the identity and every call below is exactly the previous code.
+        Tp = None if (_STREAM_BF16 or int(x.shape[0]) != T) else _odd_t(T)
+        if Tp:
+            P0 = lambda t: _pad_rows(t, T, Tp, 0)  # noqa: E731
+            P2 = lambda t: _pad_rows(t, T, Tp, 2)  # noqa: E731
+            S0 = lambda t: _slice_rows(t, T, 0)  # noqa: E731
+            S2 = lambda t: _slice_rows(t, T, 2)  # noqa: E731
+        else:
+            P0 = P2 = S0 = S2 = lambda t: t  # noqa: E731
+        xp, prep = P0(x), P0(pre_in)
+
+        attn_pre, attn_post, attn_comb = self.mhc_attn.mixes(xp)
         mark("mhc_attn_mixes")
-        h = self.mhc_attn.collapse_norm(
-            x, pre_in, self.attn_norm_w, self.eps
+        h = S2(
+            self.mhc_attn.collapse_norm(xp, prep, self.attn_norm_w, self.eps)
         )  # fused collapse + RMSNorm -> bf16 [1,1,T,D]
         mark("mhc_attn_collapse+norm")
         a = self.attention.forward(h, st)  # [1,1,T,D] bf16, replicated
@@ -209,16 +224,17 @@ class DSV41Layer:
         if (
             _STREAM_BF16
         ):  # accuracy study: round the stream to bf16 at every hc_post like the bf16 reference / GPU model
-            x2 = _rnd_bf16(self.mhc_attn.expand(a, x, attn_post, attn_comb, None))
+            x2 = _rnd_bf16(self.mhc_attn.expand(a, xp, attn_post, attn_comb, None))
             ffn_pre, ffn_post, ffn_comb = self.mhc_ffn.mixes(x2)
         else:
             x2, (ffn_pre, ffn_post, ffn_comb) = self.mhc_attn.expand_mixes(
-                a, x, attn_post, attn_comb, None, self.mhc_ffn
+                P2(a), xp, attn_post, attn_comb, None, self.mhc_ffn
             )
         mark("mhc_attn_expand+ffn_mixes")
         h, h_tok = self.mhc_ffn.collapse_norm_rm(
             x2, attn_pre, self.ffn_norm_w, self.eps
-        )  # h [1,1,T,D] bf16, h_tok [T,1,1,D] bf16 row-major
+        )  # h [1,1,Tp,D] bf16, h_tok [Tp,1,1,D] bf16 row-major
+        h, h_tok = S2(h), S0(h_tok)
         mark("mhc_ffn_collapse+norm")
         m = self.moe.forward(h, h_tok, forced_routing)  # [1,1,T,D/cols] per device
         mark("moe")
@@ -230,8 +246,8 @@ class DSV41Layer:
             self.debug.update(
                 attn_out=a, ffn_in=h, ffn_out=ttnn.add(ttnn.typecast(m, ttnn.float32), sh), routed=m, shared=sh
             )
-        x3 = self.mhc_ffn.expand(
-            m, x2, ffn_post, ffn_comb, sh
+        x3 = S0(
+            self.mhc_ffn.expand(P2(m), x2, ffn_post, ffn_comb, P2(sh))
         )  # post * (routed + shared) + comb^T x, summed inside the kernel
         if _STREAM_BF16:
             x3 = _rnd_bf16(x3)
@@ -239,5 +255,5 @@ class DSV41Layer:
         # hand DRAM-resident tensors to the caller (the next layer): an L1-sharded `ffn_pre` kept alive across
         # calls overlaps the static buffers of the next norm kernel.
         return ttnn.to_memory_config(x3, ttnn.DRAM_MEMORY_CONFIG), ttnn.to_memory_config(
-            ffn_pre, ttnn.DRAM_MEMORY_CONFIG
+            S0(ffn_pre), ttnn.DRAM_MEMORY_CONFIG
         )
