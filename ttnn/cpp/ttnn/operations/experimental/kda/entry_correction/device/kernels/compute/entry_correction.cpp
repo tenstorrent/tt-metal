@@ -131,6 +131,8 @@ void kernel_main() {
         cb_pop_front(cb_seed, state_tiles);
     }
     if (need_tail) {
+        // Cores whose chunks and final rows all use the group seed never waited above; balance the reader's push.
+        cb_wait_front(cb_tail, state_tiles);
         cb_pop_front(cb_tail, state_tiles);
     }
 }
