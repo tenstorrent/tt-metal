@@ -2,3 +2,5 @@
 # The key is the file path and the first 60 characters of the function's declarator line, as
 # check_redundant_drain.py prints it. Remove a line when the site is fixed.
 tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel_debug.h:DataFormat fmt, std::uint32_t tile_id, std::conditional_t<op  # debug-only: the caller resumes Tensix ops that read the tile the RISC just stored; kept at the writer
+tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel_debug.h:inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t row_addr, std::uint32_t *rd_data)  # debug-only: the SrcA dump's restore is queued SFPSTOREs; drained so the borrowed row is back before RISC readers (a debug-bus read of that row) run after the call
+tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc/ckernel_debug.h:inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t row_addr, std::uint32_t *rd_data)  # debug-only: the SrcA dump's restore is queued SFPSTOREs; drained so the borrowed row is back before RISC readers (a debug-bus read of that row) run after the call
