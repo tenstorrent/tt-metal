@@ -5,6 +5,7 @@
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.llama3_70b_galaxy.tt.qwen_opt_limits import qwen_prefill_opt_ok
 import torch.nn.functional as F
 
 
@@ -121,9 +122,9 @@ class TtLlamaMLP(LightweightModule):
             self.prefetcher_setup.insert_tensor(self.w2)
         self.tt_ccl = tt_ccl
 
-    def forward(self, x: ttnn.Tensor, mode, batch_size=1, return_intermediates=False):
+    def forward(self, x: ttnn.Tensor, mode, batch_size=1, return_intermediates=False, seq_parallel=False):
         if mode == "prefill":
-            return self.forward_prefill(x, batch_size=batch_size)
+            return self.forward_prefill(x, batch_size=batch_size, seq_parallel=seq_parallel)
 
         intermediates = {} if return_intermediates else None
 
@@ -346,7 +347,7 @@ class TtLlamaMLP(LightweightModule):
 
         return w2_out_reduced
 
-    def forward_prefill(self, x: ttnn.Tensor, batch_size=1) -> ttnn.Tensor:
+    def forward_prefill(self, x: ttnn.Tensor, batch_size=1, seq_parallel=False) -> ttnn.Tensor:
         """
         w1 -> gate_proj
         w2 -> down_proj
@@ -436,11 +437,37 @@ class TtLlamaMLP(LightweightModule):
             batch_size=batch_size,
         )
         ttnn.deallocate(w3_out)
+        # Qwen long prefill on Wormhole: the fused FF2 all-gather + matmul below gathers in its output dtype, so
+        # w2_in was typecast bf8 -> bf16 after the mul. Write the mul output in that dtype directly instead
+        # (S=40960: mul bf8 + typecast 1.64 ms -> mul bf16 1.04 ms; skips the bf8 rounding of w2_in).
+        # Qwen long prefill (> 8192) on Wormhole instead gathers w2_in in bf8 on the 4-link ring and runs
+        # minimal_matmul to the bf16 output (ff2_bf8_gather below), so the mul writes bf8 there.
+        # Both apply while the total context (cached prefix + S) is <= QWEN_OPT_MAX_SEQ_LEN only (qwen_opt_limits.py);
+        # longer contexts take main's FF2.
+        ff2_bf8_gather = (
+            self.args.is_qwen
+            and not self.args.is_blackhole
+            and self.use_prefetcher
+            and batch_size == 1
+            and seq_len > 8192
+            and qwen_prefill_opt_ok(self.model_config, seq_len)
+        )
+        w2_in_dtype = ttnn.bfloat8_b
+        if (
+            self.args.is_qwen
+            and not self.args.is_blackhole
+            and batch_size == 1
+            and seq_len > 4096
+            and qwen_prefill_opt_ok(self.model_config, seq_len)
+            and self.prefill_output_dtype == ttnn.bfloat16
+            and not ff2_bf8_gather
+        ):
+            w2_in_dtype = ttnn.bfloat16
         w2_in = ttnn.mul(
             w1_out_reduced,
             w3_out_reduced,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-            dtype=ttnn.bfloat8_b,
+            dtype=w2_in_dtype,
             memory_config=w1_out.memory_config(),
         )
         # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul.
@@ -465,6 +492,29 @@ class TtLlamaMLP(LightweightModule):
                 program_config=short_lens_pc_2,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+        elif ff2_bf8_gather:
+            # Gather the bf8 w2_in (4 links, half the bytes of bf16), then matmul to the bf16 output. The fused
+            # all_gather_minimal_matmul_async gathers in its output dtype and is limited to 3 links here.
+            w2_in_gathered = self.tt_ccl.ring_all_gather(
+                w2_in,
+                dim=3,
+                cluster_axis=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                num_links=prefill_num_links,
+                buffer_key="FF3",
+            )
+            ttnn.deallocate(w2_in)
+            w2_out = ttnn.experimental.minimal_matmul(
+                input_tensor=w2_in_gathered,
+                weight_tensor=self.w2_interleaved,
+                dtype=self.prefill_output_dtype,
+                config=self.model_config["PREFILL_FF2_UNFUSED_MINIMAL_MATMUL_CONFIG"],
+                # fp32 dest accumulation over K = 3200: S=40960 isolated op 3.50 -> 3.61 ms, error vs an fp32
+                # reference of the same bf8 inputs 9.7e-3 -> 1.7e-3 relative L2 (bf16 output rounding is 1.65e-3).
+                compute_kernel_config=self.args.compute_kernel_config_hifi2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(w2_in_gathered)
         else:
             # Match the input format before communicating its bytes.
             if w2_in.dtype != self.prefill_output_dtype:
@@ -480,6 +530,12 @@ class TtLlamaMLP(LightweightModule):
                 dtype=self.prefill_output_dtype,
             )
             ttnn.deallocate(w2_in)
+
+        if seq_parallel:
+            # Sequence-parallel residual (llama_model.py): keep only this mesh row's S/8 chunk of the sum.
+            w2_out_reduced = self.tt_ccl.ring_reduce_scatter_seq(w2_out, ttnn.DRAM_MEMORY_CONFIG, "FF2")
+            ttnn.deallocate(w2_out)
+            return w2_out_reduced
 
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out,

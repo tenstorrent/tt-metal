@@ -83,6 +83,8 @@ class TtTransformerBlock(LightweightModule):
             )
         else:
             attn_norm_output_memcfg = self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"]
+        # Both norms keep the RMSNorm default eps (main); DistributedNorm adds Qwen3's HF rms_norm_eps (1e-06) for
+        # prefills of S <= QWEN_OPT_MAX_SEQ_LEN only.
         self.attention_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -144,6 +146,7 @@ class TtTransformerBlock(LightweightModule):
         chunk_start_idx_tensor=None,
         kv_cache=None,
         batch_size=1,
+        seq_parallel=False,
     ) -> ttnn.Tensor:
         # x contains input in layer 0 and ffout of previous layer thereafter, x should be dealocated
         # h contains 0 in layer 0 and h_prev+x_prev+attn_out_prev thereafter, h is persistent
@@ -172,8 +175,20 @@ class TtTransformerBlock(LightweightModule):
             # In the first layer we "make" the h tensor from the original x keeping it alive
             # Note this works because layer 0 has a bfloat16 input while other layers use bfloat8
             # since we want residual to be bfloat16
-            attn_in_sharded, _ = self.attention_norm(x, None, mode)
+            # Sequence-parallel: the norm output is all-gathered along the sequence; gather it in bf8 (the
+            # matmuls after it run on bf8 activations anyway), half the bytes of bf16 (1.69 -> 1.03 ms at 40960).
+            norm_out_dtype = ttnn.bfloat8_b if seq_parallel else None
+            # Prefill length S for the norm eps choice (DistributedNorm.forward); seq-parallel x holds S / rows.
+            norm_seq_len = x.shape[-2] * (self.args.cluster_shape[0] if seq_parallel else 1)
+            attn_in_sharded, _ = self.attention_norm(
+                x, None, mode, output_dtype=norm_out_dtype, seq_len=norm_seq_len if mode == "prefill" else None
+            )
             h = x
+            if seq_parallel:
+                # x is this mesh row's S/8 chunk; attention needs the full sequence on every row.
+                attn_in_local = attn_in_sharded
+                attn_in_sharded = self.tt_ccl.ring_all_gather_seq(attn_in_local, ttnn.DRAM_MEMORY_CONFIG, "FF2")
+                attn_in_local.deallocate(True)
 
         else:
             # In subsequent Layers we take the h tensor from before and modify it in place
@@ -195,11 +210,18 @@ class TtTransformerBlock(LightweightModule):
             chunk_start_idx_tensor=chunk_start_idx_tensor,
             kv_cache=kv_cache,
             batch_size=batch_size,
+            seq_parallel=seq_parallel,
         )
         if mode == "prefill":
             h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=res_dtype)  # bf16 on BH no-prefetch
             x.deallocate(True)
-            ff_in_sharded, _ = self.ff_norm(h, None, mode)
+            ff_in_sharded, _ = self.ff_norm(
+                h, None, mode, output_dtype=ttnn.bfloat8_b if seq_parallel else None, seq_len=norm_seq_len
+            )
+            if seq_parallel:
+                ff_in_local = ff_in_sharded
+                ff_in_sharded = self.tt_ccl.ring_all_gather_seq(ff_in_local, ttnn.DRAM_MEMORY_CONFIG, "FF2")
+                ff_in_local.deallocate(True)
         if mode == "decode":
             if self.unfuse_res_add:
                 if self.args.use_prefetcher:
@@ -227,7 +249,7 @@ class TtTransformerBlock(LightweightModule):
                 attn_out.deallocate(True)
 
         # MLP takes replicated inputs and produces fractured outputs
-        ff_out = self.feed_forward.forward(ff_in_sharded, mode, batch_size=batch_size)
+        ff_out = self.feed_forward.forward(ff_in_sharded, mode, batch_size=batch_size, seq_parallel=seq_parallel)
         if self.layer_num == self.n_layers - 1 or mode == "prefill":
             out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg, dtype=res_dtype)
             if mode == "decode":
