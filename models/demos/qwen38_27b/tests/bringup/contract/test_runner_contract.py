@@ -121,6 +121,8 @@ def _runner_env(s, svc: str, out: Path, slots: int) -> dict:
         PREFILL_MIGRATION_DEVICE_MAP_PATH=str(out / "device_map.json"),
         PREFILL_TRACE_DIR=str(Golden.for_rung(s, RUNG).dir),
         PREFILL_HF_MODEL=str(s.hf_dir),
+        # known_issues.md: "The safe runner's 5 s dispatch timeout kills a prefill runner waiting for its next chunk"
+        TT_METAL_OPERATION_TIMEOUT_SECONDS="600",
     )
     assert first == 0, "the runner serves layers from 0 on a single rank"
     return env
@@ -175,6 +177,29 @@ def _ran_chunks(log: Path) -> list[tuple[int, int, int]]:
     """(slot, start, end) of every CHUNK_START line of the runner log, in order."""
     pat = re.compile(r"CHUNK_START c=\d+ \S+ slot=(\d+) \[(\d+),(\d+)\)")
     return [tuple(int(x) for x in m.groups()) for m in pat.finditer(log.read_text(errors="replace"))]
+
+
+def _start_failures(ran, served) -> list[str]:
+    """The chunks each request ran vs its plan. served: (name, slot, plan) in PREFILL_DONE order.
+
+    A slot serves its requests one after another (a follow-up is admitted only after the request before it is
+    PREFILL_DONE), so a slot's CHUNK_START sequence must be its requests' plans back to back, in done order: each
+    request is compared with its own segment, and nothing may be missing or extra on the slot.
+    """
+    fails = []
+    for slot in sorted({sl for sl, _, _ in ran} | {sl for _, sl, _ in served}):
+        seq = [(a, b) for sl, a, b in ran if sl == slot]
+        i = 0
+        for name, sl, plan in served:
+            if sl != slot:
+                continue
+            got = seq[i : i + len(plan)]
+            if got != plan:
+                fails.append(f"starts: {name} on slot {slot}: ran {got}, plan {plan}")
+            i += len(plan)
+        if i != len(seq):
+            fails.append(f"starts: slot {slot} ran {len(seq)} chunks, its requests' plans have {i}: {seq[i:]} extra")
+    return fails
 
 
 def _table_profile_failures(tables, table, layers: int, slots: int, max_seq: int, record_bytes: int) -> list[str]:
@@ -318,6 +343,7 @@ def test_runner_contract(mesh_device):
             if not rec.get("ok"):
                 fails.append(f"engine: {rec.get('errors')}")
             by_name = {r["name"]: r for r in reqs}
+            served = []  # (name, slot, plan) in PREFILL_DONE order
             for name, info in sorted(rec["requests"].items(), key=lambda kv: kv[1].get("done_s", 0)):
                 n = len(by_name[name]["token_ids"])
                 if info.get("done_position") != n:
@@ -329,15 +355,14 @@ def test_runner_contract(mesh_device):
                 if res != want_res:
                     fails.append(f"starts: {name} admitted at resident {res}, tt-d-gen's rule gives {want_res}")
                 plan_n = R.chunk_plan(n, res, chunk, max_seq)
-                got = [(a, b) for sl, a, b in ran if sl == info.get("slot") and (a, b) in plan_n]
-                if got[-len(plan_n) :] != plan_n:
-                    fails.append(f"starts: {name} on slot {info.get('slot')}: ran {got[-len(plan_n):]}, plan {plan_n}")
+                served.append((name, info.get("slot"), plan_n))
                 print(
                     f"{name}: slot {info.get('slot')}, resident {res}, chunks {plan_n}"
                     + (" (last chunk pulled back)" if R.pulled_back(plan_n) else ""),
                     flush=True,
                 )
                 finals[int(info["slot"])] = (name, n, res)
+            fails += _start_failures(ran, served)
             pulled = any(R.pulled_back(R.chunk_plan(n, r, chunk, max_seq)) for _, n, r in finals.values())
             metrics.record("runner_pulled_back", int(pulled))
             if not pulled:
