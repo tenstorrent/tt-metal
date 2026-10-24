@@ -814,7 +814,7 @@ def _l1_budget(mesh):
 # ======================================================================================================================
 
 
-def _check_dram_interleaved_tile(t, what):
+def _check_interleaved_tile(t, what):
     mc = t.memory_config()
     if mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:  # the readers address it through TensorAccessor
         raise ValueError(f"matmul_reduce_scatter: {what} must be interleaved (DRAM or L1)")
@@ -873,8 +873,8 @@ def run(
     K2, N = w_shape
     if K != K2:
         raise ValueError(f"matmul_reduce_scatter: K mismatch, A {a_shape} vs W {w_shape}")
-    _check_dram_interleaved_tile(a, "input_tensor")
-    _check_dram_interleaved_tile(w, "weight")
+    _check_interleaved_tile(a, "input_tensor")
+    _check_interleaved_tile(w, "weight")
     if memory_config is not None and memory_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
         raise NotImplementedError("matmul_reduce_scatter: sharded output memory_config (no placement axis in TARGET)")
     out_mem = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG

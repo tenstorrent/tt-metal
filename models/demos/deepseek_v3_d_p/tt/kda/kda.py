@@ -402,8 +402,12 @@ class ttKDA:
             # Its persistent mailbox and semaphores now, beside the layer's other long-lived L1; its staging is
             # allocated per call (staging="ephemeral"), so neither sits under the next call's input projection.
             prepare_matmul_reduce_scatter_mesh(mesh_device)
-            # The fused op reads its activation from DRAM and always accumulates in FP32 DEST.
-            self.norm_output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+            # The fused op reads its activation through a TensorAccessor, from DRAM or L1, and always accumulates in
+            # FP32 DEST. With the output gate beside the relay, forward() frees the input projection (L1) before the
+            # norm, so the norm output takes that L1 and the op's first entry streams only its weights from DRAM;
+            # otherwise the norm reads the projection's gate columns and its output stays in DRAM.
+            if not self.overlap_output_gate:
+                self.norm_output_memory_config = ttnn.DRAM_MEMORY_CONFIG
             self.fused_output_compute_config = ttnn.ComputeConfigDescriptor(
                 math_fidelity=program_config.output_projection_math_fidelity, fp32_dest_acc_en=True
             )
@@ -695,13 +699,16 @@ class ttKDA:
             defer_final_carry=self.carry_with_output_projection,
         )
         if self.overlap_output_gate:
+            # The norm reads the relay's output gate: the projection's last readers (chunk preparation's beta and the
+            # relay's gate copy) ran inside the recurrence, so its L1 is freed first and the norm output can take it.
+            ttnn.deallocate(inputs.projected)
             output = self._kda_rms_norm(result.output, result.output_gate, 0)
             ttnn.deallocate(result.output_gate)
         else:
             output = self._kda_rms_norm(result.output, inputs.projected, inputs.output_gate_offset)
+            # The norm read the output gate, the projection's last columns in use.
+            ttnn.deallocate(inputs.projected)
         ttnn.deallocate(result.output)
-        # The norm read the output gate, the projection's last columns in use.
-        ttnn.deallocate(inputs.projected)
         if self.carry_with_output_projection and self.fused_output_reduce_scatter:
             carry = result.final_state.inputs
             final_state = self._mmrs_carry.allocate_output(carry["prefix_final"])

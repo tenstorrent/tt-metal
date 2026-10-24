@@ -177,19 +177,25 @@ def test_kda_output_projection_mmrs(mesh_device: ttnn.MeshDevice) -> None:
 )
 def test_kda_output_projection_mmrs_balanced_lines(mesh_device: ttnn.MeshDevice) -> None:
     """balance_lines: 9 n-lines with per-block rotating widths (7, 7, 6 x 7) instead of 8 lines of 7. Every output tile
-    keeps its K order and cross-device add order, so the result is bit-identical to the uniform plan."""
+    keeps its K order and cross-device add order, so the result is bit-identical to the uniform plan. The activation
+    in interleaved L1 (the KDA layer's norm output) is read through the same TensorAccessor: bit-identical too."""
     from ttnn.operations import matmul_reduce_scatter as mrs_pkg
 
     tp = tuple(mesh_device.shape)[_TP_AXIS]
     torch.manual_seed(0)
-    a = ttnn.from_torch(
-        torch.randn(1, 1, _ROWS, _K) * 0.5,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 3), mesh_shape=tuple(mesh_device.shape)),
-    )
+    a_host = torch.randn(1, 1, _ROWS, _K) * 0.5
+    a_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 3), mesh_shape=tuple(mesh_device.shape))
+    a = {
+        name: ttnn.from_torch(
+            a_host,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=memory_config,
+            mesh_mapper=a_mapper,
+        )
+        for name, memory_config in (("dram", ttnn.DRAM_MEMORY_CONFIG), ("l1", ttnn.L1_MEMORY_CONFIG))
+    }
     w = ttnn.from_torch(
         torch.randn(_K, _N) / _K**0.5,
         dtype=ttnn.bfloat8_b,
@@ -201,9 +207,9 @@ def test_kda_output_projection_mmrs_balanced_lines(mesh_device: ttnn.MeshDevice)
     tt_ccl = TT_CCL(mesh_device)
     composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 3), mesh_shape=tuple(mesh_device.shape))
 
-    def fused(balance_lines):
+    def fused(activation, balance_lines):
         return lambda: matmul_reduce_scatter(
-            a,
+            a[activation],
             w,
             cluster_axis=_TP_AXIS,
             scatter_dim=-1,
@@ -217,17 +223,20 @@ def test_kda_output_projection_mmrs_balanced_lines(mesh_device: ttnn.MeshDevice)
             balance_lines=balance_lines,
         )
 
+    cases = {"uniform": ("dram", False), "balanced": ("dram", True), "balanced_l1_activation": ("l1", True)}
     results, plans, times = {}, {}, {}
-    for balance_lines in (False, True):
-        out = fused(balance_lines)()
-        plans[balance_lines] = dict(mrs_pkg._LAST_PLAN)
-        results[balance_lines] = ttnn.to_torch(out, mesh_composer=composer)
+    for name, (activation, balance_lines) in cases.items():
+        out = fused(activation, balance_lines)()
+        plans[name] = dict(mrs_pkg._LAST_PLAN)
+        results[name] = ttnn.to_torch(out, mesh_composer=composer)
         ttnn.deallocate(out)
-        times[balance_lines] = statistics.median(_traced_us(mesh_device, fused(balance_lines)))
+        times[name] = statistics.median(_traced_us(mesh_device, fused(activation, balance_lines)))
     print(
         "KDA_OUTPUT_MMRS_BALANCED="
         + json.dumps({"tp": tp, "plans": plans, "median_us": times}, sort_keys=True, default=str)
     )
-    assert not plans[False]["balanced_lines"] and plans[True]["balanced_lines"], plans
-    assert plans[True]["grid"][0] * plans[True]["grid"][1] > plans[False]["grid"][0] * plans[False]["grid"][1], plans
-    assert torch.equal(results[False], results[True]), "balanced n-lines must be bit-identical to the uniform plan"
+    assert not plans["uniform"]["balanced_lines"] and plans["balanced"]["balanced_lines"], plans
+    cores = {name: plan["grid"][0] * plan["grid"][1] for name, plan in plans.items()}
+    assert cores["balanced"] > cores["uniform"], plans
+    for name in ("balanced", "balanced_l1_activation"):
+        assert torch.equal(results["uniform"], results[name]), f"{name} must be bit-identical to the uniform plan"
