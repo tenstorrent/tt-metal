@@ -12,10 +12,25 @@ are derived from the mesh shape + tp_axis, so the only knob is TP.
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 # The single configuration validated on hardware (Blackhole Galaxy): (8,4), TP=4 -> SP=8, EP=32.
 _VALIDATED_MESH_SHAPE = (8, 4)
 _VALIDATED_TP = 4
+
+# all_gather_async caps its default at 4 workers per link (a Wormhole T3K sweep). On Blackhole, gathers
+# moving >= 4 MB per link run 4-7% faster with 8 (the norm all-gathers at W >= 2048 on a (2,4) stage);
+# below that the default wins. Measured with tests/perf/bench_tp_ccl.py.
+_LARGE_AG_BYTES_PER_LINK = 4 << 20
+_LARGE_AG_WORKERS_PER_LINK = 8
+
+
+def _allgather_workers_per_link(tensor, ring_size, num_links, topology):
+    if not is_blackhole():
+        return None
+    out_bytes = tensor.logical_volume() * tensor.element_size() * ring_size
+    per_link = out_bytes * (ring_size - 1) / ring_size / num_links / (2 if topology == ttnn.Topology.Ring else 1)
+    return _LARGE_AG_WORKERS_PER_LINK if per_link >= _LARGE_AG_BYTES_PER_LINK else None
 
 
 class MeshConfig:
@@ -140,17 +155,21 @@ class MeshConfig:
         Note: Caller should check if communication is needed before calling
         """
         memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+        topology = ttnn.Topology.Linear if linear else ccl_manager.topology
 
         return ttnn.experimental.all_gather_async(
             tensor,
             dim=dim,
             cluster_axis=axis,
             mesh_device=ccl_manager.mesh_device,
-            topology=ttnn.Topology.Linear if linear else ccl_manager.topology,
+            topology=topology,
             multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
             num_links=ccl_manager.num_links,
             memory_config=memory_config,
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+            num_workers_per_link=_allgather_workers_per_link(
+                tensor, tuple(ccl_manager.mesh_device.shape)[axis], ccl_manager.num_links, topology
+            ),
         )
 
     def reduce_scatter(self, tensor, ccl_manager, dim=3, axis=0, memory_config=None):
