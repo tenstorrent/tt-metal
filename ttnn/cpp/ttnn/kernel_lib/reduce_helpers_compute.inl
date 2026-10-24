@@ -157,18 +157,6 @@ ALWI void reduce_post_mul_tile(uint32_t dst, uint32_t scaler_bits) {
 }  // namespace detail
 
 // =============================================================================
-// ReduceDataFormatReconfigMode Helper Functions
-// =============================================================================
-
-constexpr bool reconfig_input(ReduceDataFormatReconfigMode mode) {
-    return mode == ReduceDataFormatReconfigMode::INPUT || mode == ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;
-}
-
-constexpr bool reconfig_output(ReduceDataFormatReconfigMode mode) {
-    return mode == ReduceDataFormatReconfigMode::OUTPUT || mode == ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;
-}
-
-// =============================================================================
 // ReduceInputPolicy Helper Functions
 // =============================================================================
 
@@ -187,24 +175,6 @@ constexpr bool manages_cb(ReduceInputPolicy p) {
 // =============================================================================
 // Helper Function Implementations
 // =============================================================================
-
-template <PoolType reduce_type, ReduceDim reduce_dim>
-ALWI void reduce_init_short_with_dt(uint32_t old_dfb_id, uint32_t input_dfb_id, uint32_t scaler_dfb_id) {
-    constexpr bool swap_operands = reduce_swaps_operands<reduce_type, reduce_dim, false>();
-    const uint32_t srca_dfb_id = swap_operands ? scaler_dfb_id : input_dfb_id;
-
-    // Reconfigure SRCA data format from old_dfb_id to the correct SrcA format
-    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_dfb_id, srca_dfb_id)));
-    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_dfb_id, srca_dfb_id)));
-
-    // Reconfigure unpacker for reduce operation (SRCA and SRCB)
-    UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id)));
-
-    // Reconfigure math for reduce operation
-    MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(input_dfb_id, scaler_dfb_id)));
-
-    // Skip packer reconfiguration - it remains valid from initial reduce_init call
-}
 
 template <typename AccumulateT>
 ALWI constexpr uint32_t get_dst_index(const AccumulateT& accumulate) {
@@ -225,9 +195,6 @@ ALWI void reload_accumulator_if_needed(
     if constexpr (is_accumulate_v<AccumulateT>) {
         if (!accumulate.is_first()) {  // Reload on all iterations except first
             accum_dfb.wait_front(dest_chunk_size);
-            constexpr bool swap_operands = reduce_swaps_operands<reduce_type, reduce_dim, is_sfpu>();
-            const uint32_t prev_srca_cb = swap_operands ? scaler_dfb_id : input_dfb_id;
-
             // For MAX + REDUCE_ROW, GMPOOL's running accumulator lives at row 0 of face 0
             // (max for rows 0-15) and row 0 of face 2 (max for rows 16-31); faces 1 and 3
             // are never read. The LLK's reduce_row_perform_transpose then rotates those
@@ -240,11 +207,6 @@ ALWI void reload_accumulator_if_needed(
             constexpr bool reload_within_face_transpose =
                 (reduce_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW && !is_sfpu);
 
-            reconfig_data_format_srca(prev_srca_cb, accumulate.config.cb_accumulator);
-            copy_init(
-                accumulate.config.cb_accumulator,
-                /*transpose_of_faces=*/0,
-                /*transpose_within_16x16_face=*/reload_within_face_transpose ? 1u : 0u);
             for (uint32_t tile = 0; tile < dest_chunk_size; ++tile) {
                 copy_tile(
                     accumulate.config.cb_accumulator,
@@ -254,18 +216,6 @@ ALWI void reload_accumulator_if_needed(
                     /*transpose_within_16x16_face=*/reload_within_face_transpose ? 1u : 0u);
             }
             accum_dfb.pop_front(dest_chunk_size);
-
-            // CRITICAL: Re-init after copy_tile corrupts SRCA config
-            // Use short version since packer config is still valid from initial init
-            // Pass accumulator DFB as old_dfb_id to reconfigure data format from accumulator to input DFB
-            if constexpr (is_sfpu) {
-                // Point SrcA back at the input for the next fold; the caller does the fold init.
-                reconfig_data_format_srca(accumulate.config.cb_accumulator, input_dfb_id);
-                copy_init(input_dfb_id);
-            } else {
-                reduce_init_short_with_dt<reduce_type, reduce_dim>(
-                    accumulate.config.cb_accumulator, input_dfb_id, scaler_dfb_id);
-            }
         }
     }
 }
@@ -385,27 +335,6 @@ ALWI void reduce(
         else { return 0; }
     }());
 
-    // Apply reconfig based on mode
-    constexpr bool swap_operands = reduce_swaps_operands<reduce_type, reduce_dim, is_sfpu>();
-    if constexpr (reconfig_input(reconfig_mode)) {
-        if constexpr (swap_operands) {
-            reconfig_data_format(scaler_dfb_id, input_dfb_id);
-        } else {
-            reconfig_data_format(input_dfb_id, scaler_dfb_id);
-        }
-    }
-    if constexpr (reconfig_output(reconfig_mode)) {
-        pack_reconfig_data_format(output_dfb_id);
-    }
-    // Initialization
-    if constexpr (is_sfpu) {
-        // The datacopy path into DEST; the one compute_kernel_hw_startup in kernel_main plus the
-        // reconfig above already established the HW config, so this only re-points the unpacker
-        // (replaces the old init_sfpu + copy_tile_to_dst_init_short, which redid a full hw config).
-        copy_init(input_dfb_id);
-    } else {
-        reduce_init<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, output_dfb_id);
-    }
     scaler_dfb.wait_front(1);  // Wait for scaler tile
     if constexpr (is_sfpu) {
         PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(output_dfb_id)));
@@ -448,17 +377,17 @@ ALWI void reduce(
                     if constexpr (waits_per_tile(input_policy)) {
                         // One-at-a-time: wait/pop per tile
                         input_dfb.wait_front(onetile);
-                        reduce_tile<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, 0, 0, dst_idx);
+                        reduce_tile<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, 0, 0, dst_idx, output_dfb_id);
                         input_dfb.pop_front(onetile);
                     } else if constexpr (waits_bulk(input_policy)) {
                         // BulkWaitBulkPop: use indexed access
                         uint32_t tile_idx = ht * stride + wt;
                         reduce_tile<reduce_type, reduce_dim>(
-                            input_dfb_id, scaler_dfb_id, tile_idx, 0, dst_idx);
+                            input_dfb_id, scaler_dfb_id, tile_idx, 0, dst_idx, output_dfb_id);
                     } else {  // PreloadedPolicy or PersistentPolicy: indexed access
                         uint32_t tile_idx = batch_offset + ht * stride + wt;
                         reduce_tile<reduce_type, reduce_dim>(
-                            input_dfb_id, scaler_dfb_id, tile_idx, 0, dst_idx);
+                            input_dfb_id, scaler_dfb_id, tile_idx, 0, dst_idx, output_dfb_id);
                     }
                 }
             }
@@ -538,15 +467,15 @@ ALWI void reduce(
                     } else if constexpr (waits_per_tile(input_policy)) {
                         // One-at-a-time: wait/pop per tile
                         input_dfb.wait_front(onetile);
-                        reduce_tile<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, 0, 0, dst_idx);
+                        reduce_tile<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, 0, 0, dst_idx, output_dfb_id);
                         input_dfb.pop_front(onetile);
                     } else if constexpr (waits_bulk(input_policy)) {
                         // BulkWaitBulkPop: use indexed access
                         reduce_tile<reduce_type, reduce_dim>(
-                            input_dfb_id, scaler_dfb_id, wt, 0, dst_idx);
+                            input_dfb_id, scaler_dfb_id, wt, 0, dst_idx, output_dfb_id);
                     } else {  // PreloadedPolicy or PersistentPolicy: indexed access
                         reduce_tile<reduce_type, reduce_dim>(
-                            input_dfb_id, scaler_dfb_id, wt + index_offset, 0, dst_idx);
+                            input_dfb_id, scaler_dfb_id, wt + index_offset, 0, dst_idx, output_dfb_id);
                     }
                 }
 
@@ -658,17 +587,17 @@ ALWI void reduce(
                             // One-at-a-time: wait/pop per tile
                             input_dfb.wait_front(onetile);
                             reduce_tile<reduce_type, reduce_dim>(
-                                input_dfb_id, scaler_dfb_id, 0, 0, dst_idx);
+                                input_dfb_id, scaler_dfb_id, 0, 0, dst_idx, output_dfb_id);
                             input_dfb.pop_front(onetile);
                         } else if constexpr (waits_bulk(input_policy)) {
                             // BulkWaitBulkPop: use indexed access
                             uint32_t tile_idx = ht * current_chunk + (i - wt);
                             reduce_tile<reduce_type, reduce_dim>(
-                                input_dfb_id, scaler_dfb_id, tile_idx, 0, dst_idx);
+                                input_dfb_id, scaler_dfb_id, tile_idx, 0, dst_idx, output_dfb_id);
                         } else {  // PreloadedPolicy or PersistentPolicy: indexed access
                             uint32_t tile_idx = batch_offset + ht * stride + i;
                             reduce_tile<reduce_type, reduce_dim>(
-                                input_dfb_id, scaler_dfb_id, tile_idx, 0, dst_idx);
+                                input_dfb_id, scaler_dfb_id, tile_idx, 0, dst_idx, output_dfb_id);
                         }
                         ++dst_idx;
                     }
@@ -717,11 +646,8 @@ ALWI void reduce(
         }
     }
 
-    // Cleanup
     if constexpr (is_sfpu) {
         PACK((llk_pack_reduce_mask_clear()));
-    } else {
-        reduce_uninit();
     }
 }
 

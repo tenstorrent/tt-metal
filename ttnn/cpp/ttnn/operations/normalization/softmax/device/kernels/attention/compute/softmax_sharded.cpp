@@ -109,8 +109,6 @@ void kernel_main() {
         calc_numeric_stable<block_w, subblock_w, dfb_x_id, dfb::max_scaler, dfb::max, dfb::exps>();
 #endif
 
-        reconfig_data_format(dfb::exps, dfb::sum_scaler);
-
 #else
 
 #ifdef NUMERIC_STABLE
@@ -143,10 +141,8 @@ void kernel_main() {
             [](std::uint32_t) {
                 // Preserve the FP32 row sum's precision in its reciprocal, independently of exp approximation.
                 if constexpr (DST_ACCUM_MODE) {
-                    recip_tile_init<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>();
                     recip_tile<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>(0);
                 } else {
-                    recip_tile_init();
                     recip_tile(0);
                 }
             });

@@ -103,9 +103,6 @@ void apply_fused_scale_mask(
     //   A partial final block (dfb_length_t not a multiple of blk) is handled by clamping rem below.
     DataflowBuffer dfb_in_obj(static_cast<uint16_t>(dfb_in));
     DataflowBuffer dfb_out_obj(static_cast<uint16_t>(dfb_out));
-    reconfig_data_format(dfb_in, dfb_fused_scale_mask);
-    pack_reconfig_data_format(dfb_out);
-    mul_bcast_scalar_init(dfb_in, dfb_fused_scale_mask);
     for (std::uint32_t cur_blk = 0; cur_blk < dfb_length_t; cur_blk += blk) {
         const std::uint32_t rem = (cur_blk + blk > dfb_length_t) ? (dfb_length_t - cur_blk) : blk;
         tile_regs_acquire();
@@ -131,13 +128,6 @@ void apply_fused_attn_mask(
     DataflowBuffer dfb_fused_attn_mask_obj(static_cast<uint16_t>(dfb_fused_attn_mask));
     DataflowBuffer dfb_out_obj(static_cast<uint16_t>(dfb_out));
     DataflowBuffer dfb_mask_padded_obj(dfb_mask_padded);
-    reconfig_data_format(dfb_in, dfb_fused_attn_mask);
-    pack_reconfig_data_format(dfb_out);
-#ifdef CAUSAL_MASK
-    add_init(dfb_in, dfb_fused_attn_mask);
-#else
-    add_bcast_rows_init(dfb_in, dfb_fused_attn_mask);
-#endif
     for (std::uint32_t cur_blk = 0; cur_blk < dfb_length_t; cur_blk += blk) {
         const std::uint32_t rem = (cur_blk + blk > dfb_length_t) ? (dfb_length_t - cur_blk) : blk;
         tile_regs_acquire();
@@ -180,9 +170,6 @@ void pad_input(std::uint32_t dfb_in, std::uint32_t dfb_out, std::uint32_t dfb_le
     DataflowBuffer dfb_in_obj(static_cast<uint16_t>(dfb_in));
     DataflowBuffer dfb_out_obj(static_cast<uint16_t>(dfb_out));
     DataflowBuffer dfb_mask_padded_obj(dfb_mask_padded);
-    reconfig_data_format(dfb_in, dfb_mask_padded);
-    pack_reconfig_data_format(dfb_out);
-    copy_init(dfb_in);  // need to copy from CB to DST to be able to run sfpu math
     for (std::uint32_t cur_blk = 0; cur_blk < dfb_length_t; cur_blk += blk) {
         const std::uint32_t rem = (cur_blk + blk > dfb_length_t) ? (dfb_length_t - cur_blk) : blk;
         tile_regs_acquire();
@@ -190,7 +177,6 @@ void pad_input(std::uint32_t dfb_in, std::uint32_t dfb_out, std::uint32_t dfb_le
         dfb_out_obj.reserve_back(static_cast<uint16_t>(rem));
         for (std::uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             if (cur_dst == rem - 1 && cur_blk + rem == dfb_length_t) {
-                add_init(dfb_in, dfb_mask_padded);
                 dfb_mask_padded_obj.wait_front(1);
                 add_tiles(dfb_in, dfb_mask_padded, cur_dst, 0, cur_dst);
             } else {
@@ -217,15 +203,6 @@ void exp_cb(std::uint32_t dfb_in, std::uint32_t dfb_out, std::uint32_t dfb_max, 
 
     DataflowBuffer dfb_in_obj(static_cast<uint16_t>(dfb_in));
     DataflowBuffer dfb_out_obj(static_cast<uint16_t>(dfb_out));
-    reconfig_data_format_srca(dfb_in);
-    pack_reconfig_data_format(dfb_out);
-#ifdef NUMERIC_STABLE
-    reconfig_data_format_srcb(dfb_max);
-    sub_bcast_cols_init(dfb_in, dfb_max);
-#else
-    copy_init(dfb_in);  // need to copy from CB to DST to be able to run sfpu math
-#endif
-    exp_tile_init<EXP_APPROX>();
     for (std::uint32_t cur_blk = 0; cur_blk < dfb_length_t; cur_blk += blk) {
         const std::uint32_t rem = (cur_blk + blk > dfb_length_t) ? (dfb_length_t - cur_blk) : blk;
         dfb_in_obj.wait_front(static_cast<uint16_t>(rem));
@@ -267,17 +244,13 @@ void reduce_cb(bool use_prev_reduce, std::uint32_t dfb_length_t) {
                 // At this point, DST[0] contains the current reduce result
                 // Load previous result into DST[1] and accumulate
                 DataflowBuffer(dfb_prev_out_id).wait_front(1);
-                reconfig_data_format_srca(dfb_prev_out_id);
-                copy_init(dfb_prev_out_id);
                 copy_tile(dfb_prev_out_id, 0, 1);
 
                 // Accumulate based on reduce type
                 if constexpr (reduce_type == PoolType::MAX) {
-                    binary_max_tile_init();
                     binary_max_tile(0, 1, 0);  // max(DST[0], DST[1]) -> DST[0]
                 } else {
                     // SUM reduction
-                    add_binary_tile_init();
                     add_binary_tile(0, 1, 0);  // add(DST[0], DST[1]) -> DST[0]
                 }
 
@@ -300,10 +273,7 @@ void apply_recip(std::uint32_t dfb_in, std::uint32_t dfb_recip, std::uint32_t df
     DataflowBuffer dfb_in_obj(static_cast<uint16_t>(dfb_in));
     DataflowBuffer dfb_recip_obj(static_cast<uint16_t>(dfb_recip));
     DataflowBuffer dfb_out_obj(static_cast<uint16_t>(dfb_out));
-    reconfig_data_format(dfb_in, dfb_recip);
-    pack_reconfig_data_format(dfb_out);
     dfb_recip_obj.wait_front(1);
-    mul_bcast_cols_init(dfb_in, dfb_recip);
     for (std::uint32_t cur_blk = 0; cur_blk < dfb_length_t; cur_blk += blk) {
         const std::uint32_t rem = (cur_blk + blk > dfb_length_t) ? (dfb_length_t - cur_blk) : blk;
         dfb_in_obj.wait_front(static_cast<uint16_t>(rem));
@@ -358,7 +328,6 @@ void kernel_main() {
     DataflowBuffer dfb_fused_scale_obj(dfb_fused_scale);
 #endif
     compute_kernel_hw_startup(dfb_in0, dfb_max_scaler, dfb_exps);
-    copy_init(dfb_mask_padded);
 
     dfb_max_scaler_obj.wait_front(1);  // comes from the reader
     dfb_sum_scaler_obj.wait_front(1);  // comes from the reader
@@ -497,20 +466,15 @@ void kernel_main() {
          */
         DataflowBuffer(static_cast<uint16_t>(dfb_sum_final)).wait_front(1);
 
-        reconfig_data_format_srca(dfb_sum_final);
-        pack_reconfig_data_format(dfb_sum_final, dfb_recip);
         tile_regs_acquire();
-        copy_init(dfb_sum_final);
         copy_tile(dfb_sum_final, 0, dst0);
 
         DataflowBuffer(static_cast<uint16_t>(dfb_sum_final)).pop_front(1);
 
         // Preserve the FP32 row sum's precision in its reciprocal, independently of exp approximation.
         if constexpr (DST_ACCUM_MODE) {
-            recip_tile_init<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>();
             recip_tile<ReciprocalDestAcc::FP32, ReciprocalApproxMode::Precise>(dst0);
         } else {
-            recip_tile_init();
             recip_tile(dst0);
         }
 
