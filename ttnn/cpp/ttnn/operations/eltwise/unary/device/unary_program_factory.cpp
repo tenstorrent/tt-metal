@@ -698,6 +698,8 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
             static_cast<uint32_t>(unary_defines.contains("INP_INT32") || unary_defines.contains("INP_UINT32")));
     } else if (ops_chain[0].type() == UnaryOpType::LOGIT) {
         compute_compile_time_args.emplace("do_clamp", static_cast<uint32_t>(logit_clamp_enabled));
+        compute_compile_time_args.emplace(
+            "pack_reconfig", static_cast<uint32_t>(dfb_data_format != dfb_data_format_output));
     }
     compute_compile_time_args.emplace("input_data_format", static_cast<uint32_t>(dfb_data_format));
 
