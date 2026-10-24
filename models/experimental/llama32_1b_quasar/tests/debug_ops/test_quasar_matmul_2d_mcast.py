@@ -23,6 +23,8 @@ Shapes = the e2e prefill QKV matmul:
     2D mcast splits M across grid.y and N across grid.x.
 
 Inputs are built bf16 via row-major upload + quasar.tilize (not from_torch(TILE), which hangs on the sim).
+no_program_config runs the same matmul through ttnn.experimental.quasar.linear with no program config (the
+unified matmul on Quasar, what the model now runs there).
 
 Run (Quasar sim):
     TTSIM_QSR_TC_LEGACY_TRUNCATION_ALIAS=0 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" \
@@ -35,6 +37,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from tests.ttnn.utils_for_testing import assert_allclose
 
 # llama-3.2-1B prefill QKV matmul dims (the e2e case that auto-picked the 2D-mcast factory)
 M, K, N = 1024, 2048, 3072
@@ -77,10 +80,11 @@ def _divisor(v, cands=(4, 2, 1)):
     return next((d for d in cands if v % d == 0), 1)
 
 
-def _run_2d(mesh_device, gx, gy):
+def _run_2d(mesh_device, gx, gy, use_program_config=True):
     """2D-mcast matmul on a gx*gy grid. 2D mcast splits M across grid.y (per_core_M) and N across grid.x
     (per_core_N). EXPECTED TO FATAL on Quasar today: the 2D factory's in0_sender holds a Gen1 config
-    (program_spec.cpp:1325). Port target -- passes once the 2D-mcast DM kernels get DataMovementGen2Config."""
+    (program_spec.cpp:1325). Port target -- passes once the 2D-mcast DM kernels get DataMovementGen2Config.
+    use_program_config=False: ttnn.experimental.quasar.linear with no program config instead."""
     torch.manual_seed(0)
     a = torch.randn(1, 1, M, K, dtype=torch.bfloat16)
     w = torch.randn(1, 1, K, N, dtype=torch.bfloat16)
@@ -122,10 +126,10 @@ def _run_2d(mesh_device, gx, gy):
         f"[mm-2d-repro] 2D mcast a[1,1,{M},{K}] x w[1,1,{K},{N}] grid {gx}x{gy} "
         f"per_core_M={per_core_M} per_core_N={per_core_N} out_block={out_block_h}x{out_block_w}"
     )
-    out = ttnn.linear(
+    out = (ttnn.linear if use_program_config else ttnn.experimental.quasar.linear)(
         at,
         wt,
-        program_config=prog_cfg,
+        program_config=prog_cfg if use_program_config else None,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
         compute_kernel_config=_compute_cfg(),
@@ -137,18 +141,21 @@ def _run_2d(mesh_device, gx, gy):
     logger.info(f"[mm-2d-repro] out shape {tuple(o.shape)} finite={torch.isfinite(o).all().item()} PCC={pcc:.5f}")
     assert torch.isfinite(o).all(), "2D-mcast matmul produced non-finite output"
     assert pcc > 0.99, f"2D-mcast matmul PCC too low: {pcc}"
+    if not use_program_config:
+        assert_allclose(ref, o.float(), rtol=0.1, atol=0.1 * ref.abs().max().item())
 
 
 @pytest.mark.timeout(3600)
-def test_matmul_2d_mcast(mesh_device):
+@pytest.mark.parametrize("use_program_config", [True, False], ids=["2d_mcast", "no_program_config"])
+def test_matmul_2d_mcast(mesh_device, use_program_config):
     """Device-grid 2D-mcast matmul (adapts to whatever the device exposes; needs a 2D grid to mcast both ways).
     NOTE the 3600s timeout: a 1024x2048x3072 matmul on the ~50 KHz functional sim takes many minutes -- the
     repo-default 300s pytest-timeout kills it mid-run (looks like a hang but is just slow)."""
     grid = mesh_device.compute_with_storage_grid_size()
     gx, gy = min(int(grid.x), 2), min(int(grid.y), 2)
-    if gx < 2 or gy < 2:
+    if use_program_config and (gx < 2 or gy < 2):
         pytest.skip(f"2D mcast needs a >=2x2 grid; device is {grid.x}x{grid.y}")
-    _run_2d(mesh_device, gx, gy)
+    _run_2d(mesh_device, gx, gy, use_program_config)
 
 
 @pytest.mark.timeout(3600)
