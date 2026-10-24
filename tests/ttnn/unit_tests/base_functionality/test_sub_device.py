@@ -138,6 +138,66 @@ def test_sub_devices_mesh(mesh_device):
     run_sub_devices(mesh_device)
 
 
+def test_sub_device_id_hash_matches_equality():
+    first_id = ttnn.SubDeviceId(0)
+    second_id = ttnn.SubDeviceId(0)
+    assert first_id == second_id, f"expected equal IDs, got {first_id} and {second_id}"
+    assert second_id in {first_id}, "equal sub-device IDs must have compatible hashes"
+
+
+@pytest.mark.parametrize("num_command_queues", [1, 2])
+def test_mesh_device_lifecycle_queries(num_command_queues, silicon_arch_name, expect_error):
+    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), num_command_queues=num_command_queues)
+    try:
+        assert mesh_device.is_initialized(), "newly opened mesh device is not initialized"
+        assert not mesh_device.is_remote_only(), "a local mesh reports only remote devices"
+        assert mesh_device.num_hw_cqs() == num_command_queues, "mesh command queue count differs from open request"
+    finally:
+        ttnn.close_mesh_device(mesh_device)
+
+    assert not mesh_device.is_initialized(), "closed mesh device remains initialized"
+    assert not mesh_device.is_remote_only(), "closed mesh device reports only remote devices"
+    with expect_error(RuntimeError, "MeshDevice is not initialized"):
+        mesh_device.get_sub_device_ids()
+    with expect_error(RuntimeError, "MeshDevice is not initialized"):
+        mesh_device.get_active_sub_device_manager_id()
+    with expect_error(RuntimeError, "MeshDevice is not initialized"):
+        mesh_device.num_hw_cqs()
+
+
+@skip_for_slow_dispatch()
+def test_mesh_device_sub_device_queries(mesh_device):
+    default_manager_id = mesh_device.get_active_sub_device_manager_id()
+    repeated_id = mesh_device.get_active_sub_device_manager_id()
+    assert repeated_id == default_manager_id, f"expected {default_manager_id}, got {repeated_id}"
+    assert repeated_id in {default_manager_id}, "equal manager IDs must have compatible hashes"
+    assert repr(repeated_id) == repr(default_manager_id), "equal manager IDs have different representations"
+    assert repr(default_manager_id).startswith("SubDeviceManagerId("), repr(default_manager_id)
+
+    first_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    second_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))})
+    manager_id = mesh_device.create_sub_device_manager(
+        [ttnn.SubDevice([first_cores]), ttnn.SubDevice([second_cores])], 3200
+    )
+    expected_ids = [ttnn.SubDeviceId(0), ttnn.SubDeviceId(1)]
+    try:
+        mesh_device.load_sub_device_manager(manager_id)
+        active_id = mesh_device.get_active_sub_device_manager_id()
+        assert active_id == manager_id, f"expected {manager_id}, got {active_id}"
+        assert active_id != default_manager_id, f"loading a manager did not replace the default {default_manager_id}"
+
+        mesh_device.set_sub_device_stall_group([ttnn.SubDeviceId(1)])
+        sub_device_ids = mesh_device.get_sub_device_ids()
+        assert sub_device_ids == expected_ids, f"expected {expected_ids}, got {sub_device_ids}"
+    finally:
+        mesh_device.reset_sub_device_stall_group()
+        mesh_device.clear_loaded_sub_device_manager()
+        mesh_device.remove_sub_device_manager(manager_id)
+
+    restored_id = mesh_device.get_active_sub_device_manager_id()
+    assert restored_id == default_manager_id, f"expected {default_manager_id}, got {restored_id}"
+
+
 @skip_for_slow_dispatch()
 def test_sub_device_program(device):
     run_sub_devices_program(device)
