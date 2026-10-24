@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 
+#include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -28,7 +29,8 @@ namespace tt::tt_metal::experimental {
 // The template argument is the element type the kernel views the region as.
 //
 // KERNEL BINDING: By default, a scratchpad instance is private to a single kernel
-//   instance. It is legal for more than one KernelSpec to bind to the same
+//   instance (this can be overriden via allow_multi_kernel_binding in the advanced
+//   options). It is legal for more than one KernelSpec to bind to the same
 //   ScratchpadSpec only if they occupy disjoint node sets.
 //
 // LIFETIME: Program-scope. The backing memory is allocated for the Program's
@@ -76,6 +78,11 @@ struct ScratchpadSpec {
     // The tile format is optional; if unspecified, the default tile format (32x32) is assumed.
     // Tile format includes the tile's "face" layout (sub-block arrangement within the tile).
     std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
+
+    ////////////////////////////////////
+    // Advanced options (see advanced_options.hpp)
+    ////////////////////////////////////
+    ScratchpadAdvancedOptions advanced_options;
 };
 
 }  // namespace tt::tt_metal::experimental
