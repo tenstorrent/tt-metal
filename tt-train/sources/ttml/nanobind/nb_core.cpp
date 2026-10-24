@@ -33,6 +33,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "core/clip_grad_norm.hpp"
 #include "core/distributed/distributed.hpp"
 #include "core/distributed/socket_manager.hpp"
+#include "core/parameter_dtype.hpp"
 #include "core/tt_profiler.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
@@ -125,6 +126,17 @@ void py_module(nb::module_& m) {
         nb::arg("p_norm_type") = 2.0f,
         nb::arg("error_if_nonfinite") = false,
         "Clip gradients of parameters to a maximum norm. Returns the total norm after clipping.");
+
+    // Parameter precision (training_config.precision.param_dtype)
+    m.def(
+        "store_trainable_parameters_as",
+        [](const ttml::serialization::NamedParameters& parameters, ttnn::DataType dtype) {
+            ttml::core::store_trainable_parameters_as(parameters, dtype);
+        },
+        nb::arg("parameters"),
+        nb::arg("dtype"),
+        "Store every trainable bf16 or fp32 parameter in dtype (BFLOAT16 or FLOAT32). Call before creating the "
+        "optimizer.");
 
     {
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));

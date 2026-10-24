@@ -6,7 +6,6 @@
 
 #include "optimizers/adamw.hpp"
 #include "optimizers/adamw_composite.hpp"
-#include "optimizers/adamw_full_precision.hpp"
 #include "optimizers/muon_composite.hpp"
 #include "optimizers/no_op.hpp"
 #include "optimizers/sgd.hpp"
@@ -62,18 +61,6 @@ OptimizerRegistry::OptimizerRegistry() {
                 .weight_decay = config["weight_decay"].as<float>(0.01F),
                 .amsgrad = config["amsgrad"].as<bool>(false),
                 .kahan_summation = config["kahan_summation"].as<bool>(false)});
-    });
-
-    register_optimizer("AdamWFullPrecision", [](const YAML::Node& config, serialization::NamedParameters params) {
-        return std::make_unique<AdamWFullPrecision>(
-            std::move(params),
-            AdamWFullPrecisionConfig{
-                .lr = config["lr"].as<float>(1e-3F),
-                .beta1 = config["beta1"].as<float>(0.9F),
-                .beta2 = config["beta2"].as<float>(0.999F),
-                .epsilon = config["epsilon"].as<float>(1e-8F),
-                .weight_decay = config["weight_decay"].as<float>(1e-2F),
-                .amsgrad = config["amsgrad"].as<bool>(false)});
     });
 
     register_optimizer("SGD", [](const YAML::Node& config, serialization::NamedParameters params) {

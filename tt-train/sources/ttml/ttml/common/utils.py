@@ -184,7 +184,9 @@ def create_optimizer(model, yaml_config: dict):
 
     Accepts either a top-level YAML config dict (with training_config.optimizer)
     or the optimizer dict directly (detected by the presence of a "type" key).
-    Passes the dict straight to the C++ optimizer factory.
+    Passes the dict straight to the C++ optimizer factory. With a top-level
+    config, training_config.precision.param_dtype first stores the model's
+    trainable parameters in that dtype, so the optimizer state follows it.
 
     Args:
         model: Model to optimize
@@ -200,6 +202,9 @@ def create_optimizer(model, yaml_config: dict):
         optimizer_cfg = tc.get("optimizer")
         if optimizer_cfg is None:
             raise ValueError("training_config must contain an 'optimizer' section")
+        params = model.parameters()
+        ttml.optimizers.apply_precision_config(tc, params)
+        return ttml.optimizers.create_optimizer(optimizer_cfg, params)
     return ttml.optimizers.create_optimizer(optimizer_cfg, model.parameters())
 
 

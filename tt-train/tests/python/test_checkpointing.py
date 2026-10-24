@@ -205,17 +205,6 @@ def test_partial_load_skips_absent_groups(tmp_path):
     ctx.reset_graph()
 
 
-def _store_as(model: TwoLayer, dtype) -> None:
-    """Store every parameter as ``dtype``, as a run that trains in that precision does. New parameters are bf16."""
-    precision = (
-        ttml.autograd.PreferredPrecision.FULL
-        if dtype == ttnn.DataType.FLOAT32
-        else ttml.autograd.PreferredPrecision.HALF
-    )
-    for t in model.parameters().values():
-        t.set_value(t.get_value(precision))
-
-
 @pytest.mark.requires_device
 @pytest.mark.parametrize(
     "saved_dtype, resumed_dtype",
@@ -229,7 +218,7 @@ def test_resume_keeps_the_models_dtype(tmp_path, saved_dtype, resumed_dtype):
 
     ttml.init.manual_seed(0)
     orig = TwoLayer()
-    _store_as(orig, saved_dtype)
+    ttml.core.store_trainable_parameters_as(orig.parameters(), saved_dtype)
     opt = _make_optimizer("AdamW", orig.parameters())
     _train_steps(orig, opt, n=1, x_np=x_np)
     path = str(tmp_path / "ckpt.pkl")
@@ -237,7 +226,7 @@ def test_resume_keeps_the_models_dtype(tmp_path, saved_dtype, resumed_dtype):
     ctx.reset_graph()
 
     restored = TwoLayer()
-    _store_as(restored, resumed_dtype)
+    ttml.core.store_trainable_parameters_as(restored.parameters(), resumed_dtype)
     restored_opt = _make_optimizer("AdamW", restored.parameters())
     checkpointing.load_checkpoint(path, model_params=restored.parameters(), optimizer=restored_opt)
 

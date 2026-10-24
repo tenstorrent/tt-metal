@@ -55,7 +55,6 @@ These optimizers write in place, and all of them take views:
 |---|---|
 | `AdamW` (fused) | the parameter and its moments |
 | `SGD` (fused) | the parameter and its momentum buffer |
-| `AdamWFullPrecision` | its fp32 master weights and moments |
 | `MorehAdamW` | the parameter and its moments, as `ttnn::moreh_adamw` output tensors |
 | `RemoteOptimizer` | the parameter, received from the aggregator |
 
@@ -71,10 +70,22 @@ a new path in an existing one (for example a config option that changes which te
 - Fused `AdamW` accepts bf16 and fp32 parameters. Its moments take the parameter's native dtype, which its kernel
   requires.
 - Every other optimizer that updates parameters has a bf16 update only. It rejects an fp32 parameter at
-  construction, with an error that names the parameter. `AdamWFullPrecision` keeps its own fp32 master weights for
-  bf16 parameters.
+  construction, with an error that names the parameter.
 - Stochastic rounding (`AdamWConfig::stochastic_rounding`) applies to bf16 parameters only. An fp32 parameter keeps
   the low bits that rounding would lose, so it is updated without it.
+
+## fp32 master weights
+
+`training_config.precision.param_dtype: float32` stores every trainable parameter in fp32. It is applied by
+`core::apply_precision_config()` (`sources/ttml/core/parameter_dtype.{hpp,cpp}`) right before the optimizer is created,
+so the optimizer state follows: in Python by `ttml.common.utils.create_optimizer()` when it is given the whole config
+(as in `train.py`), and in C++ by the `nano_gpt` runner and the 3-tier optimizer worker. Runners that pass only the
+optimizer section, such as the SFT and GRPO trainers, don't apply it. 3-tier workers keep bf16 parameters for
+`RemoteOptimizer`; the optimizer worker holds the fp32 master weights. The fp32 parameter is the master weight: fused
+`AdamW` updates it in place with fp32 moments, and forward and backward read its bf16 view, which is refreshed into its
+existing buffer the first time it is read after the step. Frozen
+parameters and non-float tensors keep their dtype. `bfloat16` stores the trainable parameters in bf16; unset, they keep
+the dtype the model builds them in, so existing configs don't change.
 
 ## Loading values into a tensor
 
@@ -111,6 +122,10 @@ file.
 - **No cached copy at all** can never be stale, but a weight is read by several ops per step, so it would be cast
   and allocated several times per step, and `get_value()` could no longer return a reference.
 - **Letting both copies be written** would round the fp32 tensor to bf16 on write and erase its sub-ulp progress.
+- **Keeping the fp32 master weights in the optimizer**, next to bf16 parameters, means casting each master into a new
+  bf16 tensor and installing it after every step: an allocation per parameter per step and a buffer address that
+  moves. With the master in the parameter, the bf16 view is refreshed in place and the step runs the same `AdamW`
+  kernel, so one optimizer covers both precisions.
 
 PyTorch uses the same idea: one source of truth with a version counter (`c10::VariableVersion`), bumped by in-place
 operations in its autograd layer while the kernels take plain tensors. Here the bump happens when the view is

@@ -6,6 +6,8 @@
 
 import pytest
 import ttml
+import ttnn
+from ttml.common.utils import create_optimizer
 
 
 def _make_python_optimizer_class():
@@ -51,9 +53,7 @@ def test_register_and_create_python_optimizer():
     """Test registering a Python optimizer and creating it via create_optimizer."""
     PyOptimizer = _make_python_optimizer_class()
 
-    ttml.optimizers.register_optimizer(
-        "PyOpt", lambda config, params: PyOptimizer(params)
-    )
+    ttml.optimizers.register_optimizer("PyOpt", lambda config, params: PyOptimizer(params))
 
     params = ttml.NamedParameters()
     opt = ttml.optimizers.create_optimizer({"type": "PyOpt"}, params)
@@ -66,9 +66,7 @@ def test_python_optimizer_methods():
     """Test that virtual method dispatch works for Python optimizers."""
     PyOptimizer = _make_python_optimizer_class()
 
-    ttml.optimizers.register_optimizer(
-        "PyOptMethods", lambda config, params: PyOptimizer(params)
-    )
+    ttml.optimizers.register_optimizer("PyOptMethods", lambda config, params: PyOptimizer(params))
 
     params = ttml.NamedParameters()
     opt = ttml.optimizers.create_optimizer({"type": "PyOptMethods"}, params)
@@ -109,3 +107,42 @@ def test_cpp_optimizer_still_works():
     opt = ttml.optimizers.create_optimizer({"type": "AdamW", "lr": 0.001}, params)
     assert opt.get_name() == "AdamW"
     assert opt.get_lr() == pytest.approx(0.001, abs=1e-6)
+
+
+def _param_dtypes(model) -> set:
+    return {t.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype for t in model.parameters().values()}
+
+
+@pytest.mark.requires_device
+@pytest.mark.parametrize(
+    "precision, expected",
+    [
+        ({"param_dtype": "float32"}, ttnn.DataType.FLOAT32),
+        (None, ttnn.DataType.BFLOAT16),
+        ({}, ttnn.DataType.BFLOAT16),
+        ({"param_dtype": None}, ttnn.DataType.BFLOAT16),
+    ],
+)
+def test_create_optimizer_applies_param_dtype(precision, expected):
+    """With a full config, create_optimizer first stores the trainable parameters in precision.param_dtype, so every
+    runner that calls it gets fp32 master weights for float32; without the key they keep the model's dtype."""
+    model = ttml.modules.LinearLayer(32, 32)
+    training_config = {"optimizer": {"type": "AdamW"}}
+    if precision is not None:
+        training_config["precision"] = precision
+
+    create_optimizer(model, {"training_config": training_config})
+
+    assert _param_dtypes(model) == {expected}
+
+
+class _ModelWithoutParameters:
+    def parameters(self):
+        return ttml.NamedParameters()
+
+
+def test_create_optimizer_rejects_an_unknown_param_dtype(expect_error):
+    """The name is checked before any parameter is touched, so this needs no device."""
+    config = {"training_config": {"precision": {"param_dtype": "float16"}, "optimizer": {"type": "AdamW"}}}
+    with expect_error(RuntimeError, "param_dtype"):
+        create_optimizer(_ModelWithoutParameters(), config)
