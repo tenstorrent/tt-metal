@@ -114,7 +114,7 @@ GlobalCircularBufferImpl::GlobalCircularBufferImpl(
         receiver_cores_,
         all_cores_,
         max_num_receivers_per_sender);
-    this->setup_cb_buffers(buffer_type, max_num_receivers_per_sender);
+    this->setup_cb_buffers(buffer_type, buffer_type, max_num_receivers_per_sender);
 }
 
 GlobalCircularBufferImpl::GlobalCircularBufferImpl(
@@ -122,6 +122,7 @@ GlobalCircularBufferImpl::GlobalCircularBufferImpl(
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type,
+    BufferType config_buffer_type,
     DramSenderTag) :
     device_(&mesh_device),
     sender_receiver_core_mapping_(sender_receiver_core_mapping),
@@ -175,7 +176,7 @@ GlobalCircularBufferImpl::GlobalCircularBufferImpl(
     pages_sent_drisc_l1_base_ = drisc_sender_state_alloc_->addr();
     sender_state_drisc_l1_base_ = pages_sent_drisc_l1_base_ + pages_sent_region;
 
-    this->setup_cb_buffers(buffer_type, max_num_receivers_per_sender);
+    this->setup_cb_buffers(buffer_type, config_buffer_type, max_num_receivers_per_sender);
     this->initialize_dram_sender_state_block(max_num_receivers_per_sender);
 }
 
@@ -246,10 +247,14 @@ void GlobalCircularBufferImpl::initialize_dram_sender_state_block(uint32_t max_n
     }
 }
 
-void GlobalCircularBufferImpl::setup_cb_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender) {
+void GlobalCircularBufferImpl::setup_cb_buffers(
+    BufferType buffer_type, BufferType config_buffer_type, uint32_t max_num_receivers_per_sender) {
     TT_FATAL(
         buffer_type == BufferType::L1 or buffer_type == BufferType::L1_SMALL,
         "Global circular buffer can only be created for L1 buffer types");
+    TT_FATAL(
+        config_buffer_type == BufferType::L1 or config_buffer_type == BufferType::L1_SMALL,
+        "Global circular buffer config pages can only be placed in L1 buffer types");
     uint32_t num_cores = all_cores_.num_cores();
 
     auto shard_parameters = ShardSpecBuffer(all_cores_, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
@@ -278,7 +283,7 @@ void GlobalCircularBufferImpl::setup_cb_buffers(BufferType buffer_type, uint32_t
         distributed::ReplicatedBufferConfig{.size = cb_config_size},
         distributed::DeviceLocalBufferConfig{
             .page_size = cb_config_page_size,
-            .buffer_type = buffer_type,
+            .buffer_type = config_buffer_type,
             .sharding_args = BufferShardingArgs(std::move(shard_parameters), TensorMemoryLayout::HEIGHT_SHARDED),
         },
         device_);
@@ -503,7 +508,8 @@ struct GlobalCircularBufferDramSenderInternals {
         distributed::MeshDevice& mesh_device,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
-        BufferType buffer_type);
+        BufferType buffer_type,
+        BufferType config_buffer_type);
 
     static SenderCoreType sender_core_type(const GlobalCircularBuffer& gcb);
     static DeviceAddr pages_sent_drisc_l1_base(const GlobalCircularBuffer& gcb);
@@ -518,9 +524,15 @@ GlobalCircularBuffer GlobalCircularBufferDramSenderInternals::make_dram_sender(
     distributed::MeshDevice& mesh_device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type) {
+    BufferType buffer_type,
+    BufferType config_buffer_type) {
     return GlobalCircularBuffer(GlobalCircularBufferImpl(
-        mesh_device, sender_receiver_core_mapping, size, buffer_type, GlobalCircularBufferImpl::DramSenderTag{}));
+        mesh_device,
+        sender_receiver_core_mapping,
+        size,
+        buffer_type,
+        config_buffer_type,
+        GlobalCircularBufferImpl::DramSenderTag{}));
 }
 
 SenderCoreType GlobalCircularBufferDramSenderInternals::sender_core_type(const GlobalCircularBuffer& gcb) {
@@ -556,7 +568,8 @@ GlobalCircularBuffer CreateGlobalCircularBufferForTensorPrefetcher(
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type,
-    bool support_multi_receiver_shards) {
+    bool support_multi_receiver_shards,
+    std::optional<BufferType> config_buffer_type) {
     // Multi-receiver shards (legacy interleaved layout) force one sender per bank; the
     // receiver-contiguous layout that disallows them is what lets a bank use two senders.
     auto mapping = build_dram_sender_mapping(
@@ -564,7 +577,7 @@ GlobalCircularBuffer CreateGlobalCircularBufferForTensorPrefetcher(
         bank_to_receivers,
         support_multi_receiver_shards ? DramSenderSplit::OnePerBank : DramSenderSplit::TwoPerBank);
     return global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals::make_dram_sender(
-        mesh_device, mapping, size, buffer_type);
+        mesh_device, mapping, size, buffer_type, config_buffer_type.value_or(buffer_type));
 }
 
 SenderCoreType sender_core_type(const GlobalCircularBuffer& gcb) {

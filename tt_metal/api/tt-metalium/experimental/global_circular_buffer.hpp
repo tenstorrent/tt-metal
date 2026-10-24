@@ -10,6 +10,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -46,6 +47,11 @@ namespace experimental {
 // single- and dual-sender banks may therefore coexist in one GCB. The Tensor prefetcher always
 // provisions both cores and routes PREFETCH requests only to this GCB's mapped sender subset.
 //
+// `config_buffer_type` places the per-receiver config pages (read pointer and credit counters)
+// apart from the ring data; std::nullopt keeps them in `buffer_type`. L1_SMALL lies above every
+// statically allocated circular buffer, so config pages there survive programs whose circular
+// buffers alias the ring data while the ring is empty.
+//
 // MeshDevice-only: the arena that backs this GCB's pages_sent allocation lives on
 // MeshDeviceImpl, so a bare IDevice cannot construct one.
 GlobalCircularBuffer CreateGlobalCircularBufferForTensorPrefetcher(
@@ -53,7 +59,8 @@ GlobalCircularBuffer CreateGlobalCircularBufferForTensorPrefetcher(
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type = BufferType::L1,
-    bool support_multi_receiver_shards = false);
+    bool support_multi_receiver_shards = false,
+    std::optional<BufferType> config_buffer_type = std::nullopt);
 
 // Sender domain of a GlobalCircularBuffer. Returns SenderCoreType::Worker for GCBs created
 // via the worker-sender path, SenderCoreType::Dram for those from
