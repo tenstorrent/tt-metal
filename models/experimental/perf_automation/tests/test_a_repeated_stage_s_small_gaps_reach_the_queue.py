@@ -59,6 +59,22 @@ def _profile(step_ops, pass_ops, device_ms=40.0):
     }
 
 
+def _run_termination_check(pm, monkeypatch, step_ops, pass_ops, spread=None):
+    """The real termination_check over one profile, the device and the other gates stubbed out."""
+    prof = _profile(step_ops, pass_ops)
+    open_ops = [dict(o, at_floor=False) for o in step_ops + pass_ops]
+    monkeypatch.setattr(pm, "_profile_with_zero_row_retry", lambda *a, **k: dict(prof))
+    monkeypatch.setattr(pm.roofline, "residual_report", lambda p, env: {"open_ops": open_ops, "at_floor": False})
+    monkeypatch.setattr(pm, "_persist_throughput", lambda *a, **k: None)
+    monkeypatch.setattr(pm, "_load_attempts_all", lambda: [])
+    if spread is not None:
+        monkeypatch.setattr(pm, "read_stage_spread", lambda **k: spread)
+    for gate in ("_host_gate", "_decode_gate", "_conv_gate", "_fold_gate"):
+        monkeypatch.setattr(pm, gate, lambda *a, **k: None)
+    monkeypatch.setattr(pm, "_short_stage_names", lambda: {"step"})
+    return pm.termination_check()
+
+
 def _repeats(pm, monkeypatch, reps):
     monkeypatch.setattr(pm, "stage_repeats_per_request", lambda stages: {s: reps[s] for s in stages or () if s in reps})
 
@@ -126,6 +142,31 @@ def test_the_per_request_cutoff_rises_with_the_units_and_never_falls(pm, monkeyp
     assert not rd.material(tiny, 0.0015), "0.19 per request is under the per-request cutoff of 0.25"
 
 
+def test_the_order_weighs_a_gap_as_its_cutoff_did(pm, monkeypatch):
+    """One weight for both: a gap the cutoff held to its raw value (inside its stage's wobble) is not
+    multiplied when the queue is ordered either, so the noise in it cannot jump the queue."""
+    _repeats(pm, monkeypatch, {"step": 127})
+    noisy = _op("Matmul", _STEP_SHAPE, 0.3, device_ms=10.0)  # material raw, but 0.3 <= 10.0 ms x 5%
+    clear = _op("Add", _STEP_SHAPE, 0.08, device_ms=1.0)
+    prof = _profile([noisy, clear], [_op("Matmul", _PASS_SHAPE, 3.0)])
+    monkeypatch.setattr(pm, "read_stage_spread", lambda **k: {"step": 0.05})
+    rd = pm._per_request_reader(prof)
+    assert rd.material(noisy, 0.3), "kept: the raw gap clears the old cutoff"
+    assert rd.weight(noisy, 0.3) == 1.0 and rd.weight(clear, 0.08) == 127.0
+    assert rd.gap(clear, 0.08) == pytest.approx(0.08 * rd.weight(clear, 0.08)), "gap is raw x weight"
+
+
+def test_termination_check_orders_by_the_weight_its_cutoff_used(pm, monkeypatch):
+    _repeats(pm, monkeypatch, {"step": 127})
+    noisy = _op("Matmul", _STEP_SHAPE, 0.3, device_ms=10.0, bound_by="memory", bucket="matmul")
+    clear = _op("Add", _STEP_SHAPE, 0.08, device_ms=1.0, bound_by="memory", bucket="eltwise")
+    out = _run_termination_check(pm, monkeypatch, [noisy, clear], [], spread={"step": 0.05})
+    blocking = out.get("blocking_ops") or out.get("blocking") or []
+    weights = {b.get("op"): b.get("cost_weight") for b in blocking}
+    assert weights == {"Matmul %s" % _STEP_SHAPE: 1.0, "Add %s" % _STEP_SHAPE: 127.0}, blocking
+    assert blocking[0]["op"] == "Add %s" % _STEP_SHAPE, "10.2 ms per request outranks a raw 0.3 ms"
+
+
 def test_a_shared_class_name_with_no_fingerprint_match_is_not_placed(pm, monkeypatch):
     _repeats(pm, monkeypatch, {"step": 127})
     prof = _profile([_op("Matmul", _STEP_SHAPE, 0.02)], [_op("Matmul", _PASS_SHAPE, 3.0)])
@@ -172,16 +213,7 @@ def test_termination_check_queues_a_repeated_stage_s_ops(pm, monkeypatch):
     _repeats(pm, monkeypatch, {"step": 127})
     step = _op("Matmul", _STEP_SHAPE, 0.02, bound_by="memory", bucket="matmul")
     once = _op("Matmul", _PASS_SHAPE, 0.3, bound_by="memory", bucket="matmul")
-    prof = _profile([step], [once])
-    open_ops = [dict(step, at_floor=False), dict(once, at_floor=False)]
-    monkeypatch.setattr(pm, "_profile_with_zero_row_retry", lambda *a, **k: dict(prof))
-    monkeypatch.setattr(pm.roofline, "residual_report", lambda p, env: {"open_ops": open_ops, "at_floor": False})
-    monkeypatch.setattr(pm, "_persist_throughput", lambda *a, **k: None)
-    monkeypatch.setattr(pm, "_load_attempts_all", lambda: [])
-    for gate in ("_host_gate", "_decode_gate", "_conv_gate", "_fold_gate"):
-        monkeypatch.setattr(pm, gate, lambda *a, **k: None)
-    monkeypatch.setattr(pm, "_short_stage_names", lambda: {"step"})
-    out = pm.termination_check()
+    out = _run_termination_check(pm, monkeypatch, [step], [once])
     blocking = out.get("blocking_ops") or out.get("blocking") or []
     names = [(b.get("stage"), b.get("op")) for b in blocking]
     step_name = "Matmul %s" % _STEP_SHAPE  # an op_code with no dims is named by its shape

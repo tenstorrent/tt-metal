@@ -8510,8 +8510,8 @@ def _per_request_reader(profile):
     cutoff, since one judged on the profiled pass would run before this weight -- and the per-op launch
     cost is already inside every op's floor.
 
-    Fields: weights ({stage: weight}, stage_cost_weights), stage(o), gap(o, raw) -> per-request ms,
-    material(o, raw) -> bool, material_sum(ops) -> bool (a gate's summed gap_ms). Stage names are
+    Fields: weights ({stage: weight}, stage_cost_weights), stage(o), weight(o, raw) -> the weight this
+    gap is given (1 where it is withheld), gap(o, raw) -> per-request ms, material(o, raw) -> bool, material_sum(ops) -> bool (a gate's summed gap_ms). Stage names are
     whatever the capture and the pipeline report."""
     import types as _types
 
@@ -8537,13 +8537,16 @@ def _per_request_reader(profile):
             placed[key] = _open_op_stage(o, profile, codes)
         return placed[key]
 
-    def gap(o, raw):
+    def weight(o, raw):
         raw = float(raw or 0.0)
         st = stage(o)
         w = float(weights.get(st or "", 1.0))
         if w > 1.0 and spread.get(st) and raw <= float(o.get("device_ms") or 0.0) * float(spread[st]):
             w = 1.0
-        return raw * w
+        return w
+
+    def gap(o, raw):
+        return float(raw or 0.0) * weight(o, raw)
 
     def material(o, raw):
         return float(raw or 0.0) >= cutoff_raw or gap(o, raw) >= cutoff_req
@@ -8554,7 +8557,9 @@ def _per_request_reader(profile):
         raw = sum(float(o.get("gap_ms") or 0.0) for o in ops)
         return raw >= cutoff_raw or sum(gap(o, o.get("gap_ms")) for o in ops) >= cutoff_req
 
-    return _types.SimpleNamespace(weights=weights, stage=stage, gap=gap, material=material, material_sum=material_sum)
+    return _types.SimpleNamespace(
+        weights=weights, stage=stage, weight=weight, gap=gap, material=material, material_sum=material_sum
+    )
 
 
 def stage_of_op(op, profile) -> str:
@@ -8950,6 +8955,10 @@ def termination_check() -> dict:
         # By fingerprint when the weights are in force (_open_op_stage): the bare code put every
         # recurring-step matmul in whichever stage matmuls cost most. Unweighted, exactly as before.
         entry["stage"] = _req.stage(o) if _req.weights else stage_of_op(op_code, prof)
+        # The weight the cutoff gave this gap, so the order cannot multiply a gap the cutoff held to
+        # its raw value (inside its stage's wobble): one rule for both, as the fusion gate ranks.
+        if _req.weights:
+            entry["cost_weight"] = round(_req.weight(o, max(gap, eff_gap)), 4)
         done, rung, reason = _op_ladder_status(o, op_code, attempts)
         if done:
             cleared.append({**entry, "verdict": reason})
@@ -9015,9 +9024,10 @@ def termination_check() -> dict:
     # WEIGHED BY WHAT THE STAGE REALLY COSTS (stage_cost_weights): the gap is read off a capped
     # profile that samples the stages unequally. The gap itself is reported unchanged; only the
     # order uses the weight, and with no weights every op's is 1 and the order is the old one.
+    # A gate's entry has no op gap of its own and takes its stage's weight; an op keeps the one above.
     _weights = _req.weights
     for b in blocking:
-        b["cost_weight"] = round(float(_weights.get(b.get("stage") or "", 1.0)), 4)
+        b.setdefault("cost_weight", round(float(_weights.get(b.get("stage") or "", 1.0)), 4))
     blocking.sort(key=lambda b: _blocking_order_key(b, _short_names))
     can_stop = not blocking
     # AND NOTHING MATERIAL MAY BE UNTRIED. `blocking` empties as each op's checklist fills, so an op

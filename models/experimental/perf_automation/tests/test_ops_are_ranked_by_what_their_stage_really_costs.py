@@ -89,7 +89,8 @@ def test_the_gate_weighs_before_it_sorts_and_reports_the_gap_unchanged():
     assert src.index("_req = _per_request_reader(_gate_prof)") < i
     j = src.index("blocking.sort(key=lambda b: _blocking_order_key(b, _short_names))")
     assert i < j
-    assert 'b["cost_weight"] = round(float(_weights.get(b.get("stage") or "", 1.0)), 4)' in src[i:j]
+    # an op entry carries the weight its cutoff gave it; a gate's entry takes its stage's weight
+    assert 'b.setdefault("cost_weight", round(float(_weights.get(b.get("stage") or "", 1.0)), 4))' in src[i:j]
     assert src.count("blocking.sort(") == 1, "one ordering"
     k = src.index("    next_target = (")
     assert '"gap_ms": blocking[0]["gap_ms"],' in src[k : k + 600], "the target reports the measured gap"
