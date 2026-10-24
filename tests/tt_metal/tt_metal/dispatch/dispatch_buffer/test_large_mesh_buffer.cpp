@@ -119,21 +119,24 @@ constexpr uint32_t ElementSize = sizeof(ElementType);
 constexpr auto KB{1ul << 10};
 constexpr auto MB{1ul << 20};
 constexpr auto GB{1ul << 30};
-class LargeMeshBufferTestSuiteBase : public MeshBufferTestSuite {
-protected:
-    static constexpr uint64_t max_num_elements_ = (12 * GB) / ElementSize;
-    // A large datatype is used to reduce random shuffle time
-    inline static std::vector<ElementType> src_vec_;
 
-    LargeMeshBufferTestSuiteBase() {
-        if (src_vec_.empty()) {
-            log_info(tt::LogTest, "LargeMeshBufferTestSuiteBase ctor: initializing src_vec_");
-            src_vec_.resize(max_num_elements_);
-            std::iota(src_vec_.begin(), src_vec_.end(), 0);
-            std::shuffle(src_vec_.begin(), src_vec_.end(), std::mt19937(std::random_device{}()));
-        }
+// Returns `num_elements` distinct values in scrambled order, so a page read back from the wrong address never matches.
+// Each value is the splitmix64 output function (https://prng.di.unimi.it/splitmix64.c) of its index plus a random
+// offset; every step of that function is invertible, so distinct indices give distinct values. The random offset makes
+// each case write different data than an earlier case or run left at the same DRAM address. Cases call this after their
+// skip checks, so a skipped case costs no host time or memory.
+std::vector<ElementType> make_src_vec(size_t num_elements) {
+    const uint64_t offset = std::mt19937_64(std::random_device{}())();
+    std::vector<ElementType> src_vec;
+    src_vec.reserve(num_elements);
+    for (size_t i = 0; i < num_elements; ++i) {
+        uint64_t z = offset + i;
+        z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
+        z = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
+        src_vec.push_back(z ^ (z >> 31));
     }
-};
+    return src_vec;
+}
 
 bool validate_interleaved_test_inputs(size_t size, MeshDevice& mesh_device) {
     const size_t num_dram_channels = mesh_device.num_dram_channels();
@@ -158,7 +161,7 @@ bool validate_interleaved_test_inputs(size_t size, MeshDevice& mesh_device) {
     return result;
 }
 
-class InterleavedMeshBufferTestSuite : public LargeMeshBufferTestSuiteBase,
+class InterleavedMeshBufferTestSuite : public MeshBufferTestSuite,
                                        public testing::WithParamInterface<std::tuple<uint64_t, uint32_t>> {};
 
 TEST_P(InterleavedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
@@ -184,12 +187,8 @@ TEST_P(InterleavedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     EXPECT_EQ(mesh_buffer->device_local_size(), tensor_size);
     EXPECT_TRUE(mesh_buffer->is_allocated());
 
-    // Create test data - use uint16_t for easy verification
     auto num_elements = tensor_size / ElementSize;
-    if (num_elements > max_num_elements_) {
-        TT_THROW("Buffer size {} elements exceeds test vector {} elements", num_elements, max_num_elements_);
-    }
-    std::vector<ElementType> src_vec(src_vec_.begin(), src_vec_.begin() + num_elements);
+    std::vector<ElementType> src_vec = make_src_vec(num_elements);
 
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
     auto mesh_size = coord_range.shape().mesh_size();
@@ -266,7 +265,7 @@ bool validate_sharded_test_inputs(
 }
 
 class ShardedMeshBufferTestSuite
-    : public LargeMeshBufferTestSuiteBase,
+    : public MeshBufferTestSuite,
       public testing::WithParamInterface<std::tuple<std::pair<Shape2D, CoreCoord>, uint32_t>> {};
 
 TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
@@ -456,10 +455,7 @@ TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     auto mesh_buffer = MeshBuffer::create(buffer_config, per_device_buffer_config, mesh_device_.get());
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
 
-    if (num_elements > max_num_elements_) {
-        TT_THROW("Buffer size {} elements exceeds test vector {} elements", num_elements, max_num_elements_);
-    }
-    std::vector<ElementType> src_vec(src_vec_.begin(), src_vec_.begin() + num_elements);
+    std::vector<ElementType> src_vec = make_src_vec(num_elements);
     auto mesh_size = coord_range.shape().mesh_size();
     std::vector<distributed::ShardDataTransfer> input_shards = {};
     input_shards.reserve(mesh_size);
