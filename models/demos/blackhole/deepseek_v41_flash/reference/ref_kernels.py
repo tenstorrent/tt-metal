@@ -15,9 +15,14 @@ reference runs the model code unchanged. Signatures and rounding follow kernel.p
 Set ``FAKE_QUANT = False`` to skip activation rounding (unquantised reference).
 """
 
+import os
+
 import torch
 
 FAKE_QUANT = True
+# The 1017 checkpoint's inference/model.py fake-quantizes the attention output o (fp8, block 128) in place before the wo_a einsum. With FAKE_QUANT = False
+# that call is a no-op like every other activation rounding; FAKE_QUANT_O = True (env DSV41_REF_O_FQ=1) applies it to that call only (the 4-D in-place calls).
+FAKE_QUANT_O = os.environ.get("DSV41_REF_O_FQ", "0") == "1"
 
 FP4_GRID = torch.tensor([0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0])
 # Midpoints between adjacent grid values; ties go to the even code, i.e. round up at 0.75, 1.75, 3.5.
@@ -46,7 +51,9 @@ def _round_fp4(a: torch.Tensor) -> torch.Tensor:
 def act_quant(x, block_size=128, scale_fmt=None, scale_dtype=torch.float32, inplace=False):
     n = x.size(-1)
     assert n % block_size == 0
-    if not FAKE_QUANT:  # unquantised variant: pass values through, unit scales
+    if not FAKE_QUANT and not (
+        FAKE_QUANT_O and inplace and x.dim() == 4
+    ):  # unquantised variant: pass values through, unit scales
         if inplace:
             return x
         ones = torch.ones(*x.shape[:-1], n // block_size, dtype=torch.float32)

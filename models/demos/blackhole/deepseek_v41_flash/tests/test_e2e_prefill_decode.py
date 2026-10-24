@@ -181,6 +181,27 @@ def test_e2e_prefill_decode(mesh_device):
             am += int(lg.argmax(-1).item() == int(first[bb]))
         log(f"FIRST TOKEN (ragged): logits PCC min {min(pcs):.4f} mean {sum(pcs) / B:.4f}, argmax match {am}/{B}")
 
+    elif bool(
+        (lens == S).all()
+    ):  # a layer subset: the reference logits are the dump's last-layer hidden states of the last prompt token through the host head
+        from models.demos.blackhole.deepseek_v41_flash.tt.host_model import HostHead
+
+        hh = HostHead()
+        refl = torch.load(os.path.join(DIR, f"layer_{layer_ids[-1]}.pt"), mmap=True)["prefill"]
+        lg = torch.cat(
+            [
+                hh(
+                    refl["h_out"][bb % Bref : bb % Bref + 1, -1:].float(),
+                    refl["pm_out"][bb % Bref : bb % Bref + 1, -1:].float(),
+                )
+                for bb in range(B)
+            ]
+        )
+        pcs = [R.pcc(logits[bb : bb + 1], lg[bb : bb + 1]) for bb in range(B)]
+        log(
+            f"FIRST TOKEN (layers {LAYERS}): finite {bool(torch.isfinite(logits).all())}, logits PCC min {min(pcs):.5f} mean {sum(pcs) / B:.5f}, argmax match {int((logits.argmax(-1) == lg.argmax(-1)).sum())}/{B}"
+        )
+
     if os.environ.get("DSV41_LAYERCHECK") == "1":
         # per-layer decode check: feed the reference decode-step input streams of every layer (dump ``dec_in`` / ``pre_in``) to the device layer, whose KV /
         # index state comes only from the prefill, and compare its output with the dump's ``dec_out`` (isolates attention + indexer from chain error growth)
