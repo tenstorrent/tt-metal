@@ -7,8 +7,8 @@
 # being unpacked from L1.  Only the weights (in1) are unpacked, into SrcA.
 #
 # The reuse LLK is meaningless without a DEST-resident in0 in exactly the layout
-# custom_mm<dense_packing> produces, so the C++ driver runs the whole documented
-# chain:  producer custom_mm<dense_packing>  ->  consumer custom_mm_reuse_dest_srcb.
+# custom_mm's Dense layout produces, so the C++ driver runs the whole documented
+# chain:  producer custom_mm (DenseSplitAcc)  ->  consumer custom_mm_reuse_dest_srcb.
 #
 # Golden (derived in custom_mm_reuse_dest_srcb_test.cpp from the headers):
 #     in0    = A0 @ B0              (producer output, [8, 32*REUSE_KT])
