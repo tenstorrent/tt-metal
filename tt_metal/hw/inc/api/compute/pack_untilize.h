@@ -252,7 +252,7 @@ template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim, bool i
 ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb, uint32_t block_c_index = 0) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
-    reconfig_data_format_srcb(icb);
+    reconfig_data_format(icb, icb);
 #endif
     pack_untilize_detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, true, is_fp32_dest_acc_en>(
         icb, ocb, __builtin_LINE());
