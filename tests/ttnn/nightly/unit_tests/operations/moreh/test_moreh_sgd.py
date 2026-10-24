@@ -8,7 +8,7 @@ import torch.optim as optim
 
 import ttnn
 import pytest
-from tt_py_test_utils_common.utility_functions import comp_allclose_and_pcc, is_wormhole_b0
+from tt_py_test_utils_common.utility_functions import comp_allclose_and_pcc
 from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
@@ -18,14 +18,6 @@ from loguru import logger
 
 # Module-scoped device: opens once per file instead of once per test case.
 pytestmark = pytest.mark.use_module_device
-
-fp32_dest_acc_en = [
-    False,  # for grayskull
-]
-fp32_dest_acc_en_ids = ["fp32_dest_acc_en=False"]
-if is_wormhole_b0():
-    fp32_dest_acc_en.append(True)
-    fp32_dest_acc_en_ids.append("fp32_dest_acc_en=True")
 
 
 def test_moreh_sgd_golden_honors_positional_hyperparameters():
@@ -72,7 +64,7 @@ def test_moreh_sgd_golden_honors_positional_hyperparameters():
     "momentum_initialized", [True, False], ids=["MOMENTUM_INITIALIZED", "MOMENTUM_NOT_INITIALIZED"]
 )
 @pytest.mark.parametrize("has_param_out", [True, False], ids=["HAS_PARAM_OUT_TRUE", "HAS_PARAM_OUT_FALSE"])
-@pytest.mark.parametrize("fp32_dest_acc_en", fp32_dest_acc_en, ids=fp32_dest_acc_en_ids)
+@pytest.mark.parametrize("fp32_dest_acc_en", compute_kernel_options, ids=compute_kernel_ids)
 @pytest.mark.parametrize(
     "npu_dtype, cpu_dtype",
     [[ttnn.bfloat8_b, torch.bfloat16], [ttnn.bfloat16, torch.bfloat16]],
@@ -258,7 +250,7 @@ def test_moreh_sgd_partial_tile(shape, device):
     "momentum_initialized", [True, False], ids=["MOMENTUM_INITIALIZED", "MOMENTUM_NOT_INITIALIZED"]
 )
 @pytest.mark.parametrize("has_param_out", [True], ids=["HAS_PARAM_OUT_TRUE"])
-@pytest.mark.parametrize("fp32_dest_acc_en", fp32_dest_acc_en, ids=fp32_dest_acc_en_ids)
+@pytest.mark.parametrize("fp32_dest_acc_en", compute_kernel_options, ids=compute_kernel_ids)
 @pytest.mark.parametrize("npu_dtype, cpu_dtype", [[ttnn.bfloat16, torch.bfloat16]], ids=["bfloat16"])
 def test_moreh_sgd_callback(
     shape,
