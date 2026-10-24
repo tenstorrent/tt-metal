@@ -11,7 +11,10 @@ ENTRYPOINT []
 
 # safe.directory is set only in root's global gitconfig. Agents run as the
 # non-root `user` account below, including against checkouts they do not own.
-RUN git config --system --add safe.directory '*'
+# WORKDIR creates /workspace as root, which that account cannot write.
+RUN git config --system --add safe.directory '*' \
+    && mkdir -p /workspace \
+    && chown user:user /workspace
 
 # `user` (uid 1001) is the account the dev image creates with passwordless
 # sudo. The image's `ubuntu` account cannot sudo without a password.
