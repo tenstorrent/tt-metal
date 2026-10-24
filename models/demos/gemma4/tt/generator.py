@@ -23,6 +23,7 @@ from models.demos.gemma4.tt.generator_trace import (
     should_auto_enable_chunked_bounded,
     warmup_gemma4_model_prefill,
 )
+from models.demos.gemma4.tt.lane_prefill_knobs import lane_prefill_table_upload_enabled
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.demos.gemma4.tt.vision.multimodal_embedder import Gemma4MultimodalEmbedder
 from models.demos.gemma4.tt.vision.unified_embedder import Gemma4UnifiedVisionEmbedder, has_unified_vision_weights
@@ -573,15 +574,6 @@ def _g4_dram_bottom_up_bytes(view) -> int:
             if free_size < 0 or addr < free_start:
                 total += int(b.get("size", 0))
     return total
-
-
-def lane_prefill_table_upload_enabled():
-    """Every lane-parallel prefill call uploads its per-layer page tables into the persistent device buffers
-    (GEMMA4_LANE_PREFILL_TABLE_UPLOAD, default 1). ``ttnn_prefill_forward`` resolves the stash through
-    ``_page_tables_to_ttnn``, which hands back a key's existing buffers without refreshing them, so without the upload
-    every call after a key's first prefills through that first call's block ids. 0 reproduces that pre-fix path (the
-    before/after coherence evidence of the 2026-10-24 Galaxy window); never serve with it."""
-    return os.environ.get("GEMMA4_LANE_PREFILL_TABLE_UPLOAD", "1").lower() in ("1", "true", "yes")
 
 
 class ChunkedPrefillPageTableGuardMixin:

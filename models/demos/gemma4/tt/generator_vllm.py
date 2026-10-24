@@ -36,7 +36,6 @@ from models.demos.gemma4.tt.generator import (
     _vision_encoder_seq_len,
     align_num_cached_tokens_to_sdpa,
     gemma4_packed_prefill_enabled,
-    lane_prefill_table_upload_enabled,
     mask_page_table_columns_past_allocation,
     max_batched_prefill_users,
     resolve_batched_prefill_chunk_users,
@@ -58,6 +57,7 @@ from models.demos.gemma4.tt.generator_utils import (  # noqa: F401
     items_within_prefill_window,
     merge_soft_tokens,
 )
+from models.demos.gemma4.tt.lane_prefill_knobs import lane_prefill_batched_enabled, lane_prefill_table_upload_enabled
 from models.demos.gemma4.tt.mesh_orientation import should_reshape_to_column
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.demos.gemma4.tt.vision.multimodal_embedder import Gemma4MultimodalEmbedder
@@ -452,13 +452,6 @@ def galaxy_lane_prefill_prompts():
     if prompts < 1:
         raise ValueError(f"GEMMA4_LANE_PREFILL_PROMPTS={prompts} must be >= 1")
     return prompts
-
-
-def lane_prefill_batched_enabled():
-    """The rounds of a gathered step prefill as one lane-batched walk (GEMMA4_LANE_PREFILL_BATCHED, default 1): k
-    users per lane as one batched stream per column. Off, every round walks on its own in the one-user-per-lane
-    layout, which isolates the plugin's admission change from the model's batched walk on the device."""
-    return gemma4_env_flag("GEMMA4_LANE_PREFILL_BATCHED", "1")
 
 
 def lane_batched_warmup_shape(prompts, lane_slots, max_chunk):
