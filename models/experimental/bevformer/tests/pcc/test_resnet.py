@@ -80,7 +80,7 @@ def test_bottleneck_layer3(device, reset_seeds, reference_and_parameters):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
 def test_bottleneck_layer4(device, reset_seeds, reference_and_parameters):
-    """layer4's DCN has 512 input channels, so it samples them in two chunks."""
+    """For the DCN variants, layer4's DCN has 512 input channels, so it samples them in two chunks."""
     reference_model, parameters = reference_and_parameters
     torch_input = torch.randn(NUM_CAMS, 1024, IMAGE_HEIGHT // 16, IMAGE_WIDTH // 16)
     torch_output = reference_model.layer4[0].eval()(torch_input)

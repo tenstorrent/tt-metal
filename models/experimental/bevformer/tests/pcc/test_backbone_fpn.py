@@ -2,9 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Camera images through the ResNet101-DCN backbone and the FPN neck, end to end.
+"""Camera images through the backbone and the FPN neck, end to end.
 
-Checks the backbone's C3-C5 and the FPN's outputs against the reference. The TT backbone's
+Checks the backbone's outputs (``RESNET_KWARGS["out_indices"]``) and the FPN's outputs against the reference. The TT backbone's
 outputs feed the TT FPN as they are, so this also checks the hand-off between the two
 (layout, dtype, memory).
 """
