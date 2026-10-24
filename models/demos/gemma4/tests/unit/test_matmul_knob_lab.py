@@ -484,6 +484,30 @@ class KnobSpace:
         return cands
 
 
+# 12B dense decode matmuls (sweeps 0622-0637, 2026-10-24, shipped layouts): out_proj tp4 16.3 -> 13.5 us / tp8 11.5 -> 9.8,
+# gate_up tp4 70.4 -> 65.8 / tp8 37.1 -> 33.9, down tp4 38.7 -> 35.7 / tp8 23.3 -> 20.9 (lead shapes); wqkv: no row
+# (today's kernel is the best usable on the narrow 12B wqkv shapes).
+for _b in BATCH_BUCKETS:
+    DECODE_MM_TABLE[("12B", "down", 4, _b)] = DecodeMMConfig(
+        "ds", "ds", 1, None, 1, "lofi", False, 3, "dram", "blackhole"
+    )
+    DECODE_MM_TABLE[("12B", "down", 8, _b)] = DecodeMMConfig(
+        "ds", "ds", 2, None, 1, "lofi", False, 4, "dram", "blackhole"
+    )
+    DECODE_MM_TABLE[("12B", "gate_up", 4, _b)] = DecodeMMConfig(
+        "ds", "ds", 2, None, 1, "lofi", False, 3, "ws", "blackhole"
+    )
+    DECODE_MM_TABLE[("12B", "gate_up", 8, _b)] = DecodeMMConfig(
+        "ds", "ds", 1, None, 1, "lofi", False, 4, "ws", "blackhole"
+    )
+    DECODE_MM_TABLE[("12B", "out_proj", 4, _b)] = DecodeMMConfig(
+        "ds", "ds", 4, None, 1, "lofi", False, 4, "dram", "blackhole"
+    )
+    DECODE_MM_TABLE[("12B", "out_proj", 8, _b)] = DecodeMMConfig(
+        "ds", "ds", 2, None, 1, "lofi", False, 4, "dram", "blackhole"
+    )
+
+
 def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     a = a.reshape(-1).double()
     b = b.reshape(-1).double()
