@@ -67,8 +67,8 @@ void kernel_main() {
     constexpr uint32_t cb_weight_k_window = get_compile_time_arg_val(1);
     constexpr uint32_t cb_arrivals_fwd = get_compile_time_arg_val(2);
     constexpr uint32_t cb_arrivals_bwd = get_compile_time_arg_val(3);
-    // streamed windows of one wave: A core_m x kb, W kb x core_n (with waves, the split axis is a wave's extent; the
-    // resident operand's axis is never split)
+    // streamed windows of one entry: A core_m x kb, W kb x core_n (the nominal extents: with waves, the split axis is a
+    // wave's extent, and the resident operand's axis is never split; with balanced n-lines, the wide width)
     constexpr uint32_t core_m = get_compile_time_arg_val(4);
     constexpr uint32_t core_n = get_compile_time_arg_val(5);
     constexpr uint32_t kb = get_compile_time_arg_val(6);
@@ -95,15 +95,14 @@ void kernel_main() {
     constexpr uint8_t a_read_noc = get_compile_time_arg_val(24);
     constexpr uint8_t w_read_noc = get_compile_time_arg_val(25);
     constexpr bool two_read_nocs = a_read_noc != w_read_noc || a_read_noc != noc_index;
-    constexpr uint32_t num_waves = get_compile_time_arg_val(26);  // entries per block (entry e is wave e mod num_waves)
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(27);
-    constexpr uint32_t n_inner = get_compile_time_arg_val(28);   // chunks along the inner axis
-    constexpr bool m_outer = get_compile_time_arg_val(29) != 0;  // chunk c: (c / n_inner, c % n_inner) as (m, n)
-    constexpr uint32_t chunk_m = get_compile_time_arg_val(30);
-    constexpr uint32_t chunk_n = get_compile_time_arg_val(31);
-    constexpr uint32_t block_m = get_compile_time_arg_val(32);
-    constexpr uint32_t block_n = get_compile_time_arg_val(33);
-    constexpr auto a_args = TensorAccessorArgs<34>();
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(26);
+    constexpr uint32_t n_inner = get_compile_time_arg_val(27);   // chunks along the inner axis
+    constexpr bool m_outer = get_compile_time_arg_val(28) != 0;  // chunk c: (c / n_inner, c % n_inner) as (m, n)
+    constexpr uint32_t chunk_m = get_compile_time_arg_val(29);
+    constexpr uint32_t chunk_n = get_compile_time_arg_val(30);
+    constexpr uint32_t block_m = get_compile_time_arg_val(31);
+    constexpr uint32_t block_n = get_compile_time_arg_val(32);
+    constexpr auto a_args = TensorAccessorArgs<33>();
     constexpr auto w_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
     constexpr auto mc_a =
         McastArgs<get_named_compile_time_arg_val("a_ct_offset"), get_named_compile_time_arg_val("a_rt_offset")>();
@@ -130,7 +129,7 @@ void kernel_main() {
     const uint32_t a_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t w_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t row0 = get_arg_val<uint32_t>(arg++);  // gm * core_m (chunk-local)
-    const uint32_t col0 = get_arg_val<uint32_t>(arg++);  // gn * core_n (chunk-local)
+    const uint32_t col0 = get_arg_val<uint32_t>(arg++);  // my leftmost entry's first column (chunk-local)
     const uint32_t arr_fwd_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t arr_bwd_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t total_fwd = get_arg_val<uint32_t>(arg++);  // arrival increments my counters receive per chunk
@@ -140,11 +139,12 @@ void kernel_main() {
     const uint32_t rep_fwd_xy = get_arg_val<uint32_t>(arg++);  // port counting my consumed fwd / bwd chunks
     const uint32_t rep_bwd_xy = get_arg_val<uint32_t>(arg++);
     const uint32_t report_chunks = get_arg_val<uint32_t>(arg++);  // chunks the upstream waits for (num - zone sets)
-    // per wave: row_off | col_off << 8 | rows << 16 | cols << 24 inside my per-core block
-    const uint32_t waves_idx = arg;
+    // per entry: row_off | col_off << 8 | rows << 16 | cols << 24, its sub-block's offset from (row0, col0) and dense
+    // extents (a wave of my per-core block, or my n-line's balanced columns of the entry's block)
+    const uint32_t geom_idx = arg;
     // per entry: [block | arrival_mask << 16 | lag << 20, thr_fwd | thr_bwd << 16]; an arrival has landed once my
     // counter of its direction reaches its threshold (one fused increment per (core, unit), in the upstream's order)
-    const uint32_t entries_idx = waves_idx + num_waves;
+    const uint32_t entries_idx = geom_idx + num_entries;
     constexpr uint32_t ENTRY_WORDS = 2;
     constexpr uint32_t total_entries = num_chunks * num_entries;
     // chunk c's tile origin inside the block and my valid extents there
@@ -152,7 +152,7 @@ void kernel_main() {
         im = m_outer ? c / n_inner : c % n_inner;
         in = m_outer ? c % n_inner : c / n_inner;
     };
-    // (the wave_valid below caps it at a wave's extent)
+    // (the entry_valid below caps it at an entry's extent)
     auto valid_ext = [](uint32_t blk, uint32_t chunk, uint32_t ci, uint32_t off) {
         const uint32_t c0 = ci * chunk;
         const uint32_t ext = blk - c0 < chunk ? blk - c0 : chunk;  // this chunk's extent
@@ -241,11 +241,9 @@ void kernel_main() {
     auto block_of = [&](uint32_t step) {
         return get_arg_val<uint32_t>(entries_idx + ENTRY_WORDS * ((step / num_k_blocks) % num_entries)) & 0xFFFF;
     };
-    auto wave_of = [&](uint32_t step) {
-        return get_arg_val<uint32_t>(waves_idx + ((step / num_k_blocks) % num_entries) % num_waves);
-    };
-    // valid extent of a wave along one axis: my valid tiles past the wave's offset, capped at its extent
-    auto wave_valid = [](uint32_t valid, uint32_t off, uint32_t ext) {
+    auto geom_of = [&](uint32_t step) { return get_arg_val<uint32_t>(geom_idx + (step / num_k_blocks) % num_entries); };
+    // valid extent of an entry along one axis: my valid tiles past the entry's offset, capped at its extent
+    auto entry_valid = [](uint32_t valid, uint32_t off, uint32_t ext) {
         return valid <= off ? 0u : (valid - off < ext ? valid - off : ext);
     };
     // the resident operand moves only in the first entry of a chunk whose outer (resident-axis) index changed; later
@@ -260,12 +258,12 @@ void kernel_main() {
     auto issue_a = [&](uint32_t step, uint32_t dst) {
 #ifndef MRS_SKIP_DRAM  // perf ablation only
         MaybeDeviceZoneScope("RD_DRAM");
-        const uint32_t wave = wave_of(step);
-        const uint32_t row_off = wave & 0xFF;
+        const uint32_t geom = geom_of(step);
+        const uint32_t row_off = geom & 0xFF;
         uint32_t im, in;
         chunk_mn(step / num_k_blocks / num_entries, im, in);
         const uint32_t m_valid = valid_ext(block_m, chunk_m, im, row0);
-        const uint32_t m_valid_w = wave_valid(m_valid, row_off, (wave >> 16) & 0xFF);
+        const uint32_t m_valid_w = entry_valid(m_valid, row_off, (geom >> 16) & 0xFF);
         const uint32_t page0 =
             (block_of(step) * a_row_per_block + im * chunk_m + row0 + row_off) * Kt + (step % num_k_blocks) * kb;
         for (uint32_t part = 0; part < 2; ++part) {
@@ -290,12 +288,12 @@ void kernel_main() {
     auto issue_w = [&](uint32_t step, uint32_t dst) {
 #ifndef MRS_SKIP_DRAM  // perf ablation only
         MaybeDeviceZoneScope("RD_DRAM");
-        const uint32_t wave = wave_of(step);
-        const uint32_t col_off = (wave >> 8) & 0xFF;
+        const uint32_t geom = geom_of(step);
+        const uint32_t col_off = (geom >> 8) & 0xFF;
         uint32_t im, in;
         chunk_mn(step / num_k_blocks / num_entries, im, in);
         const uint32_t n_valid = valid_ext(block_n, chunk_n, in, col0);
-        const uint32_t n_valid_w = wave_valid(n_valid, col_off, wave >> 24);
+        const uint32_t n_valid_w = entry_valid(n_valid, col_off, geom >> 24);
         const uint32_t page0 =
             (step % num_k_blocks) * kb * Nt + block_of(step) * w_col_per_block + in * chunk_n + col0 + col_off;
         for (uint32_t part = 0; part < 2; ++part) {

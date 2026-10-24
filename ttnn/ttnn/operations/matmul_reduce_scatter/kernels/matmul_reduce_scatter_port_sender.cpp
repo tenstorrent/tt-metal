@@ -56,6 +56,9 @@ void kernel_main() {
     constexpr bool inc_every_wave = get_compile_time_arg_val(9) != 0;
     constexpr uint32_t num_chunks = get_compile_time_arg_val(10);
     constexpr uint32_t zone_sets = get_compile_time_arg_val(12);
+    constexpr uint32_t num_lines = get_compile_time_arg_val(13);  // n-lines of the matmul grid (core k's: k mod this)
+    // tiles a narrow n-line's core sends less (one sub-block column); 0: no balanced lines, every core sends its wave
+    constexpr uint32_t narrow_tiles = get_compile_time_arg_val(14);
 
     size_t arg = 0;
     const uint32_t zone_base = get_arg_val<uint32_t>(arg++);     // downstream zone of this direction (staging + offset)
@@ -78,7 +81,9 @@ void kernel_main() {
     const uint32_t wave_tiles_idx = arg;  // per wave: tiles one core sends (<= P), dense at the front of its slot
     const uint32_t cores_idx = arg + num_waves;
     const uint32_t units_idx = cores_idx + num_cores;
-    arg = units_idx + num_units;  // fabric connection args follow
+    // balanced plans, per unit: the n-lines whose half-0 / half-1 sub-block is one column narrow (bits 0-15 / 16-31)
+    const uint32_t narrow_idx = units_idx + num_units;
+    arg = narrow_idx + (narrow_tiles > 0 ? num_units : 0);  // fabric connection args follow
 
     if (num_units == 0 && !send_ready && fwd_total == 0) {
         return;
@@ -157,8 +162,8 @@ void kernel_main() {
         const uint32_t slot0 = (unit >> 16) & 0xFF;
         const uint32_t slot1 = (unit >> 24) & 0xFF;
         const uint32_t first_half = (unit >> 10) & 0x1;
-        const uint32_t tiles = get_arg_val<uint32_t>(wave_tiles_idx + (unit & 0xFF) % num_waves);
-        const uint32_t chunks_per_core = (tiles + chunk_tiles - 1) / chunk_tiles;
+        const uint32_t wave_tiles = get_arg_val<uint32_t>(wave_tiles_idx + (unit & 0xFF) % num_waves);
+        const uint32_t narrow = narrow_tiles > 0 ? get_arg_val<uint32_t>(narrow_idx + un) : 0;
         const bool carries_inc = inc_every_wave || (unit & 0xFF) % num_waves == num_waves - 1;
         for (uint32_t walk = 0; walk < 2 * num_cores; ++walk) {  // the reader's walk: first_half's cores first
             const uint32_t hh = first_half ^ (walk >= num_cores ? 1u : 0u);
@@ -169,6 +174,11 @@ void kernel_main() {
                 continue;
             }
             const uint32_t x = cw & 0xFF, y = (cw >> 8) & 0xFF;
+            uint32_t tiles = wave_tiles;  // the reader's per-core count
+            if constexpr (narrow_tiles > 0) {
+                tiles -= ((narrow >> (16 * hf + (cw >> 20) % num_lines)) & 1) ? narrow_tiles : 0;
+            }
+            const uint32_t chunks_per_core = (tiles + chunk_tiles - 1) / chunk_tiles;
             // the downstream core's arrival ordinal (its half, this direction) on the zone ring
             const uint32_t ordinal = chunk * (hf ? down_per_chunk1 : down_per_chunk0) + (hf ? slot1 : slot0);
             const uint32_t dst_base = zone_base + (ordinal % ring_slots) * slot_bytes;

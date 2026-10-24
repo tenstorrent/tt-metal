@@ -597,6 +597,7 @@ class ttKDA:
                 compute_kernel_config=self.fused_output_compute_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 staging="ephemeral",
+                balance_lines=True,
             )
         output = ttnn.linear(
             output,
@@ -714,6 +715,9 @@ class ttKDA:
                 compute_kernel_config=self.fused_output_compute_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 staging="ephemeral",
+                # Every n-line of the matmul rectangle, with per-block rotating widths (Galaxy SP8xTP4: 80 -> 90 cores,
+                # 56 -> 50 tile-entries on the busiest core; bit-identical). The final carry keeps the idle columns.
+                balance_lines=True,
                 extra_program=lambda coord, cores: self._mmrs_carry.program(
                     coord,
                     cores,

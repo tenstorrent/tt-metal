@@ -161,3 +161,73 @@ def test_kda_output_projection_mmrs(mesh_device: ttnn.MeshDevice) -> None:
     }
     print("KDA_OUTPUT_MMRS=" + json.dumps(result, sort_keys=True, default=str))
     assert pcc["fused"] > 0.999, pcc
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(l1_small_size=1152),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="SP8xTP4-torus-xy",
+        )
+    ],
+    indirect=True,
+)
+def test_kda_output_projection_mmrs_balanced_lines(mesh_device: ttnn.MeshDevice) -> None:
+    """balance_lines: 9 n-lines with per-block rotating widths (7, 7, 6 x 7) instead of 8 lines of 7. Every output tile
+    keeps its K order and cross-device add order, so the result is bit-identical to the uniform plan."""
+    from ttnn.operations import matmul_reduce_scatter as mrs_pkg
+
+    tp = tuple(mesh_device.shape)[_TP_AXIS]
+    torch.manual_seed(0)
+    a = ttnn.from_torch(
+        torch.randn(1, 1, _ROWS, _K) * 0.5,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 3), mesh_shape=tuple(mesh_device.shape)),
+    )
+    w = ttnn.from_torch(
+        torch.randn(_K, _N) / _K**0.5,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=tuple(mesh_device.shape)),
+    )
+    tt_ccl = TT_CCL(mesh_device)
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 3), mesh_shape=tuple(mesh_device.shape))
+
+    def fused(balance_lines):
+        return lambda: matmul_reduce_scatter(
+            a,
+            w,
+            cluster_axis=_TP_AXIS,
+            scatter_dim=-1,
+            topology=ttnn.Topology.Ring,
+            num_links=tt_ccl.get_num_links(_TP_AXIS),
+            compute_kernel_config=ttnn.ComputeConfigDescriptor(
+                math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True
+            ),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            staging="ephemeral",
+            balance_lines=balance_lines,
+        )
+
+    results, plans, times = {}, {}, {}
+    for balance_lines in (False, True):
+        out = fused(balance_lines)()
+        plans[balance_lines] = dict(mrs_pkg._LAST_PLAN)
+        results[balance_lines] = ttnn.to_torch(out, mesh_composer=composer)
+        ttnn.deallocate(out)
+        times[balance_lines] = statistics.median(_traced_us(mesh_device, fused(balance_lines)))
+    print(
+        "KDA_OUTPUT_MMRS_BALANCED="
+        + json.dumps({"tp": tp, "plans": plans, "median_us": times}, sort_keys=True, default=str)
+    )
+    assert not plans[False]["balanced_lines"] and plans[True]["balanced_lines"], plans
+    assert plans[True]["grid"][0] * plans[True]["grid"][1] > plans[False]["grid"][0] * plans[False]["grid"][1], plans
+    assert torch.equal(results[False], results[True]), "balanced n-lines must be bit-identical to the uniform plan"

@@ -152,6 +152,9 @@ MCAST_SENDER_PLACEMENT = {"resident": "diagonal_disjoint", "stream": "diagonal"}
 # both families) | "diagonal_disjoint" (diagonal, each W family's start shifted so no core sends two families; focus:
 # -0.5-1 us; MiMo: +10 us, so the stream regime keeps "diagonal")
 DEST_TILES_FP32_FULL_SYNC = 8  # DEST capacity with fp32 accumulation + full sync (subblock area cap)
+# Balanced n-lines (the caller's balance_lines): the most n-lines a plan may balance, since a port unit carries each
+# half's narrow lines as a 16-bit mask
+MAX_BALANCED_LINES = 16
 
 TILE = 32
 HOLD_TILE_BYTES = 4096  # Float32 tile
@@ -366,8 +369,29 @@ def plan_mcast_senders(placement, grid_m, grid_n, a_two_parts, w_two_parts, a_sh
     return plan
 
 
-def choose_grid(gx, gy, block_m, block_n, L):
-    """(strip, orientation, grid_m, grid_n, core_m, core_n, (sb_h, sb_w)) minimizing the per-core block."""
+def balanced_line_columns(block_n, grid_n, b):
+    """[(origin, width)] of each n-line's columns of block b under balanced n-lines: block_n = grid_n * base + extra,
+    and the `extra` lines one column wider start at line b * extra (mod grid_n), so they rotate by `extra` lines per
+    block and over G blocks no line is wide more than ceil(G * extra / grid_n) times. The partition depends only on
+    (line, block), so every chip's core k holds the same tiles of block b (a partial lands on the core that owns the
+    same output tiles downstream)."""
+    base, extra = divmod(block_n, grid_n)
+    first = b * extra % grid_n
+    out, origin = [], 0
+    for gn in range(grid_n):
+        width = base + int((gn - first) % grid_n < extra)
+        out.append((origin, width))
+        origin += width
+    return out
+
+
+def choose_grid(gx, gy, block_m, block_n, L, G=1, balance_lines=False):
+    """(strip, orientation, grid_m, grid_n, core_m, core_n, (sb_h, sb_w), balanced) minimizing the tile-entries of the
+    busiest core over the G-block walk. balance_lines (scatter -1, one wave, one chunk): also consider the n-lines
+    as many as the rectangle has (grid_n = min(ext_n, block_n)) with balanced_line_columns widths, so a block_n that
+    does not split evenly costs one column on a rotating `extra` lines instead of a whole ceil-wide line everywhere
+    (Kimi-K3 o_proj, 12x9 rectangle, block 20x56: 8 lines x 7 = 56 tile-entries per core -> 9 lines of 7,7,6x7
+    rotating = 50). core_n is then the wide width (the nominal slot / window width)."""
     best = None
     for strip in [t for t in ("row", "col") if os.environ.get("MRS_STRIP", t) == t]:  # env: perf experiments only
         strip_len = gx if strip == "row" else gy
@@ -378,21 +402,44 @@ def choose_grid(gx, gy, block_m, block_n, L):
             ext_m, ext_n = (rect[0], rect[1]) if orient == "m_on_x" else (rect[1], rect[0])
             core_m = -(-block_m // min(ext_m, block_m))
             grid_m = -(-block_m // core_m)
-            core_n = -(-block_n // min(ext_n, block_n))
-            grid_n = -(-block_n // core_n)
-            sb = _subblock(core_m, core_n)
-            ragged = grid_m * core_m * grid_n * core_n - block_m * block_n
-            key = (
-                PREFER_PORT_ROW_STRIP and strip != "row",
-                core_m * core_n,
-                -sb[0] * sb[1],
-                ragged,
-                grid_m * grid_n,
-                strip != "row",
-            )
-            cand = dict(strip=strip, orient=orient, grid_m=grid_m, grid_n=grid_n, core_m=core_m, core_n=core_n, sb=sb)
-            if best is None or key < best[0]:
-                best = (key, cand)
+            n_splits = [(-(-block_n // min(ext_n, block_n)), False)]  # (core_n, balanced)
+            n_lines = min(ext_n, block_n)
+            if balance_lines and block_n % n_lines and n_lines <= MAX_BALANCED_LINES:
+                n_splits.append((-(-block_n // n_lines), True))
+            for core_n, balanced in n_splits:
+                if balanced:
+                    grid_n = n_lines
+                    base, extra = divmod(block_n, n_lines)
+                    # the busiest line's columns over the walk, and the narrow width's subblock (the smaller one)
+                    line_entries = G * base + -(-G * extra // n_lines)
+                    sb = min(_subblock(core_m, base), _subblock(core_m, core_n), key=lambda s: s[0] * s[1])
+                    ragged = (grid_m * core_m - block_m) * block_n
+                else:
+                    grid_n = -(-block_n // core_n)
+                    line_entries = G * core_n
+                    sb = _subblock(core_m, core_n)
+                    ragged = grid_m * core_m * grid_n * core_n - block_m * block_n
+                key = (
+                    PREFER_PORT_ROW_STRIP and strip != "row",
+                    core_m * line_entries,
+                    -sb[0] * sb[1],
+                    balanced,  # at equal work, the uniform split
+                    ragged,
+                    grid_m * grid_n,
+                    strip != "row",
+                )
+                cand = dict(
+                    strip=strip,
+                    orient=orient,
+                    grid_m=grid_m,
+                    grid_n=grid_n,
+                    core_m=core_m,
+                    core_n=core_n,
+                    sb=sb,
+                    balanced=balanced,
+                )
+                if best is None or key < best[0]:
+                    best = (key, cand)
     if best is None:
         raise ValueError(f"matmul_reduce_scatter: no transport strip of the {gx}x{gy} grid fits {2 * L} ports")
     return best[1]
@@ -543,13 +590,17 @@ def plan_chunk_geometry(
     staging_floor,
     budget,
     force_resident,
+    balance_lines=False,
 ):
     """Grid, regime and schedule for one chunk of chunk_m x chunk_n tiles (the whole block when n_m = n_n = 1). Raises
-    NotImplementedError when the chunk's footprint misses the L1 budget."""
+    NotImplementedError when the chunk's footprint misses the L1 budget. balance_lines: let choose_grid balance the
+    n-lines (scatter -1 only, where n is the per-block axis so W is never resident; unchunked and without waves, whose
+    per-entry geometry the balanced widths replace)."""
     chunk_m, chunk_n = -(-block_m // n_m), -(-block_n // n_n)
     n_m, n_n = -(-block_m // chunk_m), -(-block_n // chunk_n)  # no empty trailing chunk
     zone_sets = 1 if n_m * n_n == 1 else max(1, min(ZONE_SETS, n_m * n_n))
-    gd = choose_grid(gx, gy, chunk_m, chunk_n, L)
+    balance = balance_lines and scatter_dim == -1 and n_m * n_n == 1 and ENTRIES_PER_BLOCK == 1
+    gd = choose_grid(gx, gy, chunk_m, chunk_n, L, G=G, balance_lines=balance)
     core_m, core_n = gd["core_m"], gd["core_n"]
     if kind == "ring_balanced" and gd["grid_m"] * gd["grid_n"] < 2:
         raise ValueError("matmul_reduce_scatter: a balanced ring needs >= 2 matmul cores (two halves)")
@@ -808,6 +859,7 @@ def run(
     extra_program=None,
     extra_tensors=(),
     staging=None,
+    balance_lines=False,
 ):
     mesh = a.device()
     policy = staging or STAGING_POLICY
@@ -893,6 +945,7 @@ def run(
         staging_floor=staging_floor,
         budget=budget,
         force_resident=force_resident,
+        balance_lines=balance_lines,
     )
     if forced is not None:
         pl = plan_chunk_geometry(*forced, **plan_args)
@@ -944,6 +997,7 @@ def run(
         "hold_depth": pl["depth_hold"],
         "grid": (gd["grid_m"], gd["grid_n"]),
         "strip": gd["strip"],
+        "balanced_lines": gd["balanced"],
         "half_split": pl["half_split"],
         "waves": waves["n"],
         "chunks": (pl["n_m"], pl["n_n"]),
@@ -1059,17 +1113,28 @@ def create_mesh_program_descriptor(ctx):
     W = waves["n"]
     win_m, win_n = waves["win_m"], waves["win_n"]  # streamed windows: A win_m x kb, W kb x win_n (one wave)
     num_entries = G * W
-    # per wave: reader / writer (offsets + dense extents), compute (extents + subblock), ports (tiles)
-    wave_words = [r0 | (c0 << 8) | (rows << 16) | (cols << 24) for r0, c0, rows, cols in waves["descs"]]
     tall = bool(os.environ.get("MRS_SB_TALL"))  # perf experiments only: prefer taller subblocks on ties
-    wave_subblocks = [_subblock(rows, cols, prefer_tall=tall) for _, _, rows, cols in waves["descs"]]
-    wave_mm_words = [
-        rows | (cols << 8) | (h << 16) | (w_ << 24)
-        for (_, _, rows, cols), (h, w_) in zip(waves["descs"], wave_subblocks)
-    ]
-    wave_tiles = [rows * cols for _, _, rows, cols in waves["descs"]]
+    wave_tiles = [rows * cols for _, _, rows, cols in waves["descs"]]  # ports: tiles one core sends per wave
     grid_m, grid_n = gd["grid_m"], gd["grid_n"]
     block_m, block_n = ctx["block_m"], ctx["block_n"]
+    balanced = gd["balanced"]
+    line_cols = {}  # balanced n-lines: block -> [(origin, width)] per line (chunk-local; balanced plans are unchunked)
+
+    def entry_geometry(gn, v):
+        """(row_off, col, rows, cols) of virtual block v's sub-block on n-line gn: row_off from the core's row origin,
+        col chunk-local (the line's balanced columns of the block, else the line's origin plus the wave's offset)."""
+        r0, c0, rows, cols = waves["descs"][v % W]
+        if balanced:
+            if v not in line_cols:
+                line_cols[v] = balanced_line_columns(ctx["chunk_n"], grid_n, v)
+            col, cols = line_cols[v][gn]
+            return r0, col, rows, cols
+        return r0, gn * core_n + c0, rows, cols
+
+    def narrow_lines(v):
+        """Mask of the n-lines whose sub-block of virtual block v is one column short of the nominal core_n."""
+        return sum(1 << gn for gn in range(grid_n) if entry_geometry(gn, v)[3] < core_n) if balanced else 0
+
     scatter_dim, resident, slots = ctx["scatter_dim"], ctx["resident"], ctx["slots"]
     a, w, output, res = ctx["a"], ctx["w"], ctx["output"], ctx["res"]
     ring = kind != "line"
@@ -1189,9 +1254,8 @@ def create_mesh_program_descriptor(ctx):
             int(os.environ.get("MRS_LOOKAHEAD_AFTER_BARRIER", LOOKAHEAD_AFTER_BARRIER[regime])),  # env: perf only
             int(os.environ.get("MRS_A_READ_NOC", READ_NOCS[regime][0])),  # env: perf experiments only
             int(os.environ.get("MRS_W_READ_NOC", READ_NOCS[regime][1])),  # env: perf experiments only
-            W,
         ]
-        + chunk_ct  # 27..33
+        + chunk_ct  # 26..32
         + a_ct
         + w_ct
     )
@@ -1207,14 +1271,13 @@ def create_mesh_program_descriptor(ctx):
         nkb,
         P,
         num_entries,
-        W,
         ctx["super_block"],  # K-windows a subblock accumulates in DEST per pack (entry 0 packs per window)
         CB_ZERO,
         num_chunks,
         n_inner,
         int(resident),
     ]
-    writer_ct = [CB_FINISHED, P, W, out_nt, DEPTH_HANDOFF, STAGE_TILE_BYTES, num_entries, CB_ZERO] + chunk_ct + o_ct
+    writer_ct = [CB_FINISHED, P, out_nt, DEPTH_HANDOFF, STAGE_TILE_BYTES, num_entries, CB_ZERO] + chunk_ct + o_ct
     max_port_cores = -(-n_cores // L)  # matmul cores one port serves (link(k) = k mod L)
     port_ct = [
         CB_PORT_CHUNKS,
@@ -1230,6 +1293,8 @@ def create_mesh_program_descriptor(ctx):
         num_chunks,
         num_entries,  # entries per chunk
         zone_sets,
+        grid_n,  # n-lines (core k's: k mod grid_n), which the per-unit narrow masks index
+        win_m if balanced else 0,  # tiles a narrow n-line sends less (one sub-block column); 0: no narrow masks
     ]
     assert PORT_GROUP + 1 <= 8, "port sender headers: PORT_GROUP data headers + 1 credit header (pool of 8)"
 
@@ -1301,6 +1366,16 @@ def create_mesh_program_descriptor(ctx):
             for k, (gm, gn, core) in enumerate(mm_cores):
                 h = half(k)
                 l = link_of(k)
+                # per entry: the sub-block's offset from my origin (row0, col0 = my leftmost entry) and dense extents
+                # (reader / writer), and its extents and subblock (compute)
+                geo = [entry_geometry(gn, b) for b in entries[h]]
+                col0 = min(col for _, col, _, _ in geo)
+                assert all(col - col0 < 256 for _, col, _, _ in geo), "8-bit entry column offset"
+                geom_words = [r0 | ((col - col0) << 8) | (rows << 16) | (cols << 24) for r0, col, rows, cols in geo]
+                mm_words = []
+                for _, _, rows, cols in geo:
+                    sb_h, sb_w = _subblock(rows, cols, prefer_tall=tall)
+                    mm_words.append(rows | (cols << 8) | (sb_h << 16) | (sb_w << 24))
                 ent_words, roles_k, kinds_k = [], [], []
                 for b, (mask, lag) in zip(entries[h], entry_finish_plan(sc, h)):
                     r = roles[(b, h)]
@@ -1322,7 +1397,7 @@ def create_mesh_program_descriptor(ctx):
                         a_addr,
                         w_addr,
                         gm * core_m,  # chunk-local origin of my per-core block
-                        gn * core_n,
+                        col0,
                         arr_fwd_addr,
                         arr_bwd_addr,
                         # arrival increments my counters receive per chunk
@@ -1334,20 +1409,20 @@ def create_mesh_program_descriptor(ctx):
                         (rep["bwd"].x | (rep["bwd"].y << 16)) if n_arr["bwd"] else 0,
                         credit_chunks,  # chunks whose consumption is reported (the rest needs no credit)
                     ]
-                    + wave_words
+                    + geom_words
                     + ent_words
                 )
-                c_rt[core.x][core.y] = wave_mm_words + roles_k
+                c_rt[core.x][core.y] = mm_words + roles_k
                 w_rt[core.x][core.y] = (
                     [
                         o_addr,
                         gm * core_m,
-                        gn * core_n,
+                        col0,
                         (pf.x | (pf.y << 16)) if pf is not None else 0,
                         (pb.x | (pb.y << 16)) if pb is not None else 0,
                         mailbox_addr + k * MAILBOX_STRIDE,
                     ]
-                    + wave_words
+                    + geom_words
                     + kinds_k
                 )
 
@@ -1403,14 +1478,16 @@ def create_mesh_program_descriptor(ctx):
                 for k, c in table:
                     vc = virt(c)
                     core_words.append(vc.x | (vc.y << 8) | (half(k) << 16) | (k << 20))
-                units = []
+                units, narrow = [], []
                 for e, b, mask, h1_first in unit_walks(sc, d, l):
                     s0 = down["arrivals"][(0, d)].index(b[0]) if mask & 1 else 0
                     s1 = down["arrivals"][(1, d)].index(b[1]) if mask & 2 else 0
                     units.append(e | (mask << 8) | (h1_first << 10) | (s0 << 16) | (s1 << 24))
+                    narrow.append(narrow_lines(b[0]) | (narrow_lines(b[1]) << 16))
+                narrow = narrow if balanced else []  # per unit, half 0 / half 1: n-lines sending one column less
                 consumed_id = 0 if d == "fwd" else 1
                 pr_rt[pcore.x][pcore.y] = [staging_addr, mailbox_addr, consumed_id, len(core_words), len(units)] + (
-                    wave_tiles + core_words + units
+                    wave_tiles + core_words + units + narrow
                 )
                 # ready fence: the peer's opposite port sends into this chip; tell it this chip has started
                 peer_sched = ctx["sched"][q]
@@ -1451,6 +1528,7 @@ def create_mesh_program_descriptor(ctx):
                     + wave_tiles
                     + core_words
                     + units
+                    + narrow
                 )
                 args += list(
                     ttnn.setup_fabric_connection(node(coord), pn, ctx["links"][(coord, peer)][l], program, pcore)

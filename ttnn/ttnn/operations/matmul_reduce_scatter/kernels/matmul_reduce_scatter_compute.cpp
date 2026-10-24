@@ -3,12 +3,13 @@
 
 // matmul_reduce_scatter — matmul-core compute (TRISCs). fp32 DEST + full sync (8-tile subblocks).
 //
-// Per entry (one wave of a block): matmul_entry — the wave's rows x cols x Kt, K-windows of kb, into ONE reserved fp32
+// Per entry (a block, or one wave of it): matmul_entry — its rows x cols x Kt, K-windows of kb, into ONE reserved fp32
 // slot of cb_partial_hold. DEST-resident K (Perf 1): the entry's K-windows are grouped into super-blocks of S windows
 // (CT arg; entry 0 uses 1: its windows arrive at DRAM pace); subblock-outer / K-inner, each output subblock accumulates
 // a whole super-block in fp32 DEST and is packed ONCE per super-block (plain pack for the first, packer L1-acc after).
-// The wave's tiles are dense at the front of the P-tile slot (row width = cols); the W window keeps its nominal row
-// stride (win_n), so a ragged last wave reads and pops the nominal window.
+// The entry's tiles are dense at the front of the P-tile slot (row width = cols); the W window keeps its nominal row
+// stride (win_n), so a narrower entry (a ragged last wave, a balanced n-line's narrow block) reads and pops the nominal
+// window.
 //
 // RAW LLK — measured helper bypass (do NOT "fix" back to mrs_compute_kernel_lib::matmul_block): the helper's loop is
 // K-block-outer / subblock-inner and acquires + packs DEST per (K-block, subblock), so it cannot keep a subblock in
@@ -97,20 +98,19 @@ void kernel_main() {
     constexpr uint32_t cb_finished = get_compile_time_arg_val(3);
     constexpr uint32_t cb_arrivals_fwd = get_compile_time_arg_val(4);
     constexpr uint32_t cb_arrivals_bwd = get_compile_time_arg_val(5);
-    constexpr uint32_t win_n = get_compile_time_arg_val(6);  // W window row stride (tiles): one wave's nominal width
+    constexpr uint32_t win_n = get_compile_time_arg_val(6);  // W window row stride (tiles): an entry's nominal width
     constexpr uint32_t kb = get_compile_time_arg_val(7);
     constexpr uint32_t num_k_blocks = get_compile_time_arg_val(8);
-    constexpr uint32_t P = get_compile_time_arg_val(9);             // slot tiles (the largest wave)
-    constexpr uint32_t num_entries = get_compile_time_arg_val(10);  // G x num_waves
-    constexpr uint32_t num_waves = get_compile_time_arg_val(11);
-    constexpr uint32_t super_block = get_compile_time_arg_val(12);  // K-windows per DEST-resident pack (divides nkb)
-    constexpr uint32_t cb_zero = get_compile_time_arg_val(13);      // one bf16 zero tile (the writer fills it)
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(14);   // the entry walk runs once per output chunk
-    constexpr uint32_t n_inner = get_compile_time_arg_val(15);      // chunks per outer (resident-axis) index
-    constexpr bool resident = get_compile_time_arg_val(16) != 0;
+    constexpr uint32_t P = get_compile_time_arg_val(9);             // slot tiles (the largest entry)
+    constexpr uint32_t num_entries = get_compile_time_arg_val(10);  // G x waves
+    constexpr uint32_t super_block = get_compile_time_arg_val(11);  // K-windows per DEST-resident pack (divides nkb)
+    constexpr uint32_t cb_zero = get_compile_time_arg_val(12);      // one bf16 zero tile (the writer fills it)
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(13);   // the entry walk runs once per output chunk
+    constexpr uint32_t n_inner = get_compile_time_arg_val(14);      // chunks per outer (resident-axis) index
+    constexpr bool resident = get_compile_time_arg_val(15) != 0;
     static_assert(super_block >= 1 && num_k_blocks % super_block == 0, "super-block must divide the K-blocks");
-    // runtime args: per wave rows | cols << 8 | sb_h << 16 | sb_w << 24, then per entry role | lag << 8
-    constexpr uint32_t roles_idx = num_waves;
+    // runtime args: per entry rows | cols << 8 | sb_h << 16 | sb_w << 24, then per entry role | lag << 8
+    constexpr uint32_t roles_idx = num_entries;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_act_k_window, cb_weight_k_window, cb_partial_hold);
 
@@ -148,7 +148,7 @@ void kernel_main() {
 
     // In-DEST finish ops of one output subblock after its last-super-block matmul: DEST_TO_SRCA reuse adds of
     // `hold` (when set) then of the arrivals (when with_arrivals). Tiles sit row-strided at col_base + r * cols (the
-    // slot's dense wave layout); DEST tile r * w + c. Matmul state on entry and exit: srcA = W, srcB = A, matmul MOP.
+    // slot's dense entry layout); DEST tile r * w + c. Matmul state on entry and exit: srcA = W, srcB = A, matmul MOP.
     auto finish_in_dest =
         [&](uint32_t role, bool hold, bool with_arrivals, uint32_t col_base, uint32_t cols, uint32_t h, uint32_t w) {
             uint32_t srcb = cb_act_k_window;
@@ -196,9 +196,9 @@ void kernel_main() {
     // arrival landed by the end of that super-block's first subblock). Returns whether the finish is complete.
     auto matmul_entry = [&](uint32_t e, bool fill, bool fusable, uint32_t role) -> bool {
         MaybeDeviceZoneScope("MM");
-        const uint32_t wave = get_arg_val<uint32_t>(e % num_waves);
-        const uint32_t rows = wave & 0xFF, cols = (wave >> 8) & 0xFF;
-        const uint32_t sb_h = (wave >> 16) & 0xFF, sb_w = wave >> 24;
+        const uint32_t geom = get_arg_val<uint32_t>(e);
+        const uint32_t rows = geom & 0xFF, cols = (geom >> 8) & 0xFF;
+        const uint32_t sb_h = (geom >> 16) & 0xFF, sb_w = geom >> 24;
         const uint32_t n_sb_r = rows / sb_h, n_sb_c = cols / sb_w;
         const uint32_t a_win = rows * kb, w_win = win_n * kb;  // window tiles, as the reader pushes them
         const uint32_t row_group = sb_h * cols;
@@ -324,7 +324,7 @@ void kernel_main() {
         }
         if (fused) {
             if (rows * cols < P) {
-                fin_buf.push_back(P - rows * cols);  // a ragged wave: the nominal slot stays whole
+                fin_buf.push_back(P - rows * cols);  // a narrower entry: the nominal slot stays whole
             }
             if (fusable && hold_prev) {
                 hold_buf.pop_front(P);

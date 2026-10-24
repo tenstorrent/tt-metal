@@ -5,8 +5,9 @@
 //
 // Port (direction d, link l) forwards, in entry order, the units (entry, core halves) whose role on this chip is
 // start(d) or relay(d), restricted to its cores (link(k) == l). Per core of a unit: wait the core's mailbox slot (one
-// increment per (core, unit)), NoC-read its finished sub-block (the wave tiles of the entry, dense at the front of slot
-// entry mod depth_handoff of the core's cb_finished) in chunks of chunk_tiles into cb_port_chunks, then ack the core
+// increment per (core, unit)), NoC-read its finished sub-block (the entry's tiles: its wave's, one column less on a
+// balanced plan's narrow n-lines; dense at the front of slot entry mod depth_handoff of the core's cb_finished) in
+// chunks of chunk_tiles into cb_port_chunks, then ack the core
 // (consumed_d) once the read barrier covering its last chunk returned. A batch ends at a multiple of `group` chunks in
 // the CB (2 group chunks, so a reservation never wraps), at the end of a unit, and before any blocking mailbox wait (no
 // ack is held while waiting). At the end every mailbox slot is restored to 0 (all increments of this call have landed).
@@ -30,6 +31,9 @@ void kernel_main() {
     constexpr uint32_t num_waves = get_compile_time_arg_val(8);       // entry e is wave e mod num_waves
     constexpr uint32_t num_chunks = get_compile_time_arg_val(10);     // the unit walk repeats once per output chunk
     constexpr uint32_t entries_per_chunk = get_compile_time_arg_val(11);
+    constexpr uint32_t num_lines = get_compile_time_arg_val(13);  // n-lines of the matmul grid (core k's: k mod this)
+    // tiles a narrow n-line's core sends less (one sub-block column); 0: no balanced lines, every core sends its wave
+    constexpr uint32_t narrow_tiles = get_compile_time_arg_val(14);
 
     uint32_t arg = 0;
     const uint32_t finished_base = get_arg_val<uint32_t>(arg++);  // staging address (cb_finished slot 0) on every core
@@ -40,6 +44,8 @@ void kernel_main() {
     const uint32_t wave_tiles_idx = arg;               // per wave: tiles one core sends (<= P)
     const uint32_t cores_idx = arg + num_waves;        // per core: x | y << 8 | half << 16 | k << 20
     const uint32_t units_idx = cores_idx + num_cores;  // per unit: entry | half_mask << 8 | slots (sender side)
+    // balanced plans, per unit: the n-lines whose half-0 / half-1 sub-block is one column narrow (bits 0-15 / 16-31)
+    const uint32_t narrow_idx = units_idx + num_units;
     const uint32_t consumed_addr = get_semaphore(consumed_id);
     ASSERT(num_cores <= max_cores);
 
@@ -75,8 +81,8 @@ void kernel_main() {
         const uint32_t first_half = (unit >> 10) & 0x1;
         // the producing core's cb_finished slot: its global entry index (chunk-major) mod the handoff depth
         const uint32_t slot_off = (((ug / num_units) * entries_per_chunk + entry) % depth_handoff) * P * tile_bytes;
-        const uint32_t tiles = get_arg_val<uint32_t>(wave_tiles_idx + entry % num_waves);
-        const uint32_t chunks_per_core = (tiles + chunk_tiles - 1) / chunk_tiles;
+        const uint32_t wave_tiles = get_arg_val<uint32_t>(wave_tiles_idx + entry % num_waves);
+        const uint32_t narrow = narrow_tiles > 0 ? get_arg_val<uint32_t>(narrow_idx + u) : 0;
         for (uint32_t walk = 0; walk < 2 * num_cores; ++walk) {  // halves in unit order (first_half first)
             const uint32_t hh = first_half ^ (walk >= num_cores ? 1u : 0u);
             const uint32_t i = walk >= num_cores ? walk - num_cores : walk;
@@ -85,6 +91,11 @@ void kernel_main() {
                 continue;
             }
             const uint32_t k = cw >> 20;
+            uint32_t tiles = wave_tiles;
+            if constexpr (narrow_tiles > 0) {
+                tiles -= ((narrow >> (16 * hh + k % num_lines)) & 1) ? narrow_tiles : 0;
+            }
+            const uint32_t chunks_per_core = (tiles + chunk_tiles - 1) / chunk_tiles;
             volatile tt_l1_ptr uint32_t* mbox =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_base + k * mailbox_stride);
             const uint32_t target = ++handoffs[i];

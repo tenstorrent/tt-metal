@@ -125,10 +125,15 @@ def matmul_reduce_scatter(
     extra_program=None,
     extra_tensors=(),
     staging: str | None = None,
+    balance_lines: bool = False,
 ) -> ttnn.Tensor:
     """extra_program(coord, free_cores) -> ProgramDescriptor | None merges another program onto the cores this op
     leaves idle on each device (its core ranges must not overlap this op's); extra_tensors are its I/O tensors.
-    staging: "exact", "grow" or "ephemeral" (allocated per call and freed once enqueued); default MRS_STAGING."""
+    staging: "exact", "grow" or "ephemeral" (allocated per call and freed once enqueued); default MRS_STAGING.
+    balance_lines (scatter_dim -1): the planner may give the n-lines of a block that does not split evenly unequal,
+    per-block rotating widths, using every line of the matmul rectangle (the busiest core computes fewer tiles over the
+    call; more matmul cores, so fewer idle cores for extra_program). Same per-tile accumulation, so the output is
+    bit-identical to the uniform split's."""
     validate(
         input_tensor,
         weight,
@@ -155,4 +160,5 @@ def matmul_reduce_scatter(
         extra_program=extra_program,
         extra_tensors=tuple(extra_tensors),
         staging=staging,
+        balance_lines=balance_lines,
     )

@@ -4,7 +4,8 @@
 // matmul_reduce_scatter — matmul-core writer (BRISC, NoC1): handoff_or_store_block per finished entry, in order.
 //
 // cb_finished is backed by the staging tensor (same L1 address on every core and chip); entry e of this core sits in
-// slot e mod depth_handoff. An entry is one wave of a block: its rows x cols tiles are dense at the front of the slot.
+// slot e mod depth_handoff. An entry is a block (or one wave of it): its rows x cols tiles are dense at the front of
+// the slot.
 // start / relay: one mailbox increment to the port (direction, link of this core); the slot is popped (FIFO) once that
 // port acks (program-local consumed_fwd / consumed_bwd). fin: the valid tiles go to the output with one write barrier.
 // Signalling never waits on consumption: a pop is forced only when every slot is outstanding.
@@ -19,37 +20,36 @@
 void kernel_main() {
     constexpr uint32_t cb_finished = get_compile_time_arg_val(0);
     constexpr uint32_t P = get_compile_time_arg_val(1);
-    constexpr uint32_t num_waves = get_compile_time_arg_val(2);  // entry e is wave e mod num_waves
-    constexpr uint32_t out_n_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t depth_handoff = get_compile_time_arg_val(4);
-    constexpr uint32_t tile_bytes = get_compile_time_arg_val(5);
-    constexpr uint32_t num_entries = get_compile_time_arg_val(6);  // G x num_waves
-    constexpr uint32_t cb_zero = get_compile_time_arg_val(7);  // compute's fused-finish zero tile (filled here once)
+    constexpr uint32_t out_n_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t depth_handoff = get_compile_time_arg_val(3);
+    constexpr uint32_t tile_bytes = get_compile_time_arg_val(4);
+    constexpr uint32_t num_entries = get_compile_time_arg_val(5);  // G x waves
+    constexpr uint32_t cb_zero = get_compile_time_arg_val(6);  // compute's fused-finish zero tile (filled here once)
     // chunks: the entry walk runs once per output chunk; chunk c covers the tiles at (i_m * chunk_m, i_n * chunk_n)
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(8);
-    constexpr uint32_t n_inner = get_compile_time_arg_val(9);
-    constexpr bool m_outer = get_compile_time_arg_val(10) != 0;
-    constexpr uint32_t chunk_m = get_compile_time_arg_val(11);
-    constexpr uint32_t chunk_n = get_compile_time_arg_val(12);
-    constexpr uint32_t block_m = get_compile_time_arg_val(13);
-    constexpr uint32_t block_n = get_compile_time_arg_val(14);
-    constexpr auto out_args = TensorAccessorArgs<15>();
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(7);
+    constexpr uint32_t n_inner = get_compile_time_arg_val(8);
+    constexpr bool m_outer = get_compile_time_arg_val(9) != 0;
+    constexpr uint32_t chunk_m = get_compile_time_arg_val(10);
+    constexpr uint32_t chunk_n = get_compile_time_arg_val(11);
+    constexpr uint32_t block_m = get_compile_time_arg_val(12);
+    constexpr uint32_t block_n = get_compile_time_arg_val(13);
+    constexpr auto out_args = TensorAccessorArgs<14>();
     constexpr uint32_t KIND_FWD = 0, KIND_BWD = 1, KIND_FIN = 2;
     constexpr uint32_t consumed_fwd_id = 0, consumed_bwd_id = 1;
 
     uint32_t arg = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t row0 = get_arg_val<uint32_t>(arg++);  // chunk-local origin of my per-core block
-    const uint32_t col0 = get_arg_val<uint32_t>(arg++);
+    const uint32_t col0 = get_arg_val<uint32_t>(arg++);  // (its columns: my leftmost entry's)
     const uint32_t fwd_port_xy = get_arg_val<uint32_t>(arg++);
     const uint32_t bwd_port_xy = get_arg_val<uint32_t>(arg++);
     const uint32_t mailbox_slot_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t waves_idx = arg;  // per wave: row_off | col_off << 8 | rows << 16 | cols << 24
-    const uint32_t kinds_idx = waves_idx + num_waves;
-    auto wave_valid = [](uint32_t valid, uint32_t off, uint32_t ext) {
+    const uint32_t geom_idx = arg;  // per entry: row_off | col_off << 8 | rows << 16 | cols << 24 from (row0, col0)
+    const uint32_t kinds_idx = geom_idx + num_entries;
+    auto entry_valid = [](uint32_t valid, uint32_t off, uint32_t ext) {
         return valid <= off ? 0u : (valid - off < ext ? valid - off : ext);
     };
-    // my valid tiles past `off` in chunk ci of an axis (wave_valid caps them at a wave's extent)
+    // my valid tiles past `off` in chunk ci of an axis (entry_valid caps them at an entry's extent)
     auto valid_ext = [](uint32_t blk, uint32_t chunk, uint32_t ci, uint32_t off) {
         const uint32_t c0 = ci * chunk;
         const uint32_t ext = blk - c0 < chunk ? blk - c0 : chunk;
@@ -98,10 +98,10 @@ void kernel_main() {
             const uint32_t c = eg / num_entries;
             const uint32_t im = m_outer ? c / n_inner : c % n_inner;
             const uint32_t in = m_outer ? c % n_inner : c / n_inner;
-            const uint32_t wave = get_arg_val<uint32_t>(waves_idx + e % num_waves);
-            const uint32_t row_off = wave & 0xFF, col_off = (wave >> 8) & 0xFF, cols = wave >> 24;
-            const uint32_t m_valid_w = wave_valid(valid_ext(block_m, chunk_m, im, row0), row_off, (wave >> 16) & 0xFF);
-            const uint32_t n_valid_w = wave_valid(valid_ext(block_n, chunk_n, in, col0), col_off, cols);
+            const uint32_t geom = get_arg_val<uint32_t>(geom_idx + e);
+            const uint32_t row_off = geom & 0xFF, col_off = (geom >> 8) & 0xFF, cols = geom >> 24;
+            const uint32_t m_valid_w = entry_valid(valid_ext(block_m, chunk_m, im, row0), row_off, (geom >> 16) & 0xFF);
+            const uint32_t n_valid_w = entry_valid(valid_ext(block_n, chunk_n, in, col0), col_off, cols);
             for (uint32_t i = 0; i < m_valid_w; ++i) {
                 const uint32_t page = (im * chunk_m + row0 + row_off + i) * out_n_tiles + in * chunk_n + col0 + col_off;
                 {

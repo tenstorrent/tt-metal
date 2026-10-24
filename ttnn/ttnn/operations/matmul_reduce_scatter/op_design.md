@@ -36,6 +36,7 @@
 | `num_links` | int or None | no (kw) | explicit value: `1 ≤ L ≤ min over the group's hops of len(get_forwarding_link_indices)`, else ValueError. None means all usable links. | None | host (ports) |
 | `compute_kernel_config` | ComputeConfigDescriptor | no (kw) | any fidelity; `fp32_dest_acc_en` is a floor | `default_compute_kernel_config()` = HiFi2, fp32_dest_acc_en=True | CT (fidelity) |
 | `memory_config` | MemoryConfig or None | no (kw) | interleaved DRAM or L1. A sharded memory_config raises NotImplementedError: TARGET has no placement axis. | DRAM interleaved | output alloc |
+| `balance_lines` | bool | no (kw) | scatter -1 only (ignored otherwise, and for chunked or wave-split plans) | False | host (grid) |
 
 ### Registry contract (op file)
 
@@ -148,7 +149,7 @@ Re-running the table on the intermediate data (the per-entry partial sums) gives
 3. `(resident, kb) = choose_k_block(...)`. The first fit wins: resident with the largest `kb | Kt` and `kb ≥ min(Kt, 8)`. Otherwise stream with the largest `kb | Kt` that fits. Otherwise the output is chunked (see the regime table: `plan_chunk_geometry`, `chunk_cost_us`), and only when no split up to 256 chunks fits, NotImplementedError (DRAM-landing deferred).
 4. Test hooks live on the **package** module `ttnn.operations.matmul_reduce_scatter` and are read from it at call time, so `monkeypatch.setattr(package, ...)` takes effect:
    - `_FORCE_XBLOCK_RESIDENCY ∈ {None, True, False}`. When not None it replaces the residency decision; a forced `True` that does not fit raises ValueError.
-   - `_LAST_PLAN` is a dict the op overwrites on every call: `{"xblock": "resident"|"stream", "schedule": "line"|"ring_balanced"|"ring_unbalanced", "kb": int, "grid": (grid_m, grid_n), "strip": "row"|"col"}`.
+   - `_LAST_PLAN` is a dict the op overwrites on every call: `{"xblock": "resident"|"stream", "schedule": "line"|"ring_balanced"|"ring_unbalanced", "kb": int, "grid": (grid_m, grid_n), "strip": "row"|"col", "balanced_lines": bool, ...}`.
 
    The acceptance test pins both residency regimes through these hooks, so regime coverage does not depend on the box's grid size.
 
@@ -302,10 +303,29 @@ for strip in (row0, col_last) with 2L ≤ strip length:
     core_m = ceil(block_m_tiles / min(ext_m, block_m_tiles)); grid_m = ceil(block_m_tiles / core_m)
     core_n = ceil(block_n_tiles / min(ext_n, block_n_tiles)); grid_n = ceil(block_n_tiles / core_n)
     sb = max{h·w : h | core_m, w | core_n, h·w ≤ 8}
-    key = (core_m·core_n, -sb, ragged tiles, grid_m·grid_n, strip != row0)
+    key = (core_m·core_n·G, -sb, balanced, ragged tiles, grid_m·grid_n, strip != row0)
+    balance_lines and block_n % n_lines != 0 (n_lines = min(ext_n, block_n) ≤ 16): also the balanced candidate,
+      grid_n = n_lines, core_n = ceil(block_n / n_lines), work core_m·(G·base + ceil(G·extra / n_lines))
 pick the minimum key
 ```
-Focus case on QB2 (11×10 grid, scatter -1, G=4): column strip, `m_on_x`, `grid_m=10, core_m=2`, `grid_n=10, core_n=6`, subblock 2×3. That is 100 matmul cores and 12 tiles per core per entry. The row strip would give 14 tiles.
+
+**Balanced n-lines (`balance_lines`, scatter -1, one chunk, one wave).** When `block_n` does not split evenly over the
+rectangle's n extent, the uniform split rounds every line up to `ceil(block_n / ext_n)` columns and may leave lines
+idle. The balanced plan uses every line (`n_lines = min(ext_n, block_n)`, `block_n = n_lines·base + extra`): in block
+`b` the `extra` lines starting at line `b·extra mod n_lines` are one column wide (`base + 1`, the nominal `core_n`),
+the rest `base` (`balanced_line_columns`). The wide set rotates per block, so over the G-entry walk no line is wide more
+than `ceil(G·extra / n_lines)` times. Kimi-K3 o_proj on the Galaxy 12×9 rectangle (block 20×56, G = 4): uniform 10×8
+cores at 2×7 = 56 tile-entries per core; balanced 10×9 cores with widths 7,7,6×7 rotating = 50 (−11% on the busiest
+core). The partition depends only on (line, block), so core `k` holds the same tiles of block `b` on every chip and a
+partial lands on the core that owns them downstream. Each output tile keeps its K order, super-blocks and finish adds:
+bit-identical to the uniform plan. L1 is unchanged (slots and windows stay `P_nom = core_m·(base+1)`).
+- *Entry geometry*: every matmul-core kernel reads one geometry word per entry (row/col offset from the core's origin,
+  dense rows × cols), the generalization of the per-wave descriptor; the core's column origin is its leftmost entry's.
+  A narrow entry reads, computes, sends and stores one column less, and pushes / pops the nominal window and slot.
+- *Ports*: one word per unit holds each half's narrow lines (16-bit masks, line = `k mod grid_n`); a narrow core sends
+  its wave's tiles minus one sub-block column (`core_m` tiles).
+- It uses more matmul cores (Kimi: 80 → 90), so fewer cores are left for `extra_program`; it is opt-in for that reason.
+Focus case on QB2 (11×10 grid, scatter -1, G=4): column strip, `m_on_x`, `grid_m=10, core_m=2`, `grid_n=10, core_n=6`, subblock 2×3. That is 100 matmul cores and 12 tiles per core per entry. The row strip would give 14 tiles (56 tile-entries per core over the walk; 50 with `balance_lines`: 9 lines of 7,7,6×7).
 
 **Core roles:** `k` = row-major index over the used `(gm, gn)` cores. `half(k) = 0 if k < ceil(n_cores/2) else 1`. `link(k) = k mod L`.
 
