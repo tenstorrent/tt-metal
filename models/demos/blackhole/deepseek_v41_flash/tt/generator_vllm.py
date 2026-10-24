@@ -481,6 +481,14 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             logger.info(
                 f"DSV4.1 vLLM: spec traces captured ({len(self._spec_runners()) + len(self.spec_buckets)} runner(s))"
             )
+        if (
+            hasattr(self.m, "warm_requests")
+            and os.environ.get("DSV41_WARM_REQUESTS", "1") == "1"
+            and os.environ.get("DSV41_PF_SINGLE", "0") == "1"
+        ):
+            # one synthetic multi-window request with the prefix cache on (also in a speculative launch: ``warmup_model_decode`` never runs one there), after every trace exists
+            dt_, dn_ = self.m.warm_requests(chunk)
+            logger.info(f"DSV4.1 vLLM: synthetic warm-up request took {dt_:.1f} s ({dn_} new program(s))")
         self._warm = True
         logger.info(f"DSV4.1 vLLM: warm-up done in {time.perf_counter() - t0:.1f} s")
         if hasattr(self.m, "mem_report"):

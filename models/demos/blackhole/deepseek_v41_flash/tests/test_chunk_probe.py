@@ -90,6 +90,12 @@ def test_chunk_probe(mesh_device):
     ):  # the server's warm-up (allocate / compile everything, then capture the chunk trace and the decode traces) before any prefill
         m.warm_serving(CHUNK, WMAX if MODE == "single" else 16384, [], [])
         log("PROBE warm_serving done")
+        if os.environ.get("PROBE_WARM_REQ") == "1":
+            t_wr = time.perf_counter()
+            dt_wr, dn_wr = m.warm_requests(CHUNK)
+            log(
+                f"PROBE warm_requests {dt_wr:.1f} s, {dn_wr} new programs ({time.perf_counter() - t_wr:.1f} s incl. sync)"
+            )
     g = torch.Generator().manual_seed(1234)
     toks = torch.randint(1000, 100000, (B, max(LENS)), generator=g, dtype=torch.int64)
     if os.environ.get("PROBE_PROMPT"):  # real text (json list with a "prompt" field), the same for every user

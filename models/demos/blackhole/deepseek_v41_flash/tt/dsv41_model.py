@@ -2343,6 +2343,62 @@ class Model:
         self.log(f"warm_apc: snapshot + restore of {sizes} on an idle user: {dt:.1f} s")
         return dt
 
+    def warm_requests(self, chunk):
+        """One synthetic multi-window request through ``prefill_interleaved`` with every real path on (after every trace was captured: the replays need the chunk trace): two users of different mesh
+        rows with DIFFERENT chunk starts in one call (per-row starts), the lazy key hand-off, prefix snapshots on the way (APC on), then a third user that takes a prefix hit (restore + continuation).
+        Nothing of it may compile after the traces exist: the number of programs the device cache gained is logged (a non-zero count is a missing warm-up step). The model is left idle
+        (users released, snapshot store emptied). -> (seconds, new program-cache entries)."""
+        t0 = time.perf_counter()
+        pm, B, U = self.prefill_model, self.B, self.U
+        if B < 3 or pm.dyn is None or pm.dyn_trace is None:
+            return 0.0, 0
+        n0 = self.md.num_program_cache_entries()
+        apc = getattr(self, "apc", None)
+        if apc is not None and not apc.active():
+            apc = None
+        stats0 = dict(apc.stats) if apc is not None else None
+        g = torch.Generator().manual_seed(7)
+        L0, L1 = 9 * chunk, 8 * chunk
+        t0_ = torch.randint(1000, 100000, (L0,), generator=g, dtype=torch.int64)
+        t1_ = torch.randint(1000, 100000, (L1,), generator=g, dtype=torch.int64)
+        users = [0, U, 2 * U] if self.rows >= 3 else [0, 1, 2]
+        spad = pm.dyn.S_pad
+        calls = [
+            [(users[0], t0_, 0, 4 * chunk), (users[1], t1_, 0, 2 * chunk)],
+            [(users[0], t0_, 4 * chunk, L0), (users[1], t1_, 2 * chunk, L1)],
+        ]
+        try:
+            for items in calls:
+                self.prefill_interleaved(items, chunk, s_pad_max=spad, want_logits=False)
+            self.flush_key_exports(why="warm-up")
+            if apc is not None:  # a new prompt with the same tokens as user 0: takes the deepest snapshot and continues
+                self.prefill_interleaved([(users[2], t0_, 0, L0)], chunk, s_pad_max=spad, want_logits=False)
+                self.flush_key_exports(why="warm-up")
+        finally:
+            if apc is not None:
+                apc.finish_pending()
+                apc.store.clear()
+                apc.stats.update(stats0)
+            for u in users:
+                self.release_user(u)
+                self.__dict__.get("pf_resume", {}).pop(u, None)
+                self.tap_n.pop(u, None)
+            self.__dict__.pop("pf_slot_of", None)
+            self.__dict__.pop("pf_slot_owner", None)
+            self.drop_key_exports()
+        ttnn.synchronize_device(self.md)
+        dn = self.md.num_program_cache_entries() - n0
+        dt = time.perf_counter() - t0
+        self.log(
+            f"warm_requests: 2 users with different starts + a prefix hit: {dt:.1f} s, program cache {n0} -> {n0 + dn} entries"
+            + (
+                ""
+                if dn == 0
+                else f" ({dn} NEW program(s) compiled after the traces were captured: a warm-up step is missing)"
+            )
+        )
+        return dt, dn
+
     def bench_buckets(self, n=40):
         """Device time per replay (ms, blocking replay + token read) of every decode bucket, the ablation variants (DSV41_BUCKET_ABLATE) and the full step, on idle filler inputs."""
         out = {}
