@@ -9,7 +9,7 @@ reference : t0/torch/model/layers/time_attention.py, group_attention.py, rope.py
             q, k = RMSNorm_hd(q) * q_norm, RMSNorm_hd(k) * k_norm     # QK-norm BEFORE RoPE
             q = q * cos_q + rot(q) * sin_q; k likewise       # interleaved pairs, xPos folded into the tables
             ctx = SDPA(q, k, v), causal (or the uploaded mask), scale 1 / sqrt(head_dim)
-    group:  one row per series: ctx = xn @ Wv + bv         # softmax over one key is 1
+    group:  one row per series: x + xn @ (Wo Wv) + (Wo bv + bo)    # softmax over one key is 1; one matmul
             else SDPA over the G rows of a series at every patch, (S_pad * B, H, G, hd)
     return x + ctx @ Wo + bo
 """
@@ -64,9 +64,12 @@ class TtAttention:
         self._norm = upload_norm(device, weights.norm)
         self._wqkv = upload_linear(device, weights.wqkv, precision.weight_dtype("qkv"))
         self._bqkv = upload_bias(device, weights.bqkv)
-        wv, bv = weights.part(2)
-        self._wv = upload_linear(device, wv, precision.weight_dtype("wv"))
-        self._bv = upload_bias(device, bv)
+        if weights.kind != TIME:
+            # One row per series: softmax over one key is 1, so the sublayer is x + Wo (Wv xn + bv) + bo, one matmul
+            # with W = Wo Wv and b = Wo bv + bo (fp32 at load, one bf16 rounding instead of two).
+            wv, bv = weights.part(2)
+            self._wvo = upload_linear(device, weights.wo @ wv, precision.weight_dtype("wo"))
+            self._bvo = upload_bias(device, weights.wo @ bv + weights.bo)
         self._q_norm = upload_norm(device, weights.q_norm)
         self._k_norm = upload_norm(device, weights.k_norm)
         self._wo = upload_linear(device, weights.wo, precision.weight_dtype("wo"))
@@ -79,15 +82,14 @@ class TtAttention:
         import ttnn
 
         xn = rms_norm(x, self._norm, self.eps, self.precision)
-        if self.kind == TIME:
-            ctx = self._time(xn, inputs)
-        elif inputs.group_size == 1:
-            ctx = linear(xn, self._wv, self.precision, role="wv", bias=self._bv)
+        if self.kind != TIME and inputs.group_size == 1:
+            out = linear(xn, self._wvo, self.precision, role="wo", bias=self._bvo)
+            ttnn.deallocate(xn)
         else:
-            ctx = self._group(xn, inputs)
-        ttnn.deallocate(xn)
-        out = linear(ctx, self._wo, self.precision, role="wo", bias=self._bo)
-        ttnn.deallocate(ctx)
+            ctx = self._time(xn, inputs) if self.kind == TIME else self._group(xn, inputs)
+            ttnn.deallocate(xn)
+            out = linear(ctx, self._wo, self.precision, role="wo", bias=self._bo)
+            ttnn.deallocate(ctx)
         y = add(x, out)
         ttnn.deallocate(out)
         return y
