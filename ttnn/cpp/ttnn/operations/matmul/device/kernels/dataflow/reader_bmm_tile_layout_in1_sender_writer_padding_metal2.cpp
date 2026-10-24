@@ -505,21 +505,68 @@ void kernel_main() {
 
                         // Copy in1 block into the buffer, as the default kernel
                         uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_inner_dim_block_start_tile_id;
-                        for (uint32_t h = 0; h < in1_block_h; ++h) {
-                            uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
-                            for (uint32_t w = 0; w < in1_block_w; ++w) {
-                                if (bw < num_blocks_w_dim - 1 || w < last_block_w) {
-                                    noc.async_read(
-                                        s1,
-                                        dfb_in1,
-                                        in1_single_tile_size_bytes,
-                                        {.page_id = in1_tensor_tile_id},
-                                        {.offset_bytes = in1_write_offset});
+                        if constexpr (in1_tensor_stride_w == 1) {
+                            static_assert(in1_single_tile_size_bytes <= NOC_MAX_BURST_SIZE, "one tile per NoC packet");
+                            // A K-row's tiles are consecutive pages. Walk them in the accessor's memory runs
+                            // (interleaved: every bank-count-th page is that bank's next slot): one address
+                            // computation and one read state per run, then a bare one-packet read per tile.
+                            // Same tiles into the same slots as the per-page reads below, at a fraction of
+                            // their issue cost, which otherwise bounds this sender's read rate (it is the
+                            // in1 data path of a weight-streaming 2D multicast matmul).
+                            const uint32_t run_stride = s1.contiguous_page_stride();
+                            const uint32_t src_page_bytes = s1.get_aligned_page_size();
+                            const uint32_t dst_run_step_bytes = run_stride * in1_aligned_tile_size_bytes;
+                            const uint32_t l1_block_addr = dfb_in1.get_write_ptr();
+                            auto read_block = [&](const uint32_t valid_w) __attribute__((always_inline)) {
+                                uint32_t row_start_tile_id = in1_tensor_row_start_tile_id;
+                                uint32_t l1_row_addr = l1_block_addr;
+                                for (uint32_t h = 0; h < in1_block_h; ++h) {
+                                    for (uint32_t first = 0; first < run_stride && first < valid_w; ++first) {
+                                        for (uint32_t w = first; w < valid_w;) {
+                                            const uint32_t tile_id = row_start_tile_id + w;
+                                            const uint32_t run =
+                                                s1.num_contiguous_pages(tile_id, row_start_tile_id + valid_w);
+                                            const uint64_t run_noc_addr = s1.get_noc_addr(tile_id);
+                                            noc_async_read_one_packet_set_state(
+                                                run_noc_addr, in1_single_tile_size_bytes, 0, noc.get_noc_id());
+                                            uint32_t src_addr = static_cast<uint32_t>(run_noc_addr);
+                                            uint32_t dst_addr = l1_row_addr + w * in1_aligned_tile_size_bytes;
+#pragma GCC unroll 4
+                                            for (uint32_t k = 0; k < run; ++k) {
+                                                noc_async_read_one_packet_with_state(
+                                                    src_addr, dst_addr, 0, noc.get_noc_id());
+                                                src_addr += src_page_bytes;
+                                                dst_addr += dst_run_step_bytes;
+                                            }
+                                            w += run * run_stride;
+                                        }
+                                    }
+                                    row_start_tile_id += in1_tensor_stride_h;
+                                    l1_row_addr += in1_block_w * in1_aligned_tile_size_bytes;
                                 }
-                                in1_write_offset += in1_aligned_tile_size_bytes;
-                                in1_tensor_tile_id += in1_tensor_stride_w;
+                            };
+                            if (bw < num_blocks_w_dim - 1 || last_block_w == in1_block_w) {
+                                read_block(in1_block_w);
+                            } else {
+                                read_block(last_block_w);
                             }
-                            in1_tensor_row_start_tile_id += in1_tensor_stride_h;
+                        } else {
+                            for (uint32_t h = 0; h < in1_block_h; ++h) {
+                                uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
+                                for (uint32_t w = 0; w < in1_block_w; ++w) {
+                                    if (bw < num_blocks_w_dim - 1 || w < last_block_w) {
+                                        noc.async_read(
+                                            s1,
+                                            dfb_in1,
+                                            in1_single_tile_size_bytes,
+                                            {.page_id = in1_tensor_tile_id},
+                                            {.offset_bytes = in1_write_offset});
+                                    }
+                                    in1_write_offset += in1_aligned_tile_size_bytes;
+                                    in1_tensor_tile_id += in1_tensor_stride_w;
+                                }
+                                in1_tensor_row_start_tile_id += in1_tensor_stride_h;
+                            }
                         }
                         in1_tensor_current_inner_dim_block_start_tile_id += in1_tensor_next_block_stride;
 
