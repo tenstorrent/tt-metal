@@ -83,13 +83,15 @@ jobs:
 
   # Check Harbor availability first - outputs harbor-prefix for downstream jobs
   check-harbor:
-    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    # TEMP(clang-tidy-23 shadow): draft bypass, revert before real review.
+    if: github.event.action != 'destroyed' && true # was: (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     uses: ./.github/workflows/check-harbor.yaml
     with:
       runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-light-prio' || 'tt-ubuntu-light' }}
   # Single docker build job - deduplicates container builds across asan-build, build, and clang-tidy
   build-docker-images:
-    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    # TEMP(clang-tidy-23 shadow): draft bypass, see check-harbor above.
+    if: github.event.action != 'destroyed' && true # was: (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     needs: check-harbor
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
@@ -161,7 +163,8 @@ jobs:
       manylinux-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.manylinux-docker-image }}
       runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
   find-changed-files:
-    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    # TEMP(clang-tidy-23 shadow): draft bypass, see check-harbor above.
+    if: github.event.action != 'destroyed' && true # was: (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-slim
     outputs:
       any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
@@ -492,10 +495,12 @@ jobs:
   # affect the scan (see find-changed-files.sh's explicit key-workflow list) are skipped entirely.
   code-analysis:
     needs: [build-docker-images, find-changed-files]
+    # TEMP(clang-tidy-23 shadow): draft bypass, revert before real review
+    # (was: github.event_name == 'pull_request' && !...pull_request.draft).
     if: >-
       ${{
         needs.find-changed-files.outputs.run-clang-tidy == 'true' &&
-        ((github.event_name == 'pull_request' && !github.event.pull_request.draft) || github.event_name == 'merge_group')
+        (github.event_name == 'pull_request' || github.event_name == 'merge_group')
       }}
     uses: ./.github/workflows/code-analysis.yaml
     secrets: inherit
@@ -506,6 +511,29 @@ jobs:
       force-scan: true
       post-pr-suggestions: ${{ github.event_name == 'pull_request' }}
       check-harbor-runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-light-prio' || 'tt-ubuntu-light' }}
+
+  # Shadow run: times a clang-tidy 23 full scan (check set matched to v20, see
+  # cmake/clang-tidy.d/.clang-tidy.v23-new-checks.yaml) against real PR
+  # traffic. Informational only — left out of workflow-status's `needs:`
+  # below so it can't affect PR Gate Status. PR-gate only, never merge_group.
+  code-analysis-shadow-clang-tidy-23:
+    needs: [build-docker-images, find-changed-files]
+    # TEMP(clang-tidy-23 shadow): draft bypass, see code-analysis above.
+    if: >-
+      ${{
+        needs.find-changed-files.outputs.run-clang-tidy == 'true' &&
+        github.event_name == 'pull_request'
+      }}
+    uses: ./.github/workflows/code-analysis.yaml
+    secrets: inherit
+    with:
+      platform: "Ubuntu 24.04"
+      ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
+      dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
+      force-scan: true
+      post-pr-suggestions: false
+      clang-tidy-version: "23"
+      check-harbor-runs-on: tt-ubuntu-light
 
   # LLK PR Labeling — auto-apply labels based on which LLK directories changed
   llk-label-pr:

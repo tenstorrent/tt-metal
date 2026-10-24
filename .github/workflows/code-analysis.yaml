@@ -51,6 +51,11 @@ on:
         type: string
         default: "tt-ubuntu-light"
         description: "Runner label for the Harbor health check job"
+      clang-tidy-version:
+        required: false
+        type: string
+        default: "20"
+        description: "LLVM major version of clang-tidy for the full scan"
   workflow_dispatch:
     inputs:
       architecture:
@@ -184,6 +189,7 @@ jobs:
       prereq-targets: ''
       scan-targets: ''
       post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
+      clang-tidy-version: ${{ inputs.clang-tidy-version || '20' }}
 
   # Incremental scan: parallel jobs for different targets
   clang-tidy-incremental-tt-metal:
