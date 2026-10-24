@@ -53,8 +53,10 @@ void kernel_main() {
     constexpr bool use_worker_mux = get_compile_time_arg_val(mux_ct_base + 0) != 0;
     constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(mux_ct_base + 1);
     constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(mux_ct_base + 2);
-    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(mux_ct_base + 3);
-    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(mux_ct_base + 4);
+    // The mux sits in program-local L1: its addresses here and in the runtime args are offsets from the map address
+    // it publishes in semaphore fabric_mux_l1_base_semaphore_id.
+    constexpr uint32_t fabric_mux_l1_base_semaphore_id = get_compile_time_arg_val(mux_ct_base + 3);
+    constexpr size_t fabric_mux_termination_signal_offset = get_compile_time_arg_val(mux_ct_base + 4);
     constexpr uint32_t num_mux_clients = get_compile_time_arg_val(mux_ct_base + 5);
     // Active-extent mailbox block, after the fixed 6-entry mux block.
     constexpr uint32_t ext_ct_base = mux_ct_base + 6;
@@ -98,9 +100,9 @@ void kernel_main() {
     [[maybe_unused]] bool mux_connection_valid = false;
     bool is_termination_master = false;
     uint8_t fabric_mux_x = 0, fabric_mux_y = 0, fabric_mux_channel_id = 0;
-    size_t fabric_mux_channel_base_address = 0, fabric_mux_connection_info_address = 0;
-    size_t fabric_mux_connection_handshake_address = 0, fabric_mux_flow_control_address = 0;
-    size_t fabric_mux_buffer_index_address = 0;
+    size_t fabric_mux_channel_base_offset = 0, fabric_mux_connection_info_offset = 0;
+    size_t fabric_mux_connection_handshake_offset = 0, fabric_mux_flow_control_offset = 0;
+    size_t fabric_mux_buffer_index_offset = 0;
     uint32_t termination_sync_semaphore_id = 0;
     uint32_t local_fabric_mux_status_address = 0, local_flow_control_address = 0;
     uint32_t local_teardown_address = 0, local_buffer_index_address = 0;
@@ -110,11 +112,11 @@ void kernel_main() {
         is_termination_master = get_arg_val<uint32_t>(arg_idx++) != 0;
         fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);
         fabric_mux_y = get_arg_val<uint32_t>(arg_idx++);
-        fabric_mux_channel_base_address = get_arg_val<uint32_t>(arg_idx++);
-        fabric_mux_connection_info_address = get_arg_val<uint32_t>(arg_idx++);
-        fabric_mux_connection_handshake_address = get_arg_val<uint32_t>(arg_idx++);
-        fabric_mux_flow_control_address = get_arg_val<uint32_t>(arg_idx++);
-        fabric_mux_buffer_index_address = get_arg_val<uint32_t>(arg_idx++);
+        fabric_mux_channel_base_offset = get_arg_val<uint32_t>(arg_idx++);
+        fabric_mux_connection_info_offset = get_arg_val<uint32_t>(arg_idx++);
+        fabric_mux_connection_handshake_offset = get_arg_val<uint32_t>(arg_idx++);
+        fabric_mux_flow_control_offset = get_arg_val<uint32_t>(arg_idx++);
+        fabric_mux_buffer_index_offset = get_arg_val<uint32_t>(arg_idx++);
         fabric_mux_channel_id = get_arg_val<uint32_t>(arg_idx++);
         termination_sync_semaphore_id = get_arg_val<uint32_t>(arg_idx++);
         local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
@@ -318,22 +320,23 @@ void kernel_main() {
     if constexpr (use_worker_mux) {
         // Multiple workers per direction share one fabric link through a fabric mux.
         using SenderT = tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>;
+        // Waits for the mux to be ready to accept connections, which is also when it publishes its map's address.
+        const uint32_t fabric_mux_l1_base = tt::tt_fabric::wait_for_fabric_mux_l1_base(
+            fabric_mux_x, fabric_mux_y, fabric_mux_l1_base_semaphore_id, local_fabric_mux_status_address);
         SenderT mux_connection = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
             fabric_mux_x,
             fabric_mux_y,
             fabric_mux_channel_id,
             fabric_mux_num_buffers_per_channel,
             fabric_mux_channel_buffer_size_bytes,
-            fabric_mux_channel_base_address,
-            fabric_mux_connection_info_address,
-            fabric_mux_connection_handshake_address,
-            fabric_mux_flow_control_address,
-            fabric_mux_buffer_index_address,
+            fabric_mux_l1_base + fabric_mux_channel_base_offset,
+            fabric_mux_l1_base + fabric_mux_connection_info_offset,
+            fabric_mux_l1_base + fabric_mux_connection_handshake_offset,
+            fabric_mux_l1_base + fabric_mux_flow_control_offset,
+            fabric_mux_l1_base + fabric_mux_buffer_index_offset,
             local_flow_control_address,
             local_teardown_address,
             local_buffer_index_address);
-        tt::tt_fabric::wait_for_fabric_endpoint_ready(
-            fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
         tt::tt_fabric::fabric_client_connect(mux_connection);
         run_writer(&mux_connection);
 
@@ -345,7 +348,8 @@ void kernel_main() {
         Semaphore<> termination_sync(termination_sync_semaphore_id);
         if (is_termination_master) {
             termination_sync.wait(num_mux_clients - 1);
-            tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
+            tt::tt_fabric::fabric_endpoint_terminate(
+                fabric_mux_x, fabric_mux_y, fabric_mux_l1_base + fabric_mux_termination_signal_offset);
         } else {
             termination_sync.up(noc, termination_master_noc_x, termination_master_noc_y, 1);
             noc.async_atomic_barrier();

@@ -396,7 +396,10 @@ void append_fabric_mux_connection_ct_args(
     const std::array<uint32_t, num_ct_args> ct_args = {
         mux_kernel_config.get_num_buffers(channel_type),
         mux_kernel_config.get_buffer_size_bytes(channel_type),
-        mux_kernel_config.get_status_address(),
+        // A mux in program-local L1 publishes its map's address in a semaphore, which its clients wait on in place
+        // of the status word; every other mux address is then an offset from that address.
+        mux_kernel_config.is_in_program_local_l1() ? mux_kernel_config.get_l1_base_semaphore_id()
+                                                   : static_cast<uint32_t>(mux_kernel_config.get_status_address()),
         mux_kernel_config.get_termination_signal_address(),
         num_workers_per_direction};
     writer_ct_args.reserve(writer_ct_args.capacity() + num_ct_args);

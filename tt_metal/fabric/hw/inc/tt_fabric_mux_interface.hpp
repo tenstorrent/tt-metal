@@ -71,6 +71,21 @@ FORCE_INLINE void wait_for_fabric_endpoint_ready(
     } while (local_fabric_ep_status_ptr[0] != tt::tt_fabric::FabricEndpointStatus::READY_FOR_TRAFFIC);
 }
 
+// For a mux in program-local L1 (FabricMuxConfig::place_in_program_local_l1): waits until the mux is ready for
+// traffic, in place of wait_for_fabric_endpoint_ready, and returns the L1 address of its memory map. The mux's
+// addresses from the host are offsets from it. fabric_mux_l1_base_semaphore_id is
+// FabricMuxConfig::get_l1_base_semaphore_id(); a semaphore id has the same address on every core of the program.
+// local_scratch_address is a word of this core's L1 to read into.
+FORCE_INLINE uint32_t wait_for_fabric_mux_l1_base(
+    uint8_t fabric_mux_x,
+    uint8_t fabric_mux_y,
+    uint32_t fabric_mux_l1_base_semaphore_id,
+    uint32_t local_scratch_address) {
+    // The mux publishes its map's address once it is ready for traffic.
+    return poll_fabric_mux_l1_base(
+        fabric_mux_x, fabric_mux_y, fabric_mux_l1_base_semaphore_id, local_scratch_address, noc_index);
+}
+
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
 FORCE_INLINE void fabric_client_connect(WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& connection_handle) {
     connection_handle.template open<true>();
