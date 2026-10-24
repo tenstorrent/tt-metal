@@ -762,7 +762,7 @@
       tier: 2
       release_ready: false
     bh_quietbox_2:
-      timeout: 19
+      timeout: 14  # measured 7.7 min warm (16.4 cold) 2026-10-24
       tier: 1
       release_ready: true
     # bh_galaxy_perf: temporarily disabled — Blackhole Galaxy fabric / ethernet
@@ -806,7 +806,7 @@
       tier: 2
       release_ready: false
     bh_quietbox_2:
-      timeout: 25
+      timeout: 19  # measured ~15.5 min warm (21.3 cold) 2026-10-24
       tier: 1
       release_ready: true
     # bh_galaxy_perf: temporarily disabled — same Blackhole Galaxy fabric / ethernet
@@ -833,7 +833,7 @@
   model_family: Gemma
   skus:
     bh_quietbox_2:
-      timeout: 30
+      timeout: 25  # ~8 min warm; the budget covers one cold TT-cache build
       tier: 1  # the tier-2 QB2 bucket is full (186/186); this fits the tier-1 headroom
       release_ready: false
   owner_id: U088413NP0Q # Ashai Reddy
@@ -861,7 +861,7 @@
       timeout: 6
       tier: 2
     bh_quietbox_2:
-      timeout: 14
+      timeout: 11  # measured 7.7 min warm (10.2 cold) 2026-10-24
       tier: 1
       release_ready: true
   owner_id: U088413NP0Q # Ashai Reddy
