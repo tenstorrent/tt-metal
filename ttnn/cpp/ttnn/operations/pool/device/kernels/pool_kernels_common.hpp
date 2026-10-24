@@ -44,8 +44,8 @@ ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val, bool unco
 template <uint32_t cb_id, uint32_t clear_value_cb_id, typename DFB, typename ClearDFB>
 ALWI void clear_out_tiles(Noc noc, DFB dfb, ClearDFB clear_dfb) {
     constexpr uint32_t tile_size = get_tile_size(cb_id);
-    const uint32_t num_pages = get_local_cb_interface(cb_id).fifo_num_pages;
-    const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_page_size / tile_size;
+    const uint32_t num_pages = dfb.get_total_num_entries();
+    const uint32_t num_tiles = dfb.get_entry_size() / tile_size;
 
     UnicastEndpoint self_ep;
     const auto src = experimental::local_addr(clear_dfb.get_read_ptr(), noc.get_noc_id());
@@ -73,7 +73,7 @@ ALWI void clear_out_tiles(Noc noc, DstDFB dst_dfb, ClearDFB clear_value_dfb, uin
 template <uint32_t cb_id, typename DFB>
 ALWI void zero_out_tiles(Noc noc, DFB dfb) {
     constexpr uint32_t tile_size = get_tile_size(cb_id);
-    const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_num_pages;
+    const uint32_t num_tiles = dfb.get_total_num_entries();
     noc.async_write_zeros(dfb, tile_size * num_tiles);
     noc.write_zeros_l1_barrier();
 }
@@ -133,7 +133,7 @@ ALWI void fill_scalar(
 
 template <typename DFB>
 ALWI void zero_out_page(Noc noc, DFB dfb) {
-    const uint32_t page_size = get_local_cb_interface(dfb.get_id()).fifo_page_size;
+    const uint32_t page_size = dfb.get_entry_size();
     noc.async_write_zeros(dfb, page_size);
     noc.write_zeros_l1_barrier();
 }

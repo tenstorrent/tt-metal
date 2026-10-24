@@ -798,6 +798,7 @@ public:
      *   - CircularBuffer / DataflowBuffer : get_write_ptr()
      *   - Scratchpad / LocalTensorAccessor / CoreLocalMem : the start of the local region
      * @p args.offset_bytes is in bytes, including for the typed handles (whose operator[] is not).
+     * A @p size_bytes of 0 issues nothing.
      *
      * @note The destination bytes are UNDEFINED until write_zeros_l1_barrier() returns: do not read
      *       or write the window before the barrier.

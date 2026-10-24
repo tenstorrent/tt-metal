@@ -152,7 +152,7 @@ void kernel_main() {
                     {.offset_bytes = dst_offset + size_of_valid_data_in_last_page_in_row});
                 dst_offset += size_of_valid_data_in_last_page_in_row + size_of_padding_columns;
             }
-            // Trailing pad rows (padding_rows is 0 for a full 32-row block -> zero-length iDMA, tolerated).
+            // Trailing pad rows (padding_rows is 0 for a full 32-row block -> no-op).
             noc.async_write_zeros(cb_in0, padding_rows * padded_X_size, {.offset_bytes = dst_offset});
             noc.write_zeros_l1_barrier();
             noc.async_read_barrier();
