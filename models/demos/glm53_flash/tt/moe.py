@@ -94,6 +94,14 @@ def regions_keep_stacked() -> bool:
 # regions path: gathered tokens per kernel call (bounds the [T*k + E_local*32, H] bf16 region buffer: 1.09 GB for a 16 K
 # chunk, which does not fit next to the 1 M caches; the expert weights are re-read once per sub-chunk)
 REGIONS_T = int(os.environ.get("GLM53_REGIONS_T", "4096"))
+# regions path: how the per-expert token ranks (an inclusive cumsum of the [T, E] one-hot over the tokens) are computed
+# (tt-blaze G53F-0174): "cumsum" = ttnn.cumsum (a sequential scan: 6.4 ms of a ~28 ms 4096-token sub-chunk on the 8x4);
+# "mm" = a lower-triangular ones matmul (bf16 0/1 inputs, fp32 accumulation: exact integers below 2^24, so the ranks,
+# counts and every downstream tensor are bitwise identical). Read at call time.
+REGIONS_RANK = os.environ.get("GLM53_REGIONS_RANK", "cumsum")
+# the "mm" rank's [1,1,REGIONS_T,REGIONS_T] bf16 lower-triangular ones, ONE per mesh device shared by every layer (32 MB
+# per chip at 4096; a per-layer cache cost 42 x 32 MB and OOMed the 1 M server geometry, G53F-0174)
+_TRIL: dict[tuple[int, int], ttnn.Tensor] = {}
 # GLM53_REGIONS_KEEP_STACKED=1: keep the stacked (block / stream / dense) expert tensors next to the regions path's
 # per-expert lists, so decode (T <= 32) keeps the stream custom op (75 ms vs 219 ms per step on the 8x4 through the
 # regions kernel at 1 user/row) at the cost of a second copy of the expert weights (9.5 GB per chip in bfp8 on the
@@ -1069,8 +1077,11 @@ class TtRoutedExperts(LightweightModule):
             x, dense_w, idx, w = padded = [self._pad_rows(t, T_pad) for t in (x, dense_w, idx, w)]
         T_logical, T = T, T_pad
         onehot = ttnn.multiply(ttnn.typecast(ttnn.ne(dense_w, 0.0), ttnn.float32), d["mask"])  # [1,1,T,E] fp32 0/1
-        counts_f = ttnn.sum(onehot, dim=-2, keepdim=True)  # [1,1,1,E]
-        rank = ttnn.cumsum(onehot, dim=-2)  # [1,1,T,E]: inclusive rank of token t among expert e's tokens
+        rank = self._rank(onehot)  # [1,1,T,E]: inclusive rank of token t among expert e's tokens
+        if REGIONS_RANK == "mm":  # the last inclusive rank is the count (the same exact integers as the sum)
+            counts_f = ttnn.slice(rank, [0, 0, T - 1, 0], [1, 1, T, onehot.shape[-1]])
+        else:
+            counts_f = ttnn.sum(onehot, dim=-2, keepdim=True)  # [1,1,1,E]
         aligned = ttnn.multiply(ttnn.floor(ttnn.multiply(ttnn.add(counts_f, TILE - 1), 1.0 / TILE)), float(TILE))
         incl = ttnn.cumsum(aligned, dim=-1)
         offsets_f = ttnn.subtract(incl, aligned)  # [1,1,1,E] exclusive, tile-aligned
@@ -1143,6 +1154,42 @@ class TtRoutedExperts(LightweightModule):
         if T_logical != T:
             y = ttnn.slice(y, [0, 0, 0, 0], [1, 1, T_logical, H])
         return y
+
+    def _rank(self, onehot: ttnn.Tensor) -> ttnn.Tensor:
+        """Inclusive cumsum of the [1,1,T,E] fp32 0/1 one-hot over the tokens (``REGIONS_RANK``)."""
+        if REGIONS_RANK != "mm":
+            return ttnn.cumsum(onehot, dim=-2)
+        T = onehot.shape[-2]
+        tril = self._tril(T)
+        oh16 = ttnn.typecast(onehot, ttnn.bfloat16)  # 0/1: exact
+        rank = ttnn.matmul(tril, oh16, dtype=ttnn.float32, compute_kernel_config=self._rank_compute())
+        ttnn.deallocate(oh16)
+        if tril is not _TRIL.get((id(self.device), REGIONS_T)):
+            ttnn.deallocate(tril)
+        return rank
+
+    def _rank_compute(self):
+        key = ("rank_compute",)
+        if key not in self._const_cache:
+            self._const_cache[key] = _compute(self.device, ttnn.MathFidelity.HiFi4)  # fp32 dest + L1 accumulation
+        return self._const_cache[key]
+
+    def _tril(self, T: int) -> ttnn.Tensor:
+        """[1,1,T,T] bf16 lower-triangular ones. Only the REGIONS_T-sized one is cached, once per mesh device for all
+        layers (``_TRIL``); a ragged last sub-chunk takes a transient top-left slice of it, so request-varying lengths
+        never grow the cache."""
+        key = (id(self.device), REGIONS_T)
+        if key not in _TRIL:
+            n = REGIONS_T
+            _TRIL[key] = self.mesh.upload(
+                torch.tril(torch.ones(n, n, dtype=torch.bfloat16)).reshape(1, 1, n, n), ttnn.bfloat16
+            )
+        full = _TRIL[key]
+        if T == REGIONS_T:
+            return full
+        if T > REGIONS_T:
+            raise ValueError(f"regions sub-chunk of {T} rows > REGIONS_T={REGIONS_T}")
+        return ttnn.slice(full, [0, 0, 0, 0], [1, 1, T, T])
 
     def _iota_rows(self, T: int, k: int) -> ttnn.Tensor:
         """uint32 ROW_MAJOR [1, T*k] with value t at (t, j) (cached per geometry)."""

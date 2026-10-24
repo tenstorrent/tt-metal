@@ -48,7 +48,14 @@ RUNS = [r.split(":") for r in os.environ.get("PROF_RUNS", "16384:1,16384:0").spl
 OUT = os.environ.get("PROF_OUT", "/mnt/tt-data/sdawle/glm53f/prefill/logs/prof.jsonl")
 TRACE_AB = int(os.environ.get("PROF_TRACE_AB", "0"))  # decoder index whose FFN is A/B'd eager vs trace (0 = off)
 TRACE_T = int(os.environ.get("PROF_TRACE_T", "16384"))
-DUMP = os.environ.get("PROF_DUMP", "")  # path prefix: save each pass's last-token logits
+DUMP = os.environ.get("PROF_DUMP", "")
+OPS_AB = int(os.environ.get("PROF_OPS", "0"))
+#: G53F-0174 gate: "rt:rank,rt:rank,..." -- prefill the first PROF_EXPORT_N ids under each setting and sha256 every layer's
+#: exported seed state (the server's export helpers); bitwise-identical exports across settings = a pure-perf change
+EXPORT_AB = os.environ.get("PROF_EXPORT_AB", "")
+EXPORT_N = int(
+    os.environ.get("PROF_EXPORT_N", "4092")
+)  # decoder index whose routed experts get an op-by-op device breakdown  # path prefix: save each pass's last-token logits
 
 
 class Prof:
@@ -139,6 +146,8 @@ def test_prefill_profile(mesh_device):
         prompt = full[: int(spec[2])] if len(spec) > 2 and spec[2] else full
         if len(spec) > 3 and spec[3]:  # regions sub-chunk (tt/moe.py REGIONS_T is read at call time)
             moe_mod.REGIONS_T = int(spec[3])
+        if len(spec) > 4 and spec[4]:  # regions rank mode (cumsum | mm, G53F-0174)
+            moe_mod.REGIONS_RANK = spec[4]
         logger.info(
             f"[prof] run {p}: chunk {chunk} instr {spec[1]} n {int(prompt.numel())} regions_t {moe_mod.REGIONS_T}"
         )
@@ -189,6 +198,7 @@ def test_prefill_profile(mesh_device):
             chunk=chunk,
             instr=int(spec[1]),
             regions_t=moe_mod.REGIONS_T,
+            rank=moe_mod.REGIONS_RANK,
             n=int(prompt.numel()),
             wall_s=round(wall, 3),
             tok_s=round(int(prompt.numel()) / wall, 1),
@@ -204,6 +214,19 @@ def test_prefill_profile(mesh_device):
         f.write(json.dumps(summ) + "\n")
         f.flush()
         logger.info(f"[prof] summary {json.dumps(summ)}")
+    if EXPORT_AB:
+        prof.on = False
+        _set_dsa_timer(model, prof, False)
+        _export_ab(model, full, f)
+    if OPS_AB:
+        prof.on = False
+        _set_dsa_timer(model, prof, False)
+        for spec_ in os.environ.get("PROF_OPS_RT", "4096").split(","):
+            rt, _, rk = spec_.partition(":")
+            if rk:
+                moe_mod.REGIONS_RANK = rk
+            moe_mod.REGIONS_T = int(rt)  # the cached triangular matrix is sized by REGIONS_T
+            _regions_ops(model, mesh_device, full, f, int(rt))
     if TRACE_AB:
         prof.on = False  # no synchronizations inside a trace capture
         _set_dsa_timer(model, prof, False)
@@ -267,3 +290,245 @@ def _trace_ab(model, dev, prompt: torch.Tensor, f):
     f.write(json.dumps(row) + "\n")
     f.flush()
     logger.info(f"[prof] trace_ab {json.dumps(row)}")
+
+
+def _regions_ops(model, dev, prompt: torch.Tensor, f, regions_t: int):
+    """Op-by-op wall time (synchronized after every op; the MoE is device-bound, G53F-0173 trace A/B) of decoder
+    ``PROF_OPS``'s routed-expert call on a real 16 K chunk's routed inputs: a transcription of
+    ``TtRoutedExperts.forward`` (row gathers) -> ``_forward_regions_chunked`` -> ``_forward_regions`` -> reduce-scatter.
+    Rows: ``kind=regions_ops`` with seconds per op name summed over the sub-chunks."""
+    k = OPS_AB
+    ex = model.layers[k].layer.mlp.experts
+    grab = {}
+    fwd = ex.forward
+
+    def keep(x, dense_w, idx=None, w=None):
+        if "x" not in grab:
+            grab.update(x=ttnn.clone(x), dense_w=ttnn.clone(dense_w), idx=ttnn.clone(idx), w=ttnn.clone(w))
+        return fwd(x, dense_w, idx=idx, w=w)
+
+    ex.forward = keep
+    out = model.prefill(prompt[:TRACE_T], user=0, start=0)
+    for t in out[:2]:
+        if t is not None:
+            ttnn.deallocate(t)
+    ex.forward = fwd
+    acc: dict[str, float] = defaultdict(float)
+    last = [0.0]
+
+    def tick(name):
+        ttnn.synchronize_device(dev)
+        now = time.perf_counter()
+        acc[name] += now - last[0]
+        last[0] = now
+
+    TILE = 32
+    mesh = ex.mesh
+    ttnn.synchronize_device(dev)
+    t_all = last[0] = time.perf_counter()
+    x = mesh.all_gather_rows(grab["x"], dim=2)
+    tick("ag_x")
+    dense_w = mesh.all_gather_rows(grab["dense_w"], dim=2)
+    idx = mesh.all_gather_rows(grab["idx"], dim=2)
+    w = mesh.all_gather_rows(grab["w"], dim=2)
+    tick("ag_routing")
+    d = ex._dispatch
+    E, E_loc, H = ex.E, ex.E_local, ex.H
+    T_all = x.shape[-2]
+    outs = []
+    for t0 in range(0, T_all, regions_t):
+        t1 = min(t0 + regions_t, T_all)
+        xs, dws, ids, ws = [ttnn.slice(t, [0, 0, t0, 0], [1, 1, t1, t.shape[-1]]) for t in (x, dense_w, idx, w)]
+        tick("slice_in")
+        kk, T = ids.shape[-1], xs.shape[-2]
+        onehot = ttnn.multiply(ttnn.typecast(ttnn.ne(dws, 0.0), ttnn.float32), d["mask"])
+        tick("onehot")
+        if t0 == 0 and not grab.get("rank_checked"):  # G53F-0174: matmul ranks vs ttnn.cumsum on every chip, bitwise
+            grab["rank_checked"] = True
+            r_c = ttnn.cumsum(onehot, dim=-2)
+            mode = moe_mod.REGIONS_RANK
+            moe_mod.REGIONS_RANK = "mm"
+            r_m = ex._rank(onehot)
+            moe_mod.REGIONS_RANK = mode
+            same = [
+                torch.equal(ttnn.to_torch(a_), ttnn.to_torch(b_))
+                for a_, b_ in zip(mesh.device_tensors(r_c), mesh.device_tensors(r_m))
+            ]
+            f.write(json.dumps(dict(kind="rank_check", T=int(T), chips=len(same), bitwise_chips=int(sum(same)))) + "\n")
+            f.flush()
+            logger.info(f"[prof] rank_check T={T}: {sum(same)}/{len(same)} chips bitwise")
+            ttnn.deallocate(r_c)
+            ttnn.deallocate(r_m)
+            for Ts in [int(v) for v in os.environ.get("PROF_RANK_TS", "").split(",") if v.strip()]:
+                oh_s = ttnn.slice(onehot, [0, 0, 0, 0], [1, 1, Ts, onehot.shape[-1]])
+                r_c = ttnn.cumsum(oh_s, dim=-2)
+                moe_mod.REGIONS_RANK = "mm"
+                r_m = ex._rank(oh_s)
+                moe_mod.REGIONS_RANK = mode
+                cc, mm_ = [ttnn.to_torch(t_) for t_ in mesh.device_tensors(r_c)], [
+                    ttnn.to_torch(t_) for t_ in mesh.device_tensors(r_m)
+                ]
+                same = [torch.equal(a_, b_) for a_, b_ in zip(cc, mm_)]
+                ref = torch.cumsum(ttnn.to_torch(mesh.device_tensors(oh_s)[0]).double(), dim=-2)
+                row = dict(
+                    kind="rank_check",
+                    T=Ts,
+                    chips=len(same),
+                    bitwise_chips=int(sum(same)),
+                    cumsum_vs_torch=float((cc[0].double() - ref).abs().max()),
+                    mm_vs_torch=float((mm_[0].double() - ref).abs().max()),
+                )
+                f.write(json.dumps(row) + "\n")
+                f.flush()
+                logger.info(f"[prof] rank_check {json.dumps(row)}")
+                for t_ in (oh_s, r_c, r_m):
+                    ttnn.deallocate(t_)
+            tick("rank_check")
+        rank = ex._rank(onehot)
+        tick("rank")
+        if moe_mod.REGIONS_RANK == "mm":
+            counts_f = ttnn.slice(rank, [0, 0, T - 1, 0], [1, 1, T, onehot.shape[-1]])
+        else:
+            counts_f = ttnn.sum(onehot, dim=-2, keepdim=True)
+        tick("counts")
+        aligned = ttnn.multiply(ttnn.floor(ttnn.multiply(ttnn.add(counts_f, TILE - 1), 1.0 / TILE)), float(TILE))
+        incl = ttnn.cumsum(aligned, dim=-1)
+        offsets_f = ttnn.subtract(incl, aligned)
+        tick("offsets")
+        max_buf = ex.dispatch_max_tokens or (-(-(T * kk + E_loc * TILE) // TILE) * TILE)
+        pos_te = ttnn.add(
+            ttnn.multiply(ttnn.add(ttnn.subtract(rank, 1.0), offsets_f), onehot),
+            ttnn.multiply(ttnn.rsub(onehot, 1.0), float(max_buf - 1)),
+        )
+        tick("pos_te")
+        for t in (rank, aligned, incl):
+            ttnn.deallocate(t)
+        idx_u32 = ttnn.typecast(ids, ttnn.uint32)
+        pos_tk = ttnn.gather(pos_te, -1, idx_u32)
+        loc_tk = ttnn.gather(onehot, -1, idx_u32)
+        tick("gather_pick")
+        ttnn.deallocate(pos_te)
+        ttnn.deallocate(onehot)
+        ttnn.deallocate(idx_u32)
+        pos_rm = ttnn.reshape(ttnn.to_layout(ttnn.typecast(pos_tk, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, T * kk])
+        ttnn.deallocate(pos_tk)
+        tick("pos_rm")
+        slot_src = ttnn.scatter(ex._zero_u32_row(max_buf), -1, pos_rm, ex._iota_rows(T, kk))
+        tick("scatter_slots")
+        x_rm = ttnn.reshape(ttnn.to_layout(xs, ttnn.ROW_MAJOR_LAYOUT), [T, H])
+        tick("x_to_rm")
+        buf = ttnn.embedding(slot_src, x_rm, layout=ttnn.ROW_MAJOR_LAYOUT)
+        tick("embed_regions")
+        ttnn.deallocate(slot_src)
+        ttnn.deallocate(x_rm)
+        counts = ttnn.reshape(ttnn.to_layout(ttnn.typecast(counts_f, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, E])
+        offsets = ttnn.reshape(ttnn.to_layout(ttnn.typecast(offsets_f, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, E])
+        tick("counts_offsets_rm")
+        ttnn.deallocate(counts_f)
+        ttnn.deallocate(offsets_f)
+        o = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
+            ttnn.reshape(buf, [max_buf, H]),
+            offsets,
+            counts,
+            d["gidx_rm"],
+            d["gate"],
+            d["up"],
+            d["down"],
+            ex.dispatch_max_tokens or T,
+            compute_kernel_config=ex.compute,
+            activation=ttnn.RoutedExpertActivation.ClampedSiluGlu,
+        )
+        tick("expert_kernel")
+        ttnn.deallocate(buf)
+        out16 = ttnn.typecast(o, ttnn.bfloat16)
+        ttnn.deallocate(o)
+        tick("out_typecast")
+        y_rm = ttnn.to_layout(out16, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(out16)
+        tick("out_to_rm")
+        comb = ttnn.embedding(pos_rm, y_rm, layout=ttnn.ROW_MAJOR_LAYOUT)
+        tick("embed_combine")
+        ttnn.deallocate(y_rm)
+        ttnn.deallocate(pos_rm)
+        comb5 = ttnn.reshape(comb, [1, 1, T, kk, H])
+        w_loc = ttnn.multiply(ws, loc_tk)
+        ttnn.deallocate(loc_tk)
+        w16 = ttnn.typecast(w_loc, ttnn.bfloat16)
+        w_rm = ttnn.unsqueeze(ttnn.to_layout(w16, ttnn.ROW_MAJOR_LAYOUT), -1)
+        ttnn.deallocate(w_loc)
+        ttnn.deallocate(w16)
+        tick("weights_rm")
+        y = ttnn.experimental.deepseek_prefill.post_combine_reduce(
+            comb5, w_rm, expert_dim=3, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        tick("post_combine_reduce")
+        for t in (comb, w_rm, counts, offsets):
+            ttnn.deallocate(t)
+        if y.dtype != ex.activation_dtype:
+            y = ttnn.typecast(y, ex.activation_dtype)
+        tick("y_typecast")
+        outs.append(y)
+        for t in (xs, dws, ids, ws):
+            ttnn.deallocate(t)
+    y = ttnn.concat(outs, dim=-2) if len(outs) > 1 else outs[0]
+    tick("concat")
+    y = mesh.reduce_scatter_rows(y, dim=2)
+    tick("reduce_scatter")
+    total = time.perf_counter() - t_all
+    row = dict(
+        kind="regions_ops",
+        layer=k,
+        regions_t=regions_t,
+        rank=moe_mod.REGIONS_RANK,
+        T=int(T_all),
+        total_s=round(total, 4),
+        ops={n: round(v, 4) for n, v in sorted(acc.items(), key=lambda kv: -kv[1])},
+    )
+    f.write(json.dumps(row) + "\n")
+    f.flush()
+    logger.info(f"[prof] regions_ops {json.dumps(row)}")
+
+
+def _export_ab(model, prompt: torch.Tensor, f):
+    import hashlib
+
+    from models.demos.glm53_flash.tests.test_prefill_vs_blaze_golden import _dsa_state_host, _kda_state_host
+
+    digests = {}
+    for spec_ in EXPORT_AB.split(","):
+        rt, _, rk = spec_.partition(":")
+        moe_mod.REGIONS_T = int(rt)
+        if rk:
+            moe_mod.REGIONS_RANK = rk
+        n = EXPORT_N
+        out = model.prefill(prompt[:n], user=0, start=0)
+        first = model.first_token(out[1], owner_row=out[2])
+        for t in out[:2]:
+            if t is not None:
+                ttnn.deallocate(t)
+        per_layer = []
+        for dec in model.layers:
+            st = _dsa_state_host(model, dec, n) if dec.cache is not None else _kda_state_host(model, dec)
+            h = hashlib.sha256()
+            for key in sorted(st):
+                h.update(key.encode())
+                h.update(st[key].contiguous().view(torch.uint8).numpy().tobytes())
+            per_layer.append(h.hexdigest()[:16])
+        digests[spec_] = (first, per_layer)
+        logger.info(f"[prof] export {spec_}: first {first}, layer digests {per_layer[:3]}...")
+    ref_key = next(iter(digests))
+    ref = digests[ref_key]
+    for key, (first, per_layer) in digests.items():
+        row = dict(
+            kind="export_ab",
+            setting=key,
+            ref=ref_key,
+            n=EXPORT_N,
+            first_token=first,
+            first_equal=first == ref[0],
+            layers_equal=sum(a == b for a, b in zip(per_layer, ref[1])),
+            layers=len(per_layer),
+        )
+        f.write(json.dumps(row) + "\n")
+        f.flush()
+        logger.info(f"[prof] export_ab {json.dumps(row)}")
