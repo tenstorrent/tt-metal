@@ -33,8 +33,6 @@ inline std::ostream& operator<<(std::ostream& os, ThrottleLevel level) {
 }
 
 void add_stagger_defines_if_needed(tt::ARCH arch, int num_cores, std::map<std::string, std::string>& mm_kernel_defines);
-void add_dram_skip_defines_if_needed(tt::ARCH arch, std::map<std::string, std::string>& mm_in1_sender_writer_defines);
-bool should_sync_after_in1_dram(tt::ARCH arch);
 
 /*
  * Optionally limit matmul compute throughput by inserting NOP instructions between MVMUL instructions of matmul kernel
