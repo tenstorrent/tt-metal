@@ -167,6 +167,40 @@ def _router_component(mesh, spec, layer):
     return fn
 
 
+def _experts_component(mesh, spec, layer):
+    """Inputs: ffn_norm [S, H] in the residual row layout and the dense routing [S, E] (fp32), each SP row's 640
+    rows on every TP column (the router's output layout)."""
+    import ttnn
+    from models.demos.mimo_v26_flash_rl.tt.experts import Experts
+    from models.demos.mimo_v26_flash_rl.tt.mesh_io import residual_to_host, residual_to_mesh
+
+    sp, tp = tuple(mesh.shape)
+    chunk = spec.get("target.chunk")
+    experts = Experts(mesh, Checkpoint(spec.hf_dir, torch.float32), layer, rows_per_chip=chunk // sp)
+
+    def fn(ctx, x, routing):
+        with _op_hooks():
+            assert x.shape[0] == chunk, f"the device experts run whole {chunk}-token chunks, got {x.shape[0]}"
+            tx = residual_to_mesh(mesh, x)
+            tr = ttnn.from_torch(
+                routing.to(torch.float32).reshape(sp, 1, chunk // sp, routing.shape[-1]),
+                device=mesh,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=(sp, tp), dims=(0, None)),
+            )
+            ty = experts(tx, tr)
+            tx.deallocate(True)
+            tr.deallocate(True)
+            out = residual_to_host(mesh, ty).to(x.dtype)
+            ty.deallocate(True)
+        return out
+
+    fn.module = experts
+    return fn
+
+
 def device_component(mesh, spec, layer, step):
     if step == "attn_norm":
         return _norm_component(mesh, spec, layer, "input_layernorm.weight")
@@ -180,6 +214,8 @@ def device_component(mesh, spec, layer, step):
         return _mlp_component(mesh, spec, layer)
     if step == "router":
         return _router_component(mesh, spec, layer)
+    if step == "experts":
+        return _experts_component(mesh, spec, layer)
     raise NotImplementedError(f"implement stage: no device module for {step} yet")
 
 

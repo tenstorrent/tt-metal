@@ -96,6 +96,40 @@ TABLE = {
     "ROUTER_FP32_ACC": Setting(
         True, (True, False), "fp32 dest for the router gate matmul: fp32 logits (C.sliding_moe.router)"
     ),
+    "EXPERTS_FIDELITY": Setting(
+        "HiFi4",
+        ("HiFi4", "HiFi3", "HiFi2", "LoFi"),
+        "rule 7 default: HiFi4 for the routed experts' gate / up / down matmuls (C.sliding_moe.experts)",
+    ),
+    "EXPERTS_FP32_ACC": Setting(
+        True, (True, False), "fp32 dest for the routed experts' matmuls (C.sliding_moe.experts)"
+    ),
+    "EXPERTS_INTER_FP32": Setting(
+        True,
+        (True, False),
+        "routed experts: gate, up and silu(gate) * up in fp32 instead of bf16 (known issue: bf16 intermediates widen "
+        "the per-token norm ratio) (C.sliding_moe.experts)",
+    ),
+    "EXPERTS_OUT_FP32": Setting(
+        True,
+        (True, False),
+        "routed experts: the 4 dispatch groups' partials summed in fp32 by the TP reduce_scatter, rounded to bf16 "
+        "once (C.sliding_moe.experts)",
+    ),
+    "EXPERTS_BUFFER_FACTOR": Setting(
+        0,
+        None,
+        "dispatch buffer rows per chip = factor x the group's tokens (+ tile alignment); 0 = the worst case "
+        "min(top_k, experts per chip): the dispatch kernel drops overflow rows silently (C.sliding_moe.experts)",
+    ),
+    "EXPERTS_NUM_LINKS": Setting(
+        1, (1, 2), "fabric links of the experts' dispatch / combine over SP (C.sliding_moe.experts)"
+    ),
+    "EXPERTS_TOPOLOGY": Setting(
+        "Linear",
+        ("Linear", "Ring"),
+        "fabric topology of the experts' dispatch / combine over SP (axis 0) (C.sliding_moe.experts)",
+    ),
     "RING_NUM_LINKS": Setting(2, (1, 2), "fabric links of the ring SDPA gather over SP (gemma4_d_p: 2 on Blackhole)"),
 }
 
@@ -114,6 +148,10 @@ MAX_PRECISION = {
     "MLP_OUT_FP32": True,
     "ROUTER_FIDELITY": "HiFi4",
     "ROUTER_FP32_ACC": True,
+    "EXPERTS_FIDELITY": "HiFi4",
+    "EXPERTS_FP32_ACC": True,
+    "EXPERTS_INTER_FP32": True,
+    "EXPERTS_OUT_FP32": True,
 }
 
 settings = Settings("MIMO_V26_FLASH_RL_", TABLE, max_precision=MAX_PRECISION)

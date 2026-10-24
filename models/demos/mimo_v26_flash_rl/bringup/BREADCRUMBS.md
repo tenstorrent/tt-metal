@@ -158,3 +158,28 @@
 - Gate: PCC 0.999338, overlap vs CPU / golden 0.99868, matched-row rel vs CPU 8.9e-5, auto_margin_min 3.06, 10 ops,
   host FLOPs 0, deterministic.
 - Re-run: `bfw job check --task C.sliding_moe.router --gate-only`.
+
+## C.sliding_moe.experts (layer 1): PASS
+
+- `tt/experts.py` `Experts`: EP over the whole mesh, 4 dispatch groups (one per TP column), each 8 chips along SP;
+  chip (r, c) holds experts (8c + r) * 8 + [0, 8) (DeepSeek column-major `get_global_expert_idx`). Forward per chip:
+  routing [1, 1, 640, 256] fp32 -> bf16 -> `topk(8)` (ids uint16, weights bf16) -> `masked_bincount` (dispatch table
+  masks the other groups) -> `offset_cumsum(cluster_axis=0)` -> x: `ccl.gather_rows` -> ROW_MAJOR -> `dispatch`
+  (axis 0, Linear, 1 link) -> flat buffer -> TILE -> per local expert `extract` (cap 5120) -> gate / up `linear`
+  (fp32 out) -> `multiply` SILU (fp32) -> down `linear` (bf16) -> `insert` -> `combine` (axis 0, init_zeros) ->
+  `post_combine_reduce(expert_dim=3)` with the dispatch table (skips other groups' slots) -> fp32 -> TP
+  `reduce_scatter` (sums the 4 groups) -> bf16 [1, 1, 160, 4096]. 65 ttnn ops.
+- Plan risk "multi-group dispatch on FABRIC_1D_RING" resolved: dispatch / combine / offset_cumsum run as is on the 8x4
+  1D ring with 4 groups (dispatch log: sparse_mcast enabled, max_hops 10).
+- Dispatch buffer per chip: 5120 x min(top_k, 8 local experts) + 7 x 32 rows (worst case; the kernel drops overflow
+  silently). `EXPERTS_BUFFER_FACTOR` lowers it (0 = worst case). 336 MB bf16 per chip, as plan.md budgeted.
+- Weights: mxfp4 -> bf16 (exact) -> bfloat8_b in the checkpoint's [out, in] with `transpose_b`, one 2-D [N, K]
+  tensor per chip and local expert, built as host shards in a 16-thread pool and placed with `ttnn.from_host_shards`.
+  The first version (`from_torch(bfloat8_b, mesh_mapper=ShardTensor2dMesh)` on [8, 4, N, K]) converts single-threaded
+  (~4 s per 32 matrices, 24 of them) and pushed the test past pytest's 300 s timeout.
+- Settings: `EXPERTS_FIDELITY` HiFi4, `EXPERTS_FP32_ACC`, `EXPERTS_INTER_FP32`, `EXPERTS_OUT_FP32` (all in
+  MAX_PRECISION), `EXPERTS_BUFFER_FACTOR` 0, `EXPERTS_NUM_LINKS` 1, `EXPERTS_TOPOLOGY` Linear.
+- Gate: PCC 0.999992, vs CPU rel 0.0034 (limit 0.0103), worst row 0.0053, ratio [0.9990, 1.0032], vs golden rel
+  0.0042, auto_margin_min 2.37, host FLOPs 0, deterministic. Test wall time 228 s of the 300 s pytest timeout (most of
+  it the framework's CPU reference and precision model).
+- Re-run: `bfw job check --task C.sliding_moe.experts --gate-only`.
