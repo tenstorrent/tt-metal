@@ -133,6 +133,15 @@ inline uint32_t krm_slabs() {
     const uint32_t n = v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 0)) : 0u;
     return n >= 2 ? n : CB_DOUBLE_BUFFER_DEPTH;
 }
+inline float split_k_slope() {
+    const char* v = std::getenv("SPARSE_SDPA_SPLITK_SLOPE");
+    return v ? std::strtof(v, nullptr) : 0.0f;
+}
+// Batched (per-chunk) K reconstruct; needs SPARSE_SDPA_KRM_SLABS a multiple of Skt. SPARSE_SDPA_KDEQ_BATCH=0 disables.
+inline bool kdeq_batch_enabled() {
+    const char* v = std::getenv("SPARSE_SDPA_KDEQ_BATCH");
+    return v == nullptr || v[0] != '0';
+}
 // Split-K work distribution (prototype): SPARSE_SDPA_SPLITK=1 enables, unset/0 keeps the whole-token split.
 inline bool split_k_enabled() {
     const char* v = std::getenv("SPARSE_SDPA_SPLITK");
@@ -257,6 +266,7 @@ enum : uint32_t {
     CB_MERGE_CTRL,
     CB_MMAX,
     CB_CORR2,
+    KDEQ_BATCH,
     END,
 };
 }  // namespace compute_ct_arg

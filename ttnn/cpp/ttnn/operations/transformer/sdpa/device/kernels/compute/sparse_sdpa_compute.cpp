@@ -177,6 +177,7 @@ void kernel_main() {
     constexpr uint32_t cb_merge_ctrl = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_MERGE_CTRL);
     constexpr uint32_t cb_mmax = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_MMAX);
     constexpr uint32_t cb_corr2 = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_CORR2);
+    constexpr bool kdeq_batch = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::KDEQ_BATCH) != 0;
 
     constexpr uint32_t qsb =
         get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::QUERY_SUBBLOCK);  // query tile-rows per DST group
@@ -292,7 +293,70 @@ void kernel_main() {
 
                 CZONE("C-KDEQ");
                 k_in_cb.reserve_back(Skt * vDHt);
-                for (uint32_t row_tile = 0; row_tile < Skt; ++row_tile) {
+                if constexpr (kdeq_batch) {
+                    // Whole chunk at once: one tilize init per field and one multiply init per chunk instead of
+                    // per 32-row slab (needs cb_k_rm to hold the chunk's Skt slabs contiguously).
+                    constexpr uint32_t slab_16b =
+                        tt::constants::TILE_HEIGHT * packed_row_bytes / sparse_sdpa::PACKED_FIELD_ADDRESS_UNIT_BYTES;
+                    {
+                        CZONE_W("C-KW");
+                        k_rm_cb.wait_front(tt::constants::TILE_HEIGHT * Skt);
+                    }
+                    uint32_t saved_rd_ptr = 0;
+                    UNPACK(saved_rd_ptr = get_local_cb_interface(cb_k_rm).fifo_rd_ptr;);
+                    latent_tile_cb.reserve_back(Skt * latent_DHt);
+                    reconfig_data_format_srca(cb_k_rm);
+                    pack_reconfig_data_format(cb_k_latent_tile);
+                    tilize_init(cb_k_rm, latent_physical_ct, cb_k_latent_tile);
+                    for (uint32_t r = 0; r < Skt; ++r) {
+                        UNPACK(get_local_cb_interface(cb_k_rm).fifo_rd_ptr = saved_rd_ptr + r * slab_16b;);
+                        tilize_block(cb_k_rm, latent_DHt, cb_k_latent_tile, 0, r * latent_DHt);
+                    }
+                    UNPACK(get_local_cb_interface(cb_k_rm).fifo_rd_ptr = saved_rd_ptr;);
+                    latent_tile_cb.push_back(Skt * latent_DHt);
+                    tilize_uninit(cb_k_rm, cb_k_latent_tile);
+
+                    latent_tile_cb.wait_front(Skt * latent_DHt);
+                    scale_bcast_cb.wait_front(Skt * scale_blocks);
+                    reconfig_data_format(cb_k_latent_tile, cb_k_scale_bcast);
+                    pack_reconfig_data_format(cb_k_in);
+                    mul_bcast_cols_init(cb_k_latent_tile, cb_k_scale_bcast);
+                    for (uint32_t r = 0; r < Skt; ++r) {
+                        for (uint32_t block = 0; block < scale_blocks; ++block) {
+                            tile_regs_acquire();
+                            for (uint32_t t = 0; t < tiles_per_scale_block; ++t) {
+                                mul_tiles_bcast_cols(
+                                    cb_k_latent_tile,
+                                    cb_k_scale_bcast,
+                                    r * vDHt + block * tiles_per_scale_block + t,
+                                    r * scale_blocks + block,
+                                    t);
+                            }
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            for (uint32_t t = 0; t < tiles_per_scale_block; ++t) {
+                                pack_tile<true>(t, cb_k_in, r * vDHt + block * tiles_per_scale_block + t);
+                            }
+                            tile_regs_release();
+                        }
+                    }
+                    latent_tile_cb.pop_front(Skt * latent_DHt);
+                    scale_bcast_cb.pop_front(Skt * scale_blocks);
+
+                    rope_tile_cb.reserve_back(Skt * rope_DHt);
+                    reconfig_data_format_srca(cb_k_rope_rm);
+                    pack_reconfig_data_format(cb_k_rope_tile);
+                    tilize_init(cb_k_rope_rm, rope_physical_ct, cb_k_rope_tile);
+                    for (uint32_t r = 0; r < Skt; ++r) {
+                        UNPACK(get_local_cb_interface(cb_k_rope_rm).fifo_rd_ptr =
+                                   saved_rd_ptr + r * slab_16b + rope_offset_16b;);
+                        tilize_block(cb_k_rope_rm, rope_DHt, cb_k_rope_tile, 0, r * rope_DHt);
+                    }
+                    rope_tile_cb.push_back(Skt * rope_DHt);
+                    tilize_uninit(cb_k_rope_rm, cb_k_rope_tile);
+                    k_rm_cb.pop_front(tt::constants::TILE_HEIGHT * Skt);
+                }
+                for (uint32_t row_tile = 0; row_tile < (kdeq_batch ? 0u : Skt); ++row_tile) {
                     {
                         CZONE_W("C-KW");
                         k_rm_cb.wait_front(tt::constants::TILE_HEIGHT);

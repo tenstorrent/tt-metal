@@ -139,6 +139,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     cb(cb_q_in, q_in_tile_bytes, Sqt * DHt, q_in_df);  // cb_q_in : [Sqt,DHt] (bfp8 when Q is fp8)
     // Packed-row slabs (32 rows each) the gather may run ahead of compute. Base: 2 (double buffer).
     const uint32_t krm_slabs = ::sparse_sdpa::krm_slabs();
+    // Batched K reconstruct needs a whole chunk of slabs contiguous in cb_k_rm (ring of a multiple of Skt slabs).
+    const bool kdeq_batch = scaled_kv && krm_slabs >= Skt && (krm_slabs % Skt) == 0 && ::sparse_sdpa::kdeq_batch_enabled();
     if (scaled_kv) {
         // One double-buffered allocation with an owning FP8 FIFO and a format-only BF16 RoPE alias. Both use
         // the physical packed-page stride. Only cb_k_rm advances FIFO state; compute derives the alias read
@@ -183,7 +185,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     cb(cb_kack, ::sparse_sdpa::ACK_PAGE_BYTES, ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, bf);
     if (scaled_kv) {
         cb(cb_k_scale_bcast, fp32_tile_bytes, scale_blocks * krm_slabs, fp32);
-        cb(cb_k_latent_tile, k_in_tile_bytes, vDHt, tt::DataFormat::Bfp8_b);
+        cb(cb_k_latent_tile, k_in_tile_bytes, vDHt * (kdeq_batch ? Skt : 1u), tt::DataFormat::Bfp8_b);
         cb(cb_k_rope_tile, tile_bytes, Skt * (DHt - vDHt), bf);
     }
 
@@ -366,6 +368,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
          cb_merge_ctrl,
          cb_mmax,
          cb_corr2});
+    compute_ct.push_back(static_cast<uint32_t>(kdeq_batch));
     TT_FATAL(
         compute_ct.size() == ::sparse_sdpa::compute_ct_arg::END,
         "sparse_sdpa compute compile-time argument layout is out of sync");
@@ -423,14 +426,39 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     writer_desc.common_runtime_args.insert(writer_desc.common_runtime_args.end(), writer_crt.begin(), writer_crt.end());
 
     const uint64_t total_units = static_cast<uint64_t>(S) * n_chunks;
+    // Unit boundaries: proportional to per-core weights (uniform unless SPARSE_SDPA_SPLITK_SLOPE is set). Weights
+    // follow the core's row in the worker grid: on the Blackhole Galaxy the gather runs ~25% slower on the top grid
+    // rows than the bottom ones when every core gathers (measured, NoC path congestion).
+    std::vector<uint64_t> unit_bounds(num_cores + 1, 0);
+    if (split_k) {
+        const float slope = ::sparse_sdpa::split_k_slope();
+        uint32_t rmin = UINT32_MAX, rmax = 0;
+        for (const auto& c : cores) {
+            rmin = std::min<uint32_t>(rmin, c.y);
+            rmax = std::max<uint32_t>(rmax, c.y);
+        }
+        const float rmid = 0.5f * (rmin + rmax), rhalf = std::max(0.5f * (rmax - rmin), 1.0f);
+        std::vector<double> w(num_cores);
+        double wsum = 0;
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            w[i] = std::max(0.05, 1.0 + slope * (cores[i].y - rmid) / rhalf);
+            wsum += w[i];
+        }
+        double acc = 0;
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            unit_bounds[i] = static_cast<uint64_t>(acc / wsum * total_units + 0.5);
+            acc += w[i];
+        }
+        unit_bounds[num_cores] = total_units;
+    }
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = cores[i];
         uint32_t tok_start = i * base + std::min(i, extra);
         uint32_t tok_count = base + (i < extra ? 1u : 0u);
         uint32_t head_c0 = 0, tail_c1 = 0, prev_x = 0, prev_y = 0;
         if (split_k) {
-            const uint64_t b0 = total_units * i / num_cores;
-            const uint64_t b1 = total_units * (i + 1) / num_cores;
+            const uint64_t b0 = unit_bounds[i];
+            const uint64_t b1 = unit_bounds[i + 1];
             const uint32_t t0 = b0 / n_chunks, c0 = b0 % n_chunks, t1 = b1 / n_chunks, c1 = b1 % n_chunks;
             TT_FATAL(b1 - b0 >= n_chunks, "sparse_sdpa split-K needs >= one token of units per core");
             head_c0 = c0;  // HEAD = token t0, chunks [c0, n_chunks)
