@@ -37,7 +37,8 @@ struct HighBwAllGatherUnicastFactory {
         bool ring_even_split{};
         bool output_bank_owned_schedule{};
         uint32_t control_group{};
-        // Tensor specs and routing are hashed; only these scalar controls change the page schedule.
+        // Tensor specs and routing are hashed; only these scalar controls change the page schedule (the slot of a slot
+        // cache only: schedule_batch_index).
         std::optional<uint32_t> input_batch_index;
         std::optional<uint32_t> gathered_dim_size;
     };
