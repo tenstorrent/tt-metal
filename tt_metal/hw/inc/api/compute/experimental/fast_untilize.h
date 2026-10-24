@@ -165,10 +165,11 @@ ALWI void fast_untilize_block(
         fast_untilize_detail::fast_untilize_block_body<full_ct_dim, is_fp32_dest_acc_en>(
             icb, ocb, input_tile_index, output_tile_index);
         fast_untilize_uninit<full_ct_dim, is_fp32_dest_acc_en>(ocb);
-        return;
-    }
+    } else
 #endif
-    pack_untilize_block<full_ct_dim, full_ct_dim, is_fp32_dest_acc_en>(icb, 1, ocb, 0);
+    {
+        pack_untilize_block<full_ct_dim, full_ct_dim, is_fp32_dest_acc_en>(icb, 1, ocb, 0);
+    }
 }
 
 template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en>
