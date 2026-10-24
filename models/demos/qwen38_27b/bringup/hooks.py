@@ -49,11 +49,11 @@ def device_component(mesh, spec, layer, step):
     from models.demos.qwen38_27b.reference.model import Config
 
     cfg = Config(spec.hf_dir)
-    if step == "attn_norm":
+    if step in ("attn_norm", "mlp_norm"):
         from models.demos.qwen38_27b.tt.norm import TtRmsNorm
 
-        w = _layer_weights(spec, layer, ["input_layernorm.weight"])["input_layernorm.weight"]
-        mod = TtRmsNorm(mesh, w, cfg.eps)
+        name = "input_layernorm.weight" if step == "attn_norm" else "post_attention_layernorm.weight"
+        mod = TtRmsNorm(mesh, _layer_weights(spec, layer, [name])[name], cfg.eps)
     elif step == "attention" and cfg.is_linear(layer):
         return _linear_attention_component(mesh, spec, cfg, layer)
     elif step in ("attn_residual", "mlp_residual"):

@@ -46,3 +46,10 @@
   inputs cross the harness boundary through `_rows_to_device`.
 - Gate: PCC 0.999997, auto_margin_min 1.97, 1 device op, host flops 0. Re-run:
   `bfw job check --task C.linear.attn_residual --gate-only`.
+
+## C.linear.mlp_norm (layer 0)
+
+- Reuses `tt/norm.py:TtRmsNorm` (same layout and settings as attn_norm) with the checkpoint's
+  `post_attention_layernorm.weight`; `device_component` serves `attn_norm` and `mlp_norm` from one branch.
+- Gate: PCC 0.999995, rel vs CPU 0.0019 (limit 0.0063), auto_margin_min 2.71, 1 device op, host flops 0,
+  bit-identical determinism. Re-run: `bfw job check --task C.linear.mlp_norm --gate-only`.
