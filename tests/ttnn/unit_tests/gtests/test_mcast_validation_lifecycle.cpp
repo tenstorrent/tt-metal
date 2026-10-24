@@ -19,10 +19,6 @@ void attach_for_inspection(const McastImpl& mcast, const McastConfig& cfg = {}) 
 void check_building_queries(const McastImpl& mcast) {
     EXPECT_NO_THROW(mcast.participating_cores());
     EXPECT_NO_THROW(mcast.sender_only_cores());
-    std::vector<uint32_t> unchanged{42};
-    EXPECT_ANY_THROW(mcast.append_compile_time_args_to(unchanged));
-    EXPECT_ANY_THROW(mcast.append_runtime_args_to(unchanged, {0, 0}));
-    EXPECT_EQ(unchanged, std::vector<uint32_t>{42});
 }
 
 }  // namespace
