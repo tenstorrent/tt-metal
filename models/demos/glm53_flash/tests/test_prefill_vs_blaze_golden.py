@@ -1,0 +1,252 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""The resident 45-layer mesh prefill (tt/mesh_model.py) graded against the tt-blaze CPU golden bundle
+(``GLM53F_GOLDEN_DIR``: ``vllm-<job>/`` token streams + ``taps/bf16/<job>/layer_L.safetensors`` +
+``state/bf16/<job>/layer_L.safetensors``; tt-blaze G53F-0017), the disaggregated-prefill source of the blaze
+48-stage (1, 2) ring (tt-blaze G53F-0080).
+
+Per job, two prefills of user slot 0:
+
+* teacher-forced: the golden's ``n_group_a_rows`` tokens (prompt + its greedy continuation) through all layers,
+  layer by layer; per layer the output streams vs the golden ``layer_out`` rows (PCC over all rows and the worst row),
+  for DSA layers the cached latent rows vs ``dsa_kv_latent``, for KDA layers the final recurrent / conv carries vs the
+  golden end-of-run ``state``; the host head on the device's final streams vs the golden next tokens (teacher-forced
+  top-1 match).
+* prompt only (``n_prompt_tokens``): wall time (TTFT, cold + warm), the device head's first token vs the golden's
+  first completion token, and the per-layer state the ring would be seeded from (KDA recurrent + conv carries, DSA
+  latent rows, the indexer pool cache + raw rings) saved under ``GLM53F_PREFILL_OUT/<job>_prompt/``.
+
+    GLM53_MESH_SHAPE=8,4 GLM53F_PREFILL_JOBS=ka,kaqa,long pytest models/demos/glm53_flash/tests/test_prefill_vs_blaze_golden.py -s
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import time
+from pathlib import Path
+
+import pytest
+import torch
+from loguru import logger
+from safetensors import safe_open
+from safetensors.torch import save_file
+
+import ttnn
+from models.demos.glm53_flash.reference.checkpoint import (
+    FINAL_NORM_KEY,
+    LM_HEAD_KEY,
+    default_snapshot_dir,
+    load_tensors,
+    shard_headers,
+)
+from models.demos.glm53_flash.tests.utils import pcc
+from models.demos.glm53_flash.tt.config import GLM53FlashConfig
+from models.demos.glm53_flash.tt.mesh import mesh_device_params
+from models.demos.glm53_flash.tt.mesh_model import GLM53MeshModel
+
+GOLDEN = Path(os.environ.get("GLM53F_GOLDEN_DIR", "/mnt/tt-data/sdawle/glm53f/golden_sweep"))
+OUT = Path(os.environ.get("GLM53F_PREFILL_OUT", "/mnt/tt-data/sdawle/glm53f/prefill/out"))
+JOBS = [j for j in os.environ.get("GLM53F_PREFILL_JOBS", "ka,kaqa,long").split(",") if j]
+MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "8,4").split(","))
+MAX_SEQ = int(os.environ.get("GLM53F_PREFILL_MAXSEQ", "8192"))
+TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "256"))
+_DT = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
+EXPERT_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DTYPE", "bfp8")]
+EXPERT_DOWN_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DOWN_DTYPE", "bfp8")]
+_cache_env = os.environ.get("GLM53_MESH_CACHE", "/mnt/tt-data/sdawle/glm53f/prefill/mesh_cache")
+CACHE_ROOT = None if _cache_env.lower() == "none" else Path(_cache_env)
+SAVE_STATES = os.environ.get("GLM53F_PREFILL_SAVE", "1") == "1"
+
+
+def _layers() -> list[int]:
+    spec = os.environ.get("GLM53_MODEL_LAYERS", "0-44")
+    if "-" in spec:
+        a, b = spec.split("-")
+        return list(range(int(a), int(b) + 1))
+    return [int(v) for v in spec.split(",")]
+
+
+def _meta(job: str) -> dict:
+    return json.loads((GOLDEN / f"vllm-{job}" / "metadata.json").read_text())
+
+
+def _read(path: Path, keys: list[str] | None = None) -> dict[str, torch.Tensor]:
+    with safe_open(str(path), framework="pt") as f:
+        return {k: f.get_tensor(k) for k in (keys or f.keys()) if k in f.keys()}
+
+
+def _tap(job: str, L: int, keys: list[str]) -> dict[str, torch.Tensor]:
+    return _read(GOLDEN / "taps" / "bf16" / job / f"layer_{L}.safetensors", keys)
+
+
+def _state(job: str, L: int) -> dict[str, torch.Tensor]:
+    return _read(GOLDEN / "state" / "bf16" / job / f"layer_{L}.safetensors")
+
+
+def _row_pcc_min(a: torch.Tensor, b: torch.Tensor) -> tuple[float, int]:
+    worst, at = 1.0, -1
+    for r in range(a.shape[0]):
+        p = pcc(a[r], b[r])
+        if p < worst:
+            worst, at = p, r
+    return worst, at
+
+
+def _embed(model: GLM53MeshModel, ids: torch.Tensor) -> tuple[ttnn.Tensor, int]:
+    """``GLM53MeshModel.prefill``'s embedding step: the row slabs of the padded prompt."""
+    S = int(ids.numel())
+    unit = 32 * model.mesh.rows
+    T_pad = -(-S // unit) * unit
+    host = model.embedding.tokens_to_host(ids, pad_to=T_pad)
+    if model.mesh.rows > 1:
+        ids_dev = model.mesh.upload(host, ttnn.uint32, rows=3, layout=ttnn.ROW_MAJOR_LAYOUT)
+    else:
+        ids_dev = ttnn.from_torch(host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=model.device)
+    streams = model.embedding(ids_dev)
+    ttnn.deallocate(ids_dev)
+    return streams, T_pad
+
+
+def _streams_host(model: GLM53MeshModel, streams: ttnn.Tensor, S: int) -> torch.Tensor:
+    return model.mesh.to_host(streams, rows=2 if model.mesh.rows > 1 else None).float()[0, 0, :S]  # [S, 16384]
+
+
+def _kda_state_host(model: GLM53MeshModel, dec) -> dict[str, torch.Tensor]:
+    """Slot 0's KDA carries, heads gathered over the TP columns (row 0's replica)."""
+    st = dec.kda_batched
+    rec = model.mesh.to_host(st.recurrent, cols=1)[0:1].float()  # [1, 64, 128, 128] (heads column-sharded head-major)
+    tiled = st.convolution.layout == ttnn.TILE_LAYOUT  # tap-major tiles [taps, B, W_c] vs ttKDA's [B, taps, W_c]
+    conv = model.mesh.to_host(st.convolution, cols=2)
+    if tiled:
+        conv = conv.permute(1, 0, 2)
+    conv = conv[0:1].float()  # [1, taps, cols * W_c], chip c's block = [q_c | k_c | v_c]
+    cols, taps = model.mesh.cols, conv.shape[1]
+    # -> the HF channel order [q | k | v] (all heads each), the golden conv_state's
+    conv = conv.reshape(1, taps, cols, 3, -1).permute(0, 1, 3, 2, 4).reshape(1, taps, -1)
+    return {"recurrent_state": rec.contiguous(), "conv_history": conv.contiguous().to(torch.bfloat16)}
+
+
+def _dsa_state_host(model: GLM53MeshModel, dec, S: int) -> dict[str, torch.Tensor]:
+    """Slot 0's latent rows [S, 512] (identity page table), plus the indexer pool cache and raw rings."""
+    c = dec.cache
+    lat = model.mesh.to_host(c.cache)  # [max_blocks, 1, 32, 512], first replica
+    lat = lat[: c.blocks_per_seq].reshape(-1, lat.shape[-1])[:S]
+    out = {"latent": lat.contiguous().to(torch.bfloat16)}
+    idx = getattr(c, "index", None) or getattr(dec, "index", None)
+    if idx is None:
+        idx = next((v for v in vars(c).values() if type(v).__name__ == "TtIndexCache"), None)
+    if idx is not None:
+        pool = model.mesh.to_host(idx.pool_cache)
+        out["index_pool"] = pool[: idx.pool_blocks].reshape(-1, pool.shape[-1]).contiguous().float()
+        out["index_ring_k"] = model.mesh.to_host(idx.ring_k)[0, 0].contiguous().float()
+        out["index_ring_g"] = model.mesh.to_host(idx.ring_g)[0, 0].contiguous().float()
+    return out
+
+
+@pytest.mark.timeout(21600)
+@pytest.mark.parametrize(
+    "device_params", [mesh_device_params(*MESH, trace_region_size=TRACE_MB * 1_000_000)], indirect=True
+)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
+def test_prefill_vs_blaze_golden(mesh_device):
+    layers = _layers()
+    snapshot = default_snapshot_dir()
+    cfg = GLM53FlashConfig.from_hf_config_json(snapshot / "config.json")
+    t0 = time.time()
+    model = GLM53MeshModel(
+        mesh_device,
+        cfg,
+        layers,
+        max_batch=1,
+        max_seq_len=MAX_SEQ,
+        weight_cache_path=CACHE_ROOT,
+        expert_dtype=EXPERT_DTYPE,
+        expert_down_dtype=EXPERT_DOWN_DTYPE,
+    )
+    logger.info(f"[g53f-prefill] model {MESH} layers {layers[0]}..{layers[-1]} built in {time.time() - t0:.0f} s")
+    w = load_tensors(snapshot, [FINAL_NORM_KEY, LM_HEAD_KEY], shard_headers(snapshot))
+    norm_w, head_w = w[FINAL_NORM_KEY].float(), w[LM_HEAD_KEY].to(torch.bfloat16)
+    summary: dict = {}
+    for job in JOBS:
+        meta = _meta(job)
+        toks = list(meta["token_ids"])
+        S, n_prompt = int(meta["n_group_a_rows"]), int(meta["n_prompt_tokens"])
+        rep: dict = {"S": S, "n_prompt": n_prompt, "layers": {}}
+        # ---- teacher-forced: every golden row through the layers, one layer at a time
+        ids = torch.tensor(toks[:S], dtype=torch.int64)
+        streams, _ = _embed(model, ids)
+        t_job = time.time()
+        for dec in model.layers:
+            L = dec.layer_idx if hasattr(dec, "layer_idx") else layers[model.layers.index(dec)]
+            out = dec.prefill_forward(streams, user=0, seq_len=S, start=0)
+            ttnn.deallocate(streams)
+            streams = out
+            dev = _streams_host(model, streams, S)
+            gold = _tap(job, L, ["layer_out"])["layer_out"].float()[:S]
+            p_all = pcc(gold, dev)
+            p_min, at = _row_pcc_min(gold, dev)
+            ent = {"layer_out_pcc": round(p_all, 6), "row_min": round(p_min, 6), "row_min_at": at}
+            if dec.cache is not None:  # DSA
+                st = _dsa_state_host(model, dec, S)
+                g = _tap(job, L, ["dsa_kv_latent"])["dsa_kv_latent"].float()[:S]
+                ent["latent_pcc"] = round(pcc(g, st["latent"].float()), 6)
+            if getattr(dec, "kda_batched", None) is not None:  # KDA
+                st = _kda_state_host(model, dec)
+                gs = _state(job, L)
+                ent["recurrent_pcc"] = round(pcc(gs["recurrent_state"].float(), st["recurrent_state"]), 6)
+                # HF conv_state [1, W, 4] holds the last 4 conv inputs; the carry is the last 3 (taps-major)
+                gc = gs["conv_state"].float()[0].t()[-3:]  # [3, W]
+                ent["conv_pcc"] = round(pcc(gc, st["conv_history"].float()[0]), 6)
+            rep["layers"][L] = ent
+            logger.info(f"[g53f-prefill] {job} S={S} L{L}: {ent}")
+        # host head on the device's final streams: rows n_prompt-1 .. S-1 predict tokens n_prompt .. S
+        h = dev.reshape(S, 4, -1).mean(1)[n_prompt - 1 :]
+        hn = h * torch.rsqrt(h.pow(2).mean(-1, keepdim=True) + cfg.rms_norm_eps) * norm_w
+        pred = (hn.to(torch.bfloat16) @ head_w.t()).float().argmax(-1).tolist()
+        want = toks[n_prompt : S + 1]
+        match = sum(int(a == b) for a, b in zip(pred, want))
+        rep["teacher_forced"] = {"match": match, "of": len(want), "pred": pred, "want": want}
+        rep["teacher_forced_wall_s"] = round(time.time() - t_job, 1)
+        logger.info(f"[g53f-prefill] {job} teacher-forced head top-1 {match}/{len(want)}: pred {pred} want {want}")
+        ttnn.deallocate(streams)
+        # ---- prompt only: TTFT + first token + the seed states
+        prompt = torch.tensor(toks[:n_prompt], dtype=torch.int64)
+        walls = []
+        for it in range(2):
+            ttnn.synchronize_device(mesh_device)
+            t1 = time.perf_counter()
+            st_out, logits, owner = model.prefill(prompt, user=0)
+            tok = model.first_token(logits, owner)
+            walls.append(time.perf_counter() - t1)
+            ttnn.deallocate(logits)
+            if it == 0:
+                ttnn.deallocate(st_out)
+        rep["prompt"] = {
+            "first_token": tok,
+            "golden_first": toks[n_prompt],
+            "ttft_cold_s": walls[0],
+            "ttft_warm_s": walls[1],
+        }
+        logger.info(
+            f"[g53f-prefill] {job} prompt {n_prompt} tok: first token {tok} (golden {toks[n_prompt]}, "
+            f"{'MATCH' if tok == toks[n_prompt] else 'DIFF'}); TTFT cold {walls[0]:.3f} s warm {walls[1]:.3f} s"
+        )
+        if SAVE_STATES:
+            d = OUT / f"{job}_prompt"
+            d.mkdir(parents=True, exist_ok=True)
+            save_file(
+                {"streams": _streams_host(model, st_out, n_prompt).contiguous()}, str(d / "final_streams.safetensors")
+            )
+            for dec in model.layers:
+                L = dec.layer_idx if hasattr(dec, "layer_idx") else layers[model.layers.index(dec)]
+                st = _dsa_state_host(model, dec, n_prompt) if dec.cache is not None else _kda_state_host(model, dec)
+                save_file(st, str(d / f"layer_{L}.safetensors"))
+            (d / "meta.json").write_text(json.dumps({"job": job, "tokens": toks[:n_prompt], "first_token": tok}))
+        ttnn.deallocate(st_out)
+        summary[job] = rep
+        OUT.mkdir(parents=True, exist_ok=True)
+        (OUT / f"report_{job}.json").write_text(json.dumps(rep, indent=1))
+    logger.info(
+        f"[g53f-prefill] SUMMARY {json.dumps({j: {k: v for k, v in r.items() if k != 'layers'} for j, r in summary.items()})}"
+    )
