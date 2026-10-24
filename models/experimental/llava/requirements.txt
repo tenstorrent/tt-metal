@@ -1,0 +1,11 @@
+# Vision & Multimodal
+transformers>=4.37.0
+torch>=2.0.0
+Pillow>=10.0.0
+timm>=0.9.0
+
+# HuggingFace utilities
+huggingface-hub>=0.20.0
+
+# For comparison/validation
+numpy>=1.24.0
