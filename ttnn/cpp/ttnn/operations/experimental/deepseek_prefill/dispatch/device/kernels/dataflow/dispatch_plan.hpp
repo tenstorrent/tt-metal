@@ -111,3 +111,23 @@ struct alignas(PLAN_L1_ALIGNMENT) GroupedRouteInfo {
 
 static_assert(sizeof(GroupedRouteInfo) == 64, "GroupedRouteInfo must be 15 u32 padded up to PLAN_L1_ALIGNMENT");
 static_assert(alignof(GroupedRouteInfo) == PLAN_L1_ALIGNMENT, "GroupedRouteInfo must be PLAN_L1_ALIGNMENT-aligned");
+
+// ===== Packed cross-device slot (unicast path) =====
+//
+// With the unicast (non-sparse-multicast) cross-device path, the worker stages each remote (token, expert)
+// entry as ONE contiguous record in the sender's payload ring: the token row followed by its metadata words.
+// The sender then ships the token and its metadata in the same fabric packet(s), the metadata as the second
+// part of a NOC scatter write, instead of a separate metadata packet (one EDM slot and one credit round trip
+// per entry saved). The payload ring keeps its host-sized byte budget (writer_cb_size * page): its slot stride
+// grows by PACKED_META_SLOT_BYTES, so it holds one slot fewer, and every ring (route_info, payload) runs over
+// writer_cb_size - 1 slots with one fewer credit in flight. Only the 3-word routing metadata fits; a larger
+// metadata page (fp8 scale tail) keeps the separate-packet path.
+constexpr uint32_t PACKED_META_SLOT_BYTES = 64;  // keeps every payload slot 64 B aligned
+constexpr uint32_t PACKED_META_WIRE_BYTES = 16;  // [src chip, token idx, top-k slot, pad]
+constexpr bool packed_xdev_enabled(uint32_t aligned_metadata_page_size, uint32_t aligned_output_page_size) {
+#ifdef SPARSE_MCAST_DISPATCH
+    return false;
+#else
+    return aligned_metadata_page_size <= PACKED_META_SLOT_BYTES && aligned_output_page_size % 64 == 0;
+#endif
+}

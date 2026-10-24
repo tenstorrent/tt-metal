@@ -84,6 +84,14 @@ void kernel_main() {
     constexpr uint32_t cb_route_info_scratch_id = get_compile_time_arg_val(12);  // 16B local scratch
     CircularBuffer cb_route_info_scratch(cb_route_info_scratch_id);
     constexpr uint32_t meta_scratch_slots = get_compile_time_arg_val(13);
+    // Packed cross-device slots (dispatch_plan.hpp): token row + metadata in one payload-ring record, one ring
+    // slot (and one in-flight credit) fewer. Must match writer_sender_dispatch.cpp, which derives the same values.
+    constexpr bool packed_xdev = packed_xdev_enabled(aligned_metadata_page_size, aligned_output_page_size);
+    constexpr uint32_t ring_slots = packed_xdev ? writer_cb_size - 1 : writer_cb_size;
+    constexpr uint32_t payload_slot_stride =
+        packed_xdev ? aligned_output_page_size + PACKED_META_SLOT_BYTES : aligned_output_page_size;
+    // space_avail starts at writer_cb_size (host); waiting for one extra credit keeps <= ring_slots in flight.
+    constexpr uint32_t credit_slack = writer_cb_size - ring_slots;
 
     Noc noc;
 
@@ -492,9 +500,9 @@ void kernel_main() {
                         produced_count + 1,
                         (uint32_t)(*space_avail_sem_ptr),
                         route);
-                    space_avail_sem.wait_min(produced_count + 1);
+                    space_avail_sem.wait_min(produced_count + 1 + credit_slack);
 
-                    uint32_t slot = produced_count % writer_cb_size;
+                    uint32_t slot = produced_count % ring_slots;
 
                     // Build route_info (4 × u32) in local scratch, send as one NOC write.
                     // [3]=dst_chip carries the linearized dest device index for the sender's 2D
@@ -508,7 +516,7 @@ void kernel_main() {
                         route_info_scratch_addr, c4_slot, route_info_slot_stride, TRID_NON_LOCAL_WRITE);
 
                     // Payload: chunk to NOC_MAX_BURST_SIZE packets, each tagged with TRID.
-                    uint64_t c5_slot = sender_c5_base_noc_addr + slot * aligned_output_page_size;
+                    uint64_t c5_slot = sender_c5_base_noc_addr + slot * payload_slot_stride;
                     uint32_t off = 0;
                     while (off < aligned_output_page_size) {
                         uint32_t chunk = (aligned_output_page_size - off > (uint32_t)NOC_MAX_BURST_SIZE)
@@ -537,9 +545,19 @@ void kernel_main() {
                         }
                     }
 #endif
-                    uint64_t c6_slot = sender_c6_base_noc_addr + slot * aligned_metadata_page_size;
-                    noc_async_write_one_packet_with_trid(
-                        xdev_metadata_scratch_addr, c6_slot, aligned_metadata_page_size, TRID_NON_LOCAL_WRITE);
+                    if constexpr (packed_xdev) {
+                        // Metadata rides right behind the token row in the same payload-ring record.
+                        meta[3] = 0;
+                        noc_async_write_one_packet_with_trid(
+                            xdev_metadata_scratch_addr,
+                            c5_slot + aligned_output_page_size,
+                            PACKED_META_WIRE_BYTES,
+                            TRID_NON_LOCAL_WRITE);
+                    } else {
+                        uint64_t c6_slot = sender_c6_base_noc_addr + slot * aligned_metadata_page_size;
+                        noc_async_write_one_packet_with_trid(
+                            xdev_metadata_scratch_addr, c6_slot, aligned_metadata_page_size, TRID_NON_LOCAL_WRITE);
+                    }
 
                     // Wait only on this entry's cross-device writes — in-flight local
                     // DRAM writes are tagged-out by TRID and keep flying.
@@ -589,10 +607,10 @@ void kernel_main() {
         (uint32_t)core_id,
         produced_count + 1,
         (uint32_t)(*space_avail_sem_ptr));
-    space_avail_sem.wait_min(produced_count + 1);
+    space_avail_sem.wait_min(produced_count + 1 + credit_slack);
     DPRINT_DISPATCH("[W c={}] sending SENTINEL (produced total={})\n", (uint32_t)core_id, produced_count);
 
-    uint32_t sentinel_slot = produced_count % writer_cb_size;
+    uint32_t sentinel_slot = produced_count % ring_slots;
     route_info_scratch[0] = ROUTE_INFO_SENTINEL;
     route_info_scratch[1] = 0;
     route_info_scratch[2] = 0;
