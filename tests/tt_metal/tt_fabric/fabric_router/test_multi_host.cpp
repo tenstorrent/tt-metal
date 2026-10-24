@@ -39,6 +39,11 @@ using tt::tt_fabric::fabric_router_tests::expect_mesh_graph_host_topology_matche
 
 namespace tt::tt_fabric::multi_host_tests {
 
+static bool has_multiple_world_ranks() {
+    const auto world_context = tt::tt_metal::distributed::multihost::DistributedContext::get_world_context();
+    return *world_context->size() > 1;
+}
+
 std::vector<std::pair<FabricNodeId, FabricNodeId>> get_all_intermesh_connections(const ControlPlane& control_plane) {
     std::vector<std::pair<FabricNodeId, FabricNodeId>> all_intermesh_connections;
     const auto& inter_conn = control_plane.get_mesh_graph().get_inter_mesh_connectivity();
@@ -496,6 +501,9 @@ TEST(MultiHost, TestDual2x4Fabric2DSanity) {
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 }
 TEST(MultiHost, TestSplit2x2ControlPlaneInit) {
+    if (!has_multiple_world_ranks()) {
+        GTEST_SKIP() << "Split 2x2 topology requires a multi-host rank layout";
+    }
     const std::filesystem::path split_2x2_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto";
@@ -510,6 +518,9 @@ TEST(MultiHost, TestSplit2x2ControlPlaneInit) {
 }
 
 TEST(MultiHost, TestSplit2x2Fabric2DSanity) {
+    if (!has_multiple_world_ranks()) {
+        GTEST_SKIP() << "Split 2x2 topology requires a multi-host rank layout";
+    }
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
@@ -528,6 +539,9 @@ TEST(MultiHost, TestSplit2x2Fabric2DSanity) {
     }
 }
 TEST(MultiHost, TestBigMesh2x4ControlPlaneInit) {
+    if (!has_multiple_world_ranks()) {
+        GTEST_SKIP() << "Big-mesh 2x4 topology requires a multi-host rank layout";
+    }
     const std::filesystem::path big_mesh_2x4_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.textproto";
@@ -542,6 +556,9 @@ TEST(MultiHost, TestBigMesh2x4ControlPlaneInit) {
 }
 
 TEST(MultiHost, TestBigMesh2x4Fabric2DSanity) {
+    if (!has_multiple_world_ranks()) {
+        GTEST_SKIP() << "Big-mesh 2x4 topology requires a multi-host rank layout";
+    }
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
@@ -562,6 +579,7 @@ TEST(MultiHost, TestBigMesh2x4Fabric2DSanity) {
         EXPECT_TRUE(!eth_chans.empty());
     }
 }
+
 TEST(MultiHost, Test32x4QuadGalaxyControlPlaneInit) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
             tt::tt_metal::ClusterType::BLACKHOLE_GALAXY &&
@@ -818,6 +836,9 @@ TEST(MultiHost, TestBHQB4x4Fabric2DSanity) {
     }
 }
 TEST(MultiHost, TestClosetBox3PodTTSwitchControlPlaneInit) {
+    if (!has_multiple_world_ranks()) {
+        GTEST_SKIP() << "Closet-box topology requires a multi-host rank layout";
+    }
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_3pod_ttswitch_mgd.textproto";
@@ -849,6 +870,9 @@ TEST(MultiHost, TestBHQB4x4RelaxedControlPlaneInit) {
 }
 
 TEST(MultiHost, TestClosetBox3PodTTSwitchAPIs) {
+    if (!has_multiple_world_ranks()) {
+        GTEST_SKIP() << "Closet-box topology requires a multi-host rank layout";
+    }
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_3pod_ttswitch_mgd.textproto";
@@ -1432,6 +1456,9 @@ TEST(MultiHost, BHDualGalaxyFabric2DSanity) {
 }
 
 TEST(MultiHost, T3K2x2AssignZDirectionControlPlaneInit) {
+    if (!has_multiple_world_ranks()) {
+        GTEST_SKIP() << "T3K split-2x2 topology requires a multi-host rank layout";
+    }
     const std::filesystem::path t3k_2x2_assign_z_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_assign_z_direction_mesh_graph_descriptor.textproto";
@@ -1515,6 +1542,9 @@ TEST(MultiHost, T3KAssignZConflictLosingBoundaryResolvesZero) {
 }
 
 TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {
+    if (!has_multiple_world_ranks()) {
+        GTEST_SKIP() << "T3K split-2x2 topology requires a multi-host rank layout";
+    }
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
@@ -1639,6 +1669,9 @@ TEST(MultiHost, TestDual4x8ZDirectionFallbackControlPlaneInit) {
 }
 
 TEST(MultiHost, TestBHBlitzPipelineControlPlaneInit) {
+    if (!has_multiple_world_ranks()) {
+        GTEST_SKIP() << "Blitz pipeline topology requires a multi-host rank layout";
+    }
     const std::filesystem::path bh_blitz_pipeline_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/bh_glx_split_4x2.textproto";
@@ -1663,6 +1696,9 @@ TEST(MultiHost, TestBHBlitzPipelineControlPlaneInit) {
 }
 
 TEST(MultiHost, TestBlitzSuperpodAutoMapperControlPlaneInit) {
+    if (!has_multiple_world_ranks()) {
+        GTEST_SKIP() << "Blitz superpod topology requires a multi-host rank layout";
+    }
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     std::filesystem::path blitz_superpod_mesh_graph_desc_path =
         std::filesystem::path(rtoptions.get_root_dir()) /
@@ -1694,6 +1730,9 @@ TEST(MultiHost, TestBlitzSuperpodAutoMapperControlPlaneInit) {
 }
 
 TEST(MultiHost, TestBHBlitzPipelineFabric2DSanity) {
+    if (!has_multiple_world_ranks()) {
+        GTEST_SKIP() << "Blitz pipeline topology requires a multi-host rank layout";
+    }
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
@@ -1712,7 +1751,11 @@ TEST(MultiHost, TestBHBlitzPipelineFabric2DSanity) {
         EXPECT_TRUE(!eth_chans.empty());
     }
 }
+
 TEST(MultiHost, TestTriplePod32x4QuadBHGalaxyControlPlaneInit) {
+    if (!has_multiple_world_ranks()) {
+        GTEST_SKIP() << "Triple-pod topology requires a multi-host rank layout";
+    }
     const std::filesystem::path triple_pod_32x4_quad_bh_galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/triple_pod_32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto";
@@ -1729,6 +1772,9 @@ TEST(MultiHost, TestTriplePod32x4QuadBHGalaxyControlPlaneInit) {
 }
 
 TEST(MultiHost, TestTriplePod32x4QuadBHGalaxyFabric2DSanity) {
+    if (!has_multiple_world_ranks()) {
+        GTEST_SKIP() << "Triple-pod topology requires a multi-host rank layout";
+    }
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
@@ -1748,6 +1794,7 @@ TEST(MultiHost, TestTriplePod32x4QuadBHGalaxyFabric2DSanity) {
         EXPECT_TRUE(!eth_chans.empty());
     }
 }
+
 // Llama 8b decode pod MGD (tt-blaze #46935): M0 [1,8] + M1 [4,8] hosts on dual 4x16 meshes.
 // Run with llama_8b_1x2_pod_mesh_graph_descriptor.textproto on single-pod mocks (4 MPI ranks).
 TEST(MultiHost, TestLlama8b1x2PodControlPlaneInit) {
