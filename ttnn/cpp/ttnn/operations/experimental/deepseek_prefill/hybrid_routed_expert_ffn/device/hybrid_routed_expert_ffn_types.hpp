@@ -228,6 +228,9 @@ struct OperationArguments {
     // L1 per core the blocking may plan for: the arena its buffers are laid over. Zero means everything
     // above the allocator base.
     uint32_t l1_budget_bytes = 0;
+    // Per-expert weight bases come from the union kernel's weight table rather than runtime args, so
+    // the per-expert blocks are left out of the argument lists; see kernels/hybrid_weight_table.hpp.
+    bool weights_from_table = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "experts_per_chip",
@@ -243,7 +246,8 @@ struct OperationArguments {
         "output_dtype",
         "output_memory_config",
         "compute_kernel_config",
-        "l1_budget_bytes");
+        "l1_budget_bytes",
+        "weights_from_table");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -260,7 +264,8 @@ struct OperationArguments {
             output_dtype,
             output_memory_config,
             compute_kernel_config,
-            l1_budget_bytes);
+            l1_budget_bytes,
+            weights_from_table);
     }
 };
 
@@ -413,6 +418,12 @@ struct HybridRoutedExpertFfnInputs {
     // Combine's DRAM forwarding buffer, of combine::forwarding_buffer_spec. Absent: combine allocates its own; see
     // CombineL1::forwarding. An input, so a cache hit re-patches its address like any other.
     std::optional<Tensor> forwarding_buffer;
+
+    // Every expert's weight bases as one uint32 page, [gate[0..E), up[0..E), down[0..E)], read by the
+    // union kernels in place of per-expert runtime args; see kernels/hybrid_weight_table.hpp. The
+    // caller owns it and keeps it in step with the weight lists above: the op checks its shape, not
+    // its contents.
+    std::optional<Tensor> weight_table;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn

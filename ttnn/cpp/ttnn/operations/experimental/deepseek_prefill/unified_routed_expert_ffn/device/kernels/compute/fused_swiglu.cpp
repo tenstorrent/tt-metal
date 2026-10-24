@@ -106,6 +106,65 @@
 #include "api/compute/clamped_silu_glu.h"
 #endif
 
+// Plain SiLU (no variant define): evaluate silu(gate) * up as one binary SFPU op over the raw
+// bf16 accumulators, through the same fused path as the variants above. This replaces the exact
+// silu_tile (exp_21f + Newton reciprocal, ~1 us/tile), the bf8 gate_intermed round trip and the
+// separate multiply phase. It is local to this kernel; the global silu_tile is unchanged.
+// sigmoid(g) = 0.5 + 0.5 * tanh(g / 2), with tanh from the 6-entry FP16 SFPLUTFP32 table of
+// tanh_init<true> (ckernel_sfpu_tanh.h): max |sigmoid error| 0.0094, saturating to 1 at |g| >= 6.
+// Op PCC is unchanged from the exact SiLU (bfp4 weights and bf8 output dominate the error).
+#if !defined(FUSED_BINARY_ACT)
+#define FAST_SILU_GLU 1
+#define FUSED_BINARY_ACT 1
+#ifdef TRISC_MATH
+#include "llk_math_eltwise_binary_sfpu_macros.h"
+namespace ckernel::sfpu {
+template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+inline void calculate_fast_silu_glu(const uint gate_tile_idx, const uint up_tile_idx, const uint out_tile_idx) {
+    constexpr uint dst_tile_size = 32;  // 32 rows per tile in SFPU addressing
+    // Slopes packed hi/lo in LReg0/1/2, intercepts in LReg4/5/6 (loaded by fast_silu_glu_init).
+    sfpi::vLut16ss s01 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vLut16ss s23 = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vLut16ss s45 = sfpi::l_reg[sfpi::LRegs::LReg2];
+    sfpi::vLut16ii i01 = sfpi::l_reg[sfpi::LRegs::LReg4];
+    sfpi::vLut16ii i23 = sfpi::l_reg[sfpi::LRegs::LReg5];
+    sfpi::vLut16ii i45 = sfpi::l_reg[sfpi::LRegs::LReg6];
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        // The six table registers leave two LRegs, so up is loaded only once gate is consumed,
+        // and both 0.5 constants come from vConstFloatPrgm0 instead of a loaded register.
+        sfpi::vFloat gate = sfpi::dst_reg[gate_tile_idx * dst_tile_size];
+        sfpi::vFloat t = sfpi::lut(gate * sfpi::vConstFloatPrgm0, s01, i01, s23, i23, s45, i45, sfpi::LutSign::Retain);
+        t = gate * (t + sfpi::vConstFloatPrgm0);
+        // No explicit bf16 rounding: SFPSTORE truncates and the pack to bf8_b rounds again.
+        // Rounding first costs ~1 us at ISL 1024 and moves PCC by < 1e-5.
+        sfpi::dst_reg[out_tile_idx * dst_tile_size] = t * sfpi::dst_reg[up_tile_idx * dst_tile_size];
+        sfpi::dst_reg++;
+    }
+    sfpi::l_reg[sfpi::LRegs::LReg0] = s01;
+    sfpi::l_reg[sfpi::LRegs::LReg1] = s23;
+    sfpi::l_reg[sfpi::LRegs::LReg2] = s45;
+    sfpi::l_reg[sfpi::LRegs::LReg4] = i01;
+    sfpi::l_reg[sfpi::LRegs::LReg5] = i23;
+    sfpi::l_reg[sfpi::LRegs::LReg6] = i45;
+}
+
+inline void fast_silu_glu_init() {
+    // Program the constant first: SFPCONFIG writes it from LReg0, which the table then owns.
+    sfpi::vConstFloatPrgm0 = 0.5f;
+    // tanh_init<true>'s TABLE1 (breakpoints |v| = 0.5, 1, 1.5, 2, 3; max |err| 0.018) with every
+    // slope and intercept halved (exact in fp16), so the LUT returns 0.5 * tanh(v) directly.
+    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut16ss(0.96191406f * 0.5f, 0.57617188f * 0.5f);
+    sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vLut16ii(0.0f, 0.192871094f * 0.5f);
+    sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut16ss(0.28710938f * 0.5f, 0.0964355469f * 0.5f);
+    sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vLut16ii(0.48193359f * 0.5f, 0.76806641f * 0.5f);
+    sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut16ss(0.0390625f * 0.5f, 0.0f);
+    sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vLut16ii(0.8828125f * 0.5f, 0.5f);
+}
+}  // namespace ckernel::sfpu
+#endif  // TRISC_MATH
+#endif  // !FUSED_BINARY_ACT
+
 namespace {
 
 // Packer-completion barrier for the K-block boundary of a PACKER_L1_ACC phase.
@@ -423,6 +482,7 @@ template <
     // input/output CB as template args, like conv_bmm_tilize.cpp) can consume them.
     uint32_t x_cb_id,
     uint32_t x_rm_cb_id,
+    uint32_t x_tilized_cb_id,
     bool tilize_x = false>
 FORCE_INLINE void matmul_phase_fused_gu(
     uint32_t gate_cb_id,
@@ -432,7 +492,10 @@ FORCE_INLINE void matmul_phase_fused_gu(
     uint32_t gate_intermed_cb_id,
     uint32_t up_intermed_cb_id,
     uint32_t m_subblocks,
-    uint32_t n_subblocks) {
+    uint32_t n_subblocks,
+    uint32_t my_gx,
+    uint32_t my_gy,
+    uint32_t grid_x) {
     // No real_k_tiles bound here, unlike the down phase: the host asserts
     // K_gate_tiles % in0_block_w == 0, so the gate/up K-loop covers the reduction
     // dim exactly and there is no padded K position to skip. This phase's padding
@@ -477,50 +540,75 @@ FORCE_INLINE void matmul_phase_fused_gu(
     partials_gu_cb.reserve_back(EFF_OUT_MAX);
     partials_up_cb.reserve_back(EFF_OUT_MAX);
 
+    // Row-major x, tilized ONCE per M-row: gate/up K-block b is tilized by one core
+    // of the M-row, its owner (adaptive_chunk::x_owner_col), into x_tilized_cb (bf8_b
+    // staging). The owner's reader then multicasts the staging block into every
+    // row core's x_cb, itself included, so non-owners never tilize and the reader
+    // stays the only producer of x_cb. The owner tilizes block b+kAhead BEFORE its
+    // matmul of block b, so the row's upcoming blocks are on their way while every
+    // core MACs the current one; the first kAhead blocks are tilized up front.
+    //
+    // L1_ACC is turned off so the tilize packs OVERWRITE the staging instead of
+    // accumulating; the shared tilize helper reconfigures unpack SrcA + pack
+    // format, drives the per-strip wait/reserve/tilize/push/pop over the runtime
+    // x_block_tiles / in0_block_w tile-rows (adaptive per_core_M), and restores
+    // init on exit. It leaves SrcA on the bf16 row-major input, so SrcA goes back
+    // to the gate/up weight format before the matmul resumes (SrcB still holds
+    // x_cb_id: the BH tilize path never touches it, and the staging shares its
+    // bf8_b format); then the partials packer + the L1_ACC state of mm_block, the
+    // K-block whose matmul runs next.
+    auto tilize_owned_block = [&](uint32_t mm_block) {
+#ifdef PACKER_L1_ACC
+        PACK((llk_pack_reconfig_l1_acc(0)));
+#endif
+        const uint32_t n_strips = x_block_tiles / in0_block_w;
+        compute_kernel_lib::tilize<
+            in0_block_w,
+            x_rm_cb_id,
+            x_tilized_cb_id,
+            compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(n_strips);
+        // The helper consumed/produced only the runtime rows, but the reader pushed a
+        // full max cb_x_rm block and drains a full max staging block. Settle both
+        // with pointer-only bumps (no tilize work on the stale rows) so every CB
+        // moves a constant-size block.
+        const uint32_t x_pad = X_BLOCK_TILES_MAX - x_block_tiles;
+        if (x_pad > 0) {
+            CircularBuffer x_rm_cb(x_rm_cb_id);
+            CircularBuffer x_tilized_cb(x_tilized_cb_id);
+            x_rm_cb.wait_front(x_pad);
+            x_rm_cb.pop_front(x_pad);
+            x_tilized_cb.reserve_back(x_pad);
+            x_tilized_cb.push_back(x_pad);
+        }
+        reconfig_data_format_srca(gate_cb_id);
+        matmul_block_init(x_cb_id, gate_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
+        pack_reconfig_data_format(x_tilized_cb_id, partials_gu_cb_id);
+#ifdef PACKER_L1_ACC
+        PACK((llk_pack_reconfig_l1_acc(mm_block == 0 ? 0 : 1)));
+#endif
+    };
+    constexpr uint32_t kAhead = adaptive_chunk::kXTilizeLookahead;
+    const uint32_t x_period = adaptive_chunk::x_owner_period(grid_x, my_gy);
+    const bool x_eligible = adaptive_chunk::x_owner_eligible(my_gx, my_gy);
+    const auto owns_x = [&](uint32_t b) {
+        return x_eligible && b < num_blocks && adaptive_chunk::x_owner_col(b, grid_x, my_gy, x_period) == my_gx;
+    };
+    if constexpr (tilize_x) {
+        // Blocks below the lookahead have no earlier matmul to hide behind.
+        for (uint32_t b = 0; b < kAhead; ++b) {
+            if (owns_x(b)) {
+                tilize_owned_block(/*mm_block=*/0);
+            }
+        }
+    }
+
     for (uint32_t block = 0; block < num_blocks; ++block) {
         if constexpr (tilize_x) {
-            //  Row-major x: tilize this K-block's cb_x_rm strips (bf16) -> x_cb
-            //  (cb_in0_x, bf8_b) before the matmul consumes it. L1_ACC is turned
-            //  off so the tilize packs OVERWRITE x_cb rather than accumulate; the
-            //  shared tilize helper (same one conv_bmm_tilize.cpp uses) then
-            //  reconfigures unpack SrcA + pack format, drives the per-strip
-            //  wait/reserve/tilize/push/pop over the runtime x_block_tiles /
-            //  in0_block_w tile-rows (adaptive per_core_M), and restores init on
-            //  exit. The helper left SrcA pointing at the bf16 row-major input, so
-            //  restore it to the gate/up weight format before resuming the matmul
-            //  (SrcB still holds x_cb_id — the BH tilize path never touches it);
-            //  then restore the partials packer + L1_ACC state for this block.
-#ifdef PACKER_L1_ACC
-            PACK((llk_pack_reconfig_l1_acc(0)));
-#endif
-            const uint32_t n_strips = x_block_tiles / in0_block_w;
-            compute_kernel_lib::tilize<
-                in0_block_w,
-                x_rm_cb_id,
-                x_cb_id,
-                compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-                compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(n_strips);
-            // The helper consumed/produced only the runtime rows, but the reader
-            // pushed a full max cb_x_rm block and the matmul below pops a full max
-            // cb_in0_x block. Settle both with pointer-only bumps (no tilize work
-            // on the stale rows) so every CB moves a constant-size block.
-            {
-                const uint32_t x_pad = X_BLOCK_TILES_MAX - x_block_tiles;
-                if (x_pad > 0) {
-                    CircularBuffer x_rm_cb(x_rm_cb_id);
-                    x_rm_cb.wait_front(x_pad);
-                    x_rm_cb.pop_front(x_pad);
-                    x_cb.reserve_back(x_pad);
-                    x_cb.push_back(x_pad);
-                }
+            if (owns_x(block + kAhead)) {
+                tilize_owned_block(/*mm_block=*/block);
             }
-            reconfig_data_format_srca(gate_cb_id);
-            matmul_block_init(x_cb_id, gate_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
-            pack_reconfig_data_format(x_cb_id, partials_gu_cb_id);
-#ifdef PACKER_L1_ACC
-            PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
-#endif
         }
         x_cb.wait_front(X_BLOCK_TILES_MAX);
         gate_cb.wait_front(in1_block_num_tiles);
@@ -705,6 +793,18 @@ FORCE_INLINE void matmul_phase_fused_gu(
 // clamped_silu_glu_tile takes its fp32-dest mode from DST_ACCUM_MODE and wraps itself in MATH().
 #define BINARY_ACT_INIT() clamped_silu_glu_tile_init()
 #define BINARY_ACT_TILE(fp32, g, u, o) clamped_silu_glu_tile(g, u, o)
+#elif defined(FAST_SILU_GLU)
+#define BINARY_ACT_INIT() MATH((SFPU_BINARY_INIT_FN_NO_ARGS(unused, ckernel::sfpu::fast_silu_glu_init)))
+#define BINARY_ACT_TILE(fp32, g, u, o) \
+    MATH((SFPU_BINARY_CALL(            \
+        DST_SYNC_MODE,                 \
+        DST_ACCUM_MODE,                \
+        calculate_fast_silu_glu,       \
+        (fp32, 8 /* ITERATIONS */),    \
+        g,                             \
+        u,                             \
+        o,                             \
+        ckernel::VectorMode::RC)))
 #else
 #error "FUSED_BINARY_ACT is set but no activation variant matched"
 #endif
@@ -889,6 +989,11 @@ void kernel_main() {
     // compile-time) because they vary per core and one kernel serves the whole grid.
     const uint32_t gu_valid_n_subblocks = get_arg_val<uint32_t>(0);
     const uint32_t d_valid_n_subblocks = get_arg_val<uint32_t>(1);
+    // Row-major x: this core's column and row, and the row width. The core owns (tilizes)
+    // gate/up K-block b iff adaptive_chunk::x_owner_col picks it; see matmul_phase_fused_gu.
+    const uint32_t my_gx = get_arg_val<uint32_t>(2);
+    const uint32_t grid_x = get_arg_val<uint32_t>(3);
+    const uint32_t my_gy = get_arg_val<uint32_t>(4);
 
     // Phase 1 (gate)
     constexpr uint32_t g_in0_block_w = get_compile_time_arg_val(0);
@@ -973,6 +1078,8 @@ void kernel_main() {
     // Row-major bf16 x staging (x_is_row_major only); tilize input CB. Unused
     // when x is TILE.
     constexpr uint32_t cb_x_rm = get_named_compile_time_arg_val("cb_x_rm");
+    // bf8_b staging an owner core tilizes into; its reader multicasts it to the M-row.
+    constexpr uint32_t cb_x_tilized = get_named_compile_time_arg_val("cb_x_tilized");
 #ifdef FUSE_BIAS
     constexpr uint32_t cb_gate_bias = get_named_compile_time_arg_val("cb_gate_bias");
     constexpr uint32_t cb_up_bias = get_named_compile_time_arg_val("cb_up_bias");
@@ -1101,6 +1208,7 @@ void kernel_main() {
                 gu_out_block_num_tiles,
                 /*x_cb_id=*/cb_in0_x,
                 /*x_rm_cb_id=*/cb_x_rm,
+                /*x_tilized_cb_id=*/cb_x_tilized,
                 /*tilize_x=*/(x_is_row_major != 0)>(
                 cb_in1_gate,
                 cb_in1_up,
@@ -1109,7 +1217,10 @@ void kernel_main() {
                 cb_gate_intermed,
                 cb_up_intermed,
                 /*m_subblocks=*/re_m_valid,
-                /*n_subblocks=*/gu_valid_n_subblocks);
+                /*n_subblocks=*/gu_valid_n_subblocks,
+                my_gx,
+                my_gy,
+                grid_x);
 
 #ifdef FUSED_BINARY_ACT
             // Phase 3: fused activation on the raw bf16 accumulators -> cb_activated.
@@ -1169,7 +1280,12 @@ void kernel_main() {
         }  // end chunk loop
 
 #ifdef FUSE_BIAS
-        // Pop this expert's biases so the reader can refill for the next expert.
+        // Pop this expert's biases so the reader can refill for the next expert. An expert
+        // with no chunks never waited on them above, so wait first: a pop ahead of the
+        // reader's push would let the next expert's wait_front pass early.
+        CircularBuffer(cb_gate_bias).wait_front(g_in1_per_core_w);
+        CircularBuffer(cb_up_bias).wait_front(g_in1_per_core_w);
+        CircularBuffer(cb_down_bias).wait_front(d_in1_per_core_w);
         CircularBuffer(cb_gate_bias).pop_front(g_in1_per_core_w);
         CircularBuffer(cb_up_bias).pop_front(g_in1_per_core_w);
         CircularBuffer(cb_down_bias).pop_front(d_in1_per_core_w);

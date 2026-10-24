@@ -20,12 +20,12 @@ from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_p150
 from tests.ttnn.profiling.realtime_profiler_utils import assert_op_duration_merged, require_realtime_profiler
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert import (
+    _ISL_PERF_SWEEP,
     SINGLE_EXPERT_MODELS,
 )
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_moe_fused_swiglu import (
     _ISL_ALLOCATED_TOKENS,
     _ISL_EXHAUSTIVE_MODELS,
-    _ISL_EXHAUSTIVE_SWEEP,
     run_moe_fused_swiglu,
 )
 
@@ -49,84 +49,98 @@ _CEILING_ONLY = 1.0
 _LOW_ISL_MARGIN = 0.08
 _KNEE_TOKENS = 512
 
-# Device duration in ns per (model, active), x_rm layout: ONE sweep on a BH p150b (2026-09-15),
-# each case a median of _ITERS dispatches. Recalibrate on the perf runner (DDR-speed dependent):
-# each case logs an "RT-CAL" line in this dict's format, so one run regenerates the table.
+# Device duration in ns per (model, active), x_rm layout: the midpoint of three sweeps on a BH p150b
+# (2026-10-23), each case a median of _ITERS dispatches. Recalibrate on the perf runner (DDR-speed
+# dependent): each case logs an "RT-CAL" line in this dict's format, so one run regenerates the table.
 _EXPECTED_NS: dict[tuple[str, int], int] = {
-    ("kimi_k2_7", 0): 2_814,
-    ("kimi_k2_7", 128): 94_720,
-    ("kimi_k2_7", 256): 116_365,
-    ("kimi_k2_7", 512): 197_452,
-    ("kimi_k2_7", 768): 271_558,
-    ("kimi_k2_7", 1024): 344_344,
-    ("kimi_k2_7", 2048): 637_420,
-    ("kimi_k2_7", 4096): 1_229_421,
-    ("kimi_k2_7", 5120): 1_522_083,
-    ("glm_53", 0): 2_781,
-    ("glm_53", 128): 86_753,
-    ("glm_53", 256): 106_704,
-    ("glm_53", 512): 181_892,
-    ("glm_53", 768): 249_186,
-    ("glm_53", 1024): 318_833,
-    ("glm_53", 2048): 595_414,
-    ("glm_53", 4096): 1_146_764,
-    ("glm_53", 5120): 1_420_823,
+    ("kimi_k2_7", 0): 1_751,
+    ("kimi_k2_7", 32): 75_276,
+    ("kimi_k2_7", 64): 79_664,
+    ("kimi_k2_7", 96): 86_428,
+    ("kimi_k2_7", 128): 87_384,
+    ("kimi_k2_7", 256): 112_315,
+    ("kimi_k2_7", 512): 190_168,
+    ("kimi_k2_7", 768): 261_075,
+    ("kimi_k2_7", 1024): 333_629,
+    ("kimi_k2_7", 2048): 619_953,
+    ("kimi_k2_7", 4096): 1_193_839,
+    ("kimi_k2_7", 5120): 1_479_691,
+    ("glm_53", 0): 1_761,
+    ("glm_53", 32): 66_662,
+    ("glm_53", 64): 69_121,
+    ("glm_53", 96): 77_028,
+    ("glm_53", 128): 77_468,
+    ("glm_53", 256): 101_634,
+    ("glm_53", 512): 174_769,
+    ("glm_53", 768): 239_824,
+    ("glm_53", 1024): 308_361,
+    ("glm_53", 2048): 575_842,
+    ("glm_53", 4096): 1_111_580,
+    ("glm_53", 5120): 1_379_189,
 }
 
 # Same measurement and key as _EXPECTED_NS, with the weights DRAM ND-sharded: a core fetches its
 # whole K-row weight slice in ONE NoC request instead of one per tile. Its own table because the gain
-# lands where this op is weight-read bound -- 1.13-1.17x at 128, 1.10-1.12x at 256, and still 1.003-1.009x at 5120 -- so the interleaved
-# bands reject the low-ISL cases outright.
-#
-# ONE sweep on a BH p150b (2026-09-15), each case a median of _ITERS dispatches. The interleaved
-# table above is the midpoint of THREE sweeps; these carry no cross-sweep spread, so the low-ISL
-# entries are the thin ones -- which is what _LOW_ISL_MARGIN is there to absorb.
+# lands where this op is weight-read bound -- 1.16-1.17x at 128, 1.12x at 256, and still 1.006-1.009x
+# at 5120 -- so the interleaved bands reject the low-ISL cases outright. Same calibration as above.
 _NDSHARD_EXPECTED_NS: dict[tuple[str, int], int] = {
-    ("kimi_k2_7", 0): 2_804,
-    ("kimi_k2_7", 128): 83_568,
-    ("kimi_k2_7", 256): 105_725,
-    ("kimi_k2_7", 512): 187_207,
-    ("kimi_k2_7", 768): 266_642,
-    ("kimi_k2_7", 1024): 336_756,
-    ("kimi_k2_7", 2048): 633_483,
-    ("kimi_k2_7", 4096): 1_223_453,
-    ("kimi_k2_7", 5120): 1_517_023,
-    ("glm_53", 0): 2_788,
-    ("glm_53", 128): 74_208,
-    ("glm_53", 256): 95_352,
-    ("glm_53", 512): 168_893,
-    ("glm_53", 768): 237_493,
-    ("glm_53", 1024): 309_367,
-    ("glm_53", 2048): 584_487,
-    ("glm_53", 4096): 1_133_505,
-    ("glm_53", 5120): 1_407_487,
+    ("kimi_k2_7", 0): 1_817,
+    ("kimi_k2_7", 32): 66_288,
+    ("kimi_k2_7", 64): 67_917,
+    ("kimi_k2_7", 96): 75_273,
+    ("kimi_k2_7", 128): 75_598,
+    ("kimi_k2_7", 256): 100_441,
+    ("kimi_k2_7", 512): 176_664,
+    ("kimi_k2_7", 768): 255_383,
+    ("kimi_k2_7", 1024): 325_652,
+    ("kimi_k2_7", 2048): 610_185,
+    ("kimi_k2_7", 4096): 1_190_970,
+    ("kimi_k2_7", 5120): 1_470_833,
+    ("glm_53", 0): 1_793,
+    ("glm_53", 32): 56_442,
+    ("glm_53", 64): 59_925,
+    ("glm_53", 96): 65_864,
+    ("glm_53", 128): 66_330,
+    ("glm_53", 256): 90_460,
+    ("glm_53", 512): 161_760,
+    ("glm_53", 768): 229_144,
+    ("glm_53", 1024): 295_547,
+    ("glm_53", 2048): 563_140,
+    ("glm_53", 4096): 1_099_279,
+    ("glm_53", 5120): 1_367_113,
 }
 
 # Kimi K3 runs SiTU-GLU at the post-projection dims, so its K axis is ROUTED_EXPERT_HIDDEN_SIZE and
 # it cannot be driven from SINGLE_EXPERT_MODELS (which reads config.EMB_SIZE). Same measurement.
 _K3_SITU_EXPECTED_NS: dict[int, int] = {
-    0: 2_779,
-    128: 86_120,
-    256: 120_776,
-    512: 219_165,
-    768: 310_283,
-    1024: 399_470,
-    2048: 755_772,
-    4096: 1_467_782,
-    5120: 1_826_516,
+    0: 1_762,
+    32: 69_903,
+    64: 75_006,
+    96: 82_900,
+    128: 85_842,
+    256: 120_747,
+    512: 221_013,
+    768: 310_053,
+    1024: 399_767,
+    2048: 758_652,
+    4096: 1_476_747,
+    5120: 1_835_451,
 }
 
-# Kimi K3 SiTU-GLU counterpart of _NDSHARD_EXPECTED_NS: 1.08x at 128 and 256, 1.07x at 512.
+# Kimi K3 SiTU-GLU counterpart of _NDSHARD_EXPECTED_NS: 1.07x at 128, 1.08x at 256 and 512.
 _K3_SITU_NDSHARD_EXPECTED_NS: dict[int, int] = {
-    0: 2_844,
-    128: 79_762,
-    256: 111_407,
-    512: 204_457,
-    768: 293_391,
-    1024: 382_922,
-    2048: 738_619,
-    4096: 1_454_733,
-    5120: 1_810_441,
+    0: 1_782,
+    32: 63_495,
+    64: 66_969,
+    96: 79_675,
+    128: 80_023,
+    256: 111_640,
+    512: 205_237,
+    768: 295_267,
+    1024: 384_594,
+    2048: 744_304,
+    4096: 1_462_008,
+    5120: 1_820_239,
 }
 
 
@@ -152,7 +166,7 @@ def _perf_params():
     for name, config, _extended in SINGLE_EXPERT_MODELS:
         if name not in _ISL_EXHAUSTIVE_MODELS:
             continue
-        for active in _ISL_EXHAUSTIVE_SWEEP:
+        for active in _ISL_PERF_SWEEP:
             params.append(
                 pytest.param(
                     name,
@@ -214,7 +228,7 @@ def test_moe_fused_swiglu_perf(
 
 @pytest.mark.parametrize(
     "active_tokens, margin",
-    [pytest.param(active, _margin_for(active), id=f"k3-isl-{active}-perf") for active in _ISL_EXHAUSTIVE_SWEEP],
+    [pytest.param(active, _margin_for(active), id=f"k3-isl-{active}-perf") for active in _ISL_PERF_SWEEP],
 )
 @pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
 @pytest.mark.requires_host_iommu
