@@ -71,5 +71,6 @@ some Ethernet links can stay untrained, and opening the mesh then fails in
   chunked prefill's slot parity is not measured.
 - Speculative decoding: MTP drafting through vLLM is implemented but not yet run on hardware
   (doc/vllm_integration/README.md, Speculative decoding); DFlash drafts its whole block (K = 7) on the 8-slot verify
-  (`MIMO_SPEC_SLOTS=8`), chained on device, within a few percent of chained MTP at c=1
-  (doc/vllm_integration/README.md, Speculative decoding (DFlash)).
+  (`MIMO_SPEC_SLOTS=8`), chained on device, within a few percent of chained MTP at c=1; with two requests per lane
+  (`MIMO_SPEC_GROUPS=2`, c=8) both drafters draft for both, MTP +46% tokens/s over no speculation
+  (doc/vllm_integration/README.md, Speculative decoding (DFlash), Two requests per lane).

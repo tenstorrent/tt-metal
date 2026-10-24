@@ -384,6 +384,52 @@ by a few percent: another MTP run gave 3.25, 4.65 ms). K = 5 pays the 8-row kern
 accepts slightly less than the MTP layers for the same step. Open: an accept trace without SampleScan for all-greedy
 passes (0.23 ms per 8-slot step, 0.15 ms per 4-slot step, for both drafters); the draft's 10 row all-reduces.
 
+### Two requests per lane (draft groups)
+
+With more than one request in a lane the drafters drafted nothing: they kept one request's state per lane. A pass of
+8 slots holds two requests of 4 slots each, so the drafters now draft for both, each request in a **draft group** with
+its own state (`MIMO_SPEC_SLOTS=8 MIMO_SPEC_GROUPS=2`, `reference/spec_decode.py`), K = 3 each:
+
+```bash
+export MIMO_SPEC_DECODE=mtp MIMO_SPEC_SLOTS=8 MIMO_SPEC_GROUPS=2   # or dflash
+vllm serve ... --max-num-seqs 8 \
+  --speculative-config '{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter", "num_speculative_tokens": 3}'
+```
+
+- **Groups.** A request keeps its group while it runs: the adapter assigns one at its prompt (a free group, else the
+  one whose request ran least recently, `generator_vllm._draft_groups`) and places its verify columns there
+  (`plan_verify_passes`); the accept page's groups follow (`pass_rows`). A lane of more requests than groups drafts
+  for none.
+- **Layouts** (`reference/spec_chain.py`, `kernels/spec_chain.cpp`): the chain row, the result page's status and
+  drafts sections, and the MTP descriptions have a block per group; every chain step runs per group (one group: the
+  layouts of before).
+- **MTP**: one ring per group (the page table maps a group's slots to its blocks) and the group's stash slots; one
+  program drafts both groups, each from its own description; a request's first draft backfills its group's ring from
+  the history (prompts reset nothing).
+- **DFlash**: one context ring per group (the prompt writes its request's), the block's attention one decode-SDPA user
+  per group, the drafts in GreedyHead rows g * 3 ...
+- **Draft programs compile before any trace capture** (`TtMiMoMTP.warm`, `TtDFlash.warm`, in
+  `TtMiMoModel.capture_decode_trace`). The tiled reshape keeps a device mapping table, allocated when its program
+  compiles; compiled after the decode and verify captures, it sat where those traces write on replay, and the
+  two-group DFlash draft hung on its first replay in serving (tt-triage: every reshape reader in `cb_reserve_back`).
+
+c=8 (four lanes of two requests), 32 SPEED-Bench coding prompts, 512 output tokens (BH Galaxy, 2026-10-24; output
+tokens/s, TPOT, tokens/step):
+
+| configuration | greedy | sampled (T 1.0, top_p 0.95) |
+|---|---|---|
+| no speculation | 554, 12.44 ms | 571, 12.05 ms |
+| 3 MTP layers, 4-slot verify (default) | 418, 16.50 ms, 3.44 | 351, 20.08 ms, 3.18 |
+| 3 MTP layers, draft groups (K = 3) | **807, 8.65 ms, 3.42** | **733, 9.29 ms, 3.18** |
+| DFlash, draft groups (K = 3) | 707, 9.31 ms, 3.34 | 670, 9.74 ms, 3.17 |
+
+With the 4-slot verify a lane of two requests verifies without drafts (only lanes left with one request draft), and
+the speculative path costs more than plain decode: 25% fewer tokens/s than no speculation. With draft groups every
+request drafts, at its c=1 acceptance: +46% greedy, +28% sampled over no speculation. DFlash accepts slightly less than
+the MTP layers at K = 3 and prefills one row at a time (TTFT 695 vs 391 ms). The steps are host-bound: the verify's
+host side takes ~14 ms per step for the four lanes (page tables 2.4 ms) against ~20 ms of device work, so that host
+work is the next lever. At c=1 a draft-group launch runs the 8-row kernels for one request (use the 4-slot launch).
+
 ### One MTP layer per draft
 
 The checkpoint has 3 MTP layers (`num_nextn_predict_layers`). Upstream vLLM drafts all 3 tokens with layer 0; the GPU
