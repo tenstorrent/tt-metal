@@ -138,10 +138,20 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
             SOFTPLUS_BF16_POLY_C5,
             SOFTPLUS_BF16_POLY_C6);
 
-        // Tail: the degree-6 poly diverges past its [0, 5] fit domain, while the true
-        // residual < exp(-5) = 0.0067 there. Clamping to 0 keeps softplus(t>0) = t within
-        // bf16 rounding and avoids the ~8-op exp tail on every element.
-        v_if(a > SOFTPLUS_POLY_BOUNDARY) { residual = 0.0f; }
+        // Tail: past [0, 5], for t >= 0 clamping residual to 0 keeps softplus(t) = t
+        // within bf16 rounding. For t < 0, softplus(t) = f(|t|) where residual IS the output;
+        // evaluate Cody-Waite exp tail so elements with t < -5 don't collapse to +0.0 (issue #60960).
+        v_if(a > SOFTPLUS_POLY_BOUNDARY) {
+            v_if(t < 0.0f) {
+                sfpi::vFloat neg_a = sfpi::setsgn(a, 1);
+                sfpi::vFloat e = softplus_exp_negative(neg_a);
+                residual = e * (1.0f + e * (-0.5f + e * 0.333333343f));
+            }
+            v_else {
+                residual = 0.0f;
+            }
+            v_endif;
+        }
         v_endif;
 #endif
 

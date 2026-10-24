@@ -79,6 +79,26 @@ def test_softplus_threshold_boundary(device, beta, threshold):
     run_softplus_boundary_test(device, beta, threshold)
 
 
+def test_softplus_negative_tail(device):
+    """Regression test for softplus bf16 negative tail (issue #60960).
+    For inputs x < -5/beta, softplus must return non-zero representable bf16 values
+    and must not collapse to +0.0 due to tail clamping.
+    """
+    values = [-5.03125, -6.0, -10.0, -20.0]
+    torch_input_tensor = torch.tensor(values, dtype=torch.bfloat16).repeat(64, 32)
+    torch_output = torch.nn.functional.softplus(torch_input_tensor, beta=1.0, threshold=20.0)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    output_tensor = ttnn.softplus(input_tensor, beta=1.0, threshold=20.0)
+    output_torch = ttnn.to_torch(ttnn.from_device(ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)))
+
+    # Ensure no element collapses to exact zero where the reference is non-zero
+    assert torch.all(output_torch > 0.0), "softplus returned exact +0.0 for x < -5 on bfloat16"
+    assert_with_pcc(torch_output, output_torch, 0.99)
+
+
 def test_tanhshrink_ulp(device):
     """ULP regression guard for the dedicated tanhshrink SFPU op (issue #45520).
 
