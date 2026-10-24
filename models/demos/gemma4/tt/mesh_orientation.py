@@ -121,7 +121,22 @@ DECODE_FUSION_ON = {
     "GEMMA4_LAYER_NORM_FUSED": "1",
     "GEMMA4_QKV_NORM_ROPE_FUSED": "1",
 }
-DECODE_FUSION_OFF = {name: "0" for name in DECODE_FUSION_ON}
+# The dense models (31B / 12B) on the same 4-chip Blackhole meshes default to the combined dense configuration
+# measured in the layer lab and the model-level A/B (row view, QKV heads + norms + RoPE as one program, concat heads
+# into the o_proj layout, the native norms writing the next matmul's activation layout, the sharded GeGLU, the
+# fused softcap); the fused norm family (GEMMA4_NORM_FUSED=2) stays off on dense widths (slower than the native
+# width-sharded LayerNorm there). Env overrides win here as well.
+DENSE_DECODE_FUSION_ON = {
+    "GEMMA4_DRAM_SHARD_ROW_VIEW": "1",
+    "GEMMA4_QKV_L1_OUT": "1",
+    "GEMMA4_QKV_HEADS_FUSED": "1",
+    "GEMMA4_CONCAT_HEADS_FUSED": "1",
+    "GEMMA4_CONCAT_HEADS_SHARDED": "1",
+    "GEMMA4_MLP_GEGLU_SHARDED": "1",
+    "GEMMA4_NORM_SHARDED_OUT": "1",
+    "GEMMA4_SOFTCAP_FUSED": "1",
+}
+DECODE_FUSION_OFF = {name: "0" for name in {**DECODE_FUSION_ON, **DENSE_DECODE_FUSION_ON}}
 FOUR_CHIP_SHAPES = (ROW_MESH_SHAPE, COLUMN_MESH_SHAPE)
 
 _decode_fusion_profile = {}
@@ -133,9 +148,20 @@ def fused_decode_build(shape, *, blackhole: bool, moe: bool) -> bool:
     return bool(blackhole) and bool(moe) and _shape(shape) in FOUR_CHIP_SHAPES
 
 
+def dense_fused_decode_build(shape, *, blackhole: bool, moe: bool) -> bool:
+    """Whether a build runs the combined dense decode configuration by default: a Blackhole dense model on the
+    4-chip (1,4) or (4,1) mesh. Wormhole, the MoE build and the other mesh shapes (one chip, the (1,8) line, the
+    Galaxy lane engine) do not."""
+    return bool(blackhole) and not moe and _shape(shape) in FOUR_CHIP_SHAPES
+
+
 def decode_fusion_defaults(shape, *, blackhole: bool, moe: bool) -> dict:
     """The per-flag default value (the string an env var would carry) for this build."""
-    return dict(DECODE_FUSION_ON if fused_decode_build(shape, blackhole=blackhole, moe=moe) else DECODE_FUSION_OFF)
+    if fused_decode_build(shape, blackhole=blackhole, moe=moe):
+        return dict(DECODE_FUSION_ON)  # the dense-only names are absent: decode_flag reads them as "0"
+    if dense_fused_decode_build(shape, blackhole=blackhole, moe=moe):
+        return dict(DENSE_DECODE_FUSION_ON)  # the MoE-only names and the fused norm family absent: "0"
+    return dict(DECODE_FUSION_OFF)
 
 
 def set_decode_fusion_profile(shape, *, blackhole: bool, moe: bool) -> dict:

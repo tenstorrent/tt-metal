@@ -64,3 +64,38 @@ def test_profile_and_env_override(monkeypatch):
     assert mo.decode_flag("GEMMA4_MLP_DECODE_1D") == "0"
     monkeypatch.setenv("GEMMA4_MLP_DECODE_1D", "1")
     assert mo.decode_flag("GEMMA4_MLP_DECODE_1D") == "1"
+
+
+def test_four_chip_blackhole_dense_runs_the_combined_dense_configuration():
+    for shape in ((1, 4), (4, 1)):
+        assert mo.dense_fused_decode_build(shape, blackhole=True, moe=False)
+        assert not mo.fused_decode_build(shape, blackhole=True, moe=False)
+        d = mo.decode_fusion_defaults(shape, blackhole=True, moe=False)
+        assert d == mo.DENSE_DECODE_FUSION_ON
+        for name in mo.DECODE_FUSION_ON:
+            if name not in mo.DENSE_DECODE_FUSION_ON:
+                assert (
+                    d.get(name, "0") == "0"
+                )  # the MoE-only fusions and the fused norm family stay off on dense widths
+    # the MoE profile keeps every MoE flag on and none of the dense-only ones
+    d = mo.decode_fusion_defaults((1, 4), blackhole=True, moe=True)
+    assert d == mo.DECODE_FUSION_ON
+    for name in mo.DENSE_DECODE_FUSION_ON:
+        assert d.get(name, "0") == mo.DECODE_FUSION_ON.get(name, "0")
+    # Wormhole, one chip and the (1,8) line keep the old dense defaults
+    assert not mo.dense_fused_decode_build((1, 4), blackhole=False, moe=False)
+    for shape in ((1, 1), (1, 8), (4, 8)):
+        assert not mo.dense_fused_decode_build(shape, blackhole=True, moe=False)
+        assert mo.decode_fusion_defaults(shape, blackhole=True, moe=False) == mo.DECODE_FUSION_OFF
+
+
+def test_dense_profile_env_override(monkeypatch):
+    monkeypatch.delenv("GEMMA4_QKV_HEADS_FUSED", raising=False)
+    mo.set_decode_fusion_profile((1, 4), blackhole=True, moe=False)
+    try:
+        assert mo.decode_flag("GEMMA4_QKV_HEADS_FUSED") == "1"
+        assert mo.decode_flag("GEMMA4_NORM_FUSED") == "0"
+        monkeypatch.setenv("GEMMA4_QKV_HEADS_FUSED", "0")
+        assert mo.decode_flag("GEMMA4_QKV_HEADS_FUSED") == "0"  # a set env var wins
+    finally:
+        mo.clear_decode_fusion_profile()
