@@ -1073,7 +1073,10 @@ def load_gate_weights_from_hf(
         raise KeyError(f"Gate bias not found at {bias_key}. Layer {layer_idx} may not be an MoE layer.")
 
     gate_weight = state_dict[weight_key].to(dtype)
-    gate_bias = state_dict[bias_key].to(dtype)
+    # Centre in fp32 BEFORE the downcast: the bias only ranks experts (shift-invariant), and its large per-layer offset
+    # would otherwise leave bf16 only a handful of distinct values (see tt_moe_gate_prefill.centre_gate_bias).
+    bias_fp32 = state_dict[bias_key].float()
+    gate_bias = (bias_fp32 - bias_fp32.mean()).to(dtype)
 
     logger.info(
         f"Loaded gate weights from {model_id} layer {layer_idx}: weight={gate_weight.shape}, bias={gate_bias.shape}"

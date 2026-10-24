@@ -29,6 +29,20 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 
 
+
+# The noaux_tc correction bias only ranks experts (score + bias); the routing weights use the raw scores. Checkpoint
+# biases sit on large per-layer offsets (GLM-5.3: ~34 at layer 3, ~8-12 later) with a spread of only ~0.03-0.14, and
+# bf16's spacing at those magnitudes (0.0625-0.25) collapses each layer to 3-8 distinct values, i.e. it erases the
+# bias. Every top-k (and every group score, a sum of top-2 of score + bias) is invariant to a constant shift, so store
+# bias - mean(bias): exact selection semantics, and bf16 then keeps ~1e-3 resolution. The centred tensor lives under
+# its own cache name so a stale uncentred file can never be loaded in its place.
+GATE_BIAS_CACHE_NAME = "e_score_correction_bias_centered"
+
+
+def centre_gate_bias(bias: torch.Tensor) -> torch.Tensor:
+    bias = bias.float()
+    return bias - bias.mean()
+
 class GateComputeMode(Enum):
     """Controls which parts of the gate computation fall back to host (torch).
 
@@ -471,8 +485,8 @@ class TtMoEGatePrefill(LightweightModule):
         if not pattern_exists(f"{cache_name_prefix}.weight*.tensorbin", "MoEGate"):
             logger.debug(f"TTNN cache missing: {cache_name_prefix}.weight")
             return False
-        if not pattern_exists(f"{cache_name_prefix}.e_score_correction_bias*.tensorbin", "MoEGate"):
-            logger.debug(f"TTNN cache missing: {cache_name_prefix}.e_score_correction_bias")
+        if not pattern_exists(f"{cache_name_prefix}.{GATE_BIAS_CACHE_NAME}*.tensorbin", "MoEGate"):
+            logger.debug(f"TTNN cache missing: {cache_name_prefix}.{GATE_BIAS_CACHE_NAME}")
             return False
         return True
 
@@ -516,7 +530,16 @@ class TtMoEGatePrefill(LightweightModule):
             weight_for_ttnn = torch.empty(config.dim, config.n_routed_experts)
 
         if torch_bias is None:
+            # Cache-only load: as_tensor would DUMP this placeholder on a miss, so refuse rather than cache garbage.
+            bias_file = _cache_name(GATE_BIAS_CACHE_NAME)
+            if bias_file is not None and not list(Path(bias_file).parent.glob(f"{Path(bias_file).name}*.tensorbin")):
+                raise FileNotFoundError(
+                    f"{bias_file}*.tensorbin missing and no checkpoint bias supplied; rebuild it from the checkpoint "
+                    "(the bf16 cache stores the bias mean-centred, see centre_gate_bias)"
+                )
             torch_bias = torch.empty(config.n_routed_experts)
+        else:
+            torch_bias = centre_gate_bias(torch_bias)
 
         # Convert weight
         weight_tt = ttnn.as_tensor(
@@ -540,7 +563,7 @@ class TtMoEGatePrefill(LightweightModule):
             device=None,  # Always load to host first
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            cache_file_name=_cache_name("e_score_correction_bias"),
+            cache_file_name=_cache_name(GATE_BIAS_CACHE_NAME),
             cache_dump_mode=cache_dump_mode,
         )
 
