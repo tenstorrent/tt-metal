@@ -27,39 +27,28 @@
 template <typename Block>
 ALWI void tilize_row_major_block(
     DataflowBuffer& dfb_in_rm, DataflowBuffer& dfb_in, const uint32_t block_size, const Block& block) {
-    reconfig_data_format(dfb_in_rm.get_id(), dfb_in_rm.get_id());
-    pack_reconfig_data_format(dfb_in.get_id());
-
-    tilize_init(dfb_in_rm.get_id(), block_size, dfb_in.get_id());
     dfb_in_rm.wait_front(block.full_block_size());
     dfb_in.reserve_back(block.full_block_size());
 
-    tilize_block(dfb_in_rm.get_id(), block.full_block_size(), dfb_in.get_id());
+    tilize_block(dfb_in_rm.get_id(), block.full_block_size(), dfb_in.get_id(), 0, 0, block_size);
     dfb_in.push_back(block.full_block_size());
     dfb_in_rm.pop_front(block.full_block_size());
-
-    tilize_uninit(dfb_in_rm.get_id(), dfb_in.get_id());
 }
 
 /*
  * Tilize all blocks of ROW_MAJOR input from dfb_in_rm into dfb_in (batch mode).
- * tilize_init and tilize_uninit wrap the full block loop; tilize_block is called per block.
  * Caller must reinitialize binary op hardware with binary_op_init_common after this returns,
- * since tilize_uninit reconfigures the hardware state.
+ * since tilize_block leaves the hardware in its uninitialized state.
  */
 template <uint32_t block_size>
 ALWI void tilize_all_blocks_to_dfb(DataflowBuffer& dfb_in_rm, DataflowBuffer& dfb_in, const uint32_t Wt) {
-    reconfig_data_format(dfb_in_rm.get_id(), dfb_in_rm.get_id());
-    pack_reconfig_data_format(dfb_in.get_id());
-    tilize_init(dfb_in_rm.get_id(), block_size, dfb_in.get_id());
     for (auto block : norm::kernel_util::generic::blocks(Wt, block_size)) {
         dfb_in_rm.wait_front(block.full_block_size());
         dfb_in.reserve_back(block.full_block_size());
-        tilize_block(dfb_in_rm.get_id(), block.full_block_size(), dfb_in.get_id());
+        tilize_block(dfb_in_rm.get_id(), block.full_block_size(), dfb_in.get_id(), 0, 0, block_size);
         dfb_in.push_back(block.full_block_size());
         dfb_in_rm.pop_front(block.full_block_size());
     }
-    tilize_uninit(dfb_in_rm.get_id(), dfb_in.get_id());
 }
 #endif
 
@@ -70,15 +59,11 @@ ALWI void tilize_all_blocks_to_dfb(DataflowBuffer& dfb_in_rm, DataflowBuffer& df
  */
 template <typename Block, uint32_t block_size>
 ALWI void untilize_row_major_block(DataflowBuffer& dfb_out, DataflowBuffer& dfb_out_rm, const Block& block) {
-    reconfig_data_format(dfb_out.get_id(), dfb_out.get_id());  // Handle fp32_dest_acc_en=True cases
-
-    pack_untilize_init<block_size, block_size>(dfb_out.get_id(), dfb_out_rm.get_id());
     dfb_out.wait_front(block.full_block_size());
     dfb_out_rm.reserve_back(block.full_block_size());
     pack_untilize_block<block_size, block_size>(dfb_out.get_id(), 1, dfb_out_rm.get_id());
     dfb_out_rm.push_back(block.full_block_size());
     dfb_out.pop_front(block.full_block_size());
-    pack_untilize_uninit(dfb_out_rm.get_id());
 }
 
 /*
@@ -86,10 +71,6 @@ ALWI void untilize_row_major_block(DataflowBuffer& dfb_out, DataflowBuffer& dfb_
  */
 template <uint32_t block_size>
 ALWI void untilize_all_blocks_from_dfb(DataflowBuffer& dfb_out, DataflowBuffer& dfb_out_rm, const uint32_t Wt) {
-    // If fp32_dest_acc_en=True and dtype == bfloat16, then intermediate buffers were set to float32 while output is set
-    // to bfloat16. To prevent data corruption, we reconfig data format
-    reconfig_data_format(dfb_out.get_id(), dfb_out.get_id());
-    pack_untilize_init<block_size, block_size>(dfb_out.get_id(), dfb_out_rm.get_id());
     for (auto block : norm::kernel_util::generic::blocks(Wt, block_size)) {
         dfb_out.wait_front(block.full_block_size());
         dfb_out_rm.reserve_back(block.full_block_size());
@@ -97,6 +78,5 @@ ALWI void untilize_all_blocks_from_dfb(DataflowBuffer& dfb_out, DataflowBuffer& 
         dfb_out_rm.push_back(block.full_block_size());
         dfb_out.pop_front(block.full_block_size());
     }
-    pack_untilize_uninit(dfb_out_rm.get_id());
 }
 #endif

@@ -163,38 +163,6 @@ ALWI void untilize(uint32_t num_blocks) {
 
     using dispatch = UntilizeDispatchConfig<block_width_tiles, input_dfb, output_dfb>;
 
-    // Determine if we're doing data type reconfiguration
-    constexpr bool use_unpack_reconfig =
-        (reconfig_mode == untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure) ||
-        (reconfig_mode == untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure);
-
-    constexpr bool use_pack_reconfig =
-        (reconfig_mode == untilize_config::ReconfigureRegisterDatatypeMode::PackReconfigure) ||
-        (reconfig_mode == untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure);
-
-    // Reconfigure register datatypes if requested
-    if constexpr (use_unpack_reconfig) {
-        reconfig_data_format_srca(input_dfb);
-    }
-
-    if constexpr (use_pack_reconfig) {
-        pack_reconfig_data_format(output_dfb);
-    }
-
-    // =================================================================
-    // INITIALIZATION
-    // =================================================================
-
-    if constexpr (
-        init_uninit_mode == untilize_config::InitUninitMode::InitAndUninit ||
-        init_uninit_mode == untilize_config::InitUninitMode::InitOnly) {
-        untilize_init<block_width_tiles, input_dfb, output_dfb, remap_mode>();
-    }
-
-    // =================================================================
-    // UPFRONT WAITING (if requested)
-    // =================================================================
-
     // Construct DataflowBuffer objects for sync operations
     DataflowBuffer in_dfb(input_dfb);
     DataflowBuffer out_dfb(output_dfb);
@@ -267,16 +235,6 @@ ALWI void untilize(uint32_t num_blocks) {
             in_dfb.pop_front(block_width_tiles);
             out_dfb.push_back(block_width_tiles);
         }
-    }
-
-    // =================================================================
-    // CLEANUP
-    // =================================================================
-
-    if constexpr (
-        init_uninit_mode == untilize_config::InitUninitMode::InitAndUninit ||
-        init_uninit_mode == untilize_config::InitUninitMode::UninitOnly) {
-        untilize_uninit<block_width_tiles, input_dfb, output_dfb>();
     }
 }
 
