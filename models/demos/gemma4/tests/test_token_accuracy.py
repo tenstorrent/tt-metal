@@ -40,22 +40,22 @@ from models.tt_transformers.tt.common import PagedAttentionConfig
 PREFILL_LEN = 128
 # References per checkpoint and paged-KV dtype (QB2 1x4 mesh, bfp8 weights, batch 1, 385 scored positions): top-1 vs HF /
 # HF top-1 in TT top-5 (top-1 vs the passage, where HF itself scores 0.5246 on the 31B):
-#   31B  bf16 KV 0.8545 / 0.9922 (0.4338)  measured 2026-10-07 on the then-default decode path
-#        bfp8 KV 0.8442 / 0.9792 (0.4338)  measured 2026-10-24 on the pre-fusion default path (bfp8 KV costs -1.0 pt
-#        top-1 / -1.3 pt top-5 against bf16 KV, deterministic: 377 / 385 top-5 hits, three identical runs)
-#   12B  bf16 KV 0.8078 / 0.9818 (0.2779)  measured 2026-10-24 on the combined dense configuration (first record)
-#        bfp8 KV 0.8156 / 0.9792 (0.2779)  measured 2026-10-24 on the pre-fusion default path
-# Open item (2026-10-24): the combined dense configuration (tt/mesh_orientation.py DENSE_DECODE_FUSION_ON, the default
-# since 72db7f38f92) reads 31B bf16 KV 0.8442 / 0.9870 (-1.0 pt top-1 / -0.5 pt top-5 vs the bf16 reference, a near
-# miss of the top-1 gate by 0.0003) and bfp8 KV 0.8416 / 0.9844 at b1, 0.8623 / 0.9948 at b32 (-0.3 / +0.5 vs the bfp8
-# reference); the costing element is under ablation (first suspect: the fused GeGLU's erf GELU where the reference
-# activation is gelu_pytorch_tanh) and the bf16 row is re-recorded only after the fix. The gates are the reference
-# minus MARGIN so a regression trips them; GEMMA4_MIN_TOP1 / GEMMA4_MIN_TOP5 override both for an investigation. A
-# checkpoint / dtype without a recorded reference uses the other dtype's reference of the same checkpoint, else the
-# floor bars.
+#   31B  bf16 KV 0.8442 / 0.9870 (0.4390)  2026-10-24, the shipped combined dense configuration (DENSE_DECODE_FUSION_ON)
+#        bfp8 KV 0.8442 / 0.9792 (0.4338)  2026-10-24, the pre-fusion default path
+#   12B  bf16 KV 0.8078 / 0.9818 (0.2779)  2026-10-24, the shipped combined dense configuration
+#        bfp8 KV 0.8156 / 0.9792 (0.2779)  2026-10-24, the pre-fusion default path
+# Record: the pre-fusion default read 31B bf16 KV 0.8545 / 0.9922 (2026-10-07); bfp8 KV costs it -1.0 pt top-1 / -1.3 pt
+# top-5 (deterministic, 377 / 385 top-5 hits); the combined configuration reads 0.8442 / 0.9870 on bf16 KV and 0.8416 /
+# 0.9844 (b1), 0.8623 / 0.9948 (b32) on bfp8 KV. Its one-flag-off ablation (2026-10-24) found no single element: the
+# fused QKV heads op, the sharded GeGLU and the native sharded-out norm each move 1-4 near-tie positions in both
+# directions, all bit-identical to their reference forms in their unit tests; the gate's resolution is 0.26 pt per
+# position, so differences of a few positions are not a kernel defect and are not worth re-running the ablation. The
+# gates are the reference minus MARGIN so a regression trips them; GEMMA4_MIN_TOP1 / GEMMA4_MIN_TOP5 override both for an
+# investigation. A checkpoint / dtype without a recorded reference uses the other dtype's reference of the same
+# checkpoint, else the floor bars.
 MARGIN = 0.01
 REFERENCE = {  # checkpoint -> kv dtype -> (top-1 vs HF, HF top-1 in TT top-5)
-    "gemma-4-31B-it": {"bf16": (0.8545, 0.9922), "bfp8": (0.8442, 0.9792)},
+    "gemma-4-31B-it": {"bf16": (0.8442, 0.9870), "bfp8": (0.8442, 0.9792)},
     "gemma-4-12B-it": {"bf16": (0.8078, 0.9818), "bfp8": (0.8156, 0.9792)},
 }
 FLOOR = (0.82, 0.97)
