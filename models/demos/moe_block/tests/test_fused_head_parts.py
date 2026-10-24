@@ -450,7 +450,9 @@ def test_head_se3(mesh_device, device_params):
         # (every call its own x - and so its own routing: each call checked against its own reference)
         soak = int(os.environ.get("HSE3_SOAK", "0"))  # (a soak: that many more calls over a pool of 8 inputs)
         xss = [
-            [torch.randn(rows, H // C, generator=gen(7, k)) for _ in range(R * C)]
+            [
+                torch.randn(rows, H // C, generator=gen(int(os.environ.get("HSE3_SEED", "7")), k)) for _ in range(R * C)
+            ]  # (HSE3_SEED: other inputs)
             for k in range(max(ncalls(), 8 if soak else 0))
         ]
         xts = [
@@ -474,7 +476,9 @@ def test_head_se3(mesh_device, device_params):
                 _check_routing(head, xs, w_r, b_r, head.outputs["rows"], rows, name)
             if head.latent and "xbuf" not in head.outputs:
                 _check_latent(head, xs, w_l, rows, name)
-            if "xbuf" in head.outputs:
+            if "xbuf" in head.outputs and not os.environ.get(
+                "HSE3_NOXBUF"
+            ):  # (HSE3_NOXBUF: probes that skip the prep writes)
                 _check_xbuf(head, xs, w_l, rows, name)
             if head.routing is not None:
                 _check_plan(head, rows, name)
@@ -518,8 +522,18 @@ def test_head_se3(mesh_device, device_params):
             soak
         ):  # (each call its pool input; every HSE3_SOAK_CHECK-th (500) and the last checked against its own reference)
             every = int(os.environ.get("HSE3_SOAK_CHECK", "500"))
+            import random as _rnd  # (HSE3_ORDER: input order; HSE3_SOAK_SYNC: a sync each call)
+
+            order = list(range(len(xts)))
+            if os.environ.get("HSE3_ORDER"):
+                _rnd.Random(int(os.environ["HSE3_ORDER"])).shuffle(order)
+            psync = bool(os.environ.get("HSE3_SOAK_SYNC"))
             for i in range(soak):
-                y = head.run(xts[i % len(xts)], w)
+                y = head.run(xts[order[i % len(xts)]], w)
+                if psync:
+                    logger.info(f"HSE3 soak enqueued {i}")
+                    ttnn.synchronize_device(mesh_device)
+                    logger.info(f"HSE3 soak done {i}")
                 if i % 50 == 49:  # (progress: where a hang lands)
                     ttnn.synchronize_device(mesh_device)
                     logger.info(f"HSE3 {name} soak progress: {i + 1}")

@@ -613,3 +613,27 @@ larger axis binds.
   free sender choice picks it once the combine is counted: links 1532 -> 1139 us), and the shared expert's down
   projection split by columns with its activation all-gathered (I_s 2048 < H 4096: 121 vs 283 us). Attention / mHC
   side not compared.
+
+## 17. Hazard: non-posted DRAM writes on NOC1 next to NOC1 DRAM reads (2026-10-24)
+- Seen: the fused head with its dispatch prep in every chunk (SE_PREP_LAST off) wedged one chip's NOC1 about once in
+  9-200 calls (intermittent: same inputs failed at call 9 and 53; any chip; the prep core rows + 2 port cores with NOC1
+  command buffers busy; triage empty - MMIO timeout - in 6 of 10). The prep: 32 x 640 B non-posted DRAM writes a unit
+  on the engine NCRISC (NOC1), among the W stream's NOC1 DRAM reads (its own and other cores').
+- One variable at a time (>= 1200 calls a clean verdict): no prep writes - clean; the same non-posted writes into my
+  own L1 - clean; the same DRAM writes posted - clean (3600 calls with the fence below); a write barrier per unit -
+  wedges; the W read window 3 -> 1 - wedges. So: acked DRAM writes on NOC1, not their count or the read pressure.
+- Traffic-only probe (test_noc1_traffic.py: 12 writer cores x 32 x 640 B non-posted DRAM writes a unit, own NOC1 DRAM
+  reads or not, every other core streaming NOC1 DRAM reads; 400k units a writer a chip, 8 chips): no wedge. The plain
+  mix is not enough - the head adds fabric traffic (ports' NOC1 sends / atomics, EDM writes into L1 and DRAM slots).
+  The trigger is not fully pinned; the fix removes the acked writes from the overlap.
+- Fix pattern: posted DRAM writes (noc_async_write<..., posted=true>, noc_async_posted_writes_flushed before reusing the
+  source), then at the kernel's end one non-posted 4 B rewrite into each DRAM bank written (same NoC, default VC: in
+  order behind the posted data) and the write barrier - the ack means the data landed. test_posted_fence.py: 1.92 M
+  fenced iterations read back by another RISC on NOC0 under NOC1 read load, 0 stale; without the fence 90 % stale.
+- Audit (static, every head / tail / exchange / flat / combine kernel): non-posted NOC1 DRAM writes in programs that
+  also have NOC1 DRAM reads - se_engine3 RS fin y / non-RS y / latent writes; router_stream joint rows and route words
+  (router BRISC on NOC1); routing_a2a's planner plan-tensor writes when inlined on the router BRISC; the flat op's y
+  writes (se6_drecv, se_yrm reader-down columns) next to its x relays' NOC1 reads; the combine's output writers when
+  merged with the flat program; router_topk's NCRISC instance. Fabric-delivered DRAM writes (ERISC, NOC1, non-posted)
+  into routing slots / the dispatch buffer are the same shape. None of these has hung in the soaks (10k-replay soaks,
+  the matrix); they stay suspects until the traffic probe reproduces the wedge with fabric in the mix.

@@ -535,6 +535,7 @@ void kernel_main() {
 #endif
     const uint32_t pnu = get_arg_val<uint32_t>(P0);
     const auto pg = TensorAccessor(p_args, get_arg_val<uint32_t>(P0 + 1), SE_PREP_ROW);
+    uint32_t fsrc = 0, frow = 0, fco = 0;  // (the last prep unit: the fence's source / rows - mine: nothing else writes them)
 #else
     constexpr uint32_t pnu = 0;
 #endif
@@ -586,8 +587,13 @@ void kernel_main() {
         if (pu < pnu && cb_pages_available_at_front(SE_PO, SE_PREP_FULL)) {  // a prep unit's 32 rows to the buffer
             const uint32_t src = get_read_ptr(SE_PO), q = P0 + 2 + 3 * pu;
             const uint32_t row = get_arg_val<uint32_t>(q), co = get_arg_val<uint32_t>(q + 1), nb = get_arg_val<uint32_t>(q + 2);
-            for (uint32_t i = 0; i < 32; ++i) noc_async_write(src + i * SE_PREP_FULL * 64, pg.get_noc_addr(row + i) + co, nb);
-            noc_async_writes_flushed();  // (PO may be refilled once they left L1; the kernel's last barrier acks them)
+            // (posted: non-posted DRAM writes on NOC1 - their acks - under the W stream's NOC1 DRAM reads wedged a chip's
+            // NOC1, ~1 in 200 calls with the prep in every chunk; landed by the fence at the end: test_posted_fence)
+            for (uint32_t i = 0; i < 32; ++i) {
+                noc_async_write<NOC_MAX_BURST_SIZE + 1, true, true>(src + i * SE_PREP_FULL * 64, pg.get_noc_addr(row + i) + co, nb);
+            }
+            noc_async_posted_writes_flushed();  // (PO may be refilled once they left L1)
+            fsrc = src, frow = row, fco = co;
             cb_pop_front(SE_PO, SE_PREP_FULL);
             ++pu;
         }
@@ -714,6 +720,12 @@ void kernel_main() {
             ++p;
         }
     }
+#ifdef SE_PREP
+    if (pu) {  // (the prep's fence: a non-posted rewrite of 4 B in every DRAM bank - the last unit's rows, one a bank -
+        // after the posted writes on the same VC: its ack means they all landed)
+        for (uint32_t i = 0; i < NUM_DRAM_BANKS; ++i) noc_async_write(fsrc + i * SE_PREP_FULL * 64, pg.get_noc_addr(frow + i) + fco, 4);
+    }
+#endif
     noc_async_write_barrier();
 #ifdef SE_RS
     {  // re-arm my arrival counters (every increment of the call landed: each was waited to its final count)

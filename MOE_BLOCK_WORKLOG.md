@@ -1669,3 +1669,19 @@ Structural (not fixed here):
   GLM-5.3-Flash 1024 / 1280 on the 8x4 (428 / 506 KB an instance) - the block fell back to the ops head. RoutingStream
   now takes the most instances (M) whose regions fit: one a core (BRISC only) where two don't - those four fused again.
   The planner is slower at the lower M (not measurable here: Galaxy).
+
+### The K3 chunked-head NOC1 wedge (prep in every chunk): reproduced, narrowed, fixed
+- Repro (user: triage on, host risk accepted): test_head_se3, K3 1024 rows full head, SE_PREP_LAST off locally, soak.
+  Intermittent - seed 7 with a sync each call failed at call 53 and at call 9; seed 11 at 200, input order 3 at 87,
+  async runs in 0-49 / 100-149; one chip each time (1, 5, 6, 3...), NOC1 on its prep rows + 2 port cores; triage empty
+  (NOC1 wedged) 6 of 10. The host survived all.
+- Narrowing (>= 1200 calls a clean verdict): no prep writes clean; the writes into own L1 clean; posted DRAM writes
+  clean; barrier per unit wedges; W window 1 wedges. Codex: NoC1 back-pressure (DRAM write responses + fabric credits);
+  its window test came back negative.
+- Fix: the prep's writes posted + an end-of-kernel fence (a non-posted 4 B rewrite a DRAM bank, then the barrier).
+  test_posted_fence.py proves the fence (0 stale in 1.92 M iterations; 90 % without). Prep every chunk with the fix:
+  3 x 1200 calls clean, dispatch rows checked every 200. Default stays prep in the last chunk (heads K3 768 / 1024 /
+  1280: last 898 / 1078 / 1909 us, every 893 / 1073 / 1929 - no gain); the fix is perf-neutral (before 903 / 1080 /
+  1910). Codex review: approve (fence source valid - PO not rewritten after the last unit; guard on pu).
+- The hazard class and the audit: moe_knowledge_dump.md section 17. test_noc1_traffic.py (plain NOC1 write/read mix,
+  no fabric) did not reproduce in 400k units a writer - fabric is the likely missing ingredient.
