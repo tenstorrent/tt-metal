@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import pickle
 
+import ml_dtypes
 import numpy as np
 import pytest
 
@@ -271,6 +272,31 @@ def test_save_keeps_nd_replicated_tensor(tp_mesh, tmp_path):
         checkpointing.save_checkpoint(path, header={}, model_params=params, verify_replicas=verify)
         _, record = _stream_records(path)
         assert tuple(record.shape) == (1, 1, 32, 32), (verify, record.shape)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32])
+def test_gather_reads_padded_tile_shards_as_their_values(tp_mesh, dtype):
+    """``gather`` composes straight from the tiles of the host copy it checked: shards that do not fill their tiles
+    (37 rows, 70 columns per device) come back as their stored values, a sharded tensor concatenated along its shard
+    dim and a replicated one as a single copy. Every save goes through this composition; it fails if a composer reads
+    tile padding as data, keeps a replica twice or drops a shard."""
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    tp = tp_mesh.axis_size("tp")
+    values = np.random.default_rng(5).standard_normal((1, 1, 37, 70 * tp), dtype=np.float32)
+    # from_numpy reads an array's buffer as C-contiguous, so the replicated input is a copy, not a strided view.
+    one_copy = np.ascontiguousarray(values[..., :70])
+    sharded = ttml.autograd.Tensor.from_numpy(
+        values, ttnn.Layout.TILE, dtype, ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 3)
+    )
+    replicated = ttml.autograd.Tensor.from_numpy(
+        one_copy, ttnn.Layout.TILE, dtype, ttml.core.distributed.replicate_tensor_to_mesh_mapper(device)
+    )
+    for tensor, expected in ((sharded, values), (replicated, one_copy)):
+        if dtype == ttnn.DataType.BFLOAT16:
+            expected = expected.astype(ml_dtypes.bfloat16)
+        gathered = ttml.Sharding.from_tensor(tensor).gather(tensor, verify_replicas=True)
+        assert gathered.dtype == expected.dtype and gathered.shape == expected.shape, (gathered.dtype, gathered.shape)
+        np.testing.assert_array_equal(gathered.astype(np.float32), expected.astype(np.float32))
 
 
 def test_save_warns_and_skips_state_not_in_model_params(tp_mesh, tmp_path):

@@ -206,10 +206,7 @@ nb::object make_numpy_tensor(
     }();
 
     const auto make_numpy_tensor_from_data =
-        []<typename NumpyType>(
-            const auto& tensor_data, const auto& tensor_spec /*, const auto& tensor_strides*/) -> nb::object {
-        const tt::tt_metal::Shape& tensor_shape = tensor_spec.logical_shape();
-
+        []<typename NumpyType>(const auto& tensor_data, const tt::tt_metal::Shape& tensor_shape) -> nb::object {
         const auto tensor_shape_rank = tensor_shape.rank();
         std::vector<size_t> numpy_shape(tensor_shape_rank);
         std::copy(tensor_shape.cbegin(), tensor_shape.cend(), numpy_shape.begin());
@@ -279,32 +276,30 @@ nb::object make_numpy_tensor(
 
     const auto impl = [&make_numpy_tensor_from_data,
                        composer]<typename MetalType, typename NumpyType>(const ttnn::Tensor& tensor) {
-        // A device tensor comes to the host (a host tensor is returned as is), then to row major on the host.
+        // A device tensor comes to the host (a host tensor is returned as is).
         auto cpu_tensor = tensor.cpu(/*blocking=*/true);
-        cpu_tensor = cpu_tensor.to_layout(tt::tt_metal::Layout::ROW_MAJOR);
 
-        // If composer is provided, use it to compose distributed tensor shards
+        // A composer reads the host tensor in whatever layout it has: it decodes each shard it keeps (from tiles or
+        // padding) once and skips the replicas its config drops.
         if (composer != nullptr) {
-            auto composed_result = composer->compose<MetalType>(cpu_tensor);
-            auto& vec = std::get<0>(composed_result);
-            auto& shape = std::get<1>(composed_result);
-
-            // Create a temporary tensor spec with the composed shape
-            auto composed_spec = tt::tt_metal::TensorSpec(shape, cpu_tensor.tensor_spec().tensor_layout());
-            return make_numpy_tensor_from_data.template operator()<NumpyType>(vec, composed_spec);
+            const auto [composed_data, composed_shape] = composer->compose<MetalType>(cpu_tensor);
+            return make_numpy_tensor_from_data.template operator()<NumpyType>(composed_data, composed_shape);
         }
 
+        cpu_tensor = cpu_tensor.to_layout(tt::tt_metal::Layout::ROW_MAJOR);
         const auto cpu_tensor_data = tt::tt_metal::host_buffer::get_as<const MetalType>(cpu_tensor);
-        const auto cpu_tensor_spec = cpu_tensor.tensor_spec();
+        const auto& cpu_tensor_spec = cpu_tensor.tensor_spec();
         const bool logical_matches_physical = cpu_tensor_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
                                               cpu_tensor_spec.logical_2d_shape() == cpu_tensor_spec.physical_shape();
 
         if (logical_matches_physical) {
-            return make_numpy_tensor_from_data.template operator()<NumpyType>(cpu_tensor_data, cpu_tensor_spec);
+            return make_numpy_tensor_from_data.template operator()<NumpyType>(
+                cpu_tensor_data, cpu_tensor_spec.logical_shape());
         }
 
         const auto decoded_data = cpu_tensor.host_tensor().to_vector<MetalType>();
-        return make_numpy_tensor_from_data.template operator()<NumpyType>(decoded_data, cpu_tensor_spec);
+        return make_numpy_tensor_from_data.template operator()<NumpyType>(
+            decoded_data, cpu_tensor_spec.logical_shape());
     };
 
     const auto& tensor_spec = t.tensor_spec();

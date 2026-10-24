@@ -132,7 +132,8 @@ class Sharding:
                 dims.append(free_dims.pop(0) if free_dims else 0)
                 shape_override.append(1)
         config = ttnn.MeshComposerConfig(dims=dims, mesh_shape_override=ttnn.MeshShape(shape_override))
-        composed = ttnn.aggregate_tensor(host, ttnn.create_mesh_composer(_mesh_device(), config))
-        return ttml.autograd.create_tensor(composed, False).to_numpy(
-            dtype, precision=ttml.autograd.PreferredPrecision.NATIVE
+        composer = ttnn.create_mesh_composer(_mesh_device(), config)
+        # The composer decodes each shard it keeps straight from the host copy into the array.
+        return ttml.autograd.create_tensor(host, False).to_numpy(
+            dtype, composer=composer, precision=ttml.autograd.PreferredPrecision.NATIVE
         )
