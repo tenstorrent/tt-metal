@@ -34,7 +34,9 @@ def run_mm(perf_report, formats, dest_acc, dest_sync, matrix_a, matrix_b, math_f
     st = min(n, PERF_RING_TILES)
     templates = [MATH_FIDELITY(math_fidelity), DEST_SYNC(dest_sync), THROTTLE_LEVEL(throttle)]
     if NARROW is not None:
-        templates += NARROW.for_block(formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim)
+        templates += NARROW.for_block(formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim, math_fidelity=math_fidelity)
+    if hasattr(tvp, "MATMUL_FORM_KEYS"):
+        templates += tvp.MATMUL_FORM_KEYS.for_block(formats, dims.kt_dim, dims.ct_dim, dims.rt_dim)
     templates += list(extra)
     try:
         cfg = PerfConfig(
