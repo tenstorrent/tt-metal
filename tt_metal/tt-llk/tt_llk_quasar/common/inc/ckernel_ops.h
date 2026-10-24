@@ -922,7 +922,7 @@ extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsign
 #define TTI_SFPAND(lreg_c, lreg_dest)       TT_IP_SFPAND(nullptr, lreg_c, lreg_dest)
 
 #define TT_OP_SFPCAST(lreg_c, lreg_dest, instr_mod1) TT_OP(0x90, (((lreg_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))
-#define TT_IP_SFPCAST(lreg_c, lreg_dest, instr_mod1) TT_IP_INSN(IP, TT_OP_SFPCAST(lreg_c, lreg_dest, instr_mod1))
+#define TT_IP_SFPCAST(IP, lreg_c, lreg_dest, instr_mod1) TT_IP_INSN(IP, TT_OP_SFPCAST(lreg_c, lreg_dest, instr_mod1))
 #define TT_SFPCAST(lreg_c, lreg_dest, instr_mod1)    TT_IP_SFPCAST(::ckernel::instrn_buffer, lreg_c, lreg_dest, instr_mod1)
 #define TTI_SFPCAST(lreg_c, lreg_dest, instr_mod1)   TT_IP_SFPCAST(nullptr, lreg_c, lreg_dest, instr_mod1)
 
