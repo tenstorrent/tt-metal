@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Layer-completion sinks for the host-callback transport. The runtime fires `sink.layers_completed(layer_start,
-layer_end, slot_id, pos_start, pos_end)` once per completion event; LayerCompletionRingWriter pushes one message
+"""Layer-completion sinks for the host-callback transport. The runtime fires `sink.layers_completed(layer_start=,
+layer_end=, slot_id=, pos_start=, pos_end=)` once per completion event; LayerCompletionRingWriter pushes one message
 per span into the rank's ring. ttnn-free, so unit-testable.
 """
 
@@ -35,7 +35,7 @@ def _push_with_spin(try_push, *, what: str, is_shutdown) -> None:
 
 class LayerCompletionSink(ABC):
     @abstractmethod
-    def layers_completed(self, layer_start: int, layer_end: int, slot_id: int, pos_start: int, pos_end: int) -> None:
+    def layers_completed(self, *, layer_start: int, layer_end: int, slot_id: int, pos_start: int, pos_end: int) -> None:
         """Global layers [layer_start, layer_end) of the chunk (slot_id, positions [pos_start, pos_end))."""
 
 
@@ -46,7 +46,7 @@ class LayerCompletionRingWriter(LayerCompletionSink):
         self._producer = producer
         self._is_shutdown = is_shutdown
 
-    def layers_completed(self, layer_start, layer_end, slot_id, pos_start, pos_end) -> None:
+    def layers_completed(self, *, layer_start, layer_end, slot_id, pos_start, pos_end) -> None:
         fields = dict(
             slot_id=slot_id, pos_start=pos_start, pos_end=pos_end, layer_start=layer_start, layer_end=layer_end
         )
@@ -58,5 +58,5 @@ class LayerCompletionRingWriter(LayerCompletionSink):
 class NullLayerCompletionSink(LayerCompletionSink):
     """No-op sink for warm passes (see TtPrefillRuntime.compile)."""
 
-    def layers_completed(self, layer_start, layer_end, slot_id, pos_start, pos_end) -> None:
+    def layers_completed(self, *, layer_start, layer_end, slot_id, pos_start, pos_end) -> None:
         return None
