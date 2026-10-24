@@ -15,26 +15,65 @@
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/matmul.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
-#include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "api/compute/bcast.h"
-#include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 constexpr uint32_t max_dst_tiles =
     ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
 
 enum class ElementwiseBinaryOp { Add, Subtract, Multiply };
+
+// The caller waits for and pops every input window; each elementwise helper reserves and publishes its whole output,
+// and PACK state persists across helpers (the caller reconfigures it only at actual destination-format transitions).
+constexpr ckl::InputSpec resident(uint32_t dfb_id) {
+    return ckl::input(dfb_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block);
+}
+
+// A resident operand read at a runtime tile offset.
+constexpr ckl::InputSpec selected(uint32_t dfb_id) {
+    return ckl::input(
+        dfb_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Block,
+        ckl::DataFormatReconfig::Enabled,
+        ckl::TileAddressing::Offset);
+}
+
+// Broadcast row 0 of each tile of a resident operand down that tile.
+constexpr ckl::BroadcastInputSpec resident_rows(uint32_t dfb_id) {
+    return ckl::input(
+        dfb_id, ckl::BroadcastDim::Row, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block);
+}
+
+// Broadcast the single column of a resident [Mt,1] operand across each output tile row.
+constexpr ckl::BroadcastInputSpec resident_column(uint32_t dfb_id) {
+    return ckl::input(
+        dfb_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Col);
+}
+
+constexpr ckl::OutputSpec published(uint32_t dfb_id) {
+    return ckl::output(dfb_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled);
+}
+
+// Batch each destination-register synchronization.
+constexpr ckl::IterationShape dst_blocks(uint32_t tiles) {
+    return ckl::IterationShape::tiles(tiles).block_size(max_dst_tiles);
+}
 
 // Code size: the whole program must fit the kernel config buffer. The helpers are not declared inline, so O3 weighs
 // each call site with its regular budget instead of the larger inline-declared one, and pack loops are not peeled.
@@ -78,230 +117,82 @@ void matmul_blocks(DFB0& a, DFB1& b, DFB2& o) {
 }
 
 // Apply a typed binary operation tilewise, batching each destination-register synchronization.
-template <ElementwiseBinaryOp Op, typename DFB0, typename DFB1, typename DFB2>
+template <
+    ElementwiseBinaryOp Op,
+    uint32_t ADfb,
+    uint32_t BDfb,
+    uint32_t ODfb,
+    typename DFB0,
+    typename DFB1,
+    typename DFB2>
 void elementwise_binary(DFB0& a, DFB1& b, DFB2& o, uint32_t n) {
-    const uint32_t a_id = a.get_id();
-    const uint32_t b_id = b.get_id();
-    const uint32_t o_id = o.get_id();
-
-    o.reserve_back(n);
-    reconfig_data_format(a_id, b_id);  // binary(a_id,b_id): a_id->srcA, b_id->srcB
-    if constexpr (Op == ElementwiseBinaryOp::Add) {
-        add_init(a_id, b_id);
-    } else if constexpr (Op == ElementwiseBinaryOp::Subtract) {
-        sub_init(a_id, b_id);
-    } else {
-        mul_init(a_id, b_id);
-    }
-    for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
-        const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
-        tile_regs_acquire();
-        if constexpr (Op == ElementwiseBinaryOp::Add) {
-            add_block(a_id, b_id, block_start, block_start, 0, block_tiles);
-        } else if constexpr (Op == ElementwiseBinaryOp::Subtract) {
-            sub_block(a_id, b_id, block_start, block_start, 0, block_tiles);
-        } else {
-            mul_block(a_id, b_id, block_start, block_start, 0, block_tiles);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-#pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
-        }
-        tile_regs_release();
-    }
-    o.push_back(n);
+    // binary(a, b): a -> srcA, b -> srcB
+    constexpr ckl::BinaryFpuOp op = Op == ElementwiseBinaryOp::Add        ? ckl::BinaryFpuOp::Add
+                                    : Op == ElementwiseBinaryOp::Subtract ? ckl::BinaryFpuOp::Sub
+                                                                          : ckl::BinaryFpuOp::Mul;
+    ckl::eltwise_chain(
+        dst_blocks(n), ckl::BinaryFpu<op, resident(ADfb), resident(BDfb)>{a, b}, ckl::PackTile<published(ODfb)>{o});
 }
 
 // Multiply one selected source-tile pair and publish the result.
-template <typename DFB0, typename DFB1, typename DFB2>
+template <uint32_t ADfb, uint32_t BDfb, uint32_t ODfb, typename DFB0, typename DFB1, typename DFB2>
 void multiply_selected_tile(DFB0& a, uint32_t a_tile, DFB1& b, uint32_t b_tile, DFB2& o) {
-    const uint32_t a_id = a.get_id();
-    const uint32_t b_id = b.get_id();
-    const uint32_t o_id = o.get_id();
-
-    o.reserve_back(1);
-    reconfig_data_format(a_id, b_id);
-    mul_init(a_id, b_id);
-    tile_regs_acquire();
-    mul_block(a_id, b_id, a_tile, b_tile, 0, 1);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(0, o_id, 0);
-    tile_regs_release();
-    o.push_back(1);
+    ckl::eltwise_chain(
+        ckl::IterationShape::one_tile(),
+        ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, selected(ADfb), selected(BDfb)>{a, b, a_tile, b_tile},
+        ckl::PackTile<published(ODfb)>{o});
 }
 
-template <typename DFB0, typename DFB1>
+template <uint32_t InDfb, uint32_t ODfb, typename DFB0, typename DFB1>
 void square_tiles(DFB0& in, DFB1& o, uint32_t n) {
-    const uint32_t in_id = in.get_id();
-    const uint32_t o_id = o.get_id();
-
-    o.reserve_back(n);
-    reconfig_data_format_srca(in_id);
-    copy_init(in_id);
-    square_tile_init();
-    for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
-        const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
-        tile_regs_acquire();
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            copy_tile(in_id, block_start + tile, tile);
-            square_tile(tile);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-#pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
-        }
-        tile_regs_release();
-    }
-    o.push_back(n);
+    ckl::unary<ckl::Square<>, resident(InDfb), published(ODfb)>(dst_blocks(n), in, o);
 }
 
 // Mode and Iterations restrict the exponential to a row vector for row-replicated inputs: VectorMode::R visits faces 0
 // and 1, and two of a face's eight SFPU iterations span its first rows, row 0 included. The rest of each output tile
 // is then unspecified.
-template <VectorMode Mode = VectorMode::RC, int Iterations = 8, typename DFB0, typename DFB1>
+template <
+    VectorMode Mode = VectorMode::RC,
+    int Iterations = 8,
+    uint32_t InDfb,
+    uint32_t ODfb,
+    typename DFB0,
+    typename DFB1>
 void exponential_tiles(DFB0& in, DFB1& o, uint32_t n) {
-    const uint32_t in_id = in.get_id();
-    const uint32_t o_id = o.get_id();
-
-    o.reserve_back(n);
-    reconfig_data_format_srca(in_id);  // unary: in_id->srcA
-    copy_init(in_id);
-    exp_tile_init();
-    for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
-        const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
-        tile_regs_acquire();
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            copy_tile(in_id, block_start + tile, tile);
-            exp_tile<false, false, InputClamping::ClampToNegative, Iterations>(tile, Mode);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-#pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
-        }
-        tile_regs_release();
-    }
-    o.push_back(n);
+    ckl::unary<ckl::Exp<ckl::Approx::Exact, ckl::Dst::D0, Iterations, Mode>, resident(InDfb), published(ODfb)>(
+        dst_blocks(n), in, o);
 }
 
-template <typename DFB0, typename DFB1>
+template <uint32_t InDfb, uint32_t ODfb, typename DFB0, typename DFB1>
 void multiply_by_half(DFB0& in, DFB1& o, uint32_t n) {
     constexpr uint32_t fp32_half_bits = __builtin_bit_cast(uint32_t, 0.5F);
-    const uint32_t in_id = in.get_id();
-    const uint32_t o_id = o.get_id();
-
-    o.reserve_back(n);
-    reconfig_data_format_srca(in_id);
-    copy_init(in_id);
-    binop_with_scalar_tile_init();
-    for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
-        const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
-        tile_regs_acquire();
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            copy_tile(in_id, block_start + tile, tile);
-            mul_unary_tile(tile, fp32_half_bits);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-#pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
-        }
-        tile_regs_release();
-    }
-    o.push_back(n);
+    ckl::eltwise_chain(
+        dst_blocks(n),
+        ckl::CopyTile<resident(InDfb)>{in},
+        ckl::MulUnary<>{fp32_half_bits},
+        ckl::PackTile<published(ODfb)>{o});
 }
 
-template <typename DFB0, typename DFB1>
+template <uint32_t InDfb, uint32_t ODfb, typename DFB0, typename DFB1>
 void reciprocal_tiles(DFB0& in, DFB1& o, uint32_t n) {
-    const uint32_t in_id = in.get_id();
-    const uint32_t o_id = o.get_id();
-
-    o.reserve_back(n);
-    reconfig_data_format_srca(in_id);
-    copy_init(in_id);
     // Precise regardless of the op's approx mode: exp(a - G) replaces an exact exponential.
-    constexpr auto recip_dest = DST_ACCUM_MODE ? ReciprocalDestAcc::FP32 : ReciprocalDestAcc::BF16;
-    recip_tile_init<recip_dest, ReciprocalApproxMode::Precise>();
-    for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
-        const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
-        tile_regs_acquire();
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            copy_tile(in_id, block_start + tile, tile);
-            recip_tile<recip_dest, ReciprocalApproxMode::Precise>(tile);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-#pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
-        }
-        tile_regs_release();
-    }
-    o.push_back(n);
+    ckl::unary<ckl::Recip<ckl::Dst::D0, ckernel::ReciprocalApproxMode::Precise>, resident(InDfb), published(ODfb)>(
+        dst_blocks(n), in, o);
 }
 
 // out[Mt,Nt] = A[Mt,Nt] * col[Mt,1]  (broadcast the single column of `col` across N)
-template <typename DFB0, typename DFB1, typename DFB2>
+template <uint32_t ADfb, uint32_t ColDfb, uint32_t ODfb, typename DFB0, typename DFB1, typename DFB2>
 void multiply_by_column(DFB0& a, DFB1& col, DFB2& o, uint32_t Mt, uint32_t Nt) {
-    const uint32_t a_id = a.get_id();
-    const uint32_t col_id = col.get_id();
-    const uint32_t o_id = o.get_id();
-
-    o.reserve_back(Mt * Nt);
-    reconfig_data_format(a_id, col_id);  // bcast(a_id,col_id): a_id->srcA, col_id->srcB
-    mul_bcast_cols_init(a_id, col_id);
-    const uint32_t output_tiles = Mt * Nt;
-    for (uint32_t block_start = 0; block_start < output_tiles; block_start += max_dst_tiles) {
-        const uint32_t block_tiles =
-            (output_tiles - block_start < max_dst_tiles) ? output_tiles - block_start : max_dst_tiles;
-        tile_regs_acquire();
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            const uint32_t input_tile = block_start + tile;
-            mul_tiles_bcast_cols(a_id, col_id, input_tile, input_tile / Nt, tile);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-#pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
-        }
-        tile_regs_release();
-    }
-    o.push_back(Mt * Nt);
+    // bcast(a, col): a -> srcA, col -> srcB
+    ckl::mul<resident(ADfb), resident_column(ColDfb), published(ODfb)>(
+        ckl::IterationShape::grid(Mt, Nt).block_size(max_dst_tiles), a, col, o);
 }
 
 // out[n] = A[n] * row[n]  (broadcast row 0 of each `row` tile down its tile)
-template <typename DFB0, typename DFB1, typename DFB2>
+template <uint32_t ADfb, uint32_t RowDfb, uint32_t ODfb, typename DFB0, typename DFB1, typename DFB2>
 void multiply_by_row(DFB0& a, DFB1& row, DFB2& o, uint32_t n) {
-    const uint32_t a_id = a.get_id();
-    const uint32_t row_id = row.get_id();
-    const uint32_t o_id = o.get_id();
-
-    o.reserve_back(n);
-    reconfig_data_format(a_id, row_id);  // bcast(a_id,row_id): a_id->srcA, row_id->srcB
-    mul_bcast_rows_init(a_id, row_id);
-    for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
-        const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
-        tile_regs_acquire();
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            mul_tiles_bcast_rows(a_id, row_id, block_start + tile, block_start + tile, tile);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-#pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
-        }
-        tile_regs_release();
-    }
-    o.push_back(n);
+    // bcast(a, row): a -> srcA, row -> srcB
+    ckl::mul<resident(ADfb), resident_rows(RowDfb), published(ODfb)>(dst_blocks(n), a, row, o);
 }
 
 // Invert (I-N) for the strictly lower N by nesting three block levels, so every matmul keeps
@@ -311,8 +202,23 @@ void multiply_by_row(DFB0& a, DFB1& row, DFB2& o, uint32_t n) {
 //   level 3: join the 8-row blocks. M3 = B L3 satisfies M3^4=0, so
 //            (I-N)^-1 = (I+M3)(I+M3^2)B.
 // Eight matmuls in total, two fewer than a single 8-row Horner series over the same input.
-template <typename DFB0, typename DFB1, typename DFB2, typename DFB3, typename DFB4, typename DFB5, typename DFB6>
-void invert_block_nested(
+// Force-inlined: it is called once, and GCC inlines it into the raw version but not once its elementwise steps are
+// chains, which leaves the eight one-tile steps of the inverse behind an extra call boundary.
+template <
+    uint32_t NegativeStrictLowerAkkDfb,
+    uint32_t IdentityDfb,
+    uint32_t BlockMasksDfb,
+    uint32_t MatrixDfb,
+    uint32_t TotalDfb,
+    uint32_t ProductDfb,
+    typename DFB0,
+    typename DFB1,
+    typename DFB2,
+    typename DFB3,
+    typename DFB4,
+    typename DFB5,
+    typename DFB6>
+FORCE_INLINE void invert_block_nested(
     DFB0& negative_strict_lower_akk,
     DFB1& inverse,
     DFB2& identity,
@@ -320,23 +226,25 @@ void invert_block_nested(
     DFB4& matrix,
     DFB5& total,
     DFB6& product) {
-    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 0, matrix);  // N1
+    multiply_selected_tile<NegativeStrictLowerAkkDfb, BlockMasksDfb, MatrixDfb>(
+        negative_strict_lower_akk, 0, block_masks, 0, matrix);  // N1
     matrix.wait_front(1);
-    elementwise_binary<ElementwiseBinaryOp::Add>(identity, matrix, total, 1);
+    elementwise_binary<ElementwiseBinaryOp::Add, IdentityDfb, MatrixDfb, TotalDfb>(identity, matrix, total, 1);
     total.wait_front(1);
     for (uint32_t step = 0; step < 2; ++step) {
         matmul_blocks<1, 1, 1, false>(matrix, total, product);
         product.wait_front(1);
         // The two-entry total DFB holds the old and new Horner values together.
         // Discarding the old front makes the new value current without a second DFB.
-        elementwise_binary<ElementwiseBinaryOp::Add>(identity, product, total, 1);
+        elementwise_binary<ElementwiseBinaryOp::Add, IdentityDfb, ProductDfb, TotalDfb>(identity, product, total, 1);
         total.wait_front(2);
         total.pop_front(1);
         product.pop_front(1);
     }
     matrix.pop_front(1);  // total holds A
 
-    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 1, matrix);  // L2
+    multiply_selected_tile<NegativeStrictLowerAkkDfb, BlockMasksDfb, MatrixDfb>(
+        negative_strict_lower_akk, 0, block_masks, 1, matrix);  // L2
     matrix.wait_front(1);
     matmul_blocks<1, 1, 1, false>(total, matrix, product);  // M2 = A L2
     product.wait_front(1);
@@ -344,12 +252,14 @@ void invert_block_nested(
     matmul_blocks<1, 1, 1, false>(product, total, matrix);  // M2 A
     matrix.wait_front(1);
     product.pop_front(1);
-    elementwise_binary<ElementwiseBinaryOp::Add>(total, matrix, total, 1);  // B = A + M2 A
+    elementwise_binary<ElementwiseBinaryOp::Add, TotalDfb, MatrixDfb, TotalDfb>(
+        total, matrix, total, 1);  // B = A + M2 A
     total.wait_front(2);
     total.pop_front(1);
     matrix.pop_front(1);
 
-    multiply_selected_tile(negative_strict_lower_akk, 0, block_masks, 2, product);  // L3
+    multiply_selected_tile<NegativeStrictLowerAkkDfb, BlockMasksDfb, ProductDfb>(
+        negative_strict_lower_akk, 0, block_masks, 2, product);  // L3
     product.wait_front(1);
     // -strict_lower(Akk) is dead after extracting L3. Reuse its one-tile DFB
     // below for I+M3; all transactions remain one tile wide.
@@ -359,10 +269,11 @@ void invert_block_nested(
     product.pop_front(1);
     matmul_blocks<1, 1, 1, false>(matrix, matrix, product);  // M3^2
     product.wait_front(1);
-    elementwise_binary<ElementwiseBinaryOp::Add>(identity, matrix, negative_strict_lower_akk, 1);
+    elementwise_binary<ElementwiseBinaryOp::Add, IdentityDfb, MatrixDfb, NegativeStrictLowerAkkDfb>(
+        identity, matrix, negative_strict_lower_akk, 1);
     negative_strict_lower_akk.wait_front(1);
     matrix.pop_front(1);
-    elementwise_binary<ElementwiseBinaryOp::Add>(identity, product, matrix, 1);
+    elementwise_binary<ElementwiseBinaryOp::Add, IdentityDfb, ProductDfb, MatrixDfb>(identity, product, matrix, 1);
     matrix.wait_front(1);
     product.pop_front(1);
     matmul_blocks<1, 1, 1, false>(negative_strict_lower_akk, matrix, product);  // (I+M3)(I+M3^2)
@@ -431,6 +342,8 @@ template <
     bool Scale,
     uint32_t SquaredDfb,
     uint32_t InverseNormsDfb,
+    uint32_t InputDfb,
+    uint32_t NormalizedDfb,
     typename DFB0,
     typename DFB1,
     typename DFB2,
@@ -446,13 +359,14 @@ void normalize_l2_rows(
     DFB3& inverse_norms) {
     constexpr uint32_t matrix_tiles = RowTiles * ColumnTiles;
 
-    square_tiles(input, squared, matrix_tiles);
+    square_tiles<InputDfb, SquaredDfb>(input, squared, matrix_tiles);
 
     reduce_squared_rows_to_inverse_norms<Scale, SquaredDfb, InverseNormsDfb>(
         RowTiles, ColumnTiles, eps_bits, scale_bits);
 
     inverse_norms.wait_front(RowTiles);
-    multiply_by_column(input, inverse_norms, normalized, RowTiles, ColumnTiles);
+    multiply_by_column<InputDfb, InverseNormsDfb, NormalizedDfb>(
+        input, inverse_norms, normalized, RowTiles, ColumnTiles);
     normalized.wait_front(matrix_tiles);
     inverse_norms.pop_front(RowTiles);
     input.pop_front(matrix_tiles);
@@ -460,36 +374,38 @@ void normalize_l2_rows(
 
 // beta = sigmoid(logits) in FP32, from the BF16 logits the reader moved into column 0. The SFPU sigmoid is the
 // accurate one ttnn.sigmoid runs; BF16 widens exactly into the FP32 destination.
-template <uint32_t Ct, typename DFB0, typename DFB1>
+template <uint32_t Ct, uint32_t LogitsDfb, uint32_t BetaDfb, typename DFB0, typename DFB1>
 void activate_beta(DFB0& logits, DFB1& beta) {
-    beta.reserve_back(Ct);
-    reconfig_data_format_srca(logits.get_id());
-    pack_reconfig_data_format(beta.get_id());
-    copy_init(logits.get_id());
-    sigmoid_tile_init<false>();
-    for (uint32_t tile = 0; tile < Ct; ++tile) {
-        tile_regs_acquire();
-        copy_tile(logits.get_id(), tile, 0);
-        sigmoid_tile<VectorMode::RC, false>(0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, beta.get_id(), tile);
-        tile_regs_release();
-    }
-    beta.push_back(Ct);
-    logits.pop_front(Ct);
+    ckl::unary<
+        ckl::Sigmoid<>,
+        ckl::input(LogitsDfb, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+        ckl::output(BetaDfb, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
+        ckl::IterationShape::tiles(Ct), logits, beta);
 }
 
-template <uint32_t Ct, uint32_t Vt, typename DFB0, typename DFB1, typename DFB2>
+template <
+    uint32_t Ct,
+    uint32_t Vt,
+    uint32_t VDfb,
+    uint32_t BetaDfb,
+    uint32_t VBetaDfb,
+    typename DFB0,
+    typename DFB1,
+    typename DFB2>
 void prepare_v_beta(DFB0& v, DFB1& beta, DFB2& v_beta) {
     constexpr uint32_t chunk_value_tiles = Ct * Vt;
-    multiply_by_column(v, beta, v_beta, Ct, Vt);
+    multiply_by_column<VDfb, BetaDfb, VBetaDfb>(v, beta, v_beta, Ct, Vt);
     v.pop_front(chunk_value_tiles);
 }
 
 template <
     uint32_t Ct,
     uint32_t Kt,
+    uint32_t CenteredDecayDfb,
+    uint32_t CenteredInverseDecayDfb,
+    uint32_t GLastDfb,
+    uint32_t AnchorDecayDfb,
+    uint32_t AnchorGDfb,
     typename DFB0,
     typename DFB1,
     typename DFB2,
@@ -521,17 +437,20 @@ void prepare_gate_factors(
     g_last.wait_front(chunk_key_tiles);
     g.pop_front(chunk_key_tiles);
 
-    multiply_by_half(g_last, anchor_g, chunk_key_tiles);  // anchor = G_last/2
+    multiply_by_half<GLastDfb, AnchorGDfb>(g_last, anchor_g, chunk_key_tiles);  // anchor = G_last/2
     anchor_g.wait_front(chunk_key_tiles);
 
     {
         auto& centered_g = anchor_decay;
-        elementwise_binary<ElementwiseBinaryOp::Subtract>(centered_decay, anchor_g, centered_g, chunk_key_tiles);
+        elementwise_binary<ElementwiseBinaryOp::Subtract, CenteredDecayDfb, AnchorGDfb, AnchorDecayDfb>(
+            centered_decay, anchor_g, centered_g, chunk_key_tiles);
         centered_g.wait_front(chunk_key_tiles);
         centered_decay.pop_front(chunk_key_tiles);
-        exponential_tiles(centered_g, centered_decay, chunk_key_tiles);
+        exponential_tiles<VectorMode::RC, 8, AnchorDecayDfb, CenteredDecayDfb>(
+            centered_g, centered_decay, chunk_key_tiles);
         centered_decay.wait_front(chunk_key_tiles);
-        reciprocal_tiles(centered_decay, centered_inverse_decay, chunk_key_tiles);  // exp(anchor-G)
+        reciprocal_tiles<CenteredDecayDfb, CenteredInverseDecayDfb>(
+            centered_decay, centered_inverse_decay, chunk_key_tiles);  // exp(anchor-G)
         centered_inverse_decay.wait_front(chunk_key_tiles);
         centered_g.pop_front(chunk_key_tiles);
     }
@@ -539,7 +458,7 @@ void prepare_gate_factors(
     // exp(G_last/2) is row-replicated and the broadcasts read only row 0, so only the face rows holding it are
     // computed. That takes two SFPU iterations: one leaves part of row 0 unwritten, and kd, q_decay, k_dec_t and
     // final_decay come out wrong.
-    exponential_tiles<VectorMode::R, 2>(anchor_g, anchor_decay, chunk_key_tiles);
+    exponential_tiles<VectorMode::R, 2, AnchorGDfb, AnchorDecayDfb>(anchor_g, anchor_decay, chunk_key_tiles);
     anchor_decay.wait_front(chunk_key_tiles);
     anchor_g.pop_front(chunk_key_tiles);
 }
@@ -547,6 +466,15 @@ void prepare_gate_factors(
 template <
     uint32_t Ct,
     uint32_t Kt,
+    uint32_t NormalizedQDfb,
+    uint32_t NormalizedKDfb,
+    uint32_t BetaDfb,
+    uint32_t AnchorDecayDfb,
+    uint32_t CenteredDecayDfb,
+    uint32_t QDecayDfb,
+    uint32_t KdDfb,
+    uint32_t KBetaPairwiseDfb,
+    uint32_t QPairwiseDfb,
     typename DFB0,
     typename DFB1,
     typename DFB2,
@@ -570,40 +498,57 @@ void prepare_scan_and_pairwise_inputs(
 
     {
         auto& beta_k = q_pairwise;
-        multiply_by_column(normalized_k, beta, beta_k, Ct, Kt);
+        multiply_by_column<NormalizedKDfb, BetaDfb, QPairwiseDfb>(normalized_k, beta, beta_k, Ct, Kt);
         beta_k.wait_front(chunk_key_tiles);
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(beta_k, centered_decay, k_beta_pairwise, chunk_key_tiles);
+        elementwise_binary<ElementwiseBinaryOp::Multiply, QPairwiseDfb, CenteredDecayDfb, KBetaPairwiseDfb>(
+            beta_k, centered_decay, k_beta_pairwise, chunk_key_tiles);
         k_beta_pairwise.wait_front(chunk_key_tiles);  // beta*k*exp(G-anchor)
         beta_k.pop_front(chunk_key_tiles);
     }
     beta.pop_front(Ct);
-    elementwise_binary<ElementwiseBinaryOp::Multiply>(normalized_q, centered_decay, q_pairwise, chunk_key_tiles);
+    elementwise_binary<ElementwiseBinaryOp::Multiply, NormalizedQDfb, CenteredDecayDfb, QPairwiseDfb>(
+        normalized_q, centered_decay, q_pairwise, chunk_key_tiles);
     q_pairwise.wait_front(chunk_key_tiles);  // q*exp(G-anchor)
     normalized_q.pop_front(chunk_key_tiles);
     centered_decay.pop_front(chunk_key_tiles);
 
     // The scan-facing factors exp(G) = exp(G-anchor) * exp(anchor) reuse the anchored products.
     pack_reconfig_data_format(q_pairwise.get_id(), q_decay.get_id());
-    multiply_by_row(q_pairwise, anchor_decay, q_decay, chunk_key_tiles);
+    multiply_by_row<QPairwiseDfb, AnchorDecayDfb, QDecayDfb>(q_pairwise, anchor_decay, q_decay, chunk_key_tiles);
     pack_reconfig_data_format(q_decay.get_id(), kd.get_id());
-    multiply_by_row(k_beta_pairwise, anchor_decay, kd, chunk_key_tiles);
+    multiply_by_row<KBetaPairwiseDfb, AnchorDecayDfb, KdDfb>(k_beta_pairwise, anchor_decay, kd, chunk_key_tiles);
     pack_reconfig_data_format(kd.get_id(), k_beta_pairwise.get_id());
 }
 
 // exp(G_last) = exp(G_last / 2)^2, squared in FP32 from the anchor's rows, of which the transpose to dl reads row 0.
-template <uint32_t Ct, uint32_t Kt, typename DFB0, typename DFB1, typename DFB2>
+template <
+    uint32_t Ct,
+    uint32_t Kt,
+    uint32_t AnchorDecayDfb,
+    uint32_t FinalDecayRowsDfb,
+    typename DFB0,
+    typename DFB1,
+    typename DFB2>
 void prepare_final_decay_rows(DFB0& g_last, DFB1& anchor_decay, DFB2& final_decay_rows) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
-    square_tiles(anchor_decay, final_decay_rows, chunk_key_tiles);
+    square_tiles<AnchorDecayDfb, FinalDecayRowsDfb>(anchor_decay, final_decay_rows, chunk_key_tiles);
     final_decay_rows.wait_front(chunk_key_tiles);
     g_last.pop_front(chunk_key_tiles);
 }
 
-template <uint32_t Ct, uint32_t Kt, typename DFB0, typename DFB1, typename DFB2>
+template <
+    uint32_t Ct,
+    uint32_t Kt,
+    uint32_t NormalizedKDfb,
+    uint32_t CenteredInverseDecayDfb,
+    uint32_t KPairwiseDfb,
+    typename DFB0,
+    typename DFB1,
+    typename DFB2>
 void prepare_k_pairwise(DFB0& normalized_k, DFB1& centered_inverse_decay, DFB2& k_pairwise) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
 
-    elementwise_binary<ElementwiseBinaryOp::Multiply>(
+    elementwise_binary<ElementwiseBinaryOp::Multiply, NormalizedKDfb, CenteredInverseDecayDfb, KPairwiseDfb>(
         normalized_k, centered_inverse_decay, k_pairwise, chunk_key_tiles);
     k_pairwise.wait_front(chunk_key_tiles);  // k*exp(anchor-G)
     normalized_k.pop_front(chunk_key_tiles);
@@ -613,6 +558,9 @@ void prepare_k_pairwise(DFB0& normalized_k, DFB1& centered_inverse_decay, DFB2& 
 template <
     uint32_t Ct,
     uint32_t Kt,
+    uint32_t CausalMaskDfb,
+    uint32_t IntraDfb,
+    uint32_t AqkDfb,
     typename DFB0,
     typename DFB1,
     typename DFB2,
@@ -636,13 +584,21 @@ void prepare_pairwise_matrices(
         matmul_blocks<Ct, Kt, Ct, true>(q_pairwise, k_pairwise, aqk);
         aqk.wait_front(chunk_matrix_tiles);  // raw q_i*k_j*exp(G_i-G_j)
         q_pairwise.pop_front(chunk_key_tiles);
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(aqk, causal_mask, intra, chunk_matrix_tiles);
+        elementwise_binary<ElementwiseBinaryOp::Multiply, AqkDfb, CausalMaskDfb, IntraDfb>(
+            aqk, causal_mask, intra, chunk_matrix_tiles);
         aqk.pop_front(chunk_matrix_tiles);
     }
 }
 
 template <
     uint32_t Ct,
+    uint32_t AkkDfb,
+    uint32_t CausalMaskDfb,
+    uint32_t IdentityDfb,
+    uint32_t BlockMasksDfb,
+    uint32_t Scratch0Dfb,
+    uint32_t Scratch1Dfb,
+    uint32_t ProductDfb,
     typename DFB0,
     typename DFB1,
     typename DFB2,
@@ -669,18 +625,21 @@ void prepare_t_inv(
         auto& diagonal_akk = scratch_1;
 
         // T_inv = (I + strictly_lower(Akk))^-1.
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(akk, causal_mask, lower_akk, chunk_matrix_tiles);
+        elementwise_binary<ElementwiseBinaryOp::Multiply, AkkDfb, CausalMaskDfb, Scratch0Dfb>(
+            akk, causal_mask, lower_akk, chunk_matrix_tiles);
         lower_akk.wait_front(chunk_matrix_tiles);  // lower(A), including diagonal
         akk.pop_front(chunk_matrix_tiles);
-        elementwise_binary<ElementwiseBinaryOp::Multiply>(lower_akk, identity, diagonal_akk, chunk_matrix_tiles);
+        elementwise_binary<ElementwiseBinaryOp::Multiply, Scratch0Dfb, IdentityDfb, Scratch1Dfb>(
+            lower_akk, identity, diagonal_akk, chunk_matrix_tiles);
         diagonal_akk.wait_front(chunk_matrix_tiles);  // diag(A)
-        elementwise_binary<ElementwiseBinaryOp::Subtract>(diagonal_akk, lower_akk, akk, chunk_matrix_tiles);
+        elementwise_binary<ElementwiseBinaryOp::Subtract, Scratch1Dfb, Scratch0Dfb, AkkDfb>(
+            diagonal_akk, lower_akk, akk, chunk_matrix_tiles);
         akk.wait_front(chunk_matrix_tiles);  // -strictly_lower(A)
         diagonal_akk.pop_front(chunk_matrix_tiles);
         lower_akk.pop_front(chunk_matrix_tiles);
     }
 
-    invert_block_nested(
+    invert_block_nested<AkkDfb, IdentityDfb, BlockMasksDfb, Scratch0Dfb, Scratch1Dfb, ProductDfb>(
         akk,
         t_inv,
         identity,
@@ -690,7 +649,17 @@ void prepare_t_inv(
         /*product=*/product);
 }
 
-template <uint32_t Ct, uint32_t Kt, typename DFB0, typename DFB1, typename DFB2, typename DFB3, typename DFB4>
+template <
+    uint32_t Ct,
+    uint32_t Kt,
+    uint32_t KPairwiseDfb,
+    uint32_t AnchorDecayDfb,
+    uint32_t FinalDecayRowsDfb,
+    typename DFB0,
+    typename DFB1,
+    typename DFB2,
+    typename DFB3,
+    typename DFB4>
 void prepare_decay_outputs(
     DFB0& k_pairwise, DFB1& anchor_decay, DFB2& final_decay_rows, DFB3& k_dec_t, DFB4& final_decay) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
@@ -704,7 +673,8 @@ void prepare_decay_outputs(
 
         // k_dec_t = (kr * exp(G_last))^T.
         pack_reconfig_data_format(final_decay.get_id(), k_dec.get_id());
-        multiply_by_row(k_pairwise, anchor_decay, k_dec, chunk_key_tiles);
+        multiply_by_row<KPairwiseDfb, AnchorDecayDfb, FinalDecayRowsDfb>(
+            k_pairwise, anchor_decay, k_dec, chunk_key_tiles);
         k_dec.wait_front(chunk_key_tiles);
         k_pairwise.pop_front(chunk_key_tiles);
         anchor_decay.pop_front(chunk_key_tiles);
@@ -782,10 +752,10 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
         v.wait_front(chunk_value_tiles);
         g.wait_front(chunk_key_tiles);
         beta_logits.wait_front(Ct);
-        activate_beta<Ct>(beta_logits, beta);
+        activate_beta<Ct, dfb::beta, dfb::beta_activated>(beta_logits, beta);
         beta.wait_front(Ct);
 
-        normalize_l2_rows<Ct, Kt, true, dfb::workspace_3, dfb::tile_workspace_0>(
+        normalize_l2_rows<Ct, Kt, true, dfb::workspace_3, dfb::tile_workspace_0, dfb::q, dfb::normalized_q>(
             q,
             normalized_q,
             EPS_BITS,
@@ -793,7 +763,7 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
             /*squared=*/workspace_3,
             /*inverse_norms=*/tile_workspace_0);
 
-        normalize_l2_rows<Ct, Kt, false, dfb::workspace_3, dfb::tile_workspace_0>(
+        normalize_l2_rows<Ct, Kt, false, dfb::workspace_3, dfb::tile_workspace_0, dfb::k, dfb::normalized_k>(
             k,
             normalized_k,
             EPS_BITS,
@@ -803,12 +773,19 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
 
         // PACK state persists across helpers. Reconfigure only at actual destination-format transitions.
         pack_reconfig_data_format(normalized_k.get_id(), v_beta.get_id());
-        prepare_v_beta<Ct, Vt>(v, beta, v_beta);
+        prepare_v_beta<Ct, Vt, dfb::v, dfb::beta_activated, dfb::v_beta>(v, beta, v_beta);
         pack_reconfig_data_format(v_beta.get_id(), workspace_0.get_id());
 
         auto& centered_decay = workspace_0;
         auto& g_last = workspace_3;
-        prepare_gate_factors<Ct, Kt>(
+        prepare_gate_factors<
+            Ct,
+            Kt,
+            dfb::workspace_0,
+            dfb::centered_inverse_decay,
+            dfb::workspace_3,
+            dfb::anchor_decay,
+            dfb::workspace_2>(
             g,
             gate_tril,
             gate_ones,
@@ -820,21 +797,42 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
 
         auto& k_beta_pairwise = workspace_1;
         auto& q_pairwise = workspace_2;
-        prepare_scan_and_pairwise_inputs<Ct, Kt>(
+        prepare_scan_and_pairwise_inputs<
+            Ct,
+            Kt,
+            dfb::normalized_q,
+            dfb::normalized_k,
+            dfb::beta_activated,
+            dfb::anchor_decay,
+            dfb::workspace_0,
+            dfb::q_decay,
+            dfb::kd,
+            dfb::workspace_1,
+            dfb::workspace_2>(
             normalized_q, normalized_k, beta, anchor_decay, centered_decay, q_decay, kd, k_beta_pairwise, q_pairwise);
 
         auto& final_decay_rows = workspace_0;
-        prepare_final_decay_rows<Ct, Kt>(g_last, anchor_decay, final_decay_rows);
+        prepare_final_decay_rows<Ct, Kt, dfb::anchor_decay, dfb::workspace_0>(g_last, anchor_decay, final_decay_rows);
 
         auto& k_pairwise = workspace_3;
-        prepare_k_pairwise<Ct, Kt>(normalized_k, centered_inverse_decay, k_pairwise);
+        prepare_k_pairwise<Ct, Kt, dfb::normalized_k, dfb::centered_inverse_decay, dfb::workspace_3>(
+            normalized_k, centered_inverse_decay, k_pairwise);
 
-        prepare_pairwise_matrices<Ct, Kt>(k_beta_pairwise, q_pairwise, k_pairwise, tril, akk, intra, tile_workspace_0);
+        prepare_pairwise_matrices<Ct, Kt, dfb::tril, dfb::intra, dfb::tile_workspace_0>(
+            k_beta_pairwise, q_pairwise, k_pairwise, tril, akk, intra, tile_workspace_0);
 
         // All inverse scratch transactions are one tile. tile_workspace_1 has two entries so each
         // level can enqueue its replacement before popping the old value; its four transactions
         // per work item also return both cursors to their starting slot.
-        prepare_t_inv<Ct>(
+        prepare_t_inv<
+            Ct,
+            dfb::akk,
+            dfb::tril,
+            dfb::eye,
+            dfb::block_masks,
+            dfb::tile_workspace_0,
+            dfb::tile_workspace_1,
+            dfb::tile_workspace_2>(
             akk,
             tril,
             eye,
@@ -845,7 +843,8 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
             /*product=*/tile_workspace_2);
 
         pack_reconfig_data_format(t_inv.get_id(), final_decay.get_id());
-        prepare_decay_outputs<Ct, Kt>(k_pairwise, anchor_decay, final_decay_rows, k_decay_transposed, final_decay);
+        prepare_decay_outputs<Ct, Kt, dfb::workspace_3, dfb::anchor_decay, dfb::workspace_0>(
+            k_pairwise, anchor_decay, final_decay_rows, k_decay_transposed, final_decay);
         pack_reconfig_data_format(k_decay_transposed.get_id(), workspace_3.get_id());
         // v_beta, kd, q_decay, intra, k_dec_t, dl, T_inv stay pushed for the writer.
     }

@@ -6,13 +6,25 @@
 #include <cstdint>
 
 #include "api/compute/common.h"
-#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
-#include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
+
+namespace ckl = compute_kernel_lib;
+
+// Inputs are waited for and popped by the caller; each helper reserves and publishes its whole output, and the packer
+// keeps the format configured before the helper.
+constexpr ckl::InputSpec resident(uint32_t dfb_id) {
+    return ckl::input(dfb_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block);
+}
+
+constexpr ckl::OutputSpec published(uint32_t dfb_id) {
+    return ckl::output(dfb_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled);
+}
 
 // product = A @ state. Each output subblock accumulates the whole key dimension in DST, k = 0 .. Kt - 1 in order.
 template <uint32_t Kt, uint32_t Vt, typename DFBA, typename DFBState, typename DFBProduct>
@@ -57,51 +69,36 @@ FORCE_INLINE void multiply(DFBA& a, DFBState& state, DFBProduct& product) {
 // state = product + b as an SFPU add of two FP32 DST operands; an FPU add would truncate the FP32 product in srcA.
 // product unpacks to DST losslessly and BF16 b widens exactly through srcA. Every packed buffer is FP32, so the
 // packer configuration from startup stays valid.
-template <uint32_t Tiles, typename DFBProduct, typename DFBB, typename DFBState, typename DFBOut>
+template <
+    uint32_t ProductDfb,
+    uint32_t BDfb,
+    uint32_t StateDfb,
+    uint32_t OutDfb,
+    uint32_t Tiles,
+    typename DFBProduct,
+    typename DFBB,
+    typename DFBState,
+    typename DFBOut>
 FORCE_INLINE void add(DFBProduct& product, DFBB& b, DFBState& state, DFBOut* out) {
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     // product and b interleave in DST: tile i uses DST[2i] and DST[2i + 1].
     constexpr uint32_t pair_tiles = dst_tiles / 2;
     static_assert(pair_tiles > 0);
-    const uint32_t product_id = product.get_id();
-    const uint32_t b_id = b.get_id();
-    const uint32_t state_id = state.get_id();
-    const uint32_t out_id = out == nullptr ? 0 : out->get_id();
-    state.reserve_back(Tiles);
+    constexpr auto shape = ckl::IterationShape::tiles(Tiles).block_size(pair_tiles);
+    using ProductToDst = ckl::CopyTile<resident(ProductDfb), ckl::Dst::D0>;
+    using BToDst = ckl::CopyTile<resident(BDfb), ckl::Dst::D1>;
+    using PackState = ckl::PackTile<published(StateDfb)>;
     if (out != nullptr) {
-        out->reserve_back(Tiles);
-    }
-    for (uint32_t first = 0; first < Tiles; first += pair_tiles) {
-        const uint32_t count = first + pair_tiles <= Tiles ? pair_tiles : Tiles - first;
-        tile_regs_acquire();
-        reconfig_data_format_srca(product_id);
-        copy_init(product_id);
-        for (uint32_t i = 0; i < count; ++i) {
-            copy_tile(product_id, first + i, 2 * i);
-        }
-        reconfig_data_format_srca(product_id, b_id);
-        copy_init(b_id);
-        for (uint32_t i = 0; i < count; ++i) {
-            copy_tile(b_id, first + i, 2 * i + 1);
-        }
-        add_binary_tile_init();
-        for (uint32_t i = 0; i < count; ++i) {
-            add_binary_tile(2 * i, 2 * i + 1, 2 * i);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t i = 0; i < count; ++i) {
-            pack_tile(2 * i, state_id, first + i);
-            if (out != nullptr) {
-                pack_tile(2 * i, out_id, first + i);
-            }
-        }
-        tile_regs_release();
-    }
-    state.push_back(Tiles);
-    if (out != nullptr) {
-        out->push_back(Tiles);
+        ckl::eltwise_chain(
+            shape,
+            ProductToDst{product},
+            BToDst{b},
+            ckl::AddBinary<>{},
+            PackState{state},
+            ckl::PackTile<published(OutDfb)>{*out});
+    } else {
+        ckl::eltwise_chain(shape, ProductToDst{product}, BToDst{b}, ckl::AddBinary<>{}, PackState{state});
     }
 }
 
@@ -136,7 +133,7 @@ TT_KERNEL void compute() {
         product.wait_front(state_tiles);
         // Publish the carry after step entry_step - 1 (this rank's entry state) and after the last step.
         const bool publish = step + 1 == entry_step || step + 1 == steps;
-        add<state_tiles>(product, b, state, publish ? &out : nullptr);
+        add<dfb::product, dfb::b, dfb::state, dfb::out, state_tiles>(product, b, state, publish ? &out : nullptr);
         product.pop_front(state_tiles);
         b.pop_front(state_tiles);
     }
