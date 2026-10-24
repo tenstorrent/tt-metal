@@ -25,8 +25,8 @@ constexpr uint32_t NOC_L1_TO_DRAM_ALIGNMENT = DRAM_ALIGNMENT;  // 32
 constexpr uint32_t DEFAULT_MAX_NOC_LOCATIONS = 14 * 10    // Tensix cores
                                                + 14 * 1   // ETH cores
                                                + 2 * 12;  // DRAM cores
-// Noc reads/writes must be 16-byte aligned.
-constexpr uint32_t NOC_L1_TO_L1_ALIGNMENT = L1_ALIGNMENT;      // 16
+// DRAM-core print buffers are read through the DRAM endpoint, which needs DRAM alignment.
+constexpr uint32_t NOC_L1_TO_L1_ALIGNMENT = DRAM_ALIGNMENT;    // 64
 constexpr uint32_t NOC_L1_TO_DRAM_ALIGNMENT = DRAM_ALIGNMENT;  // 64
 #elif defined(ARCH_QUASAR)
 constexpr uint32_t DEFAULT_MAX_NOC_LOCATIONS =
@@ -69,6 +69,9 @@ class DevicePrintDispatch {
         std::max(NocL1ToL1Alignment, static_cast<uint32_t>(sizeof(uint32_t) * 2));
     static_assert((NocL1ToL1Alignment & (NocL1ToL1Alignment - 1)) == 0, "NocL1ToL1Alignment must be power of 2");
     static_assert((NocL1ToDramAlignment & (NocL1ToDramAlignment - 1)) == 0, "NocL1ToDramAlignment must be power of 2");
+    static_assert(
+        2 * NocL1ToL1Alignment <= 64 * sizeof(uint32_t),
+        "DramStreamMessageHeader::align cannot hold the largest buffer offset");
     using NocCmdBufGuardWithInit = device_print_dispatch::NocCmdBufGuardWithInit<NocCmdBufGuard>;
 
 public:
@@ -260,20 +263,30 @@ private:
 
         for (uint32_t i = 0; i < noc_locations_count; i++, rw_pointer_address_in_l1 += rw_pointers_entry_size) {
             uint64_t remote_l1_address;
+            uint32_t buffer_size;
             if constexpr (EnableNocLocationCache) {
                 remote_l1_address = cache_rw_ptr_addrs[i];
+                buffer_size = cache_buffer_sizes[i];
             } else {
                 remote_l1_address = noc_locations[i].rw_ptr_addr;
+                buffer_size = noc_locations[i].buf_size;
             }
             uint32_t alignment = (uint32_t)remote_l1_address & (NocL1ToL1Alignment - 1);
             volatile tt_l1_ptr uint32_t* rw_pointers = local_l1_ptr<uint32_t>(rw_pointer_address_in_l1 + alignment);
             uint32_t write_position = rw_pointers[0];
-            [[maybe_unused]] uint32_t read_position = rw_pointers[1];
+            uint32_t read_position = rw_pointers[1];
 
             // Ignore cores that have their write pointer in starting magic or disabled magic, as those cores are not
             // active in printing.
             if (write_position == DEBUG_PRINT_SERVER_STARTING_MAGIC ||
                 write_position == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
+                continue;
+            }
+
+            uint32_t write_offset = write_position & ~DEVICE_PRINT_WRITE_STALL_FLAG;
+            bool read_offset_valid = read_position == DEVICE_PRINT_RESET_BUFFER_MAGIC ||
+                                     (read_position <= buffer_size && (read_position & 3) == 0);
+            if (write_offset > buffer_size || (write_offset & 3) != 0 || !read_offset_valid) {
                 continue;
             }
 
@@ -411,7 +424,7 @@ private:
                 header->x = noc_location->x;
                 header->y = noc_location->y;
             }
-            header->align = buffer_l1_alignment;
+            header->align = buffer_l1_alignment / sizeof(uint32_t);
             header->buffer_wrapped = buffer_wrapped;
             header->length = remote_buffer_size;
 
