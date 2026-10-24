@@ -787,7 +787,9 @@ targets:
               prefill_t/s: 283.7325
               prefill_time_to_token: 0.2608
               compile_decode: 0.0337
-              compile_prefill: 147.9379
+              # Bimodal by runner, same code: 144-146 s on f10cs06/f10cs08,
+              # 118-122 s on f10cs09 (host-wide speed-up since 10-14); centred so both pass at +/-15%.
+              compile_prefill: 133.0
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
