@@ -5253,3 +5253,74 @@ def test_matmul_1d_mcast_sharded_output_anchors_at_subdevice_start(device, mcast
         device.reset_sub_device_stall_group()
         device.clear_loaded_sub_device_manager()
         device.remove_sub_device_manager(mgr)
+
+
+def _bias_logical_h_program_config(config_kind, m, n, k):
+    if config_kind == "reuse":
+        return ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(1, 1),
+            in0_block_w=k // 32,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=m // 32,
+            per_core_N=n // 32,
+        )
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(1, 1),
+        in0_block_w=k // 32,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=m // 32,
+        out_block_w=n // 32,
+        per_core_M=m // 32,
+        per_core_N=n // 32,
+        fuse_batch=True,
+        mcast_in0=True,
+    )
+
+
+# Rejects every logical bias h that the padded-h check lets silently read padding; reuse [1, N] with M>1 is also rejected but ttnn.linear's host router post-processes it before dispatch.
+@pytest.mark.parametrize(
+    "config_kind, m, bias_h",
+    [
+        ("mcast1d", 64, 16),  # Mt>1 non-reuse: requires h == 1
+        ("reuse", 32, 16),  # Mt==1 reuse: small-M bug (only new check catches)
+        ("mcast1d", 32, 16),  # Mt==1 non-reuse: small-M bug (h in (1, M))
+    ],
+    ids=["mcast1d-Mt2-h16", "reuse-Mt1-h16", "mcast1d-Mt1-h16"],
+)
+def test_matmul_rejects_bias_with_mismatched_logical_h(device, expect_error, config_kind, m, bias_h):
+    torch.manual_seed(0)
+    n, k = 32, 32
+    a_t = ttnn.from_torch(torch.randn(m, k, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    b_t = ttnn.from_torch(torch.randn(k, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    bias_t = ttnn.from_torch(torch.randn(bias_h, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "logical bias h .* must be"):
+        ttnn.linear(a_t, b_t, bias=bias_t, program_config=_bias_logical_h_program_config(config_kind, m, n, k))
+
+
+# Supported bias shapes per factory: [1, N] broadcast on non-reuse; per-row [M, N] on reuse (any Mt) and non-reuse (Mt==1 only).
+@pytest.mark.parametrize(
+    "config_kind, m, bias_h",
+    [
+        ("mcast1d", 32, 1),  # Mt==1 non-reuse broadcast
+        ("mcast1d", 32, 32),  # Mt==1 non-reuse per-row
+        ("mcast1d", 64, 1),  # Mt>1 non-reuse broadcast
+        ("reuse", 32, 32),  # Mt==1 reuse
+        ("reuse", 64, 64),  # Mt>1 reuse
+    ],
+    ids=["mcast1d-Mt1-h1", "mcast1d-Mt1-hM", "mcast1d-Mt2-h1", "reuse-Mt1-hM", "reuse-Mt2-hM"],
+)
+def test_matmul_accepts_valid_biases(device, config_kind, m, bias_h):
+    torch.manual_seed(0)
+    n, k = 32, 32
+    a = torch.randn(m, k, dtype=torch.bfloat16)
+    b = torch.randn(k, n, dtype=torch.bfloat16)
+    bias = torch.randn(bias_h, n, dtype=torch.bfloat16)
+    a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device)
+    b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device)
+    bias_t = ttnn.from_torch(bias, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.to_torch(
+        ttnn.linear(a_t, b_t, bias=bias_t, program_config=_bias_logical_h_program_config(config_kind, m, n, k))
+    )
+    assert_with_pcc(a.float() @ b.float() + bias.float(), out.float(), pcc=0.99)
