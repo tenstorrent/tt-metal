@@ -234,7 +234,9 @@ void kernel_main() {
                      .noc_x_end = mcast_dest_noc_end_x,
                      .noc_y_end = mcast_dest_noc_end_y,
                      .addr = l1_read_addr_ex},
-                    true);
+                    false);
+                // Wait until the value is in every receiver's L1 before sending VALID.
+                noc.async_write_barrier();
                 reduce_sender_sem.set_multicast(
                     noc,
                     mcast_dest_noc_start_x,
@@ -256,7 +258,8 @@ void kernel_main() {
                          .noc_x_end = mcast_first_group_dest_noc_end_x,
                          .noc_y_end = mcast_first_group_dest_noc_end_y,
                          .addr = l1_read_addr_ex},
-                        true);
+                        false);
+                    noc.async_write_barrier();
                     reduce_sender_sem.set_multicast(
                         noc,
                         mcast_first_group_dest_noc_start_x,
@@ -279,7 +282,8 @@ void kernel_main() {
                          .noc_x_end = mcast_last_group_dest_noc_end_x,
                          .noc_y_end = mcast_last_group_dest_noc_end_y,
                          .addr = l1_read_addr_ex},
-                        true);
+                        false);
+                    noc.async_write_barrier();
                     reduce_sender_sem.set_multicast(
                         noc,
                         mcast_last_group_dest_noc_start_x,
