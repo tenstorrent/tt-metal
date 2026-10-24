@@ -1685,3 +1685,8 @@ Structural (not fixed here):
   1910). Codex review: approve (fence source valid - PO not rewritten after the last unit; guard on pu).
 - The hazard class and the audit: moe_knowledge_dump.md section 17. test_noc1_traffic.py (plain NOC1 write/read mix,
   no fabric) did not reproduce in 400k units a writer - fabric is the likely missing ingredient.
+- Traffic-only probe with fabric (test_noc1_traffic fab_l1 / fab_dram: port cores streaming 8 KB packets with fused
+  atomics into an X neighbour's L1 / DRAM, on top of the write + read mix): no wedge in 200 programs. Adding NOC1 column
+  multicasts gave a stall at program 150-200 on logical column 11's row 0 / 1 cores of every chip in every variant -
+  with no DRAM writes, with no lead on column 11 - a probe artifact around the movers column (never a W multicast
+  column in the engine); not chased. The 20 audit sites stay unconverted suspects (knowledge dump section 17).
