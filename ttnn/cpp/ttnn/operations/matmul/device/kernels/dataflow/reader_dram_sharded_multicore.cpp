@@ -16,7 +16,7 @@
 // runtime arguments are needed; the only per-core table is DSMC_ROLE (one byte per logical core:
 // 0 = idle, else wi + 1), which lets the program run on the bounding rectangle of its cores.
 //
-// Device 2.0 APIs throughout: Noc reads/writes with AllocatorBank<DRAM> (weight), UnicastEndpoint
+// Device 2.0 APIs throughout: Noc reads/writes with BankView (weight), UnicastEndpoint
 // (activation and output shards, group partials) and CoreLocalMem / DataflowBuffer (local L1),
 // NocOptions::TXN_ID reads and barriers, Noc::is_read_trid_flushed for the in-order retire, and
 // Semaphore for the reduce. The one legacy call is noc_async_read_set_trid(0) at the end: the Noc
@@ -30,6 +30,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/tensor/transfer_noc_addr.h"
 #include "experimental/kernel_args.h"
 #ifdef DSMC_REDUCE
 #include "api/semaphore.h"
@@ -76,7 +77,6 @@ constexpr uint32_t kGroupCores[] = {DSMC_CORE};  // per work item
 #endif
 
 constexpr UnicastEndpoint kCore;  // a worker core's L1 at virtual (x, y)
-constexpr AllocatorBank<AllocatorBankType::DRAM> kDram;
 
 FORCE_INLINE uint32_t core_x(uint32_t xy) { return xy & 0xffff; }
 FORCE_INLINE uint32_t core_y(uint32_t xy) { return xy >> 16; }
@@ -128,14 +128,14 @@ FORCE_INLINE void retire_w(const Noc& noc, DataflowBuffer& dfb_w, Ring& ring) {
 // One block (rb rows x nc columns of this bank's shard, from row r and column n0) into the next
 // ring slot. The ring is exactly D slots of the buffer, so slot i always lands where the buffer's
 // write pointer will be when block i is pushed.
-template <typename XRetire>
+template <typename W, typename XRetire>
 FORCE_INLINE void issue_w(
     const Noc& noc,
     DataflowBuffer& dfb_w,
     Ring& ring,
     XRetire&& retire_x_fn,
+    const W& w,
     uint32_t bank,
-    uint32_t w_addr,
     uint32_t r,
     uint32_t rb,
     uint32_t n0,
@@ -158,14 +158,14 @@ FORCE_INLINE void issue_w(
     if (nc == Nbt) {
         // whole rows of the shard are contiguous in the bank
         noc.async_read<NocOptions::TXN_ID>(
-            kDram, dst, rb * Nbt * WT, {.bank_id = bank, .addr = w_addr + r * Nbt * WT}, {}, tag);
+            w, dst, rb * Nbt * WT, {.bank_id = bank, .offset_bytes = r * Nbt * WT}, {}, tag);
     } else {
         for (uint32_t i = 0; i < rb; i++) {
             noc.async_read<NocOptions::TXN_ID>(
-                kDram,
+                w,
                 dst,
                 nc * WT,
-                {.bank_id = bank, .addr = w_addr + ((r + i) * Nbt + n0) * WT},
+                {.bank_id = bank, .offset_bytes = ((r + i) * Nbt + n0) * WT},
                 {.offset_bytes = i * nc * WT},
                 tag);
         }
@@ -200,12 +200,14 @@ void kernel_main() {
 
 #ifdef DSMC_STREAMS_W
     DataflowBuffer dfb_w(dfb::w);
-    const uint32_t w_addr = TensorAccessor(tensor::in1).get_bank_base_address();
+    const TensorAccessor w_acc(tensor::in1);
+    const BankView w(w_acc);  // weight shard of DRAM bank `bank`, addressed by offset into it
     Ring ring;
 #endif
 #ifdef DSMC_STREAM1
     DataflowBuffer dfb_x(dfb::x);
-    const uint32_t x_addr = TensorAccessor(tensor::in0).get_bank_base_address();
+    // Raw: same L1 address on the activation shard cores (no handle form yet).
+    const uint32_t x_addr = tensor_accessor::detail::TransferAccess::bank_base(TensorAccessor(tensor::in0));
     dfb_x.reserve_back(nblk * KB);
     const uint32_t xl1 = dfb_x.get_write_ptr();
     XQueue xq;
@@ -237,7 +239,7 @@ void kernel_main() {
 #endif
 #ifdef DSMC_STREAMS_W
             if (WSINGLE ? (PAR == 0) : ((p & 1) == PAR)) {
-                issue_w(noc, dfb_w, ring, retire_x_fn, bank, w_addr, k0 + r, rb, qa, qb - qa);
+                issue_w(noc, dfb_w, ring, retire_x_fn, w, bank, k0 + r, rb, qa, qb - qa);
             } else {
                 retire_w(noc, dfb_w, ring);
             }
@@ -302,7 +304,8 @@ void kernel_main() {
 #endif
     {
         DataflowBuffer dfb_out(dfb::out);
-        const uint32_t out_addr = TensorAccessor(tensor::output).get_bank_base_address();
+        // Raw: same L1 address on the output shard cores (no handle form yet).
+        const uint32_t out_addr = tensor_accessor::detail::TransferAccess::bank_base(TensorAccessor(tensor::output));
         dfb_out.wait_front(MAXOWN);
         const uint32_t l1 = dfb_out.get_read_ptr();
         for (uint32_t i = 0; i < nown; i++) {

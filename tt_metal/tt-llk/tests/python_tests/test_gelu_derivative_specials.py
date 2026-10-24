@@ -33,6 +33,7 @@ import numpy as np
 import pytest
 import torch
 from conftest import skip_for_quasar
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -153,7 +154,7 @@ def _run(in_fmt, out_fmt, dest_acc, approx):
             tile_count_res=tc_A,
         ),
         dest_acc=dest_acc,
-        unpack_to_dest=in_fmt.is_32_bit() and dest_acc == DestAccumulation.Yes,
+        unpack_to_dest=unpacks_to_dest(in_fmt, dest_acc),
     )
     hw = torch.tensor(cfg.run().result, dtype=format_dict[formats.output_format])
     return (

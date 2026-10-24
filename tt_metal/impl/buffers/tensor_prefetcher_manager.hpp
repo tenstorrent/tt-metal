@@ -59,9 +59,9 @@ class MeshDevice;
 //     fixed-size socket pages (splitting when the tensor list overflows a page)
 //     and pushes them onto the internal queue in order. The host worker thread
 //     fans each page out to every socket whose mesh coord is in `subset` via
-//     non-blocking try_write so one slow socket can't starve the others. The
-//     caller is responsible for keeping tensors and the GCB alive until stop()
-//     (see the public tensor_prefetcher.hpp note).
+//     non-blocking try_stage / publish_staged so one slow socket can't starve
+//     the others. The caller is responsible for keeping tensors and the GCB
+//     alive until stop() (see the public tensor_prefetcher.hpp note).
 //   * stop() pushes DRAIN requests naming every target still in memory, then an
 //     all-zero STOP page to the full mesh, joins the worker thread, WaitProgramDone
 //     on each device, and releases per-cycle resources.
@@ -198,6 +198,10 @@ private:
     // One DRAIN request per page's worth of every sender's live drain targets, for stop to send ahead
     // of STOP.
     std::vector<Request> build_drain_requests();
+    // TT_FATALs unless every page is one socket page, which is what worker_loop sends from each. Runs on
+    // the caller's thread before a request is queued, since a TT_FATAL on the worker thread would end
+    // the process.
+    void validate_request_pages(const std::vector<std::vector<uint8_t>>& sender_pages) const;
     void enumerate_dram_senders();
     RequestTarget target_for(const experimental::GlobalCircularBuffer& gcb) const;
     RequestTarget target_for(
@@ -239,6 +243,9 @@ private:
     // Base (local DRISC L1) of this prefetcher's per-CQ signal slots; uniform
     // across all sender cores. Carved at the front of the kernel working region.
     uint32_t cq_signal_l1_addr_ = 0;
+    // Base (local DRISC L1) of the kTensorPrefetcherSelectorScratchBytes a selector page is read into;
+    // uniform across all sender cores.
+    uint32_t selector_scratch_l1_addr_ = 0;
     // Distance between consecutive signal slots. The slots hold one uint32 each but are
     // spaced a full L1 alignment apart: each is the destination of its own dispatcher
     // write, and a dispatch write only lands on an L1-aligned address. Packed 4 bytes
@@ -288,6 +295,9 @@ private:
     std::mutex queue_mu_;
     std::condition_variable queue_cv_;
     std::deque<Request> pending_;
+    // Whether pending_ holds requests the worker has not taken; only written under queue_mu_. Lets
+    // worker_loop skip the lock while it waits for room in the socket FIFOs and nothing new has come.
+    std::atomic<bool> has_pending_{false};
     std::atomic<bool> stop_requested_{false};
 
     // Requests captured during trace capture, keyed by the recording trace's id. Populated by

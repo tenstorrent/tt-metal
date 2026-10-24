@@ -8,12 +8,12 @@ from loguru import logger
 
 import ttnn
 
-# NOTE: This file is forked from models/common/modules/tt_ccl.py
+# NOTE: This file is forked from models/common/tt_ccl.py
 #       This is done to include logic for divifing the grid of cores for ring attention
 #       One col is taken for the CCL communication of the op
 
 # =============================================================================
-# CCL tuning defaults - shared across all TTTv2 modules
+# CCL tuning defaults - shared by every TT_CCL user
 # =============================================================================
 
 # Default number of chunks per synchronization barrier in CCL operations.
@@ -211,15 +211,22 @@ class TT_CCL:
         return resources["pairs"][index]
 
     def get_combine_overlap_semaphores(self):
-        """(fwd_arrived, final_arrived, expert_go) for hybrid_routed_expert_moe overlapped with combine.
+        """fwd_arrived, final_arrived and expert_go, then combine's channel counters, for
+        hybrid_routed_expert_moe overlapped with combine.
 
         Neighbouring chips bump these across launches, so they must outlive every program: one set for the mesh,
         shared by all MoE layers, which run one after another and each leave the counts as they found them. On every
         worker core, so the address is uniform across the mesh and covers both ops' rows.
+
+        The channel counters are here rather than inside the op for a second reason: the routed expert's L1
+        arena takes every free byte before combine is built, so nothing can be allocated there at all.
         """
         if self.combine_overlap_semaphores is None:
+            channels = ttnn.experimental.deepseek_prefill.hybrid_routed_expert_moe_channel_semaphore_count(
+                self.mesh_device
+            )
             self.combine_overlap_semaphores = tuple(
-                ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3)
+                ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3 + channels)
             )
             # Every chip must have zeroed its copies before any neighbour bumps them.
             ttnn.synchronize_device(self.mesh_device)

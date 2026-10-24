@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
-    DestAccumulation,
     PerfRunType,
     Transpose,
 )
@@ -73,11 +73,7 @@ def test_perf_transpose_dest(
             tile_count_res=tile_count,
         ),
         unpack_to_dest=formats.input_format.is_32_bit(),
-        dest_acc=(
-            DestAccumulation.Yes
-            if formats.input_format.is_32_bit()
-            else DestAccumulation.No
-        ),
+        dest_acc=dest_acc_for(formats.input_format),
     )
 
     configuration.run(perf_report)
