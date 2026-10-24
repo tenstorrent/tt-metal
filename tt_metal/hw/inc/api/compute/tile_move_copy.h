@@ -193,6 +193,10 @@ ALWI void copy_block(
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
 #endif
+#ifndef ARCH_QUASAR
+    reconfig_data_format_srca(in_cb_id);
+    copy_init<is_fp32_dest_acc_en>(in_cb_id);
+#endif
     UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, start_in_tile_index, ntiles)));
     MATH((llk_math_eltwise_unary_datacopy_block<

@@ -153,6 +153,25 @@ ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t n
 #endif
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void pack_block(
+    std::uint32_t ifrom_dst,
+    std::uint32_t icb,
+    std::uint32_t ntiles,
+    bool l1_acc,
+    ReluConfig relu = ReluConfig::none()) {
+    LLK_SAN_FUNCTION();
+#ifndef ARCH_QUASAR
+    pack_reconfig_data_format(icb);
+    PACK((llk_pack_init<PackMode::Default, false, true, true>(icb, 1)));
+    PACK((llk_pack_reconfig_l1_acc(l1_acc ? 1 : 0)));
+    PACK((llk_pack_relu_config(relu)));
+    PACK((llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
+#else
+    PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
+#endif
+}
+
 // clang-format off
 /**
  * Issues a single no-write packer op: it steps the packer engine only -- no DST is committed to L1 and it
