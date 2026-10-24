@@ -207,10 +207,8 @@ def _assert_output(out_torch, golden, dtype_tt, op_name, acts=(), pcc=None, keep
 
 
 # Special values, checked as production checks them (test_div_fp32): every pair of these through an op, with inf and
-# NaN where torch puts them (allow_nonfinite) and the sign of zero not checked. Quasar's divide gives a number where
-# IEEE gives NaN for the pairs in _DIVIDE_NOT_NAN, so those run apart.
+# NaN where torch puts them (allow_nonfinite) and the sign of zero not checked.
 _SPECIAL = {"1.5": 1.5, "-2": -2.0, "+0": 0.0, "-0": -0.0, "inf": math.inf, "-inf": -math.inf, "nan": math.nan}
-_DIVIDE_NOT_NAN = [("+0", "-0"), ("-0", "+0"), ("-0", "-0"), ("inf", "inf"), ("-inf", "-inf"), ("nan", "+0")]
 
 
 def _run_special(device, op_name, dtype_tt, pairs):
