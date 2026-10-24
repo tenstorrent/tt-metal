@@ -50,61 +50,35 @@ inline void disarm_sfploadmacro_misc() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_typecast_fp32_to_uint16() {
-#ifdef DISABLE_SFPLOADMACRO
-#pragma GCC unroll 0
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
-        TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
-        if (is_fp32_dest_acc_en) {
-            TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_2, 0);
-        } else {
-            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_2, 0);
-        }
-    }
-#else
-    if constexpr (!is_fp32_dest_acc_en) {
-        // 16-bit Dest: SFPLOADMACRO fast path, throughput of 2 cycles per input row.
-        //
-        // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
-        //
-        // t | Load | Simple            | MAD | Round            | Store   |
-        // - | ---- | ----------------- | --- | ---------------- | ------- |
-        // 0 | [v]  |                   |     |                  |         |
-        // 1 | nop  | [v] = max(v, 0.0) |     |                  |         |
-        // 0 | ...  | (must be idle)    |     | (must be idle)   |         |
-        // 1 | ...  |                   |     | [v] L16 = rnd(v) |         |
-        // 0 | ...  |                   |     |                  | [v] L16 |
+        // result = 0 (default for in < 0, |in| < 1.0, and subnormals)
+        TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, 0);
 
-        // SFPLOADMACRO operand encoding: operand0 = (macro_select << 2) | (VD & 3) and the
-        // trailing operand = VD >> 2, so the hardware reconstructs the value-register index
-        // VD = (trailing << 2) | (operand0 & 3) -- a 3-bit index spanning LREG0..LREG7 -- while
-        // operand0[3:2] selects which armed macro fires. Here VD is 0/1 and macro_select 0, so
-        // the mask/shift are no-ops, but the same idiom addresses VD >= 4 elsewhere (e.g.
-        // calculate_typecast_uint32_to_fp32 fires macro 2 with VD = LREG7).
-#pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d++) {
-            int v = d & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
-            TT_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_2, v >> 2);
-            TTI_SFPNOP;
-        }
-        TTI_SFPNOP;
-        TTI_SFPNOP;
-        TTI_SFPNOP;
-    } else {
-        // 32-bit Dest: the swap-hi-lo16 store cannot be expressed by the init-time macro store
-        // mode, so this case uses the plain loop. The init still armed the macro Misc word, so
-        // disarm the leftover state first (WH hangs otherwise running a plain loop with it, #46751).
-        disarm_sfploadmacro_misc();
-#pragma GCC unroll 0
-        for (int d = 0; d < ITERATIONS; d++) {
-            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
-            TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
-            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
-            TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_2, 0);
+        // LaneEnabled = in >= 0
+        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+        // exp = in.Exp (LaneEnabled = exp >= 0)
+        TTI_SFPEXEXP(
+            0, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPEXEXP_MOD1_SET_CC_SGN_EXP | sfpi::SFPEXEXP_MOD1_SET_CC_COMP_EXP);
+        // result = 0xffff (saturation clamp for uint16)
+        TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, 0xffff);
+        // exp -= 16 (LaneEnabled = exp < 16)
+        TTI_SFPIADD(-16 & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
+        // exp -= 7 (shift amount = exp - 23)
+        TTI_SFPIADD(-7 & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        // result = exman(in, sfpi::MantissaMode::ImplicitOne) << (exp - 23)
+        TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+        TTI_SFPSHFT(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
+        // LaneEnabled = true
+        TTI_SFPENCC(0, 0, 0, 0);
+
+        if constexpr (is_fp32_dest_acc_en) {
+            TTI_SFPSTORE(p_sfpu::LREG1, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_2, 0);
+        } else {
+            TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::LO16, ADDR_MOD_2, 0);
         }
     }
-#endif
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
@@ -896,36 +870,6 @@ template <bool APPROXIMATION_MODE>
 inline void init_typecast_fp32_to_uint16() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
-#ifndef DISABLE_SFPLOADMACRO
-    // Programs the macro used by the 16-bit Dest (LO16 store) path of
-    // calculate_typecast_fp32_to_uint16. The 32-bit Dest path uses the plain loop and
-    // disarms this macro first (the init cannot see is_fp32_dest_acc_en; see #46751).
-
-    // InstructionTemplate[0]
-    TTI_SFPSWAP(0, p_sfpu::LCONST_0, 12, 0xf);  // L[VD] = max(0, L[VD])
-
-    // InstructionTemplate[1]
-    TTI_SFP_STOCH_RND(0, 0, 0, 0, 13, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
-
-    // Macro 0
-    {
-        constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (0 << 3) | (4 + 0);
-        constexpr std::uint32_t mad_bits = 0;
-        constexpr std::uint32_t round_bits = 0x00 | 0x40 | (2 << 3) | (4 + 1);
-        constexpr std::uint32_t store_bits = 0x00 | 0x40 | (3 << 3) | 3;
-
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 0, 0);
-    }
-
-    // Misc: {
-    //   StoreMod0: LO16,
-    //   UsesLoadMod0ForStore: {0},
-    //   UnitDelayKind: {1}, (WaitForElapsedInstructions=1)
-    // }
-    TTI_SFPCONFIG(0x100 | InstrModLoadStore::LO16, 8, 1);
-#endif
 }
 
 template <bool APPROXIMATION_MODE>

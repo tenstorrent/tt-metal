@@ -225,8 +225,7 @@ def _simulate_bfp_quantization(x, man_bits):
 
 
 def _float_to_uint16_clamp(x):
-    # Device float_to_uint16 converts to float32 before std::round; match in float32.
-    return torch.clamp(torch.floor(x.float() + 0.5).to(torch.int32), min=0, max=65535)
+    return torch.clamp(x.to(torch.int32), min=0, max=65535)
 
 
 def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
