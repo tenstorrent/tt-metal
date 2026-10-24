@@ -352,7 +352,7 @@ def test_full_model(mesh_device, reset_seeds, request):
     hf_model.eval()
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
 
-    prompt = "The capital of France is"
+    prompt = os.environ.get("GEMMA4_TEST_PROMPT_TEXT") or "The capital of France is"  # another base sentence on request
     input_ids = tokenizer.encode(prompt, return_tensors="pt")  # [1, seq_len]
     want = int(
         os.environ.get("GEMMA4_TEST_PROMPT_TOKENS", "0")
@@ -450,6 +450,12 @@ def test_full_model(mesh_device, reset_seeds, request):
 
     passing, pcc_msg = compare_tensors(tt_compare, hf_compare, pcc_threshold=get_pcc_threshold(request))
     logger.info(f"Full model PCC (seq_len={seq_len}): {pcc_msg}")
+    dump = os.environ.get(
+        "GEMMA4_TEST_DUMP_LOGITS"
+    )  # diagnostics: both logit tensors + the ids for an offline per-position read
+    if dump:
+        torch.save({"tt": tt_compare.cpu(), "hf": hf_compare.cpu(), "input_ids": input_ids.cpu()}, dump)
+        logger.info(f"Full model logits dumped to {dump}")
     # the last-token logits (the first generated token's distribution) and its top-1: the prefill gate of a long prompt
     last_tt, last_hf = tt_compare[0, seq_len - 1].float(), hf_compare[0, seq_len - 1].float()
     last_pcc = torch.corrcoef(torch.stack([last_tt, last_hf]))[0, 1].item()

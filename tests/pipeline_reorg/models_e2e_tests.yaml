@@ -806,7 +806,9 @@
       tier: 2
       release_ready: false
     bh_quietbox_2:
-      timeout: 19  # measured ~15.5 min warm (21.3 cold) 2026-10-24
+      timeout: 26  # run 40103786590 (first full run past the SDPA grid throw): 20.7 min wall at the 19-min kill with
+                   # the vision run not yet started; text_demo 404 s + lm_head / packed_verify / full_model 614 s (the
+                   # full model is 498 s, ~8 min of it the 31B HF reference forward on the CPU) + the vision towers
       tier: 1
       release_ready: true
     # bh_galaxy_perf: temporarily disabled — same Blackhole Galaxy fabric / ethernet
@@ -833,7 +835,8 @@
   model_family: Gemma
   skus:
     bh_quietbox_2:
-      timeout: 25  # ~8 min warm; the budget covers one cold TT-cache build
+      timeout: 17  # run 40103786590: 3.3 min warm; a cold TT-cache rebuild (one-off after a cache layout change) is
+                   # the shield runner's exposure, not the PR gate's
       tier: 1  # the tier-2 QB2 bucket is full (186/186); this fits the tier-1 headroom
       release_ready: false
   owner_id: U088413NP0Q # Ashai Reddy
@@ -861,7 +864,7 @@
       timeout: 6
       tier: 2
     bh_quietbox_2:
-      timeout: 11  # measured 7.7 min warm (10.2 cold) 2026-10-24
+      timeout: 12  # run 40103786590: 9.7 min
       tier: 1
       release_ready: true
   owner_id: U088413NP0Q # Ashai Reddy
