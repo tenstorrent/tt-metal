@@ -1024,7 +1024,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     layout = layer_completion_layout(
         layer_split,
         rank,
-        kv_slot_layer_ids=getattr(ADAPTER, "kv_slot_layer_ids", lambda n: None)(NUM_LAYERS),
         extra_layers=extra_layers,
     )
     router = LayerCompletionRouter(

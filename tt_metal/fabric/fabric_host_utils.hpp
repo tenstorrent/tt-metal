@@ -15,6 +15,7 @@
 #include <llrt/tt_cluster.hpp>
 #include <tt_stl/assert.hpp>
 #include <map>
+#include <set>
 #include <vector>
 #include <unordered_map>
 #include <optional>
@@ -94,6 +95,15 @@ void append_fabric_connection_rt_args(
     const tt::tt_metal::CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     CoreType core_type);
+
+// Wormhole non-Galaxy only. For each MMIO chip, the fabric dispatch-link channels toward its directly connected remote
+// (non-MMIO) chips, i.e. the link FabricBuilder::discover_channels configures for dispatch. That router polls for base
+// firmware often enough to keep UMD's remote transfers responsive; the other fabric routers can hold the core for tens
+// of seconds per transfer while fabric is active. MMIO chips without a one-hop remote chip are left out. Needs the
+// fabric routing tables (MetalContext::initialize_fabric_config()). Each entry is meant for
+// tt::Cluster::configure_ethernet_cores_for_remote_transfers.
+std::map<ChipId, std::set<chan_id_t>> get_remote_transfer_dispatch_channels(
+    const ControlPlane& control_plane, const tt::Cluster& cluster);
 
 // Helper: Build adjacency map and discover corners/edges using BFS
 using AdjacencyMap = std::unordered_map<ChipId, std::vector<ChipId>>;
