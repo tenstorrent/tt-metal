@@ -17,6 +17,7 @@ import os
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
@@ -847,3 +848,90 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
     )
     out3_torch = _from_device(out3, mesh_device)
     assert out3_torch.shape[-2] == short_cont, "short continuation with seq < hist failed"
+
+
+# ── Chunked prefill numerics (served 8K / 32K path) ──────────────────────
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
+@pytest.mark.parametrize(
+    "layer_type",
+    [
+        "full_attention",
+        pytest.param(
+            "sliding_attention",
+            marks=pytest.mark.skipif(os.environ.get("CI") == "true", reason="CI subset: the global layer only"),
+        ),
+    ],
+)
+def test_chunked_prefill_matches_one_shot(layer_type, mesh_device, reset_seeds, request):
+    """Two 1024-token chunks through the vLLM-style chunked prefill (``chunk_start_idx`` + ``chunk_page_table``,
+    the served 8K / 32K path) match the one-shot 2048-token prefill of the same layer: the global layer's second
+    chunk attends the paged prefix through ``chunked_prefill_sdpa`` and the sliding layer's through its stashed
+    tail, both on the prefill SDPA program config (step 3b units-fill rule) that the one-shot path uses."""
+    from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
+    from models.tt_transformers.tt.common import PagedAttentionConfig
+
+    hf_text_config = TestFactory.create_hf_text_config()
+    try:
+        layer_idx = find_layer_idx(hf_text_config, layer_type)
+    except ValueError:
+        pytest.skip(f"no {layer_type} layer in this checkpoint")
+
+    chunk_size = 1024
+    block_size = 64
+    total_seq = chunk_size * 2
+    max_num_blocks = total_seq // block_size + 2
+    max_seq_len = max_num_blocks * block_size
+    paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
+    _, _, config, tt_attn, mesh_config = _setup_attention(mesh_device, layer_idx, max_seq_len=max_seq_len)
+    _skip_if_l1_overflow(config, mesh_device)
+    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, max_seq_len, layer_idx)
+
+    hd = int(config.head_dim)
+
+    def rope_rows(lo, hi):
+        # the prefill RoPE consumes cos / sin rows [0, rows) of what it is given: a chunk needs its own positions
+        # (the generator builds them from chunk_start_idx), the one-shot call the first total_seq rows.
+        return tuple(ttnn.slice(t, [0, 0, lo, 0], [1, 1, hi, hd]) for t in (cos_tt, sin_tt))
+
+    x = torch.randn(1, 1, total_seq, config.hidden_size, dtype=torch.bfloat16)
+    # one-shot reference: the whole prompt in one prefill call
+    one_shot = tt_attn(_to_device(x, mesh_device), rope_mats=rope_rows(0, total_seq), is_decode=False)
+    one_shot_torch = _from_device(one_shot, mesh_device)
+    one_shot.deallocate(True)
+
+    kv_cache = init_kv_cache(
+        mesh_device=mesh_device,
+        config=config,
+        paged_attention_config=paged_attention_config,
+        cache_dtype=ttnn.bfloat16,
+        mesh_config=mesh_config,
+    )
+    tt_attn.kv_cache = kv_cache
+    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(1, -1)
+    page_table_tt = ttnn.from_torch(page_table, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+    outs = []
+    for c in range(2):
+        lo, hi = c * chunk_size, (c + 1) * chunk_size
+        chunk_pt = page_table[:, lo // block_size : hi // block_size]
+        chunk_pt_tt = ttnn.from_torch(chunk_pt, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+        out = tt_attn(
+            _to_device(x[:, :, lo:hi].contiguous(), mesh_device),
+            rope_mats=rope_rows(lo, hi),
+            is_decode=False,
+            page_table=page_table_tt,
+            kv_cache=kv_cache,
+            chunk_start_idx=lo,
+            chunk_page_table=chunk_pt_tt,
+        )
+        outs.append(_from_device(out, mesh_device))
+        out.deallocate(True)
+    chunked_torch = torch.cat(outs, dim=-2)
+    assert chunked_torch.shape == one_shot_torch.shape, (chunked_torch.shape, one_shot_torch.shape)
+    for name, lo, hi in (("chunk 1", 0, chunk_size), ("chunk 2", chunk_size, total_seq)):
+        passing, pcc_msg = compare_tensors(
+            chunked_torch[:, :, lo:hi], one_shot_torch[:, :, lo:hi], pcc_threshold=get_pcc_threshold(request)
+        )
+        logger.info(f"chunked prefill vs one-shot, {layer_type} layer {layer_idx}, {name}: {pcc_msg}")
+        assert passing, f"{layer_type} layer {layer_idx} {name} vs one-shot prefill: {pcc_msg}"

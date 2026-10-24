@@ -649,10 +649,80 @@ def flush_deferred_bounded_fills(layers):
                     pass
 
 
+_SDPA_DUMP_STATE = {"calls": 0, "last_in": None}
+_SDPA_KEEP = []  # GEMMA4_SDPA_KEEP_REFS=1: strong references to the SDPA inputs / outputs for the process lifetime
+
+
+def _dump_sdpa_output(tt_out):
+    """GEMMA4_SDPA_DUMP_DIR (diagnostics): the chip-0 output of the call whose inputs were dumped last."""
+    import torch
+
+    path = _SDPA_DUMP_STATE.get("last_in")
+    if not path:
+        return
+    shards = ttnn.get_device_tensors(tt_out) if hasattr(tt_out, "device") else [tt_out]
+    if os.environ.get("GEMMA4_SDPA_DUMP_ALL_CHIPS", "0") == "1":
+        out = torch.stack([ttnn.to_torch(sh).to(torch.bfloat16) for sh in shards])
+    else:
+        out = ttnn.to_torch(shards[0]).to(torch.bfloat16)
+    torch.save({"out": out}, path.replace("sdpa_in_", "sdpa_out_"))
+    _SDPA_DUMP_STATE["last_in"] = None
+
+
+def _dump_sdpa_inputs(dump_dir, tt_q, tt_k, tt_v, config, seq_len, sliding_window):
+    """GEMMA4_SDPA_DUMP_DIR (diagnostics): save the chip-0 Q / K / V handed to the prefill SDPA op (post-norm, post-RoPE)
+    and the op arguments for the first sliding and the first global layer seen, as torch tensors."""
+    import torch
+
+    kind = "sliding" if config.is_sliding else "global"
+    if os.environ.get("GEMMA4_SDPA_DUMP_ALL", "0") == "1":  # every call, numbered in call order
+        _SDPA_DUMP_STATE["calls"] += 1
+        path = os.path.join(dump_dir, f"sdpa_in_{_SDPA_DUMP_STATE['calls']:03d}_{kind}.pt")
+    else:
+        path = os.path.join(dump_dir, f"sdpa_in_{kind}.pt")
+        if os.path.exists(path):
+            return
+    os.makedirs(dump_dir, exist_ok=True)
+    _SDPA_DUMP_STATE["last_in"] = path
+
+    def host(t):
+        shards = ttnn.get_device_tensors(t) if hasattr(t, "device") else [t]
+        if os.environ.get("GEMMA4_SDPA_DUMP_ALL_CHIPS", "0") == "1":  # every chip's shard, stacked: [chips, ...]
+            return torch.stack([ttnn.to_torch(sh).to(torch.bfloat16) for sh in shards])
+        return ttnn.to_torch(shards[0]).to(torch.bfloat16)
+
+    torch.save(
+        {
+            "q": host(tt_q),
+            "k": host(tt_k),
+            "v": host(tt_v),
+            "seq_len": int(seq_len),
+            "sliding_window": sliding_window,
+            "head_dim": int(config.head_dim),
+            "layer_idx": int(getattr(config, "layer_idx", -1)),
+            "kind": kind,
+            "scale": 1.0,
+        },
+        path,
+    )
+    logger.info(f"SDPA inputs dumped to {path} (q {tuple(tt_q.shape)}, k {tuple(tt_k.shape)}, window {sliding_window})")
+
+
 def _sdpa_single_chunk(tt_q, tt_k, tt_v, config, seq_len, sliding_window, compute_kernel_config, mm_attn_mask=None):
     """Single-chunk prefill SDPA. With ``mm_attn_mask`` (image-span bidirectional mask, see
     ``mm_attention_mask.py``) the op takes the explicit additive mask instead of ``is_causal`` and
     ``sliding_window_size`` (the op forbids combining them; the window is baked into the mask)."""
+    dump_dir = os.environ.get("GEMMA4_SDPA_DUMP_DIR")  # diagnostics: the exact op inputs, once per layer type
+    if dump_dir:
+        _dump_sdpa_inputs(dump_dir, tt_q, tt_k, tt_v, config, seq_len, sliding_window)
+    if (
+        sliding_window is not None
+        and int(seq_len) <= int(sliding_window)
+        and os.environ.get("GEMMA4_PREFILL_SDPA_NO_WINDOW", "0") == "1"
+    ):
+        # diagnostics (opt-in): a window the prompt never reaches is inert, so the plain causal op path has the same
+        # semantics at this length; isolates the op's sliding-window handling from its K/V geometry.
+        sliding_window = None
     if mm_attn_mask is not None:
         return ttnn.transformer.scaled_dot_product_attention(
             tt_q,
@@ -661,19 +731,39 @@ def _sdpa_single_chunk(tt_q, tt_k, tt_v, config, seq_len, sliding_window, comput
             attn_mask=mm_attn_mask,
             is_causal=False,
             scale=1.0,
-            program_config=prefill_sdpa_program_config(config.head_dim, seq_len, sliding_window=None),
+            program_config=prefill_sdpa_program_config(
+                config.head_dim, seq_len, sliding_window=None, num_heads=int(tt_q.shape[1])
+            ),
             compute_kernel_config=compute_kernel_config,
         )
-    return ttnn.transformer.scaled_dot_product_attention(
+    # diagnostics (opt-in, inventory 4m): GEMMA4_SDPA_SYNC=1 synchronizes the device before and after the op,
+    # GEMMA4_SDPA_OUT_DRAM=1 forces the output into DRAM interleaved, GEMMA4_SDPA_KEEP_REFS=1 keeps the inputs and
+    # the output referenced for the process lifetime (no buffer reuse behind the op).
+    if os.environ.get("GEMMA4_SDPA_SYNC", "0") == "1":
+        ttnn.synchronize_device(tt_q.device())
+    out_kwargs = (
+        {"memory_config": ttnn.DRAM_MEMORY_CONFIG} if os.environ.get("GEMMA4_SDPA_OUT_DRAM", "0") == "1" else {}
+    )
+    out = ttnn.transformer.scaled_dot_product_attention(
         tt_q,
         tt_k,
         tt_v,
         is_causal=True,
         scale=1.0,
         sliding_window_size=sliding_window,
-        program_config=prefill_sdpa_program_config(config.head_dim, seq_len, sliding_window=sliding_window),
+        program_config=prefill_sdpa_program_config(
+            config.head_dim, seq_len, sliding_window=sliding_window, num_heads=int(tt_q.shape[1])
+        ),
         compute_kernel_config=compute_kernel_config,
+        **out_kwargs,
     )
+    if os.environ.get("GEMMA4_SDPA_SYNC", "0") == "1":
+        ttnn.synchronize_device(tt_q.device())
+    if os.environ.get("GEMMA4_SDPA_KEEP_REFS", "0") == "1":
+        _SDPA_KEEP.extend([tt_q, tt_k, tt_v, out])
+    if dump_dir:
+        _dump_sdpa_output(out)
+    return out
 
 
 def _fused_prefill_qkv_ok(tt_q, cos_cache, weights) -> bool:
@@ -1171,7 +1261,7 @@ def _prefill_forward_single(
                 scale=1.0,
                 sliding_window_size=sliding_window,
                 program_config=prefill_sdpa_program_config(
-                    config.head_dim, hist + seq_len, sliding_window=sliding_window
+                    config.head_dim, hist + seq_len, sliding_window=sliding_window, num_heads=int(q_cat.shape[1])
                 ),
                 compute_kernel_config=sdpa_ckc,
             )
@@ -1658,7 +1748,9 @@ def prefill_forward(
         is_causal=True,
         scale=1.0,
         sliding_window_size=sliding_window,
-        program_config=prefill_sdpa_program_config(config.head_dim, int(tt_q.shape[-2]), sliding_window=sliding_window),
+        program_config=prefill_sdpa_program_config(
+            config.head_dim, int(tt_q.shape[-2]), sliding_window=sliding_window, num_heads=int(tt_q.shape[1])
+        ),
         compute_kernel_config=sdpa_compute_kernel_config,
     )
     tt_q.deallocate(True)
