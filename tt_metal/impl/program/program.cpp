@@ -3107,12 +3107,11 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
 
 void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
-    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device));
 
-    uint64_t device_hash = BuildEnvManager::get_instance(extract_context_id(mesh_device))
+    uint64_t device_hash = BuildEnvManager::get_instance(mesh_device->impl().get_context_id())
                                .get_device_build_env(mesh_device->build_id())
                                .build_key();
-    if (not metal_ctx.hal().is_coordinate_virtualization_enabled()) {
+    if (not mesh_device->impl().metal_env().get_hal().is_coordinate_virtualization_enabled()) {
         ttsl::hash::hash_combine(device_hash, mesh_device->id());
     }
     if (!is_cached()) {
@@ -3127,7 +3126,7 @@ void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_devic
     if (!cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
         auto sub_device_id = this->determine_sub_device_ids(mesh_device).at(0);
-        ProgramCommandSequence program_command_sequence{metal_ctx};
+        ProgramCommandSequence program_command_sequence{mesh_device->impl().metal_context()};
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id);
         program_dispatch::assemble_device_commands(
@@ -3148,12 +3147,11 @@ void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_devic
 
 void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
-    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device));
 
-    uint64_t device_hash = BuildEnvManager::get_instance(extract_context_id(mesh_device))
+    uint64_t device_hash = BuildEnvManager::get_instance(mesh_device->impl().get_context_id())
                                .get_device_build_env(mesh_device->build_id())
                                .build_key();
-    if (not metal_ctx.hal().is_coordinate_virtualization_enabled()) {
+    if (not mesh_device->impl().metal_env().get_hal().is_coordinate_virtualization_enabled()) {
         device_hash = (device_hash << 32) | (mesh_device->id());
     }
     if (!is_cached()) {
@@ -3168,7 +3166,7 @@ void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh
     if (!trace_cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
         auto sub_device_id = this->determine_sub_device_ids(mesh_device).at(0);
-        ProgramCommandSequence program_command_sequence{metal_ctx};
+        ProgramCommandSequence program_command_sequence{mesh_device->impl().metal_context()};
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id);
         program_dispatch::assemble_device_commands(

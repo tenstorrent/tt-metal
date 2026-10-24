@@ -28,7 +28,6 @@
 #include <memory>
 #include <unordered_map>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "distributed.hpp"
@@ -37,7 +36,7 @@
 #include "mesh_device.hpp"
 #include <tt_stl/reflection.hpp>
 #include "impl/context/metal_context.hpp"
-#include "llrt/metal_soc_descriptor.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
@@ -264,7 +263,7 @@ void GlobalCircularBufferImpl::setup_cb_buffers(BufferType buffer_type, uint32_t
         },
         device_);
 
-    auto l1_alignment = MetalContext::instance(extract_context_id(device_)).hal().get_alignment(HalMemType::L1);
+    auto l1_alignment = device_->impl().metal_env().get_hal().get_alignment(HalMemType::L1);
     // [0] is_sender, [1] num_receivers, [2] fifo_start_addr, [3] fifo_size, [4] fifo_ptr,
     // [5] noc_xy_addr, [6] aligned_pages_sent_addr (local), [7] remote_pages_addr_override
     // (the canonical remote NoC target — equal to slot 6 for sharded GCB, points across L1

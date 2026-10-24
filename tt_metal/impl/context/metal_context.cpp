@@ -101,6 +101,7 @@ void validate_worker_l1_size(size_t& worker_l1_size, const Hal& hal) {
         worker_l1_size,
         max_worker_l1_size);
 }
+
 }  // namespace
 
 ContextId extract_context_id(const IDevice* device) {
@@ -112,9 +113,6 @@ ContextId extract_context_id(const IDevice* device) {
     return mesh_device->impl().get_context_id();
 }
 
-ContextId extract_context_id(const distributed::MeshDevice* mesh_device) {
-    TT_ASSERT(mesh_device != nullptr, "MeshDevice is nullptr");
-    return mesh_device->impl().get_context_id();
 }
 
 void MetalContext::initialize_device_manager(
