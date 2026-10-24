@@ -13,20 +13,21 @@ void kernel_main() {
     uint32_t runtime_args_counter = 0;
     uint32_t output_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t intermediates_addr = get_arg_val<uint32_t>(runtime_args_counter++);
-    uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
-    uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
+    // Then the core's work items (Q chunks): num_runs, (first_item, num_items) per run.
+    const uint32_t num_runs = get_arg_val<uint32_t>(runtime_args_counter++);
 
     constexpr uint32_t cb_intermediates = tt::CBIndex::c_4;
     constexpr uint32_t cb_output = tt::CBIndex::c_15;
 
-    constexpr uint32_t vWt = get_compile_time_arg_val(0);      // number of tiles in output/value inner dimension
-    constexpr uint32_t Ht = get_compile_time_arg_val(1);       // number of tiles in sequence dimension
-    constexpr uint32_t q_heads = get_compile_time_arg_val(2);  // num of heads in query
-    constexpr uint32_t pairs_per_seq = Ht / 2;
+    constexpr uint32_t vWt = get_compile_time_arg_val(0);         // number of tiles in output/value inner dimension
+    constexpr uint32_t Ht = get_compile_time_arg_val(1);          // number of tiles in sequence dimension
+    constexpr uint32_t q_heads = get_compile_time_arg_val(2);     // num of heads in query
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);  // query tile-rows per Q chunk
+    constexpr uint32_t q_num_chunks = Ht / Sq_chunk_t;
 
     const uint32_t tile_bytes = get_tile_size(cb_output);
 
-    constexpr auto output_args = TensorAccessorArgs<3>();
+    constexpr auto output_args = TensorAccessorArgs<4>();
     const auto output_addr_generator = TensorAccessor(output_args, output_addr);
 
 #ifdef RETURN_INTERMEDIATES
@@ -46,7 +47,7 @@ void kernel_main() {
     generate_tile_with_bfloat16_value(cb_reduction_scaler, one);  // tile with 1.0 for reduction
     generate_matmul_row_reduce_tile(cb_matmul_reduce);            // tile for matmul row reduce
 
-#if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
+#ifdef CAUSAL_MASK
     // Emit *pre-transformed* mask tiles so the compute kernel can stamp them directly
     // onto QK^T scores via the packer's L1-accumulate path (TTNN's
     // `apply_causal_mask_lightweight` pattern). The mask values are added in FP32 in L1 by
@@ -61,77 +62,44 @@ void kernel_main() {
     generate_tile_with_bfloat16_value(cb_attn_mask, BF16_NEG_LARGE_BITS);
 #endif
 
-    const uint32_t tiles_per_head = vWt;
+    constexpr uint32_t out_tiles_per_chunk = Sq_chunk_t * vWt;
     constexpr uint32_t kIntermediateTilesPerRow = 1U;
 
-#ifdef BALANCED_PARALLELISM
-    // Balanced parallelism mode: write outputs for pairs of rows (light + heavy).
-    // Each pair combines an early-sequence row (few attention tiles) with a late-sequence row (many tiles),
-    // so every core writes roughly the same amount of data.
-    // Runtime args reuse: num_rows_to_process = num_pairs, start_row = start_pair_idx.
-    auto write_row = [&](const uint32_t r) {
-        const uint32_t s_tile_idx = r % Ht;
-        const uint32_t q_head_idx = (r / Ht) % q_heads;
-        const uint32_t batch_idx = r / (Ht * q_heads);
-        const uint32_t out_start_idx = ((batch_idx * q_heads + q_head_idx) * Ht + s_tile_idx) * tiles_per_head;
+    // One Q chunk: Sq_chunk_t consecutive output rows, contiguous in DRAM.
+    auto write_q_chunk = [&](const uint32_t global_q_chunk_idx) {
+        const uint32_t seq_idx = global_q_chunk_idx / q_num_chunks;  // batch * q_heads + head
+        const uint32_t first_row_tile = (global_q_chunk_idx % q_num_chunks) * Sq_chunk_t;
+        const uint32_t global_first_row = seq_idx * Ht + first_row_tile;
 
-        write_tiles_by_row(cb_output, output_addr_generator, out_start_idx, tiles_per_head, tile_bytes, tiles_per_head);
+        // -------- Output: (B, H, S, D), heads NOT fused --------
+        // Linear index for [B, H, S, D]: ((b * q_heads + h) * Ht + s_tile) * vWt + col
+        write_tiles_by_row(
+            cb_output,
+            output_addr_generator,
+            global_first_row * vWt,
+            out_tiles_per_chunk,
+            tile_bytes,
+            out_tiles_per_chunk);
 
 #ifdef RETURN_INTERMEDIATES
-        const uint32_t intermediate_base_idx =
-            ((batch_idx * q_heads + q_head_idx) * Ht + s_tile_idx) * kIntermediateTilesPerRow;
-
-        cb_wait_front(cb_intermediates, kIntermediateTilesPerRow);
-        const uint32_t l1_intermediates_read_addr = get_read_ptr(cb_intermediates);
-        noc_async_write_page(intermediate_base_idx, intermediates_addr_generator, l1_intermediates_read_addr);
+        // -------- Intermediates: (B, qNH, S, 32) = 1 FP32 tile per row: logsumexp --------
+        constexpr uint32_t interm_tiles = Sq_chunk_t * kIntermediateTilesPerRow;
+        cb_wait_front(cb_intermediates, interm_tiles);
+        uint32_t l1_intermediates_read_addr = get_read_ptr(cb_intermediates);
+        for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+            noc_async_write_page(global_first_row + r, intermediates_addr_generator, l1_intermediates_read_addr);
+            l1_intermediates_read_addr += interm_tile_bytes;
+        }
         noc_async_write_barrier();
-        cb_pop_front(cb_intermediates, kIntermediateTilesPerRow);
+        cb_pop_front(cb_intermediates, interm_tiles);
 #endif
     };
 
-    for (uint32_t p = 0; p < num_rows_to_process; ++p) {
-        const uint32_t global_pair_idx = start_row + p;
-
-        // Map pair index to sequence and position within sequence
-        const uint32_t seq_idx = global_pair_idx / pairs_per_seq;
-        const uint32_t pair_in_seq = global_pair_idx % pairs_per_seq;
-
-        // Calculate the two row indices for this pair (light = early in seq, heavy = late in seq)
-        const uint32_t light_row_in_seq = pair_in_seq;
-        const uint32_t heavy_row_in_seq = Ht - 1 - pair_in_seq;
-
-        const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
-        const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
-
-        write_row(heavy_global_row);
-        write_row(light_global_row);
+    for (uint32_t run = 0; run < num_runs; ++run) {
+        const uint32_t first_item = get_arg_val<uint32_t>(runtime_args_counter++);
+        const uint32_t num_items = get_arg_val<uint32_t>(runtime_args_counter++);
+        for (uint32_t item = first_item; item < first_item + num_items; ++item) {
+            write_q_chunk(item);
+        }
     }
-#else
-    // Standard mode: write outputs sequentially
-    const uint32_t end_row = start_row + num_rows_to_process;
-    for (uint32_t r = start_row; r < end_row; r++) {
-        // convert global row index to output tensor coordinates
-        const uint32_t s_tile_idx = r % Ht;  // position in sequence (tile idx)
-        const uint32_t q_head_idx = (r / Ht) % q_heads;
-        const uint32_t batch_idx = r / (Ht * q_heads);
-
-        // -------- Output: (B, H, S, D), heads NOT fused --------
-        // Linear index for [B, H, S, D]: ((b * q_heads + h) * Ht + s_tile) * tiles_per_head + col
-        const uint32_t out_start_idx = ((batch_idx * q_heads + q_head_idx) * Ht + s_tile_idx) * tiles_per_head;
-
-        write_tiles_by_row(cb_output, output_addr_generator, out_start_idx, tiles_per_head, tile_bytes, tiles_per_head);
-
-#ifdef RETURN_INTERMEDIATES
-        // -------- Intermediates: (B, qNH, S, 32) = 1 FP32 tile: logsumexp --------
-        const uint32_t intermediate_base_idx =
-            ((batch_idx * q_heads + q_head_idx) * Ht + s_tile_idx) * kIntermediateTilesPerRow;
-
-        cb_wait_front(cb_intermediates, kIntermediateTilesPerRow);
-        const uint32_t l1_intermediates_read_addr = get_read_ptr(cb_intermediates);
-        noc_async_write_page(intermediate_base_idx, intermediates_addr_generator, l1_intermediates_read_addr);
-        noc_async_write_barrier();
-        cb_pop_front(cb_intermediates, kIntermediateTilesPerRow);
-#endif
-    }
-#endif
 }

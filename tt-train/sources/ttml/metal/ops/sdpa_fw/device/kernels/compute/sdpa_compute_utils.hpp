@@ -78,7 +78,6 @@ void apply_mask_on_reg(
     uint32_t custom_inf_bits,
     uint32_t mask_tile_idx = 0U) {
     const uint32_t mask_register = register_idx + 1U;  // mask register should be next to data register
-    cb_wait_front(cb_attn_mask, onetile);
     copy_init(cb_attn_mask);
     copy_tile(
         cb_attn_mask,
@@ -104,22 +103,22 @@ void apply_mask_on_reg(
     add_binary_tile(register_idx, mask_register, register_idx);
 }
 
+// Per-row softmax helpers. Score CB is row-major (row r, K tile n at r * Sk_chunk_t + n); each stat CB
+// is Sq_chunk_t deep with row r in slot r. The caller owns waits/reserves/pushes of the row-deep CBs.
+
 // TODO: replace FPU reduce_tile(MAX) + sub_tiles_bcast_cols with SFPU equivalents once LLK
 // provides SFPU row-reduce-max and sub_bcast_col. This will allow the full softmax (max, sub,
 // exp, sum, reciprocal) to stay in DST at FP32 without pack/unpack round-trips through the CB.
 //
-// Reduces over `Sk_chunk_t` consecutive attention-weight tiles in the same row, accumulating
-// the max into a single DST register. For `Sk_chunk_t == 1` this collapses to a single
-// reduce_tile call (the original single-tile behavior).
+// Max over row `row` of the score CB, folded with its running max, packed to cb_cur_max[row].
 template <PoolType pool_type, ReduceDim reduce_dim, uint32_t Sk_chunk_t = 1U>
 void update_cur_row_max_value(
     uint32_t cb_attention_weights,
     uint32_t cb_identity_scaler,
     uint32_t cb_cur_max,
     uint32_t cb_prev_max,
-    bool do_eltwise_max = false) {
-    cb_wait_front(cb_attention_weights, Sk_chunk_t);
-
+    bool do_eltwise_max,
+    uint32_t row) {
     constexpr uint32_t reduce_dst_idx = 0;
     constexpr uint32_t prev_max_dst_idx = 1U;
     reconfig_data_format(cb_attention_weights, cb_identity_scaler);
@@ -129,17 +128,16 @@ void update_cur_row_max_value(
         reduce_tile<pool_type, reduce_dim>(
             cb_attention_weights,
             cb_identity_scaler,
-            /* in0 tile_idx */ n,
+            /* in0 tile_idx */ row * Sk_chunk_t + n,
             /* in1 tile_idx */ 0,
             /* dst_reg_idx */ reduce_dst_idx);
     }
     reduce_uninit();
 
     if (do_eltwise_max) {
-        cb_wait_front(cb_prev_max, onetile);
         reconfig_data_format_srca(cb_attention_weights, cb_prev_max);
         copy_init(cb_prev_max);
-        copy_tile(cb_prev_max, /* tile_idx */ 0, /* register idx */ prev_max_dst_idx);
+        copy_tile(cb_prev_max, /* tile_idx */ row, /* register idx */ prev_max_dst_idx);
 
         // find max value between current max and previous max
         binary_max_tile_init();
@@ -147,93 +145,77 @@ void update_cur_row_max_value(
     }
     tile_regs_commit();
 
-    cb_reserve_back(cb_cur_max, onetile);
     tile_regs_wait();
     pack_reconfig_data_format(cb_cur_max);
-    pack_tile(reduce_dst_idx, cb_cur_max);
+    pack_tile</* out_of_order */ true>(reduce_dst_idx, cb_cur_max, /* offset */ row);
     tile_regs_release();
-    cb_push_back(cb_cur_max, onetile);
 }
 
-// Apply exp(scale * (score - max)) in place on Sk_chunk_t attention-weight tiles, and produce
-// the per-row partial chunk sum (sum over the Sk_chunk_t tiles) into cb_cur_exp_sum.
-//
-// For Sk_chunk_t > 1 the chunk sum is built directly in L1 via the packer's L1-accumulate path:
-// the first exp tile overwrites cb_cur_exp_sum[0], subsequent tiles add to it. This avoids an
-// extra DST cycle (and an extra row-reduce CB) just to fold the per-tile partial sums together.
-//
-// DST budget: Sk_chunk_t registers are held live across sub_tiles_bcast_cols + exp_tile +
-// (two) pack passes. With fp32_dest_acc_en=true the DST has 4 tiles, so Sk_chunk_t <= 4.
-template <uint32_t scaler_fp32, uint32_t scaler_bf16, uint32_t Sk_chunk_t = 1U>
-void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t cb_cur_max, uint32_t cb_cur_exp_sum) {
-    cb_wait_front(cb_attention_weights, Sk_chunk_t);
-    cb_wait_front(cb_cur_max, onetile);
+// P = exp(scale * (score - max)) written over row `row` of the score CB, sm_block_size tiles per DST
+// pass. The row's sum of P is built in cb_cur_exp_sum[row] by the packer: the first tile is packed
+// normally, the rest with L1-accumulate on, which adds the tile onto the one already in that slot.
+template <uint32_t scaler_fp32, uint32_t scaler_bf16, uint32_t Sk_chunk_t, uint32_t sm_block_size>
+void apply_exp_inplace_and_find_exp_sum(
+    uint32_t cb_attention_weights, uint32_t cb_cur_max, uint32_t cb_cur_exp_sum, uint32_t row) {
+    static_assert(Sk_chunk_t % sm_block_size == 0U, "sm_block_size must divide Sk_chunk_t");
 
     reconfig_data_format(cb_attention_weights, cb_cur_max);
     sub_bcast_cols_init(cb_attention_weights, cb_cur_max);
 
-    // Fused scale+exp: compute exp(scale * (score - max)) in a single SFPU pass.
-    // sdpa_exp_tile_scaled dispatches to the arch-appropriate path (WH sfpi mul or BH LREG12 fold).
-    tile_regs_acquire();
-    for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
-        sub_tiles_bcast_cols(
-            cb_attention_weights, cb_cur_max, /* in0 tile_idx */ n, /* in1 tile_idx */ 0, /* dst_reg_idx */ n);
-        sdpa_exp_tile_scaled<scaler_fp32, scaler_bf16>(n);
-    }
-    tile_regs_commit();
-
-    // In-place overwrite of cb_attention_weights. The CB is sized exactly Sk_chunk_t (no
-    // double-buffering), so pop+reserve aliases to the same physical L1 slots.
-    cb_pop_front(cb_attention_weights, Sk_chunk_t);
-    cb_reserve_back(cb_attention_weights, Sk_chunk_t);
-    cb_reserve_back(cb_cur_exp_sum, onetile);
-
-    tile_regs_wait();
-    // Write the Sk_chunk_t exp tiles back to cb_attention_weights at offsets 0..Sk_chunk_t-1.
-    pack_reconfig_data_format(cb_attention_weights);
-    pack_reconfig_l1_acc(false);
-    for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
-        pack_tile(n, cb_attention_weights);
-    }
-    cb_push_back(cb_attention_weights, Sk_chunk_t);
-
-    // Build the chunk's partial sum directly in cb_cur_exp_sum[0]:
-    //   - first exp tile: overwrite slot 0 (L1-acc off);
-    //   - subsequent tiles: L1-accumulate onto slot 0.
-    pack_reconfig_data_format(cb_cur_exp_sum);
-    pack_tile</* out_of_order */ true>(/* dst */ 0, cb_cur_exp_sum, /* offset */ 0);
-    if constexpr (Sk_chunk_t > 1U) {
-        pack_reconfig_l1_acc(true);
-        for (uint32_t n = 1U; n < Sk_chunk_t; ++n) {
-            pack_tile</* out_of_order */ true>(/* dst */ n, cb_cur_exp_sum, /* offset */ 0);
+    for (uint32_t n0 = 0; n0 < Sk_chunk_t; n0 += sm_block_size) {
+        // Fused scale+exp: compute exp(scale * (score - max)) in a single SFPU pass.
+        // sdpa_exp_tile_scaled dispatches to the arch-appropriate path (WH sfpi mul or BH LREG12 fold).
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < sm_block_size; ++i) {
+            sub_tiles_bcast_cols(
+                cb_attention_weights,
+                cb_cur_max,
+                /* in0 tile_idx */ row * Sk_chunk_t + n0 + i,
+                /* in1 tile_idx */ row,
+                /* dst_reg_idx */ i);
+            sdpa_exp_tile_scaled<scaler_fp32, scaler_bf16>(i);
         }
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_reconfig_data_format(cb_attention_weights);
         pack_reconfig_l1_acc(false);
+        for (uint32_t i = 0; i < sm_block_size; ++i) {
+            pack_tile</* out_of_order */ true>(i, cb_attention_weights, /* offset */ row * Sk_chunk_t + n0 + i);
+        }
+
+        // row sum: first tile overwrites the slot, the rest add onto it
+        pack_reconfig_data_format(cb_cur_exp_sum);
+        uint32_t i = 0;
+        if (n0 == 0U) {
+            pack_tile</* out_of_order */ true>(/* dst */ 0, cb_cur_exp_sum, /* offset */ row);
+            i = 1U;
+        }
+        if (i < sm_block_size) {
+            pack_reconfig_l1_acc(true);
+            for (; i < sm_block_size; ++i) {
+                pack_tile</* out_of_order */ true>(/* dst */ i, cb_cur_exp_sum, /* offset */ row);
+            }
+            pack_reconfig_l1_acc(false);
+        }
+        tile_regs_release();
     }
-    cb_push_back(cb_cur_exp_sum, onetile);
-    tile_regs_release();
 }
 
-// Computes (attention_weights @ V) where attention_weights is a row of Sk_chunk_t score tiles
-// and V is the corresponding Sk_chunk_t × Wt block. The K-dimension reduction (over Sk_chunk_t)
-// is accumulated inside the matmul DST register across an inner loop. For Sk_chunk_t == 1 the
-// inner loop runs once and indexing collapses to the original single-tile-row form.
-//
-// Each output block of `block_size` feat tiles is produced by one matmul_block call per K step
-// (ct_dim=block_size, rt_dim=1, kt_dim=Sk_chunk_t). V is row-major in cb_value (seq outer, feat
-// inner), so the `block_size` V tiles consumed per K step at a fixed seq are already contiguous
-// in the CB — no transpose read needed (contrast with QK^T where K must be col-major). The
-// matmul_block MOP walks them contiguously starting at in1_idx = k*Wt+tile_idx.
-//
-// `block_size` here is the caller's choice. `matmul_block` writes ct_dim output tiles into
-// DST and needs no scratch register, so callers can pass up to `dst_size` (4 for fp32_acc,
-// 8 for bf16_acc) — distinct from the SFPU block_size used elsewhere that needs `+1` for
-// `unary_bcast` scratch and is therefore capped at `dst_size - 1`.
-template <uint32_t Sk_chunk_t = 1U>
+// O_step = P @ V for the whole chunk: P is Sq_chunk_t x Sk_chunk_t tiles (row-major), V is
+// Sk_chunk_t x Wt tiles (row-major, as read from DRAM). Each matmul_block call produces a
+// block_h x block_w rectangle of output tiles and accumulates over Sk_chunk_t inside DST.
+template <uint32_t Sk_chunk_t, uint32_t Sq_chunk_t>
 void matmul_qk_by_v(
-    uint32_t Wt, uint32_t block_size, uint32_t cb_attention_weights, uint32_t cb_value, uint32_t cb_cur_mm_out) {
-    cb_wait_front(cb_attention_weights, Sk_chunk_t);
+    uint32_t Wt,
+    uint32_t block_h,
+    uint32_t block_w,
+    uint32_t cb_attention_weights,
+    uint32_t cb_value,
+    uint32_t cb_cur_mm_out) {
+    cb_wait_front(cb_attention_weights, Sq_chunk_t * Sk_chunk_t);
     cb_wait_front(cb_value, Sk_chunk_t * Wt);
-    cb_reserve_back(cb_cur_mm_out, Wt);
+    cb_reserve_back(cb_cur_mm_out, Sq_chunk_t * Wt);
 
     // matmul maps: in0(attention_weights)→SrcB, in1(value)→SrcA
     reconfig_data_format(cb_value, cb_attention_weights);
@@ -242,44 +224,43 @@ void matmul_qk_by_v(
         cb_attention_weights,
         cb_value,
         /* transpose */ 0,
-        /* ct_dim */ block_size,
-        /* rt_dim */ 1,
+        /* ct_dim */ block_w,
+        /* rt_dim */ block_h,
         /* kt_dim */ Sk_chunk_t);
 
-    for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx += block_size) {
-        tile_regs_acquire();
-        // K-reduction: at each k step, matmul_block writes ct_dim=block_size output tiles into
-        // DST[0..block_size-1], accumulating across k steps. For Sk_chunk_t==1 the loop runs
-        // once and behavior matches the legacy single-step matmul.
-        for (uint32_t k_in_chunk = 0; k_in_chunk < Sk_chunk_t; ++k_in_chunk) {
-            matmul_block(
-                cb_attention_weights,
-                cb_value,
-                /* in0 (A) tile_idx */ k_in_chunk,
-                /* in1 (B) tile_idx */ k_in_chunk * Wt + tile_idx,
-                /* dst_idx */ 0,
-                /* transpose */ 0,
-                /* ct_dim */ block_size,
-                /* rt_dim */ 1,
-                /* kt_dim */ Sk_chunk_t);
+    for (uint32_t row0 = 0; row0 < Sq_chunk_t; row0 += block_h) {
+        for (uint32_t col0 = 0; col0 < Wt; col0 += block_w) {
+            tile_regs_acquire();
+            for (uint32_t k = 0; k < Sk_chunk_t; ++k) {
+                matmul_block(
+                    cb_attention_weights,
+                    cb_value,
+                    /* in0 (P) tile_idx */ row0 * Sk_chunk_t + k,
+                    /* in1 (V) tile_idx */ k * Wt + col0,
+                    /* dst_idx */ 0,
+                    /* transpose */ 0,
+                    /* ct_dim */ block_w,
+                    /* rt_dim */ block_h,
+                    /* kt_dim */ Sk_chunk_t);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t i = 0; i < block_h; ++i) {
+                for (uint32_t j = 0; j < block_w; ++j) {
+                    pack_tile</* out_of_order */ true>(
+                        i * block_w + j, cb_cur_mm_out, /* offset */ (row0 + i) * Wt + col0 + j);
+                }
+            }
+            tile_regs_release();
         }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            pack_tile(block_idx, cb_cur_mm_out);
-        }
-        tile_regs_release();
     }
-    cb_push_back(cb_cur_mm_out, Wt);
+    cb_push_back(cb_cur_mm_out, Sq_chunk_t * Wt);
 }
 
+// exp(scale * (prev_max - cur_max)) for row `row` -> cb_exp_max_diff[row].
 template <uint32_t scaler_fp32, uint32_t scaler_bf16>
-void update_exp_max_diff(uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, uint32_t cb_exp_max_diff) {
-    cb_wait_front(cb_prev_max_value, onetile);
-    cb_wait_front(cb_cur_max_value, onetile);
-
-    cb_reserve_back(cb_exp_max_diff, onetile);
-
+void update_exp_max_diff(
+    uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, uint32_t cb_exp_max_diff, uint32_t row) {
     const uint32_t exp_max_diff_dst_idx = 0;
     reconfig_data_format(cb_prev_max_value, cb_cur_max_value);
     tile_regs_acquire();
@@ -287,8 +268,8 @@ void update_exp_max_diff(uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, 
     sub_tiles(
         cb_prev_max_value,
         cb_cur_max_value,
-        /* tile_idx */ 0,
-        /* tile_idx */ 0,
+        /* tile_idx */ row,
+        /* tile_idx */ row,
         /* dst_reg_idx */ exp_max_diff_dst_idx);
 
     // First-column scaled exp: exp(scale * (prev_max - cur_max)).
@@ -299,26 +280,23 @@ void update_exp_max_diff(uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, 
 
     tile_regs_wait();
     pack_reconfig_data_format(cb_exp_max_diff);
-    pack_tile(exp_max_diff_dst_idx, cb_exp_max_diff);
+    pack_tile</* out_of_order */ true>(exp_max_diff_dst_idx, cb_exp_max_diff, /* offset */ row);
     tile_regs_release();
-    cb_push_back(cb_exp_max_diff, onetile);
 }
 
-void update_cur_exp_sum_inplace(uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_exp, uint32_t cb_exp_max_diff) {
-    cb_wait_front(cb_prev_sum_exp, onetile);
-    cb_wait_front(cb_cur_sum_exp, onetile);
-    cb_wait_front(cb_exp_max_diff, onetile);
-
+// cur_sum[row] = prev_sum[row] * exp_max_diff[row] + cur_sum[row], in place.
+void update_cur_exp_sum_inplace(
+    uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_exp, uint32_t cb_exp_max_diff, uint32_t row) {
     const uint32_t exp_sum_dst_idx = 0;
     reconfig_data_format(cb_prev_sum_exp, cb_exp_max_diff);  // reconfig data format to precise
     mul_bcast_cols_init(cb_prev_sum_exp, cb_exp_max_diff);
     tile_regs_acquire();
     // multiply previous exp sum with exp_max_diff
-    mul_tiles_bcast_cols(cb_prev_sum_exp, cb_exp_max_diff, 0, 0, exp_sum_dst_idx);
+    mul_tiles_bcast_cols(cb_prev_sum_exp, cb_exp_max_diff, row, row, exp_sum_dst_idx);
 
     // copy current sum exp to next register
     copy_init(cb_cur_sum_exp);
-    copy_tile(cb_cur_sum_exp, /* tile_idx */ 0, /* register idx */ exp_sum_dst_idx + 1U);
+    copy_tile(cb_cur_sum_exp, /* tile_idx */ row, /* register idx */ exp_sum_dst_idx + 1U);
 
     // add to updated previous exp sum with current exp sum
     add_binary_tile_init();
@@ -326,12 +304,9 @@ void update_cur_exp_sum_inplace(uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_ex
     tile_regs_commit();
 
     tile_regs_wait();
-    cb_pop_front(cb_cur_sum_exp, onetile);
-    cb_reserve_back(cb_cur_sum_exp, onetile);
     pack_reconfig_data_format(cb_cur_sum_exp);
-    pack_tile(exp_sum_dst_idx, cb_cur_sum_exp);
+    pack_tile</* out_of_order */ true>(exp_sum_dst_idx, cb_cur_sum_exp, /* offset */ row);
     tile_regs_release();
-    cb_push_back(cb_cur_sum_exp, onetile);
 }
 
 // Lightweight init for unary_bcast<COL> with B2D datacopy path.
@@ -346,107 +321,100 @@ void init_unary_bcast_col(uint32_t cb_col_vec) {
         cb_col_vec)));
 }
 
-// Scale prev_mm_out tiles by a column-broadcast factor and L1-accumulate onto cur_mm_out.
-// Uses SFPU path: prev_mm_out is loaded via UnpackToDestFp32 (full FP32 in DST),
-// the scale factor is loaded via unary_bcast<COL> (col 0 broadcast to all cols),
-// and mul_binary_tile does FP32 SFPU multiply.
+// cur_mm_out[row] += prev_mm_out[row] * exp_max_diff[row]. The factor is one value per tile row
+// (column 0), broadcast across the tile; the add is done by the packer with L1-accumulate on.
+template <uint32_t Sq_chunk_t>
 void update_cur_mm_out(
     uint32_t Wt, uint32_t block_size, uint32_t cb_prev_mm_out, uint32_t cb_cur_mm_out, uint32_t cb_exp_max_diff) {
-    cb_wait_front(cb_prev_mm_out, Wt);
-    cb_wait_front(cb_cur_mm_out, Wt);
-    cb_wait_front(cb_exp_max_diff, onetile);
+    cb_wait_front(cb_prev_mm_out, Sq_chunk_t * Wt);
+    cb_wait_front(cb_cur_mm_out, Sq_chunk_t * Wt);
+    cb_wait_front(cb_exp_max_diff, Sq_chunk_t);
 
     pack_reconfig_data_format(cb_cur_mm_out);
     pack_reconfig_l1_acc(true);
 
-    for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx += block_size) {
-        tile_regs_acquire();
+    for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
+        for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx += block_size) {
+            tile_regs_acquire();
 
-        // Load prev_mm_out tiles to DST via UnpackToDestFp32 (full FP32 precision)
-        reconfig_data_format(cb_prev_mm_out, cb_prev_mm_out);
-        copy_init(cb_prev_mm_out);
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            copy_tile(cb_prev_mm_out, tile_idx + block_idx, block_idx);
+            // Load prev_mm_out tiles to DST via UnpackToDestFp32 (full FP32 precision)
+            reconfig_data_format(cb_prev_mm_out, cb_prev_mm_out);
+            copy_init(cb_prev_mm_out);
+            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                copy_tile(cb_prev_mm_out, row * Wt + tile_idx + block_idx, block_idx);
+            }
+
+            // Load this row's exp_max_diff with column broadcast to DST[block_size]
+            init_unary_bcast_col(cb_exp_max_diff);
+            unary_bcast<BroadcastType::COL>(cb_exp_max_diff, row, block_size);
+
+            // SFPU element-wise multiply: DST[i] = DST[i] * DST[block_size]
+            mul_binary_tile_init();
+            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                mul_binary_tile(block_idx, block_size, block_idx);
+            }
+
+            tile_regs_commit();
+            tile_regs_wait();
+            // The CB holds exactly one chunk, so the write pointer sits on the tiles already pushed:
+            // with L1-accumulate on this adds onto them.
+            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                pack_tile</* out_of_order */ true>(
+                    block_idx, cb_cur_mm_out, /* offset */ row * Wt + tile_idx + block_idx);
+            }
+            tile_regs_release();
         }
-
-        // Load exp_max_diff with column broadcast to DST[block_size]
-        init_unary_bcast_col(cb_exp_max_diff);
-        unary_bcast<BroadcastType::COL>(cb_exp_max_diff, 0, block_size);
-
-        // SFPU element-wise multiply: DST[i] = DST[i] * DST[block_size]
-        mul_binary_tile_init();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            mul_binary_tile(block_idx, block_size, block_idx);
-        }
-
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-            pack_tile(block_idx, cb_cur_mm_out);
-        }
-        tile_regs_release();
     }
     pack_reconfig_l1_acc(false);
 
-    cb_pop_front(cb_cur_mm_out, Wt);
-    cb_reserve_back(cb_cur_mm_out, Wt);
-    cb_push_back(cb_cur_mm_out, Wt);
+    cb_pop_front(cb_cur_mm_out, Sq_chunk_t * Wt);
+    cb_reserve_back(cb_cur_mm_out, Sq_chunk_t * Wt);
+    cb_push_back(cb_cur_mm_out, Sq_chunk_t * Wt);
 }
 
-// Row-reduce a tile in place via matmul with a column-of-ones tile.
-// Result is a column vector (value in column 0 of each row).
+// Row-reduce tile `row` of cb_in_idx in place (matmul with a ones column).
 template <uint32_t cb_identity_scaler, uint32_t cb_matmul_reduce>
-void row_reduce_tile_inplace(uint32_t cb_in_idx) {
-    cb_wait_front(cb_in_idx, onetile);
-    cb_wait_front(cb_matmul_reduce, onetile);
-
+void row_reduce_tile_inplace(uint32_t cb_in_idx, uint32_t row) {
     const uint32_t reduce_dst_idx = 0;
 
     reconfig_data_format(cb_matmul_reduce, cb_in_idx);
     tile_regs_acquire();
 
     matmul_init(cb_in_idx, cb_matmul_reduce, 0);
-    matmul_tiles(cb_in_idx, cb_matmul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduce_dst_idx);
+    matmul_tiles(cb_in_idx, cb_matmul_reduce, /* tile_idx */ row, /* tile_idx */ 0, reduce_dst_idx);
     tile_regs_commit();
 
     tile_regs_wait();
-    cb_pop_front(cb_in_idx, onetile);
-    cb_reserve_back(cb_in_idx, onetile);
     pack_reconfig_data_format(cb_in_idx);
-    pack_tile(reduce_dst_idx, cb_in_idx);
+    pack_tile</* out_of_order */ true>(reduce_dst_idx, cb_in_idx, /* offset */ row);
     tile_regs_release();
-    cb_push_back(cb_in_idx, onetile);
 }
 
-// Apply reciprocal to a tile in place.
-void recip_tile_inplace(uint32_t cb_in_idx) {
-    cb_wait_front(cb_in_idx, onetile);
-
+// 1/x on tile `row` of cb_in_idx in place.
+void recip_tile_inplace(uint32_t cb_in_idx, uint32_t row) {
     const uint32_t dst_idx = 0;
     tile_regs_acquire();
     reconfig_data_format(cb_in_idx, cb_in_idx);
     copy_init(cb_in_idx);
-    copy_tile(cb_in_idx, /* tile_idx */ 0, dst_idx);
+    copy_tile(cb_in_idx, /* tile_idx */ row, dst_idx);
     recip_tile_init();
     MATH((recip_tile_first_column(dst_idx)));
     tile_regs_commit();
 
     tile_regs_wait();
-    cb_pop_front(cb_in_idx, onetile);
-    cb_reserve_back(cb_in_idx, onetile);
     pack_reconfig_data_format(cb_in_idx);
-    pack_tile(dst_idx, cb_in_idx);
+    pack_tile</* out_of_order */ true>(dst_idx, cb_in_idx, /* offset */ row);
     tile_regs_release();
-    cb_push_back(cb_in_idx, onetile);
 }
 
-// Compute logsumexp = scale*max + log(sum_exp) and pack to output CB with column-0 masking.
-// Max is unscaled (raw QK^T max), so we multiply by scale to get the correct LSE.
-// Reads from cb_sum_exp (row-reduced) and cb_max WITHOUT consuming them.
-// cb_mask_tile should contain 1.0 in column 0 and 0.0 elsewhere (cb_matmul_reduce).
-// The lse tile is computed entirely in FP32 DST registers for maximum precision.
+// lse[row] = scale * max + log(sum_exp), FP32, column 0 only, packed to cb_out_lse[row].
 void compute_and_pack_lse(
-    uint32_t cb_sum_exp, uint32_t cb_max, uint32_t cb_out_lse, uint32_t cb_mask_tile, uint32_t scaler_bits) {
+    uint32_t cb_sum_exp,
+    uint32_t cb_max,
+    uint32_t cb_out_lse,
+    uint32_t cb_mask_tile,
+    uint32_t scaler_bits,
+    uint32_t row) {
     // mask_tile HW constraint: mask register must be idst_data + 1
     const uint32_t lse_reg = 0;
     const uint32_t mask_reg = 1U;
@@ -456,14 +424,14 @@ void compute_and_pack_lse(
 
     reconfig_data_format(cb_sum_exp, cb_sum_exp);
     copy_init(cb_sum_exp);
-    copy_tile(cb_sum_exp, /* tile_idx */ 0, lse_reg);
+    copy_tile(cb_sum_exp, /* tile_idx */ row, lse_reg);
 
     log_tile_init</* fast_and_approx */ false>();
     log_tile</* fast_and_approx */ false>(lse_reg);
 
     reconfig_data_format_srca(/* old_cb_idx */ cb_sum_exp, /* new_cb_idx */ cb_max);
     copy_init(/* new_cb_idx */ cb_max);
-    copy_tile(cb_max, /* tile_idx */ 0, max_reg);
+    copy_tile(cb_max, /* tile_idx */ row, max_reg);
 
     // lse = scale * max + log(sum_exp)
     binop_with_scalar_tile_init();
@@ -482,11 +450,9 @@ void compute_and_pack_lse(
     tile_regs_commit();
 
     tile_regs_wait();
-    cb_reserve_back(cb_out_lse, onetile);
     pack_reconfig_data_format(cb_out_lse);
-    pack_tile(lse_reg, cb_out_lse);
+    pack_tile</* out_of_order */ true>(lse_reg, cb_out_lse, /* offset */ row);
     tile_regs_release();
-    cb_push_back(cb_out_lse, onetile);
 }
 
 // Pack intermediate result with masking to ensure only column 0 has value, rest are zeros.

@@ -12,14 +12,13 @@
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
-    uint32_t query_address = get_arg_val<uint32_t>(runtime_args_counter++);        // query buffer address
-    uint32_t key_address = get_arg_val<uint32_t>(runtime_args_counter++);          // key buffer address
-    uint32_t value_address = get_arg_val<uint32_t>(runtime_args_counter++);        // value buffer address
-    uint32_t mask_address = get_arg_val<uint32_t>(runtime_args_counter++);         // mask buffer address
-    uint32_t gate_address = get_arg_val<uint32_t>(runtime_args_counter++);         // gate buffer address
-    uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);  // rows to process in this kernel
-    uint32_t start_row =
-        get_arg_val<uint32_t>(runtime_args_counter++);  // pre calculated num_rows_written in program factory
+    uint32_t query_address = get_arg_val<uint32_t>(runtime_args_counter++);  // query buffer address
+    uint32_t key_address = get_arg_val<uint32_t>(runtime_args_counter++);    // key buffer address
+    uint32_t value_address = get_arg_val<uint32_t>(runtime_args_counter++);  // value buffer address
+    uint32_t mask_address = get_arg_val<uint32_t>(runtime_args_counter++);   // mask buffer address
+    uint32_t gate_address = get_arg_val<uint32_t>(runtime_args_counter++);   // gate buffer address
+    // Then the core's work items (Q chunks): num_runs, (first_item, num_items) per run.
+    const uint32_t num_runs = get_arg_val<uint32_t>(runtime_args_counter++);
 
     constexpr uint32_t cb_query = tt::CBIndex::c_0;
     constexpr uint32_t cb_key = tt::CBIndex::c_1;
@@ -36,10 +35,10 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(2);       // (S / TILE_H)
     constexpr uint32_t q_heads = get_compile_time_arg_val(3);  // num of heads in query
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(4);  // num of heads per group
-    [[maybe_unused]] constexpr uint32_t Sk_chunk_t =
-        get_compile_time_arg_val(5);  // multi-tile K/V chunking factor (consumed in chunked reader path)
-    constexpr uint32_t pairs_per_seq = Ht / 2;
-    constexpr auto query_args = TensorAccessorArgs<6>();
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(5);       // K/V tiles per inner-loop step
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(6);       // query tile-rows per Q chunk
+    constexpr uint32_t q_num_chunks = Ht / Sq_chunk_t;
+    constexpr auto query_args = TensorAccessorArgs<7>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto mask_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
@@ -65,112 +64,48 @@ void kernel_main() {
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
-#ifdef BALANCED_PARALLELISM
-    // Balanced parallelism mode: read Q/K/V for pairs of rows (light + heavy).
-    // Each pair combines an early-sequence row (few K/V tiles) with a late-sequence row (many tiles),
-    // so every core reads roughly the same amount of data.
-    // Runtime args reuse: num_rows_to_process = num_pairs, start_row = start_pair_idx.
-    //
-    // Reads K and V in Sk_chunk_t-tile chunks (one DMA + one push per chunk). For causal
-    // we round the K-tile count UP to the next multiple of Sk_chunk_t so the diagonal chunk
-    // is fully resident in L1 before compute starts processing it. Ht is constrained to be
-    // a multiple of Sk_chunk_t by the program factory, so the round-up never reads OOB.
-    auto read_row = [&](const uint32_t global_row_idx) {
-        const uint32_t q_start_idx = global_row_idx * qWt;
-        read_tiles_by_row(cb_query, query_address_generator, q_start_idx, qWt, tile_bytes, qWt);
+    // Reads one Q chunk (Sq_chunk_t query tile-rows) and then the K/V tiles it attends to, in steps of
+    // Sk_chunk_t tiles. The push order must match the cb_wait_front order in the compute kernel.
+    auto read_q_chunk = [&](const uint32_t global_q_chunk_idx) {
+        const uint32_t seq_idx = global_q_chunk_idx / q_num_chunks;  // batch * q_heads + head
+        const uint32_t first_row_tile = (global_q_chunk_idx % q_num_chunks) * Sq_chunk_t;
+        const uint32_t global_first_row = seq_idx * Ht + first_row_tile;
 
-        const uint32_t q_head_idx = (global_row_idx / Ht) % q_heads;
-        const uint32_t batch_idx = global_row_idx / (Ht * q_heads);
+        read_tiles_by_row(
+            cb_query, query_address_generator, global_first_row * qWt, Sq_chunk_t * qWt, tile_bytes, Sq_chunk_t * qWt);
+
+        const uint32_t q_head_idx = seq_idx % q_heads;
+        const uint32_t batch_idx = seq_idx / q_heads;
         const uint32_t kv_group_idx = q_head_idx / heads_per_group;
         const uint32_t key_offset = (batch_idx * num_of_groups + kv_group_idx) * qWt * Ht;
         const uint32_t value_offset = (batch_idx * num_of_groups + kv_group_idx) * vWt * Ht;
-        const uint32_t q_row_tile = global_row_idx % Ht;
-        const uint32_t num_kv_tiles_to_read = round_up(q_row_tile + 1U, Sk_chunk_t);
-        const uint32_t num_kv_chunks = num_kv_tiles_to_read / Sk_chunk_t;
-
-        for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
-            const uint32_t h_start = k_chunk * Sk_chunk_t;
-            const uint32_t key_start_idx = key_offset + h_start * qWt;
-            // Lay K out col-major in cb_key (feat outer, seq inner) so `matmul_block`
-            // with transpose=1 can step in1_idx by +Sk_chunk_t per feature, walking the
-            // contraction direction contiguously. K source in DRAM is (Sk_chunk_t × qWt)
-            // row-major; the helper writes tile (n, feat) at CB pos feat*Sk_chunk_t + n.
-            read_tile_block_transposed(cb_key, key_address_generator, key_start_idx, Sk_chunk_t, qWt, tile_bytes);
-            const uint32_t value_start_idx = value_offset + h_start * vWt;
-            read_tiles_by_row(
-                cb_value, value_address_generator, value_start_idx, Sk_chunk_t * vWt, tile_bytes, Sk_chunk_t * vWt);
-        }
-#ifdef HAS_GATE
-        read_tiles_by_row(cb_gate, gate_address_generator, global_row_idx * vWt, vWt, tile_bytes, vWt);
-#endif
-    };
-
-    for (uint32_t p = 0; p < num_rows_to_process; ++p) {
-        const uint32_t global_pair_idx = start_row + p;
-
-        // Map pair index to sequence and position within sequence
-        const uint32_t seq_idx = global_pair_idx / pairs_per_seq;
-        const uint32_t pair_in_seq = global_pair_idx % pairs_per_seq;
-
-        // Calculate the two row indices for this pair (light = early in seq, heavy = late in seq)
-        const uint32_t light_row_in_seq = pair_in_seq;
-        const uint32_t heavy_row_in_seq = Ht - 1 - pair_in_seq;
-
-        const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
-        const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
-
-        read_row(heavy_global_row);
-        read_row(light_global_row);
-    }
-#else
-    // Standard mode: process rows sequentially.
-    // Reads K, V and (USE_ATTN_MASK) mask in Sk_chunk_t-tile chunks. Causal K-count is
-    // rounded UP to the next Sk_chunk_t boundary; the program factory guarantees Ht is a
-    // multiple of Sk_chunk_t so the round-up never reads past the sequence end.
-    for (uint32_t i = 0; i < num_rows_to_process; ++i) {
-        const uint32_t global_row_idx = start_row + i;
-        const uint32_t q_start_idx = global_row_idx * qWt;
-        read_tiles_by_row(cb_query, query_address_generator, q_start_idx, qWt, tile_bytes, qWt);
-
-        const uint32_t q_head_idx = (global_row_idx / Ht) % q_heads;  // which head of Q we are processing right now
-
-        // which batch we are processing right now
-        const uint32_t batch_idx = global_row_idx / (Ht * q_heads);
-        // calculate which group of K and V we need to read for this head of Q
-        const uint32_t kv_group_idx = q_head_idx / heads_per_group;
-
-        const uint32_t key_offset =
-            (batch_idx * num_of_groups + kv_group_idx) * qWt * Ht;  // jump to start of relevant batch/group of K
-        const uint32_t value_offset =
-            (batch_idx * num_of_groups + kv_group_idx) * vWt * Ht;  // jump to start of relevant batch/group of V
-
-        // q_row_tile = position within sequence (0 to Ht-1)
-        const uint32_t q_row_tile = global_row_idx % Ht;
 
 #ifdef CAUSAL_MASK
-        // For causal: round up to next Sk_chunk_t boundary so the diagonal chunk is fully read.
-        const uint32_t num_kv_tiles_to_read = round_up(q_row_tile + 1U, Sk_chunk_t);
+        const uint32_t num_kv_tiles_to_read = round_up(first_row_tile + Sq_chunk_t, Sk_chunk_t);
 #else
         const uint32_t num_kv_tiles_to_read = Ht;
 #endif
-        const uint32_t num_kv_chunks = num_kv_tiles_to_read / Sk_chunk_t;
+        const uint32_t num_kv_steps = num_kv_tiles_to_read / Sk_chunk_t;
 
-#ifdef USE_ATTN_MASK
-        // Mask is (1, 1, S, S) - same mask for all batches/heads, indexed by sequence position only
-        const uint32_t mask_offset = q_row_tile * Ht;
-#endif
-
-        for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
-            const uint32_t h_start = k_chunk * Sk_chunk_t;
+        for (uint32_t k_step = 0; k_step < num_kv_steps; ++k_step) {
+            const uint32_t h_start = k_step * Sk_chunk_t;
             const uint32_t key_start_idx = key_offset + h_start * qWt;
-            // Lay K col-major in cb_key (see balanced path above for rationale).
+            // K lands feature-major in cb_key (all Sk_chunk_t tiles of feature 0, then feature 1, ...),
+            // the order matmul_block walks when it multiplies by K^T.
             read_tile_block_transposed(cb_key, key_address_generator, key_start_idx, Sk_chunk_t, qWt, tile_bytes);
 
 #ifdef USE_ATTN_MASK
-            // Pre-stage all Sk_chunk_t mask tiles for this chunk in one DMA + one push.
-            // Mask tiles are contiguous along the K (column) axis for a given row.
-            read_tiles_by_row(
-                cb_attn_mask, mask_address_generator, mask_offset + h_start, Sk_chunk_t, tile_bytes, Sk_chunk_t);
+            // Arbitrary mask: Sq_chunk_t x Sk_chunk_t tiles of this step, row-major; the mask is
+            // (1, 1, S, S), so a row's Sk_chunk_t tiles are contiguous.
+            for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                read_tiles_by_row(
+                    cb_attn_mask,
+                    mask_address_generator,
+                    (first_row_tile + r) * Ht + h_start,
+                    Sk_chunk_t,
+                    tile_bytes,
+                    Sk_chunk_t);
+            }
 #endif
             // Note: For CAUSAL_MASK, the two reusable mask tiles are generated once by the writer.
             const uint32_t value_start_idx = value_offset + h_start * vWt;
@@ -178,8 +113,16 @@ void kernel_main() {
                 cb_value, value_address_generator, value_start_idx, Sk_chunk_t * vWt, tile_bytes, Sk_chunk_t * vWt);
         }
 #ifdef HAS_GATE
-        read_tiles_by_row(cb_gate, gate_address_generator, global_row_idx * vWt, vWt, tile_bytes, vWt);
+        read_tiles_by_row(
+            cb_gate, gate_address_generator, global_first_row * vWt, Sq_chunk_t * vWt, tile_bytes, Sq_chunk_t * vWt);
 #endif
+    };
+
+    for (uint32_t run = 0; run < num_runs; ++run) {
+        const uint32_t first_item = get_arg_val<uint32_t>(runtime_args_counter++);
+        const uint32_t num_items = get_arg_val<uint32_t>(runtime_args_counter++);
+        for (uint32_t item = first_item; item < first_item + num_items; ++item) {
+            read_q_chunk(item);
+        }
     }
-#endif
 }

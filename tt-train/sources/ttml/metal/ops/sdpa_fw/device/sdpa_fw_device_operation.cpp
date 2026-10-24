@@ -279,14 +279,16 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_val
     const bool return_intermediates,
     const std::optional<ttnn::Tensor>& preallocated_intermediate,
     const std::optional<ttnn::Tensor>& preallocated_output,
-    const std::optional<ttnn::Tensor>& gate) {
+    const std::optional<ttnn::Tensor>& gate,
+    const ttml::metal::SDPAForwardProgramConfig& program_config) {
     using OperationType = ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .return_intermediates = return_intermediates,
         .mask_type = mask_type,
         .dropout_probability = dropout_probability,
-        .has_gate = gate.has_value()};
+        .has_gate = gate.has_value(),
+        .program_config = program_config};
     auto tensor_args = OperationType::tensor_args_t{
         .query = query_tensor,
         .key = key_tensor,

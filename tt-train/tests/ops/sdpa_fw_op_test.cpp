@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt_stl/reflection.hpp>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
 #include <ttnn/tensor/tensor.hpp>
@@ -23,6 +24,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "metal/common/const_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
@@ -498,6 +500,8 @@ struct SDPATestConfig {
     float gate_min = -4.0F;  // sigmoid(-4) ~ 0.018
     float gate_max = 4.0F;   // sigmoid(+4) ~ 0.982
     float dropout_prob = 0.0F;
+    // 0 = program factory default.
+    ttml::metal::SDPAForwardProgramConfig program_config{};
     float result_atol = 2e-2F;
     float result_rtol = 2e-2F;
     float intermediate_atol = 2e-2F;
@@ -578,7 +582,15 @@ void run_sdpa_test(const SDPATestConfig& config) {
 
     // Run SDPA kernel with new interface - this is our reference implementation
     auto result = ttml::metal::sdpa_fw(
-        query, key, value, config.mask_type, kernel_mask, config.dropout_prob, return_intermediates, kernel_gate);
+        query,
+        key,
+        value,
+        config.mask_type,
+        kernel_mask,
+        config.dropout_prob,
+        return_intermediates,
+        kernel_gate,
+        config.program_config);
     xt::xarray<float> result_xtensor =
         core::to_xtensor(result[0].value());  // Kernel returns (B, H, S, D) - heads NOT fused
     xt::xarray<float> interm_xtensor = core::to_xtensor(result[1].value());
@@ -606,7 +618,15 @@ void run_sdpa_test(const SDPATestConfig& config) {
         constexpr float kGateAtol = 1e-4F;
         constexpr float kGateRtol = 8e-3F;
         auto ungated = ttml::metal::sdpa_fw(
-            query, key, value, config.mask_type, kernel_mask, config.dropout_prob, return_intermediates);
+            query,
+            key,
+            value,
+            config.mask_type,
+            kernel_mask,
+            config.dropout_prob,
+            return_intermediates,
+            std::nullopt,
+            config.program_config);
         xt::xarray<float> ungated_xtensor = core::to_xtensor(ungated[0].value());
         xt::xarray<float> ungated_interm_xtensor = core::to_xtensor(ungated[1].value());
 
@@ -1201,8 +1221,8 @@ INSTANTIATE_TEST_SUITE_P(
             .use_gate = true,
             .test_name = "NIGHTLY_GQA_4Q_2KV"},
         // Balanced parallelism: causal, even St, and B*H*St/2 >= number of cores (B=4, H=12, S=256 gives 192
-        // light/heavy row pairs), so the program factory selects the paired reader/compute/writer loops and the
-        // gate is read inside the paired read_row lambda.
+        // light/heavy row pairs), so the program factory hands out paired Q chunks and each core's gate reads
+        // follow that item order.
         SDPATestConfig{
             .batch_size = 4U,
             .sequence_length = 256U,
@@ -1396,4 +1416,145 @@ TEST_F(SDPAForwardTest, GateTest_ProgramCacheHitReadsNewGate) {
         << ")";
     EXPECT_FALSE(xt::allclose(out_b_host, out_a_host, 8e-3F, 1e-4F))
         << "Cache-hit run reproduced the first gate's output: stale gate address";
+}
+
+// =============================================================================
+// q_chunk_size / k_chunk_size knobs: same numbers, different chunking.
+// =============================================================================
+
+struct ChunkKnobs {
+    uint32_t q_chunk_size;
+    uint32_t k_chunk_size;
+};
+
+// One Q row with a wide K step, many Q rows with one K tile, square, and both rectangles.
+const std::vector<ChunkKnobs> kChunkKnobSweep = {{32, 256}, {128, 32}, {64, 64}, {128, 64}, {64, 256}};
+
+void run_chunk_knob_sweep(SDPATestConfig base, const std::vector<ChunkKnobs>& sweep = kChunkKnobSweep) {
+    for (const auto& knobs : sweep) {
+        SDPATestConfig config = base;
+        config.program_config = {.q_chunk_size = knobs.q_chunk_size, .k_chunk_size = knobs.k_chunk_size};
+        config.test_name = fmt::format("{}_q{}_k{}", base.test_name, knobs.q_chunk_size, knobs.k_chunk_size);
+        SCOPED_TRACE(config.test_name);
+        run_sdpa_test(config);
+    }
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // S=256: standard (non-paired) distribution.
+    run_chunk_knob_sweep(SDPATestConfig{
+        .batch_size = 1U,
+        .sequence_length = 256U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "ChunkKnobs_Causal"});
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal_GQA_ManySeqs) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // 144 sequences, GQA: more pairs than any grid has cores, so q=128 still takes the paired split.
+    run_chunk_knob_sweep(SDPATestConfig{
+        .batch_size = 9U,
+        .sequence_length = 256U,
+        .query_dim = 1024U,     // 16 heads * 64
+        .key_value_dim = 256U,  // 4 kv heads * 64
+        .num_query_heads = 16U,
+        .num_key_heads = 4U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "ChunkKnobs_Causal_GQA_ManySeqs"});
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal_NonPow2) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // S = 12 tiles: 3-tile chunks give odd sub-blocks and a causal step count that is not a power of two.
+    run_chunk_knob_sweep(
+        SDPATestConfig{
+            .batch_size = 1U,
+            .sequence_length = 384U,
+            .query_dim = 128U,
+            .key_value_dim = 128U,
+            .num_query_heads = 2U,
+            .num_key_heads = 2U,
+            .mask_type = ttml::metal::AttentionMaskType::Causal,
+            .test_name = "ChunkKnobs_Causal_NonPow2"},
+        {{96, 96}, {32, 96}, {96, 32}, {128, 96}, {96, 384}});
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Arbitrary) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    run_chunk_knob_sweep(SDPATestConfig{
+        .batch_size = 1U,
+        .sequence_length = 256U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+        .test_name = "ChunkKnobs_Arbitrary"});
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_None_DiffVDim_Gate) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // No mask, vWt < qWt, gate: non-square PV geometry.
+    run_chunk_knob_sweep(SDPATestConfig{
+        .batch_size = 1U,
+        .sequence_length = 256U,
+        .query_dim = 256U,
+        .key_value_dim = 256U,
+        .value_dim = 128U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::None,
+        .use_gate = true,
+        .test_name = "ChunkKnobs_None_DiffVDim_Gate"});
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Rejected) {
+    using namespace ttml;
+    const uint32_t S = 256U;
+    const std::array<std::size_t, 4> shape{1U, 2U, S, 64U};
+    auto make = [&](uint32_t seed) {
+        return core::from_xtensor(
+            test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed), &autograd::ctx().get_device());
+    };
+    auto query = make(1U);
+    auto key = make(2U);
+    auto value = make(3U);
+    auto run = [&](uint32_t q_chunk_size, uint32_t k_chunk_size) {
+        return metal::sdpa_fw(
+            query,
+            key,
+            value,
+            metal::AttentionMaskType::Causal,
+            std::nullopt,
+            0.0F,
+            false,
+            std::nullopt,
+            {.q_chunk_size = q_chunk_size, .k_chunk_size = k_chunk_size});
+    };
+    EXPECT_NO_THROW(run(0U, 0U));
+    EXPECT_NO_THROW(run(S, S));
+    EXPECT_THROW(run(48U, 0U), std::exception) << "q_chunk_size must be a tile multiple";
+    EXPECT_THROW(run(0U, 48U), std::exception) << "k_chunk_size must be a tile multiple";
+    EXPECT_THROW(run(96U, 0U), std::exception) << "q_chunk_size must divide the sequence length";
+    EXPECT_THROW(run(0U, 2U * S), std::exception) << "k_chunk_size must divide the sequence length";
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ChangeProgramHash) {
+    // The op hashes its attributes by reflection; the chunk knobs must take part, or a second config on
+    // the same shapes would silently reuse the first config's cached program.
+    using Params = ttml::metal::ops::sdpa_fw::device::SDPAForwardParams;
+    const Params base{.mask_type = ttml::metal::AttentionMaskType::Causal};
+    Params q_changed = base;
+    q_changed.program_config.q_chunk_size = 128U;
+    Params k_changed = base;
+    k_changed.program_config.k_chunk_size = 128U;
+    EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(q_changed));
+    EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(k_changed));
+    EXPECT_NE(
+        ttsl::hash::hash_objects_with_default_seed(q_changed), ttsl::hash::hash_objects_with_default_seed(k_changed));
 }

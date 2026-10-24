@@ -15,7 +15,6 @@
 
 namespace ttml::metal::ops::ring_sdpa_fw {
 
-
 RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
@@ -59,7 +58,10 @@ RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::creat
         // Create SDPA forward operation with the effective mask type
         // No explicit mask tensor needed - SDPA kernel generates causal mask internally
         sdpa_fw::device::operation_attributes_t sdpa_attrs{
-            .return_intermediates = true, .mask_type = effective_mask_type, .dropout_probability = 0.0F};
+            .return_intermediates = true,
+            .mask_type = effective_mask_type,
+            .dropout_probability = 0.0F,
+            .program_config = operation_attributes.program_config};
 
         sdpa_fw::device::tensor_args_t sdpa_tensor_args{
             .query = query,
@@ -81,10 +83,7 @@ RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::creat
         shared_variables_t ring_vars{
             .sdpa_fw_reader_kernel = sdpa_vars.sdpa_fw_reader_kernel,
             .sdpa_fw_writer_kernel = sdpa_vars.sdpa_fw_writer_kernel,
-            .sdpa_fw_kernel_group_1 = sdpa_vars.sdpa_fw_kernel_group_1,
-            .sdpa_fw_kernel_group_2 = sdpa_vars.sdpa_fw_kernel_group_2,
-            .core_group_1 = sdpa_vars.core_group_1,
-            .core_group_2 = sdpa_vars.core_group_2,
+            .sdpa_fw_compute_kernel = sdpa_vars.sdpa_fw_compute_kernel,
             .num_cores = sdpa_vars.num_cores,
             .num_cores_y = sdpa_vars.num_cores_y};
 
@@ -135,7 +134,10 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
         std::optional<ttnn::Tensor> mask_opt = std::nullopt;
         std::optional<ttnn::Tensor> gate_opt = std::nullopt;
         sdpa_fw::operation_attributes_t sdpa_attrs{
-            .return_intermediates = true, .mask_type = effective_mask_type, .dropout_probability = 0.0F};
+            .return_intermediates = true,
+            .mask_type = effective_mask_type,
+            .dropout_probability = 0.0F,
+            .program_config = operation_attributes.program_config};
 
         sdpa_fw::tensor_args_t sdpa_tensor_args{
             .query = query,
@@ -152,10 +154,7 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
         sdpa_fw::SDPAForwardProgramFactory::shared_variables_t sdpa_shared_vars{
             .sdpa_fw_reader_kernel = shared_vars.sdpa_fw_reader_kernel,
             .sdpa_fw_writer_kernel = shared_vars.sdpa_fw_writer_kernel,
-            .sdpa_fw_kernel_group_1 = shared_vars.sdpa_fw_kernel_group_1,
-            .sdpa_fw_kernel_group_2 = shared_vars.sdpa_fw_kernel_group_2,
-            .core_group_1 = shared_vars.core_group_1,
-            .core_group_2 = shared_vars.core_group_2,
+            .sdpa_fw_compute_kernel = shared_vars.sdpa_fw_compute_kernel,
             .num_cores = shared_vars.num_cores,
             .num_cores_y = shared_vars.num_cores_y};
 
