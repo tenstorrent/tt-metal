@@ -88,14 +88,26 @@ ttnn::Tensor unbroadcast_grad(const autograd::TensorPtr& input, const ttnn::Tens
 
 autograd::TensorPtr operator+(const autograd::TensorPtr& a, const ttnn::Tensor& b) {
     auto out = autograd::create_tensor(ttnn::add(a->get_value(), b));
-    autograd::GradFunction grad = [a, out]() { a->add_grad(out->get_grad()); };
+    autograd::GradFunction grad = [a, out]() {
+        if (was_broadcasted(a, out->get_grad())) {
+            a->add_grad(unbroadcast_grad(a, out->get_grad()));
+        } else {
+            a->add_grad(out->get_grad());
+        }
+    };
     out->set_node(autograd::add_backward_node(std::move(grad), out, a));
     return out;
 }
 
 autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::AutocastTensor& b) {
     auto out = autograd::create_tensor(ttnn::add(a->get_value(), b.get_tensor()));
-    autograd::GradFunction grad = [a, out]() { a->add_grad(out->get_grad()); };
+    autograd::GradFunction grad = [a, out]() {
+        if (was_broadcasted(a, out->get_grad())) {
+            a->add_grad(unbroadcast_grad(a, out->get_grad()));
+        } else {
+            a->add_grad(out->get_grad());
+        }
+    };
     out->set_node(autograd::add_backward_node(std::move(grad), out, a));
     return out;
 }
