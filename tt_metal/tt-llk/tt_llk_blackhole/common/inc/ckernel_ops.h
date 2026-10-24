@@ -9,7 +9,7 @@
 // User is likely using static analysis tool.  Provide a declaration.
 extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsigned, unsigned, unsigned) __attribute__((nothrow));
 #endif
-#define TT_IP_INSN(IP, ENC)  __builtin_rvtt_ttinsn((IP), (ENC), 0, 0, 0)
+#define TT_IP_INSN(IP, ENC) __builtin_rvtt_ttinsn((IP), (ENC), 0, 0, 0)
 #elif defined(ARCH_BLACKHOLE) && defined(LLK_BOOT_BRISC)
 // The llk test infra uses TTI macros on brisc and somehow executes
 // it. So icky. See #58141
@@ -1251,11 +1251,20 @@ extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsign
 #define TT_IP_UNPACR_NOP(                                                                                                                   \
     IP, Unpacker_Select, Stream_Id, Msg_Clr_Cnt, Set_Dvalid, Clr_to1_fmt_Ctrl, Stall_Clr_Cntrl, Bank_Clr_Ctrl, Src_ClrVal_Ctrl, Unpack_Pop) \
     TT_IP_INSN(                                                                                                                             \
-        IP, \ TT_OP_UNPACR_NOP(                                                                                                             \
-            Unpacker_Select, Stream_Id, Msg_Clr_Cnt, Set_Dvalid, Clr_to1_fmt_Ctrl, Stall_Clr_Cntrl, Bank_Clr_Ctrl, Src_ClrVal_Ctrl, Unpack_Pop))
+        IP,                                                                                                                                 \
+        TT_OP_UNPACR_NOP(Unpacker_Select, Stream_Id, Msg_Clr_Cnt, Set_Dvalid, Clr_to1_fmt_Ctrl, Stall_Clr_Cntrl, Bank_Clr_Ctrl, Src_ClrVal_Ctrl, Unpack_Pop))
 #define TT_UNPACR_NOP(Unpacker_Select, Stream_Id, Msg_Clr_Cnt, Set_Dvalid, Clr_to1_fmt_Ctrl, Stall_Clr_Cntrl, Bank_Clr_Ctrl, Src_ClrVal_Ctrl, Unpack_Pop) \
     TT_IP_UNPACR_NOP(                                                                                                                                     \
-        ::ckernel::instrn_buffer, Unpacker_Select, Stream_Id, Msg_Clr_Cnt, Set_Dvalid, Clr_to1_fmt_Ctrl, Stall_Clr_Cntrl, Bank_Clr_Ctrl, Src_ClrVal_Ctrl, Unpack_Pop)
+        ::ckernel::instrn_buffer,                                                                                                                         \
+        Unpacker_Select,                                                                                                                                  \
+        Stream_Id,                                                                                                                                        \
+        Msg_Clr_Cnt,                                                                                                                                      \
+        Set_Dvalid,                                                                                                                                       \
+        Clr_to1_fmt_Ctrl,                                                                                                                                 \
+        Stall_Clr_Cntrl,                                                                                                                                  \
+        Bank_Clr_Ctrl,                                                                                                                                    \
+        Src_ClrVal_Ctrl,                                                                                                                                  \
+        Unpack_Pop)
 #define TTI_UNPACR_NOP(Unpacker_Select, Stream_Id, Msg_Clr_Cnt, Set_Dvalid, Clr_to1_fmt_Ctrl, Stall_Clr_Cntrl, Bank_Clr_Ctrl, Src_ClrVal_Ctrl, Unpack_Pop) \
     TT_IP_UNPACR_NOP(                                                                                                                                      \
         nullptr, Unpacker_Select, Stream_Id, Msg_Clr_Cnt, Set_Dvalid, Clr_to1_fmt_Ctrl, Stall_Clr_Cntrl, Bank_Clr_Ctrl, Src_ClrVal_Ctrl, Unpack_Pop)

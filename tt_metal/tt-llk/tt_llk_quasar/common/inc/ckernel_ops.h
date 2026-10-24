@@ -9,7 +9,7 @@
 // User is likely using static analysis tool.  Provide a declaration.
 extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsigned, unsigned, unsigned) __attribute__((nothrow));
 #endif
-#define TT_IP_INSN(IP, ENC)  __builtin_rvtt_ttinsn((IP), (ENC), 0, 0, 0)
+#define TT_IP_INSN(IP, ENC) __builtin_rvtt_ttinsn((IP), (ENC), 0, 0, 0)
 #elif defined(ARCH_QUASAR) && defined(LLK_BOOT_BRISC)
 // The llk test infra uses TTI macros on brisc and somehow executes
 // it. So icky. See #58141

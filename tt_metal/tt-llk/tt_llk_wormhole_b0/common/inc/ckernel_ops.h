@@ -9,7 +9,7 @@
 // User is likely using static analysis tool.  Provide a declaration.
 extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsigned, unsigned, unsigned) __attribute__((nothrow));
 #endif
-#define TT_IP_INSN(IP, ENC)  __builtin_rvtt_ttinsn((IP), (ENC), 0, 0, 0)
+#define TT_IP_INSN(IP, ENC) __builtin_rvtt_ttinsn((IP), (ENC), 0, 0, 0)
 #elif defined(ARCH_WORMHOLE) && defined(LLK_BOOT_BRISC)
 // The llk test infra uses TTI macros on brisc and somehow executes
 // it. So icky. See #58141
@@ -973,8 +973,8 @@ extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsign
 #define TT_OP_STOREREG(TdmaDataRegIndex, RegAddr)     TT_OP(0x67, (((TdmaDataRegIndex) << 18) + ((RegAddr) << 0)))
 #define TT_STOREREG_VALID(TdmaDataRegIndex, RegAddr)  (ckernel::is_valid(TdmaDataRegIndex, 6) && ckernel::is_valid(RegAddr, 18))
 #define TT_IP_STOREREG(IP, TdmaDataRegIndex, RegAddr) TT_IP_INSN(IP, TT_OP_STOREREG(TdmaDataRegIndex, RegAddr))
-#define TT_STOREREG(TdmaDataRegIndex, RegAddr)       TT_IP_STOREREG(::ckernel::instrn_buffer, TdmaDataRegIndex, RegAddr)
-#define TTI_STOREREG(TdmaDataRegIndex, RegAddr)      TT_IP_STOREREG(nullptr, TdmaDataRegIndex, RegAddr)
+#define TT_STOREREG(TdmaDataRegIndex, RegAddr)        TT_IP_STOREREG(::ckernel::instrn_buffer, TdmaDataRegIndex, RegAddr)
+#define TTI_STOREREG(TdmaDataRegIndex, RegAddr)       TT_IP_STOREREG(nullptr, TdmaDataRegIndex, RegAddr)
 
 #define TT_OP_SUBDMAREG(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
     TT_OP(0x59, (((OpBisConst) << 23) + ((ResultRegIndex) << 12) + ((OpBRegIndex) << 6) + ((OpARegIndex) << 0)))
@@ -1035,34 +1035,37 @@ extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsign
      ckernel::is_valid(CfgContextId, 3) && ckernel::is_valid(AddrCntContextId, 2) && ckernel::is_valid(OvrdThreadId, 1) &&                                \
      ckernel::is_valid(SetDatValid, 1) && ckernel::is_valid(rareb_en, 1) && ckernel::is_valid(ZeroWrite2, 1) && ckernel::is_valid(AutoIncContextID, 1) && \
      ckernel::is_valid(RowSearch, 1) && ckernel::is_valid(SearchCacheFlush, 1) && ckernel::is_valid(Last, 1))
-#define TT_IP_UNPACR(IP,        \
-    Unpack_block_selection,     \
-    AddrMode,                   \
-    CfgContextCntInc,           \
-    CfgContextId,               \
-    AddrCntContextId,           \
-    OvrdThreadId,               \
-    SetDatValid,                \
-    rareb_en,                   \
-    ZeroWrite2,                 \
-    AutoIncContextID,           \
-    RowSearch,                  \
-    SearchCacheFlush,           \
-    Last)                       \
-    TT_IP_INSN(IP, TT_OP_UNPACR(   \
-        Unpack_block_selection, \
-        AddrMode,               \
-        CfgContextCntInc,       \
-        CfgContextId,           \
-        AddrCntContextId,       \
-        OvrdThreadId,           \
-        SetDatValid,            \
-        rareb_en,               \
-        ZeroWrite2,             \
-        AutoIncContextID,       \
-        RowSearch,              \
-        SearchCacheFlush,       \
-        Last))
+#define TT_IP_UNPACR(               \
+    IP,                             \
+    Unpack_block_selection,         \
+    AddrMode,                       \
+    CfgContextCntInc,               \
+    CfgContextId,                   \
+    AddrCntContextId,               \
+    OvrdThreadId,                   \
+    SetDatValid,                    \
+    rareb_en,                       \
+    ZeroWrite2,                     \
+    AutoIncContextID,               \
+    RowSearch,                      \
+    SearchCacheFlush,               \
+    Last)                           \
+    TT_IP_INSN(                     \
+        IP,                         \
+        TT_OP_UNPACR(               \
+            Unpack_block_selection, \
+            AddrMode,               \
+            CfgContextCntInc,       \
+            CfgContextId,           \
+            AddrCntContextId,       \
+            OvrdThreadId,           \
+            SetDatValid,            \
+            rareb_en,               \
+            ZeroWrite2,             \
+            AutoIncContextID,       \
+            RowSearch,              \
+            SearchCacheFlush,       \
+            Last))
 #define TT_UNPACR(                \
     Unpack_block_selection,       \
     AddrMode,                     \
