@@ -4,6 +4,7 @@
 from itertools import chain, product
 
 import pytest
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
@@ -32,6 +33,7 @@ from helpers.test_variant_parameters import (
     IN_TILE_DIMS,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_ROW_MOP,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
@@ -174,21 +176,34 @@ TINY_TILES_MATMUL_COMBINATIONS = [
 ALL_TEST_PARAMS = list(
     chain(
         (
-            (fidelity, cfg, throttle, 1)
+            (fidelity, cfg, throttle, 1, False)
             for fidelity, cfg, throttle in product(
                 MATH_FIDELITIES, MATMUL_COMBINATIONS, THROTTLE_LEVELS
             )
         ),
         (
-            (fidelity, cfg, 0, 1)
+            (fidelity, cfg, 0, 1, False)
             for fidelity, cfg in product(
                 MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
             )
         ),
         (
-            (fidelity, cfg, 0, DEST_HANDOFF_NUM_BLOCKS)
+            (fidelity, cfg, 0, DEST_HANDOFF_NUM_BLOCKS, False)
             for fidelity, cfg in product(MATH_FIDELITIES, MATMUL_COMBINATIONS)
             if cfg.tile_dimensions.kt_dim == 1
+        ),
+        # Blackhole row MOP (one MOP per reuse row instead of per tile), throttle 0: pairs with
+        # the first slice's throttle-0 rows for a per-tile vs per-row A/B.
+        (
+            (fidelity, cfg, 0, 1, True)
+            for fidelity, cfg in product(
+                MATH_FIDELITIES,
+                (
+                    MATMUL_COMBINATIONS
+                    if get_chip_architecture() == ChipArchitecture.BLACKHOLE
+                    else []
+                ),
+            )
         ),
     )
 )
@@ -196,13 +211,14 @@ ALL_TEST_PARAMS = list(
 
 @pytest.mark.perf
 @pytest.mark.parametrize(
-    "math_fidelity,matmul_config,throttle,num_blocks", ALL_TEST_PARAMS
+    "math_fidelity,matmul_config,throttle,num_blocks,row_mop", ALL_TEST_PARAMS
 )
 def test_perf_math_matmul(
     math_fidelity,
     matmul_config,
     throttle,
     num_blocks,
+    row_mop,
     perf_report,
 ):
     """
@@ -248,6 +264,7 @@ def test_perf_math_matmul(
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(matmul_config.dest_sync),
             THROTTLE_LEVEL(throttle),
+            MATMUL_ROW_MOP(row_mop),
         ],
         runtimes=[
             DEST_INDEX(matmul_config.dst_index),

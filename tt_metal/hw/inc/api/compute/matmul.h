@@ -20,6 +20,16 @@
 #ifndef MM_THROTTLE
 #define MM_THROTTLE 0
 #endif
+// Blackhole: when 1, matmul_block_init/matmul_block run one math MOP per reuse row of the output block instead of
+// one per output tile (default 0). Results are bit-identical. Requires full 32x32 in0/in1 tiles, and every
+// matmul_block call must pass the ct_dim/rt_dim of its matmul_block_init. Ignored while the matmul is throttled.
+// matmul_init/matmul_tiles keep the per-tile MOP.
+#ifndef MM_ROW_MOP
+#define MM_ROW_MOP 0
+#endif
+#if MM_ROW_MOP && !defined(ARCH_BLACKHOLE)
+#error "MM_ROW_MOP is only implemented for Blackhole"
+#endif
 namespace ckernel {
 
 #ifdef ARCH_BLACKHOLE
@@ -30,6 +40,8 @@ volatile tt_l1_ptr std::uint32_t* throttle_ptr =
     reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(MEM_L1_ARC_FW_SCRATCH);
 // tracks the state of the currently programmed matmul MOP (0: default throttle level, 1: max throttle level)
 static std::uint32_t throttled_mop_status = 0;
+// whether the unthrottled block matmul runs one math MOP per reuse row (see MM_ROW_MOP)
+constexpr bool mm_row_mop = MM_ROW_MOP != 0;
 
 // clang-format off
 /**
@@ -72,10 +84,11 @@ ALWI void matmul_block_math_dynamic_throttle(
         MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE_MAX>(idst, ct_dim, rt_dim)));
     } else {
         if (throttled_mop_status != 0) {
-            MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+            MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE, mm_row_mop>(
+                in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
             throttled_mop_status = 0;
         }
-        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
+        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, mm_row_mop>(idst, ct_dim, rt_dim)));
     }
 #endif
 }
@@ -217,10 +230,13 @@ ALWI void matmul_block_init(
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
-    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
 #ifdef ARCH_BLACKHOLE
+    MATH((
+        llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE, mm_row_mop>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
     // Dynamic throttling is only available on Blackhole architecture
     MATH((throttled_mop_status = 0));
+#else
+    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
 #endif
 #else
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
