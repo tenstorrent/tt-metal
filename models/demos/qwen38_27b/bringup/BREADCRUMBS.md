@@ -37,3 +37,12 @@
   `ctx.extra["state_out"]` (conv [conv_dim, 3], recurrent [48, 128, 128]), in the reference's layout.
 - Gate: PCC 0.999994; vs CPU rel 0.0034 (limit 0.015); layer-3 input rel 0.0175 (limit 0.033); auto_margin_min 1.56;
   49 device ops; bit-identical determinism. Re-run: `bfw job check --task C.linear.attention --gate-only`.
+
+## C.linear.attn_residual (layer 0)
+
+- `tt/residual.py:TtResidualAdd`: one `ttnn.add` (bf16 out, DRAM) of two residual-stream tensors, [1, 1, 640, 5120]
+  bf16 per chip (SP 8 on axis 0, replicated on axis 1). The add is local, so there is no collective.
+- `bringup/hooks.py`: `device_component` returns it for `attn_residual` and for `mlp_residual` (the same add). Both
+  inputs cross the harness boundary through `_rows_to_device`.
+- Gate: PCC 0.999997, auto_margin_min 1.97, 1 device op, host flops 0. Re-run:
+  `bfw job check --task C.linear.attn_residual --gate-only`.

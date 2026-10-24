@@ -56,6 +56,16 @@ def device_component(mesh, spec, layer, step):
         mod = TtRmsNorm(mesh, w, cfg.eps)
     elif step == "attention" and cfg.is_linear(layer):
         return _linear_attention_component(mesh, spec, cfg, layer)
+    elif step in ("attn_residual", "mlp_residual"):
+        from models.demos.qwen38_27b.tt.residual import TtResidualAdd
+
+        add = TtResidualAdd()
+
+        def residual_fn(ctx, a, b):
+            with _ops_visible():
+                return _rows_to_host(mesh, add(_rows_to_device(mesh, a), _rows_to_device(mesh, b)))
+
+        return residual_fn
     else:
         raise NotImplementedError(f"implement stage: no device module for {step} yet")
 
