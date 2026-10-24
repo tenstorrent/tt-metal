@@ -284,9 +284,9 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         if (head_chunk_index % num_chunks >= valid_chunks) {
             continue;
         }
-        enqueue_head_chunk_read(q_accessor, q, head_chunk_index, Kt);
-        enqueue_head_chunk_read(k_accessor, k, head_chunk_index, Kt);
-        enqueue_head_chunk_read(v_accessor, v, head_chunk_index, Vt);
+        // The input buffers hold one batch, so each reservation waits for compute to release the previous batch's
+        // tiles. Reserve in the order compute releases them (g, beta, q, v, then k): each read is issued as soon as
+        // its own buffer frees, not behind one compute releases later.
         enqueue_head_chunk_read(g_accessor, g, head_chunk_index, Kt);
         // Token-major beta logits: the chunk's tile holds 32 heads' logits as columns.
         static_assert(Ct == 1, "token-major beta supports one tile row per chunk");
@@ -294,6 +294,9 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         const uint32_t chunk = head_chunk_index % num_chunks;
         enqueue_contiguous_read(
             beta_accessor, beta, chunk * beta_width_tiles + beta_offset_tiles + head / tt::constants::TILE_WIDTH, 1);
+        enqueue_head_chunk_read(q_accessor, q, head_chunk_index, Kt);
+        enqueue_head_chunk_read(v_accessor, v, head_chunk_index, Vt);
+        enqueue_head_chunk_read(k_accessor, k, head_chunk_index, Kt);
         // All five inputs are independent reads on the same NoC. One barrier lets them overlap, then publishes
         // the complete work item atomically to compute.
         noc.async_read_barrier();
@@ -328,11 +331,11 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
                 tile[target] = tile[source];
             }
         }
-        q.push_back(chunk_key_tiles);
-        k.push_back(chunk_key_tiles);
-        v.push_back(chunk_value_tiles);
         g.push_back(chunk_key_tiles);
         beta.push_back(Ct);
+        q.push_back(chunk_key_tiles);
+        v.push_back(chunk_value_tiles);
+        k.push_back(chunk_key_tiles);
         // Compute starts on the first item while the constants are generated; it waits for each one at first use.
         if (constants_pending) {
             fill_constants();
