@@ -41,6 +41,7 @@
 #include "api/compute/transpose_dest.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
 void kernel_main() {
     // === Compile-time args ===
@@ -137,7 +138,14 @@ void kernel_main() {
     constexpr uint32_t stats_reduce_src_cb =
         (packed_ag_enabled != 0) ? stats_transposed_gathered_cb : stats_gathered_cb;
 
-    const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
+    // This worker's rows: derived from its static index and the common tile-row count, the same
+    // split the reader and writer compute (runtime_length.hpp).
+    constexpr uint32_t num_workers = get_compile_time_arg_val(43);
+    const uint32_t total_tile_rows = get_common_arg_val<uint32_t>(0);
+    const uint32_t worker_index = get_arg_val<uint32_t>(0);
+    const uint32_t rows_per_worker = ttnn::runtime_length::tiles_per_core(total_tile_rows, num_workers);
+    const uint32_t num_tile_rows = ttnn::runtime_length::core_end(worker_index, rows_per_worker, total_tile_rows) -
+                                   ttnn::runtime_length::core_start(worker_index, rows_per_worker, total_tile_rows);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(intermediate_cb, transformation_mat_cb, rotated_input_cb);
     matmul_init(intermediate_cb, transformation_mat_cb);

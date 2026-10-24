@@ -16,7 +16,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads(
     const bool transpose_k_heads,
     const bool kv_tied,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors) {
+    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors,
+    const bool runtime_rows) {
     TT_FATAL(num_q_heads > 0, "num_q_heads must be greater than 0");
     const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_q_heads);
     // Every head takes at least one column, so bounding the head counts by the width they split also keeps
@@ -83,14 +84,17 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads(
         transpose_k_heads,
         kv_tied,
         memory_config,
-        optional_output_tensors);
+        optional_output_tensors,
+        std::nullopt,
+        runtime_rows);
 }
 
 std::tuple<Tensor, Tensor> nlp_create_q_heads_split(
     const Tensor& input,
     uint32_t num_heads,
     uint32_t split_head_dim,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    const bool runtime_rows) {
     TT_FATAL(input.logical_shape().rank() == 4 && num_heads > 0, "Expected rank-4 input and nonzero head count");
     TT_FATAL(
         input.logical_shape()[3] == input.padded_shape()[3] && input.logical_shape()[3] % num_heads == 0,
@@ -105,7 +109,8 @@ std::tuple<Tensor, Tensor> nlp_create_q_heads_split(
         false,
         memory_config,
         std::nullopt,
-        split_head_dim);
+        split_head_dim,
+        runtime_rows);
     return {first, second};
 }
 

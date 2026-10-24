@@ -6,6 +6,7 @@
 #include "ttnn/device_operation.hpp"
 
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -270,6 +271,47 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
+namespace {
+// The multi-core factory with interleaved input and output derives its per-core rows on device when
+// asked to; only that configuration hashes without the row count.
+bool row_free_configuration(
+    const UntilizeDeviceOperation::operation_attributes_t& operation_attributes,
+    const UntilizeDeviceOperation::tensor_args_t& tensor_args) {
+    if (!operation_attributes.runtime_rows || tensor_args.input.is_sharded() ||
+        operation_attributes.output_mem_config.is_sharded()) {
+        return false;
+    }
+    return std::holds_alternative<UntilizeMultiCoreProgramFactory>(
+        UntilizeDeviceOperation::select_program_factory(operation_attributes, tensor_args));
+}
+}  // namespace
+
+void UntilizeDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (!row_free_configuration(operation_attributes, tensor_args)) {
+        validate_on_program_cache_miss(operation_attributes, tensor_args);
+        return;
+    }
+    // Only the row-dependent invariants: the row count is not in the hash.
+    using namespace tt::constants;
+    const auto& input_tensor_a = tensor_args.input;
+    uint32_t tensor_width = input_tensor_a.padded_shape()[-1];
+    uint32_t tensor_height = tensor_width == 0 ? 0 : input_tensor_a.physical_volume() / tensor_width;
+    TT_FATAL(tensor_width % TILE_WIDTH == 0, "Width must be evenly divisible into tiles");
+    TT_FATAL(tensor_height % TILE_HEIGHT == 0, "Height must be evenly divisible into tiles");
+}
+
+ttsl::hash::hash_t UntilizeDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (!row_free_configuration(operation_attributes, tensor_args)) {
+        return ttsl::hash::hash_objects_with_default_seed(
+            ttsl::hash::type_hash<UntilizeDeviceOperation>, operation_attributes, tensor_args);
+    }
+    constexpr uint64_t kSalt = 0x756e74696c697a65ULL;  // "untilize"
+    return tt::tt_metal::operation::hash_operation<UntilizeDeviceOperation>(
+        kSalt, operation_attributes, ttnn::operations::common::hash_spec_without_rows(tensor_args.input, kSalt));
+}
+
 UntilizeDeviceOperation::spec_return_value_t UntilizeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
@@ -422,7 +464,8 @@ Tensor untilize(
     bool fp32_dest_acc_en,
     std::optional<CoreRangeSet> sub_core_grids,
     bool enough_space_height,
-    uint32_t pf_type) {
+    uint32_t pf_type,
+    bool runtime_rows) {
     return ttnn::device_operation::launch<UntilizeDeviceOperation>(
         UntilizeOperationAttributes{
             .output_mem_config = std::move(output_mem_config),
@@ -430,7 +473,8 @@ Tensor untilize(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .sub_core_grids = std::move(sub_core_grids),
             .enough_space_height = enough_space_height,
-            .pf_type = pf_type},
+            .pf_type = pf_type,
+            .runtime_rows = runtime_rows},
         UntilizeTensorArgs{.input = input});
 }
 

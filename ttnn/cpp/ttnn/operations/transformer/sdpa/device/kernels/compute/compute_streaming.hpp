@@ -208,14 +208,29 @@ struct RingAccumulatorState {
 // their CB tile INDICES stay compile-time.
 // Only the ring_joint_sdpa producer uses it; exp_ring keeps the plain LightweightMaskContext —
 // sdpa_ring_v2's MaskCtx template param is deduced per caller.
+// The local tail is runtime on the dynamic-length path (the per-chip length moves it), a constant elsewhere.
+// The setter is what the producer calls on both paths (kernel_main is not a template, so an `if constexpr`
+// there would still have to compile an assignment to the constant).
+template <bool Dynamic, uint32_t Ct>
+struct LocalNPaddedTilesField {
+    uint32_t local_n_padded_tiles = Ct;
+    void set_local_n_padded_tiles(uint32_t value) { local_n_padded_tiles = value; }
+};
+template <uint32_t Ct>
+struct LocalNPaddedTilesField<false, Ct> {
+    static constexpr uint32_t local_n_padded_tiles = Ct;
+    static void set_local_n_padded_tiles(uint32_t) {}
+};
+
 template <
     uint32_t NeginfTileIdx,
     uint32_t CausalDiagTileIdx,
     uint32_t LocalNPaddedTiles,
     uint32_t GlobalNPartialTileIdx,
     uint32_t JointLPartialTileIdx,
-    uint32_t StraddleMaskChunkId>
-struct RingStreamingMaskCtx {
+    uint32_t StraddleMaskChunkId,
+    bool DynamicLocalN = false>
+struct RingStreamingMaskCtx : LocalNPaddedTilesField<DynamicLocalN, LocalNPaddedTiles> {
     // Per-ring-iter runtime fields (the only ones needing stack storage):
     bool is_causal = false;
     uint32_t global_n_padded_tiles = 0;
@@ -227,7 +242,6 @@ struct RingStreamingMaskCtx {
     static constexpr uint32_t neginf_tile_idx = NeginfTileIdx;
     static constexpr uint32_t causal_diag_tile_idx = CausalDiagTileIdx;
     static constexpr uint32_t primary_diag_tile_idx = CausalDiagTileIdx;
-    static constexpr uint32_t local_n_padded_tiles = LocalNPaddedTiles;
     static constexpr uint32_t global_n_partial_tile_idx = GlobalNPartialTileIdx;
     static constexpr uint32_t joint_l_partial_tile_idx = JointLPartialTileIdx;
     static constexpr uint32_t straddle_mask_chunk_id = StraddleMaskChunkId;
@@ -242,7 +256,7 @@ struct RingStreamingMaskCtx {
         m.causal_diag_tile_idx = causal_diag_tile_idx;
         m.primary_diag_tile_idx = primary_diag_tile_idx;
         m.global_n_padded_tiles = global_n_padded_tiles;
-        m.local_n_padded_tiles = local_n_padded_tiles;
+        m.local_n_padded_tiles = this->local_n_padded_tiles;
         m.joint_n_padded_tiles = joint_n_padded_tiles;
         m.global_n_partial_col = global_n_partial_col;
         m.joint_l_partial_col = joint_l_partial_col;
@@ -2615,11 +2629,16 @@ void sdpa_ring_v2(
     // Rows of newest slabs this pass appends (packed_kv_pass_rows).
     const uint32_t packed_newest_rows = 0,
     // Padded multicast slots the reader runs after this core's Q chunks; their K/V entries are drained.
-    const uint32_t padded_q_slots = 0) {
+    const uint32_t padded_q_slots = 0,
+    // Live per-chip KV length in tiles; the template value is a 0 placeholder on the dynamic-length path.
+    const uint32_t local_padded_Nt_rt = local_padded_Nt) {
     init_sdpa_streaming_semaphores();
     const bool packed_sources = packed_kv_enabled && packed_source_count > 1;
+    // Static path (nonzero template value): the constant, so the plan and the liveness checks fold as before.
+    constexpr bool local_n_is_dynamic = local_padded_Nt == 0;
     const ring_joint::PackedKVGroupPlan packed_kv = ring_joint::packed_kv_pass_plan(
-        {ring_joint::packed_kv_source_tiles(local_padded_Nt, logical_nt, kv_region_Nt, ring_size),
+        {ring_joint::packed_kv_source_tiles(
+             local_n_is_dynamic ? local_padded_Nt_rt : local_padded_Nt, logical_nt, kv_region_Nt, ring_size),
          packed_sources ? packed_source_count : 1,
          Sk_chunk_t,
          kv_region_Nt},
@@ -2752,12 +2771,17 @@ void sdpa_ring_v2(
                 chunk_size_t,
                 q_local_padded_Nt>(source_ring_id, k_chunk, Sk_chunk_t, logical_nt, causal_end_nt);
         }
-        return !kv_chunk_starts_before_logical_end<
-            kv_pad_rotation_enabled,
-            chunked_enabled,
-            local_padded_Nt,
-            chunk_size_t,
-            kv_region_Nt>(source_ring_id, k_chunk * Sk_chunk_t, logical_nt);
+        if constexpr (local_n_is_dynamic) {
+            return !kv_chunk_starts_before_logical_end<kv_pad_rotation_enabled, chunked_enabled>(
+                source_ring_id, k_chunk * Sk_chunk_t, logical_nt, local_padded_Nt_rt, chunk_size_t, kv_region_Nt);
+        } else {
+            return !kv_chunk_starts_before_logical_end<
+                kv_pad_rotation_enabled,
+                chunked_enabled,
+                local_padded_Nt,
+                chunk_size_t,
+                kv_region_Nt>(source_ring_id, k_chunk * Sk_chunk_t, logical_nt);
+        }
     };
 
     // Causal skip: K chunks fully above the diagonal — drain K/V from CBs and skip.

@@ -52,6 +52,12 @@ struct UntilizeDeviceOperation {
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+
+    // Under runtime_rows the multi-core factory with interleaved input and output derives its per-core
+    // rows on device, so the input spec is hashed without the row count; else the framework's default hash.
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(
@@ -77,6 +83,7 @@ Tensor untilize(
     bool fp32_dest_acc_en,
     std::optional<CoreRangeSet> sub_core_grids,
     bool enough_space_height,
-    uint32_t pf_type);
+    uint32_t pf_type,
+    bool runtime_rows = false);
 
 }  // namespace ttnn::prim

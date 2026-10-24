@@ -16,6 +16,7 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_SRCS
     create_qkv_heads_from_separate_tensors/device/create_qkv_heads_from_separate_tensors_program_factory.cpp
     nlp_concat_heads/device/nlp_concat_heads_device_operation.cpp
     nlp_concat_heads/device/nlp_concat_heads_program_factory.cpp
+    nlp_concat_heads/device/nlp_concat_heads_runtime_rows_program_factory.cpp
     nlp_concat_heads/nlp_concat_heads.cpp
     nlp_concat_heads_decode/device/nlp_concat_heads_decode_device_operation.cpp
     nlp_concat_heads_decode/device/nlp_concat_heads_decode_program_factory.cpp
@@ -26,6 +27,7 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_SRCS
     nlp_concat_heads_boltz/nlp_concat_heads_boltz.cpp
     nlp_create_qkv_heads/device/nlp_create_qkv_heads_device_operation.cpp
     nlp_create_qkv_heads/device/nlp_create_qkv_heads_program_factory.cpp
+    nlp_create_qkv_heads/device/nlp_create_qkv_heads_runtime_rows_program_factory.cpp
     nlp_create_qkv_heads/nlp_create_qkv_heads.cpp
     nlp_create_qkv_heads_decode/device/nlp_create_qkv_heads_decode_device_operation.cpp
     nlp_create_qkv_heads_decode/device/nlp_create_qkv_heads_decode_interleaved_program_factory.cpp

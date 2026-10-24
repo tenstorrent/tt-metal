@@ -14,6 +14,8 @@
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"  // for roofline calculation
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
+#include "ttnn/operation.hpp"
 
 #include <algorithm>
 
@@ -203,6 +205,53 @@ void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
             input_tensor.padded_shape(),
             input_tensor.layout());
     }
+}
+
+// Only the row-dependent invariants: the row count is not in the MINIMAL_DEFAULT hash.
+void AllGatherAsyncDeviceOperation::validate_on_program_cache_hit(
+    const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto input_shape = input_tensor.padded_shape();
+    if (input_tensor.layout() == Layout::TILE && input_shape.rank() >= 2) {
+        TT_FATAL(
+            input_shape[-2] % tt::constants::TILE_HEIGHT == 0,
+            "Input tensor height {} must be tile-aligned",
+            input_shape[-2]);
+    }
+    if (tensor_args.persistent_output_buffer.has_value()) {
+        const auto output_shape = tensor_args.persistent_output_buffer->padded_shape();
+        TT_FATAL(output_shape.size() == input_shape.size(), "Output rank {} must match input", output_shape.size());
+        for (size_t i = 0; i < input_shape.size(); ++i) {
+            const bool ok = (i == args.dim) ? output_shape[i] <= input_shape[i] * args.ring_size
+                                            : output_shape[i] == input_shape[i];
+            TT_FATAL(ok, "Output shape {} does not fit the gather of input shape {}", output_shape, input_shape);
+        }
+    }
+}
+
+ttsl::hash::hash_t AllGatherAsyncDeviceOperation::compute_program_hash(
+    const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
+    constexpr uint64_t kSalt = 0x616c6c5f67617468ULL;  // "all_gath"
+    const bool row_free = select_version(args) == AllGatherAsyncVersion::MINIMAL_DEFAULT;
+    const auto hash_tensor = [&](const Tensor& tensor) {
+        return row_free ? ttnn::operations::common::hash_spec_without_rows(tensor, kSalt)
+                        : ttsl::hash::hash_objects_with_default_seed(kSalt, tensor.tensor_spec());
+    };
+    uint32_t num_workers_per_direction = 0;
+    if (row_free) {
+        const uint32_t output_bytes = tensor_args.persistent_output_buffer.has_value()
+                                          ? tensor_args.persistent_output_buffer->buffer()->size()
+                                          : compute_output_specs(args, tensor_args).compute_packed_buffer_size_bytes();
+        num_workers_per_direction =
+            all_gather_async_num_workers_per_direction(args, tensor_args.input_tensor, output_bytes);
+    }
+    return tt::tt_metal::operation::hash_operation<AllGatherAsyncDeviceOperation>(
+        args.attribute_values(),
+        row_free,
+        num_workers_per_direction,
+        hash_tensor(tensor_args.input_tensor),
+        tensor_args.persistent_output_buffer.has_value(),
+        tensor_args.persistent_output_buffer.has_value() ? hash_tensor(*tensor_args.persistent_output_buffer) : 0);
 }
 
 AllGatherAsyncDeviceOperation::spec_return_value_t AllGatherAsyncDeviceOperation::compute_output_specs(

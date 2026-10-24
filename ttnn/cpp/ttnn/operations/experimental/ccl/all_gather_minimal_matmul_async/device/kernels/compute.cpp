@@ -14,6 +14,7 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
 #ifdef FUSE_SWIGLU
 // Fused SwiGLU output stage. The matmul produced an interleaved gate/up block in `in_cb`:
@@ -400,20 +401,25 @@ void kernel_main() {
     constexpr uint32_t M_block_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t K_block_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t N_block_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(4);
-    constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(5);
-    constexpr uint32_t subblock_h = get_compile_time_arg_val(6);
-    constexpr uint32_t subblock_w = get_compile_time_arg_val(7);
+    constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(4);
+    constexpr uint32_t subblock_h = get_compile_time_arg_val(5);
+    constexpr uint32_t subblock_w = get_compile_time_arg_val(6);
+    constexpr uint32_t in0_parallel_axis_cores = get_compile_time_arg_val(7);
 
+    // Same uniform M split as the data-movement kernels (see dm_in0_sender.cpp).
+    const uint32_t M_tiles = get_common_arg_val<uint32_t>(0);
     uint32_t argidx = 0;
-    const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_idx = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
+    const uint32_t M_tiles_per_core = ttnn::runtime_length::tiles_per_core(M_tiles, in0_parallel_axis_cores);
+    const uint32_t M_blocks_per_core = ttnn::runtime_length::blocks_per_core(M_tiles_per_core, M_block_tiles);
+    const uint32_t M_start_tile = in0_idx * M_tiles_per_core;
+    const uint32_t M_end_tile = M_start_tile + M_tiles_per_core;
 
 #ifdef FUSE_TERNARY
-    const uint32_t fused_ternary_scalar_uint = get_common_arg_val<uint32_t>(0);
-    const uint32_t broadcast_ternary_b = get_common_arg_val<uint32_t>(1);
+    const uint32_t fused_ternary_scalar_uint = get_common_arg_val<uint32_t>(1);
+    const uint32_t broadcast_ternary_b = get_common_arg_val<uint32_t>(2);
 #else
     // Default value when ternary is not fused (not used, helps compiler optimize)
     constexpr uint32_t fused_ternary_scalar_uint = 0;

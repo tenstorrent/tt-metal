@@ -22,20 +22,29 @@ from loguru import logger
 
 import ttnn
 
+from ....models.transformers.minimax_h3.length_classes import length_class
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, resolve_canvas_size
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import (
+    _DIT_FSDP_ENV,
+    _DYNAMIC_LENGTH_ENV,
     _PRESETS_BH,
+    _PRESETS_WH,
     MiniMaxH3Pipeline,
+    _DenoisePath,
     _requested_audio_t_factor,
+    _requested_dynamic_length,
     _resolve_audio_t_shard,
+    _resolve_denoise_path,
+    _resolve_dit_fsdp,
     validate_bucket_ladder,
 )
 from ....pipelines.minimax_h3.policy import align_num_frames, get_num_frames
 from ..wan2_2.common import check_output_sanity
-from .common import GALAXY_MESHES
+from .common import GALAXY_MESHES, MESH_4X8_RING
 from .common_av import (
     CALIBRATED_FOX_PROMPT,
     artifact_dir,
+    assert_generation_ok,
     check_audio_sanity,
     check_av_sync,
     check_spatial_seams,
@@ -119,17 +128,226 @@ def test_requested_audio_t_factor_precedence(monkeypatch, expect_error):
         _requested_audio_t_factor(None)
 
 
+def test_requested_dynamic_length_precedence(monkeypatch, expect_error):
+    monkeypatch.delenv(_DYNAMIC_LENGTH_ENV, raising=False)
+    # no kwarg, no env -> the given default
+    assert _requested_dynamic_length(None, True) == (True, False)
+    assert _requested_dynamic_length(None, False) == (False, False)
+    # the env fills a None kwarg either way
+    monkeypatch.setenv(_DYNAMIC_LENGTH_ENV, "0")
+    assert _requested_dynamic_length(None, True) == (False, True)
+    monkeypatch.setenv(_DYNAMIC_LENGTH_ENV, "1")
+    assert _requested_dynamic_length(None, False) == (True, True)
+    # explicit kwarg wins over the env
+    assert _requested_dynamic_length(False, True) == (False, False)
+    monkeypatch.setenv(_DYNAMIC_LENGTH_ENV, "0")
+    assert _requested_dynamic_length(True, False) == (True, False)
+    # anything but '0'/'1' is a clear error
+    monkeypatch.setenv(_DYNAMIC_LENGTH_ENV, "yes")
+    with expect_error(ValueError, _DYNAMIC_LENGTH_ENV):
+        _requested_dynamic_length(None, True)
+
+
+# Pure (no-device) coverage of which denoise path the constructor kwargs select on each preset.
+def _denoise_path(preset, *, coresident=None, **kwargs):
+    """(trace_denoise, bucket_denoise, dynamic_length) for the kwargs given; the rest default to None."""
+    kwargs = dict(trace_denoise=None, bucket_denoise=None, bucket_ladder=None, dynamic_length=None) | kwargs
+    coresident = preset.get("coresident", True) if coresident is None else coresident
+    path = _resolve_denoise_path(preset, coresident=coresident, **kwargs)
+    return path.trace_denoise, path.bucket_denoise, path.dynamic_length
+
+
+def test_resolve_denoise_path_bh_4x8(monkeypatch, expect_error):
+    monkeypatch.delenv(_DYNAMIC_LENGTH_ENV, raising=False)
+    preset = _PRESETS_BH[(4, 8)]
+    dynamic, bucketed, traced = (False, False, True), (False, True, False), (True, True, False)
+    unbucketed = (False, False, False)
+    # the default is dynamic, and any bucketed kwarg keeps the backup path
+    assert _denoise_path(preset) == dynamic
+    assert _denoise_path(preset, trace_denoise=True) == traced
+    assert _denoise_path(preset, bucket_denoise=True) == bucketed
+    assert _denoise_path(preset, bucket_ladder=preset["bucket_ladder"]["t2va"]) == bucketed
+    assert _denoise_path(preset, trace_denoise=False) == bucketed
+    assert _denoise_path(preset, bucket_denoise=False) == unbucketed
+    assert _denoise_path(preset, dynamic_length=False) == bucketed
+    # an explicit dynamic request: a ladder only supplies the cap, tracing or bucketing contradicts it
+    assert _denoise_path(preset, dynamic_length=True, bucket_ladder=preset["bucket_ladder"]["t2va"]) == dynamic
+    with expect_error(ValueError, "eager-only"):
+        _denoise_path(preset, dynamic_length=True, trace_denoise=True)
+    with expect_error(ValueError, "both denoise paths"):
+        _denoise_path(preset, dynamic_length=True, bucket_denoise=True)
+    # env: below the kwarg, above the preset
+    monkeypatch.setenv(_DYNAMIC_LENGTH_ENV, "0")
+    assert _denoise_path(preset) == bucketed
+    assert _denoise_path(preset, bucket_denoise=True) == bucketed
+    assert _denoise_path(preset, dynamic_length=True) == dynamic
+    monkeypatch.setenv(_DYNAMIC_LENGTH_ENV, "1")
+    assert _denoise_path(preset) == dynamic
+    assert _denoise_path(preset, dynamic_length=False) == bucketed
+    with expect_error(ValueError, "eager-only"):
+        _denoise_path(preset, trace_denoise=True)
+
+
+def test_resolve_denoise_path_quad_and_wormhole(monkeypatch, expect_error):
+    monkeypatch.delenv(_DYNAMIC_LENGTH_ENV, raising=False)
+    quad, wormhole = _PRESETS_BH[(4, 32)], _PRESETS_WH[(4, 8)]
+    # both stay bucketed; the quad buckets through its trace, which evicting stages drops
+    assert _denoise_path(quad) == (True, True, False)
+    assert _denoise_path(quad, coresident=False) == (False, False, False)
+    assert _denoise_path(wormhole) == (False, True, False)
+    assert _denoise_path(quad, dynamic_length=False) == (True, True, False)
+    monkeypatch.setenv(_DYNAMIC_LENGTH_ENV, "0")
+    assert _denoise_path(quad) == (True, True, False)
+    # the switch cannot make the quad dynamic
+    monkeypatch.setenv(_DYNAMIC_LENGTH_ENV, "1")
+    with expect_error(ValueError, "eager-only"):
+        _denoise_path(quad)
+    assert _denoise_path(wormhole) == (False, False, True)
+
+
+def test_resolve_dit_fsdp(monkeypatch, expect_error):
+    monkeypatch.delenv(_DIT_FSDP_ENV, raising=False)
+    bh, quad, wormhole = _PRESETS_BH[(4, 8)], _PRESETS_BH[(4, 32)], _PRESETS_WH[(4, 8)]
+    assert "dit_fsdp" not in bh and "dit_fsdp" not in quad
+    env = f"from {_DIT_FSDP_ENV}"
+    # dynamic ref2va shards the DiT; bucketed ref2va and dynamic t2va stay unsharded
+    assert _resolve_dit_fsdp(bh, dit_fsdp=None, task="ref2va", dynamic_length=True) == (True, "dynamic ref2va")
+    assert _resolve_dit_fsdp(bh, dit_fsdp=None, task="ref2va", dynamic_length=False) == (False, "default")
+    assert _resolve_dit_fsdp(bh, dit_fsdp=None, task="t2va", dynamic_length=True) == (False, "default")
+    assert _resolve_dit_fsdp(quad, dit_fsdp=None, task="ref2va", dynamic_length=False) == (False, "default")
+    # the kwarg and a preset key both win over the rule
+    assert _resolve_dit_fsdp(bh, dit_fsdp=False, task="ref2va", dynamic_length=True) == (False, "kwarg")
+    assert _resolve_dit_fsdp(bh, dit_fsdp=True, task="t2va", dynamic_length=False) == (True, "kwarg")
+    assert _resolve_dit_fsdp(wormhole, dit_fsdp=None, task="t2va", dynamic_length=False) == (True, "preset")
+    # the env overrides all of them
+    monkeypatch.setenv(_DIT_FSDP_ENV, "0")
+    assert _resolve_dit_fsdp(bh, dit_fsdp=None, task="ref2va", dynamic_length=True) == (False, env)
+    assert _resolve_dit_fsdp(wormhole, dit_fsdp=True, task="ref2va", dynamic_length=False) == (False, env)
+    monkeypatch.setenv(_DIT_FSDP_ENV, "1")
+    assert _resolve_dit_fsdp(bh, dit_fsdp=False, task="t2va", dynamic_length=False) == (True, env)
+    monkeypatch.setenv(_DIT_FSDP_ENV, "yes")
+    with expect_error(ValueError, _DIT_FSDP_ENV):
+        _resolve_dit_fsdp(bh, dit_fsdp=None, task="t2va", dynamic_length=False)
+
+
 # Pure (no-device) coverage for the per-mesh bucket ladders.
 @pytest.mark.parametrize("task", ["t2va", "ref2va"])
 def test_preset_bucket_ladder_is_aligned(task):
     preset = _PRESETS_BH[(4, 8)]
     validate_bucket_ladder(preset["bucket_ladder"][task], 8 * ttnn.TILE_SIZE)
-    assert preset["bucket_denoise"] and not preset.get("trace_denoise")
+    # dynamic by default; the ladder stays valid as the backup path and supplies the admission cap
+    assert preset["dynamic_length"] and preset["bucket_denoise"] and not preset.get("trace_denoise")
 
 
 @pytest.mark.parametrize("task", ["t2va", "ref2va"])
 def test_quad_preset_bucket_ladder_is_aligned(task):
     validate_bucket_ladder(_PRESETS_BH[(4, 32)]["bucket_ladder"][task], 32 * ttnn.TILE_SIZE)
+
+
+def test_presets_never_trace_a_dynamic_length():
+    for presets in (_PRESETS_BH, _PRESETS_WH):
+        for shape, preset in presets.items():
+            assert not (preset.get("dynamic_length") and preset.get("trace_denoise")), shape
+    # dynamic length is measured on the Blackhole 4x8 only
+    assert not _PRESETS_BH[(4, 32)].get("dynamic_length") and not _PRESETS_WH[(4, 8)].get("dynamic_length")
+
+
+def test_denoise_path_name():
+    """The construction log's name for each path."""
+    assert _DenoisePath(False, False, True, False).name == "dynamic length"
+    assert _DenoisePath(True, True, False, False).name == "bucketed, traced"
+    assert _DenoisePath(False, True, False, False).name == "bucketed"
+    assert _DenoisePath(False, False, False, False).name == "unbucketed"
+
+
+# Pure (no-device) coverage of the dynamic-length padding and admission rule.
+def test_dynamic_padded_length_admission(expect_error):
+    pipeline = MiniMaxH3Pipeline.__new__(MiniMaxH3Pipeline)
+    pipeline.sp_factor, pipeline.dynamic_length, pipeline.max_sequence_length = 8, True, 120320
+    pipeline._force_pad_to = None
+    assert pipeline._padded_length(37749) == 37888  # 256-aligned, not a ladder rung
+    assert pipeline._padded_length(120320) == 120320
+    with expect_error(ValueError, "beyond the longest served packed length"):
+        pipeline._padded_length(120321)
+    pipeline._force_pad_to = 120320  # the warm-up's capacity point
+    assert pipeline._padded_length(37749) == 120320
+    pipeline._force_pad_to = 18944
+    with expect_error(ValueError, "smaller than the packed length"):
+        pipeline._padded_length(37749)
+
+
+# The dynamic-length gate: one program set per length class must serve every length in it. The cheap form runs by
+# default on the Blackhole 4x8 (`MINIMAX_H3_DYNAMIC_GATE=0` opts out); `=1` adds the hour-long full-warm form.
+DYNAMIC_GATE_ENV = "MINIMAX_H3_DYNAMIC_GATE"
+# (quiet warm, measured) durations inside each length class of `length_classes.py` at 16:9.
+DYNAMIC_GATE_CLASS_POINTS_S = [(4, 5), (10, 15)]
+
+
+def _assert_no_denoise_misses(pipeline, warm_s: int, measured_s: int) -> None:
+    misses = pipeline.last_program_cache_misses
+    assert (
+        misses["denoising"] == 0
+    ), f"the {measured_s} s request compiled {misses['denoising']} denoise programs after the {warm_s} s warm: {misses}"
+
+
+@pytest.mark.skipif(os.environ.get(DYNAMIC_GATE_ENV) == "0", reason=f"{DYNAMIC_GATE_ENV}=0 opts out of the gate")
+@pytest.mark.timeout(5400)
+@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
+def test_t2va_dynamic_length_zero_misses(mesh_device, reset_seeds):
+    """Per length class: one quiet request, then a measured one at a new padded length in the same class, which
+    must add no denoise program. No init warm-up, so the class's first request is its only compile; audio is
+    untraced because the tracer captures on its first call."""
+    weights = weights_dir("transformer", "text_encoder", "vae", "audio_vae")
+    height, width = resolve_canvas_size(16, 9)
+    pipeline = MiniMaxH3Pipeline.create_pipeline(
+        mesh_device=mesh_device,
+        weights_dir=weights,
+        vae_output_type="yuv420",
+        dynamic_length=True,
+        warmup=False,
+        trace_audio=False,
+    )
+    assert pipeline.dynamic_length and not pipeline.bucket_denoise
+    for warm_s, measured_s in DYNAMIC_GATE_CLASS_POINTS_S:
+        with pipeline.quiet():
+            pipeline(
+                PROMPT, num_frames=get_num_frames(warm_s), height=height, width=width, num_inference_steps=3, seed=SEED
+            )
+        warm_rows = pipeline.last_seq_len.padded // pipeline.sp_factor
+        output = pipeline(
+            PROMPT, num_frames=get_num_frames(measured_s), height=height, width=width, num_inference_steps=3, seed=SEED
+        )
+        measured_rows = pipeline.last_seq_len.padded // pipeline.sp_factor
+        assert warm_rows != measured_rows, f"{warm_s} s and {measured_s} s both pad to {warm_rows} rows/device"
+        assert length_class(warm_rows) == length_class(measured_rows), f"{warm_s} s and {measured_s} s span two classes"
+        assert_generation_ok(output, align_num_frames(get_num_frames(measured_s)))
+        _assert_no_denoise_misses(pipeline, warm_s, measured_s)
+    pipeline.release_traces()
+
+
+@pytest.mark.skipif(
+    os.environ.get(DYNAMIC_GATE_ENV) != "1",
+    reason=f"the full-warm gate (init warm-up, then a cross-class measure) runs on request: set {DYNAMIC_GATE_ENV}=1",
+)
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
+def test_t2va_dynamic_length_zero_misses_full_warm(mesh_device, reset_seeds):
+    """The served configuration: the init warm-up, a quiet 5 s request, then a measured 10 s one across the class
+    boundary, which must add no denoise program."""
+    weights = weights_dir("transformer", "text_encoder", "vae", "audio_vae")
+    height, width = resolve_canvas_size(16, 9)
+    pipeline = MiniMaxH3Pipeline.create_pipeline(
+        mesh_device=mesh_device, weights_dir=weights, vae_output_type="yuv420", dynamic_length=True
+    )
+    assert pipeline.dynamic_length and not pipeline.bucket_denoise
+    with pipeline.quiet():
+        pipeline(PROMPT, num_frames=get_num_frames(5), height=height, width=width, num_inference_steps=3, seed=SEED)
+    output = pipeline(
+        PROMPT, num_frames=get_num_frames(10), height=height, width=width, num_inference_steps=3, seed=SEED
+    )
+    assert_generation_ok(output, align_num_frames(get_num_frames(10)))
+    _assert_no_denoise_misses(pipeline, 5, 10)
+    pipeline.release_traces()
 
 
 @pytest.mark.timeout(7200)
