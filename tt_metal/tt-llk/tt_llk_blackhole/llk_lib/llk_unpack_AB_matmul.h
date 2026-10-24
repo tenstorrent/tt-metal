@@ -209,7 +209,7 @@ inline void _llk_unpack_AB_matmul_narrow_mop_config_(
  * @param unpA_partial_face: Whether operand A is unpacked face-by-face (partial faces).
  * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
  */
-template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0>
+template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0, std::uint32_t stream_z = 0>
 inline void _llk_unpack_AB_matmul_mop_config_(
     const std::uint32_t ct_dim, const std::uint32_t rt_dim, const bool unpA_partial_face, const bool unpB_partial_face)
 {
@@ -217,6 +217,26 @@ inline void _llk_unpack_AB_matmul_mop_config_(
     // in1/inB - loaded to SrcA
 
     const bool reuse_a                      = ct_dim >= rt_dim;
+    if constexpr (stream_z != 0 && kernel_broadcast_b != 1)
+    {
+        if (reuse_a && !unpA_partial_face)
+        {
+            // dense in1 tiles back to back: the Z counter steps one tile (stream_z faces) per UNPACR, no config read and write
+            load_replay_buf(
+                0,
+                4,
+                []
+                {
+                    TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_INCADCZW(p_setadc::UNP_A, 0, 0, 0, stream_z);
+                    TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_INCADCZW(p_setadc::UNP_A, 0, 0, 0, stream_z);
+                });
+            ckernel_unpack_template z_tmp = ckernel_unpack_template(false, false, lltt::replay_insn(0, 2), 0, 0, 0, lltt::replay_insn(2, 2), 0, 0);
+            z_tmp.program();
+            return;
+        }
+    }
     const std::uint32_t replay_buf_prog_len = (reuse_a && unpA_partial_face) ? 18 : ((!reuse_a && unpB_partial_face) ? 18 : 12);
     const std::uint32_t replay_buf_run_len  = replay_buf_prog_len / 2;
 
@@ -404,7 +424,12 @@ inline void _llk_unpack_AB_matmul_mop_config_(
  * @ref _llk_unpack_AB_matmul_ is the matching execute call.
  * @ref _llk_math_matmul_init_ is the matching init on the math thread (consumes SrcA/SrcB).
  */
-template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0, bool auto_ttsync = false, bool stream_narrow = false>
+template <
+    std::uint32_t kernel_broadcast_a = 0,
+    std::uint32_t kernel_broadcast_b = 0,
+    bool auto_ttsync                 = false,
+    bool stream_narrow               = false,
+    std::uint32_t stream_z           = 0>
 __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     const std::uint32_t transpose       = 0,
     const std::uint32_t ct_dim          = 1,
@@ -465,7 +490,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     }
     else
     {
-        _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
+        _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b, stream_z>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
     }
 
     if constexpr (auto_ttsync)
@@ -546,7 +571,8 @@ template <
     bool auto_ttsync                 = false,
     std::uint32_t dest_max_tiles     = 16,
     bool hoist_rows                  = true,
-    std::uint32_t max_row_tiles      = dest_max_tiles>
+    std::uint32_t max_row_tiles      = dest_max_tiles,
+    std::uint32_t stream_z           = 0>
 inline void _llk_unpack_AB_matmul_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -684,6 +710,14 @@ inline void _llk_unpack_AB_matmul_(
             TT_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, unp_cfg_context == 0 ? 0 : context_1_zmask);
         }
 
+        if constexpr (stream_z != 0 && kernel_broadcast_b != 1)
+        {
+            if (reuse_a && !unpA_partial_face)
+            {
+                TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0001); // the next row starts at Z = 0
+            }
+        }
+
         // T6::SEMGET for context release
         t6_semaphore_get(semaphore::UNPACK_SYNC);
 
@@ -708,7 +742,7 @@ inline void _llk_unpack_AB_matmul_(
  * @param in1_k_stride: The tiles between the operand B tiles of consecutive k steps.
  * @note Same init and uninit as @ref _llk_unpack_AB_matmul_.
  */
-template <std::uint32_t dest_max_tiles = 16>
+template <std::uint32_t dest_max_tiles = 16, std::uint32_t stream_z = 0>
 inline void _llk_unpack_AB_matmul_k_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -793,6 +827,14 @@ inline void _llk_unpack_AB_matmul_k_(
             }
 
             TT_INSN(unp_cfg_context == 0 ? mop_0 : mop_1);
+
+            if constexpr (stream_z != 0)
+            {
+                if (reuse_a && !unpA_partial_face)
+                {
+                    TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0001); // the next row starts at Z = 0
+                }
+            }
 
             // T6::SEMGET for context release
             t6_semaphore_get(semaphore::UNPACK_SYNC);
