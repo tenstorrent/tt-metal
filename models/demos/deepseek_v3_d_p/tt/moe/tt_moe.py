@@ -912,6 +912,38 @@ class TtMoe(LightweightModule):
 
         self._dump_routing(indices, scores, actual_start or 0, cache_user_id, metadata is not None)
 
+        # DIAGNOSTIC ONLY (never a candidate): GLM_DIAG_BALANCED_ROUTING=1 replaces the gate's expert ids with a
+        # constant, exactly balanced pattern (every expert gets the same token count, each token's 8 experts
+        # spread over chips/columns pseudo-randomly) to measure MoE time without load skew. Scores stay real.
+        if os.environ.get("GLM_DIAG_BALANCED_ROUTING") == "1":
+            if getattr(self, "_diag_idx", None) is None:
+                n_rows = self.mesh_device.shape[0]
+                per_chip = indices.shape[0]
+                topk = indices.shape[-1]
+                g = torch.arange(n_rows * per_chip)
+                pi = torch.randperm(self.num_routed_experts, generator=torch.Generator().manual_seed(1234))
+                stride = self.num_routed_experts // topk
+                pattern = torch.stack(
+                    [(pi[g % self.num_routed_experts] + stride * k) % self.num_routed_experts for k in range(topk)],
+                    dim=-1,
+                )
+                torch_dtype = torch.int32 if indices.dtype == ttnn.uint32 else torch.int16
+                self._diag_idx = ttnn.from_torch(
+                    pattern.reshape(n_rows * per_chip, topk).to(torch_dtype),
+                    device=self.mesh_device,
+                    dtype=indices.dtype,
+                    layout=indices.layout,
+                    memory_config=indices.memory_config(),
+                    mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
+                )
+                logger.warning(
+                    f"[DIAG] balanced routing ON layer={self.layer_idx} idx shape={indices.shape} dtype={indices.dtype} "
+                    f"layout={indices.layout} counts min/max={torch.bincount(pattern.flatten()).min().item()}/"
+                    f"{torch.bincount(pattern.flatten()).max().item()}"
+                )
+            ttnn.deallocate(indices)
+            indices = ttnn.clone(self._diag_idx)
+
         (
             tt_expert_offsets,
             tt_expert_token_counts,
