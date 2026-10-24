@@ -10,6 +10,7 @@ from typing import Dict
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
+from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.data_format_inference import effective_dest_acc, unpacks_to_dest
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -85,22 +86,6 @@ from helpers.utils import (
 # =============================================================================
 # Shared skip helpers
 # =============================================================================
-
-
-def fp32_no_dest_acc_skip_reason(formats, dest_acc):
-    """Why a driver calling :func:`_skip_fp32_no_dest_acc` skips this variant, or
-    ``None``. The exact-op guard in test_sfpu_accuracy_budget.py asks it too, so its
-    exclusions cannot drift from the skip."""
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        return "32-bit inputs need a 32-bit Dest (dest_acc=Yes)"
-    return None
-
-
-def _skip_fp32_no_dest_acc(formats, dest_acc):
-    """32-bit inputs need a 32-bit Dest (dest_acc=Yes)."""
-    reason = fp32_no_dest_acc_skip_reason(formats, dest_acc)
-    if reason:
-        pytest.skip(reason)
 
 
 def _resolve_perf_args(is_perf, perf_report, run_types):
@@ -916,7 +901,7 @@ def test_eltwise_binary_sfpu_float(
     bcast_dim,
     **run_kwargs,
 ):
-    _skip_fp32_no_dest_acc(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     # copy_dest_value copies src1 onto src0 and does not broadcast. A broadcast
     # row would compare against the broadcast golden, which this kernel does not
@@ -1064,7 +1049,7 @@ def test_eltwise_binary_sfpu_mul_production_exact():
 def test_eltwise_binary_sfpu_div(formats, dest_acc, **run_kwargs):
     # DIV routes through the dedicated production kernel (calculate_sfpu_binary_div);
     # split out from the float sweep since the reciprocal path is precision-sensitive.
-    _skip_fp32_no_dest_acc(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     sfpu_binary(
         formats,
@@ -1079,7 +1064,7 @@ def test_eltwise_binary_sfpu_div(formats, dest_acc, **run_kwargs):
 def test_eltwise_binary_sfpu_float_extended(formats, dest_acc, mathop, **run_kwargs):
     # max/min (SFPSWAP) and fmod/remainder (fp32 reciprocal) binary kernels with no
     # dedicated production BinaryOp; driven through the same in-DST harness as add/sub.
-    _skip_fp32_no_dest_acc(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     # fmod/remainder divide by b via a reciprocal, and Bfp8_b's coarse quantization blows up
     # the quotient for small divisors. It only shows when the output is Bfp8_b as well: a
@@ -1110,7 +1095,7 @@ def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop, **run_kwargs):
     # float mask: data at tile0, mask at tile1. Output is data where mask != 0, else 0
     # (MASK) or +inf (MASK_POSINF).
     # Crafted stimuli so the mask carries real zeros.
-    _skip_fp32_no_dest_acc(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     # One tile pair only, unlike every other op here: calculate_mask hard-codes its operands
     # and ignores the forwarded dst indices, so only the first placement computes anything.
@@ -1133,7 +1118,7 @@ def test_eltwise_binary_sfpu_atan2(formats, dest_acc, mathop, **run_kwargs):
     # atan2(y, x): y = tile0, x = tile1. Signed [-5, 5] gives mixed signs so all quadrants
     # (and the |y|>=|x| / x<0 branches) are exercised. A minimax approximation: gated by
     # its step budget on Wormhole, and by tolerance + PCC elsewhere.
-    _skip_fp32_no_dest_acc(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     sfpu_binary(
         formats,
@@ -1148,7 +1133,7 @@ def test_eltwise_binary_sfpu_atan2(formats, dest_acc, mathop, **run_kwargs):
 def test_eltwise_binary_sfpu_eq_ne(formats, dest_acc, mathop, **run_kwargs):
     # Eq/Ne(a, b) with a = tile0, b = tile1. Crafted paired stimuli give a non-constant 0/1
     # golden so the equal branch is exercised (the default random sweep never is).
-    _skip_fp32_no_dest_acc(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     spec_A, spec_B = _eq_ne_stimuli_specs()
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B, **run_kwargs)
@@ -1160,7 +1145,7 @@ def test_eltwise_binary_sfpu_float_comparison(formats, dest_acc, mathop, **run_k
     # exactly equal and the rest differ by +/-1.0: the tie is what distinguishes the strict
     # comparisons from the non-strict ones, and the wide gaps keep every other element's
     # verdict independent of rounding. See _comparison_stimuli_specs.
-    _skip_fp32_no_dest_acc(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     spec_A, spec_B = _comparison_stimuli_specs()
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B, **run_kwargs)
@@ -1170,7 +1155,7 @@ def test_eltwise_binary_sfpu_float_comparison(formats, dest_acc, mathop, **run_k
 def test_eltwise_binary_sfpu_isclose(formats, dest_acc, mathop, **run_kwargs):
     # isclose(a, b) = |a - b| <= atol + rtol*|b|, a = tile0, b = tile1. torch default
     # tolerances (fixed in the C++ dispatch); crafted stimuli give a non-constant 0/1 mix.
-    _skip_fp32_no_dest_acc(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     spec_A, spec_B = _isclose_stimuli_specs()
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B, **run_kwargs)
@@ -1181,7 +1166,7 @@ def test_eltwise_binary_sfpu_isclose_nan(formats, dest_acc, mathop):
     # Both-NaN, one-sided-NaN and mixed-sign-NaN pairs, which is where EQUAL_NAN changes the
     # answer; see _isclose_nan_stimuli_specs for the lane table. Only on pipelines that deliver
     # a NaN operand to the SFPU intact.
-    _skip_fp32_no_dest_acc(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
     if not specials_safe(formats.input_format, formats.output_format, dest_acc):
         pytest.skip("this pipeline does not deliver a NaN operand to the SFPU intact")
 
@@ -1212,7 +1197,7 @@ def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop, **run_kwargs)
     # step budget on Wormhole and by tolerance + PCC elsewhere; x swept over [-8, 3.9].
     # The x > 4 (-exp(-x)) branch needs a device-computed
     # exp(-x) operand the shared harness can't provide, left to a future driver.
-    _skip_fp32_no_dest_acc(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     sfpu_binary(
         formats,
@@ -1960,7 +1945,7 @@ def test_eltwise_binary_sfpu_edges(formats, dest_acc, mathop, edge_class):
     One variant per (op, class) rather than per op: see the comment above _EDGE_CLASSES for
     why a single tensor holding every pole cannot report which behaviour changed.
     """
-    _skip_fp32_no_dest_acc(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     # Cat B. Two independent gates, both must pass: BINARY_SPECIALS_READY_OPS says the golden
     # defines an answer for a non-finite operand, specials_safe() says the pipeline delivers one
@@ -2221,7 +2206,7 @@ def _run_sfpu_add_top_row(
 
 @parametrize(**ADD_TOP_ROW_SWEEP)
 def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop, **run_kwargs):
-    _skip_fp32_no_dest_acc(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     _run_sfpu_add_top_row(formats, dest_acc, mathop, **run_kwargs)
 
@@ -2396,7 +2381,7 @@ def test_eltwise_binary_sfpu_bcast(
     dest_acc,
     **run_kwargs,
 ):
-    _skip_fp32_no_dest_acc(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     # Mirror sfpu_binary(): on Blackhole, Float16/Float32 inputs require
     # dest_acc=Yes (32-bit dest), so silently upgrade the parametrized value.

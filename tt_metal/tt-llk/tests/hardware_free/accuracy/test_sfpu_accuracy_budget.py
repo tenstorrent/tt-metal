@@ -1199,16 +1199,16 @@ def _exact_driver_skip(driver, op, formats, dest_acc):
     """Why *driver* skips this variant, or ``None``: the drivers' own skip predicates,
     asked rather than re-typed, so an exclusion here can neither outlive nor outgrow the
     skip. A binary driver applies the Float32 one exactly when it calls
-    ``_skip_fp32_no_dest_acc``."""
+    ``skip_if_32bit_input_without_dest_acc``."""
     import inspect
 
-    import test_eltwise_binary_sfpu as binary
     import test_eltwise_unary_sfpu as unary
+    from helpers.constraints import skip_reason_32bit_input_without_dest_acc
 
     if driver is unary.test_eltwise_unary_sfpu_isinf_isnan:
         return unary.isinf_isnan_skip_reason(formats, op, dest_acc)
-    if "_skip_fp32_no_dest_acc(" in inspect.getsource(driver):
-        return binary.fp32_no_dest_acc_skip_reason(formats, dest_acc)
+    if "skip_if_32bit_input_without_dest_acc(" in inspect.getsource(driver):
+        return skip_reason_32bit_input_without_dest_acc(formats, dest_acc)
     return None
 
 
