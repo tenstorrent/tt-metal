@@ -18,8 +18,9 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/dataflow/value_block_multicast.hpp"
 
+// Reserve this value block's slice of `rows` tile rows and issue its reads; the caller completes and publishes them.
 template <uint32_t Vt, uint32_t VtFull, typename Accessor, typename DFB>
-FORCE_INLINE void read_and_publish_value_slice(
+FORCE_INLINE void stage_value_slice(
     const Accessor& accessor, DFB& buffer, Noc& noc, uint32_t row_base, uint32_t rows, uint32_t value_block) {
     buffer.reserve_back(rows * Vt);
     const uint32_t entry_size = buffer.get_entry_size();
@@ -35,6 +36,12 @@ FORCE_INLINE void read_and_publish_value_slice(
                 {.offset_bytes = (destination + value_tile) * entry_size});
         }
     }
+}
+
+template <uint32_t Vt, uint32_t VtFull, typename Accessor, typename DFB>
+FORCE_INLINE void read_and_publish_value_slice(
+    const Accessor& accessor, DFB& buffer, Noc& noc, uint32_t row_base, uint32_t rows, uint32_t value_block) {
+    stage_value_slice<Vt, VtFull>(accessor, buffer, noc, row_base, rows, value_block);
     noc.async_read_barrier();
     // push_back publishes this DFB to compute. Complete its reads first; delaying publication to coalesce across
     // buffers would prevent compute from overlapping the next buffer's NOC reads.
@@ -181,8 +188,12 @@ TT_KERNEL void reader(
                         value_block);
                 }
             }
-            read_and_publish_value_slice<Vt, Vt_full>(
-                v_beta_accessor, v_beta, noc, head_chunk * Ct * Vt_full, Ct, value_block);
+            // v_beta's reads complete with the shared inputs' reads when those are multicast, else on their own.
+            stage_value_slice<Vt, Vt_full>(v_beta_accessor, v_beta, noc, head_chunk * Ct * Vt_full, Ct, value_block);
+            if constexpr (!mcast_shared) {
+                noc.async_read_barrier();
+                v_beta.push_back(Ct * Vt);
+            }
             // Value-independent inputs, in the order compute consumes them.
             const auto for_each_shared_input = [&](auto&& input) {
                 input(kd_accessor, kd, head_chunk * chunk_key_tiles, chunk_key_tiles);
@@ -225,7 +236,10 @@ TT_KERNEL void reader(
                     kda::multicast_shared(noc, inputs, ready, valid, peer_x0, peer_y0, peer_x1, peer_y1, receivers);
                 } else {
                     kda::receive_shared(noc, inputs, ready, valid, peer_x0, peer_y0);
+                    noc.async_read_barrier();
                 }
+                // The sender's multicast waited for every read it issued, v_beta's included.
+                v_beta.push_back(Ct * Vt);
             }
         }
     };
