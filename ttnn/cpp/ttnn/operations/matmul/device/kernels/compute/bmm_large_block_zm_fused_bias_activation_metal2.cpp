@@ -93,6 +93,20 @@ constexpr bool bmm_unpack_auto_ttsync = !bmm_main_form && bmm_ttsync_cells && ge
                                         get_arg(args::out_subblock_h) <= 2 && !bmm_reload_every_block &&
                                         (get_arg(args::in0_block_num_tiles) > get_arg(args::in0_block_w) ||
                                          (get_arg(args::out_subblock_w) == 1 && get_arg(args::out_subblock_h) == 1));
+// 2: no other unpack call in the kernel (bias add, in0 transpose, untilize copy, partials reload), so the ttsync matmul rows
+// skip the context-count post and get that only feed another unpack call's context poll; half sync from four k steps, where
+// the shorter row read 0 cycles slower in the harness (Half kt 1 rows read up to 0.78 cycles slower and stay on 1)
+#if defined(FUSE_BIAS) || defined(IN0_TRANSPOSE_TILE)
+constexpr bool bmm_other_unpack = true;
+#else
+constexpr bool bmm_other_unpack = get_arg(args::untilize_out) != 0;
+#endif
+constexpr uint32_t bmm_unpack_ttsync_mode =
+    !bmm_unpack_auto_ttsync ? 0
+                            : ((DST_SYNC_MODE == DstSync::SyncHalf && get_arg(args::in0_block_w) >= 4 && !bmm_other_unpack &&
+                                !bmm_reload_every_block)
+                                   ? 2
+                                   : 1);
 #endif
 
 // This is the Metal 2.0 fork of bmm_large_block_zm_fused_bias_activation.cpp, which still sits
@@ -169,7 +183,7 @@ FORCE_INLINE void transpose_tile_block(In0TransposeDFB& in0_transpose_dfb, In0DF
 
 template <
     bool row_mop,
-    bool unpack_auto_ttsync,
+    uint32_t unpack_auto_ttsync,
     uint32_t kt_per_section,
     DataFormat out_format,
     typename MmPartialsDFB,
@@ -332,10 +346,10 @@ void kernel_main() {
         (row_mop_fidelity || out_subblock_w >= 6 || (out_subblock_num_tiles >= 8 && in0_block_w > 1)) &&
         (DST_ACCUM_MODE || (unpack_src_format[out_dfb_id] != (uint8_t)DataFormat::Float32 &&
                             unpack_src_format[mm_partials_dfb_id] != (uint8_t)DataFormat::Float32));
-    constexpr bool unpack_auto_ttsync = bmm_unpack_auto_ttsync;
+    constexpr uint32_t unpack_auto_ttsync = bmm_unpack_ttsync_mode;
 #else
     constexpr bool row_mop = false;
-    constexpr bool unpack_auto_ttsync = false;
+    constexpr uint32_t unpack_auto_ttsync = 0;
 #endif
     // Buffer view the cross-block reload copies through: the UnpackToDestFp32-marked alias of the
     // partials buffer when it is also read as an FPU operand (fused bias), otherwise the partials

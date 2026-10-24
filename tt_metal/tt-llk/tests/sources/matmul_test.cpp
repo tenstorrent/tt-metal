@@ -59,10 +59,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifdef ARCH_BLACKHOLE
-#ifdef MATMUL_UNPACK_TTSYNC
-    constexpr bool unpack_auto_ttsync = true;
+#ifdef MATMUL_UNPACK_TTSYNC_EXCL
+    constexpr std::uint32_t unpack_auto_ttsync = 2;
+#elif defined(MATMUL_UNPACK_TTSYNC)
+    constexpr std::uint32_t unpack_auto_ttsync = 1;
 #else
-    constexpr bool unpack_auto_ttsync = false;
+    constexpr std::uint32_t unpack_auto_ttsync = 0;
 #endif
     // the test chooses the 8-bit stream at compile time, as a kernel's compile-time formats do
 #ifdef MATMUL_STREAM_NARROW

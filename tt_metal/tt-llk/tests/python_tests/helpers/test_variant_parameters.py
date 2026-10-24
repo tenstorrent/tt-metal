@@ -217,6 +217,13 @@ class MATMUL_K_LOOP(TemplateParameter):
         return [MATMUL_K_LOOP()] if key else []
 
 
+class MATMUL_UNPACK_TTSYNC_EXCL(TemplateParameter):
+    """Blackhole matmul ttsync unpack of a kernel whose only unpack calls are ttsync matmul rows: no context-count post and get."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_UNPACK_TTSYNC_EXCL"
+
+
 @dataclass
 class MATMUL_IN1_ALT(TemplateParameter):
     """Blackhole matmul with in1 32x16 tiles whose body alternates the DEST row groups (in1_order 1)."""

@@ -38,6 +38,7 @@ from helpers.test_variant_parameters import (
     MATMUL_STREAM_NARROW,
     MATMUL_STREAM_Z,
     MATMUL_UNPACK_TTSYNC,
+    MATMUL_UNPACK_TTSYNC_EXCL,
     NUM_FACES,
     PERF_RUN_TYPE,
     THROTTLE_LEVEL,
@@ -105,6 +106,7 @@ def test_matmul(
     transpose=False,
     unpack_ttsync=False,
     dest_sync=DestSync.Half,
+    unpack_ttsync_excl=False,
 ):
     torch_format = format_dict[format_dest_acc_and_dims[0].output_format]
 
@@ -172,6 +174,7 @@ def test_matmul(
             THROTTLE_LEVEL(),
             *([MATMUL_ROW_MOP()] if row_mop else []),
             *([MATMUL_UNPACK_TTSYNC()] if unpack_ttsync else []),
+            *([MATMUL_UNPACK_TTSYNC_EXCL()] if unpack_ttsync_excl else []),
             *([] if unpack_ttsync else MATMUL_UNPACK_TTSYNC.for_block(formats, dest_acc, math_fidelity, matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim, dest_sync)),
             *MATMUL_STREAM_NARROW.for_block(
                 formats, dest_acc, dest_sync, matmul_dims.ct_dim, matmul_dims.rt_dim,
@@ -273,6 +276,23 @@ def test_matmul_unpack_ttsync(math_fidelity, format_dest_acc_and_dims, dest_sync
         format_dest_acc_and_dims,
         unpack_ttsync=True,
         dest_sync=dest_sync,
+    )
+
+
+@skip_for_wormhole
+@pytest.mark.nightly
+@parametrize(
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
+    format_dest_acc_and_dims=ROW_MOP_COMBINATIONS,
+    dest_sync=[DestSync.Half, DestSync.Full],
+)
+def test_matmul_unpack_ttsync_excl(math_fidelity, format_dest_acc_and_dims, dest_sync):
+    test_matmul(
+        math_fidelity,
+        format_dest_acc_and_dims,
+        unpack_ttsync=True,
+        dest_sync=dest_sync,
+        unpack_ttsync_excl=True,
     )
 
 

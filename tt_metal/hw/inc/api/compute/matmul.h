@@ -234,7 +234,7 @@ ALWI void matmul_tiles(
 // clang-format on
 template <
     bool row_mop = false,
-    bool unpack_auto_ttsync = false,
+    std::uint32_t unpack_auto_ttsync = false,
     std::uint32_t kt_per_section = 0,
     DataFormat out_format = DataFormat::Invalid,
     int in1_order = 0>
@@ -300,7 +300,7 @@ ALWI void matmul_block_init(
 // clang-format on
 template <
     bool row_mop = false,
-    bool unpack_auto_ttsync = false,
+    std::uint32_t unpack_auto_ttsync = false,
     std::uint32_t kt_per_section = 0,
     DataFormat out_format = DataFormat::Invalid,
     int in1_order = 0>
@@ -349,7 +349,7 @@ ALWI void matmul_block(
 // clang-format on
 template <
     bool row_mop = false,
-    bool unpack_auto_ttsync = false,
+    std::uint32_t unpack_auto_ttsync = false,
     std::uint32_t kt_per_section = 0,
     DataFormat out_format = DataFormat::Invalid,
     int in1_order = 0>
