@@ -17,6 +17,7 @@
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/link_health.hpp>
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/distributed_context.hpp>
@@ -69,17 +70,6 @@ UbbId get_ubb_id(tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id);
 
 class FabricContext;
 
-// This struct provides information for how a process binds to a particular
-// mesh and local mesh rank (MeshHostRankId rename - #24178) in the mesh graph
-// descriptor.
-struct LocalMeshBinding {
-    // Can bind multiple meshes to a single host. Most use-cases
-    // only require a 1:1 host to mesh mapping. At least one mesh_id
-    // is guaranteed to be present in this vector.
-    std::vector<MeshId> mesh_ids;
-    MeshHostRankId host_rank;
-};
-
 // In multi-host context, APIs parameterized with MeshScope, can return
 // results for local mesh or global mesh.
 enum class MeshScope {
@@ -111,12 +101,7 @@ public:
         const ::tt::llrt::RunTimeOptions& rtoptions,
         const ::tt::tt_metal::Hal& hal,
         const tt_metal::distributed::multihost::DistributedContext& distributed_context,
-        FabricConfig fabric_config = FabricConfig::DISABLED,
-        FabricReliabilityMode fabric_reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-        FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
-        FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED,
-        FabricRouterConfig fabric_router_config = FabricRouterConfig{},
-        FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT);
+        const tt_metal::ControlPlaneConfig& config = {});
 
     // Create control plane with custom mesh graph descriptor
     explicit ControlPlane(
@@ -125,12 +110,7 @@ public:
         const ::tt::tt_metal::Hal& hal,
         const tt_metal::distributed::multihost::DistributedContext& distributed_context,
         const std::string& mesh_graph_desc_file,
-        FabricConfig fabric_config = FabricConfig::DISABLED,
-        FabricReliabilityMode fabric_reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-        FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
-        FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED,
-        FabricRouterConfig fabric_router_config = FabricRouterConfig{},
-        FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT);
+        const tt_metal::ControlPlaneConfig& config = {});
 
     // Create control plane with custom mesh graph descriptor and logical mesh chip id to physical chip id mapping
     explicit ControlPlane(
@@ -140,12 +120,7 @@ public:
         const tt_metal::distributed::multihost::DistributedContext& distributed_context,
         const std::string& mesh_graph_desc_file,
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping,
-        FabricConfig fabric_config = FabricConfig::DISABLED,
-        FabricReliabilityMode fabric_reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-        FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
-        FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED,
-        FabricRouterConfig fabric_router_config = FabricRouterConfig{},
-        FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT);
+        const tt_metal::ControlPlaneConfig& config = {});
 
     ~ControlPlane();
 
@@ -324,12 +299,6 @@ public:
 
     void clear_fabric_context();
 
-    // Align the resolved fabric config with the env's current config (called on every config transition, e.g.
-    // teardown), then re-adopt an MGD-declared per-mesh config. Keeps the read-through get_fabric_config() in
-    // sync: an auto-discovered system follows the env exactly (back to DISABLED on teardown), while an MGD's
-    // explicit per-mesh fabric_config is preserved.
-    void sync_fabric_config(FabricConfig config);
-
     // Check if the provided chip and channel is a cross-host eth link
     bool is_cross_host_eth_link(ChipId chip_id, chan_id_t chan_id) const;
 
@@ -416,12 +385,12 @@ public:
         MeshId src_mesh_id, MeshId dst_mesh_id) const;
 
     // Getters
-    FabricConfig get_fabric_config() const { return fabric_config_; }
-    FabricReliabilityMode get_fabric_reliability_mode() const { return fabric_reliability_mode_; }
-    FabricTensixConfig get_fabric_tensix_config() const { return fabric_tensix_config_; }
-    FabricUDMMode get_fabric_udm_mode() const { return fabric_udm_mode_; }
-    FabricRouterConfig get_fabric_router_config() const { return fabric_router_config_; }
-    FabricManagerMode get_fabric_manager_mode() const { return fabric_manager_; }
+    FabricConfig get_fabric_config() const { return config_.fabric_config; }
+    FabricReliabilityMode get_fabric_reliability_mode() const { return config_.reliability_mode; }
+    FabricTensixConfig get_fabric_tensix_config() const { return config_.fabric_tensix_config; }
+    FabricUDMMode get_fabric_udm_mode() const { return config_.fabric_udm_mode; }
+    FabricRouterConfig get_fabric_router_config() const { return config_.router_config; }
+    FabricManagerMode get_fabric_manager_mode() const { return config_.fabric_manager; }
 
 private:
     // Check if the provided mesh is local to this host
@@ -434,9 +403,9 @@ private:
 
     void init_control_plane_auto_discovery();
 
-    // Gathers the FabricConfig of every rank and enforces one consistent FabricConfig per logical mesh
-    // and across all meshes connected by the mesh graph descriptor. Must run after the local mesh
-    // binding and distributed contexts are known, and before routing tables or FabricContext are built.
+    // Gathers the ControlPlaneConfig of every rank and enforces one FabricConfig per logical mesh and identical
+    // other settings on every rank (only fabric_config, mesh_id and host_rank may differ). Must run after the local
+    // mesh binding and distributed contexts are known, and before routing tables or FabricContext are built.
     void validate_fabric_config_compatibility();
 
     // Initialize fabric context if fabric is enabled
@@ -448,24 +417,14 @@ private:
     std::reference_wrapper<const ::tt::tt_metal::Hal> hal_;
     std::reference_wrapper<const tt_metal::distributed::multihost::DistributedContext> distributed_context_;
 
-    // Fabric Settings
-    tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
+    // Fabric settings. Strict system health mode (reliability_mode) requires (expects) all links/devices to be
+    // live: any downed devices/links result in an error. Otherwise the control plane is free to instantiate
+    // fewer routing planes according to which links are available.
+    tt_metal::ControlPlaneConfig config_;
 
     // FabricConfig that was agreed on by all ranks in validate_fabric_config_compatibility(). Fabric
     // initialization is only allowed to proceed with this value.
     std::optional<tt_fabric::FabricConfig> validated_fabric_config_;
-
-    // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
-    // is expected that any downed devices/links will result in some sort of error condition being
-    // reported. When set to false, the control plane is free to instantiate fewer routing planes
-    // according to which links are available.
-    tt_fabric::FabricReliabilityMode fabric_reliability_mode_ =
-        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
-
-    tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
-    tt_fabric::FabricUDMMode fabric_udm_mode_ = tt_fabric::FabricUDMMode::DISABLED;
-    tt_fabric::FabricRouterConfig fabric_router_config_ = tt_fabric::FabricRouterConfig{};
-    tt_fabric::FabricManagerMode fabric_manager_ = tt_fabric::FabricManagerMode::DEFAULT;
 
     // Coordinate along that ring's axis of the neighbor reached by `direction`.
     std::optional<int> ring_coord_of_neighbor(
@@ -643,14 +602,8 @@ private:
     void assign_direction_to_fabric_eth_core(
         const FabricNodeId& fabric_node_id, const tt::tt_metal::CoreCoord& eth_core, RoutingDirection direction);
 
-    // Initialize the local mesh binding from the environment variables
-    // Returns std::nullopt if not in multi-host context
-    LocalMeshBinding initialize_local_mesh_binding();
-
-    // Per-rank model: each rank owns one mesh, so build fabric for that mesh's resolved config rather than the
-    // raw process-wide override. Adopts it into fabric_config_ once the local mesh binding is known. No-op when
-    // the rank owns multiple meshes or the MGD declares no explicit per-mesh config.
-    void adopt_local_mesh_fabric_config();
+    // Check that config_.mesh_id / config_.host_rank exist in the mesh graph descriptor.
+    void validate_local_mesh_binding() const;
 
     // Top level function responsible for generating intermesh connectivity
     // based on the MGD and Physical State of the system.
@@ -719,7 +672,6 @@ private:
     void validate_requested_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections) const;
 
     std::unique_ptr<FabricContext> fabric_context_;
-    LocalMeshBinding local_mesh_binding_;
 
     // Distributed contexts for each multi-host mesh, that this host is part of - this is typically a single mesh.
     std::unordered_map<MeshId, std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>>

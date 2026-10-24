@@ -2618,9 +2618,9 @@ TEST(MeshGraphDescriptorTests, PlainFabric2DDowngradesExpressMgdToMesh) {
 }
 
 namespace {
-// Write an inline MGD, build a MeshGraph (optionally with a process-wide override), and return the
-// resolved FabricConfig for mesh `mesh_id` -- or nullopt if construction was rejected (an incompatible
-// config-vs-topology request, or the 1D-multi-mesh guard).
+// Write an inline MGD, build a MeshGraph (optionally with a process-wide override), and return the config
+// mesh `mesh_id` runs -- the override, else the mesh's dim_types default -- or nullopt if construction was
+// rejected (an incompatible config-vs-topology request, or the 1D-multi-mesh guard).
 std::optional<tt::tt_fabric::FabricConfig> resolve_mesh_fabric_config(
     const std::string& text_proto,
     tt::tt_metal::ClusterType cluster,
@@ -2634,7 +2634,8 @@ std::optional<tt::tt_fabric::FabricConfig> resolve_mesh_fabric_config(
     std::optional<tt::tt_fabric::FabricConfig> resolved;
     try {
         tt::tt_fabric::MeshGraph mesh_graph(cluster, path.string(), process_wide_override);
-        resolved = mesh_graph.get_fabric_config(MeshId{mesh_id});
+        resolved = process_wide_override.value_or(
+            mesh_graph.get_mesh_graph_descriptor().default_fabric_config_from_dim_types(MeshId{mesh_id}));
     } catch (const std::exception&) {
         // A rejected config (config-vs-topology or the 1D-multi-mesh guard) is the expected negative outcome;
         // report it as nullopt.
@@ -2646,68 +2647,60 @@ std::optional<tt::tt_fabric::FabricConfig> resolve_mesh_fabric_config(
 }  // namespace
 
 // Single-mesh resolution rules (T3K so an explicit 1D config maps to MESH, not a torus). See the per-case
-// inline comments below; the config-vs-topology check runs after resolution and rejects an incompatible torus.
+// inline comments below; the config-vs-topology check rejects an incompatible torus override.
 TEST(MeshGraphDescriptorTests, FabricConfigResolutionSingleMesh) {
     using FabricConfig = tt::tt_fabric::FabricConfig;
-    const auto mgd = [](const std::string& dim_types, const std::string& field) {
+    const auto mgd = [](const std::string& dim_types) {
         return "mesh_descriptors { name: \"M\" arch: WORMHOLE_B0 device_topology { dims: [ 1, 8 ] dim_types: [ " +
-               dim_types + " ] } host_topology { dims: [ 1, 1 ] } channels { count: 1 } " + field +
-               " } graph_descriptors { name: \"G0\" type: \"FABRIC\" "
+               dim_types +
+               " ] } host_topology { dims: [ 1, 1 ] } channels { count: 1 } "
+               "} graph_descriptors { name: \"G0\" type: \"FABRIC\" "
                "instances { mesh { mesh_descriptor: \"M\" mesh_id: 0 } } } "
                "top_level_instance { graph { graph_descriptor: \"G0\" graph_id: 0 } }";
     };
-    const auto cfg = [&](const std::string& dt, const std::string& field, std::optional<FabricConfig> ov) {
-        return resolve_mesh_fabric_config(mgd(dt, field), tt::tt_metal::ClusterType::T3K, ov);
+    const auto cfg = [&](const std::string& dt, std::optional<FabricConfig> ov) {
+        return resolve_mesh_fabric_config(mgd(dt), tt::tt_metal::ClusterType::T3K, ov);
     };
 
     // Auto-derive is always 2D, never 1D -- even for a 1-row mesh.
-    EXPECT_EQ(cfg("LINE, LINE", "", std::nullopt), FabricConfig::FABRIC_2D);
-    EXPECT_EQ(cfg("LINE, RING", "", std::nullopt), FabricConfig::FABRIC_2D_TORUS_X);
-    // An explicit override can request anything (incl. 1D); the MGD field wins over a code override.
-    EXPECT_EQ(cfg("LINE, LINE", "", FabricConfig::FABRIC_1D), FabricConfig::FABRIC_1D);
-    EXPECT_EQ(cfg("LINE, RING", "fabric_config: FABRIC_1D", FabricConfig::FABRIC_1D_RING), FabricConfig::FABRIC_1D);
-    // An incompatible torus is rejected after resolution from either source; a compatible config is kept.
-    EXPECT_EQ(cfg("LINE, LINE", "", FabricConfig::FABRIC_2D_TORUS_X), std::nullopt);
-    EXPECT_EQ(cfg("LINE, LINE", "fabric_config: FABRIC_2D_TORUS_X", std::nullopt), std::nullopt);
-    EXPECT_EQ(cfg("LINE, LINE", "", FabricConfig::FABRIC_2D), FabricConfig::FABRIC_2D);
+    EXPECT_EQ(cfg("LINE, LINE", std::nullopt), FabricConfig::FABRIC_2D);
+    EXPECT_EQ(cfg("LINE, RING", std::nullopt), FabricConfig::FABRIC_2D_TORUS_X);
+    // An explicit override can request anything (incl. 1D) the topology provides.
+    EXPECT_EQ(cfg("LINE, LINE", FabricConfig::FABRIC_1D), FabricConfig::FABRIC_1D);
+    EXPECT_EQ(cfg("LINE, LINE", FabricConfig::FABRIC_2D), FabricConfig::FABRIC_2D);
+    // An incompatible torus override is rejected.
+    EXPECT_EQ(cfg("LINE, LINE", FabricConfig::FABRIC_2D_TORUS_X), std::nullopt);
 }
 
-// Multi-mesh resolution: a two-mesh line MGD (4x8 RING,LINE + 4x2 LINE,LINE). Each mesh resolves its own
-// config; the declared field wins over a process-wide override; and an explicit 1D config is rejected here
-// (contrast the single-mesh test, where explicit 1D is kept). See the per-case inline comments below.
+// Multi-mesh resolution: a two-mesh line MGD (4x8 RING,LINE + 4x2 LINE,LINE). Without an override each mesh
+// derives its own config from dim_types; an override applies to every mesh; and an explicit 1D config is
+// rejected here (contrast the single-mesh test, where explicit 1D is kept). See the per-case inline comments.
 TEST(MeshGraphDescriptorTests, FabricConfigResolutionMultiMesh) {
     using FabricConfig = tt::tt_fabric::FabricConfig;
-    const auto mgd = [](const std::string& ring_field, const std::string& line_field) {
-        return "mesh_descriptors { name: \"R\" arch: BLACKHOLE device_topology { dims: [ 4, 8 ] "
-               "dim_types: [ RING, LINE ] } host_topology { dims: [ 4, 4 ] } channels { count: 2 policy: RELAXED } " +
-               ring_field +
-               " } mesh_descriptors { name: \"L\" arch: BLACKHOLE device_topology { dims: [ 4, 2 ] "
-               "dim_types: [ LINE, LINE ] } host_topology { dims: [ 1, 1 ] } channels { count: 2 policy: RELAXED } " +
-               line_field +
-               " } graph_descriptors { name: \"G0\" type: \"FABRIC\" "
-               "instances { mesh { mesh_descriptor: \"R\" mesh_id: 0 } } "
-               "instances { mesh { mesh_descriptor: \"L\" mesh_id: 1 } } "
-               "connections { nodes { mesh { mesh_descriptor: \"R\" mesh_id: 0 } } "
-               "nodes { mesh { mesh_descriptor: \"L\" mesh_id: 1 } } channels { count: 4 policy: RELAXED } } } "
-               "top_level_instance { graph { graph_descriptor: \"G0\" graph_id: 0 } }";
+    const std::string mgd =
+        "mesh_descriptors { name: \"R\" arch: BLACKHOLE device_topology { dims: [ 4, 8 ] "
+        "dim_types: [ RING, LINE ] } host_topology { dims: [ 4, 4 ] } channels { count: 2 policy: RELAXED } "
+        "} mesh_descriptors { name: \"L\" arch: BLACKHOLE device_topology { dims: [ 4, 2 ] "
+        "dim_types: [ LINE, LINE ] } host_topology { dims: [ 1, 1 ] } channels { count: 2 policy: RELAXED } "
+        "} graph_descriptors { name: \"G0\" type: \"FABRIC\" "
+        "instances { mesh { mesh_descriptor: \"R\" mesh_id: 0 } } "
+        "instances { mesh { mesh_descriptor: \"L\" mesh_id: 1 } } "
+        "connections { nodes { mesh { mesh_descriptor: \"R\" mesh_id: 0 } } "
+        "nodes { mesh { mesh_descriptor: \"L\" mesh_id: 1 } } channels { count: 4 policy: RELAXED } } } "
+        "top_level_instance { graph { graph_descriptor: \"G0\" graph_id: 0 } }";
+    const auto cfg = [&](std::optional<FabricConfig> ov, uint32_t mesh) {
+        return resolve_mesh_fabric_config(mgd, tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, ov, mesh);
     };
-    const auto cfg = [&](const std::string& rf, const std::string& lf, std::optional<FabricConfig> ov, uint32_t mesh) {
-        return resolve_mesh_fabric_config(mgd(rf, lf), tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, ov, mesh);
-    };
-    const std::string torus_y = "fabric_config: FABRIC_2D_TORUS_Y";
-    const std::string two_d = "fabric_config: FABRIC_2D";
 
-    // Declared per-mesh different configs, and per-mesh derived defaults, both build cleanly.
-    EXPECT_EQ(cfg(torus_y, two_d, std::nullopt, 0), FabricConfig::FABRIC_2D_TORUS_Y);
-    EXPECT_EQ(cfg(torus_y, two_d, std::nullopt, 1), FabricConfig::FABRIC_2D);
-    EXPECT_EQ(cfg("", "", std::nullopt, 0), FabricConfig::FABRIC_2D_TORUS_Y);
-    EXPECT_EQ(cfg("", "", std::nullopt, 1), FabricConfig::FABRIC_2D);
-    // The declared field wins over a conflicting process-wide override.
-    EXPECT_EQ(cfg(torus_y, "", FabricConfig::FABRIC_2D, 0), FabricConfig::FABRIC_2D_TORUS_Y);
+    // Per-mesh derived defaults differ and build cleanly.
+    EXPECT_EQ(cfg(std::nullopt, 0), FabricConfig::FABRIC_2D_TORUS_Y);
+    EXPECT_EQ(cfg(std::nullopt, 1), FabricConfig::FABRIC_2D);
+    // A FABRIC_2D override restricts the torus mesh to plain mesh.
+    EXPECT_EQ(cfg(FabricConfig::FABRIC_2D, 0), FabricConfig::FABRIC_2D);
     // A global TORUS_Y override is rejected on the LINE,LINE mesh (provides only MESH).
-    EXPECT_EQ(cfg("", "", FabricConfig::FABRIC_2D_TORUS_Y, 1), std::nullopt);
+    EXPECT_EQ(cfg(FabricConfig::FABRIC_2D_TORUS_Y, 1), std::nullopt);
     // An explicit 1D config is single-mesh only: rejected on this 2-mesh MGD.
-    EXPECT_EQ(cfg("", "", FabricConfig::FABRIC_1D, 0), std::nullopt);
+    EXPECT_EQ(cfg(FabricConfig::FABRIC_1D, 0), std::nullopt);
 }
 
 // express_links (two ROW patterns) expand into 48 Z edges on the 32x4 [RING, RING] descriptor.

@@ -52,8 +52,8 @@ public:
 
     // Requested fabric configuration (configure_fabric). Distinct from get_fabric_config(), which is the runtime
     // value and may differ after the dispatch fallback enables fabric.
-    const FabricConfigDescriptor& get_fabric_config_descriptor() const { return fabric_desc_; }
-    void configure_fabric(const FabricConfigDescriptor& fabric);
+    const ControlPlaneConfig& get_fabric_config_descriptor() const { return fabric_desc_; }
+    void configure_fabric(const ControlPlaneConfig& fabric);
 
     bool check_use_count_zero() const;
 
@@ -156,17 +156,9 @@ private:
     std::optional<int> registered_context_id_ = std::nullopt;
 
     // --- Fabric config state ---
-    // What configure_fabric was asked for. fabric_config_ below is the runtime value.
-    FabricConfigDescriptor fabric_desc_ = {};
-
-    tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
-    tt_fabric::FabricReliabilityMode fabric_reliability_mode_ =
-        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
-    tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
-    tt_fabric::FabricUDMMode fabric_udm_mode_ = tt_fabric::FabricUDMMode::DISABLED;
-    tt_fabric::FabricManagerMode fabric_manager_ = tt_fabric::FabricManagerMode::DEFAULT;
-    tt_fabric::FabricRouterConfig fabric_router_config_ = tt_fabric::FabricRouterConfig{};
-    uint8_t num_fabric_active_routing_planes_ = 0;
+    // The current fabric configuration: set by configure_fabric, and updated by set_fabric_config, the dispatch
+    // fallback and teardown.
+    ControlPlaneConfig fabric_desc_ = {};
     std::map<tt_fabric::FabricNodeId, ChipId> logical_mesh_chip_id_to_physical_chip_id_mapping_;
     std::optional<std::string> custom_mesh_graph_desc_path_ = std::nullopt;
 
