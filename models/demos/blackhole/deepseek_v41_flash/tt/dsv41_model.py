@@ -2329,6 +2329,7 @@ class Model:
                     snap = PC.snapshot_finish(self, PC.snapshot_begin(self, b, s_, toks))
                 else:
                     snap = PC.snapshot_user(self, b, s_, toks)
+                PC.restore_users(self, snap, [b])
                 del snap
         except PC.ApcUnsupported as e:
             self.log(f"APC warm-up skipped: {e}")
