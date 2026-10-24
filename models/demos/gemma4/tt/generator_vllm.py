@@ -2169,6 +2169,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         return full_page_tables, kwargs
 
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        t_entry = time.perf_counter()
+        for m in self.model:
+            m._g4_pf_ms = {}  # host phases of this call (install / trace / lm_head / readback), see the perf line
         self._g4_alloc_dump("prefill_")
         self._g4_alloc_check_pending = True
         tokens = kwargs.get("tokens")
@@ -2439,7 +2442,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 args0.disable_batched_prefill = prev_disable
             for m in self.model:
                 m._g4_batched_prefill_consumption = False
+            t_clear = time.perf_counter()
             self._clear_sequential_batch_page_tables()
+            clear_ms = (time.perf_counter() - t_clear) * 1000.0
 
         # Device work is synchronous after the TT forward returns — same
         # wall clock the metal demo attributes to ``inference_prefill`` / TTFT.
@@ -2450,7 +2455,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         logger.info(
             "[gemma4-vllm-perf] prefill TTFT={:.1f} ms | prefill_tok/s={:.2f} | "
             "seq_len={} | max_prefill_chunk_size={} | bounded_sliding={} | batch={} | multimodal_users={} | "
-            "mm_stage_ms={:.1f}",
+            "mm_stage_ms={:.1f} | phases: {}",
             ttft_ms,
             prefill_tok_s,
             seq_len,
@@ -2459,11 +2464,27 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             batch_size,
             mm_users,
             mm_stage_ms,
+            self._g4_prefill_phases(t_entry, t0, clear_ms),
         )
         # Reset decode accumulators at the start of each new generate.
         self._perf_decode_tokens = 0
         self._perf_decode_s = 0.0
         return out
+
+    def _g4_prefill_phases(self, t_entry, t0, clear_ms):
+        """Host phases of one ``prefill_forward`` call for the perf line (ms): the prelude before the TT forward
+        (page-table build, mask, pad, install), the per-layer page-table installs (ms and count over the call), the
+        traced calls (input staging + replay + its sync), the deferred lm_head, the logits readback and the
+        sequential-table clear. Plain host clocks around the existing calls: no device sync is added."""
+        acc = {}
+        for m in self.model:
+            for k, v in (getattr(m, "_g4_pf_ms", None) or {}).items():
+                acc[k] = acc.get(k, 0.0) + float(v)
+        return (
+            f"prelude={(t0 - t_entry) * 1000.0:.1f} install={acc.get('install', 0.0):.1f}x{int(round(acc.get('install_n', 0.0)))} "
+            f"trace={acc.get('trace', 0.0):.1f} lm_head={acc.get('lm_head', 0.0):.1f} readback={acc.get('readback', 0.0):.1f} "
+            f"clear={clear_ms:.1f} ms"
+        )
 
     @staticmethod
     def _slice_page_tables_rows(page_tables_per_layer, rows):
@@ -2898,6 +2919,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             return page_tables_per_layer
         max_b = int(self.model_args[0].max_batch_size)
         out = []
+        padded_by_id = {}  # layers of one kv-cache group share the host table: pad it once, keep it shared
         for pt in page_tables_per_layer:
             if pt is None or not isinstance(pt, torch.Tensor):
                 out.append(pt)
@@ -2906,8 +2928,11 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             if int(pt2.shape[0]) >= max_b:
                 out.append(pt2)
                 continue
-            padded = torch.zeros((max_b, int(pt2.shape[1])), dtype=torch.int32)
-            padded[: pt2.shape[0], :] = pt2.to(dtype=torch.int32)
+            padded = padded_by_id.get(id(pt))
+            if padded is None:
+                padded = torch.zeros((max_b, int(pt2.shape[1])), dtype=torch.int32)
+                padded[: pt2.shape[0], :] = pt2.to(dtype=torch.int32)
+                padded_by_id[id(pt)] = padded
             out.append(padded)
         return out
 

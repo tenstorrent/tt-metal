@@ -16,6 +16,7 @@ Compatible with tt_transformers Generator interface.
 """
 
 import os
+import time
 
 import torch
 from loguru import logger
@@ -1886,6 +1887,14 @@ class Gemma4Model:
         # a second layer with different content means the sharing no longer
         # holds, so the batch key's buffers are rebuilt unshared.
         written: dict = {}
+        # The layers of one kv-cache group are handed the same host tensor: pad it,
+        # compare it with the last upload and snapshot it once per distinct
+        # (table, device shape), not once per layer (the lane-sharded layout is
+        # per layer and keeps the per-layer work).
+        lane_layout = self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False)
+        padded_cache: dict = {}
+        equal_cache: dict = {}
+        clone_cache: dict = {}
         for i, pt in enumerate(page_tables_per_layer):
             if pt is None or persistent[i] is None or isinstance(pt, ttnn.Tensor):
                 continue
@@ -1897,22 +1906,35 @@ class Gemma4Model:
                 target_b = int(pt_host.shape[0])
                 target_w = int(pt_host.shape[-1])
             lane_pt_mapper = None
-            if self.mesh_config is not None and getattr(self.mesh_config, "lane_sharded", False):
+            key = (id(pt), target_b, target_w)
+            if lane_layout:
                 # Rebuild the sharded host layout (owner stack / frame pad) so
                 # the H2D copy matches the lane-sharded persistent tensor.
                 pt_padded, lane_pt_mapper = self._page_table_host_layout(pt_host, target_w, layer_idx=i)
             else:
-                pt_padded = self._pad_page_table_host_to_shape(pt_host, target_b, target_w)
-            if (
-                not force
-                and last_hosts is not None
-                and i < len(last_hosts)
-                and last_hosts[i] is not None
-                and torch.equal(last_hosts[i], pt_padded)
-            ):
-                new_last[i] = last_hosts[i]
-                continue
-            new_last[i] = pt_padded.detach().clone() if pt_padded is not None else None
+                pt_padded = padded_cache.get(key)
+                if pt_padded is None:
+                    pt_padded = self._pad_page_table_host_to_shape(pt_host, target_b, target_w)
+                    padded_cache[key] = pt_padded
+            if not force and last_hosts is not None and i < len(last_hosts) and last_hosts[i] is not None:
+                eq_key = (key, id(last_hosts[i])) if not lane_layout else None
+                unchanged = equal_cache.get(eq_key) if eq_key is not None else None
+                if unchanged is None:
+                    unchanged = torch.equal(last_hosts[i], pt_padded)
+                    if eq_key is not None:
+                        equal_cache[eq_key] = unchanged
+                if unchanged:
+                    new_last[i] = last_hosts[i]
+                    continue
+            if pt_padded is None:
+                new_last[i] = None
+            elif lane_layout:
+                new_last[i] = pt_padded.detach().clone()
+            else:
+                snapshot = clone_cache.get(key)
+                if snapshot is None:
+                    snapshot = clone_cache[key] = pt_padded.detach().clone()
+                new_last[i] = snapshot
             prev = written.get(id(persistent[i]))
             if prev is not None:
                 if torch.equal(prev, pt_padded):
@@ -1930,7 +1952,6 @@ class Gemma4Model:
                 return self.update_persistent_per_layer_page_tables(page_tables_per_layer, force=force)
             written[id(persistent[i])] = pt_padded
             # Cache key includes target shape so B=1 and B=32 pads don't collide.
-            key = (id(pt), target_b, target_w)
             host_pt = host_cache.get(key)
             if host_pt is None:
                 host_pt = ttnn.from_torch(
@@ -2312,21 +2333,40 @@ class Gemma4Model:
             for lt, m in host_masks.items()
         }
 
+    def _g4_pf_add(self, key: str, seconds: float) -> None:
+        """Accumulate a prefill phase's host wall (ms) for the vLLM bridge's ``[gemma4-vllm-perf]`` line."""
+        d = self.__dict__.get("_g4_pf_ms")
+        if d is None:
+            d = self._g4_pf_ms = {}
+        d[key] = d.get(key, 0.0) + seconds * 1000.0
+
     def process_output_prefill(self, tt_out, last_token_idx):
         """Read prefill logits to host and slice to the last token's vocab row.
 
         Under TP, Gemma4 all-gathers logits inside the model so a single
         device tensor already holds the full vocab. Under lanes only the owner lane's
         column prefilled against the real page tables, so read that lane's chip.
+        A one-row host tensor is the last token's row already (the mixin's
+        ``_append_prefill_result`` sliced it on one device before the readback).
         """
-        if self._lane_sharded:
-            owner = int(getattr(self, "_g4_active_owner_lane", 0) or 0) % self.mesh_config.lanes
-            torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[self.lane_device_indices()[owner]])
-        elif self.mesh_config is not None and self.mesh_config.tp > 1:
-            torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
-        else:
-            torch_output = ttnn.to_torch(tt_out)
-        return torch_output[..., last_token_idx, : self.vocab_size]
+        t0 = time.perf_counter()
+        try:
+            if int(tt_out.shape[-2]) == 1:
+                try:
+                    first = ttnn.get_device_tensors(tt_out)[0]
+                except Exception:  # noqa: BLE001 - a single-shard host tensor
+                    first = tt_out
+                return ttnn.to_torch(first)[..., 0, : self.vocab_size]
+            if self._lane_sharded:
+                owner = int(getattr(self, "_g4_active_owner_lane", 0) or 0) % self.mesh_config.lanes
+                torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[self.lane_device_indices()[owner]])
+            elif self.mesh_config is not None and self.mesh_config.tp > 1:
+                torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+            else:
+                torch_output = ttnn.to_torch(tt_out)
+            return torch_output[..., last_token_idx, : self.vocab_size]
+        finally:
+            self._g4_pf_add("readback", time.perf_counter() - t0)
 
     def _g4_retire_scavenge(self):
         """Free device tensors this model handed to the shared consumption.
@@ -2359,6 +2399,14 @@ class Gemma4Model:
         lst.append(t)
 
     def process_logits_after_prefill_trace(self, hidden_states, last_token_idx):
+        """Deferred lm_head for traced prefill (timed; see :meth:`_process_logits_after_prefill_trace`)."""
+        t0 = time.perf_counter()
+        try:
+            return self._process_logits_after_prefill_trace(hidden_states, last_token_idx)
+        finally:
+            self._g4_pf_add("lm_head", time.perf_counter() - t0)
+
+    def _process_logits_after_prefill_trace(self, hidden_states, last_token_idx):
         """Deferred lm_head for traced prefill.
 
         The trace returns post-norm hidden states ``[1,1,seq,hidden]`` when

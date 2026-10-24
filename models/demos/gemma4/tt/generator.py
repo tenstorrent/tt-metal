@@ -671,9 +671,13 @@ class ChunkedPrefillPageTableGuardMixin:
                 )
             m._sequential_row_cursor = row + 1
             sliced = []
+            sliced_by_id = {}  # layers of one kv-cache group share the host table: one slice object per group
             for p in batch_host:
                 if isinstance(p, torch.Tensor) and p.dim() > 1 and int(p.shape[0]) > 1:
-                    sliced.append(p[row : row + 1])
+                    view = sliced_by_id.get(id(p))
+                    if view is None:
+                        view = sliced_by_id[id(p)] = p[row : row + 1]
+                    sliced.append(view)
                 else:
                     sliced.append(p)
             m._active_page_tables_per_layer = sliced
@@ -724,7 +728,12 @@ class ChunkedPrefillPageTableGuardMixin:
             model._g4_page_table_writer_by_rows = writers
         last_writer = writers.get(rows) if rows is not None else None
         force = writer == "prefill" and last_writer != "prefill"
+        t0 = time.perf_counter()
         model.update_persistent_per_layer_page_tables(page_tables_per_layer, force=force)
+        add = getattr(model, "_g4_pf_add", None)
+        if add is not None:
+            add("install", time.perf_counter() - t0)
+            add("install_n", 0.001)  # counted in the same ms accumulator: 1 per install
         if rows is None:
             return
         writers[rows] = writer
@@ -1056,6 +1065,15 @@ class ChunkedPrefillPageTableGuardMixin:
         for m in self.model:
             m._prefill_trace_mode = True
             m._sequential_row_active = True  # the capture below re-enters the eager path for this user
+        # The row of the 32-row last-token tile this user's logits land on (the shared loop reads
+        # ``(last_token_idx - num_cached_tokens) % 32``); ``_append_prefill_result`` slices it on device.
+        last_idx = kwargs.get("last_token_idx")
+        self._g4_pf_row = (
+            (int(last_idx), (int(last_idx) - int(kwargs.get("num_cached_tokens", 0) or 0)) % 32)
+            if last_idx is not None
+            else None
+        )
+        t0 = time.perf_counter()
         try:
             if force_chunk_pt:
                 return self._easy_trace_prefill_with_chunk_page_table(*args, **kwargs)
@@ -1064,6 +1082,50 @@ class ChunkedPrefillPageTableGuardMixin:
             for m in self.model:
                 m._prefill_trace_mode = False
                 m._sequential_row_active = False
+                add = getattr(m, "_g4_pf_add", None)
+                if add is not None:
+                    add("trace", time.perf_counter() - t0)
+                    break
+
+    def _append_prefill_result(self, prefill_results, idx, model_id, last_token_idx, tail_out, sampling_enabled):
+        """Queue one row of the logits for readback instead of the whole 32-row tile from every device.
+
+        The shared loop reads the untilized ``[1, 1, 32, vocab]`` tile back from every TP device (4 x 16.8 MB for
+        the 262k vocab) and keeps one row of one device. After a traced single-user prefill the row is known
+        (``_easy_trace_prefill``), so slice it on device and read one 512 KB row per device; the model's
+        ``process_output_prefill`` takes the one-row host tensor as it is. The eager, sampling, lane-sharded and
+        hidden-states paths keep the shared readback. GEMMA4_PREFILL_ROW_READBACK=0 restores it everywhere.
+        """
+        pair = getattr(self, "_g4_pf_row", None)
+        self._g4_pf_row = None
+        # the row belongs to the traced call that recorded it: the same user (its absolute last-token index)
+        row = pair[1] if pair is not None and pair[0] == int(last_token_idx) else None
+        model = self.model[model_id]
+        if (
+            sampling_enabled
+            or row is None
+            or not isinstance(tail_out, ttnn.Tensor)
+            or getattr(model, "_lane_sharded", False)
+            or os.environ.get("GEMMA4_PREFILL_ROW_READBACK", "1") == "0"
+            or len(tail_out.shape) != 4
+            or int(tail_out.shape[-2]) <= row
+            or tail_out.layout != ttnn.ROW_MAJOR_LAYOUT
+        ):
+            return super()._append_prefill_result(
+                prefill_results, idx, model_id, last_token_idx, tail_out, sampling_enabled
+            )
+        vocab = int(tail_out.shape[-1])
+        row_tensor = ttnn.slice(tail_out, [0, 0, row, 0], [1, 1, row + 1, vocab])
+        queued = row_tensor.cpu(blocking=False)  # one row per device; the consumer reads the first shard
+        prefill_results.append(
+            {
+                "idx": idx,
+                "model_id": model_id,
+                "last_token_idx": last_token_idx,
+                "logits": queued,
+                "sampling": sampling_enabled,
+            }
+        )
 
     def _easy_trace_prefill_with_chunk_page_table(
         self,
