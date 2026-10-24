@@ -81,6 +81,7 @@ def test_v41_decode_capacity(mesh_device, device_params):
     users = int(os.environ.get("V41_CAP_USERS", 4))
     base = int(os.environ.get("V41_CAP_PROMPT", 255))
     warmup = int(os.environ.get("V41_CAP_WARMUP", 2))
+    margin = int(os.environ.get("V41_CAP_MARGIN", 64))  # the users start this far below the capacity: steps + slots
     fill = os.environ.get("V41_CAP_FILL", "1") == "1"
     graph = os.environ.get("V41_CAP_GRAPH", "0") == "1"
     graph_mb = int(os.environ.get("V41_CAP_GRAPH_MB", 64))
@@ -176,7 +177,7 @@ def test_v41_decode_capacity(mesh_device, device_params):
     positions = {}
     for s in range(n_slots):
         # near the capacity, both parities, distinct; the step writes at position // ratio and must stay below cap
-        positions[s] = cap - 64 - s
+        positions[s] = cap - margin - s
         decoder.slots[s].position = positions[s]
     result["positions"] = {str(s): positions[s] for s in (0, n_slots - 1)}
     result["dram_after_fill_bytes"] = _dram_bytes(mesh_device)
