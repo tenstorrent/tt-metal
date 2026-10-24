@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import gc
+
 import pytest
 
 from .test_factory import skip_if_config_only_checkpoint
@@ -39,6 +41,21 @@ def pytest_runtest_setup(item):
     """Skip PR integration tests when CI uses config-only HF_MODEL (no weights/tokenizer)."""
     if _MARKERS_REQUIRING_REAL_CHECKPOINT.intersection(m.name for m in item.iter_markers()):
         skip_if_config_only_checkpoint()
+
+
+_DEVICE_FIXTURES = ("device", "mesh_device", "bh_2d_mesh_device")
+
+
+@pytest.fixture(autouse=True)
+def ensure_gc(request):
+    """models/conftest.py runs gc.collect() before every test (autouse ``ensure_gc``) so device buffers and handles
+    from the previous test are released. Over the heap this package carries (ttnn + the model modules) that collect
+    costs ~0.16 s per test on a dev box and ~0.45 s on the CI N150 VM, which for the ~700 host cases of a whole-dir
+    unit run is 3-5 minutes of pure overhead (run 40103786590: the wh_n150 E2B unit leg past its 10-min step). This
+    override, the closest definition for everything under gemma4/tests, keeps the collect for tests that hold a
+    device and skips it for host tests, which allocate nothing a collect would free on a device."""
+    if any(name in request.fixturenames for name in _DEVICE_FIXTURES):
+        gc.collect()
 
 
 @pytest.fixture(autouse=True)
