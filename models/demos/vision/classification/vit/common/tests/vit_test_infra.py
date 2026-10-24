@@ -60,6 +60,7 @@ class VitTestInfra:
         image_processor = AutoImageProcessor.from_pretrained(model_name)
 
         self.parameters = preprocess_model_parameters(
+            model_name=model_name,
             initialize_model=lambda: model,
             device=device,
             custom_preprocessor=ttnn_optimized_sharded_vit.custom_preprocessor,
