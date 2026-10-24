@@ -69,13 +69,14 @@ _OP = {0: ("add", lambda x, y: x + y), 1: ("sub", lambda x, y: x - y), 2: ("mul"
 
 @pytest.mark.parametrize(
     "reuse,op",
-    [(0, 0), (0, 1), (1, 1), (0, 2)],
-    ids=["add-SRCA", "sub-SRCA", "sub-SRCB", "mul-SRCA"],
+    [(0, 0), (0, 1), (1, 1), (0, 2), (1, 2)],
+    ids=["add-SRCA", "sub-SRCA", "sub-SRCB", "mul-SRCA", "mul-SRCB"],
 )
 def test_dest_reuse_matrix(device, reuse, op):
     """DestReuseBinary reuse-direction x op. Stage1 D0=A+B; stage2 routes DEST per ReuseType:
-    SRCA -> (A+B) op C, SRCB -> C op (A+B). Sub covers both directions because it distinguishes
-    operand order; commutative Add/Mul need only one direction to cover their op emission."""
+    SRCA -> (A+B) op C, SRCB -> C op (A+B). Sub distinguishes operand order outright. Mul needs
+    both directions as well: the FPU does not reduce srcA and srcB alike, so (A+B)*C and C*(A+B)
+    are not bit-identical. Add is the only one of the three whose two directions agree exactly."""
     n = 4
     dt = ttnn.bfloat16
     shape = [1, 1, 32, 32 * n]
