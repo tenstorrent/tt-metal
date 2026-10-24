@@ -251,6 +251,9 @@ ALWI void pack_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t cal
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb, uint32_t block_c_index = 0) {
     LLK_SAN_FUNCTION();
+#ifndef ARCH_QUASAR
+    reconfig_data_format_srcb(icb);
+#endif
     pack_untilize_detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, true, is_fp32_dest_acc_en>(
         icb, ocb, __builtin_LINE());
     for (uint32_t r = 0; r < block_rt_dim; ++r) {
