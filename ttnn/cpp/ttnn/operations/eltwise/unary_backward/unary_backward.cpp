@@ -620,33 +620,31 @@ std::vector<Tensor> cos_bw(
 std::vector<Tensor> acosh_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor in_sq = ttnn::square(input, output_mem_config);
-    Tensor in_rsqrt =
-        ttnn::rsqrt(ttnn::subtract(in_sq, 1.0f, std::nullopt, output_mem_config), false, output_mem_config);
+    // Factor rsqrt(x^2 - 1) as rsqrt(x - 1) * rsqrt(x + 1) to prevent premature overflow for x > 1.84e19
+    Tensor in_rsqrt = ttnn::multiply(
+        ttnn::rsqrt(ttnn::subtract(input, 1.0f, std::nullopt, output_mem_config), false, output_mem_config),
+        ttnn::rsqrt(ttnn::add(input, 1.0f, std::nullopt, output_mem_config), false, output_mem_config),
+        std::nullopt,
+        output_mem_config);
     Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
     float t_nan = tt::tt_metal::hal::get_nan();
     float t_inf = tt::tt_metal::hal::get_inf();
+
+    Tensor is_pole = ttnn::eq(input, 1.0f, std::nullopt, output_mem_config);
+    Tensor is_nan = ttnn::logical_or(
+        ttnn::lt(input, 1.0f, std::nullopt, output_mem_config),
+        ttnn::logical_and(is_pole, ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
+        std::nullopt,
+        output_mem_config);
 
     Tensor check_condition =
         ttnn::multiply(ttnn::signbit(grad, output_mem_config), -1.0f, std::nullopt, output_mem_config);
 
     grad_a = ttnn::where(
-        ttnn::logical_or(
-            ttnn::lt(in_sq, 1.0f, std::nullopt, output_mem_config),
-            ttnn::logical_and(
-                ttnn::eq(input, 1.0f, std::nullopt, output_mem_config),
-                ttnn::eqz(grad, output_mem_config),
-                std::nullopt,
-                output_mem_config),
-            std::nullopt,
-            output_mem_config),
+        is_nan,
         t_nan,
         ttnn::where(
-            ttnn::logical_and(
-                ttnn::le(input, 1.0f, std::nullopt, output_mem_config),
-                ttnn::ge(input, -1.0f, std::nullopt, output_mem_config),
-                std::nullopt,
-                output_mem_config),
+            is_pole,
             ttnn::multiply(
                 ttnn::add(
                     check_condition, ttnn::eqz(check_condition, output_mem_config), std::nullopt, output_mem_config),
