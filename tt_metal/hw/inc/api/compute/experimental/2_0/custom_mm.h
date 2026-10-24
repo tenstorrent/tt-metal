@@ -187,9 +187,9 @@ ALWI void custom_mm_block_init_short(
 }
 
 template <
-    bool finalize = true,
-    bool read_transposed = false,
     CustomMmDestLayout layout = CustomMmDestLayout::Default,
+    bool finalize = custom_mm_split_acc(layout),
+    bool read_transposed = false,
     DataFormat F0,
     TensorShape S0,
     DataFormat F1,
@@ -210,13 +210,13 @@ ALWI void custom_mm_block(
     UNPACK((_llk_unpack_AB_custom_mm_<read_transposed>(
         in1.l1_address, in0.l1_address, in1_tile_index, in0_tile_index, in1_tile_size, in0_tile_size, kt_dim, ct_dim)));
     MATH((
-        llk_math_custom_mm<finalize, layout, experimental::LLKOperand<F0, S0>::descriptor>(dst_index, kt_dim, ct_dim)));
+        llk_math_custom_mm<layout, finalize, experimental::LLKOperand<F0, S0>::descriptor>(dst_index, kt_dim, ct_dim)));
 }
 
 template <
-    bool finalize = true,
-    bool read_transposed = false,
     CustomMmDestLayout layout = CustomMmDestLayout::Default,
+    bool finalize = custom_mm_split_acc(layout),
+    bool read_transposed = false,
     DataFormat F1,
     TensorShape S1>
 ALWI void custom_mm_block(
@@ -244,7 +244,7 @@ ALWI void custom_mm_block(
     }));
     MATH(({
         const auto in0_id = get_operand_id(in0_cb_id);
-        llk_math_custom_mm_impl<finalize, layout>(get_operand_face_r_dim(in0_id), dst_index, kt_dim, ct_dim);
+        llk_math_custom_mm_impl<layout, finalize>(get_operand_face_r_dim(in0_id), dst_index, kt_dim, ct_dim);
     }));
 }
 

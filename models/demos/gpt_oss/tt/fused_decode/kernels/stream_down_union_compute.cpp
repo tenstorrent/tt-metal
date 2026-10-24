@@ -42,9 +42,9 @@ void kernel_main() {
         cb_wait_front(wcb, cols * seg_tiles);
         for (uint32_t c = 0; c < ncols; ++c) {
             if (e + 1 == num_sel) {
-                custom_mm_block<true, false, dest_layout>(cb_in0, wcb, 0, c * seg_tiles, c, seg_tiles);
+                custom_mm_block<dest_layout>(cb_in0, wcb, 0, c * seg_tiles, c, seg_tiles);
             } else {
-                custom_mm_block<false, false, dest_layout>(cb_in0, wcb, 0, c * seg_tiles, c, seg_tiles);
+                custom_mm_block<dest_layout, false>(cb_in0, wcb, 0, c * seg_tiles, c, seg_tiles);
             }
         }
         cb_pop_front(wcb, cols * seg_tiles);

@@ -18,11 +18,11 @@
  *************************************************************************/
 
 template <
-    bool finalize = true,
     ckernel::CustomMmDestLayout layout = ckernel::CustomMmDestLayout::Default,
+    bool finalize = ckernel::custom_mm_split_acc(layout),
     ckernel::experimental::LLKMemDescriptor IN0_DESC>
 inline void llk_math_custom_mm(
     const std::uint32_t dst_index, const std::uint32_t kt_dim, const std::uint32_t ct_dim = 1) {
     SAN_HOOK(unsupported());
-    llk_math_custom_mm_impl<finalize, layout>(IN0_DESC.shape.face_r_dim, dst_index, kt_dim, ct_dim);
+    llk_math_custom_mm_impl<layout, finalize>(IN0_DESC.shape.face_r_dim, dst_index, kt_dim, ct_dim);
 }

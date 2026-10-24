@@ -81,13 +81,13 @@ void kernel_main() {
         for (uint32_t p = 0; p < pairs; ++p) {
             tile_regs_acquire();
             cb_wait_front(wcb, kt);
-            custom_mm_block<true, false, dest_layout>(cb_x, wcb, 0, 0, 0, kt);
+            custom_mm_block<dest_layout>(cb_x, wcb, 0, 0, 0, kt);
             cb_pop_front(wcb, kt);
             cb_wait_front(wcb, kt);
-            custom_mm_block<true, false, dest_layout>(cb_x, wcb, 0, 0, 1, kt);
+            custom_mm_block<dest_layout>(cb_x, wcb, 0, 0, 1, kt);
             cb_pop_front(wcb, kt);
             custom_mm_block_init_short<transpose, dest_layout>(cb_sc, cb_id, cb_act);
-            custom_mm_block<true, false, dest_layout>(cb_sc, cb_id, e, 0, 2, 1);  // row weights
+            custom_mm_block<dest_layout>(cb_sc, cb_id, e, 0, 2, 1);  // row weights
 
 #ifdef DENSE_SILU
             // Plain SwiGLU (dense MLP, e.g. the DFlash drafter): silu(g) * u.

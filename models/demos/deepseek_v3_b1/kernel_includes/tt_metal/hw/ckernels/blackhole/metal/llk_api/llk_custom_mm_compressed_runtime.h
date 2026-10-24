@@ -107,7 +107,7 @@ FORCE_INLINE void custom_mm_compressed_block_runtime(
         TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
         TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
     }));
-    MATH((_llk_math_custom_mm_<FINALIZE, DEST_LAYOUT>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
+    MATH((_llk_math_custom_mm_<DEST_LAYOUT, FINALIZE>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
 }
 
 // Sentinel value for zero tiles in relative-offset fmt metadata.
@@ -208,7 +208,7 @@ FORCE_INLINE void custom_mm_compressed_block_runtime_dram(
         TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
         TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
     }));
-    MATH((_llk_math_custom_mm_<FINALIZE, DEST_LAYOUT>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
+    MATH((_llk_math_custom_mm_<DEST_LAYOUT, FINALIZE>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
 }
 
 }  // namespace compressed

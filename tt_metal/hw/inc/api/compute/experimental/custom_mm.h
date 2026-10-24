@@ -92,15 +92,15 @@ ALWI void custom_mm_block_init(
  *
  * Return value: None
  *
- * | Argument  | Description                                                                               | Type               | Valid Range                                             | Required                |
- * |-----------|-------------------------------------------------------------------------------------------|--------------------|---------------------------------------------------------|-------------------------|
- * | transpose | The transpose flag for performing transpose operation on in1                              | bool               | true/false                                              | False (default false)   |
- * | layout    | Where the output tiles sit in DEST, see CustomMmDestLayout; execute and uninit must match | CustomMmDestLayout | Default, DefaultSplitAcc, Dense, DenseSplitAcc, Compact | False (default Default) |
- * | clear_src | Whether to clear SrcB at init (saves power as only 1/8 FPU rows are used)                 | bool               | true/false                                              | False (default true)    |
- * | in0_cb_id | The identifier of the first input circular buffer (CB)                                    | uint32_t           | 0 to 31                                                 | True                    |
- * | in1_cb_id | The identifier of the second input circular buffer (CB)                                   | uint32_t           | 0 to 31                                                 | True                    |
- * | out_cb_id | The identifier of the output circular buffer (CB)                                         | uint32_t           | 0 to 31                                                 | True                    |
- * | ct_dim    | The width of the output matrix in tiles                                                   | uint32_t           | 1 to 34                                                 | False (default 1)       |
+ * | Argument  | Description                                                                                                     | Type               | Valid Range                                             | Required                |
+ * |-----------|-----------------------------------------------------------------------------------------------------------------|--------------------|---------------------------------------------------------|-------------------------|
+ * | transpose | The transpose flag for performing transpose operation on in1                                                    | bool               | true/false                                              | False (default false)   |
+ * | layout    | Where the output tiles sit in DEST, see CustomMmDestLayout; execute and uninit must match                       | CustomMmDestLayout | Default, DefaultSplitAcc, Dense, DenseSplitAcc, Compact | False (default Default) |
+ * | clear_src | Whether to clear SrcB at init (saves power as only 1/8 FPU rows are used)                                       | bool               | true/false                                              | False (default true)    |
+ * | in0_cb_id | The identifier of the first input circular buffer (CB)                                                          | uint32_t           | 0 to 31                                                 | True                    |
+ * | in1_cb_id | The identifier of the second input circular buffer (CB)                                                         | uint32_t           | 0 to 31                                                 | True                    |
+ * | out_cb_id | The identifier of the output circular buffer (CB)                                                               | uint32_t           | 0 to 31                                                 | True                    |
+ * | ct_dim    | The width of the output matrix in tiles                                                                         | uint32_t           | 1 to 34                                                 | False (default 1)       |
  */
 // clang-format on
 template <bool transpose = false, CustomMmDestLayout layout = CustomMmDestLayout::Default, bool clear_src = true>
@@ -136,9 +136,9 @@ ALWI void custom_mm_block_init_short(
  *
  * | Argument        | Description                                                                                                     | Type               | Valid Range                                             | Required                |
  * |-----------------|-----------------------------------------------------------------------------------------------------------------|--------------------|---------------------------------------------------------|-------------------------|
- * | finalize        | Whether to merge the split accumulation partials at the end of this call                                        | bool               | true/false; true needs a SplitAcc layout                | False (default true)    |
- * | read_transposed | Whether to read in1 tiles in transposed order (read ct tiles with a stride of kt, then move over a single tile) | bool               | true/false                                              | False (default false)   |
  * | layout          | Must match the init; dst_index counts its custom_mm_tile_rows                                                   | CustomMmDestLayout | Default, DefaultSplitAcc, Dense, DenseSplitAcc, Compact | False (default Default) |
+ * | finalize        | Whether to merge the split accumulation partials at the end of this call; defaults to true for SplitAcc layouts | bool               | true/false; true needs a SplitAcc layout                | False                   |
+ * | read_transposed | Whether to read in1 tiles in transposed order (read ct tiles with a stride of kt, then move over a single tile) | bool               | true/false                                              | False (default false)   |
  * | in0_cb_id       | The identifier of the first input circular buffer (CB)                                                          | uint32_t           | 0 to 31                                                 | True                    |
  * | in1_cb_id       | The identifier of the second input circular buffer (CB)                                                         | uint32_t           | 0 to 31                                                 | True                    |
  * | in0_tile_index  | The index of the tile in block A from the first input CB                                                        | uint32_t           | Must be less than the size of the CB                    | True                    |
@@ -148,7 +148,10 @@ ALWI void custom_mm_block_init_short(
  * | ct_dim          | The width of the output matrix in tiles                                                                         | uint32_t           | 1 to 34                                                 | False (default 1)       |
  */
 // clang-format on
-template <bool finalize = true, bool read_transposed = false, CustomMmDestLayout layout = CustomMmDestLayout::Default>
+template <
+    CustomMmDestLayout layout = CustomMmDestLayout::Default,
+    bool finalize = custom_mm_split_acc(layout),
+    bool read_transposed = false>
 ALWI void custom_mm_block(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -159,7 +162,7 @@ ALWI void custom_mm_block(
     const std::uint32_t ct_dim = 1) {
     UNPACK((llk_unpack_AB_custom_mm<read_transposed>(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim)));
-    MATH((llk_math_custom_mm<finalize, layout>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
+    MATH((llk_math_custom_mm<layout, finalize>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
 }
 
 // clang-format off
@@ -221,25 +224,25 @@ ALWI void custom_mm_block_unpack(
  *
  * Return value: None
  *
- * | Argument  | Description                                                              | Type               | Valid Range                                             | Required                |
- * |-----------|--------------------------------------------------------------------------|--------------------|---------------------------------------------------------|-------------------------|
- * | finalize  | Whether to merge the split accumulation partials at the end of this call | bool               | true/false; true needs a SplitAcc layout                | False (default true)    |
- * | layout    | Must match the init; dst_index counts its custom_mm_tile_rows            | CustomMmDestLayout | Default, DefaultSplitAcc, Dense, DenseSplitAcc, Compact | False (default Default) |
- * | in0_cb_id | The identifier of the first input circular buffer (CB)                   | uint32_t           | 0 to 31                                                 | True                    |
- * | in1_cb_id | The identifier of the second input circular buffer (CB)                  | uint32_t           | 0 to 31                                                 | True                    |
- * | dst_index | The first DST output tile, in tiles of the layout's custom_mm_tile_rows  | uint32_t           | Output tiles must fit the acquired DST REG              | True                    |
- * | kt_dim    | The inner dimension in tiles                                             | uint32_t           | Any integer from 1 to 256 (inclusive)                   | True                    |
- * | ct_dim    | The width of the output matrix in tiles                                  | uint32_t           | 1 to 34                                                 | False (default 1)       |
+ * | Argument  | Description                                                                                                 | Type               | Valid Range                                             | Required                |
+ * |-----------|-------------------------------------------------------------------------------------------------------------|--------------------|---------------------------------------------------------|-------------------------|
+ * | layout    | Must match the init; dst_index counts its custom_mm_tile_rows                                               | CustomMmDestLayout | Default, DefaultSplitAcc, Dense, DenseSplitAcc, Compact | False (default Default) |
+ * | finalize  | Whether to merge the split accumulation partials at the end of this call; defaults to true for SplitAcc layouts | bool               | true/false; true needs a SplitAcc layout                | False                   |
+ * | in0_cb_id | The identifier of the first input circular buffer (CB)                                                      | uint32_t           | 0 to 31                                                 | True                    |
+ * | in1_cb_id | The identifier of the second input circular buffer (CB)                                                     | uint32_t           | 0 to 31                                                 | True                    |
+ * | dst_index | The first DST output tile, in tiles of the layout's custom_mm_tile_rows                                     | uint32_t           | Output tiles must fit the acquired DST REG              | True                    |
+ * | kt_dim    | The inner dimension in tiles                                                                                | uint32_t           | Any integer from 1 to 256 (inclusive)                   | True                    |
+ * | ct_dim    | The width of the output matrix in tiles                                                                     | uint32_t           | 1 to 34                                                 | False (default 1)       |
  */
 // clang-format on
-template <bool finalize = true, CustomMmDestLayout layout = CustomMmDestLayout::Default>
+template <CustomMmDestLayout layout = CustomMmDestLayout::Default, bool finalize = custom_mm_split_acc(layout)>
 ALWI void custom_mm_block_math(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
-    MATH((llk_math_custom_mm<finalize, layout>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
+    MATH((llk_math_custom_mm<layout, finalize>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
 }
 
 // clang-format off

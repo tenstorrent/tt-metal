@@ -73,13 +73,11 @@ void kernel_main() {
             if constexpr (mixed) {
                 custom_mm_block_init_short<false, CustomMmDestLayout::Dense>(
                     tt::CBIndex::c_0, Weight(b_base), tt::CBIndex::c_16, producer_ct);
-                custom_mm_block<false, false, CustomMmDestLayout::Dense>(
-                    tt::CBIndex::c_0, Weight(b_base), 1, 1, 0, 2, producer_ct);
+                custom_mm_block<CustomMmDestLayout::Dense>(tt::CBIndex::c_0, Weight(b_base), 1, 1, 0, 2, producer_ct);
             } else {
                 custom_mm_block_init_short<false, CustomMmDestLayout::Dense>(
                     Activation(a_base), Weight(b_base), tt::CBIndex::c_16, producer_ct);
-                custom_mm_block<false, false, CustomMmDestLayout::Dense>(
-                    Activation(a_base), Weight(b_base), 1, 1, 0, 2, producer_ct);
+                custom_mm_block<CustomMmDestLayout::Dense>(Activation(a_base), Weight(b_base), 1, 1, 0, 2, producer_ct);
             }
             if constexpr (mode == 2) {
                 // The reuse unpacker processes two K tiles per MOP iteration.

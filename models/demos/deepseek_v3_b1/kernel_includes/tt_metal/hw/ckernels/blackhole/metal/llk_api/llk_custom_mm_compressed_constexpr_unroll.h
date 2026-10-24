@@ -99,7 +99,7 @@ FORCE_INLINE void custom_mm_compressed_block_constexpr(
         uint32_t address_a = addr_in1;
         _custom_mm_compressed_unroll_<KT_DIM, CT_DIM, NUM_PACKED, FMT_PACKED>(cfg, address_a, reg0_base, reg2_base);
     }));
-    MATH((_llk_math_custom_mm_<true, DEST_LAYOUT>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
+    MATH((_llk_math_custom_mm_<DEST_LAYOUT>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
 }
 
 }  // namespace compressed

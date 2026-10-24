@@ -157,7 +157,7 @@ struct Matmul {
                 for (uint32_t w = 0; w < out_w; w++) {
                     tile_regs_acquire();
 
-                    custom_mm_block<finalize, read_transposed, dest_layout>(
+                    custom_mm_block<dest_layout, finalize, read_transposed>(
                         args.in0, args.in1, 0, w * args.k_num_tiles, 0, args.k_num_tiles);
 
                     tile_regs_commit();
@@ -197,7 +197,7 @@ struct Matmul {
                 // Batch processing - all tiles at once
                 tile_regs_acquire();
 
-                custom_mm_block<finalize, read_transposed, dest_layout>(
+                custom_mm_block<dest_layout, finalize, read_transposed>(
                     args.in0, args.in1, 0, 0, 0, args.k_num_tiles, out_w);
 
                 tile_regs_commit();

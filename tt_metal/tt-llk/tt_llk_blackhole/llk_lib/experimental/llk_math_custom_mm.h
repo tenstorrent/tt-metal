@@ -213,9 +213,10 @@ inline void _llk_math_custom_mm_init_(const std::uint32_t operandB_face_r_dim, c
 /**
  * @brief Run the custom_mm MVMUL MOP over kt_dim k-tiles into DEST.
  *
- * @tparam finalize: Merge the split accumulators at the end of the call; only for the SplitAcc layouts. Pass false
- *                  on all but the last of several calls accumulating into the same tiles.
  * @tparam layout: Must match the init.
+ * @tparam finalize: Merge the split accumulators at the end of the call; defaults to true for the SplitAcc layouts,
+ *                  which alone allow it. Pass false on all but the last of several calls accumulating into the
+ *                  same tiles.
  * @param operandB_face_r_dim: Face row count of in0 (SrcB), one of {1, 2, 4, 8}.
  * @param dst_index: First DEST output tile, counted in custom_mm_tile_rows of the layout.
  * @param kt_dim: Number of k-tiles to accumulate, 1 to 256.
@@ -225,7 +226,7 @@ inline void _llk_math_custom_mm_init_(const std::uint32_t operandB_face_r_dim, c
  * @note Callers that know the DEST sync mode should also assert @ref custom_mm_fits_dest.
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_custom_mm_.
  */
-template <bool finalize = true, CustomMmDestLayout layout = CustomMmDestLayout::Default>
+template <CustomMmDestLayout layout = CustomMmDestLayout::Default, bool finalize = custom_mm_split_acc(layout)>
 inline void _llk_math_custom_mm_(
     const std::uint32_t operandB_face_r_dim, const std::uint32_t dst_index, const std::uint32_t kt_dim, const std::uint32_t ct_dim = 1)
 {

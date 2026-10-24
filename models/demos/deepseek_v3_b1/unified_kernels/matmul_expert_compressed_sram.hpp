@@ -246,7 +246,7 @@ struct MatmulExpertCompressedSRAM {
                                 compressed_custom_mm_block<CustomMmDestLayout::Dense>(
                                     cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
                             } else {
-                                custom_mm_block<false, false, CustomMmDestLayout::DenseSplitAcc>(
+                                custom_mm_block<CustomMmDestLayout::DenseSplitAcc, false>(
                                     cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
                             }
                         } else {
@@ -254,7 +254,7 @@ struct MatmulExpertCompressedSRAM {
                                 compressed_custom_mm_block<CustomMmDestLayout::Dense>(
                                     cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
                             } else {
-                                custom_mm_block<true, false, CustomMmDestLayout::DenseSplitAcc>(
+                                custom_mm_block<CustomMmDestLayout::DenseSplitAcc>(
                                     cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
                             }
                         }
@@ -304,8 +304,7 @@ struct MatmulExpertCompressedSRAM {
                             cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
                     } else {
                         // DenseSplitAcc: this single call accumulates and finalizes its split partials.
-                        custom_mm_block<true, false, CustomMmDestLayout::DenseSplitAcc>(
-                            cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
+                        custom_mm_block<CustomMmDestLayout::DenseSplitAcc>(cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
                     }
 
                     tile_regs_commit();

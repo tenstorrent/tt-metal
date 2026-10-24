@@ -74,7 +74,7 @@ void kernel_main() {
         const bool rope = n < rope_cols;
         tile_regs_acquire();
         cb_wait_front(cb_w, kt);
-        custom_mm_block<true, false, dest_layout>(cb_in0, cb_w, 0, 0, 0, kt);
+        custom_mm_block<dest_layout>(cb_in0, cb_w, 0, 0, 0, kt);
         cb_pop_front(cb_w, kt);
         tile_regs_commit();
         const uint32_t cb_dst = rope ? cb_y : cb_out;
@@ -95,10 +95,10 @@ void kernel_main() {
         cb_wait_front(cb_y, 1);
         custom_mm_block_init_short<transpose, dest_layout>(cb_y, cb_rot, cb_out);
         tile_regs_acquire();
-        custom_mm_block<true, false, dest_layout>(cb_y, cb_rot, 0, 0, 0, 1);                // y
-        custom_mm_block<true, false, dest_layout>(cb_y, cb_rot, 0, 1, 1, 1);                // y @ T
-        custom_mm_block<true, false, dest_layout>(cb_cs, cb_rot, t, 0, 2, 1);               // cos_t
-        custom_mm_block<true, false, dest_layout>(cb_cs, cb_rot, head_tiles + t, 0, 3, 1);  // sin_t
+        custom_mm_block<dest_layout>(cb_y, cb_rot, 0, 0, 0, 1);                // y
+        custom_mm_block<dest_layout>(cb_y, cb_rot, 0, 1, 1, 1);                // y @ T
+        custom_mm_block<dest_layout>(cb_cs, cb_rot, t, 0, 2, 1);               // cos_t
+        custom_mm_block<dest_layout>(cb_cs, cb_rot, head_tiles + t, 0, 3, 1);  // sin_t
         mul_binary_tile_init();
         mul_rows(0, 2, 0);
         mul_rows(1, 3, 1);

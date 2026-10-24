@@ -169,7 +169,7 @@ FORCE_INLINE void custom_mm_compressed_block_compact(
         constexpr size_t total_pairs = KT_DIM * CT_DIM / 2;
         _emit_runs_<0, total_pairs, NUM_PACKED, FMT_PACKED>(cfg, address_a, reg0_base, reg2_base);
     }));
-    MATH((_llk_math_custom_mm_<true, DEST_LAYOUT>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
+    MATH((_llk_math_custom_mm_<DEST_LAYOUT>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
 }
 
 }  // namespace compressed

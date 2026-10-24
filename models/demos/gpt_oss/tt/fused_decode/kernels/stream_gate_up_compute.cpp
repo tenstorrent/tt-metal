@@ -84,10 +84,10 @@ void kernel_main() {
         for (uint32_t p = 0; p < pairs; ++p) {
             tile_regs_acquire();
             cb_wait_front(cb_w, kt);
-            custom_mm_block<true, false, dest_layout>(cb_x, cb_w, 0, 0, 0, kt);
+            custom_mm_block<dest_layout>(cb_x, cb_w, 0, 0, 0, kt);
             cb_pop_front(cb_w, kt);
             cb_wait_front(cb_w, kt);
-            custom_mm_block<true, false, dest_layout>(cb_x, cb_w, 0, 0, 1, kt);
+            custom_mm_block<dest_layout>(cb_x, cb_w, 0, 0, 1, kt);
             cb_pop_front(cb_w, kt);
 
             clamp_tile_init();

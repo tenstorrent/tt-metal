@@ -30,7 +30,7 @@ void kernel_main() {
     cb_wait_front(cb_in0, kt);
     tile_regs_acquire();
     cb_wait_front(cb_w, kt);
-    custom_mm_block<true, false, dest_layout>(cb_in0, cb_w, 0, 0, 0, kt);
+    custom_mm_block<dest_layout>(cb_in0, cb_w, 0, 0, 0, kt);
     cb_pop_front(cb_w, kt);
     tile_regs_commit();
     cb_reserve_back(cb_out, 1);

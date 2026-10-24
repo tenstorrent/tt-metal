@@ -168,7 +168,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
     // Producer output starts at DEST row ISRC (dst_index is a tile slot; ISRC=0).
-    _llk_math_custom_mm_<true /* finalize */, CustomMmDestLayout::DenseSplitAcc>(
+    _llk_math_custom_mm_<CustomMmDestLayout::DenseSplitAcc, true /* finalize */>(
         IN0_TILE_R_DIM, 0 /* dst_index (tile slot) */, PRODUCER_KT, REUSE_KT /* ct_dim */);
 
     // ---- consumer reuse math: out = in0(from DEST) @ B1, accumulated into DEST ----

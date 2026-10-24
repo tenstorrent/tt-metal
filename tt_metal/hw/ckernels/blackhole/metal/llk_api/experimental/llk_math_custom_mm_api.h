@@ -36,7 +36,7 @@ inline void llk_math_custom_mm_init(
 
 // Shared by the CB-id execute below and the LLKOperand one (experimental/2_0/llk_math_custom_mm.h), which
 // differ only in where operandB_face_r_dim comes from.
-template <bool finalize = true, CustomMmDestLayout layout = CustomMmDestLayout::Default>
+template <CustomMmDestLayout layout = CustomMmDestLayout::Default, bool finalize = custom_mm_split_acc(layout)>
 inline void llk_math_custom_mm_impl(
     const std::uint32_t operandB_face_r_dim,
     const std::uint32_t dst_index,
@@ -46,10 +46,10 @@ inline void llk_math_custom_mm_impl(
         (custom_mm_fits_dest<DST_SYNC_MODE, layout>(dst_index, ct_dim)),
         "custom_mm: dst_index + ct_dim output tiles overrun the DEST sync region");
 
-    _llk_math_custom_mm_<finalize, layout>(operandB_face_r_dim, dst_index, kt_dim, ct_dim);
+    _llk_math_custom_mm_<layout, finalize>(operandB_face_r_dim, dst_index, kt_dim, ct_dim);
 }
 
-template <bool finalize = true, CustomMmDestLayout layout = CustomMmDestLayout::Default>
+template <CustomMmDestLayout layout = CustomMmDestLayout::Default, bool finalize = custom_mm_split_acc(layout)>
 inline void llk_math_custom_mm(
     const std::uint32_t operand0,
     const std::uint32_t operand1,
@@ -61,5 +61,5 @@ inline void llk_math_custom_mm(
     const std::uint32_t operandB_id = get_operand_id(operand0);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
 
-    llk_math_custom_mm_impl<finalize, layout>(operandB_face_r_dim, dst_index, kt_dim, ct_dim);
+    llk_math_custom_mm_impl<layout, finalize>(operandB_face_r_dim, dst_index, kt_dim, ct_dim);
 }

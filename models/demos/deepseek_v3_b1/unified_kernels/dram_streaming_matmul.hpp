@@ -297,13 +297,13 @@ struct DRAMStreamingMatmul {
                         // Intermediate subblocks: finalize=false (partial accumulation)
                         for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k - 1; sb_k++) {
                             cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
-                            custom_mm_block<false, false, dest_layout>(
+                            custom_mm_block<dest_layout, false>(
                                 CTArgs::cb_in0, CTArgs::cb_in1, sb_k * CTArgs::subblock_k, 0, 0, CTArgs::subblock_k);
                             cb_pop_front(CTArgs::cb_in1, CTArgs::subblock_k);
                         }
                         // Final subblock: finalize=true
                         cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
-                        custom_mm_block<true, false, dest_layout>(
+                        custom_mm_block<dest_layout>(
                             CTArgs::cb_in0,
                             CTArgs::cb_in1,
                             (CTArgs::num_subblocks_k - 1) * CTArgs::subblock_k,
@@ -360,13 +360,13 @@ struct DRAMStreamingMatmul {
                         // Intermediate subblocks: finalize=false (partial accumulation)
                         for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k - 1; sb_k++) {
                             cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
-                            custom_mm_block<false, false, dest_layout>(
+                            custom_mm_block<dest_layout, false>(
                                 CTArgs::cb_in0, CTArgs::cb_in1, sb_k * CTArgs::subblock_k, 0, w, CTArgs::subblock_k);
                             cb_pop_front(CTArgs::cb_in1, CTArgs::subblock_k);
                         }
                         // Final subblock: finalize=true
                         cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
-                        custom_mm_block<true, false, dest_layout>(
+                        custom_mm_block<dest_layout>(
                             CTArgs::cb_in0,
                             CTArgs::cb_in1,
                             (CTArgs::num_subblocks_k - 1) * CTArgs::subblock_k,

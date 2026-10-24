@@ -177,11 +177,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         if (split_acc && call == num_calls - 1)
         {
-            _llk_math_custom_mm_<split_acc /* finalize */, dest_layout>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
+            _llk_math_custom_mm_<dest_layout>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
         }
         else
         {
-            _llk_math_custom_mm_<false /* finalize */, dest_layout>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
+            _llk_math_custom_mm_<dest_layout, false /* finalize */>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
         }
     }
 
