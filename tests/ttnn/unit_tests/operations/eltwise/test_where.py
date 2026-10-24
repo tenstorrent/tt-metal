@@ -7,11 +7,16 @@ import ttnn
 import pytest
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
-from math import isnan
+from math import isfinite, isnan
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0
 
 
 def torch_equal_nan(a, b):
     return torch.all((a == b) | (torch.isnan(a) & torch.isnan(b)))
+
+
+# A float32 value is bf16-exact iff these bits are all zero.
+FP32_LOW_16_BITS_MASK = 0xFFFF
 
 
 def make_condition_tensor(shape, dtype, condition, stride=8):
@@ -406,23 +411,63 @@ def test_bf8b_exponent_behaviour(device):
     assert torch_equal_nan(tt_result3, result3)
 
 
+# Wormhole row broadcast of a bf16 operand into a 32-bit Dest comes back wrong for every SFPU binary op
+# (add, div, pow, maximum as well), independently of the where variant; Blackhole takes the software
+# broadcast path for these shapes and is expected to pass.
+_WH_ROW_BCAST_BF16_FP32_DEST = pytest.mark.xfail(
+    condition=is_wormhole_b0(),
+    strict=True,
+    raises=AssertionError,
+    reason="Wormhole row broadcast of a bf16 operand into a 32-bit Dest",
+)
+
+
+@pytest.mark.parametrize(
+    "c_shape, t_shape, scalar_condition",
+    [
+        ((2, 64, 128), (2, 64, 128), None),
+        ((2, 64, 1), (2, 64, 128), None),
+        ((1, 1, 1), (2, 64, 128), 0),
+        ((1, 1, 1), (2, 64, 128), 1),
+        pytest.param((1, 1, 128), (2, 64, 128), None, marks=_WH_ROW_BCAST_BF16_FP32_DEST),
+        pytest.param((1, 1, 128), (2, 64, 1), None, marks=_WH_ROW_BCAST_BF16_FP32_DEST),
+        pytest.param((2, 64, 1), (1, 1, 128), None, marks=_WH_ROW_BCAST_BF16_FP32_DEST),
+    ],
+    ids=[
+        "no_bcast",
+        "col_bcast",
+        "scalar_bcast_false",
+        "scalar_bcast_true",
+        "row_bcast",
+        "row_a_col_b_bcast",
+        "row_b_col_a_bcast",
+    ],
+)
 @pytest.mark.parametrize("scalar_is_true", [False, True], ids=["tts", "tst"])
 @pytest.mark.parametrize("scalar", [-1.0, 15.5, -float("inf")])
-def test_where_scalar_bf16_inputs_fp32_output(device, scalar, scalar_is_true):
+def test_where_scalar_bf16_inputs_fp32_output(device, c_shape, t_shape, scalar_condition, scalar, scalar_is_true):
     # Regression: with a float32 output, where read DEST as bf16 and packed the scalar as two bf16 halves.
+    # The broadcast kernels take their where_tile variant from the condition dtype; with a float32 output
+    # the Dest is 32-bit, so a bf16 condition must still select the Float32 variant (as no-bcast does).
+    # scalar_condition fixes a single-element condition (both values are covered); None draws a random mask.
+    shape = torch.broadcast_shapes(c_shape, t_shape)
     torch.manual_seed(0)
-    C = (torch.rand((64, 128)) > 0.5).to(torch.bfloat16)
-    T = torch.rand((64, 128), dtype=torch.bfloat16).uniform_(-100, 100)
+    if scalar_condition is not None:
+        C = torch.full(c_shape, float(scalar_condition)).to(torch.bfloat16)
+    else:
+        C = (torch.rand(c_shape) > 0.5).to(torch.bfloat16)
+    T = torch.rand(t_shape, dtype=torch.bfloat16).uniform_(-100, 100)
     ttnn_C = ttnn.from_torch(C, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_T = ttnn.from_torch(T, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    out = ttnn.from_torch(torch.zeros((64, 128)), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.from_torch(torch.zeros(shape), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
+    cond = C.bool().expand(shape)
     if scalar_is_true:
         ttnn.where(ttnn_C, scalar, ttnn_T, output_tensor=out)
-        expected = torch.where(C.bool(), torch.tensor(scalar), T.float())
+        expected = torch.where(cond, torch.tensor(scalar), T.float().expand(shape))
     else:
         ttnn.where(ttnn_C, ttnn_T, scalar, output_tensor=out)
-        expected = torch.where(C.bool(), T.float(), torch.tensor(scalar))
+        expected = torch.where(cond, T.float().expand(shape), torch.tensor(scalar))
 
     assert torch.equal(ttnn.to_torch(out), expected)
 
@@ -588,6 +633,41 @@ def test_where_tss(device, dtype, h, w, scalar1, scalar2):
     ttnn_result = ttnn.where(ttnn_C, T, F)
     result = ttnn.to_torch(ttnn_result)
 
+    assert torch_equal_nan(result, golden)
+
+
+@pytest.mark.parametrize("h, w", [[64, 128]])
+@pytest.mark.parametrize(
+    "scalar1, scalar2",
+    [
+        # Not bf16-representable: the low 16 mantissa bits of each fp32 word are set, so the exact compare
+        # proves the full 32-bit result reaches L1, not just the upper half.
+        [15.123456, 31.654321],
+        [float("inf"), -float("inf")],
+    ],
+)
+def test_where_tss_bf16_condition_fp32_output(device, h, w, scalar1, scalar2):
+    """A preallocated float32 output puts Dest in 32-bit mode while the condition stays bf16; the
+    where must then read and write full 32-bit Dest words, not the 16-bit halves a bf16 input implies."""
+    torch.manual_seed(0)
+    for scalar in (scalar1, scalar2):
+        if isfinite(scalar):
+            assert (
+                torch.tensor(scalar, dtype=torch.float32).view(torch.int32) & FP32_LOW_16_BITS_MASK
+            ), "scalar must not be bf16-exact"
+
+    C = torch.rand((h, w), dtype=torch.bfloat16).uniform_(-100, 100)
+    C = (C > 0).to(torch.bfloat16)
+    ttnn_C = ttnn.from_torch(C, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_out = ttnn.from_torch(
+        torch.zeros((h, w), dtype=torch.float32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    golden = torch.where(C.bool(), scalar1, scalar2)
+    ttnn.where(ttnn_C, scalar1, scalar2, output_tensor=ttnn_out)
+    result = ttnn.to_torch(ttnn_out)
+
+    assert result.dtype == torch.float32
     assert torch_equal_nan(result, golden)
 
 
