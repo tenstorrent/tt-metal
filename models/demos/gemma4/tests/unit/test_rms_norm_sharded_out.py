@@ -6,6 +6,7 @@ the norm equals the module's own-grid path up to the reduction order, the matmul
 from the interleaved output, and a layout of wide shards (the 8-core wqkv grids) is declined unless the cap allows
 it (the 8-core wqkv grids are within the default cap of 24); single chip, the dense shard shapes (31B / 12B at TP=4)."""
 
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -23,25 +24,24 @@ def _pcc(a, b):
     return torch.corrcoef(torch.stack([a.flatten().float(), b.flatten().float()]))[0, 1].item()
 
 
+CI = os.environ.get("CI") == "true"
+CASES = {
+    "31b_gateup_b32": (32, 5376, 10752, None),
+    "31b_gateup_b1": (1, 5376, 10752, None),
+    "12b_gateup_b32": (32, 3840, 7680, None),
+    "12b_gateup_b1": (1, 3840, 7680, None),
+    "31b_wqkv_declined_w16": (32, 5376, 4096, 16),
+    "31b_wqkv": (32, 5376, 4096, None),
+    "12b_wqkv": (32, 3840, 2048, None),
+}
+CI_CASES = ("31b_gateup_b1", "12b_wqkv")  # every case compiles its own LayerNorm grid (~20 s cold): two under CI
+
+
 @pytest.mark.parametrize(
     "R, W, N, max_w",
     [
-        (32, 5376, 10752, None),
-        (1, 5376, 10752, None),
-        (32, 3840, 7680, None),
-        (1, 3840, 7680, None),
-        (32, 5376, 4096, 16),
-        (32, 5376, 4096, None),
-        (32, 3840, 2048, None),
-    ],
-    ids=[
-        "31b_gateup_b32",
-        "31b_gateup_b1",
-        "12b_gateup_b32",
-        "12b_gateup_b1",
-        "31b_wqkv_declined_w16",
-        "31b_wqkv",
-        "12b_wqkv",
+        pytest.param(*v, id=k, marks=[] if (k in CI_CASES or not CI) else [pytest.mark.skip(reason="CI subset")])
+        for k, v in CASES.items()
     ],
 )
 @pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
