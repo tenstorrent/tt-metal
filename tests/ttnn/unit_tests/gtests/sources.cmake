@@ -3,6 +3,7 @@
 
 set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     test_reflect.cpp
+    sdpa/test_ring_joint_floater_layout.cpp
     sdpa/test_ring_joint_ksplit.cpp
     sdpa/test_ring_mla_packing_plan.cpp
     sdpa/test_sliding_window_work_plan.cpp

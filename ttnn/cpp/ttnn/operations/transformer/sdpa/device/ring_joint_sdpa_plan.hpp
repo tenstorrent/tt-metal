@@ -16,7 +16,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 
-#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_floaters.hpp"
+#include "ttnn/operations/transformer/sdpa/device/ring_joint_floater_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation_types.hpp"
 
 namespace ttnn::prim::ring_joint_plan {

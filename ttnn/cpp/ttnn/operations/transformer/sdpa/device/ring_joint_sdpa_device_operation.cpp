@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
-#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_floaters.hpp"
+#include "ttnn/operations/transformer/sdpa/device/ring_joint_floater_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_plan.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"

@@ -6,7 +6,7 @@
 #include "kernels/chunked_q_mapping.hpp"
 #include "kernels/dataflow/chunked_prefill_utils.hpp"
 #include "kernels/ring_joint_ksplit.hpp"
-#include "kernels/ring_joint_floaters.hpp"
+#include "ring_joint_floater_layout.hpp"
 #include "kernels/ring_mla_packing_plan.hpp"
 #include "kernels/sliding_window_geometry.hpp"
 #include "kernels/sliding_window_work_plan.hpp"
@@ -1439,22 +1439,21 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     TT_FATAL(
         floaters == (output_tensors.size() > RING_JOINT_SDPA_FLOATER_SCRATCH_IDX),
         "ring_joint floaters: the scratch output must exist exactly when floaters run");
-    if (floaters) {
-        // Homes merge the partials in the order of their pieces' iterations; every piece donates something, and a
-        // home keeps part of every non-empty band (so a partial with state always has the home's own to merge into).
-        for (uint32_t piece = 0; piece < ring_joint::kDonatedPieces; ++piece) {
-            TT_FATAL(
-                floater_schedule.fracs[piece] > 0 && floater_schedule.fracs[piece] < ring_joint::kDonationFracOne &&
-                    floater_schedule.iters[piece] < ring_size &&
-                    (piece == 0 || floater_schedule.iters[piece - 1] < floater_schedule.iters[piece]),
-                "ring_joint floaters: invalid schedule for {} heads x {} bands",
-                NH,
-                ksplit_count);
-        }
-    }
     const uint32_t gather_workers = 2 * ag.num_links;
-    // The gather column's cores below its workers join the program as extra cores (indices num_cores..).
-    const uint32_t floater_column_cores = floaters ? grid_size.y - gather_workers : 0;
+    // Home blocks, floater groups and their visits (ring_joint_floater_layout.hpp); without floaters, every core keeps
+    // the defaults. The gather column's cores below its workers join a floater program as extra cores (indices
+    // num_cores..).
+    const ring_joint::FloaterLayout floater_layout =
+        floaters ? ring_joint::build_floater_layout(
+                       floater_schedule,
+                       grid_size.x,
+                       grid_size.y,
+                       NH,
+                       ksplit_count,
+                       gather_workers,
+                       B * NH * num_q_chunks,
+                       ring_size)
+                 : ring_joint::no_floater_layout(grid_size.x, num_cores, B * NH * num_q_chunks);
     if (floaters) {
         core_grid_set = CoreRangeSet(std::vector<CoreRange>{
             core_grid, CoreRange({grid_size.x, gather_workers}, {grid_size.x, grid_size.y - 1})});
@@ -1469,10 +1468,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             semaphore.core_ranges = core_grid_set;
         }
     }
-    const uint32_t num_cores_all = num_cores + floater_column_cores;
+    const uint32_t num_cores_all = floater_layout.num_cores_all;
     auto logical_core = [&](uint32_t i) {
-        return i < num_cores ? CoreCoord{i % grid_size.x, i / grid_size.x}
-                             : CoreCoord{grid_size.x, gather_workers + (i - num_cores)};
+        const auto [x, y] = floater_layout.logical_xy(i);
+        return CoreCoord{x, y};
     };
 
     // Segmented accumulation (kernels/compute/ring_joint_sdpa.cpp): per-ring-iteration accumulators merged into the
@@ -2264,114 +2263,20 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         return std::pair<uint32_t, uint32_t>{head, q_chunk};
     };
 
-    // Floater layout: home block g is the 2x2 block at (2 (g % 5), 2 (g / 5)) holding head pair g % (NH / 2) of band
-    // g / (NH / 2); its core k = (r, c) owns unit (2 pair + r) * 2 + c (head 2 pair + r, Q chunk c), so a head's two Q
-    // chunks (an expansion pair, one V chain) share a row.
-    constexpr uint32_t home_block_cols = 5;
-    constexpr uint32_t kNoGroup = std::numeric_limits<uint32_t>::max();
-    auto block_core = [&](uint32_t g, uint32_t k) {
-        return (2 * (g / home_block_cols) + k / 2) * grid_size.x + 2 * (g % home_block_cols) + k % 2;
-    };
-    std::vector<uint32_t> home_band(num_cores_all, 0);
-    std::vector<uint32_t> home_unit(num_cores_all, total_q_chunks);
-    std::vector<uint32_t> unit_home(floaters ? ksplit_count * total_q_chunks : 0, 0);
-    if (floaters) {
-        for (uint32_t g = 0; g < ring_joint::kFloaterHomeBlocks; ++g) {
-            for (uint32_t k = 0; k < 4; ++k) {
-                const uint32_t core = block_core(g, k);
-                home_band[core] = g / (NH / 2);
-                home_unit[core] = (2 * (g % (NH / 2)) + k / 2) * 2 + k % 2;
-                unit_home[home_band[core] * total_q_chunks + home_unit[core]] = core;
-            }
-        }
-    }
-    // Floater groups: the 25th block, the last column's rows 0-3 and 4-7, the gather column's rows 4-7, and the 2x2 of
-    // both columns' rows 8-9. Group core k mirrors home core k of the block it visits (its expansion pairs are (0, 1)
-    // and (2, 3)); the visits go round-robin over the groups in ring order, each home block's two pieces. Group core k
-    // is floater core 4 f + k, and saves its visit v in its ring slot v % kFloaterRingSlots.
-    struct FloaterVisit {
-        uint32_t iter, block, piece;
-    };
-    // A home core's donated piece: the scratch slot it lands, and the floater core whose semaphore ordinal it sets.
-    struct HomePiece {
-        uint32_t slot, floater, ordinal;
-    };
-    // A home's ring iteration after which it merges its first piece (FloaterSchedule::merge_after).
-    std::vector<uint32_t> home_merge_iter(num_cores_all, 0);
-    std::vector<std::array<uint32_t, 4>> floater_groups;
-    std::vector<std::vector<FloaterVisit>> floater_visits;
-    std::vector<uint32_t> floater_group_of(num_cores_all, kNoGroup);
-    std::vector<uint32_t> floater_k_of(num_cores_all, 0);
-    std::vector<std::array<HomePiece, ring_joint::kDonatedPieces>> home_pieces(num_cores_all);
-    auto floater_slot = [&](uint32_t f, uint32_t k, uint32_t v) {
-        return (f * 4 + k) * ring_joint::kFloaterRingSlots + v % ring_joint::kFloaterRingSlots;
-    };
-    if (floaters) {
-        const uint32_t x = grid_size.x - 1;
-        auto at = [&](uint32_t cy) { return cy * grid_size.x + x; };
-        floater_groups = {
-            {block_core(24, 0), block_core(24, 1), block_core(24, 2), block_core(24, 3)},
-            {at(0), at(1), at(2), at(3)},
-            {at(4), at(5), at(6), at(7)},
-            {num_cores, num_cores + 1, num_cores + 2, num_cores + 3},
-            {at(8), num_cores + 4, at(9), num_cores + 5}};
-        floater_visits.resize(floater_groups.size());
-        uint32_t next = 0;
-        for (uint32_t piece = 0; piece < ring_joint::kDonatedPieces; ++piece) {
-            for (uint32_t g = 0; g < ring_joint::kFloaterHomeBlocks; ++g) {
-                floater_visits[next++ % floater_groups.size()].push_back({floater_schedule.iters[piece], g, piece});
-            }
-        }
-        for (uint32_t f = 0; f < floater_groups.size(); ++f) {
-            for (uint32_t piece = 0; piece < ring_joint::kDonatedPieces; ++piece) {
-                const auto visits_in_iter =
-                    std::count_if(floater_visits[f].begin(), floater_visits[f].end(), [&](const FloaterVisit& visit) {
-                        return visit.iter == floater_schedule.iters[piece];
-                    });
-                TT_FATAL(
-                    visits_in_iter <= ring_joint::kFloaterMaxVisitsPerIter,
-                    "ring_joint floaters: group {} has {} visits in ring iteration {}",
-                    f,
-                    visits_in_iter,
-                    floater_schedule.iters[piece]);
-            }
-            // A visit's ordinal (v + 1) is a bit of the floater's semaphore.
-            TT_FATAL(
-                floater_visits[f].size() < 32,
-                "ring_joint floaters: group {} has {} visits",
-                f,
-                floater_visits[f].size());
-            for (uint32_t k = 0; k < 4; ++k) {
-                floater_group_of[floater_groups[f][k]] = f;
-                floater_k_of[floater_groups[f][k]] = k;
-                for (uint32_t v = 0; v < floater_visits[f].size(); ++v) {
-                    const auto& visit = floater_visits[f][v];
-                    home_pieces[block_core(visit.block, k)][visit.piece] = {
-                        floater_slot(f, k, v), floater_groups[f][k], v + 1};
-                    TT_FATAL(
-                        v == 0 || floater_visits[f][v - 1].piece <= visit.piece,
-                        "ring_joint floaters: group {} runs its visits out of piece order",
-                        f);
-                    if (visit.piece == 0) {
-                        // A group runs its first-piece visits first, so v is the visit's place in that queue.
-                        TT_FATAL(
-                            v < ring_joint::kFloaterFirstPieceVisits &&
-                                floater_schedule.merge_after[v] >= floater_schedule.iters[0] &&
-                                floater_schedule.merge_after[v] < ring_size,
-                            "ring_joint floaters: no merge iteration for group {}'s first-piece visit {}",
-                            f,
-                            v);
-                        home_merge_iter[block_core(visit.block, k)] = floater_schedule.merge_after[v];
-                    }
-                }
-            }
-        }
-        TT_FATAL(
-            floater_groups.size() == ring_joint::kFloaterGroups,
-            "ring_joint floaters: {} groups, the scratch and schedules assume {}",
-            floater_groups.size(),
-            ring_joint::kFloaterGroups);
-    }
+    // The floater layout's tables, by the names the rest of the builder uses.
+    const auto& home_band = floater_layout.home_band;
+    const auto& home_unit = floater_layout.home_unit;
+    const auto& unit_home = floater_layout.unit_home;
+    const auto& home_merge_iter = floater_layout.home_merge_iter;
+    const auto& home_pieces = floater_layout.home_pieces;
+    const auto& floater_groups = floater_layout.groups;
+    const auto& floater_visits = floater_layout.visits;
+    const auto& floater_group_of = floater_layout.group_of;
+    const auto& floater_k_of = floater_layout.k_of;
+    constexpr uint32_t kNoGroup = ring_joint::kNoFloaterGroup;
+    using HomePiece = ring_joint::HomePiece;
+    auto block_core = [&](uint32_t g, uint32_t k) { return floater_layout.block_core(g, k); };
+    auto floater_slot = [](uint32_t f, uint32_t k, uint32_t v) { return ring_joint::FloaterLayout::slot(f, k, v); };
     // K split: core (x, y) is in band y / rows_per_split and owns unit (y % rows_per_split) * grid.x + x (with
     // floaters: its home block's band and unit). Idle cores report band 0; they own no unit.
     auto ksplit_band = [&](uint32_t core_idx) -> uint32_t {
