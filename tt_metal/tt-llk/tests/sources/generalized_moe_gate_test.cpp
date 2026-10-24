@@ -222,6 +222,9 @@ static inline void gmg_sanitize_scratch()
     constexpr int IDS_LO        = IDS_TILE * DREG_PER_TILE;           // 32 (even cols of IDS row 0)
     constexpr int IDS_HI        = IDS_LO + 1;                         // 33 (odd  cols)
     constexpr int NUM_DREG      = NUM_DEST_TILES * DREG_PER_TILE;     // 128
+    // Top-8 answer = lanes 0..3 of each even/odd row-half; vConstTileId is 2 * lane.
+    constexpr int ANSWER_LANES         = 4;
+    constexpr int ANSWER_TILE_ID_LIMIT = 2 * ANSWER_LANES;
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     for (int k = 0; k < NUM_DREG; ++k)
     {
@@ -231,18 +234,27 @@ static inline void gmg_sanitize_scratch()
         }
         sfpi::dst_reg[k] = 0.0f;
     }
-    // Mask each answer row-half to the top-8: with columns split even/odd, cols 0..7 are the first four
-    // even and first four odd columns -> lanes 0..3 -> vConstTileId < 8; zero the residue past them.
-    // (Same vFloat mod-0 raw-bit round-trip finalize_ungrouped uses for the idx row -- kept ids survive.)
-    for (const int dreg : {SCORES_LO, SCORES_HI, IDS_LO, IDS_HI})
+    // Mask each answer row-half to the top-8; zero the residue past them.
+    for (const int dreg : {SCORES_LO, SCORES_HI})
     {
         sfpi::vFloat v = sfpi::dst_reg[dreg];
-        v_if (sfpi::vConstTileId >= 8)
+        v_if (sfpi::vConstTileId >= ANSWER_TILE_ID_LIMIT)
         {
             v = 0.0f;
         }
         v_endif;
         sfpi::dst_reg[dreg] = v;
+    }
+    // Id rows go through the U16 layout: a float round trip would store an id with a zero low byte (256) as 0.
+    for (const int dreg : {IDS_LO, IDS_HI})
+    {
+        sfpi::vUInt v = sfpi::dst_reg[dreg].mode<sfpi::DataLayout::U16>();
+        v_if (sfpi::vConstTileId >= ANSWER_TILE_ID_LIMIT)
+        {
+            v = 0;
+        }
+        v_endif;
+        sfpi::dst_reg[dreg].mode<sfpi::DataLayout::U16>() = v;
     }
 }
 
