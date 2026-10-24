@@ -116,8 +116,24 @@ inline void _llk_math_sdpa_custom_mm_init_(const std::uint32_t operandB_face_r_d
     math::_configure_default_zero_flag_state_();
 }
 
+/**
+ * @brief Prepare the ct_dim result tiles in DEST: seed them from the mask rows in SrcB, or zero them.
+ *
+ * @param dst_index: DEST row offset of the first result tile within the current half, a multiple of FACE_R_DIM.
+ * @param ct_dim: Number of result tiles, 1 to 16.
+ * @param mask_chunk: Seed each output face from the SrcB row @ref _llk_unpack_AB_sdpa_custom_mm_ unpacked for it
+ *                    (ct_dim * 2 rows) instead of zeroing the tiles.
+ * @note 16-bit DEST only: the clears are issued in 16-bit mode and the row-by-row fallback assumes a tile is 16
+ *       consecutive DEST rows.
+ * @note The dest RWC must be 0 on entry, as the MVMULs that follow require anyway; the mask path resets the
+ *       counters itself and the clear path leaves them untouched.
+ */
 inline void _llk_math_sdpa_custom_mm_mask_dest_(const std::uint32_t dst_index, const std::uint32_t ct_dim, bool mask_chunk = false)
 {
+    LLK_ASSERT(dst_index % FACE_R_DIM == 0, "sdpa_custom_mm: dst_index must be a multiple of FACE_R_DIM (a result tile is FACE_R_DIM DEST rows)");
+    LLK_ASSERT(
+        dst_index + ct_dim * FACE_R_DIM <= DEST_REGISTER_HALF_SIZE,
+        "sdpa_custom_mm: the ct_dim result tiles starting at dst_index must fit inside the current DEST half");
     // Zero Dest
     std::uint32_t dst_offset = dst_index + get_dest_buffer_base();
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_offset);
@@ -136,17 +152,52 @@ inline void _llk_math_sdpa_custom_mm_mask_dest_(const std::uint32_t dst_index, c
         // Zero Dest
         // ZEROACC auto-detects the DEST bank, so its tile index must be bank-relative (dst_index, not
         // dst_offset which already includes the bank base -> would double-count the bank on bank 1).
-        std::uint32_t dst_face = dst_index / 16;
-        // A tile is 2 faces of 8x16, so clearing 16 rows per tile is equivalent to clearing the tile
+        // A result tile is 2 faces of 8x16 = FACE_R_DIM DEST rows, the block ZEROACC's 16-row mode clears.
+        constexpr std::uint32_t DEST_ROWS_PER_TILE = FACE_R_DIM;
+        std::uint32_t dst_face                     = dst_index / DEST_ROWS_PER_TILE;
         for (std::uint32_t i = 0; i < ct_dim; i++)
         {
-            TT_ZEROACC(p_zeroacc::CLR_16, 0, 0, ADDR_MOD_7, dst_face);
+            // ZEROACC's 16-row mode takes an absolute 16-row block index within the DEST bank, but Blackhole
+            // derives that instruction's bank-select from (dest row offset + block index). Once the sum
+            // reaches the bank size the select flips and the clear lands 512 rows away in the other DEST
+            // half: this tile keeps the previous accumulation and 16 rows the packer may be reading are
+            // zeroed instead (measured on p150, see llk_math_eltwise_binary.h). Here the row offset is
+            // dst_index and the block index dst_index / 16 + i, so only the last slot of a 16-bit bank
+            // reaches it (496 + 31). The one-row mode addresses purely in rows (MATH_Offset + dest RWC +
+            // where; the dest RWC is 0 on entry, as the MVMULs below also require, and ADDR_MOD_7 leaves
+            // it there), so clear that tile row by row. This LLK clears a 16-bit DEST only.
+            const bool crosses_bank = (dst_index + dst_face) >= DEST_REGISTER_HALF_SIZE;
+            if (crosses_bank)
+            {
+                for (std::uint32_t row = 0; row < DEST_ROWS_PER_TILE; row++)
+                {
+                    TT_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0 /*use_32_bit_mode*/, 0 /*clear_zero_flags*/, ADDR_MOD_7, i * DEST_ROWS_PER_TILE + row /*where*/);
+                }
+            }
+            else
+            {
+                TT_ZEROACC(p_zeroacc::CLR_16, 0 /*use_32_bit_mode*/, 0 /*clear_zero_flags*/, ADDR_MOD_7, dst_face /*where*/);
+            }
             dst_face++;
         }
     }
 }
 
-// Call _llk_math_sdpa_custom_mm_init_ first; re-run it after any op that leaves the Src zero flag at keep.
+/**
+ * @brief Compute ct_dim result tiles of the SDPA matmul: prepare DEST with @ref _llk_math_sdpa_custom_mm_mask_dest_,
+ *        then accumulate the kt_dim-deep MVMUL walk, posting FPU_SFPU after every signal_granularity tiles.
+ *
+ * @tparam signal_granularity: Result tiles per FPU_SFPU post; must divide ct_dim.
+ * @param operandB_face_r_dim: in0 face height, 1, 2, 4 or 8; currently unused (the address mods are fixed), kept
+ *                             for symmetry with the unpack call.
+ * @param dst_index: DEST row offset of the first result tile within the current half, a multiple of FACE_R_DIM.
+ * @param kt_dim: Inner dimension in tiles.
+ * @param ct_dim: Number of result tiles, 1 to 16.
+ * @param mask_chunk: Seed DEST from the mask instead of zeroing it; must match the unpack call.
+ * @note Call @ref _llk_math_sdpa_custom_mm_init_ first; re-run it after any op that leaves the Src zero flag at keep.
+ * @note 16-bit DEST only, see @ref _llk_math_sdpa_custom_mm_mask_dest_.
+ * @note On the unpack thread, pair with @ref _llk_unpack_AB_sdpa_custom_mm_ (same kt_dim, ct_dim and mask_chunk).
+ */
 template <std::uint32_t signal_granularity = 1>
 inline void _llk_math_sdpa_custom_mm_(
     const std::uint32_t operandB_face_r_dim,
