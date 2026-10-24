@@ -41,6 +41,9 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU, TtSharedExpert
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
+# glue track: workers per link for the MoE x all-gather over TP; "0" = op default.
+_GLUE_MOE_XAG_WORKERS = int(os.environ.get("GLUE_MOE_XAG_WORKERS", "8")) or None
+
 # Four similarly-named dimensions, shown for Kimi-K3, the only variant where all four differ:
 #
 #   emb_dim            7168  model hidden. Gate input, shared-expert input, block in/out.
@@ -977,6 +980,8 @@ class TtMoe(LightweightModule):
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
                 num_links=self.col_num_links,
                 topology=self.col_topology,
+                # glue R0: 8 workers per link 85.3 us vs 90.5 default at [640,1536] -> 6144.
+                num_workers_per_link=_GLUE_MOE_XAG_WORKERS,
             )
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] x (after all_gather) shape: {x.shape}")

@@ -31,6 +31,9 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
 
+# glue track: workers per link for the q_a (and merged q_a+kv_a) TP reduce-scatter; "0" = op default.
+_GLUE_STEM_RS_WORKERS = int(os.environ.get("GLUE_STEM_RS_WORKERS", "8")) or None
+
 
 class ttMLA:
     MLA_WEIGHT_NAMES = [
@@ -595,6 +598,17 @@ class ttMLA:
         logger.info(f"Loaded {len(weights)} weights in MLA layer {layer_idx} (kv_only={kv_only})")
         if self._merge_qkv_a:
             self.qkv_a_proj_weight = self._concat_qkv_a_weight()
+        # glue track: q_a norm as a TP-distributed fused RMSNorm on the reduce-scatter output, BEFORE the
+        # all-gather (the replicated ttnn.rms_norm on [S, q_lora_rank] runs on one core per tile-row).
+        self._q_distnorm = (
+            os.environ.get("GLUE_Q_DISTNORM", "1") == "1"
+            and self.tp_factor > 1
+            and not kv_only
+            and not self._merge_qkv_a
+            and self._llama4_beta is None
+        )
+        if self._q_distnorm:
+            self._q_a_norm_weight_tp = self._tp_shard_norm_weight(self.q_a_layernorm_weight, self.q_lora_rank)
 
         # DSA indexer (v3.2 / GLM): self._has_indexer was resolved above (before the buffer alloc). The
         # TtIndexer owns the indexer stems / RoPE tables / device key-cache and reuses this MLA's q_a stem
@@ -1160,16 +1174,18 @@ class ttMLA:
             **self._get_mm_kwargs("q_a_proj", seq_len_local),
         )
 
+        if self._q_distnorm:
+            return self._q_a_latent_distnorm(qr, seq_len_local)
         # All reduce (skip for single-device TP)
         if self.tp_factor > 1:
             qr = self._tp_all_reduce(qr, self._q_a_latent_gather_output, seq_len_local)
         return self._q_a_norm(qr, norm_memory_config)
 
-    def _tp_all_reduce(self, x: ttnn.Tensor, gather_output: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
+    def _tp_reduce_scatter(self, x: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
         assert (
             seq_len_local == self.active_seq_len_local
         ), f"TP gather was preallocated for {self.active_seq_len_local} local tokens, got {seq_len_local}"
-        x = ttnn.experimental.reduce_scatter_minimal_async(
+        return ttnn.experimental.reduce_scatter_minimal_async(
             x,
             persistent_output_buffers=None,
             dim=3,
@@ -1179,7 +1195,12 @@ class ttMLA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=self.tp_ccl_topology,
             cluster_axis=self.tp_axis,
+            # Default is 2 workers below 1 MB per link; 8 measured 42.6 -> 38.5 us at [640,2048] (glue R0).
+            num_workers_per_link=_GLUE_STEM_RS_WORKERS,
         )
+
+    def _tp_all_reduce(self, x: ttnn.Tensor, gather_output: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
+        x = self._tp_reduce_scatter(x, seq_len_local)
         return ttnn.experimental.high_bw_all_gather(
             x,
             dim=3,
@@ -1187,6 +1208,55 @@ class ttMLA:
             cluster_axis=self.tp_axis,
             num_links=self.ccl_num_links,
         )
+
+    def _tp_shard_norm_weight(self, weight: ttnn.Tensor, width: int) -> ttnn.Tensor:
+        """Replicated ROW_MAJOR [1, 1, width/32, 32] norm weight -> TP-sharded TILE [1, 1, 1, width/tp] row,
+        the affine-weight form dit_fused_distributed_rmsnorm broadcasts (same as TtDistributedRmsNorm)."""
+        host = ttnn.to_torch(ttnn.get_device_tensors(weight)[0]).reshape(1, 1, 1, width)
+        dims = [None, None]
+        dims[self.tp_axis] = 3
+        return ttnn.from_torch(
+            host,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=dims),
+        )
+
+    def _q_a_latent_distnorm(self, qr: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
+        """RS -> TP-distributed fused RMSNorm on this chip's [S, q_lora/tp] slice -> AG of the normed latent.
+        Row-wise RMSNorm commutes with the column gather once the row statistics are all-reduced, which the
+        fused op does with one small stats all-gather. Returns the model-owned persistent gather buffer:
+        callers must NOT deallocate it."""
+        x = self._tp_reduce_scatter(qr, seq_len_local)
+        ttnn.deallocate(qr)
+        semaphores, stats = self.tt_ccl.get_fused_rmsnorm_resources(
+            x, self._q_a_norm_weight_tp, self.tp_axis, self.ccl_num_links
+        )
+        normed = ttnn.experimental.dit_fused_distributed_rmsnorm(
+            x,
+            self.tp_axis,
+            self.mesh_device,
+            semaphores,
+            topology=self.tp_ccl_topology,
+            epsilon=self.config.rms_norm_eps,
+            weight=self._q_a_norm_weight_tp,
+            persistent_output_buffer=stats,
+            num_preferred_links=self.ccl_num_links,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(x)
+        out = ttnn.experimental.high_bw_all_gather(
+            normed,
+            dim=3,
+            output_tensor=self._q_a_latent_gather_output,
+            cluster_axis=self.tp_axis,
+            num_links=self.ccl_num_links,
+        )
+        ttnn.deallocate(normed)
+        return out
 
     def _q_a_norm(self, qr: ttnn.Tensor, norm_memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
         return ttnn.rms_norm(
@@ -1266,7 +1336,8 @@ class ttMLA:
             self.q_b_proj_weight,
             **self._get_mm_kwargs("q_b_proj", seq_len_local),
         )
-        ttnn.deallocate(qr)
+        if not self._q_distnorm:  # distnorm qr IS the persistent TP gather buffer
+            ttnn.deallocate(qr)
 
         # The Q stem uses interleaved head creation. Write the two channel regions directly.
         tt_q_nope, tt_q_rope = ttnn.experimental.nlp_create_q_heads_split(

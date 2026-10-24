@@ -736,4 +736,111 @@ def test_glue_r0(mesh_device, variant, config_only):
         timer("F3 add L1+L1->L1", lambda: ttnn.add(x_l1, b_l1, memory_config=L1))
         _free([b_d, b_l1])
 
+    # ======================= G. R0-2: Option X q path, q_b input placement, L1 RS outputs =======================
+    if want("g"):
+        w_qa = torch.randn(H, Q_LORA) * (1 / H**0.5)
+        g_q = torch.rand(Q_LORA) + 0.5
+        tw_qa = mk(mesh, w_qa, ttnn.bfloat8_b, dims=(None, 0))
+        tg_q = mk(mesh, g_q.reshape(1, 1, -1, 32), layout=ttnn.ROW_MAJOR_LAYOUT)
+        # TP-sharded TILE row, built exactly like ttMLA._tp_shard_norm_weight
+        host_g = ttnn.to_torch(ttnn.get_device_tensors(tg_q)[0]).reshape(1, 1, 1, Q_LORA)
+        tg_q_tp = ttnn.from_torch(
+            host_g,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=DRAM,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(None, 3)),
+        )
+        qa_cfg, qb_cfg = glm_cfg("q_a_proj"), glm_cfg("q_b_proj")
+        buf_q = tt_ccl.get_mla_high_bw_all_gather_buffer(
+            name="q_a_latent", shape=[1, 1, S, Q_LORA], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
+        buf_q2 = ttnn.empty([1, 1, S, Q_LORA], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=DRAM)
+
+        def qa_mm():
+            return ttnn.linear(
+                x_l1, tw_qa, program_config=qa_cfg["program_config"], memory_config=L1, dtype=ttnn.bfloat16, compute_kernel_config=hifi2
+            )
+
+        def distnorm(src):
+            sems, stats = tt_ccl.get_fused_rmsnorm_resources(src, tg_q_tp, 1, 2)
+            return ttnn.experimental.dit_fused_distributed_rmsnorm(
+                src, 1, mesh, sems, topology=topo, epsilon=EPS, weight=tg_q_tp, persistent_output_buffer=stats,
+                num_preferred_links=2, dtype=ttnn.bfloat16, memory_config=DRAM,
+            )
+
+        def q_base(workers=None):
+            q = qa_mm()
+            q2 = rs(q, workers=workers)
+            ttnn.deallocate(q)
+            q3 = hbag(q2, buf_q)
+            ttnn.deallocate(q2)
+            return ttnn.rms_norm(q3, weight=tg_q, epsilon=EPS, memory_config=L1, compute_kernel_config=hifi2)
+
+        def q_x(workers=8, out=buf_q2):
+            q = qa_mm()
+            q2 = rs(q, workers=workers)
+            ttnn.deallocate(q)
+            q3 = distnorm(q2)
+            ttnn.deallocate(q2)
+            q4 = hbag(q3, out)
+            ttnn.deallocate(q3)
+            return None
+
+        try:
+            ref = q_base()
+            q_x()
+            cmp("G1 optionX qn (DRAM persistent) vs base", buf_q2, ref)
+            refs = {}
+            for d in (0, 5, 10, 31):
+                refs[d] = rmsnorm_ref(rows(x_full, d // TP)[0, 0] @ w_qa, g_q)
+            cmp("G1 optionX qn vs torch", buf_q2, refs)
+            cmp("G1 base qn vs torch", ref, refs)
+            _free(ref)
+        except Exception as e:
+            log(f"FAIL G1 pcc: {e}")
+            traceback.print_exc()
+        timer("G2 q path base (RS default workers)", lambda: q_base())
+        timer("G2 q path base (RS 8 workers)", lambda: q_base(8))
+        timer("G2 q path optionX (RS 8 workers, distnorm, AG)", lambda: q_x(8))
+        timer("G2 q path optionX (RS default, distnorm, AG)", lambda: q_x(None))
+        # q_b with in0 in L1 (production: norm output) vs DRAM (option X: persistent gather buffer)
+        w_qb = torch.randn(Q_LORA, 64 * (NOPE + ROPE)) * (1 / Q_LORA**0.5)
+        tw_qb = mk(mesh, w_qb, ttnn.bfloat8_b, dims=(None, 1))
+        qn_l1 = mk(mesh, torch.randn(1, 1, S * SP, Q_LORA), mem=L1, dims=(2, None))
+        qn_dram = mk(mesh, torch.randn(1, 1, S * SP, Q_LORA), mem=DRAM, dims=(2, None))
+        for tag, src in (("L1", qn_l1), ("DRAM", qn_dram)):
+            timer(
+                f"G3 q_b mm in0 {tag}",
+                lambda src=src: ttnn.linear(
+                    src, tw_qb, program_config=qb_cfg["program_config"], memory_config=qb_cfg["out_mem_config"],
+                    dtype=ttnn.bfloat16, compute_kernel_config=hifi2,
+                ),
+            )
+        # HB-AG into an L1 output buffer
+        try:
+            buf_l1 = ttnn.empty([1, 1, S, Q_LORA], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=L1)
+            q2 = rs(qa_mm(), workers=8)
+            o = hbag(q2, buf_l1)
+            o2 = hbag(q2, buf_q2)
+            cmp("G4 HBAG L1 out vs DRAM out", buf_l1, buf_q2)
+            timer("G4 HBAG [640,512]->2048 L1 out", lambda: [hbag(q2, buf_l1)] and None)
+            timer("G4 HBAG [640,512]->2048 DRAM out", lambda: [hbag(q2, buf_q2)] and None)
+        except Exception as e:
+            log(f"FAIL G4 HBAG L1: {type(e).__name__}: {str(e)[:300]}")
+        # o_proj RS with an L1 output, and the residual add reading it
+        o_full = mk(mesh, torch.randn(1, 1, S, H), mem=L1)
+        timer("G5 o_proj RS -> DRAM", lambda: rs(o_full))
+        timer("G5 o_proj RS -> L1", lambda: rs(o_full, mem=L1))
+        r_l1 = rs(o_full, mem=L1)
+        r_d = rs(o_full)
+        timer("G5 residual add x(DRAM) + rs(DRAM) -> DRAM", lambda: ttnn.add(x_dram, r_d))
+        timer("G5 residual add x(DRAM) + rs(L1) -> DRAM", lambda: ttnn.add(x_dram, r_l1))
+        # small TP RS (indexer wk partial [640,128])
+        wk_p = mk(mesh, torch.randn(1, 1, S, 128), mem=DRAM)
+        for w in (None, 4, 8):
+            timer(f"G6 RS wk [640,128] workers={w}", lambda w=w: rs(wk_p, workers=w))
+        _free([o_full, r_l1, r_d, wk_p, qn_l1, qn_dram])
+
     log("DONE")
