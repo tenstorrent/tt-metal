@@ -90,6 +90,15 @@ def ccl_semaphore_pool_depth() -> int:
     return max(depth, 4) if lane_ccl_async_enabled() else depth
 
 
+def allreduce_gather_sum_enabled() -> bool:
+    """GEMMA4_CCL_ALLREDUCE_AG=1: the TP all-reduce of decode rows (<= one row tile, 180 KB per chip on the Galaxy)
+    as ONE all_gather_async over the TP axis plus a local sum, instead of reduce_scatter_minimal_async + all_gather_async
+    (49 + 44 us per all-reduce, 2 per layer = 5.6 ms of the 32.6 ms step, window-2/3 profiles 2026-10-24). At this
+    message size the collectives are latency-bound: one collective's hops instead of two, the sum is ~5 us. Opt-in;
+    validated per arm by tests/unit/test_layer_lanes_traced.py (traced one-layer step delta + parity)."""
+    return os.environ.get("GEMMA4_CCL_ALLREDUCE_AG", "0") == "1"
+
+
 def default_ccl_topology(mesh_device=None):
     """Default CCL topology for Gemma4 TP collectives.
 
@@ -346,6 +355,26 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None, axis=Non
     chunks = ccl_chunks_per_sync()
     workers = ccl_num_workers_per_link()
     nbuf = ccl_num_buffers_per_channel()
+    if allreduce_gather_sum_enabled() and ccl_manager is not None and int(tensor.shape[-2]) <= 32:
+        # one all-gather of the partial sums along a fresh dim, then the local sum (allreduce_gather_sum_enabled)
+        gathered = ttnn.experimental.all_gather_async(
+            tensor,
+            persistent_output_buffer=None,
+            dim=1,
+            multi_device_global_semaphore=ccl_manager.get_ag_semaphore()[:2],
+            num_links=ccl_manager.num_links,
+            cluster_axis=tp_axis,
+            topology=topology,
+            memory_config=memory_config,
+            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+            chunks_per_sync=chunks,
+            num_workers_per_link=workers,
+            num_buffers_per_channel=nbuf,
+        )
+        tensor.deallocate(True)
+        summed = ttnn.sum(gathered, dim=1, keepdim=True, memory_config=memory_config)
+        ttnn.deallocate(gathered)
+        return summed
     if ccl_async_enabled():
         tp = mesh_config.tp if group_size is None else group_size
         rs_bufs = ccl_manager.get_persistent_rs_buffers(tensor, memory_config, tp, axis=tp_axis)
