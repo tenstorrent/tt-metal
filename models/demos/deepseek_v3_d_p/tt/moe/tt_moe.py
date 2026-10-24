@@ -14,6 +14,7 @@ This module assembles the full MoE pipeline:
 6. Final: Add routed output + shared output
 """
 
+import math
 import os
 from pathlib import Path
 from typing import Optional, Union
@@ -796,6 +797,72 @@ class TtMoe(LightweightModule):
             forwarding_buffer=self.combine_forwarding_buffer,
         )
 
+
+    def _slackfill(self):
+        """E0 probe: env TT_GLM_SLACKFILL = off | mm:<n> | a2a | ag | rs_linear | rs_ring, comma-separated.
+        Dummy inputs are allocated once (first forward = warm-up) and kept; outputs are freed after the join."""
+        spec = os.getenv("TT_GLM_SLACKFILL", "off").lower()
+        if spec in ("", "off", "0"):
+            return []
+        sd, cores = self.shared_sd_id, self.shared_sd_cores
+        cache = TtMoe.__dict__.get("_slackfill_cache")
+        if cache is None:
+            cache = {}
+            TtMoe._slackfill_cache = cache
+        md = self.mesh_device
+
+        def dev(name, shape, dtype=ttnn.bfloat16):
+            if name not in cache:
+                cache[name] = ttnn.from_torch(
+                    torch.randn(shape) * 0.01, device=md, dtype=dtype, layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=ttnn.ReplicateTensorToMesh(md))
+            return cache[name]
+
+        outs = []
+        for item in spec.split(","):
+            kind, _, arg = item.partition(":")
+            if kind == "mm":
+                x, w = dev("mm_x", (1, 1, 640, 2048)), dev("mm_w", (1, 1, 2048, 4096), ttnn.bfloat8_b)
+                g = cores.bounding_box().grid_size()
+                cfg = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=g, in0_block_w=8, out_subblock_h=1, out_subblock_w=1,
+                    per_core_M=math.ceil(20 / g.y), per_core_N=math.ceil(128 / g.x), transpose_mcast=False,
+                    fuse_batch=False, fused_activation=None)
+                for _ in range(int(arg or 8)):
+                    outs.append(ttnn.matmul(x, w, program_config=cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                                            sub_device_id=sd))
+            elif kind == "a2a":
+                q = dev("a2a_q", (1, 16, 640, 576))
+                outs.append(ttnn.experimental.all_to_all_async_generic(
+                    q, in_dim=1, out_dim=2, num_links=self.col_num_links, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    cluster_axis=1, subdevice_id=sd))
+            elif kind == "ag":
+                a = dev("ag_x", (1, 1, 640, 1536))
+                outs.append(ttnn.experimental.all_gather_async(
+                    a, dim=-1, cluster_axis=1,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=1),
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
+                    num_links=self.col_num_links, topology=self.col_topology, subdevice_id=sd))
+            elif kind in ("rs_linear", "rs_ring"):
+                topo = ttnn.Topology.Linear if kind == "rs_linear" else ttnn.Topology.Ring
+                a = dev("rs_x", (1, 1, 640, 6144))
+                key = f"rs_mid_{kind}"
+                if key not in cache:
+                    shape = ([2] if topo == ttnn.Topology.Linear else []) + [1, 1, 640, 6144]
+                    cache[key] = ttnn.from_torch(torch.zeros(shape), device=md, dtype=ttnn.bfloat16,
+                                                 layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                                                 mesh_mapper=ttnn.ReplicateTensorToMesh(md))
+                outs.append(ttnn.experimental.reduce_scatter_minimal_async(
+                    a, persistent_output_buffers=[cache[key]], dim=-1,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=1),
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
+                    num_links=self.col_num_links, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG, topology=topo, cluster_axis=1,
+                    subdevice_id=sd))
+            else:
+                raise ValueError(f"TT_GLM_SLACKFILL item {item!r}")
+        return outs
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -1021,12 +1088,18 @@ class TtMoe(LightweightModule):
         shared_output = self.shared_expert(x)
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
+        # E0 slack-fill physics probe (overlap design, env TT_GLM_SLACKFILL, default off): extra placeable dummy
+        # work on the shared-expert sub-device after the shared expert, concurrent with dispatch. Measures whether
+        # the dispatch slack can be filled for free and which fabric ops can run next to dispatch. Numerically inert.
+        slackfill_outputs = self._slackfill() if self.overlap_shared_expert_with_dispatch else []
 
         if self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
                 self._trace_controller.sub_device_clear()
             else:
                 self.mesh_device.clear_loaded_sub_device_manager()
+        for t in slackfill_outputs:  # after the join: nothing in flight can still use them
+            ttnn.deallocate(t)
         # NOTE: padding_config is memoized + owned by the gate (build_padding_config caches it per
         # actual_isl so a captured trace's replay reuses the same device tensor instead of re-issuing a
         # host from_torch). Do NOT deallocate it here — it is reused across forwards/replays; freeing it
