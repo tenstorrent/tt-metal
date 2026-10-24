@@ -18,11 +18,13 @@ def _mesh_device():
 
 
 class ReplicaMismatchError(ValueError):
-    """A tensor's label says two devices hold copies of the same data, and they do not.
+    """A tensor's label does not match its shards: devices the label calls replicas of each other hold different data,
+    or the label lists a device that holds no shard, or leaves out one that does.
 
-    ``Sharding.gather`` keeps one copy per ``Replicate`` mesh axis, so a ``Replicate`` label over data that differs
-    across that axis would silently drop every copy but the first. The check is ``ttnn.verify_shards_match_topology``,
-    the one the flatbuffer writer runs before ``dump_tensor`` writes one copy per replica group."""
+    ``Sharding.gather`` keeps one copy per ``Replicate`` mesh axis and composes the shards the label lists, so such a
+    label would silently drop or misplace data. The check is ``ttnn.verify_shards_match_topology``, the one the
+    flatbuffer writer runs before ``dump_tensor`` writes one copy per replica group; its message says which mismatch it
+    found."""
 
 
 def _fatal_message(error: BaseException) -> str:
@@ -99,11 +101,12 @@ class Sharding:
         Replicate axis contributes one copy.
 
         With ``verify_replicas`` (off by default; ``save_checkpoint`` turns it on),
-        ``ttnn.verify_shards_match_topology`` checks the host copy first: the shards the label calls replicas of each
-        other must hold the same values (their tile padding may differ), else ``ReplicaMismatchError`` is raised, i.e.
-        the label does not describe the data and keeping one copy would drop the others. The check compares shards
-        already on the host, so it moves no data; replicas whose bytes match cost one memcmp, and it allocates only to
-        decode replicas whose padding differs in a layout it cannot walk in place, such as block floats."""
+        ``ttnn.verify_shards_match_topology`` checks the host copy first: the label must cover the shards both ways, and
+        the shards it calls replicas of each other must hold the same values (their tile padding may differ), else
+        ``ReplicaMismatchError`` is raised, i.e. the label does not describe the data and composing by it would drop or
+        misplace some. The check compares shards already on the host, so it moves no data; replicas whose bytes match
+        cost one memcmp, and it allocates only to decode replicas whose padding differs in a layout it cannot walk in
+        place, such as block floats."""
         value = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
         dtype = value.dtype
         if self._is_single_device():
@@ -114,8 +117,7 @@ class Sharding:
                 ttnn.verify_shards_match_topology(host)
             except RuntimeError as e:
                 raise ReplicaMismatchError(
-                    f"labelled {self.describe()}, but the copies that label calls replicas of each other differ, so "
-                    f"the data is not replicated there; saving one copy would drop the others ({_fatal_message(e)})"
+                    f"labelled {self.describe()}, which does not match its shards ({_fatal_message(e)})"
                 ) from e
         rank = len(value.shape)
         shard_dims = {p.dim % rank for p in self._placements if isinstance(p, ttnn.PlacementShard)}
