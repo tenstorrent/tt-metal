@@ -306,6 +306,11 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreBlockInter
             ComputeHardwareConfig compute_cfg_gen2;
             compute_cfg_gen2.enable_32_bit_dest = compute_cfg.enable_32_bit_dest;
             compute_cfg_gen2.unpack_modes = compute_cfg.unpack_modes;  // TODO(#52269): copied from WH/BH
+            // Quasar unpacks Int32 only into DEST.
+            if (a.dtype() == DataType::INT32) {
+                compute_cfg_gen2.enable_32_bit_dest = true;
+                compute_cfg_gen2.unpack_modes.insert({in_dfb_of(set), UnpackMode::UnpackToDest});
+            }
             compute_hw = compute_cfg_gen2;
         }
 
