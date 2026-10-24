@@ -22,6 +22,16 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_AB_matmul.h"
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_ROW_LE_8)
+constexpr std::uint32_t matmul_max_row_tiles = 8;
+#elif defined(ARCH_BLACKHOLE)
+constexpr std::uint32_t matmul_max_row_tiles = get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
+#endif
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_KT_PER_SECTION, MATMUL_OUT_FORMAT>();
+#elif defined(ARCH_BLACKHOLE)
+constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync>();
+#endif
 #include "llk_unpack_common.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -52,6 +62,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_B           = params.buffer_B;
 #endif
 
+#ifdef ARCH_BLACKHOLE
+    // the test chooses the 8-bit stream at compile time, as a kernel's compile-time formats do
+#ifdef MATMUL_STREAM_NARROW
+    constexpr bool stream_narrow = !is_fp32_dest_acc_en;
+#else
+    constexpr bool stream_narrow = false;
+#endif
+#ifdef MATMUL_STREAM_Z
+    constexpr std::uint32_t stream_z = 4;
+#else
+    constexpr std::uint32_t stream_z = 0;
+#endif
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, false, stream_narrow, stream_z
+#define MATMUL_UNPACK_TEMPLATE_ARGS \
+    0, 0, false, get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(), matmul_hoist_rows, matmul_max_row_tiles, stream_z
+#else
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
+#define MATMUL_UNPACK_TEMPLATE_ARGS
+#endif
+
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -65,17 +95,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces_A, // in0
             TILE_SIZE_UNPACK_B,
             TILE_SIZE_UNPACK_A);
-        _llk_unpack_AB_matmul_init_<>(
+        _llk_unpack_AB_matmul_init_<MATMUL_UNPACK_INIT_TEMPLATE_ARGS>(
             UNPACK_TRANSPOSE_FACES,
             CT_DIM,
             RT_DIM,
             KT_DIM,
             in1_tile_r_dim < FACE_R_DIM ? in1_tile_r_dim : FACE_R_DIM,
             in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM,
-            num_faces_B,     // in1
-            num_faces_A,     // in0
-            PARTIAL_FACE_B,  // in1
-            PARTIAL_FACE_A); // in0
+            num_faces_B,    // in1
+            num_faces_A,    // in0
+            PARTIAL_FACE_B, // in1
+            PARTIAL_FACE_A);
         PROFILER_SYNC();
     }
     {
@@ -95,9 +125,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_K_LOOP)
+                    _llk_unpack_AB_matmul_k_<get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(), stream_z>(
+                        L1_ADDRESS(buffer_A[0]),
+                        L1_ADDRESS(buffer_B[0]),
+                        0,
+                        0,
+                        TILE_SIZE_UNPACK_B,
+                        TILE_SIZE_UNPACK_A,
+                        PARTIAL_FACE_B,
+                        PARTIAL_FACE_A,
+                        CT_DIM,
+                        RT_DIM,
+                        KT_DIM,
+                        KT_DIM,
+                        CT_DIM);
+#else
                     for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
-                        _llk_unpack_AB_matmul_<>(
+                        _llk_unpack_AB_matmul_<MATMUL_UNPACK_TEMPLATE_ARGS>(
                             L1_ADDRESS(buffer_A[0]),
                             L1_ADDRESS(buffer_B[0]),
                             j,
@@ -110,6 +156,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             RT_DIM,
                             KT_DIM);
                     }
+#endif
                 }
             }
         }
@@ -118,11 +165,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
 }
 
 #endif
+// zone markers of the other threads keep their line numbers
+#line 146
 
 #ifdef LLK_TRISC_MATH
 
 #include "llk_math_common.h"
 #include "llk_math_matmul.h"
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+constexpr bool matmul_tile_mop = !matmul_math_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_KT_PER_SECTION, MATMUL_OUT_FORMAT>();
+#else
+constexpr bool matmul_tile_mop = false;
+#endif
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_IN1_ALT)
+constexpr int matmul_in1_order = 1;
+#else
+constexpr int matmul_in1_order = 0;
+#endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -153,7 +212,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-        _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
+        _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, matmul_in1_order, !(dest_sync == DstSync::SyncHalf && is_fp32_dest_acc_en), dest_sync == DstSync::SyncFull>(
             in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, PARTIAL_FACE_MATH, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
         PROFILER_SYNC();
     }
@@ -174,7 +233,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
-                        _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(DST_INDEX, CT_DIM, RT_DIM);
+                        _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop>(DST_INDEX, CT_DIM, RT_DIM);
                     }
                 }
             }
@@ -191,9 +250,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         "Matmul block exceeds destination capacity");
                     for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
-                        _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(DST_INDEX, CT_DIM, RT_DIM);
+                        _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop>(DST_INDEX, CT_DIM, RT_DIM);
                     }
-                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+                    constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b;
+                    #else
+                    constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3;
+                    #endif
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en, fused_post_flip>();
                 }
             }
         }
