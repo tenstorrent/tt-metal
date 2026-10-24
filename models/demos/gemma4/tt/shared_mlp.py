@@ -271,7 +271,7 @@ class SharedMLP:
         if lane_sharded:
             # Slice-3 choreography: rows are lane-local but the weights are
             # fractured across lanes, so gather all lanes' rows first ...
-            hidden_states = ccl_lane_gather_rows(hidden_states, self.mesh_config)
+            hidden_states = ccl_lane_gather_rows(hidden_states, self.mesh_config, ccl_manager=self.ccl_manager)
             owner = getattr(self.mesh_config, "_g4_single_lane_prefill_owner", None)
             if (
                 owner is not None

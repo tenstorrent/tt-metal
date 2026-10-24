@@ -71,6 +71,25 @@ def ccl_persistent_buffers_enabled() -> bool:
     return os.environ.get("GEMMA4_CCL_PERSISTENT_BUF", "1").lower() not in ("0", "false", "no")
 
 
+def lane_ccl_async_enabled() -> bool:
+    """GEMMA4_LANE_CCL_ASYNC=1: the lane-axis gather / scatter run as the async collectives with the CCLManager's
+    pre-created global semaphores and a barrier semaphore, like the TP all-reduce, instead of the generic ops that
+    create their own semaphores per program. Structural fix for the (2,4) line-fabric race (tt-triage 2026-10-24:
+    a Linear lane-axis reduce-scatter completes on the end columns first, the middle columns enter the TP collective
+    unaligned and a late remote write of the previous collective corrupts a reused L1 semaphore): the barrier aligns
+    the participants before any data write and the pool depth (>= 4 under this flag) keeps consecutive collectives on
+    distinct semaphores. Valid inside traces (no host synchronize). Default off until the block kernel gate validates
+    it; the served Galaxy keeps the generic ops."""
+    return os.environ.get("GEMMA4_LANE_CCL_ASYNC", "0") == "1"
+
+
+def ccl_semaphore_pool_depth() -> int:
+    """Rotation depth of the CCLManager's rs / ag / barrier semaphore pools (GEMMA4_CCL_SEM_POOL_DEPTH, default 2;
+    at least 4 with GEMMA4_LANE_CCL_ASYNC=1, where the lane collectives share the pools with the TP all-reduce)."""
+    depth = max(2, int(os.environ.get("GEMMA4_CCL_SEM_POOL_DEPTH", "2")))
+    return max(depth, 4) if lane_ccl_async_enabled() else depth
+
+
 def default_ccl_topology(mesh_device=None):
     """Default CCL topology for Gemma4 TP collectives.
 
@@ -158,7 +177,7 @@ class CCLManager:
         self._rs_semaphores = []
         self._ag_semaphores = []
         self._barrier_semaphores = []
-        for _ in range(2):
+        for _ in range(ccl_semaphore_pool_depth()):
             self._rs_semaphores.append([ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(3)])
             self._ag_semaphores.append([ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(3)])
             self._barrier_semaphores.append(ttnn.create_global_semaphore(mesh_device, core_range_set, 0))
@@ -173,21 +192,21 @@ class CCLManager:
         self._persistent_rs_inter: dict = {}
 
     def get_rs_semaphore(self):
-        """Returns list of 3 semaphores for reduce_scatter (cycles double-buffer)."""
+        """Returns list of 3 semaphores for reduce_scatter (cycles the pool; depth ``ccl_semaphore_pool_depth``)."""
         sems = self._rs_semaphores[self._rs_idx]
-        self._rs_idx = (self._rs_idx + 1) % 2
+        self._rs_idx = (self._rs_idx + 1) % len(self._rs_semaphores)
         return sems
 
     def get_ag_semaphore(self):
-        """Returns list of 3 semaphores for all_gather (cycles double-buffer)."""
+        """Returns list of 3 semaphores for all_gather (cycles the pool)."""
         sems = self._ag_semaphores[self._ag_idx]
-        self._ag_idx = (self._ag_idx + 1) % 2
+        self._ag_idx = (self._ag_idx + 1) % len(self._ag_semaphores)
         return sems
 
     def get_barrier_semaphore(self):
-        """Returns single barrier semaphore (cycles double-buffer)."""
+        """Returns single barrier semaphore (cycles the pool)."""
         sem = self._barrier_semaphores[self._barrier_idx]
-        self._barrier_idx = (self._barrier_idx + 1) % 2
+        self._barrier_idx = (self._barrier_idx + 1) % len(self._barrier_semaphores)
         return sem
 
     def get_all_reduce_semaphores(self):
@@ -443,16 +462,34 @@ def lane_ccl_sync_enabled(mesh_config) -> bool:
     )
 
 
-def ccl_lane_gather_rows(tensor, mesh_config, memory_config=None, consume=True):
+def ccl_lane_gather_rows(tensor, mesh_config, memory_config=None, consume=True, ccl_manager=None):
     """All-gather the row dim across lanes so each chip's fractured weight chunk sees every lane's rows.
 
     ``consume`` frees ``tensor`` after the gather; pass False for a tensor the caller still owns (the decoder layer
     frees ``expert_input`` itself after the MoE call, and a pad within the tile padding is only a view of it).
+    With ``GEMMA4_LANE_CCL_ASYNC=1`` and a ``ccl_manager`` the gather is ``all_gather_async`` on the manager's
+    semaphores with a barrier (``lane_ccl_async_enabled``).
     """
     if mesh_config is None or not getattr(mesh_config, "lane_sharded", False):
         return tensor
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
-    gathered = ttnn.all_gather(tensor, dim=2, cluster_axis=mesh_config.sp_axis, memory_config=memory_config)
+    if ccl_manager is not None and lane_ccl_async_enabled():
+        gathered = ttnn.experimental.all_gather_async(
+            tensor,
+            persistent_output_buffer=None,
+            dim=2,
+            multi_device_global_semaphore=ccl_manager.get_ag_semaphore()[:2],
+            num_links=ccl_manager.num_links,
+            cluster_axis=mesh_config.sp_axis,
+            topology=ccl_manager.topology,
+            memory_config=memory_config,
+            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+            chunks_per_sync=ccl_chunks_per_sync(),
+            num_workers_per_link=ccl_num_workers_per_link(),
+            num_buffers_per_channel=ccl_num_buffers_per_channel(),
+        )
+    else:
+        gathered = ttnn.all_gather(tensor, dim=2, cluster_axis=mesh_config.sp_axis, memory_config=memory_config)
     if consume:
         tensor.deallocate(True)
     if lane_ccl_sync_enabled(mesh_config):
@@ -468,13 +505,31 @@ def ccl_lane_scatter_rows(tensor, mesh_config, memory_config=None, ccl_manager=N
     if mesh_config is None or not getattr(mesh_config, "lane_sharded", False):
         return tensor
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
-    scattered = ttnn.reduce_scatter(
-        tensor,
-        dim=2,
-        cluster_axis=mesh_config.sp_axis,
-        memory_config=memory_config,
-        use_l1_small_for_semaphores=ccl_semaphores_in_l1_small(tensor.device()),
-    )
+    if ccl_manager is not None and lane_ccl_async_enabled():
+        # the manager's semaphores + barrier: every lane enters aligned, the pool keeps consecutive collectives apart
+        scattered = ttnn.experimental.reduce_scatter_minimal_async(
+            tensor,
+            persistent_output_buffers=None,
+            dim=2,
+            multi_device_global_semaphore=ccl_manager.get_rs_semaphore(),
+            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+            num_links=ccl_manager.num_links,
+            cluster_axis=mesh_config.sp_axis,
+            memory_config=memory_config,
+            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ccl_manager.topology,
+            chunks_per_sync=ccl_chunks_per_sync(),
+            num_workers_per_link=ccl_num_workers_per_link(),
+            num_buffers_per_channel=ccl_num_buffers_per_channel(),
+        )
+    else:
+        scattered = ttnn.reduce_scatter(
+            tensor,
+            dim=2,
+            cluster_axis=mesh_config.sp_axis,
+            memory_config=memory_config,
+            use_l1_small_for_semaphores=ccl_semaphores_in_l1_small(tensor.device()),
+        )
     tensor.deallocate(True)
     if lane_ccl_sync_enabled(mesh_config):
         ttnn.synchronize_device(scattered.device())  # the columns enter the TP all-reduce aligned

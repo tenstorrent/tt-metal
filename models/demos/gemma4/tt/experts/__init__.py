@@ -189,15 +189,18 @@ class Gemma4Experts:
             if int(packed.shape[2]) != rows + pad_rows:  # the router op always writes one row tile (32 rows)
                 packed = ttnn.slice(packed, [0, 0, 0, 0], [1, 1, rows + pad_rows, int(packed.shape[3])])
             hidden_states = ccl_lane_gather_rows(
-                hidden_states, self.mesh_config, consume=self._owned_copy(hidden_states, x_in)
+                hidden_states,
+                self.mesh_config,
+                consume=self._owned_copy(hidden_states, x_in),
+                ccl_manager=self.ccl_manager,
             )
             if os.environ.get("GEMMA4_PACKED_GATHER_TILE", "0") == "1":
                 # fallback if the lane all_gather refuses the 32-byte ROW_MAJOR pages: gather one tile per lane
                 packed = ttnn.to_layout(packed, ttnn.TILE_LAYOUT)
-                packed = ccl_lane_gather_rows(packed, self.mesh_config)
+                packed = ccl_lane_gather_rows(packed, self.mesh_config, ccl_manager=self.ccl_manager)
                 packed = ttnn.to_layout(packed, ttnn.ROW_MAJOR_LAYOUT)
             else:
-                packed = ccl_lane_gather_rows(packed, self.mesh_config)
+                packed = ccl_lane_gather_rows(packed, self.mesh_config, ccl_manager=self.ccl_manager)
             assert self._use_decode_kernel(hidden_states), "the gathered rows exceed the kernel frame"
             out = self.moe_decode.forward(hidden_states, PackedRouting(packed, routing.k))
             out = ttnn.mesh_partition(out, dim=2, cluster_axis=self.mesh_config.ep_axis)
@@ -260,11 +263,14 @@ class Gemma4Experts:
                     sparse_idx = ttnn.concat([ttnn.to_layout(sparse_idx, ttnn.ROW_MAJOR_LAYOUT), pad_ids], dim=2)
                     sparse_idx = ttnn.to_layout(sparse_idx, ttnn.TILE_LAYOUT)
             hidden_states = ccl_lane_gather_rows(
-                hidden_states, self.mesh_config, consume=self._owned_copy(hidden_states, x_in)
+                hidden_states,
+                self.mesh_config,
+                consume=self._owned_copy(hidden_states, x_in),
+                ccl_manager=self.ccl_manager,
             )
-            dense_routing = ccl_lane_gather_rows(dense_routing, self.mesh_config)
+            dense_routing = ccl_lane_gather_rows(dense_routing, self.mesh_config, ccl_manager=self.ccl_manager)
             if sparse_idx is not None:
-                sparse_idx = ccl_lane_gather_rows(sparse_idx, self.mesh_config)
+                sparse_idx = ccl_lane_gather_rows(sparse_idx, self.mesh_config, ccl_manager=self.ccl_manager)
                 if os.environ.get("GEMMA4_SPARSE_DEBUG") == "1":
                     ttnn.synchronize_device(self.mesh_device)
                     logger.info(
@@ -315,7 +321,7 @@ class Gemma4Experts:
                 out = ttnn.mesh_partition(out, dim=2, cluster_axis=self.mesh_config.ep_axis)
             else:
                 out = self._forward(hidden_states, dense_routing, combine=False)
-                out = ccl_lane_scatter_rows(out, self.mesh_config)
+                out = ccl_lane_scatter_rows(out, self.mesh_config, ccl_manager=self.ccl_manager)
             if pad_rows:
                 out = ttnn.slice(out, [0, 0, 0, 0], [1, 1, rows, out.shape[-1]])
             return out
