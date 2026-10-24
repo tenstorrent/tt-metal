@@ -56,9 +56,6 @@ TT_KERNEL void writer(uint32_t work_item_start, uint32_t work_item_count, uint32
             noc.async_write_barrier();
             buffer.pop_front(items * tiles);
         };
-    auto drain = [&](auto& buffer, const auto& accessor, uint32_t tiles, uint32_t work_item) {
-        drain_items(buffer, accessor, tiles, &work_item, 1);
-    };
     // Compute runs the valid work items in batches of batch_items (those past the last whole batch one at a time) and
     // publishes each output for a whole batch, in this order.
     uint32_t valid_items = 0;
@@ -84,14 +81,18 @@ TT_KERNEL void writer(uint32_t work_item_start, uint32_t work_item_count, uint32
         drain_items(k_decay_transposed, k_decay_transposed_accessor, kc, batch, items);
         done += items;
     }
-    // Compute inverts every item's Akk together after the per-item terms, padded to max_items.
+    // Compute inverts every item's Akk together after the per-item terms, padded to max_items, and publishes them
+    // together: write them with one barrier.
+    uint32_t inverse_work_items[max_items];
     uint32_t inverse_items = 0;
     for (uint32_t index = 0; index < work_item_count; ++index) {
         const uint32_t work_item = work_item_start + index;
         if (work_item % num_chunks < valid_chunks) {
-            drain(t_inv, t_inv_accessor, cc, work_item);
-            ++inverse_items;
+            inverse_work_items[inverse_items++] = work_item;
         }
+    }
+    if (inverse_items != 0) {
+        drain_items(t_inv, t_inv_accessor, cc, inverse_work_items, inverse_items);
     }
     if (inverse_items != 0 && inverse_items != max_items) {
         t_inv.wait_front((max_items - inverse_items) * cc);
