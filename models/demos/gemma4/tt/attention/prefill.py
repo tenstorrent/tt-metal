@@ -30,6 +30,7 @@ from .operations import (
     effective_block_size,
     prefill_sdpa_program_config,
     prefill_short_lived_memcfg,
+    sdpa_device_grid,
     split_qkv_heads_prefill,
 )
 from .weights import AttentionWeights
@@ -732,7 +733,11 @@ def _sdpa_single_chunk(tt_q, tt_k, tt_v, config, seq_len, sliding_window, comput
             is_causal=False,
             scale=1.0,
             program_config=prefill_sdpa_program_config(
-                config.head_dim, seq_len, sliding_window=None, num_heads=int(tt_q.shape[1])
+                config.head_dim,
+                seq_len,
+                sliding_window=None,
+                num_heads=int(tt_q.shape[1]),
+                device_grid=sdpa_device_grid(tt_q),
             ),
             compute_kernel_config=compute_kernel_config,
         )
@@ -752,7 +757,11 @@ def _sdpa_single_chunk(tt_q, tt_k, tt_v, config, seq_len, sliding_window, comput
         scale=1.0,
         sliding_window_size=sliding_window,
         program_config=prefill_sdpa_program_config(
-            config.head_dim, seq_len, sliding_window=sliding_window, num_heads=int(tt_q.shape[1])
+            config.head_dim,
+            seq_len,
+            sliding_window=sliding_window,
+            num_heads=int(tt_q.shape[1]),
+            device_grid=sdpa_device_grid(tt_q),
         ),
         compute_kernel_config=compute_kernel_config,
         **out_kwargs,
@@ -1261,7 +1270,11 @@ def _prefill_forward_single(
                 scale=1.0,
                 sliding_window_size=sliding_window,
                 program_config=prefill_sdpa_program_config(
-                    config.head_dim, hist + seq_len, sliding_window=sliding_window, num_heads=int(q_cat.shape[1])
+                    config.head_dim,
+                    hist + seq_len,
+                    sliding_window=sliding_window,
+                    num_heads=int(q_cat.shape[1]),
+                    device_grid=sdpa_device_grid(q_cat),
                 ),
                 compute_kernel_config=sdpa_ckc,
             )
@@ -1749,7 +1762,11 @@ def prefill_forward(
         scale=1.0,
         sliding_window_size=sliding_window,
         program_config=prefill_sdpa_program_config(
-            config.head_dim, int(tt_q.shape[-2]), sliding_window=sliding_window, num_heads=int(tt_q.shape[1])
+            config.head_dim,
+            int(tt_q.shape[-2]),
+            sliding_window=sliding_window,
+            num_heads=int(tt_q.shape[1]),
+            device_grid=sdpa_device_grid(tt_q),
         ),
         compute_kernel_config=sdpa_compute_kernel_config,
     )

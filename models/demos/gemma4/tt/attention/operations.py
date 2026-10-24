@@ -283,8 +283,32 @@ def apply_rope_decode_peruser(tensor, cos_b, sin_b, prepared=None):
 # (8,8) / q 256 config, the explicit chunk / grid env vars win. The 12B (4 Q heads per chip) keeps its config until
 # its >768-position prefill defect is fixed (inventory 4m).
 PREFILL_SDPA_WIDE_MIN_HEADS = 8
-PREFILL_SDPA_WIDE_GRID = (12, 10)
+PREFILL_SDPA_WIDE_GRID = (12, 10)  # the measured grid on the Galaxy's 13x10 P150s; clamped to the device's grid below
 PREFILL_SDPA_WIDE_Q = 128
+PREFILL_SDPA_BASE_GRID = (8, 8)  # the fixed configs' grid (head_dim 512: (8, 4)), clamped the same way
+
+
+def sdpa_device_grid(tensor):
+    """``(x, y)`` of the compute grid the SDPA may use on ``tensor``'s device (GEMMA4_TEST_GRID=WxH caps it, the
+    forced-grid mechanism of custom_ops/grid.py). The CI Blackhole SKUs (harvested P150 / P300) have fewer columns
+    than the Galaxy's 13x10 P150s: a constant (12, 10) threw "num_cores <= compute_with_storage_grid_size" there
+    (1aaff4164cc CI), so every grid here derives from the device."""
+    g = tensor.device().compute_with_storage_grid_size()
+    gx, gy = int(g.x), int(g.y)
+    cap = os.environ.get("GEMMA4_TEST_GRID", "").strip().lower()
+    if cap and "x" in cap:
+        cx, cy = (int(v) for v in cap.split("x", 1))
+        gx, gy = min(gx, cx), min(gy, cy)
+    return gx, gy
+
+
+def _fit(grid, device_grid):
+    """``grid`` clamped to ``device_grid`` (None = unknown: assume the 8x8 class, never wider)."""
+    if device_grid is None:
+        return (min(grid[0], 8), min(grid[1], 8))
+    return (max(1, min(grid[0], int(device_grid[0]))), max(1, min(grid[1], int(device_grid[1]))))
+
+
 # Chips with fewer Q heads (the 12B at TP 4: 4 Q / 2 KV heads per chip) take the op's own defaults (no program
 # config, q = k = 32 on its full grid) instead: with our q 256 / k 128 config the 12B's logits collapse beyond ~768
 # positions on repetitive prompts (inventory 4m: every chunk config between q 32 and 256 moves the cliff, the op
@@ -292,7 +316,7 @@ PREFILL_SDPA_WIDE_Q = 128
 # unset = this rule, "1" = always the fixed configs, "0" = always the op defaults (diagnostics).
 
 
-def prefill_sdpa_program_config(head_dim, seq_len, sliding_window=None, num_heads=None):
+def prefill_sdpa_program_config(head_dim, seq_len, sliding_window=None, num_heads=None, device_grid=None):
     """Tuned SDPAProgramConfig for the non-chunked prefill path (seq <= 32768).
 
     The op defaults to ``q_chunk=k_chunk=32`` when ``program_config`` is omitted
@@ -305,7 +329,8 @@ def prefill_sdpa_program_config(head_dim, seq_len, sliding_window=None, num_head
     ``k_chunk`` at ``window//2`` so the K loop does not walk mostly-masked
     chunks (#51911). Chunks are multiples of 32 and clamped to ``seq_len``.
     Overridable via ``GEMMA4_PREFILL_SDPA_QCHUNK`` / ``_KCHUNK`` / ``_GRID``. With ``num_heads`` (q heads on this
-    chip) >= 8 on Blackhole the wide (12,10) / q 128 config applies (``GEMMA4_PREFILL_SDPA_WIDE=0`` opts out).
+    chip) >= 8 on Blackhole the wide (12,10) / q 128 config applies (``GEMMA4_PREFILL_SDPA_WIDE=0`` opts out);
+    every grid is clamped to ``device_grid`` (the device's compute grid; unknown = the 8x8 class).
     """
     seq_len = max(32, int(seq_len))
     progcfg = os.environ.get("GEMMA4_PREFILL_SDPA_PROGCFG", "")
@@ -325,13 +350,13 @@ def prefill_sdpa_program_config(head_dim, seq_len, sliding_window=None, num_head
     ):
         return None  # narrow chips (the 12B): the op defaults
     if head_dim >= 512:
-        grid = ttnn.CoreCoord(8, 4)
+        grid = ttnn.CoreCoord(*_fit((8, 4), device_grid))
         dq, dk = 128, 128
     else:
         # head_dim<=256: q=k=512 (~3.5 MB) and even q=k=256 (~1.58 MB) overflow
         # L1 (max 1.57 MB); q=256/k=128 keeps the static CBs in budget while
         # still giving wider Q parallelism than the default.
-        grid = ttnn.CoreCoord(8, 8)
+        grid = ttnn.CoreCoord(*_fit(PREFILL_SDPA_BASE_GRID, device_grid))
         dq, dk = 256, 128
     if (
         head_dim <= 256
@@ -340,8 +365,10 @@ def prefill_sdpa_program_config(head_dim, seq_len, sliding_window=None, num_head
         and is_blackhole()
         and os.environ.get("GEMMA4_PREFILL_SDPA_WIDE", "1") != "0"
     ):
-        grid = ttnn.CoreCoord(*PREFILL_SDPA_WIDE_GRID)
-        dq = PREFILL_SDPA_WIDE_Q
+        wide = _fit(PREFILL_SDPA_WIDE_GRID, device_grid)
+        if wide[0] * wide[1] > PREFILL_SDPA_BASE_GRID[0] * PREFILL_SDPA_BASE_GRID[1]:  # the grid admits the fill
+            grid = ttnn.CoreCoord(*wide)
+            dq = PREFILL_SDPA_WIDE_Q
     q_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_QCHUNK", dq))
     k_chunk = int(os.environ.get("GEMMA4_PREFILL_SDPA_KCHUNK", dk))
     # GEMMA4_PREFILL_SDPA_GRID=WxH (opt-in): the SDPA parallelises over heads x q-chunks, so the 12B's 4 q heads per
@@ -350,7 +377,7 @@ def prefill_sdpa_program_config(head_dim, seq_len, sliding_window=None, num_head
     grid_env = os.environ.get("GEMMA4_PREFILL_SDPA_GRID", "").strip().lower()
     if grid_env and "x" in grid_env:
         gw, gh = (int(v) for v in grid_env.split("x", 1))
-        grid = ttnn.CoreCoord(gw, gh)
+        grid = ttnn.CoreCoord(*_fit((gw, gh), device_grid))
     exp_approx = os.environ.get("GEMMA4_PREFILL_SDPA_EXP_APPROX", "0") == "1"
     if sliding_window is not None:
         # Wider k_chunk than the window walks masked tiles and can regress vs
@@ -432,7 +459,11 @@ def chunked_prefill_sdpa(
     # The non-chunked path's program config (grid / chunks per head_dim, the GEMMA4_PREFILL_SDPA_* overrides, the
     # units-fill rule over this chip's heads x the q-chunks of one prefill chunk); chunks clamp to one chunk's rows.
     program_config = prefill_sdpa_program_config(
-        head_dim, min(int(seq_len), PREFILL_CHUNK_SIZE), sliding_window=None, num_heads=int(nh)
+        head_dim,
+        min(int(seq_len), PREFILL_CHUNK_SIZE),
+        sliding_window=None,
+        num_heads=int(nh),
+        device_grid=sdpa_device_grid(tt_q),
     )
     q_chunk_size = program_config.q_chunk_size if program_config is not None else 32
     # HiFi4 + FP32 dest-acc: restore the softmax-reduce precision #47311 removed.
@@ -650,7 +681,7 @@ def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, sca
             scale=scale,
             sliding_window_size=sliding_window,
             program_config=prefill_sdpa_program_config(
-                head_dim, slice_len, sliding_window=sliding_window, num_heads=nh
+                head_dim, slice_len, sliding_window=sliding_window, num_heads=nh, device_grid=sdpa_device_grid(tt_q)
             ),
             compute_kernel_config=compute_kernel_config,
         )
