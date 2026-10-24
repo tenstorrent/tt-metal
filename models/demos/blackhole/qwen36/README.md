@@ -320,7 +320,7 @@ replay and hangs the device (seen: `tt_all_reduce`). `warmup_vision` therefore w
   **rejected** with a `ValueError` (patch count, warmed buckets, advice) instead of being run. This still fails that
   request's step (the engine reports the error) but avoids the device hang. If `max_pixels` is unset (vLLM default
   ~16 MP, ~65k patches) a WARNING is logged at warmup.
-- Test: `tests/test_vllm_vision_guard.py`.
+- Test: `tests/test_vllm_batched_mm.py::test_vision_guard`.
 
 ## Tests
 
