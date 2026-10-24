@@ -1255,16 +1255,14 @@ std::vector<Tensor> cosh_bw(
 std::vector<Tensor> logiteps_bw(
     const Tensor& grad, const Tensor& input, float eps, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    float low, high;
-    low = eps;
-    high = 1.0 - low;
+    const float low = eps < 0.0f ? 0.0f : eps;
+    const float high = 1.0f - low;
     Tensor grad_result = ttnn::multiply(
         grad,
         ttnn::reciprocal(ttnn::multiply(
             input, ttnn::rsub(input, 1.0f, std::nullopt, output_mem_config), std::nullopt, output_mem_config)),
         std::nullopt,
         output_mem_config);
-    Tensor t_eps = ttnn::full_like(input, eps, input.dtype(), input.layout(), std::nullopt, output_mem_config);
     Tensor ltl_gth = ttnn::logical_or(
         ttnn::lt(input, low, std::nullopt, output_mem_config),
         ttnn::gt(input, high, std::nullopt, output_mem_config),
@@ -1272,7 +1270,7 @@ std::vector<Tensor> logiteps_bw(
         output_mem_config);
     grad_result = where(
         ttnn::eq(ltl_gth, 1.0f, std::nullopt, output_mem_config),
-        where(ttnn::ltz(t_eps, output_mem_config), std::nanf(" "), 0.f, output_mem_config),
+        eps < 0.0f ? std::nanf("") : 0.0f,
         where(
             ttnn::logical_or(
                 ttnn::eq(input, 0.0f, std::nullopt, output_mem_config),
