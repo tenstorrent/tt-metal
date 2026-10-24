@@ -65,10 +65,17 @@ void matmul_blocks(DFB0& a, DFB1& b, DFB2& o) {
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t row = 0; row < subblock_rows; row++) {
+#ifdef ARCH_BLACKHOLE
+            if constexpr (!DST_ACCUM_MODE) {
+                pack_block_mop(0, o_id, subblock_rows * subblock_columns);
+            } else
+#endif
+            {
+                for (uint32_t row = 0; row < subblock_rows; row++) {
 #pragma GCC unroll 1
-                for (uint32_t column = 0; column < subblock_columns; column++) {
-                    pack_tile(row * subblock_columns + column, o_id, (mi + row) * Nt + ni + column);
+                    for (uint32_t column = 0; column < subblock_columns; column++) {
+                        pack_tile(row * subblock_columns + column, o_id, (mi + row) * Nt + ni + column);
+                    }
                 }
             }
             tile_regs_release();
@@ -105,9 +112,16 @@ void elementwise_binary(DFB0& a, DFB1& b, DFB2& o, uint32_t n) {
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        if constexpr (!DST_ACCUM_MODE) {
+            pack_block_mop(0, o_id, block_tiles);
+        } else
+#endif
+        {
 #pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
+            for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+                pack_tile(tile, o_id, block_start + tile);
+            }
         }
         tile_regs_release();
     }
@@ -151,9 +165,16 @@ void square_tiles(DFB0& in, DFB1& o, uint32_t n) {
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        if constexpr (!DST_ACCUM_MODE) {
+            pack_block_mop(0, o_id, block_tiles);
+        } else
+#endif
+        {
 #pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
+            for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+                pack_tile(tile, o_id, block_start + tile);
+            }
         }
         tile_regs_release();
     }
@@ -181,9 +202,16 @@ void exponential_tiles(DFB0& in, DFB1& o, uint32_t n) {
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        if constexpr (!DST_ACCUM_MODE) {
+            pack_block_mop(0, o_id, block_tiles);
+        } else
+#endif
+        {
 #pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
+            for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+                pack_tile(tile, o_id, block_start + tile);
+            }
         }
         tile_regs_release();
     }
@@ -209,9 +237,16 @@ void multiply_by_half(DFB0& in, DFB1& o, uint32_t n) {
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        if constexpr (!DST_ACCUM_MODE) {
+            pack_block_mop(0, o_id, block_tiles);
+        } else
+#endif
+        {
 #pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
+            for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+                pack_tile(tile, o_id, block_start + tile);
+            }
         }
         tile_regs_release();
     }
@@ -238,9 +273,16 @@ void reciprocal_tiles(DFB0& in, DFB1& o, uint32_t n) {
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        if constexpr (!DST_ACCUM_MODE) {
+            pack_block_mop(0, o_id, block_tiles);
+        } else
+#endif
+        {
 #pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
+            for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+                pack_tile(tile, o_id, block_start + tile);
+            }
         }
         tile_regs_release();
     }
@@ -268,9 +310,16 @@ void multiply_by_column(DFB0& a, DFB1& col, DFB2& o, uint32_t Mt, uint32_t Nt) {
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        if constexpr (!DST_ACCUM_MODE) {
+            pack_block_mop(0, o_id, block_tiles);
+        } else
+#endif
+        {
 #pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
+            for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+                pack_tile(tile, o_id, block_start + tile);
+            }
         }
         tile_regs_release();
     }
@@ -392,9 +441,16 @@ void transpose_tile_row_to_column(DFB0& in, DFB1& o, uint32_t row_tiles) {
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        if constexpr (!DST_ACCUM_MODE) {
+            pack_block_mop(0, o_id, block_tiles);
+        } else
+#endif
+        {
 #pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
+            for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+                pack_tile(tile, o_id, block_start + tile);
+            }
         }
         tile_regs_release();
     }

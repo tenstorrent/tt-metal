@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/experimental/reg_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
@@ -58,7 +59,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < n; ++i) {
             pack_tile(i, cb_out.get_cb_id());
         }
-        tile_regs_release();
+        tile_regs_release_lean();
 
         cb_out.push_back(n);
         cb_post_lhs.pop_front(n);
