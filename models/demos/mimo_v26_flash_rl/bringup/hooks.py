@@ -77,19 +77,19 @@ SLOTS = 2  # serving_answers.yaml slots
 
 
 def _attention_component(mesh, spec, layer):
-    from models.demos.mimo_v26_flash_rl.tt.attention import ChunkMeta, FullAttention, RopeTables
+    from models.demos.mimo_v26_flash_rl.tt.attention import Attention, ChunkMeta, RopeTables, layer_dims
     from models.demos.mimo_v26_flash_rl.tt.ccl import RingResources
     from models.demos.mimo_v26_flash_rl.tt.mesh_io import residual_to_host, residual_to_mesh
 
     ck = Checkpoint(spec.hf_dir, torch.float32)
     cfg = ck.config
-    if cfg["hybrid_layer_pattern"][layer] != 0:
-        raise NotImplementedError(f"layer {layer} is a sliding-window layer: no device module yet")
+    dims = layer_dims(cfg, layer)  # full or sliding (swa_ heads, theta, window, sink)
     chunk, max_seq = spec.get("target.chunk"), spec.get("target.seq")
-    rope_dim = int(cfg["head_dim"] * cfg["partial_rotary_factor"])  # the reference Layer's inv_freq formula
-    inv_freq = 1.0 / (cfg["rope_theta"] ** (torch.arange(0, rope_dim, 2, dtype=torch.int64).float() / rope_dim))
-    meta = ChunkMeta(mesh, chunk)
-    attn = FullAttention(
+    rope_dim = int(dims["head_dim"] * cfg["partial_rotary_factor"])  # the reference Layer's inv_freq formula
+    theta = dims["rope_theta"]
+    inv_freq = 1.0 / (theta ** (torch.arange(0, rope_dim, 2, dtype=torch.int64).float() / rope_dim))
+    meta = ChunkMeta(mesh, chunk, window=dims["window"])
+    attn = Attention(
         mesh,
         ck,
         layer,

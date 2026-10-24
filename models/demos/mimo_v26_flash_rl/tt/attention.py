@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Full (causal, no sink) attention of MiMo on the [8, 4] mesh: SP over axis 0, heads over TP axis 1.
+"""Attention of MiMo on the [8, 4] mesh: SP over axis 0, heads over TP axis 1. Full layers (0, 5, ..): causal, no
+sink, 1 kv head per chip. Sliding layers (1-4, ..): causal window 128 with a per-head sink, 2 kv heads per chip.
 
 Per chip, one chunk of 5120 tokens:
     x [1, 1, 160, 4096] local rows -> all_gather over TP -> [640, 4096] (the SP row's tokens)
@@ -11,6 +12,9 @@ Per chip, one chunk of 5120 tokens:
     -> RoPE (HF rotate_half) on dims 0-63 of q and k, cos / sin rows looked up at each local row's absolute position
     -> k, v written into the served caches (update_padded_kv_cache over SP, pad rows zeroed)
     -> ring_joint_sdpa causal over SP, reading the whole prefix from the caches (V head dim 128)
+       sliding layers: the 192-wide zero-padded v is also written to an unserved attention-only cache (the op's
+       sliding path needs V head dim == QK head dim), ring_joint_sdpa runs with sliding_window_size and
+       attention_sink over the compact predecessor halo, and the output is sliced back to 128
     -> concat heads [640, 2048] -> o_proj row-parallel (this rank's 2048 input columns) -> reduce_scatter over TP
     -> [1, 1, 160, 4096]
 
@@ -27,6 +31,9 @@ import ttnn
 from . import ccl
 from .kv_cache import LayerKV, chunk_positions
 from .settings import settings
+
+SWA_K_CHUNK = 128  # the ring SDPA's chunked sliding path accepts k chunk 128 only
+SWA_HALO = 128  # predecessor halo rows per slot: the window - 1 keys rounded up to whole k chunks
 
 
 def _compute_config(mesh, fidelity: str, fp32: bool, packer_l1_acc: bool = False):
@@ -54,8 +61,8 @@ class ChunkMeta:
     """Device-resident per-chunk metadata shared by the layers: slot, prefix length (kv_actual), end of the real
     tokens, and every local row's absolute position ([1, W] uint32 per SP row, replicated over TP)."""
 
-    def __init__(self, mesh, chunk: int):
-        self.mesh, self.chunk = mesh, chunk
+    def __init__(self, mesh, chunk: int, window: int | None = None):
+        self.mesh, self.chunk, self.window = mesh, chunk, window
         self.sp = tuple(mesh.shape)[0]
         self.slot = _scalar(mesh)
         self.kv_actual = _scalar(mesh)
@@ -68,6 +75,84 @@ class ChunkMeta:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(0, None)),
         )
+        # [1, 1, W, 1] bf16 per chip: 1 on the rows before valid_end, 0 on pad rows (multi-head caches zero their
+        # pad rows through it, zero_padded_kv_cache takes one head only)
+        self.valid_rows = ttnn.from_torch(
+            self._host_valid(0, chunk),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(0, None)),
+        )
+
+        # sliding layers: [1, 1, W, 2 * HALO + W] fp32 additive window mask (0 / -1e30) per chip over the keys
+        # [halo slot 0 | halo slot 1 | the chip's own rows] (see SlidingAttention below)
+        self.swa_mask = None
+        if window:
+            self.swa_mask = ttnn.from_torch(
+                self._host_swa_mask(0, chunk),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(0, None)),
+            )
+            sel, cached = self._host_halo_select(0, chunk)
+            self.halo_select, self.halo_cached = (
+                ttnn.from_torch(
+                    t,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(0, None)),
+                )
+                for t in (sel, cached)
+            )
+
+    def _halo_positions(self, p: torch.Tensor) -> torch.Tensor:
+        """[2 * HALO] key positions of the two halo slots of one chip's rows p (unused slot: -1e9)."""
+        breaks = [0] + [i for i in range(1, len(p)) if p[i] != p[i - 1] + 1]
+        halo = torch.full((2, SWA_HALO), -(10**9), dtype=torch.int64)
+        for slot, b in enumerate(breaks[:2]):
+            halo[slot] = p[b] - SWA_HALO + torch.arange(SWA_HALO)
+        return halo.flatten()
+
+    def _host_halo_select(self, start: int, end: int):
+        """Halo rows of this chunk's own tokens come from its bf16 k / v, not from the cache (the device's bf16 ->
+        bfloat8_b typecast on the cache write is biased, +0.3 %, which the sink-dominated softmax turns into a -5 %
+        norm error on each slab's first rows). sel [sp, 1, 2 HALO, chunk]: one-hot from a halo row to its row of the
+        SP all-gathered k (SP row s, local row i = column s W + i); cached [sp, 1, 2 HALO, 1]: 1 where the halo row
+        is before the chunk (from the cache, as the ring SDPA gathered it)."""
+        pos = self._host_positions(start)  # [sp, W]
+        where = {int(g): j for j, g in enumerate(pos.flatten().tolist())}
+        sel = torch.zeros(self.sp, 1, 2 * SWA_HALO, self.chunk)
+        cached = torch.zeros(self.sp, 1, 2 * SWA_HALO, 1)
+        for r in range(self.sp):
+            for j, g in enumerate(self._halo_positions(pos[r]).tolist()):
+                if start <= g < end:
+                    sel[r, 0, j, where[g]] = 1.0
+                elif 0 <= g < start:
+                    cached[r, 0, j, 0] = 1.0
+        return sel.to(torch.bfloat16), cached.to(torch.bfloat16)
+
+    def _host_swa_mask(self, start: int, end: int) -> torch.Tensor:
+        """Query row i (position p_i) sees key j (position k_j) when p_i - window < k_j <= p_i, k_j >= 0 and k_j <
+        end. Key positions: the chip's rows, and the 128 positions before each run of consecutive rows (the ring
+        SDPA's halo slots: slot 0 precedes the first run, slot 1 the second when the chunk wraps an SP slab)."""
+        pos = self._host_positions(start)  # [sp, W]
+        out = []
+        for r in range(self.sp):
+            p = pos[r]
+            keys = torch.cat((self._halo_positions(p), p))
+            qi, kj = p[:, None], keys[None, :]
+            ok = (kj <= qi) & (kj > qi - self.window) & (kj >= 0) & (kj < end)
+            out.append(torch.where(ok, 0.0, -1e30))
+        return torch.stack(out)[:, None].float()  # [sp, 1, W, 2 * HALO + W]
+
+    def _host_valid(self, start: int, end: int) -> torch.Tensor:
+        return (self._host_positions(start) < end).to(torch.bfloat16)[:, None, :, None]  # [sp, 1, W, 1]
 
     def _host_positions(self, start: int) -> torch.Tensor:
         return chunk_positions(start, self.sp, self.chunk)  # [sp, W]: SP row r -> its chip's [1, W]
@@ -91,6 +176,29 @@ class ChunkMeta:
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(0, None)),
         )
         ttnn.copy_host_to_device_tensor(h, self.positions)
+        h = ttnn.from_torch(
+            self._host_valid(start, end),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(0, None)),
+        )
+        ttnn.copy_host_to_device_tensor(h, self.valid_rows)
+        if self.swa_mask is not None:
+            h = ttnn.from_torch(
+                self._host_swa_mask(start, end),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(0, None)),
+            )
+            ttnn.copy_host_to_device_tensor(h, self.swa_mask)
+            for t, dev in zip(self._host_halo_select(start, end), (self.halo_select, self.halo_cached)):
+                h = ttnn.from_torch(
+                    t,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(0, None)),
+                )
+                ttnn.copy_host_to_device_tensor(h, dev)
 
 
 class RopeTables:
@@ -122,18 +230,37 @@ class RopeTables:
         return out
 
 
-def rank_weights(ck, layer_idx: int, cfg: dict, tp: int):
+def layer_dims(cfg: dict, layer_idx: int) -> dict:
+    """Heads, head dims, RoPE theta, window and sink of one layer (the reference Layer's config keys: sliding layers
+    read the ``swa_`` variants)."""
+    swa = cfg["hybrid_layer_pattern"][layer_idx] == 1
+    sfx = "swa_" if swa else ""
+    return {
+        "heads": cfg.get(f"{sfx}num_attention_heads", cfg["num_attention_heads"]),
+        "kv_heads": cfg.get(f"{sfx}num_key_value_heads", cfg["num_key_value_heads"]),
+        "head_dim": cfg.get(f"{sfx}head_dim", cfg["head_dim"]),
+        "v_head_dim": cfg.get(f"{sfx}v_head_dim", cfg["v_head_dim"]),
+        "rope_theta": cfg["swa_rope_theta"] if swa else cfg["rope_theta"],
+        "window": cfg["sliding_window"] if swa else None,
+        "sink": bool(cfg.get("add_swa_attention_sink_bias" if swa else "add_full_attention_sink_bias", False)),
+    }
+
+
+def rank_weights(ck, layer_idx: int, cfg: dict, tp: int, fold_scales: bool = True):
     """fp32 per-TP-rank weights in the checkpoint's [out, in] orientation (the linears run with transpose_b, so the
     bfloat8_b blocks of 16 run along K as in the precision model; [in, out] blocks along the output and costs single
     output columns up to 9x their error): qkv [tp, lh D + lkv D + lkv D, H] (q rows x D^-0.5, v rows x
     attention_value_scale and zero-padded 128 -> D so nlp_create_qkv_heads splits it) and o_proj [tp, H, lh Dv]
     (rank r's input columns). The checkpoint's own rank slabs: rank r holds q heads r*lh.., kv heads r*lkv.."""
-    heads, kv_heads, D, Dv = cfg["num_attention_heads"], cfg["num_key_value_heads"], cfg["head_dim"], cfg["v_head_dim"]
+    dims = layer_dims(cfg, layer_idx)
+    heads, kv_heads, D, Dv = dims["heads"], dims["kv_heads"], dims["head_dim"], dims["v_head_dim"]
     lh, lkv = heads // tp, kv_heads // tp
     p = f"model.layers.{layer_idx}.self_attn"
     wq, wk, wv = ck.qkv(f"{p}.qkv_proj", heads * D, kv_heads * D, kv_heads * Dv)
-    wq = wq.float() * D**-0.5
-    wv = wv.float() * (cfg.get("attention_value_scale") or 1.0)
+    wq, wv = wq.float(), wv.float()
+    if fold_scales:  # else the module applies them after the projection (sliding layers)
+        wq = wq * D**-0.5
+        wv = wv * (cfg.get("attention_value_scale") or 1.0)
     slabs = []
     for r in range(tp):
         q_r = wq[r * lh * D : (r + 1) * lh * D]
@@ -145,9 +272,9 @@ def rank_weights(ck, layer_idx: int, cfg: dict, tp: int):
     return torch.stack(slabs), wo.view(-1, tp, lh * Dv).permute(1, 0, 2).contiguous()
 
 
-class FullAttention:
-    """One full-attention layer (MiMo layers 0, 5, ...). ``layer`` is the reference Layer config (heads, dims,
-    rope); weights come from the checkpoint in fp32 and are rounded once to bfloat8_b on the device."""
+class Attention:
+    """One attention layer, full (MiMo layers 0, 5, ...) or sliding (1-4, ...), from ``layer_dims``; weights come
+    from the checkpoint in fp32 and are rounded once to bfloat8_b on the device."""
 
     def __init__(
         self,
@@ -165,10 +292,10 @@ class FullAttention:
     ):
         self.mesh, self.ring, self.meta, self.rope = mesh, ring, meta, rope
         self.sp, self.tp = tuple(mesh.shape)
-        self.heads = cfg["num_attention_heads"]
-        self.kv_heads = cfg["num_key_value_heads"]
-        self.head_dim = cfg["head_dim"]
-        self.v_head_dim = cfg["v_head_dim"]
+        dims = layer_dims(cfg, layer_idx)
+        self.heads, self.kv_heads = dims["heads"], dims["kv_heads"]
+        self.head_dim, self.v_head_dim = dims["head_dim"], dims["v_head_dim"]
+        self.window = dims["window"]
         self.rope_dim = int(self.head_dim * cfg["partial_rotary_factor"])
         assert self.heads % self.tp == 0 and self.kv_heads % self.tp == 0
         self.lh, self.lkv = self.heads // self.tp, self.kv_heads // self.tp
@@ -176,26 +303,84 @@ class FullAttention:
         self.local_seq = max_seq // self.sp
 
         # the softmax scale is folded into the q rows in fp32 and SDPA runs at scale 1 (the kernel may truncate a
-        # non-power-of-two scale to bf16: 192^-0.5 -0.54 %, known issue "SDPA attention sink ... truncated scale")
+        # non-power-of-two scale to bf16: 192^-0.5 -0.54 %, known issue "SDPA attention sink ... truncated scale").
+        # With scale 1 the kernel's sink term exp((sink - max) * scale) takes the checkpoint's sink logit as is.
         self.scale = 1.0
-        wqkv, wo = rank_weights(ck, layer_idx, cfg, self.tp)
+        # sliding layers keep the softmax and value scales out of the bfloat8_b weights and apply them after the
+        # projection, as the reference does: folded in, the rounding moved single o_proj output columns past their
+        # limit (layer 1 column 2331 0.19 vs 0.16)
+        self.fold_scales = not self.window
+        self.v_scale = cfg.get("attention_value_scale") or 1.0
+        self.true_scale = self.head_dim**-0.5
+        wqkv, wo = rank_weights(ck, layer_idx, cfg, self.tp, fold_scales=self.fold_scales)
+        if self.window and settings.get("SWA_WEIGHTS_BF16_FIRST"):
+            # fp32 -> bf16 -> bfloat8_b, as the precision model rounds them (fp32 -> bfloat8_b directly picks other
+            # shared exponents and doubled layer 1's K error vs the model: output column 529 0.13 vs 0.04)
+            wqkv, wo = wqkv.to(torch.bfloat16).float(), wo.to(torch.bfloat16).float()
         self.wqkv = self._sharded_weight(wqkv.unsqueeze(0))  # [1, tp, N, H] -> per chip [1, 1, N, H]
         self.wo = self._sharded_weight(wo.unsqueeze(0))
+        self.sink = self.sink32 = None
+        if dims["sink"]:  # [heads] -> per chip [1, lh, 1, 1] bf16 TILE: this rank's q heads
+            sink = ck.get(f"model.layers.{layer_idx}.self_attn.attention_sink_bias").float()
+            self.sink = ttnn.from_torch(
+                sink.to(torch.bfloat16).view(1, self.heads, 1, 1),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(None, 1)),
+            )
+            self.sink32 = ttnn.from_torch(
+                sink.view(1, self.heads, 1, 1),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(None, 1)),
+            )
+        self.swa_cfg = _compute_config(mesh, "HiFi4", True)
+        # the softmax scale as an fp32 tensor operand: a scalar operand is rounded to bf16 (192^-0.5 +0.13 %, which the
+        # sink-dominated softmax turned into a -1.4 % output bias)
+        self.scale32 = ttnn.from_torch(
+            torch.full((1, 1, 1, 1), self.head_dim**-0.5),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
 
-        self.kv = LayerKV(mesh, slots, self.lkv, self.local_seq, self.head_dim, self.v_head_dim)
+        self.kv = LayerKV(
+            mesh,
+            slots,
+            self.lkv,
+            self.local_seq,
+            self.head_dim,
+            self.v_head_dim,
+            attn_v_dim=self.head_dim if self.window else None,
+        )
         self.mm_cfg = _compute_config(
             mesh, settings.get("ATTN_FIDELITY"), settings.get("ATTN_FP32_ACC"), packer_l1_acc=True
         )
         self.rope_cfg = _compute_config(mesh, "HiFi4", True)
         # fp32 dest off: the kv_actual_isl_tensor path runs only the streaming SDPA compute (TT_FATAL otherwise)
         self.sdpa_cfg = _compute_config(mesh, settings.get("SDPA_FIDELITY"), False)
-        self.sdpa_program = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=ring.sdpa_grid,
-            q_chunk_size=settings.get("SDPA_Q_CHUNK"),
-            k_chunk_size=settings.get("SDPA_K_CHUNK"),
-            exp_approx_mode=False,
-            segmented_accumulation=settings.get("SDPA_SEGMENTED"),
-        )
+        if self.window:
+            # the op's chunked sliding path takes q chunks 64 / 128 and k chunk 128 only (the halo granularity)
+            self.sdpa_program = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ring.sdpa_grid,
+                q_chunk_size=settings.get("SWA_SDPA_Q_CHUNK"),
+                k_chunk_size=SWA_K_CHUNK,
+                exp_approx_mode=False,
+            )
+        else:
+            self.sdpa_program = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ring.sdpa_grid,
+                q_chunk_size=settings.get("SDPA_Q_CHUNK"),
+                k_chunk_size=settings.get("SDPA_K_CHUNK"),
+                exp_approx_mode=False,
+                segmented_accumulation=settings.get("SDPA_SEGMENTED"),
+            )
 
     def _sharded_weight(self, w: torch.Tensor):
         return ttnn.from_torch(
@@ -213,7 +398,10 @@ class FullAttention:
         w = self.chunk // self.sp
         g = torch.arange(length)
         row, local = (g // w) % self.sp, (g // self.chunk) * w + g % w
-        for name, src in (("key", key), ("value", value)):
+        srcs = [("key", key), ("value", value)]
+        if self.kv.attn_value is not None:
+            srcs.append(("attn_value", torch.nn.functional.pad(value.float(), (0, self.head_dim - value.shape[-1]))))
+        for name, src in srcs:
             cache = getattr(self.kv, name)
             width = src.shape[-1]
             host = torch.zeros(self.sp, self.tp, self.kv.slots, self.lkv, self.local_seq, width)
@@ -263,11 +451,20 @@ class FullAttention:
         k = self._rope(k, cos, sin, R)
         cos.deallocate(True)
         sin.deallocate(True)
+        if not self.fold_scales:
+            v = ttnn.multiply(v, self.v_scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if self.lkv > 1:  # pad rows zeroed before the write (zero_padded_kv_cache below takes single-head caches only)
+            k = self._zero_pad_rows(k)
+            v = self._zero_pad_rows(v)
         v_full = v
         v = ttnn.slice(v_full, (0, 0, 0, 0), (1, self.lkv, v_full.shape[2], Dv), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        v_full.deallocate(True)
+        writes = [(self.kv.key, k), (self.kv.value, v)]
+        if self.kv.attn_value is not None:  # sliding: the zero-padded 192-wide v for the SDPA (its pad columns are 0)
+            writes.append((self.kv.attn_value, v_full))
+        else:
+            v_full.deallocate(True)
 
-        for cache, t in ((self.kv.key, k), (self.kv.value, v)):
+        for cache, t in writes:
             t8 = ttnn.typecast(t, ttnn.bfloat8_b)
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 cache,
@@ -278,59 +475,27 @@ class FullAttention:
                 num_layers=1,
                 cluster_axis=ccl.SP_AXIS,
             )
-            ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
-                cache,
-                self.meta.slot,
-                self.meta.valid_end,
-                layer_idx=0,
-                num_layers=1,
-                chunk_size_global=self.chunk,
-                cluster_axis=ccl.SP_AXIS,
-                pad_align=ttnn.TILE_SIZE,
-            )
+            if self.lkv == 1:
+                ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                    cache,
+                    self.meta.slot,
+                    self.meta.valid_end,
+                    layer_idx=0,
+                    num_layers=1,
+                    chunk_size_global=self.chunk,
+                    cluster_axis=ccl.SP_AXIS,
+                    pad_align=ttnn.TILE_SIZE,
+                )
             t8.deallocate(True)
-            t.deallocate(True)
+            if not self.window:
+                t.deallocate(True)
 
-        gather = self.sp * self.local_seq
-        # the fork adds only exact_exp (accurate softmax exp; the source op's streaming kernel hard-codes the
-        # Schraudolph approximation, ~1.3 % rel error on this layer's attention output)
-        exact = settings.get("SDPA_EXACT_EXP")
-        sdpa = (
-            ttnn.bringup.ring_joint_scaled_dot_product_attention
-            if exact
-            else (ttnn.transformer.ring_joint_scaled_dot_product_attention)
-        )
-        extra = {"exact_exp": True} if exact else {}
-        out, _, _ = sdpa(
-            q,
-            self.kv.key,
-            self.kv.value,
-            None,
-            None,
-            None,
-            persistent_output_buffer_k=self.ring.gather_buffer("full_k", self.lkv, gather, D, ttnn.bfloat8_b),
-            persistent_output_buffer_v=self.ring.gather_buffer("full_v", self.lkv, gather, Dv, ttnn.bfloat8_b),
-            joint_strategy="rear",
-            logical_n=gather,
-            program_config=self.sdpa_program,
-            scale=self.scale,
-            compute_kernel_config=self.sdpa_cfg,
-            dim=2,
-            multi_device_global_semaphore=self.ring.semaphores,
-            num_links=self.ring.num_links,
-            cluster_axis=ccl.SP_AXIS,
-            mesh_device=self.mesh,
-            topology=ttnn.Topology.Linear,
-            ccl_core_grid_offset=self.ring.ccl_core_grid_offset,
-            use_column_major_ccl=True,
-            is_causal=True,
-            is_balanced=False,
-            slot_id=self.meta.slot,
-            kv_actual_isl_tensor=self.meta.kv_actual,
-            kv_cache_num_layers=1,
-            kv_cache_layer_idx=0,
-            **extra,
-        )
+        if self.window:
+            out = self._sliding_sdpa(q, k, v)
+            for t in (k, v, v_full):
+                t.deallocate(True)
+        else:
+            out = self._full_sdpa(q)
         q.deallocate(True)
         heads = ttnn.experimental.nlp_concat_heads(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         out.deallocate(True)
@@ -351,6 +516,173 @@ class FullAttention:
             y = ttnn.typecast(y32, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             y32.deallocate(True)
         return y
+
+    def _zero_pad_rows(self, t):
+        """t [1, heads, W, d] x the chunk's row-validity mask: rows at or past valid_end become 0 (exact for the
+        rest), so the cache's pad rows are zero once written, as zero_padded_kv_cache leaves them."""
+        out = ttnn.multiply(t, self.meta.valid_rows, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        t.deallocate(True)
+        return out
+
+    def _sdpa_op(self):
+        # the fork adds exact_exp (accurate softmax exp; the source op's streaming kernel hard-codes the
+        # Schraudolph approximation, ~1.3 % rel error on layer 0's attention output)
+        if settings.get("SDPA_EXACT_EXP"):
+            return ttnn.bringup.ring_joint_scaled_dot_product_attention, {"exact_exp": True}
+        return ttnn.transformer.ring_joint_scaled_dot_product_attention, {}
+
+    def _ring_args(self):
+        return dict(
+            joint_strategy="rear",
+            program_config=self.sdpa_program,
+            scale=self.scale,
+            compute_kernel_config=self.sdpa_cfg,
+            dim=2,
+            multi_device_global_semaphore=self.ring.semaphores,
+            num_links=self.ring.num_links,
+            cluster_axis=ccl.SP_AXIS,
+            mesh_device=self.mesh,
+            topology=ttnn.Topology.Linear,
+            ccl_core_grid_offset=self.ring.ccl_core_grid_offset,
+            use_column_major_ccl=True,
+            is_causal=True,
+            is_balanced=False,
+            slot_id=self.meta.slot,
+            kv_actual_isl_tensor=self.meta.kv_actual,
+            kv_cache_num_layers=1,
+            kv_cache_layer_idx=0,
+        )
+
+    def _sliding_sdpa(self, q, k, v):
+        """Window + sink attention of this chip's rows. The ring SDPA (window, sink) brings the predecessor halo of
+        K / V into its compact gather buffers (two slots: a chunk that wraps an SP slab needs both); the softmax
+        itself is then composed in fp32 over [halo slot 0 | halo slot 1 | own rows] (``_window_softmax``): the
+        sink takes nearly all the softmax mass on these layers (scores ~ -24 vs sink ~ 0.8), so the output scales
+        as exp(score - sink) and the op's bf16-dest scores put a 6 % bias on its own output."""
+        D, Dv = self.head_dim, self.v_head_dim
+        halo = SWA_HALO
+        buf_k = self.ring.gather_buffer("swa_k", self.lkv, 2 * halo, D, ttnn.bfloat8_b)
+        buf_v = self.ring.gather_buffer("swa_v", self.lkv, 2 * halo, D, ttnn.bfloat8_b)
+        sdpa, extra = self._sdpa_op()
+        out, _, _ = sdpa(
+            q,
+            self.kv.key,
+            self.kv.attn_value,
+            None,
+            None,
+            None,
+            persistent_output_buffer_k=buf_k,
+            persistent_output_buffer_v=buf_v,
+            logical_n=self.sp * self.local_seq,
+            attention_sink=self.sink,
+            sliding_window_size=self.window,
+            **{**self._ring_args(), "scale": self.scale if self.fold_scales else self.true_scale},
+            **extra,
+        )
+        out.deallocate(True)
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        hv8 = ttnn.slice(buf_v, (0, 0, 0, 0), (1, self.lkv, 2 * halo, Dv), memory_config=mc)
+        hk = self._halo(buf_k, k)
+        hv = self._halo(hv8, v)
+        hv8.deallocate(True)
+        k_ext = ttnn.concat((hk, k), dim=2, memory_config=mc)  # [1, lkv, 2 * halo + W, D]
+        v_ext = ttnn.concat((hv, v), dim=2, memory_config=mc)
+        hk.deallocate(True)
+        hv.deallocate(True)
+        o = self._window_softmax(q, k_ext, v_ext)
+        k_ext.deallocate(True)
+        v_ext.deallocate(True)
+        return o
+
+    def _halo(self, ring_buf, own):
+        """[1, lkv, 2 HALO, d] bf16: rows before the chunk from the ring SDPA's gathered cache rows, rows inside it
+        from the SP all-gather of this chunk's bf16 ``own`` rows (one-hot select, exact), pad / unused rows 0."""
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        cache = ttnn.typecast(ring_buf, ttnn.bfloat16, memory_config=mc)
+        from_cache = ttnn.multiply(cache, self.meta.halo_cached, memory_config=mc)
+        cache.deallocate(True)
+        gathered = ttnn.all_gather(own, dim=2, cluster_axis=ccl.SP_AXIS, memory_config=mc)  # [1, lkv, chunk, d]
+        inside = ttnn.matmul(
+            self.meta.halo_select, gathered, dtype=ttnn.bfloat16, memory_config=mc, compute_kernel_config=self.swa_cfg
+        )
+        gathered.deallocate(True)
+        out = ttnn.add(from_cache, inside, memory_config=mc)
+        from_cache.deallocate(True)
+        inside.deallocate(True)
+        return out
+
+    def _window_softmax(self, q, k_ext, v_ext):
+        """fp32 softmax(q k^T + mask, sink) v per kv group: q [1, lh, W, D] bf16, k_ext / v_ext [1, lkv, N, D | Dv]
+        -> [1, lh, W, Dv] bf16. The scale is folded into q; the sink is one more logit per head."""
+        mc, cfg = ttnn.DRAM_MEMORY_CONFIG, self.swa_cfg
+        W, D, Dv = q.shape[2], self.head_dim, self.v_head_dim
+        N = k_ext.shape[2]
+        rep = self.lh // self.lkv
+        outs = []
+        for g in range(self.lkv):
+            qg = ttnn.slice(q, (0, g * rep, 0, 0), (1, (g + 1) * rep, W, D), memory_config=mc)
+            qg = ttnn.reshape(qg, (1, 1, rep * W, D))
+            kg = ttnn.slice(k_ext, (0, g, 0, 0), (1, g + 1, N, D), memory_config=mc)
+            vg = ttnn.slice(v_ext, (0, g, 0, 0), (1, g + 1, N, Dv), memory_config=mc)
+            sc = ttnn.matmul(qg, kg, transpose_b=True, dtype=ttnn.float32, memory_config=mc, compute_kernel_config=cfg)
+            qg.deallocate(True)
+            kg.deallocate(True)
+            sc = ttnn.reshape(sc, (1, rep, W, N))
+            if not self.fold_scales:
+                scaled = ttnn.multiply(sc, self.scale32, memory_config=mc)
+                sc.deallocate(True)
+                sc = scaled
+            masked = ttnn.add(sc, self.meta.swa_mask, memory_config=mc)
+            sc.deallocate(True)
+            sink = ttnn.slice(self.sink32, (0, g * rep, 0, 0), (1, (g + 1) * rep, 1, 1), memory_config=mc)
+            m = ttnn.max(masked, dim=-1, keepdim=True, memory_config=mc)
+            m2 = ttnn.maximum(m, sink, memory_config=mc)
+            m.deallocate(True)
+            p = ttnn.subtract(masked, m2, memory_config=mc)
+            masked.deallocate(True)
+            p = ttnn.exp(p, fast_and_approximate_mode=False, memory_config=mc)
+            z = ttnn.sum(p, dim=-1, keepdim=True, memory_config=mc, compute_kernel_config=cfg)
+            ds = ttnn.subtract(sink, m2, memory_config=mc)
+            es = ttnn.exp(ds, fast_and_approximate_mode=False, memory_config=mc)
+            z2 = ttnn.add(z, es, memory_config=mc)
+            for t in (ds, es, z, m2, sink):
+                t.deallocate(True)
+            p = ttnn.reshape(p, (1, 1, rep * W, N))
+            o = ttnn.matmul(p, vg, dtype=ttnn.float32, memory_config=mc, compute_kernel_config=cfg)
+            p.deallocate(True)
+            vg.deallocate(True)
+            o = ttnn.reshape(o, (1, rep, W, Dv))
+            on = ttnn.divide(o, z2, memory_config=mc)
+            o.deallocate(True)
+            z2.deallocate(True)
+            if settings.get("SWA_OUT_FP32"):
+                outs.append(on)
+            else:
+                outs.append(ttnn.typecast(on, ttnn.bfloat16, memory_config=mc))
+                on.deallocate(True)
+        out = ttnn.concat(outs, dim=1, memory_config=mc)
+        for t in outs:
+            t.deallocate(True)
+        return out
+
+    def _full_sdpa(self, q):
+        D, Dv = self.head_dim, self.v_head_dim
+        gather = self.sp * self.local_seq
+        sdpa, extra = self._sdpa_op()
+        out, _, _ = sdpa(
+            q,
+            self.kv.key,
+            self.kv.value,
+            None,
+            None,
+            None,
+            persistent_output_buffer_k=self.ring.gather_buffer("full_k", self.lkv, gather, D, ttnn.bfloat8_b),
+            persistent_output_buffer_v=self.ring.gather_buffer("full_v", self.lkv, gather, Dv, ttnn.bfloat8_b),
+            logical_n=gather,
+            **self._ring_args(),
+            **extra,
+        )
+        return out
 
     def _rope(self, t, cos, sin, R):
         """HF rotate_half RoPE on the first R dims of every head."""

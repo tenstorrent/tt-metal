@@ -55,10 +55,17 @@ def allocate_served(mesh, shape, width: int, dtype=ttnn.bfloat8_b):
 class LayerKV:
     """The served key / value caches of one layer (``kv_tensors`` of the serving contract)."""
 
-    def __init__(self, mesh, slots: int, local_heads: int, local_seq: int, k_dim: int, v_dim: int):
+    def __init__(
+        self, mesh, slots: int, local_heads: int, local_seq: int, k_dim: int, v_dim: int, attn_v_dim: int | None = None
+    ):
         self.slots, self.local_heads, self.local_seq = slots, local_heads, local_seq
         self.key = allocate_served(mesh, [slots, local_heads, local_seq, k_dim], k_dim)
         self.value = allocate_served(mesh, [slots, local_heads, local_seq, v_dim], v_dim)
+        # sliding layers: value zero-padded to attn_v_dim, read only by the SDPA (its sliding path needs V head dim ==
+        # QK head dim); same layout as the served caches, never served (not in tensors())
+        self.attn_value = (
+            allocate_served(mesh, [slots, local_heads, local_seq, attn_v_dim], attn_v_dim) if attn_v_dim else None
+        )
 
     def tensors(self) -> dict:
         return {"key": self.key, "value": self.value}

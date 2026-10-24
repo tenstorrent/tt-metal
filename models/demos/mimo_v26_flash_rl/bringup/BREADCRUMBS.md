@@ -107,3 +107,36 @@
   with its TP reduce_scatter), so no collective.
 - Gate: PCC 0.999997, auto_margin_min 2.00, 1 ttnn op, host FLOPs 0.
 - Re-run: `bfw job check --task C.attn_dense.mlp_residual --gate-only`.
+
+## C.sliding_moe.attention (layer 1): PASS
+
+- `tt/attention.py` `Attention` (was `FullAttention`) serves full and sliding layers from `layer_dims(cfg, layer)`
+  (the reference's `swa_` keys: 8 kv heads -> 2 per chip, theta 1e4, window 128, sink). Layer 0's path is unchanged
+  (its gate re-run: bit-identical metrics). `hooks._attention_component` builds RoPE from the layer's theta and
+  `ChunkMeta(window=...)`.
+- Sliding forward: qkv -> RoPE -> v x 0.707 -> pad rows zeroed by `ChunkMeta.valid_rows` (multiply) -> served K / V and
+  an unserved 192-wide zero-padded V (`LayerKV.attn_value`) written with `update_padded_kv_cache` ->
+  `ttnn.bringup.ring_joint_scaled_dot_product_attention(sliding_window_size=128, attention_sink, exact_exp)` with
+  compact gather buffers of 2 x 128 rows -> **its output is discarded**; its gathered halo (K / V rows before each
+  run of the chip's rows) plus the chip's own bf16 k / v feed a composed fp32 softmax (`_window_softmax`: matmul
+  fp32 -> x 192^-0.5 (fp32 tensor) -> + window mask -> max with sink -> exp -> sum + exp(sink - max) -> p @ v ->
+  divide), per kv group -> concat heads (fp32) -> o_proj -> TP reduce_scatter.
+- `zero_padded_kv_cache` takes single-head caches only (TT_FATAL "cache num-heads dim must be 1"): with 2 kv heads
+  the pad rows are zeroed before the write instead (k, v x row-validity mask).
+- Why not the op's softmax: the sink holds nearly all the mass (scores ~ -24, sink ~ 0.8, sum exp(scores)/exp(sink)
+  ~ 1e-10), so the output scales as exp(score - sink). The streaming kernel (bf16 dest, required with the sink /
+  kv_actual_isl) truncates scores to bf16 (ulp 0.125 at |24|): device SDPA alone 0.015 rel vs fp32 SDPA on the same
+  device q / K / V, row norms +6 %, gate rel 0.037 and bias -0.038. Composed fp32: rel 0.014, margin 1.006.
+- Other layer-1 fixes, each measured on the gate: scales applied after the projection, not folded into the bfp8
+  qkv (`rank_weights(fold_scales=False)`; folded moved column 2331 to 0.19 vs 0.16); sliding weights rounded fp32 ->
+  bf16 -> bfp8 (`SWA_WEIGHTS_BF16_FIRST`; column 529 0.15 -> 0.11); halo rows inside the current chunk taken from the
+  SP all-gathered bf16 k / v via a one-hot matmul (`ChunkMeta.halo_select`), not from the cache: the device bf16 ->
+  bfp8 typecast on the cache write is biased +0.3 %, which gave each SP slab's first 32 rows a -5 % norm error.
+- Settings: `SWA_SDPA_Q_CHUNK` 128, `SWA_WEIGHTS_BF16_FIRST` True, `SWA_OUT_FP32` True (k chunk fixed 128 by the op).
+- Gate: PCC 0.999976, rel vs CPU 0.0139 (limit 0.0264), worst column 529 0.1115 vs 0.1122: margin 1.006 (thin),
+  88 ops, host FLOPs 0, determinism ok. Remaining: median row-norm bias -1.3 % (limit 2.5 %), not yet explained (CPU
+  emulation of the composed path on the dumped device tensors matches the device to 0.0013).
+- Cost / next: the ring SDPA computes a discarded output (only its halo gather is used) and the composed softmax
+  materialises [8, 640, 896] fp32 scores per kv group; P.* can replace both by a fork of the streaming kernel with
+  fp32 scores / an fp32 sink term. The scratch dumps used for the diagnosis are not kept.
+- Re-run: `bfw job check --task C.sliding_moe.attention --gate-only`.

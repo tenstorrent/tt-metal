@@ -57,6 +57,23 @@ TABLE = {
         "ring SDPA segmented_accumulation (per-ring-iteration accumulators; needs one Q chunk per core). Layer-0 gate "
         "margin at k 320: on 0.989, off 1.003, so off (C.attn_dense.attention)",
     ),
+    "SWA_SDPA_Q_CHUNK": Setting(
+        128,
+        (64, 128),
+        "sliding-window ring SDPA q chunk (the op's chunked sliding path takes 64 or 128; k chunk is fixed at 128) "
+        "(C.sliding_moe.attention)",
+    ),
+    "SWA_WEIGHTS_BF16_FIRST": Setting(
+        True,
+        (True, False),
+        "sliding layers: qkv / o_proj weights rounded fp32 -> bf16 before bfloat8_b (C.sliding_moe.attention)",
+    ),
+    "SWA_OUT_FP32": Setting(
+        True,
+        (True, False),
+        "sliding layers: the composed window softmax output stays fp32 through the head concat into o_proj "
+        "(C.sliding_moe.attention)",
+    ),
     "MLP_FIDELITY": Setting(
         "HiFi4",
         ("HiFi4", "HiFi3", "HiFi2", "LoFi"),
@@ -82,6 +99,7 @@ MAX_PRECISION = {
     "ATTN_OUT_FP32": True,
     "SDPA_FIDELITY": "HiFi4",
     "SDPA_EXACT_EXP": True,
+    "SWA_OUT_FP32": True,
     "MLP_FIDELITY": "HiFi4",
     "MLP_FP32_ACC": True,
     "MLP_INTER_FP32": True,
