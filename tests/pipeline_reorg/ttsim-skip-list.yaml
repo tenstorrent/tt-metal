@@ -14,6 +14,7 @@
 wormhole_b0:
   # Job-level timeouts -- can be cut down still
   - tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_resnet50_e2e_graph_capture
+  - tests/ttnn/unit_tests/operations/conv/test_conv1d.py::test_conv1d_prepared_weights_dram_slicing
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_dram_reads.py
@@ -31,6 +32,7 @@ blackhole:
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py
   - tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py
+  - tests/ttnn/unit_tests/operations/conv/test_conv1d.py::test_conv1d_prepared_weights_dram_slicing
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_dram_reads.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
