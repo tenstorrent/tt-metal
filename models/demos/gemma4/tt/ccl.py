@@ -425,6 +425,24 @@ def ccl_allreduce_fractured(tensor, mesh_config, ccl_manager, memory_config=None
     return out
 
 
+def lane_ccl_sync_enabled(mesh_config) -> bool:
+    """GEMMA4_LANE_CCL_SYNC=1: synchronize the mesh after every lane-axis collective of an eager single-user prefill.
+
+    Workaround for the (2,4) block on a FABRIC_1D line (tt-triage capture 2026-10-24 06:45, devq 0596): a Linear
+    lane-axis reduce-scatter completes on the end columns first; the middle columns then enter the next TP
+    all-reduce late and a remote write of the previous collective lands on an L1 address the next op already reuses
+    (a program semaphore read 0xA3B6F3D3 on the stuck chip), so both chips of the column wait forever while the end
+    columns run 21 ops ahead. A device sync after each lane collective keeps the columns aligned, as the per-phase
+    synchronization of GEMMA4_PREFILL_PHASE_TIMING=1 did (passed on all 4 lanes). Eager single-user prefill only (the
+    owner lane is set): never inside a trace capture, where a synchronize is a TT_FATAL. A ring (the Galaxy) completes
+    symmetrically and does not need it.
+    """
+    return (
+        os.environ.get("GEMMA4_LANE_CCL_SYNC", "0") == "1"
+        and getattr(mesh_config, "_g4_single_lane_prefill_owner", None) is not None
+    )
+
+
 def ccl_lane_gather_rows(tensor, mesh_config, memory_config=None, consume=True):
     """All-gather the row dim across lanes so each chip's fractured weight chunk sees every lane's rows.
 
@@ -437,6 +455,8 @@ def ccl_lane_gather_rows(tensor, mesh_config, memory_config=None, consume=True):
     gathered = ttnn.all_gather(tensor, dim=2, cluster_axis=mesh_config.sp_axis, memory_config=memory_config)
     if consume:
         tensor.deallocate(True)
+    if lane_ccl_sync_enabled(mesh_config):
+        ttnn.synchronize_device(gathered.device())
     return gathered
 
 
@@ -456,6 +476,8 @@ def ccl_lane_scatter_rows(tensor, mesh_config, memory_config=None, ccl_manager=N
         use_l1_small_for_semaphores=ccl_semaphores_in_l1_small(tensor.device()),
     )
     tensor.deallocate(True)
+    if lane_ccl_sync_enabled(mesh_config):
+        ttnn.synchronize_device(scattered.device())  # the columns enter the TP all-reduce aligned
     reduced = sync_all_reduce(scattered, mesh_config.tp_axis, memory_config, ccl_manager)
     scattered.deallocate(True)
     return reduced
