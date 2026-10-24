@@ -32,14 +32,69 @@
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
-// Code size: the whole program must fit the kernel config buffer. The pack build keeps the helpers out of line and
-// its pack loops rolled (`#pragma GCC unroll 1`). The unpack and math builds declare them inline: out of line, the
-// unpack thread's format reconfiguration cannot fold the buffer ids, and its binary grows.
+// Code size: the whole program must fit the default kernel config buffer, so each TRISC build keeps one copy of the
+// code it repeats most. Every choice below only moves code in or out of line; each tile sees the same operations.
+//  - KDA_PREP_HELPER (the stage helpers): out of line in the pack build, whose loops stay rolled
+//    (`#pragma GCC unroll 1`). Inline in unpack and math: out of line, the unpack thread's format reconfiguration
+//    cannot fold the buffer ids, and its binary grows.
+//  - KDA_SHARED_HELPER (a helper called from several stages): one copy in math and pack. noclone keeps GCC from
+//    specializing a copy per call site. Inline in unpack, which folds the buffer ids.
+//  - KDA_ITEMS_HELPER (the inverse's per-stage helpers): out of line in every build, one copy in math and pack; the
+//    unpack build's per-call-site copies fold the buffer ids and come out smaller.
+//  - The math build keeps one copy of the matmul call and its init (the call carries the throttled-matmul program
+//    reprogramming, ~3 KB per inlined site); the pack build keeps one copy of the pack loop, called once per
+//    destination acquire.
 #ifdef TRISC_PACK
 #define KDA_PREP_HELPER __attribute__((noinline))
 #else
 #define KDA_PREP_HELPER inline
 #endif
+
+#ifdef TRISC_UNPACK
+#define KDA_SHARED_HELPER inline
+#define KDA_ITEMS_HELPER __attribute__((noinline))
+#else
+#define KDA_SHARED_HELPER __attribute__((noinline, noclone))
+#define KDA_ITEMS_HELPER __attribute__((noinline, noclone))
+#endif
+
+#ifdef TRISC_MATH
+#define KDA_MATH_OUTLINE __attribute__((noinline, noclone))
+#else
+#define KDA_MATH_OUTLINE inline
+#endif
+
+#ifdef TRISC_PACK
+#define KDA_PACK_OUTLINE __attribute__((noinline, noclone))
+#else
+#define KDA_PACK_OUTLINE inline
+#endif
+
+// Pack destination tiles [dst, dst + count) to o's tiles [out, out + count), in order.
+KDA_PACK_OUTLINE void pack_tiles(uint32_t dst, uint32_t o_id, uint32_t out, uint32_t count) {
+#pragma GCC unroll 1
+    for (uint32_t tile = 0; tile < count; ++tile) {
+        pack_tile(dst + tile, o_id, out + tile);
+    }
+}
+
+KDA_MATH_OUTLINE void matmul_tiles_block(
+    uint32_t a_id,
+    uint32_t b_id,
+    uint32_t a_tile,
+    uint32_t b_tile,
+    uint32_t dst,
+    bool transpose,
+    uint32_t ct,
+    uint32_t rt,
+    uint32_t kt) {
+    matmul_block(a_id, b_id, a_tile, b_tile, dst, transpose, ct, rt, kt);
+}
+
+KDA_MATH_OUTLINE void matmul_tiles_block_init(
+    uint32_t a_id, uint32_t b_id, bool transpose, uint32_t ct, uint32_t rt, uint32_t kt) {
+    matmul_block_init(a_id, b_id, transpose, ct, rt, kt);
+}
 
 constexpr uint32_t max_dst_tiles =
     ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
@@ -61,7 +116,7 @@ KDA_PREP_HELPER void matmul_blocks(DFB0& a, bool a_shared, DFB1& b, DFB2& o, uin
     // Matmul maps in0=a_id->srcB and in1=b_id->srcA. Reconfigure unpack formats explicitly because init only
     // asserts formats; otherwise mixed fp32/bf16 CBs are read in the wrong format.
     reconfig_data_format(b_id, a_id);
-    matmul_block_init(a_id, b_id, Tr, subblock_columns, subblock_rows, Kt);
+    matmul_tiles_block_init(a_id, b_id, Tr, subblock_columns, subblock_rows, Kt);
     for (uint32_t item = 0; item < items; ++item) {
         const uint32_t a_base = a_shared ? 0 : item * Mt * Kt;
         const uint32_t b_base = item * Kt * Nt;
@@ -73,7 +128,7 @@ KDA_PREP_HELPER void matmul_blocks(DFB0& a, bool a_shared, DFB1& b, DFB2& o, uin
                     // kt_dim describes operand geometry; each K slice is still issued explicitly. B^T is stored
                     // [Nt,Kt], while the non-transposed B is stored [Kt,Nt].
                     const uint32_t b_index = Tr ? ni * Kt + ki : ki * Nt + ni;
-                    matmul_block(
+                    matmul_tiles_block(
                         a_id,
                         b_id,
                         a_base + mi * Kt + ki,
@@ -87,10 +142,7 @@ KDA_PREP_HELPER void matmul_blocks(DFB0& a, bool a_shared, DFB1& b, DFB2& o, uin
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t row = 0; row < subblock_rows; row++) {
-#pragma GCC unroll 1
-                    for (uint32_t column = 0; column < subblock_columns; column++) {
-                        pack_tile(row * subblock_columns + column, o_id, o_base + (mi + row) * Nt + ni + column);
-                    }
+                    pack_tiles(row * subblock_columns, o_id, o_base + (mi + row) * Nt + ni, subblock_columns);
                 }
                 tile_regs_release();
             }
@@ -105,7 +157,7 @@ KDA_PREP_HELPER void matmul_blocks(DFB0& a, bool a_shared, DFB1& b, DFB2& o, uin
 // a's tile for item i is a_base + i (or a_base alone when a is a shared constant), likewise b. Out of line, with the
 // operation a runtime argument: the program sits at the kernel-config size limit.
 template <typename DFB0, typename DFB1, typename DFB2>
-__attribute__((noinline)) void binary_items(
+KDA_ITEMS_HELPER void binary_items(
     ElementwiseBinaryOp op,
     DFB0& a,
     uint32_t a_base,
@@ -143,9 +195,7 @@ __attribute__((noinline)) void binary_items(
         }
         tile_regs_commit();
         tile_regs_wait();
-        for (uint32_t item = 0; item < count; ++item) {
-            pack_tile(item, o_id, first + item);
-        }
+        pack_tiles(0, o_id, first, count);
         tile_regs_release();
     }
     o.push_back(n);
@@ -175,10 +225,7 @@ KDA_PREP_HELPER void square_tiles(DFB0& in, DFB1& o, uint32_t n) {
         }
         tile_regs_commit();
         tile_regs_wait();
-#pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
-        }
+        pack_tiles(0, o_id, block_start, block_tiles);
         tile_regs_release();
     }
     o.push_back(n);
@@ -205,10 +252,7 @@ KDA_PREP_HELPER void exponential_tiles(DFB0& in, DFB1& o, uint32_t n) {
         }
         tile_regs_commit();
         tile_regs_wait();
-#pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
-        }
+        pack_tiles(0, o_id, block_start, block_tiles);
         tile_regs_release();
     }
     o.push_back(n);
@@ -235,10 +279,7 @@ KDA_PREP_HELPER void multiply_by_column(DFB0& a, DFB1& col, DFB2& o, uint32_t Mt
         }
         tile_regs_commit();
         tile_regs_wait();
-#pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
-        }
+        pack_tiles(0, o_id, block_start, block_tiles);
         tile_regs_release();
     }
     o.push_back(Mt * Nt);
@@ -271,10 +312,7 @@ KDA_PREP_HELPER void multiply_by_column_then(DFB0& a, DFB1& col, DFB2& b, DFB3& 
         }
         tile_regs_commit();
         tile_regs_wait();
-#pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
-        }
+        pack_tiles(0, o_id, block_start, block_tiles);
         tile_regs_release();
     }
     o.push_back(output_tiles);
@@ -292,12 +330,12 @@ KDA_PREP_HELPER void matmul_transposed_masked(DFB0& a, DFB1& b, DFB2& mask, DFB3
     for (uint32_t first = 0; first < items; first += max_dst_tiles) {
         const uint32_t count = items - first < max_dst_tiles ? items - first : max_dst_tiles;
         reconfig_data_format(b_id, a_id);
-        matmul_block_init(a_id, b_id, true, 1, 1, Kt);
+        matmul_tiles_block_init(a_id, b_id, true, 1, 1, Kt);
         tile_regs_acquire();
         for (uint32_t item = 0; item < count; ++item) {
             const uint32_t base = (first + item) * Kt;
             for (uint32_t k = 0; k < Kt; ++k) {
-                matmul_block(a_id, b_id, base + k, base + k, item, true, 1, 1, Kt);
+                matmul_tiles_block(a_id, b_id, base + k, base + k, item, true, 1, 1, Kt);
             }
         }
         reconfig_data_format(mask_id, mask_id);
@@ -307,9 +345,7 @@ KDA_PREP_HELPER void matmul_transposed_masked(DFB0& a, DFB1& b, DFB2& mask, DFB3
         }
         tile_regs_commit();
         tile_regs_wait();
-        for (uint32_t item = 0; item < count; ++item) {
-            pack_tile(item, o_id, first + item);
-        }
+        pack_tiles(0, o_id, first, count);
         tile_regs_release();
     }
     o.push_back(items);
@@ -333,10 +369,7 @@ KDA_PREP_HELPER void multiply_by_row(DFB0& a, DFB1& row, DFB2& o, uint32_t n) {
         }
         tile_regs_commit();
         tile_regs_wait();
-#pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
-        }
+        pack_tiles(0, o_id, block_start, block_tiles);
         tile_regs_release();
     }
     o.push_back(n);
@@ -344,24 +377,22 @@ KDA_PREP_HELPER void multiply_by_row(DFB0& a, DFB1& row, DFB2& o, uint32_t n) {
 
 // o[i] = a[i] @ b[i] for one-tile matrices.
 template <typename DFB0, typename DFB1, typename DFB2>
-__attribute__((noinline)) void matmul_items(DFB0& a, DFB1& b, DFB2& o, uint32_t n) {
+KDA_ITEMS_HELPER void matmul_items(DFB0& a, DFB1& b, DFB2& o, uint32_t n) {
     const uint32_t a_id = a.get_id();
     const uint32_t b_id = b.get_id();
     const uint32_t o_id = o.get_id();
     o.reserve_back(n);
     reconfig_data_format(b_id, a_id);
-    matmul_block_init(a_id, b_id, false, 1, 1, 1);
+    matmul_tiles_block_init(a_id, b_id, false, 1, 1, 1);
     for (uint32_t first = 0; first < n; first += max_dst_tiles) {
         const uint32_t count = n - first < max_dst_tiles ? n - first : max_dst_tiles;
         tile_regs_acquire();
         for (uint32_t item = 0; item < count; ++item) {
-            matmul_block(a_id, b_id, first + item, first + item, item, false, 1, 1, 1);
+            matmul_tiles_block(a_id, b_id, first + item, first + item, item, false, 1, 1, 1);
         }
         tile_regs_commit();
         tile_regs_wait();
-        for (uint32_t item = 0; item < count; ++item) {
-            pack_tile(item, o_id, first + item);
-        }
+        pack_tiles(0, o_id, first, count);
         tile_regs_release();
     }
     o.push_back(n);
@@ -452,10 +483,7 @@ KDA_PREP_HELPER void transpose_tile_row_to_column(DFB0& in, DFB1& o, uint32_t ro
         }
         tile_regs_commit();
         tile_regs_wait();
-#pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, o_id, block_start + tile);
-        }
+        pack_tiles(0, o_id, block_start, block_tiles);
         tile_regs_release();
     }
     o.push_back(row_tiles);
@@ -465,15 +493,15 @@ KDA_PREP_HELPER void transpose_tile_row_to_column(DFB0& in, DFB1& o, uint32_t ro
 // and optional scaling in DST avoids materializing row sums in a separate intermediate DFB.
 // The row sums, and the column broadcast that applies the factors, use only column 0, so the epilogue runs on the
 // faces holding it (VectorMode::C); the other columns of each factor tile are unspecified.
-template <bool Scale, uint32_t SquaredDfb, uint32_t InverseNormsDfb>
-KDA_PREP_HELPER void reduce_squared_rows_to_inverse_norms(
-    uint32_t row_tiles, uint32_t column_tiles, uint32_t eps_bits, uint32_t scale_bits) {
-    auto inverse_norm = [eps_bits, scale_bits](uint32_t dst) {
+template <uint32_t SquaredDfb, uint32_t InverseNormsDfb>
+KDA_SHARED_HELPER void reduce_squared_rows_to_inverse_norms(
+    uint32_t row_tiles, uint32_t column_tiles, uint32_t eps_bits, bool scale, uint32_t scale_bits) {
+    auto inverse_norm = [eps_bits, scale, scale_bits](uint32_t dst) {
         binop_with_scalar_tile_init();
         add_unary_tile(dst, eps_bits, VectorMode::C);
         rsqrt_tile_init();
         rsqrt_tile(dst, VectorMode::C);
-        if constexpr (Scale) {
+        if (scale) {
             binop_with_scalar_tile_init();
             mul_unary_tile(dst, scale_bits, VectorMode::C);
         }
@@ -489,7 +517,6 @@ KDA_PREP_HELPER void reduce_squared_rows_to_inverse_norms(
 
 template <
     uint32_t ColumnTiles,
-    bool Scale,
     uint32_t SquaredDfb,
     uint32_t InverseNormsDfb,
     typename DFB0,
@@ -501,6 +528,7 @@ KDA_PREP_HELPER void normalize_l2_rows(
     DFB1& normalized,
     uint32_t row_tiles,
     uint32_t eps_bits,
+    bool scale,
     uint32_t scale_bits,
 
     // intermediate
@@ -510,8 +538,8 @@ KDA_PREP_HELPER void normalize_l2_rows(
 
     square_tiles(input, squared, matrix_tiles);
 
-    reduce_squared_rows_to_inverse_norms<Scale, SquaredDfb, InverseNormsDfb>(
-        row_tiles, ColumnTiles, eps_bits, scale_bits);
+    reduce_squared_rows_to_inverse_norms<SquaredDfb, InverseNormsDfb>(
+        row_tiles, ColumnTiles, eps_bits, scale, scale_bits);
 
     inverse_norms.wait_front(row_tiles);
     multiply_by_column(input, inverse_norms, normalized, row_tiles, ColumnTiles);
@@ -543,10 +571,7 @@ KDA_PREP_HELPER void activate_beta(DFB0& logits, DFB1& beta_row, DFB2& beta, uin
         }
         tile_regs_commit();
         tile_regs_wait();
-#pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, row_id, block_start + tile);
-        }
+        pack_tiles(0, row_id, block_start, block_tiles);
         tile_regs_release();
     }
     beta_row.push_back(tiles);
@@ -575,9 +600,9 @@ KDA_PREP_HELPER void matmul_row_minus(DFB0& a, DFB1& b, DFB2& c, DFB3& o, uint32
     for (uint32_t item = 0; item < items; ++item) {
         const uint32_t base = item * Nt;
         reconfig_data_format(b_id, a_id);
-        matmul_block_init(a_id, b_id, false, Nt, 1, 1);
+        matmul_tiles_block_init(a_id, b_id, false, Nt, 1, 1);
         tile_regs_acquire();
-        matmul_block(a_id, b_id, 0, base, 0, false, Nt, 1, 1);
+        matmul_tiles_block(a_id, b_id, 0, base, 0, false, Nt, 1, 1);
         reconfig_data_format(c_id, c_id);
         sub_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(c_id);
         for (uint32_t tile = 0; tile < Nt; ++tile) {
@@ -585,9 +610,7 @@ KDA_PREP_HELPER void matmul_row_minus(DFB0& a, DFB1& b, DFB2& c, DFB3& o, uint32
         }
         tile_regs_commit();
         tile_regs_wait();
-        for (uint32_t tile = 0; tile < Nt; ++tile) {
-            pack_tile(tile, o_id, base + tile);
-        }
+        pack_tiles(0, o_id, base, Nt);
         tile_regs_release();
     }
     o.push_back(items * Nt);
@@ -624,14 +647,8 @@ KDA_PREP_HELPER void exponential_and_reciprocal(DFB0& in, DFB1& exponential, DFB
         }
         tile_regs_commit();
         tile_regs_wait();
-#pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, exp_id, block_start + tile);
-        }
-#pragma GCC unroll 1
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(half + tile, inv_id, block_start + tile);
-        }
+        pack_tiles(0, exp_id, block_start, block_tiles);
+        pack_tiles(half, inv_id, block_start, block_tiles);
         tile_regs_release();
     }
     exponential.push_back(n);
@@ -740,8 +757,8 @@ KDA_PREP_HELPER void prepare_q_terms(
     DFB7& inverse_norms) {
     const uint32_t key_tiles = items * Ct * Kt;
 
-    normalize_l2_rows<Kt, true, SquaredDfb, InverseNormsDfb>(
-        q, normalized_q, items * Ct, EPS_BITS, SCALE_BITS, squared, inverse_norms);
+    normalize_l2_rows<Kt, SquaredDfb, InverseNormsDfb>(
+        q, normalized_q, items * Ct, EPS_BITS, /*scale=*/true, SCALE_BITS, squared, inverse_norms);
     elementwise_binary<ElementwiseBinaryOp::Multiply>(normalized_q, centered_decay, q_pairwise, key_tiles);
     q_pairwise.wait_front(key_tiles);  // q*exp(G-anchor)
     normalized_q.pop_front(key_tiles);
@@ -789,8 +806,8 @@ KDA_PREP_HELPER void prepare_k_terms(
     DFB10& inverse_norms) {
     const uint32_t key_tiles = items * Ct * Kt;
 
-    normalize_l2_rows<Kt, false, SquaredDfb, InverseNormsDfb>(
-        k, normalized_k, items * Ct, EPS_BITS, /*scale_bits=*/0, squared, inverse_norms);
+    normalize_l2_rows<Kt, SquaredDfb, InverseNormsDfb>(
+        k, normalized_k, items * Ct, EPS_BITS, /*scale=*/false, /*scale_bits=*/0, squared, inverse_norms);
 
     // beta*k*exp(G-anchor), beta*k kept in DST.
     multiply_by_column_then(normalized_k, beta, centered_decay, k_beta_pairwise, items * Ct, Kt);
@@ -961,17 +978,19 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
         activate_beta<Ct>(beta_logits, beta_row, beta, items);
         beta.wait_front(items * Ct);
 
+        // q and k normalize through the same squared and normalized buffers, so one copy of the row reduction serves
+        // both.
         auto& q_pairwise = workspace_1;
         q.wait_front(key_tiles);
-        prepare_q_terms<Ct, Kt, dfb::workspace_1, dfb::inverse_norms, SCALE_BITS, EPS_BITS>(
+        prepare_q_terms<Ct, Kt, dfb::workspace_2, dfb::inverse_norms, SCALE_BITS, EPS_BITS>(
             q,
             centered_decay,
             anchor_decay,
             q_decay,
             q_pairwise,
             items,
-            /*normalized_q=*/workspace_2,
-            /*squared=*/workspace_1,
+            /*normalized_q=*/normalized_k,
+            /*squared=*/workspace_2,
             inverse_norms);
 
         v.wait_front(items * chunk_value_tiles);
