@@ -57,6 +57,7 @@ EXPERT_DOWN_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DOWN_DTYPE", "bfp8")]
 _cache_env = os.environ.get("GLM53_MESH_CACHE", "/mnt/tt-data/sdawle/glm53f/prefill/mesh_cache")
 CACHE_ROOT = None if _cache_env.lower() == "none" else Path(_cache_env)
 SAVE_STATES = os.environ.get("GLM53F_PREFILL_SAVE", "1") == "1"
+DUMP_LAYERS = set(os.environ.get("GLM53F_PREFILL_DUMP_LAYERS", "").split(","))
 
 
 def _layers() -> list[int]:
@@ -144,6 +145,23 @@ def _dsa_state_host(model: GLM53MeshModel, dec, S: int) -> dict[str, torch.Tenso
     return out
 
 
+def _save_seed(model: GLM53MeshModel, streams, d: Path, job: str, toks: list[int], n: int, next_token: int) -> None:
+    """Every layer's state after a prefill of ``toks[:n]`` (slot 0) + the final streams, one safetensors per layer."""
+    d.mkdir(parents=True, exist_ok=True)
+    save_file({"streams": _streams_host(model, streams, n).contiguous()}, str(d / "final_streams.safetensors"))
+    for dec in model.layers:
+        st = _dsa_state_host(model, dec, n) if dec.cache is not None else _kda_state_host(model, dec)
+        save_file(st, str(d / f"layer_{dec.layer_idx}.safetensors"))
+    meta = {
+        "job": job,
+        "n": n,
+        "tokens": toks[:n],
+        "next_token": next_token,
+        "layers": [x.layer_idx for x in model.layers],
+    }
+    (d / "meta.json").write_text(json.dumps(meta))
+
+
 @pytest.mark.timeout(21600)
 @pytest.mark.parametrize(
     "device_params", [mesh_device_params(*MESH, trace_region_size=TRACE_MB * 1_000_000)], indirect=True
@@ -170,15 +188,23 @@ def test_prefill_vs_blaze_golden(mesh_device):
     summary: dict = {}
     for job in JOBS:
         meta = _meta(job)
-        toks = list(meta["token_ids"])
+        # the golden rows = prompt + its greedy completion (metadata "token_ids" is the prompt only)
+        toks = list(meta["prompt_token_ids"]) + list(meta["completion_token_ids"])
         S, n_prompt = int(meta["n_group_a_rows"]), int(meta["n_prompt_tokens"])
         rep: dict = {"S": S, "n_prompt": n_prompt, "layers": {}}
         # ---- teacher-forced: every golden row through the layers, one layer at a time
         ids = torch.tensor(toks[:S], dtype=torch.int64)
         streams, _ = _embed(model, ids)
+        emb = _streams_host(model, streams, S)
+        g_in = _tap(job, layers[0], ["layer_in"]).get("layer_in")
+        if g_in is not None:
+            rep["embed_pcc"] = round(pcc(g_in.float()[:S], emb), 6)
+            logger.info(
+                f"[g53f-prefill] {job} input streams vs golden layer_in of L{layers[0]}: pcc {rep['embed_pcc']}"
+            )
         t_job = time.time()
         for dec in model.layers:
-            L = dec.layer_idx if hasattr(dec, "layer_idx") else layers[model.layers.index(dec)]
+            L = dec.layer_idx
             out = dec.prefill_forward(streams, user=0, seq_len=S, start=0)
             ttnn.deallocate(streams)
             streams = out
@@ -187,6 +213,16 @@ def test_prefill_vs_blaze_golden(mesh_device):
             p_all = pcc(gold, dev)
             p_min, at = _row_pcc_min(gold, dev)
             ent = {"layer_out_pcc": round(p_all, 6), "row_min": round(p_min, 6), "row_min_at": at}
+            ent["stream_pcc"] = [
+                round(pcc(gold[:, i * 4096 : (i + 1) * 4096], dev[:, i * 4096 : (i + 1) * 4096]), 4) for i in range(4)
+            ]
+            ent["norm_ratio"] = round(float(dev.norm() / gold.norm()), 4)
+            if str(L) in DUMP_LAYERS:
+                OUT.mkdir(parents=True, exist_ok=True)
+                save_file(
+                    {"dev": dev.contiguous(), "gold": gold.contiguous(), "emb": emb.contiguous()},
+                    str(OUT / f"dump_{job}_L{L}.safetensors"),
+                )
             if dec.cache is not None:  # DSA
                 st = _dsa_state_host(model, dec, S)
                 g = _tap(job, L, ["dsa_kv_latent"])["dsa_kv_latent"].float()[:S]
@@ -233,17 +269,37 @@ def test_prefill_vs_blaze_golden(mesh_device):
             f"{'MATCH' if tok == toks[n_prompt] else 'DIFF'}); TTFT cold {walls[0]:.3f} s warm {walls[1]:.3f} s"
         )
         if SAVE_STATES:
-            d = OUT / f"{job}_prompt"
-            d.mkdir(parents=True, exist_ok=True)
-            save_file(
-                {"streams": _streams_host(model, st_out, n_prompt).contiguous()}, str(d / "final_streams.safetensors")
-            )
-            for dec in model.layers:
-                L = dec.layer_idx if hasattr(dec, "layer_idx") else layers[model.layers.index(dec)]
-                st = _dsa_state_host(model, dec, n_prompt) if dec.cache is not None else _kda_state_host(model, dec)
-                save_file(st, str(d / f"layer_{L}.safetensors"))
-            (d / "meta.json").write_text(json.dumps({"job": job, "tokens": toks[:n_prompt], "first_token": tok}))
+            _save_seed(model, st_out, OUT / f"{job}_prompt", job, toks, n_prompt, tok)
         ttnn.deallocate(st_out)
+        # ---- the ring seed: the prefill of ids[:S'] at the pool-aligned split S' = 4 * floor((n_prompt - 1) / 4), so the
+        # k-pool ring holds no partial pool and the ring replays R = n_prompt - S' in [1, 4] tokens (its own first token)
+        split = 4 * ((n_prompt - 1) // 4)
+        if SAVE_STATES and split >= 4:
+            st_out, logits, owner = model.prefill(torch.tensor(toks[:split], dtype=torch.int64), user=0)
+            nxt = model.first_token(logits, owner)
+            ttnn.deallocate(logits)
+            _save_seed(model, st_out, OUT / f"{job}_split{split}", job, toks, split, nxt)
+            rep["split"] = {"S_prime": split, "replay": n_prompt - split, "next_token": nxt, "golden_next": toks[split]}
+            logger.info(
+                f"[g53f-prefill] {job} seed at S'={split} (replay {n_prompt - split}): next {nxt} golden {toks[split]}"
+            )
+            ttnn.deallocate(st_out)
+        # extra seeds of this job's rows (GLM53F_PREFILL_SEEDS="long:2044,..."): the prefill of toks[:n] at any 4-aligned n
+        for spec in [s for s in os.environ.get("GLM53F_PREFILL_SEEDS", "").split(",") if s.startswith(f"{job}:")]:
+            n = int(spec.split(":")[1])
+            assert n % 4 == 0 and 4 <= n < len(
+                toks
+            ), f"GLM53F_PREFILL_SEEDS {spec}: n must be 4-aligned and < {len(toks)}"
+            ttnn.synchronize_device(mesh_device)
+            t1 = time.perf_counter()
+            st_out, logits, owner = model.prefill(torch.tensor(toks[:n], dtype=torch.int64), user=0)
+            nxt = model.first_token(logits, owner)
+            wall = time.perf_counter() - t1
+            ttnn.deallocate(logits)
+            _save_seed(model, st_out, OUT / f"{job}_split{n}", job, toks, n, nxt)
+            ttnn.deallocate(st_out)
+            rep.setdefault("seeds", {})[n] = {"next_token": nxt, "golden_next": toks[n], "prefill_s": round(wall, 3)}
+            logger.info(f"[g53f-prefill] {job} seed at S'={n}: next {nxt} golden {toks[n]} ({wall:.2f} s)")
         summary[job] = rep
         OUT.mkdir(parents=True, exist_ok=True)
         (OUT / f"report_{job}.json").write_text(json.dumps(rep, indent=1))
