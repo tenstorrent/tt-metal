@@ -494,8 +494,10 @@ inline void _llk_unpack_tilizeA_B_init_(
     config_unpacker_x_end<p_setadc::UNP_A>(1);
     config_unpacker_x_end<p_setadc::UNP_B>(unpB_face_r_dim);
 
-    // Set Y stride for SrcA to be one 1x16 row of datums
-    std::uint32_t unpA_ch1_y_stride = SCALE_DATUM_SIZE(unpack_dst_format, FACE_C_DIM);
+    // Set Y stride for SrcA to be one 1x16 row of datums, with the formula configure, the srcA reconfig and
+    // _llk_unpack_tilizeA_B_uninit_ program: a Tf32 SrcA (Float32 L1 operand under 32-bit dest) gets the 4-byte
+    // datum its rows are written with. SCALE_DATUM_SIZE has no Tf32 arm and would give a quarter-row stride.
+    const std::uint32_t unpA_ch1_y_stride = canonical_unpA_y_stride(unpack_dst_format);
     cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(unpA_ch1_y_stride);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
