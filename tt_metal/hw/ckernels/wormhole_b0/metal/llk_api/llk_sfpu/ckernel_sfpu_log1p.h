@@ -138,8 +138,22 @@ template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en, i
 inline void calculate_log1p() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat result = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
-        if constexpr (!is_fp32_dest_acc_en) {
+        sfpi::vFloat inp = sfpi::dst_reg[0];
+        sfpi::vFloat result = calculate_log1p_fp32<is_fp32_dest_acc_en>(inp);
+        if constexpr (is_fp32_dest_acc_en) {
+            // log1p(±0) = ±0: the reduction flattens -0.0 to +0.0 (m + t, t = 0 at k = 0).
+            // Restore the input verbatim on the zero lanes only, so NaN (x < -1, x = -inf),
+            // ±inf and every nonzero result stay bit-identical. is_zero is an integer
+            // compare, (as<vUInt>(inp) << 1) == 0, exact for ±0 and deterministic-false for
+            // NaN/±inf/subnormals, so the restore does not lean on the float compare's NaN
+            // semantics, which SFPSETCC leaves unspecified for a NaN comparand
+            // (tests/ttnn/unit_tests/operations/eltwise/test_nextafter.py). fp32-only: a 16-bit
+            // destination canonicalises -0.0 to +0.0, so there is no sign to preserve.
+            // Kept here, not in calculate_log1p_fp32, so the shared asinh/acosh/atanh and
+            // logaddexp callers, which never need it, do not pay for it.
+            v_if(sfpi::is_zero(inp)) { result = inp; }
+            v_endif;
+        } else {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = result;

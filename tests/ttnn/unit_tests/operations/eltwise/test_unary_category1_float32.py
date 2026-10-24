@@ -922,15 +922,14 @@ def test_expm1_special_values(device):
     | Input                      | Expected                              |
     |----------------------------|---------------------------------------|
     | -inf                       | -1                                    |
-    | +0                         | +0                                    |
-    | -0                         | +0 (torch gives -0; sign not checked) |
+    | ±0                         | ±0 (sign checked below)               |
     | subnormals                 | 0 (input and golden flushed)          |
     | ±1e-30                     | ±1e-30 (expm1(x) ≈ x for tiny x)      |
     | +inf                       | +inf                                  |
     | NaN, negative NaN          | NaN                                   |
 
-    The ULP check treats -0 and +0 as equal, so the device's +0 for
-    expm1(-0) passes.
+    assert_with_ulp treats -0 and +0 as equal, so the sign of expm1(-0) is asserted
+    separately below.
     """
     positive_nan = torch.tensor([float("nan")], dtype=torch.float32)
     subnormals = torch.tensor([1e-40, -1e-40, 1.1e-38, -1.1e-38], dtype=torch.float32)
@@ -951,6 +950,12 @@ def test_expm1_special_values(device):
     result = ttnn.to_torch(ttnn.expm1(tt_in))
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
+
+    # expm1(-0.0) is -0.0 (torch parity); index 1 is the -0.0 probe above.
+    assert result.view(-1)[1].item() == 0.0 and torch.signbit(result.view(-1)[1]), (
+        f"expm1(-0.0) returned {result.view(-1)[1].item()!r}, expected -0.0; the ULP comparison "
+        "above cannot see the sign of a zero."
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
