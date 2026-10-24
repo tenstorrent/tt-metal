@@ -698,7 +698,7 @@ def _crs(cores):
     return ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
 
 
-def _mesh_resources(mesh, staging_tiles):
+def _mesh_resources(mesh, staging_tiles, policy=None):
     key = id(mesh)
     gx, gy = _full_grid(mesh)
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))])
@@ -724,7 +724,8 @@ def _mesh_resources(mesh, staging_tiles):
         ttnn.synchronize_device(mesh)  # every counter / mailbox zero before any chip's first call
         res = dict(mesh=mesh, sems=sems, mailbox=mailbox, staging=None, staging_tiles=0)
         _MESH_CACHE[key] = res
-    if res["staging_tiles"] < staging_tiles or (STAGING_POLICY == "exact" and res["staging_tiles"] != staging_tiles):
+    policy = policy or STAGING_POLICY
+    if res["staging_tiles"] < staging_tiles or (policy != "grow" and res["staging_tiles"] != staging_tiles):
         if res["staging"] is not None:
             ttnn.deallocate(res["staging"])
             res["staging"] = None
@@ -739,6 +740,12 @@ def _mesh_resources(mesh, staging_tiles):
         )
         res["staging_tiles"] = staging_tiles
     return res
+
+
+def prepare_mesh(mesh):
+    """Create the mesh's persistent semaphores and mailbox now, so a caller can place them among its other long-lived
+    L1 allocations instead of wherever L1 is free at the first call."""
+    _mesh_resources(mesh, 0, "ephemeral")
 
 
 def _l1_budget(mesh):
@@ -800,8 +807,10 @@ def run(
     hooks,
     extra_program=None,
     extra_tensors=(),
+    staging=None,
 ):
     mesh = a.device()
+    policy = staging or STAGING_POLICY
     a_shape, w_shape = list(a.shape), list(w.shape)
     if not 2 <= len(a_shape) <= 4 or any(s != 1 for s in a_shape[:-2]):
         raise ValueError(f"matmul_reduce_scatter: A must be rank 2-4 with leading dims 1, got {a_shape}")
@@ -860,7 +869,7 @@ def run(
     tW = int(w.buffer_aligned_page_size())
     cached = _MESH_CACHE.get(id(mesh))
     staging_floor = cached["staging_tiles"] if cached is not None and cached["mesh"] is mesh else 0
-    if STAGING_POLICY == "exact":
+    if policy != "grow":
         staging_floor = 0  # reallocated to this call's size below
     budget = _l1_budget(mesh)
     if cached is not None and cached["mesh"] is mesh and cached["staging"] is not None:
@@ -945,7 +954,7 @@ def run(
     }
 
     staging_tiles = (DEPTH_HANDOFF + pl["zone_sets"] * (slots["fwd"] + slots["bwd"])) * P
-    res = _mesh_resources(mesh, staging_tiles)
+    res = _mesh_resources(mesh, staging_tiles, policy)
 
     out_shape = list(a_shape)
     out_shape[-1] = N
@@ -997,7 +1006,7 @@ def run(
     if extra_program is not None:
         desc = _merge_extra_programs(mesh, desc, extra_program)
     result = ttnn.generic_op([a, w, *extra_tensors, output], desc)
-    if STAGING_POLICY == "ephemeral":
+    if policy == "ephemeral":
         # Free the L1 staging once the program is enqueued: later ops reuse it only after this one finishes, and
         # peers write into it only while this program runs. Keeps it from crowding other ops' static CBs.
         ttnn.deallocate(res["staging"])

@@ -10,6 +10,9 @@ from pathlib import Path
 
 import torch
 from ttnn.operations.matmul_reduce_scatter import matmul_reduce_scatter
+from ttnn.operations.matmul_reduce_scatter.matmul_reduce_scatter_program_descriptor import (
+    prepare_mesh as prepare_matmul_reduce_scatter_mesh,
+)
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA, KDA_SOFTPLUS_THRESHOLD, KDAConfig
@@ -396,6 +399,9 @@ class ttKDA:
             carry = self.recurrence._relay_final_carry
             self._mmrs_carry = FinalCarryProgram(mesh_device, carry._axis, carry._num_links)
         if self.fused_output_reduce_scatter:
+            # Its persistent mailbox and semaphores now, beside the layer's other long-lived L1; its staging is
+            # allocated per call (staging="ephemeral"), so neither sits under the next call's input projection.
+            prepare_matmul_reduce_scatter_mesh(mesh_device)
             # The fused op reads its activation from DRAM and always accumulates in FP32 DEST.
             self.norm_output_memory_config = ttnn.DRAM_MEMORY_CONFIG
             self.fused_output_compute_config = ttnn.ComputeConfigDescriptor(
@@ -590,6 +596,7 @@ class ttKDA:
                 num_links=self.tt_ccl.get_num_links(self._tp_cluster_axis),
                 compute_kernel_config=self.fused_output_compute_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                staging="ephemeral",
             )
         output = ttnn.linear(
             output,
@@ -706,6 +713,7 @@ class ttKDA:
                 num_links=self.tt_ccl.get_num_links(self._tp_cluster_axis),
                 compute_kernel_config=self.fused_output_compute_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                staging="ephemeral",
                 extra_program=lambda coord, cores: self._mmrs_carry.program(
                     coord,
                     cores,
@@ -719,7 +727,13 @@ class ttKDA:
                 ),
                 extra_tensors=[
                     t
-                    for t in (carry["rank_final"], carry["prefix_final"], carry["actual_start"], carry["actual_end"], final_state)
+                    for t in (
+                        carry["rank_final"],
+                        carry["prefix_final"],
+                        carry["actual_start"],
+                        carry["actual_end"],
+                        final_state,
+                    )
                     if t is not None
                 ],
             )

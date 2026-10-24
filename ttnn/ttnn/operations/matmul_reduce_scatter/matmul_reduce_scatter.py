@@ -124,9 +124,11 @@ def matmul_reduce_scatter(
     memory_config: ttnn.MemoryConfig | None = None,
     extra_program=None,
     extra_tensors=(),
+    staging: str | None = None,
 ) -> ttnn.Tensor:
     """extra_program(coord, free_cores) -> ProgramDescriptor | None merges another program onto the cores this op
-    leaves idle on each device (its core ranges must not overlap this op's); extra_tensors are its I/O tensors."""
+    leaves idle on each device (its core ranges must not overlap this op's); extra_tensors are its I/O tensors.
+    staging: "exact", "grow" or "ephemeral" (allocated per call and freed once enqueued); default MRS_STAGING."""
     validate(
         input_tensor,
         weight,
@@ -152,4 +154,5 @@ def matmul_reduce_scatter(
         hooks=pkg,
         extra_program=extra_program,
         extra_tensors=tuple(extra_tensors),
+        staging=staging,
     )
