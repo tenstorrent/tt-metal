@@ -305,28 +305,37 @@ class MATMUL_UNPACK_TTSYNC(TemplateParameter):
 
     @staticmethod
     def for_block(formats, dest_acc, math_fidelity, ct_dim: int, rt_dim: int, kt_dim: int, dest_sync=None) -> list:
-        """[MATMUL_UNPACK_TTSYNC()] for LoFi 1x1 and 1x2 blocks of at most 4 k steps that the K loop entry does not take, else [].
-
-        Measured: the GPR form beats the context poll where one call is a few tiles at LoFi and loses from kt 32 and on 2x2."""
+        """[MATMUL_UNPACK_TTSYNC()] for the blocks of up to 2x2 tiles that the K loop entry does not take and where the GPR form measured 0 slower than the context poll."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
             return []
         if MATMUL_K_LOOP.for_block(formats, dest_acc, math_fidelity, ct_dim, rt_dim, kt_dim):
             return []
-        if dest_sync == DestSync.Half and kt_dim <= 4:
-            # the poll form is bound by the RISC's per-call stores here; the GPR form lets the unpack thread run them
-            if math_fidelity == MathFidelity.HiFi2 and rt_dim == 1 and ct_dim == 1:
-                # these two input and accumulate pairs measure 0.6 to 2.3 percent slower with the GPR form
-                if (formats.input_format, dest_acc) in ((DataFormat.Bfp8_b, DestAccumulation.Yes), (DataFormat.Float32, DestAccumulation.No)):
-                    return []
-                return [MATMUL_UNPACK_TTSYNC()]
-            if math_fidelity == MathFidelity.LoFi and rt_dim == 2 and ct_dim <= 2 and kt_dim >= 2:
-                return [MATMUL_UNPACK_TTSYNC()]
-        if math_fidelity != MathFidelity.LoFi or rt_dim != 1 or ct_dim > 2 or kt_dim > 4:
-            return []
-        # 32-bit input at half sync with one k step is hand-off bound and loses about 1 percent
-        if formats.input_format == DataFormat.Float32 and dest_sync == DestSync.Half and kt_dim == 1:
-            return []
-        return [MATMUL_UNPACK_TTSYNC()]
+        # the cells below measured 0 slower than the context poll over 1440 small-block rows (ABBA, both orders) and are the
+        # same cells bmm_unpack_auto_ttsync takes in the metal2 matmul kernel
+        half = dest_sync == DestSync.Half
+        fid = math_fidelity
+        one = rt_dim == 1 and ct_dim == 1
+        f32_acc = dest_acc == DestAccumulation.Yes
+        in_f, out_f = formats.input_format, formats.output_format
+        if kt_dim >= 5:
+            take = one and fid in (MathFidelity.HiFi2, MathFidelity.LoFi)
+        elif kt_dim >= 2:
+            take = (one and (fid in (MathFidelity.HiFi2, MathFidelity.LoFi) or (fid == MathFidelity.HiFi3 and half)) and not (
+                fid == MathFidelity.HiFi3 and in_f == DataFormat.Float16_b and out_f == DataFormat.Float32 and not f32_acc
+            )) or (fid == MathFidelity.LoFi and half and rt_dim <= 2 and ct_dim <= 2)
+            if fid == MathFidelity.LoFi and rt_dim == 1 and ct_dim == 2 and in_f == DataFormat.Float32 and out_f == DataFormat.Float16_b:
+                take = False
+            if rt_dim == 2 and ct_dim == 2 and in_f == DataFormat.Float32:
+                take = False
+        else:
+            take = (
+                one
+                and half
+                and fid in (MathFidelity.HiFi2, MathFidelity.LoFi)
+                and not (in_f == DataFormat.Float32 and out_f == DataFormat.Float32 and not f32_acc)
+                and not (fid == MathFidelity.HiFi2 and in_f == DataFormat.Bfp8_b and out_f == DataFormat.Float32 and f32_acc)
+            )
+        return [MATMUL_UNPACK_TTSYNC()] if take else []
 
 
 @dataclass

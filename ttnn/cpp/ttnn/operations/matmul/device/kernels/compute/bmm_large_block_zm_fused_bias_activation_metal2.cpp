@@ -56,11 +56,43 @@ constexpr bool bmm_in1_32x16 = unpack_tile_r_dim[dfb::in1] > 16 && unpack_tile_c
 constexpr int bmm_in1_order =
     bmm_in1_32x16 && !(MATH_FIDELITY == ckernel::MathFidelity::LoFi && DST_ACCUM_MODE) ? 1 : 0;
 #endif
+#if defined(UCK_CHLKC_PACK)
+constexpr bool bmm_ttsync_cells = false;
+#else
+// the cells where the ttsync unpack form measured 0 slower than the context poll (small-block harness, 1440 rows, ABBA)
+constexpr bool bmm_ttsync_cells = []() constexpr {
+    constexpr bool half = DST_SYNC_MODE == DstSync::SyncHalf;
+    constexpr auto fid = MATH_FIDELITY;
+    constexpr uint32_t w = get_arg(args::out_subblock_w), h = get_arg(args::out_subblock_h), kt = get_arg(args::in0_block_w);
+    constexpr bool one = w == 1 && h == 1;
+    constexpr uint8_t in_f = unpack_src_format[dfb::in0], out_f = unpack_src_format[dfb::out];
+    constexpr bool f32 = (uint8_t)DataFormat::Float32 == in_f;
+    constexpr bool f32_out = out_f == (uint8_t)DataFormat::Float32;
+    if (MM_THROTTLE != 0) {
+        return false;
+    }
+    if (kt >= 5) {
+        return one && (fid == ckernel::MathFidelity::HiFi2 || fid == ckernel::MathFidelity::LoFi);
+    }
+    if (kt >= 2) {
+        if (fid == ckernel::MathFidelity::LoFi && h <= 2 && w <= 2 && half) {
+            return !(h == 1 && w == 2 && f32 && out_f == (uint8_t)DataFormat::Float16_b) && !(h == 2 && w == 2 && f32);
+        }
+        return one && (fid == ckernel::MathFidelity::HiFi2 || fid == ckernel::MathFidelity::LoFi ||
+                       (fid == ckernel::MathFidelity::HiFi3 && half &&
+                        !(in_f == (uint8_t)DataFormat::Float16_b && f32_out && !DST_ACCUM_MODE)));
+    }
+    return one && half && (fid == ckernel::MathFidelity::HiFi2 || fid == ckernel::MathFidelity::LoFi) &&
+           !(f32 && f32_out && !DST_ACCUM_MODE) &&
+           !(fid == ckernel::MathFidelity::HiFi2 && in_f == (uint8_t)DataFormat::Bfp8_b && f32_out && DST_ACCUM_MODE);
+}();
+#endif
 // not when the partials are reloaded every block: the matmul init after each reload drains the unpack thread; not for
-// one tile row of in0 either (decode), which reads slower with it
-constexpr bool bmm_unpack_auto_ttsync = !bmm_main_form && get_arg(args::out_subblock_w) <= 2 &&
+// one tile row of in0 either (decode), except one-tile sub blocks, where the call is the whole block and the form reads faster
+constexpr bool bmm_unpack_auto_ttsync = !bmm_main_form && bmm_ttsync_cells && get_arg(args::out_subblock_w) <= 2 &&
                                         get_arg(args::out_subblock_h) <= 2 && !bmm_reload_every_block &&
-                                        get_arg(args::in0_block_num_tiles) > get_arg(args::in0_block_w);
+                                        (get_arg(args::in0_block_num_tiles) > get_arg(args::in0_block_w) ||
+                                         (get_arg(args::out_subblock_w) == 1 && get_arg(args::out_subblock_h) == 1));
 #endif
 
 // This is the Metal 2.0 fork of bmm_large_block_zm_fused_bias_activation.cpp, which still sits
