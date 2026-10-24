@@ -655,6 +655,24 @@ class ttMLA:
                 if self.sp_factor == 1:
                     raise ValueError("sparse MLA overlap requires SP > 1; SP=1 uses an unconstrained slice path")
                 self._sparse_mla_overlap = self.tt_ccl.get_sparse_mla_overlap_resources(requested_overlap_profile)
+        # Shared-layer overlap (prototype, env TT_GLM_SHARED_KV_OVERLAP = a2a | a2a_untilize | off):
+        # a reuse layer has no top-k, so its KVPE prefix gather is serial with the heads->seq
+        # all-to-all. Run the gather on the overlap manager's gather sub-device while the all-to-all
+        # (and optionally the untilize) runs on its 80-core sub-device. Reuses the full layers' manager
+        # and gather semaphores, so it needs an overlap profile and must stay off for non-reuse layers.
+        self._shared_q_overlap = None
+        self._shared_q_overlap_mode = os.getenv("TT_GLM_SHARED_KV_OVERLAP", "off").lower()
+        if self._shared_q_overlap_mode not in ("off", "a2a", "a2a_untilize"):
+            raise ValueError(f"TT_GLM_SHARED_KV_OVERLAP={self._shared_q_overlap_mode!r}: expected off|a2a|a2a_untilize")
+        if (
+            self._shared_q_overlap_mode != "off"
+            and requested_overlap_profile is not None
+            and self._has_indexer
+            and self._indexer_reuse
+            and not self.kv_only
+            and self.sp_factor > 1
+        ):
+            self._shared_q_overlap = self.tt_ccl.get_sparse_mla_overlap_resources(requested_overlap_profile)
         if self._has_indexer:
             # The indexer assumes natural-order SP sharding (contiguous per-chip query blocks: its
             # device RoPE and the indexer_score per-device causal offset both index positions as
@@ -1902,6 +1920,24 @@ class ttMLA:
             actual_end=actual_end,
             metadata=metadata,
         )
+        if self._shared_q_overlap is not None and self._needs_head_to_seq_reshard:
+            q_rm, kvpe_dev = self._reshard_q_and_gather_overlapped(
+                tt_q=tt_q,
+                kvpe_cache=kvpe_cache,
+                cache_batch_idx=cache_batch_idx,
+                populated_global=populated_global,
+                seq_len_local=seq_len_local,
+                metadata=metadata,
+            )
+            return self._finish_sparse_chunked_attn(
+                tt_q=tt_q,
+                tt_kvpe=tt_kvpe,
+                kvpe_dev=kvpe_dev,
+                indices=indices,
+                kvpe_cache=kvpe_cache,
+                seq_len_local=seq_len_local,
+                q_resharded=q_rm,
+            )
         kvpe_dev = self._gather_kvpe_prefix(
             kvpe_cache,
             cache_batch_idx,
@@ -1917,6 +1953,61 @@ class ttMLA:
             kvpe_cache=kvpe_cache,
             seq_len_local=seq_len_local,
         )
+
+    def _reshard_q_and_gather_overlapped(
+        self, *, tt_q, kvpe_cache, cache_batch_idx, populated_global, seq_len_local, metadata=None
+    ):
+        """Shared (reuse) layer: KVPE prefix gather on the gather sub-device || heads->seq all-to-all
+        (+ optional untilize) on the other sub-device. Manager load/clear are the fork/join.
+
+        Issue order matters: go signals leave dispatch in order and each waits on its own sub-device,
+        so the gather is issued FIRST; otherwise its go would queue behind the untilize's, which waits
+        for the all-to-all to finish."""
+        resources = self._shared_q_overlap
+        trace_controller = getattr(self, "_trace_controller", None)
+        loaded = failed = False
+        try:
+            if trace_controller is not None:
+                trace_controller.sub_device_load(resources.manager_id)
+            else:
+                self.mesh_device.load_sub_device_manager(resources.manager_id)
+            loaded = True
+            ttnn.tracy_message("`TT_SIGNPOST: SHARED_KV_OVERLAP_START`")
+            kvpe_dev = self._gather_kvpe_prefix(
+                kvpe_cache,
+                cache_batch_idx,
+                populated_global,
+                block_cyclic_chunk_local=seq_len_local,
+                overlap_resources=resources,
+                metadata=metadata,
+            )
+            q_seq_sharded = ttnn.experimental.all_to_all_async_generic(
+                tt_q,
+                in_dim=1,
+                out_dim=2,
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cluster_axis=self.tp_axis,
+                subdevice_id=resources.topk_subdevice_id,
+            )
+            if self._shared_q_overlap_mode == "a2a_untilize":
+                q_rm = ttnn.to_layout(q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT, sub_core_grids=resources.topk_core_grid)
+                ttnn.deallocate(q_seq_sharded)
+            else:
+                q_rm = q_seq_sharded  # still TILE; _sparse_mla untilizes it on the full grid
+        except Exception:
+            failed = True
+            raise
+        finally:
+            if loaded:
+                if trace_controller is not None:
+                    trace_controller.sub_device_clear()
+                else:
+                    self.mesh_device.clear_loaded_sub_device_manager()
+                ttnn.tracy_message("`TT_SIGNPOST: SHARED_KV_OVERLAP_END`")
+            if failed:
+                self.tt_ccl.reset_sparse_mla_overlap_semaphores()
+        return q_rm, kvpe_dev
 
     def _prepare_sparse_kv_prefix(
         self,
@@ -1968,6 +2059,7 @@ class ttMLA:
         indices,
         kvpe_cache,
         seq_len_local,
+        q_resharded=None,
     ):
         """Consume joined/finalized branch outputs on the restored default full-grid manager."""
         for value in tt_kvpe if isinstance(tt_kvpe, tuple) else (tt_kvpe,):
@@ -1976,7 +2068,12 @@ class ttMLA:
         # Sparse attention runs over latent V; project to v_head_dim afterwards. The prefix is already
         # sliced to this slot (batch-1), so no cache_batch_idx.
         attn_out = self._sparse_mla(
-            tt_q, kvpe_dev, indices, block_cyclic_chunk_local=seq_len_local, cache_batch_idx=None
+            tt_q,
+            kvpe_dev,
+            indices,
+            block_cyclic_chunk_local=seq_len_local,
+            cache_batch_idx=None,
+            q_resharded=q_resharded,
         )
         # NOT deallocated: the full-mesh gather writes the model-owned persistent scratch, and freeing
         # that would take the buffer away from every later chunk and layer. (high_bw_all_gather returns a
@@ -2255,6 +2352,7 @@ class ttMLA:
         indices: ttnn.Tensor,
         block_cyclic_chunk_local: int,
         cache_batch_idx: Optional[int] = None,
+        q_resharded: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """Absorbed MQA over the top-k selected latents (FlashMLA sparse contract: no causal mask —
         ``indices`` already encode it via the 0xFFFFFFFF sentinel). Invoked SPMD on the SP×TP mesh:
@@ -2290,7 +2388,12 @@ class ttMLA:
         transpose_head_to_seq = self._needs_head_to_seq_reshard
 
         q_seq_sharded = q
-        if transpose_head_to_seq:
+        if q_resharded is not None:
+            # Already redistributed heads->seq by the overlapped region (TILE, or ROW_MAJOR when the
+            # region also untilized it).
+            assert transpose_head_to_seq
+            q_seq_sharded = q_resharded
+        elif transpose_head_to_seq:
             q_seq_sharded = ttnn.experimental.all_to_all_async_generic(
                 q,
                 in_dim=1,
@@ -2300,9 +2403,12 @@ class ttMLA:
                 cluster_axis=self.tp_axis,
             )  # [1,H,S/(sp·tp),576] — FABRIC_2D path selected at runtime; topology resolves to Linear
 
-        q_rm = ttnn.to_layout(q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT)  # the op is ROW_MAJOR-only; q comes in TILE
-        if q_seq_sharded is not q:
-            ttnn.deallocate(q_seq_sharded)
+        if q_seq_sharded.layout == ttnn.ROW_MAJOR_LAYOUT:
+            q_rm = q_seq_sharded
+        else:
+            q_rm = ttnn.to_layout(q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT)  # the op is ROW_MAJOR-only; q comes in TILE
+            if q_seq_sharded is not q:
+                ttnn.deallocate(q_seq_sharded)
 
         # Indices must match q_rm's sequence sharding. Direct TP sequence shards [1,1,S/(sp*tp),k]
         # already match after head-to-sequence redistribution. Partition legacy globally replicated
