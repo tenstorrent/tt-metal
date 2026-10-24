@@ -337,6 +337,30 @@ DECODE_MM_TABLE = {
     ("12B", "lm_head", 4, 1): DecodeMMConfig("1d", "full", 3, None, 6, "hifi2", False),
     ("12B", "lm_head", 4, 32): DecodeMMConfig("1d", "full", 3, None, 6, "hifi2", False),
 }
+# 31B dense decode matmuls (sweeps 0602-0617, 2026-10-24, shipped layouts): the DRAM-sharded kernel's multi-core
+# pipeline (workers per bank, small K block) on every shape with > 1 % flip-adjusted gain; b1 and b32 share a row.
+# wqkv tp4 54.2 -> 53.2 us, o_proj tp4 33.1 -> 29.1 / tp8 21.5 -> 17.8, gate_up tp4 128.8 -> 124.4 / tp8 67.3 -> 63.4,
+# down tp4 69.3 -> 65.5 / tp8 40.1 -> 33.5 (lead shapes; _logs/g7_matmul_knob_lab.md). wqkv tp8: no row.
+for _b in BATCH_BUCKETS:
+    DECODE_MM_TABLE[("31B", "qkv", 4, _b)] = DecodeMMConfig("ds", "ds", 2, None, 1, "lofi", False, 3, "l1", "blackhole")
+    DECODE_MM_TABLE[("31B", "out_proj", 4, _b)] = DecodeMMConfig(
+        "ds", "ds", 4, None, 1, "lofi", False, 4, "dram", "blackhole"
+    )
+    DECODE_MM_TABLE[("31B", "out_proj", 8, _b)] = DecodeMMConfig(
+        "ds", "ds", 4, None, 1, "lofi", False, 4, "dram", "blackhole"
+    )
+    DECODE_MM_TABLE[("31B", "gate_up", 4, _b)] = DecodeMMConfig(
+        "ds", "ds", 1, None, 1, "lofi", False, 4, "ws", "blackhole"
+    )
+    DECODE_MM_TABLE[("31B", "gate_up", 8, _b)] = DecodeMMConfig(
+        "ds", "ds", 1, None, 1, "lofi", False, 4, "ws", "blackhole"
+    )
+    DECODE_MM_TABLE[("31B", "down", 4, _b)] = DecodeMMConfig(
+        "ds", "ds", 1, None, 1, "lofi", False, 4, "dram", "blackhole"
+    )
+    DECODE_MM_TABLE[("31B", "down", 8, _b)] = DecodeMMConfig(
+        "ds", "ds", 1, None, 1, "lofi", False, 4, "dram", "blackhole"
+    )
 
 
 class KnobSpace:
