@@ -39,10 +39,10 @@ INPUT_DTYPE = ttnn.bfloat16
 # can be exact ties on device even when torch separates them.
 SORT_RESOLUTION = 2e-3
 # The device's activations against torch: allowed relative error, and the logit range checked. The
-# device's sqrt-softplus returns 0 for logits below about -5 (torch gives up to 0.08 there), so its
-# range starts at -5.
+# device's bf16 softplus keeps its negative tail (it used to return 0 below about -5, which is why
+# the sqrt-softplus range once started there), so both activations are checked over the same range.
 ACTIVATION_RTOL = {"sigmoid": 2e-3, "sqrtsoftplus": 3e-3}
-ACTIVATION_RANGE = {"sigmoid": (-8.0, 16.0), "sqrtsoftplus": (-5.0, 16.0)}
+ACTIVATION_RANGE = {"sigmoid": (-8.0, 16.0), "sqrtsoftplus": (-8.0, 16.0)}
 MIN_STRICT_FRACTION = 0.5
 
 ENGINES = pytest.mark.parametrize("stable_sort", [True, False], ids=["stable", "unstable"])
