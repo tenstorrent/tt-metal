@@ -76,6 +76,7 @@ set(UNIT_TESTS_API_SOURCES
     test_soc_descriptor.cpp
     test_stream_scratch_register.cpp
     test_tile.cpp
+    test_bfloat16_device_helpers.cpp
     test_tilize_untilize.cpp
     test_worker_config_buffer.cpp
     test_blockfloat_common.cpp
