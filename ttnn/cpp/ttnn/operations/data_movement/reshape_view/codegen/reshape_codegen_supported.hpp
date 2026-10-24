@@ -44,7 +44,8 @@ bool supported_by_codegen(
     const LaunchPlan& plan);
 
 // Routing and forced entry. ROW_MAJOR: the stick geometry, with the slab geometry when the stick program misses the
-// static window. TILE: tile rows when the gate accepts it, else the segment map. nullopt when the gate refuses.
+// static window. TILE: the first plan the gate accepts of tile rows and LCM where they beat native, then tile rows,
+// the segment map and LCM. nullopt when the gate refuses all of them.
 std::optional<LaunchPlan> plan_codegen(
     const Tensor& input,
     const ttnn::Shape& logical_output_shape,

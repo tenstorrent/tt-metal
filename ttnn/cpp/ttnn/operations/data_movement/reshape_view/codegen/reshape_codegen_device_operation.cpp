@@ -28,19 +28,19 @@ ReshapeCodegenDeviceOperation::program_factory_t ReshapeCodegenDeviceOperation::
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     namespace rcg = ttnn::operations::data_movement::reshape_codegen;
     if (tensor_args.input.layout() == Layout::TILE) {
-        // The live choice, not the planned route: a tile-rows call too big for live L1 runs the segment map.
+        // The live choice, not the planned route: a tile-rows or LCM call too big for live L1 runs the segment map.
         const auto chosen = rcg::live_tile_choice(
             tensor_args.input,
             operation_attributes.logical_output_shape,
             rcg::reshape_core_grid(tensor_args.input, operation_attributes.sub_core_grids).num_cores(),
             operation_attributes.plan);
-        if (chosen.has_value() && std::holds_alternative<rcg::TileMappedChoice>(*chosen)) {
+        if (operation_attributes.plan.tile_route == rcg::TileRoute::TileMapped ||
+            (chosen.has_value() && std::holds_alternative<rcg::TileMappedChoice>(*chosen))) {
             return ReshapeCodegenTileMappedProgramFactory{};
         }
         if (operation_attributes.plan.tile_route == rcg::TileRoute::TileRows) {
             return ReshapeCodegenTileRowsProgramFactory{};
         }
-        return ReshapeCodegenTileMappedProgramFactory{};
     }
     return ReshapeCodegenProgramFactory{};
 }
@@ -71,12 +71,22 @@ void ReshapeCodegenDeviceOperation::validate_on_program_cache_miss(
             "ReshapeCodegen was launched without a row-major geometry");
         return;
     }
+    // A view keeps its source's buffer, so the buffer may hold more pages than the plan reads; interleaved
+    // page i sits at the same address either way, so only a short buffer is an error.
+    if (plan.tile_route == rcg::TileRoute::Lcm) {
+        TT_FATAL(plan.lcm.has_value(), "ReshapeCodegen was launched on the LCM route without its geometry");
+        const uint64_t lcm_pages = static_cast<uint64_t>(plan.lcm->total_chunks) * plan.lcm->in_tiles;
+        TT_FATAL(
+            input.buffer()->num_pages() >= lcm_pages,
+            "Reshape input has {} tiles, the LCM plan needs at least {}",
+            input.buffer()->num_pages(),
+            lcm_pages);
+        return;
+    }
     if (plan.tile_route != rcg::TileRoute::TileRows) {
         return;
     }
     const auto& layout = plan.tile_rows.layout;
-    // A view keeps its source's buffer, so the buffer may hold more pages than the plan reads; interleaved
-    // page i sits at the same address either way, so only a short buffer is an error.
     TT_FATAL(
         input.buffer()->num_pages() >= layout.num_input_pages,
         "Reshape input has {} tiles, the tile-row plan needs at least {}",
@@ -100,9 +110,10 @@ ReshapeCodegenDeviceOperation::tensor_return_value_t ReshapeCodegenDeviceOperati
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-// The hashed rung or depth steps along fixed ladders (tile-row rungs, segment-map input depths, power-of-two stick
-// pushes, slab batches), so the key changes only when live L1 crosses a rung or tile rows falls back to the segment
-// map. A call no plan fits hashes rung 0, which never has an entry: it misses and the program factory raises.
+// The hashed rung or depth steps along fixed ladders (tile-row rungs, LCM write batches, segment-map input depths,
+// power-of-two stick pushes, slab batches), so the key changes only when live L1 crosses a rung or a tile-rows or LCM
+// call falls back to the segment map. A call no plan fits hashes rung 0, which never has an entry: it misses and the
+// program factory raises.
 ttsl::hash::hash_t ReshapeCodegenDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& plan = operation_attributes.plan;
@@ -113,7 +124,8 @@ ttsl::hash::hash_t ReshapeCodegenDeviceOperation::compute_program_hash(
             operation_attributes.logical_output_shape,
             rcg::reshape_core_grid(tensor_args.input, operation_attributes.sub_core_grids).num_cores(),
             plan);
-        // Tile rows: rung and staging depth. Segment map: slicing and input CB depth.
+        // Tile rows: rung and staging depth. LCM: output CB depth and write batch. Segment map: slicing and input
+        // CB depth.
         size_t program = 0;
         uint32_t first = 0;
         uint32_t second = 0;
@@ -122,6 +134,9 @@ ttsl::hash::hash_t ReshapeCodegenDeviceOperation::compute_program_hash(
             if (const auto* rows = std::get_if<rcg::TileRowsChoice>(&*chosen)) {
                 first = rows->max_in;
                 second = rows->staged_batches;
+            } else if (const auto* lcm = std::get_if<rcg::LcmPlan>(&*chosen)) {
+                first = lcm->out_cb_depth;
+                second = lcm->write_batch;
             } else {
                 const auto& mapped = std::get<rcg::TileMappedChoice>(*chosen);
                 first = mapped.layout.sliced ? 1 : 0;
