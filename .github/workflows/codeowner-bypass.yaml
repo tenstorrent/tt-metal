@@ -1,0 +1,168 @@
+name: CodeOwner Bypass
+
+# Two PR-comment commands:
+#
+#   /codeowners bypass  A member of @tenstorrent/codeowner-bypass blesses the PR.
+#                       The only effect is the `codeowner-bypass` label.
+#   /enqueue            The PR author (or a bypass-team member) puts a blessed PR
+#                       into the merge queue. The enqueue is made with the
+#                       CODEOWNERS_GROUP_ANALYSIS_PAT identity, which is a bypass
+#                       actor on the `main-codeowner-bypass` ruleset, so code-owner
+#                       review is skipped. Required checks and the queue still apply.
+#
+# The label alone is not proof: anyone with write access can add a label by hand.
+# `/enqueue` therefore requires that the most recent `labeled` event for the label
+# was made by the bot identity. If a PR is evicted from the queue, comment
+# `/enqueue` again; the label stays.
+#
+# Triggered by issue_comment, which always runs the workflow from the default
+# branch. PR code is never checked out.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+env:
+  BYPASS_LABEL: codeowner-bypass
+  BYPASS_TEAM: codeowner-bypass
+  ORG: tenstorrent
+  GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
+  GH_REPO: ${{ github.repository }}
+
+jobs:
+  bless:
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/codeowner')
+    runs-on: ubuntu-slim
+    concurrency:
+      group: codeowner-bypass-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    steps:
+      - name: Bless the PR
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+
+          # Only the exact command on its own line; other /codeowners commands
+          # are handled by codeowners-group-analysis.yaml.
+          if ! printf '%s\n' "$COMMENT_BODY" | grep -Eq '^/codeowners?[[:space:]]+bypass[[:space:]]*$'; then
+            echo "Not a bypass command; nothing to do."
+            exit 0
+          fi
+
+          reply() {
+            gh api -X POST "repos/$GH_REPO/issues/$PR_NUMBER/comments" -f body="$1" > /dev/null
+          }
+
+          gh api -X POST "repos/$GH_REPO/issues/comments/$COMMENT_ID/reactions" -f content=eyes > /dev/null || true
+
+          # Team membership: HTTP 200 with state=active for members, 404 otherwise.
+          STATE=$(gh api "orgs/$ORG/teams/$BYPASS_TEAM/memberships/$COMMENT_AUTHOR" --jq .state 2>/dev/null || echo none)
+          if [ "$STATE" != "active" ]; then
+            echo "$COMMENT_AUTHOR is not an active member of $ORG/$BYPASS_TEAM"
+            reply "❌ @$COMMENT_AUTHOR: only members of @$ORG/$BYPASS_TEAM can bless a PR for code-owner bypass."
+            exit 0
+          fi
+
+          PR_STATE=$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER" --jq .state)
+          if [ "$PR_STATE" != "open" ]; then
+            reply "❌ PR is not open; not blessing."
+            exit 0
+          fi
+
+          gh label create "$BYPASS_LABEL" --color B60205 \
+            --description "Blessed by the codeowner-bypass team; the author may /enqueue" 2>/dev/null || true
+          # Re-adding a label that is already present records no new `labeled`
+          # event, so drop it first: /enqueue checks that the latest one is ours.
+          gh api -X DELETE "repos/$GH_REPO/issues/$PR_NUMBER/labels/$BYPASS_LABEL" > /dev/null 2>&1 || true
+          gh api -X POST "repos/$GH_REPO/issues/$PR_NUMBER/labels" -f "labels[]=$BYPASS_LABEL" > /dev/null
+
+          reply "✅ Blessed for code-owner bypass by @$COMMENT_AUTHOR. The PR author can now comment \`/enqueue\` to put it in the merge queue (comment it again if the PR is evicted). Required checks and the merge queue still apply."
+
+  enqueue:
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/enqueue')
+    runs-on: ubuntu-slim
+    concurrency:
+      group: codeowner-bypass-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    steps:
+      - name: Enqueue a blessed PR
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+
+          if ! printf '%s\n' "$COMMENT_BODY" | grep -Eq '^/enqueue[[:space:]]*$'; then
+            echo "Not an /enqueue command; nothing to do."
+            exit 0
+          fi
+
+          reply() {
+            gh api -X POST "repos/$GH_REPO/issues/$PR_NUMBER/comments" -f body="$1" > /dev/null
+          }
+
+          gh api -X POST "repos/$GH_REPO/issues/comments/$COMMENT_ID/reactions" -f content=eyes > /dev/null || true
+
+          PR=$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER")
+          PR_STATE=$(jq -r .state <<<"$PR")
+          PR_DRAFT=$(jq -r .draft <<<"$PR")
+          PR_AUTHOR=$(jq -r .user.login <<<"$PR")
+          PR_NODE_ID=$(jq -r .node_id <<<"$PR")
+
+          if [ "$PR_STATE" != "open" ] || [ "$PR_DRAFT" = "true" ]; then
+            reply "❌ \`/enqueue\`: PR must be open and not a draft."
+            exit 0
+          fi
+
+          # Who may enqueue: the PR author, or a bypass-team member.
+          if [ "$COMMENT_AUTHOR" != "$PR_AUTHOR" ]; then
+            STATE=$(gh api "orgs/$ORG/teams/$BYPASS_TEAM/memberships/$COMMENT_AUTHOR" --jq .state 2>/dev/null || echo none)
+            if [ "$STATE" != "active" ]; then
+              reply "❌ @$COMMENT_AUTHOR: only the PR author or a member of @$ORG/$BYPASS_TEAM can \`/enqueue\` this PR."
+              exit 0
+            fi
+          fi
+
+          # The label must be present...
+          HAS_LABEL=$(jq -r --arg l "$BYPASS_LABEL" '[.labels[]?.name] | index($l) != null' <<<"$(gh api "repos/$GH_REPO/issues/$PR_NUMBER")")
+          # ...and the most recent application of it must have been made by the bot,
+          # not by someone with write access adding the label by hand.
+          BOT_LOGIN=$(gh api user --jq .login)
+          LABELER=$(gh api --paginate "repos/$GH_REPO/issues/$PR_NUMBER/timeline" \
+            | jq -rs --arg l "$BYPASS_LABEL" \
+                '[.[][] | select(.event == "labeled" and .label.name == $l)] | last | .actor.login // ""')
+
+          if [ "$HAS_LABEL" != "true" ] || [ "$LABELER" != "$BOT_LOGIN" ]; then
+            echo "has_label=$HAS_LABEL labeler=$LABELER bot=$BOT_LOGIN"
+            reply "❌ \`/enqueue\`: this PR has not been blessed for code-owner bypass. A member of @$ORG/$BYPASS_TEAM must comment \`/codeowners bypass\` first."
+            exit 0
+          fi
+
+          # Enqueue as the bot, which is a bypass actor on main-codeowner-bypass.
+          if OUT=$(gh api graphql \
+              -f query='mutation($id: ID!) { enqueuePullRequest(input: {pullRequestId: $id}) { mergeQueueEntry { position } } }' \
+              -f id="$PR_NODE_ID" 2>&1); then
+            POS=$(jq -r '.data.enqueuePullRequest.mergeQueueEntry.position // "?"' <<<"$OUT")
+            reply "✅ Enqueued by @$COMMENT_AUTHOR (queue position $POS). If the PR is evicted, comment \`/enqueue\` again."
+          else
+            echo "$OUT"
+            # Surface GitHub's reason (failing checks, already queued, conflicts, ...).
+            MSG=$(jq -r '.errors[0].message // empty' <<<"$OUT" 2>/dev/null || true)
+            reply "❌ \`/enqueue\` failed: ${MSG:-see the workflow run for details}."
+            exit 1
+          fi
