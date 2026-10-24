@@ -254,20 +254,16 @@ void kernel_main() {
             tile_regs_acquire();
             if (!block.is_first()) {
                 dfb_accumulate.wait_front(onetile);
-                reconfig_data_format_srca(dfb_accumulate_id);
-                copy_init(dfb_accumulate_id);
                 copy_tile(dfb_accumulate_id, 0, dst0);
                 dfb_accumulate.pop_front(onetile);
             }
             dfb_xmm2.wait_front(block.full_block_size());
 
             // Accumulate (x-E[x])^2
-            reconfig_data_format(dfb_scaler_id, dfb_xmm2_id);
-            reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(dfb_xmm2_id, dfb_scaler_id, dfb_accumulate_id);
             for (auto i : block.local()) {
                 const auto scaler_tile_idx = block.to_global(i) == Wt - 1 && last_tile_is_partial ? 1 : 0;
                 reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-                    dfb_xmm2_id, dfb_scaler_id, i, static_cast<uint32_t>(scaler_tile_idx), dst0);
+                    dfb_xmm2_id, dfb_scaler_id, i, static_cast<uint32_t>(scaler_tile_idx), dst0, dfb_accumulate_id);
             }
 
             dfb_xmm2.pop_front(block.full_block_size());
@@ -281,12 +277,10 @@ void kernel_main() {
                 mul_unary_tile(dst0, generic::bit_cast<uint32_t>(1.0f / W));
             }
 
-            reduce_uninit();
             tile_regs_commit();
             tile_regs_wait();
 
             pack_dfb_obj.reserve_back(onetile);
-            pack_reconfig_data_format(pack_dfb_id);
             pack_tile(dst0, pack_dfb_id);
             tile_regs_release();
             pack_dfb_obj.push_back(onetile);

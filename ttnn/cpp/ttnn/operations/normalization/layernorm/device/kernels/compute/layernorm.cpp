@@ -206,21 +206,12 @@ void kernel_main() {
                 dfb_inb_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
             ckl::output(dfb_x_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(row_shape);
         // by the end of this loop we should end up with Wt tiles in dfb_x_id
-#ifndef RMSNORM
-        reconfig_data_format(dfb_in_id, dfb_x_id, dfb_inb_id, dfb_scaler_id);
 #else
-        reconfig_data_format(dfb_in_id, dfb_x_id, dfb_inb_id, dfb_x_id);
-#endif
-#else
-#ifdef RMSNORM
-        reconfig_data_format(dfb_in_id, dfb_in_id);
-        pack_reconfig_data_format(dfb_xmm2_id);
-#ifdef ARCH_QUASAR
+#if defined(RMSNORM) && defined(ARCH_QUASAR)
         // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
         // destination (BFD) is set by pack_init. Retarget it, else pack_tile keeps writing into the
         // hw_startup output ring and this DFB is never written (all-zero output).
         pack_init(dfb_xmm2_id);
-#endif
 #endif
 #endif
 
@@ -238,13 +229,8 @@ void kernel_main() {
             ckl::output(
                 dfb_xmm_id,
                 ckl::ReservePolicy::PerBlockSize,
-                ckl::PushPolicy::PerBlockSize,
-                ckl::DataFormatReconfig::Disabled)>(row_shape);
+                ckl::PushPolicy::PerBlockSize)>(row_shape);
         dfb_ex.pop_front(1);
-
-#ifndef FUSE_PRE_ADD
-        reconfig_data_format_srca(dfb_x_id, dfb_xmm_id);
-#endif
 #endif
 
         // Preserve dfb_xmm_id for the normalization pass; the variance path consumes only its square.
@@ -254,16 +240,11 @@ void kernel_main() {
                 dfb_xmm_id,
                 ckl::WaitPolicy::Cumulative,
                 ckl::PopPolicy::None,
-                ckl::InputTileMapping::Block,
-                ckl::DataFormatReconfig::Disabled),
+                ckl::InputTileMapping::Block),
             ckl::output(
                 dfb_xmm2_id,
                 ckl::ReservePolicy::PerBlockSize,
-                ckl::PushPolicy::PerBlockSize,
-                ckl::DataFormatReconfig::Disabled)>(row_shape);
-#if defined RMSNORM and not defined FUSE_PRE_ADD
-        reconfig_data_format(dfb_xmm_id, dfb_xmm2_id, dfb_xmm_id, dfb_scaler_id);
-#endif
+                ckl::PushPolicy::PerBlockSize)>(row_shape);
 
         // Var[x]
         numeric::
@@ -314,20 +295,13 @@ void kernel_main() {
                 ckl::PackTile<ckl::output(
                     dfb_im_or_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
 
-#if defined RMSNORM and not defined FUSE_PRE_ADD
-#if defined(FUSE_GAMMA) || defined(FUSE_BETA)
-            reconfig_data_format_srca(dfb_xmm_id, dfb_fusion_id);
-#endif
-#endif
 #ifdef FUSE_GAMMA
             constexpr uint32_t dfb_outg_id = do_beta ? dfb_fusion_id : dfb_out_id;
-            if constexpr (!do_beta) {
-                pack_reconfig_data_format(dfb_out_id);
 #ifdef ARCH_QUASAR
+            if constexpr (!do_beta) {
                 pack_init(dfb_out_id);
-#endif
             }
-            reconfig_data_format_srcb(dfb_ex2pe_id, dfb_gamma_id);
+#endif
             ckl::eltwise_chain(
                 block_shape,
                 ckl::BinaryFpu<
@@ -336,15 +310,14 @@ void kernel_main() {
                         dfb_fusion_id,
                         ckl::WaitPolicy::PerBlockSize,
                         ckl::PopPolicy::PerBlockSize,
-                        ckl::InputTileMapping::Block,
-                        ckl::DataFormatReconfig::Disabled),
+                        ckl::InputTileMapping::Block),
                     ckl::input(
                         dfb_gamma_id,
                         ckl::BroadcastDim::Row,
                         ckl::WaitPolicy::Upfront,
                         ckl::PopPolicy::None,
                         ckl::InputTileMapping::Block,
-                        ckl::DataFormatReconfig::Disabled,
+                        ckl::DataFormatReconfig::Enabled,
                         ckl::TileAddressing::Offset)>{0u, block.start()},
                 // Activation must be applied last. If do_beta != 0 then
                 // activation will be applied after the beta addition.
@@ -354,18 +327,11 @@ void kernel_main() {
                 ckl::PackTile<ckl::output(
                     dfb_outg_id,
                     ckl::ReservePolicy::PerBlockSize,
-                    ckl::PushPolicy::PerBlockSize,
-                    ckl::DataFormatReconfig::Disabled)>{});
+                    ckl::PushPolicy::PerBlockSize)>{});
 #endif
 #ifdef FUSE_BETA
-            pack_reconfig_data_format(dfb_out_id);
 #ifdef ARCH_QUASAR
             pack_init(dfb_out_id);
-#endif
-#ifdef FUSE_GAMMA
-            reconfig_data_format_srcb(dfb_gamma_id, dfb_beta_id);
-#else
-            reconfig_data_format_srcb(dfb_ex2pe_id, dfb_beta_id);
 #endif
             ckl::eltwise_chain(
                 block_shape,
@@ -375,22 +341,20 @@ void kernel_main() {
                         dfb_fusion_id,
                         ckl::WaitPolicy::PerBlockSize,
                         ckl::PopPolicy::PerBlockSize,
-                        ckl::InputTileMapping::Block,
-                        ckl::DataFormatReconfig::Disabled),
+                        ckl::InputTileMapping::Block),
                     ckl::input(
                         dfb_beta_id,
                         ckl::BroadcastDim::Row,
                         ckl::WaitPolicy::Upfront,
                         ckl::PopPolicy::None,
                         ckl::InputTileMapping::Block,
-                        ckl::DataFormatReconfig::Disabled,
+                        ckl::DataFormatReconfig::Enabled,
                         ckl::TileAddressing::Offset)>{0u, block.start()},
                 ckl::Optional<fused_activation_enabled, FusedActivation>{},
                 ckl::PackTile<ckl::output(
                     dfb_out_id,
                     ckl::ReservePolicy::PerBlockSize,
-                    ckl::PushPolicy::PerBlockSize,
-                    ckl::DataFormatReconfig::Disabled)>{});
+                    ckl::PushPolicy::PerBlockSize)>{});
 #endif
         }
         dfb_ex2pe.pop_front(1);
