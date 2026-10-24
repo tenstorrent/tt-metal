@@ -37,9 +37,21 @@ from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     unpack_result,
 )
 from models.experimental.mimo_v2_6_flash.reference.spec_decode import MAX_DRAFTS, SPEC_SLOTS, DraftSource
-from models.experimental.mimo_v2_6_flash.reference.spec_inputs import pack_mtp, pack_mtp_layers, pack_verify
+from models.experimental.mimo_v2_6_flash.reference.spec_inputs import (
+    pack_mtp,
+    pack_mtp_commits,
+    pack_verify,
+)
 from models.experimental.mimo_v2_6_flash.tt import generator_vllm
 from models.experimental.mimo_v2_6_flash.tt.generator_vllm import MiMoV2ForCausalLM
+from models.experimental.mimo_v2_6_flash.reference import spec_decode as spec_layout
+
+# The MTP drafter's 4-slot verify (the draft groups: test_spec_groups_host.py, test_spec_groups_adapter_host.py).
+pytestmark = pytest.mark.skipif(
+    (spec_layout.SPEC_SLOTS, spec_layout.DRAFT_GROUPS) != (4, 1),
+    reason="MTP's 4-slot layouts: run without MIMO_SPEC_SLOTS / MIMO_SPEC_GROUPS",
+)
+
 
 pytest.importorskip("vllm_tt_plugin")
 from vllm_tt_plugin.spec_decode import accept_greedy_drafts  # noqa: E402
@@ -103,9 +115,9 @@ class FakeMTP:
         self.lane.mtp_words = pack_mtp(B, tokens, plan).tolist()
         self._run()
 
-    def read_drafts(self, anchor):
+    def read_drafts(self, anchor, group=0):
         result = self.lane.chain.read()
-        assert result.draft_anchor == anchor
+        assert group == 0 and result.draft_anchor == anchor
         return result.drafts
 
 
@@ -204,7 +216,7 @@ def propose(model, committed, positions, counts, num_drafts=MAX_DRAFTS):
 
 def start(model, p):
     """As after a plain decode step of the request alone on lane 1 (slot 0), which committed SEQ[p] at p."""
-    model.spec_sources[1] = DraftSource(row=SPEC_ROW, slots=[0])
+    model.spec_sources[1] = [DraftSource(row=SPEC_ROW, slots=[0])]
     rows = DP * PER_LANE
     committed = torch.full((rows, 1 + MAX_DRAFTS), -1, dtype=torch.int32)
     positions = torch.full((rows, 1 + MAX_DRAFTS), -1, dtype=torch.int32)
@@ -352,14 +364,14 @@ class LayersMTP:
         self.chained += 1
         self._run()
 
-    def enqueue_layers(self, source, tokens, positions, m):
+    def enqueue_layers(self, commits):
         self.planned += 1
-        self.lane.mtp_words = pack_mtp_layers(B, source, tokens, positions, m).tolist()
+        self.lane.mtp_words = pack_mtp_commits(B, commits).tolist()
         self._run()
 
-    def read_drafts(self, anchor):
+    def read_drafts(self, anchor, group=0):
         result = self.lane.chain.read()
-        assert result.draft_anchor == anchor == SPEC_SLOTS - 1
+        assert group == 0 and result.draft_anchor == anchor == SPEC_SLOTS - 1
         return result.drafts
 
 
@@ -513,7 +525,7 @@ def test_the_backfill_runs_where_the_rings_do_not_continue(adapter):
     host-planned on a differing commit) do not. Every verify pass's chain row names its slots' request slot."""
     lane = adapter.models[1]
     lane.mtp.history = object()
-    lane.mtp.enqueue_backfill = lambda slot, a: lane.mtp.backfills.append((slot, a))
+    lane.mtp.enqueue_backfill = lambda slot, a, group=0: lane.mtp.backfills.append((slot, a))
     adapter.chain_check = True
     rows_seen = []
     enqueue = lane.verify_enqueue
@@ -558,7 +570,8 @@ class FakeDFlash:
         self.ring = []  # the positions the ring holds, sorted
         self.head = [0] * B
 
-    def reset(self):
+    def reset(self, group=0):
+        assert group == 0
         self.resets += 1
         self.ring = []
 
@@ -577,19 +590,20 @@ class FakeDFlash:
             below = [q for q in self.ring if q < start]
             assert below and below == list(range(below[0], start)), f"the ring {self.ring} below the anchor {start}"
             self.head[:MAX_DRAFTS] = [draft_of(start, k) for k in range(MAX_DRAFTS)]
-        lane.chain.words[DRAFTS_AT:] = dflash_drafts_step(w, self.head)
+        lane.chain.words[DRAFTS_AT:] = dflash_drafts_step(w, self.head, DFLASH)
 
     def enqueue_chained(self):
         assert self.lane.rope_tables is not None
         self.chained += 1
         self._run()
 
-    def enqueue(self, context, anchor, start, anchor_slot=None):
+    def enqueue(self, drafts):
         self.planned += 1
-        self.lane.dflash_words = dflash_inputs(DFLASH, context, anchor, start, anchor_slot)
+        self.lane.dflash_words = dflash_inputs(DFLASH, drafts)
         self._run()
 
-    def read_drafts(self):
+    def read_drafts(self, group=0):
+        assert group == 0
         return self.head[:MAX_DRAFTS]
 
 
@@ -599,7 +613,7 @@ class DFlashLane(FakeLane):
     def __init__(self):
         super().__init__()
         self.mtp, self.dflash = None, FakeDFlash(self)
-        self.dflash_words = dflash_inputs(DFLASH, [], 0, 0)
+        self.dflash_words = dflash_inputs(DFLASH)
         self.tap_positions = [-1] * B
 
     def verify_enqueue(self, tokens, positions, chain=None, accept=None):

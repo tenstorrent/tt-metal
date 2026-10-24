@@ -51,9 +51,17 @@ from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     tokens_step,
 )
 from models.experimental.mimo_v2_6_flash.reference.spec_decode import MAX_DRAFTS, SPEC_SLOTS
-from models.experimental.mimo_v2_6_flash.reference.spec_inputs import pack_mtp_layers
+from models.experimental.mimo_v2_6_flash.reference.spec_inputs import pack_mtp_commits
 from models.experimental.mimo_v2_6_flash.tt import generator_vllm
 from models.experimental.mimo_v2_6_flash.tt.generator_vllm import MiMoV2ForCausalLM
+from models.experimental.mimo_v2_6_flash.reference import spec_decode as spec_layout
+
+# The MTP drafter's 4-slot verify (the draft groups: test_spec_groups_host.py, test_spec_groups_adapter_host.py).
+pytestmark = pytest.mark.skipif(
+    (spec_layout.SPEC_SLOTS, spec_layout.DRAFT_GROUPS) != (4, 1),
+    reason="MTP's 4-slot layouts: run without MIMO_SPEC_SLOTS / MIMO_SPEC_GROUPS",
+)
+
 
 pytest.importorskip("vllm_tt_plugin")
 
@@ -105,9 +113,9 @@ class OracleLayersMTP(FakeMTP):
             self.plans.append([(inputs["rope"][j], inputs["hidden"][j], inputs["tokens0"][j]) for j in rows])
         lane.chain.words[64:] = drafts_step(mtp, heads, layers=MAX_DRAFTS)
 
-    def enqueue_layers(self, source, tokens, positions, m):
+    def enqueue_layers(self, commits):
         self.planned += 1
-        self.lane.mtp_words = pack_mtp_layers(B, source, tokens, positions, m).tolist()
+        self.lane.mtp_words = pack_mtp_commits(B, commits).tolist()
         self._run()
 
     def reset(self):
@@ -147,7 +155,7 @@ class AsyncLane(FakeLane):
     def set_vllm_page_tables(self, rows):
         self.table_slots.append(sorted(rows))
 
-    def prefill_enqueue(self, chunk, slot, start_pos=0, history_continues=False):
+    def prefill_enqueue(self, chunk, slot, start_pos=0, history_continues=False, draft_group=0):
         self.prefills.append((slot, start_pos, chunk.numel()))
         return {"logits": torch.nn.functional.one_hot(torch.tensor(SEQ[start_pos + chunk.numel()]), VOCAB).float()}
 
@@ -714,7 +722,7 @@ def with_history(lane):
     """Give the lane's drafter a history (tt/mtp_backfill.py): its backfills recorded as (slot, a, the drafts it had
     enqueued before), so that a backfill is seen to precede the draft it serves."""
     lane.mtp.history = object()
-    lane.mtp.enqueue_backfill = lambda slot, a: lane.mtp.backfills.append(
+    lane.mtp.enqueue_backfill = lambda slot, a, group=0: lane.mtp.backfills.append(
         (slot, a, lane.mtp.planned + lane.mtp.chained)
     )
 
@@ -761,7 +769,7 @@ def test_the_backfill_comes_with_the_first_fresh_propose_after_a_lane_drops_to_o
     # A plain step at the bonus continues the rings the chained draft wrote (up to the bonus - 1).
     drafts = propose_plain(adapter, read(adapter, submit(adapter, {SPEC_ROW: bonus})), {SPEC_ROW: bonus})
     assert lane.mtp.planned == 2 and len(lane.mtp.backfills) == 1, "no backfill"
-    assert adapter.mtp_ring[1] == (0, bonus)
+    assert adapter.mtp_ring[1][0] == (0, bonus)
     # Two overlapped plain steps: the older one's propose goes stale (no draft at bonus + 1), the next backfills.
     older = submit(adapter, {SPEC_ROW: bonus + 1})
     newest = submit(adapter, {SPEC_ROW: bonus + 2}, reload=False)
@@ -786,7 +794,7 @@ def test_a_verify_after_a_prompt_over_a_deferred_one_backfills_before_its_chaine
     adapter.prefill_forward(
         prompt, torch.zeros(1, dtype=torch.int32), torch.tensor([40]), FULL_TABLE, None, empty_slots=[SPEC_ROW + 2]
     )
-    assert adapter.mtp_ring[1] is None and lane.mtp_resets == 1
+    assert adapter.mtp_ring[1][0] is None and lane.mtp_resets == 1
     readout = read_on_thread(adapter, pending)
     m = int(readout.accepted_counts[SPEC_ROW])
     drafts = adapter.propose_draft_tokens(MAX_DRAFTS, *commit(readout), hidden=pending)
@@ -812,6 +820,6 @@ def test_a_declined_chained_draft_leaves_the_rings_unknown(adapter, defer):
     start(adapter, p)
     drafts = [SEQ[p + 1 + k] for k in range(MAX_DRAFTS)]  # every draft accepted: the bonus reaches the limit
     handle = deferred(adapter, *block(SEQ[p], p, drafts)).handle
-    assert adapter.mtp_ring[1] == (0, handle)
+    assert adapter.mtp_ring[1][0] == (0, handle)
     read_on_thread(adapter, handle)
-    assert adapter._ring(1) is None and adapter.mtp_ring[1] is None
+    assert adapter._ring(1) is None and adapter.mtp_ring[1][0] is None

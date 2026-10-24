@@ -21,7 +21,12 @@ import pytest
 import torch
 
 from models.experimental.mimo_v2_6_flash.reference import sample_verify as sv
-from models.experimental.mimo_v2_6_flash.reference.spec_decode import MAX_DRAFTS, plan_verify_passes
+from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
+    GROUP_SLOTS,
+    MAX_DRAFTS,
+    SPEC_SLOTS,
+    plan_verify_passes,
+)
 
 TP = 8
 LOCAL = 64
@@ -179,7 +184,8 @@ def test_random_requests_match_the_host_walk(top_k, top_p):
         checked += not got[2] and not near
         assert 1 <= got[0] <= n + 1 and len(got[1]) == got[0]
         assert got[1][: got[0] - 1] == drafts[: got[0] - 1], "a committed prefix that is not the drafts"
-    assert checked >= 40, f"only {checked} of 60 requests compared exactly"
+    # Longer walks (7 drafts with 8 slots) leave the certified candidates more often.
+    assert checked >= (40 if MAX_DRAFTS <= 3 else 30), f"only {checked} of 60 requests compared exactly"
 
 
 def test_accept_boundary_is_p_of_the_draft():
@@ -276,6 +282,9 @@ def test_a_nucleus_past_the_candidates_is_flagged_truncated():
 
 
 # ---------------------------------------------------------------------- a pass: layouts and several requests
+@pytest.mark.skipif(
+    GROUP_SLOTS < SPEC_SLOTS, reason="draft groups place each request in a group (test_spec_groups_host)"
+)
 def test_a_pass_with_two_requests_round_trips_through_the_pages():
     rng = random.Random(8)
     rows = [(0, [11, 12, -1, -1], [40, 41, -1, -1], 1), (1, [13, -1, -1, -1], [9, -1, -1, -1], 0)]
@@ -304,7 +313,7 @@ def test_a_pass_with_two_requests_round_trips_through_the_pages():
     probs, order, cut = ref_dist(slot_logits[1], 1.0, 0, 0.9)
     want, near = ref_draw(probs, order, q24(0.3))
     assert near or committed[0, 1] == want
-    assert committed[0, 2:].tolist() == [-1, -1] and committed[1, 1:].tolist() == [-1] * MAX_DRAFTS
+    assert committed[0, 2:].tolist() == [-1] * (MAX_DRAFTS - 1) and committed[1, 1:].tolist() == [-1] * MAX_DRAFTS
 
 
 def test_against_the_plugin_walk_with_the_same_uniforms():

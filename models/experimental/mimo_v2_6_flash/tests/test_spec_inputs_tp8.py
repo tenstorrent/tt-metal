@@ -408,7 +408,7 @@ def test_spec_chain_dflash_tp8(mesh_device):
         head_row = [rng.randrange(152576) for _ in range(B)]
         verify_upload = (spec.verify_host(tok, pos, chain_t), spec.verify_packed)
         want_packed, header = dflash_chain_step(pack_verify(tok, pos, chain_t).tolist(), acc, ids, layout)
-        want_result = header + dflash_drafts_step(want_packed, head_row)
+        want_result = header + dflash_drafts_step(want_packed, head_row, layout)
         assert len(want_packed) == layout.words and len(want_result) == RESULT_WORDS
         for runner in (run, replay):
             ttnn.copy_host_to_device_tensor(*verify_upload)
@@ -422,7 +422,7 @@ def test_spec_chain_dflash_tp8(mesh_device):
                 assert got == want_result, f"case {k} chip {c}: result page\n{got}\n{want_result}"
 
     # A host-written upload (a host-planned draft): the drafts step reports the anchor slot it names.
-    upload_words(plan, dflash_inputs(layout, [(0, 700), (1, 701)], 1234, 702, anchor_slot=1), packed)
+    upload_words(plan, dflash_inputs(layout, [(0, [(0, 700), (1, 701)], 1234, 702, 1)]), packed)
     head_row = [rng.randrange(152576) for _ in range(B)]
     upload_words(plan, head_row, head)
     chain.drafts()

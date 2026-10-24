@@ -26,6 +26,10 @@ matmul (32 rows); o_proj and the dense SiLU MLP's down projection are row-parall
 norm's rows 1..MAX_DRAFTS (moved to rows 0.. by a one-hot matmul) go through the target's LM head into a GreedyHead:
 its token row is the drafts.
 
+Draft groups (MIMO_SPEC_GROUPS=2): one program drafts for a lane's two requests, group g's block in rows
+g * block .. (its own decode-SDPA user over its own ring rows g * RING ..), its drafts in GreedyHead rows
+g * MAX_DRAFTS ..; each group's ring is its request's (the adapter keeps a request in one group).
+
 Inputs per draft: one packed uint32 row (reference.spec_chain.DFlashLayout) with the anchor token, the RoPE
 positions of the queries, the block and the context rows (rows of the decode RoPE tables), and each context row's ring
 row (the scatter P [32, RING] is rows of an identity table; a skipped row reads its zero row). The host uploads it
@@ -43,7 +47,7 @@ import ttnn
 
 from ..reference.dflash import DFlashConfig, load_dflash_weights
 from ..reference.spec_chain import DFlashLayout, dflash_inputs
-from ..reference.spec_decode import MAX_DRAFTS
+from ..reference.spec_decode import DRAFT_GROUPS, MAX_DRAFTS
 from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config
 from .decoder import TtRMSNorm
 from .greedy_head import GreedyHead
@@ -216,25 +220,40 @@ class TtDFlash:
         any trace capture (after TtMiMoModel.setup_vllm_kv_cache)."""
         assert self.taps is None
         m, cfg = self.model, self.cfg
-        b, h, hd, r = m.max_batch, cfg.hidden_size, cfg.head_dim, self.ring
+        b, h, hd, r, groups = m.max_batch, cfg.hidden_size, cfg.head_dim, self.ring, DRAFT_GROUPS
         assert b == TILE, "the taps' rows are the decode slots, one tile"
+        assert groups * cfg.block <= TILE and groups * MAX_DRAFTS <= 8, "the groups' blocks and drafts fit a tile"
         self.taps = [self._tensor(torch.zeros(1, 1, b, h)) for _ in self.tap_layers]
-        for layer in self.layers:
-            layer.ring_k = self._tensor(torch.zeros(1, 1, r, hd))
-            layer.ring_v = self._tensor(torch.zeros(1, 1, r, hd))
-        self.valid = self._tensor(torch.zeros(1, 1, TILE, r))
+        for layer in self.layers:  # group g's ring: rows g * RING .. (g + 1) * RING - 1
+            layer.ring_k = self._tensor(torch.zeros(1, 1, groups * r, hd))
+            layer.ring_v = self._tensor(torch.zeros(1, 1, groups * r, hd))
+        self.valid = self._tensor(torch.zeros(1, 1, TILE, groups * r))
+        # reset(g): valid <- valid * keep[g], zero on group g's ring rows.
+        self.keep = []
+        for g in range(groups):
+            keep = torch.ones(1, 1, TILE, groups * r)
+            keep[..., g * r : (g + 1) * r] = 0
+            self.keep.append(self._tensor(keep))
         self.ones_kv = self._tensor(torch.ones(1, 1, TILE, hd))
         self.ones_sq = self._tensor(torch.ones(1, 1, TILE, TILE))
         self.zeros_kv = self._tensor(torch.zeros(1, 1, self.keys - r - TILE, hd))
-        # The attention mask's columns after the ring: the block's rows open, its padding and the zero rows closed.
-        tail = torch.full((1, 1, TILE, self.keys - r), NEG)
-        tail[..., : cfg.block] = 0
-        self.mask_tail = self._tensor(tail)
+        # The attention mask's columns after the ring, per group: its block's rows open, the other rows (another
+        # group's block, the padding) and the zero rows closed.
+        self.mask_tail = []
+        for g in range(groups):
+            tail = torch.full((1, 1, TILE, self.keys - r), NEG)
+            tail[..., g * cfg.block : (g + 1) * cfg.block] = 0
+            self.mask_tail.append(self._tensor(tail))
         sel = torch.zeros(1, 1, TILE, h)
-        sel[:, :, 0] = 1
+        sel[:, :, [g * cfg.block for g in range(groups)]] = 1  # the groups' anchor rows
         self.anchor_sel = self._tensor(sel)
+        not_anchor = self._tensor(1 - sel)
+        self.mask_block = ttnn.multiply(self.mask_rows, not_anchor)  # the mask embedding in every other row
+        not_anchor.deallocate(True)
         shift = torch.zeros(1, 1, TILE, TILE)
-        shift[0, 0, torch.arange(TILE - 1), torch.arange(1, TILE)] = 1  # row i <- row i + 1
+        for g in range(groups):  # group g's draft k (block row g * block + 1 + k) to row g * MAX_DRAFTS + k
+            for k in range(MAX_DRAFTS):
+                shift[0, 0, g * MAX_DRAFTS + k, g * cfg.block + 1 + k] = 1
         self.shift = self._tensor(shift)
         # The draft's cos / sin are rows of the decode RoPE tables (the SWA theta, 10000, and 64 rotated dims of the
         # target's 192: their first 128 dims are DFlash's), its context scatter rows of an identity table (the last
@@ -246,21 +265,22 @@ class TtDFlash:
         self.rope_positions = tables[0].shape[0]
         self.rope_tails = {}
         if tables[0].shape[-1] < hd:  # compact tables: the rotated dims, then the constant 1 (cos) / 0 (sin)
-            for n in (TILE, self.queries):
+            for n in (TILE, groups * self.queries):
                 tail = (torch.ones(1, 1, n, hd - tables[0].shape[-1]), torch.zeros(1, 1, n, hd - tables[0].shape[-1]))
                 self.rope_tails[n] = [self._tensor(t) for t in tail]
-        eye = torch.zeros(r + 1, r)
-        eye[:r] = torch.eye(r)
+        eye = torch.zeros(groups * r + 1, groups * r)
+        eye[: groups * r] = torch.eye(groups * r)
         self.eye = self._tensor(eye, layout=ttnn.ROW_MAJOR_LAYOUT)
-        self.layout = DFlashLayout(r, cfg.block, self.queries // cfg.block, self.rope_positions - 1)
-        self.packed = [TILE, self.queries, TILE, TILE, TILE]  # tokens, query / block / context RoPE rows, ring rows
+        self.layout = DFlashLayout(r, cfg.block, self.queries // cfg.block, self.rope_positions - 1, groups)
+        # tokens, query / block / context RoPE rows, ring rows
+        self.packed = [TILE, groups * self.queries, TILE, TILE, TILE]
         assert sum(self.packed) == self.layout.words
         self.inputs = {
             "packed": self._tensor(
                 torch.zeros(1, self.layout.words, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
             )
         }
-        self.head = GreedyHead(self.plan, m.vocab_local, MAX_DRAFTS, b)
+        self.head = GreedyHead(self.plan, m.vocab_local, groups * MAX_DRAFTS, b)
         if m.verify_sampler is not None:
             # The verify's accept trace ends with the chain step, which writes the pass's result page and, when a
             # draft chains behind the pass, this draft's packed upload; the draft program ends with the drafts step
@@ -274,9 +294,9 @@ class TtDFlash:
                 dflash=(self.inputs["packed"], self.layout),
             )
 
-    def reset(self):
-        """Forget the ring (a new request, or one whose context the ring does not continue)."""
-        ttnn.fill(self.valid, 0.0, output_tensor=self.valid)
+    def reset(self, group=0):
+        """Forget draft group ``group``'s ring (a new request, or one whose context the ring does not continue)."""
+        ttnn.multiply(self.valid, self.keep[group], output_tensor=self.valid)
 
     # ------------------------------------------------------------------ taps (decode / verify traces, prefill)
     def tap(self, layer_index, y):
@@ -318,12 +338,13 @@ class TtDFlash:
         full.deallocate(True)
         return h
 
-    def _scatter_matrix(self, rows, positions):
-        """Host P [1, 1, rows, RING]: row i of the rows to ring row positions[i] % RING (None or < 0 skips it)."""
-        p = torch.zeros(1, 1, rows, self.ring)
+    def _scatter_matrix(self, rows, positions, group):
+        """Host P [1, 1, rows, groups * RING]: row i of the rows to ring row group * RING + positions[i] % RING (None or
+        < 0 skips it)."""
+        p = torch.zeros(1, 1, rows, DRAFT_GROUPS * self.ring)
         for i, pos in enumerate(positions):
             if pos is not None and pos >= 0:
-                p[0, 0, i, pos % self.ring] = 1
+                p[0, 0, i, group * self.ring + pos % self.ring] = 1
         return p
 
     def _cos_sin(self, positions):
@@ -381,14 +402,15 @@ class TtDFlash:
         n.deallocate(True)
         return out
 
-    def prefill_context(self, acc, start_pos, real_len):
+    def prefill_context(self, acc, start_pos, real_len, group=0):
         """After a prefill chunk at ``start_pos`` with ``real_len`` real rows: write the K / V of its last RING rows
-        (``acc``: the chunk's summed fc rows, consumed) into every layer's ring. Eager; keyed on the padded length."""
+        (``acc``: the chunk's summed fc rows, consumed) into every layer's ring of draft group ``group``. Eager; keyed
+        on the padded length."""
         rows = acc.shape[-2]
         h = self._context_hidden(acc, prefill=True)
         first = max(0, real_len - self.ring)
         positions = [start_pos + i if first <= i < real_len else None for i in range(rows)]
-        p = self._tensor(self._scatter_matrix(rows, positions))
+        p = self._tensor(self._scatter_matrix(rows, positions, group))
         cos, sin = (self._tensor(t) for t in self._cos_sin([start_pos + i for i in range(rows)]))
         pt = ttnn.transpose(p, -2, -1)
         keep = self._keep(pt)
@@ -412,14 +434,14 @@ class TtDFlash:
     # ------------------------------------------------------------------ draft program
     def _body(self):
         """The draft program (persistent inputs only): the context step, the block's 5 layers, the LM head and the
-        GreedyHead whose token row (rows 0 .. MAX_DRAFTS - 1) is the drafts."""
-        m, cfg = self.model, self.cfg
+        GreedyHead whose token row is the drafts (group g's at rows g * MAX_DRAFTS ..)."""
+        m, cfg, groups, r = self.model, self.cfg, DRAFT_GROUPS, self.ring
         tokens, idx_q, idx_b, idx_c, slots = self._unpack()
         cos_q, sin_q = self._rope_rows(idx_q)
         cos_b, sin_b = self._rope_rows(idx_b)
         cos_c, sin_c = self._rope_rows(idx_c)
         p = ttnn.reshape(
-            ttnn.embedding(slots, self.eye, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16), (1, 1, TILE, self.ring)
+            ttnn.embedding(slots, self.eye, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16), (1, 1, TILE, groups * r)
         )
         for t in (idx_q, idx_b, idx_c, slots):
             t.deallocate(True)
@@ -432,26 +454,35 @@ class TtDFlash:
         keep = self._keep(pt)
         self._mark_valid(p)
         closed = ttnn.multiply(ttnn.subtract(self.valid, 1.0), -NEG)  # 0 on valid ring rows, NEG elsewhere
-        full = ttnn.concat([closed, self.mask_tail], dim=-1)
+        masks = []
+        for g in range(groups):  # group g's user: its ring rows, its block rows; every query alike
+            ring = closed if groups == 1 else ttnn.slice(closed, (0, 0, 0, g * r), (1, 1, TILE, (g + 1) * r))
+            full = ttnn.concat([ring, self.mask_tail[g]], dim=-1)
+            if ring is not closed:
+                ring.deallocate(True)
+            masks.append(ttnn.concat([full] * (self.queries // TILE), dim=2))
+            full.deallocate(True)
         closed.deallocate(True)
-        mask = ttnn.concat([full] * (self.queries // TILE), dim=2)  # [1, 1, queries, keys]: every query alike
-        full.deallocate(True)
-        # Block rows: the anchor's embedding in row 0, the mask embedding below it.
+        mask = masks[0] if groups == 1 else ttnn.concat(masks, dim=0)  # [groups, 1, queries, keys]
+        if groups > 1:
+            for t in masks:
+                t.deallocate(True)
+        # Block rows: each group's anchor embedding in its first row, the mask embedding in the others.
         e = ttnn.embedding(tokens, m.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         tokens.deallocate(True)
         e = ttnn.reshape(e, (1, 1, TILE, cfg.hidden_size))
         anchor = ttnn.multiply(e, self.anchor_sel)
         e.deallocate(True)
-        x = ttnn.add(anchor, self.mask_rows)
+        x = ttnn.add(anchor, self.mask_block)
         anchor.deallocate(True)
         for layer in self.layers:
             hn = layer.input_norm(x)
             xqkv = layer.qkv_mm(hn, layer.wqkv)
             hn.deallocate(True)
             hd, nl = cfg.head_dim, layer.nh_local
-            # Queries: the block rows' q heads as rows r * heads + h; the block's K / V rows.
-            qrows = ttnn.slice(xqkv, (0, 0, 0, 0), (1, 1, cfg.block, nl * hd))
-            q = ttnn.reshape(qrows, (1, 1, self.queries, hd))
+            # Queries: the groups' block rows' q heads as rows (g * block + r) * heads + h; the block's K / V rows.
+            qrows = ttnn.slice(xqkv, (0, 0, 0, 0), (1, 1, groups * cfg.block, nl * hd))
+            q = ttnn.reshape(qrows, (1, 1, groups * self.queries, hd))
             qrows.deallocate(True)
             kb = ttnn.slice(xqkv, (0, 0, 0, nl * hd), (1, 1, TILE, (nl + 1) * hd))
             vb = ttnn.slice(xqkv, (0, 0, 0, (nl + 1) * hd), (1, 1, TILE, (nl + 2) * hd))
@@ -466,10 +497,14 @@ class TtDFlash:
             self._scatter(layer.ring_v, vc, pt, keep)
             kcr.deallocate(True)
             vc.deallocate(True)
-            keys = ttnn.concat([layer.ring_k, kbr, self.zeros_kv], dim=2)
-            vals = ttnn.concat([layer.ring_v, vb, self.zeros_kv], dim=2)
+            keys = self._user_keys(layer.ring_k, kbr)
+            vals = self._user_keys(layer.ring_v, vb)
             kbr.deallocate(True)
             vb.deallocate(True)
+            if groups > 1:  # [1, groups, queries, D]: one decode user per group
+                qg = ttnn.reshape(qr, (1, groups, self.queries, hd))
+                qr.deallocate(True)
+                qr = qg
             attn = ttnn.transformer.scaled_dot_product_attention_decode(
                 qr,
                 keys,
@@ -484,10 +519,10 @@ class TtDFlash:
             )
             for t in (qr, keys, vals):
                 t.deallocate(True)
-            # [1, 1, rows * heads, D] -> each block row's heads concatenated, padded back to the tile's 32 rows
-            rows = ttnn.reshape(attn, (1, 1, cfg.block, nl * hd))
+            # [1, groups, rows * heads, D] -> each block row's heads concatenated, padded back to the tile's 32 rows
+            rows = ttnn.reshape(attn, (1, 1, groups * cfg.block, nl * hd))
             attn.deallocate(True)
-            cat = ttnn.pad(rows, padding=((0, 0), (0, 0), (0, TILE - cfg.block), (0, 0)), value=0.0)
+            cat = ttnn.pad(rows, padding=((0, 0), (0, 0), (0, TILE - groups * cfg.block), (0, 0)), value=0.0)
             rows.deallocate(True)
             x = self._residual(x, cat, layer.o_mm, layer.wo)
             h2 = layer.post_norm(x)
@@ -514,6 +549,24 @@ class TtDFlash:
         logits.deallocate(True)
         if m.spec_chain is not None:
             m.spec_chain.drafts()
+
+    def _user_keys(self, ring, block):
+        """The attention's keys (or values) [groups, 1, KEYS, head_dim]: per group its ring rows, the block's 32 rows
+        (its mask opens the group's own), the zero rows."""
+        r, users = self.ring, []
+        for g in range(DRAFT_GROUPS):
+            rows = (
+                ring if DRAFT_GROUPS == 1 else ttnn.slice(ring, (0, 0, g * r, 0), (1, 1, (g + 1) * r, ring.shape[-1]))
+            )
+            users.append(ttnn.concat([rows, block, self.zeros_kv], dim=2))
+            if rows is not ring:
+                rows.deallocate(True)
+        if DRAFT_GROUPS == 1:
+            return users[0]
+        out = ttnn.concat(users, dim=0)
+        for t in users:
+            t.deallocate(True)
+        return out
 
     def _unpack(self):
         """The packed upload's parts (uint32 [1, n] each): tokens, the query / block / context RoPE positions, the
@@ -559,7 +612,7 @@ class TtDFlash:
         """Compile with an idle run (an all-zero scatter writes nothing), then capture the draft program."""
         assert self.trace is None and self.head is not None
         m = self.model
-        self.upload([], 0, 0)
+        self.upload([])
         self._body()
         ttnn.synchronize_device(m.mesh_device)
         trace_id = ttnn.begin_trace_capture(m.mesh_device, cq_id=0)
@@ -574,28 +627,29 @@ class TtDFlash:
             self.trace = None
 
     # ------------------------------------------------------------------ host
-    def host_inputs(self, context, anchor, start, anchor_slot=None):
-        """The packed upload of one draft (uint32 [1, n], reference.spec_chain.dflash_inputs): ``context`` [(tap row,
-        position)] the committed rows to write into the ring, ``anchor`` the last committed token, at position
-        ``start``, from slot ``anchor_slot`` (the drafts step reports the drafts of a draft with one). Positions past
-        the RoPE tables (a draft at the context's end, which the verify then drops) read their last row."""
-        words = dflash_inputs(self.layout, context, anchor, start, anchor_slot)
+    def host_inputs(self, drafts):
+        """The packed upload of a draft (uint32 [1, n], reference.spec_chain.dflash_inputs): ``drafts`` [(group,
+        context, anchor, start, anchor_slot)], per drafting group ``context`` [(tap row, position)] the committed rows
+        to write into its ring, ``anchor`` the last committed token, at position ``start``, from slot ``anchor_slot``
+        (the drafts step reports the drafts of a group with one). Positions past the RoPE tables (a draft at the
+        context's end, which the verify then drops) read their last row."""
+        words = dflash_inputs(self.layout, drafts)
         packed = torch.tensor([[w - (1 << 32) if w >= 1 << 31 else w for w in words]], dtype=torch.int32)
         return ttnn.from_torch(
             packed, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.plan.replicate()
         )
 
-    def upload(self, context, anchor, start, anchor_slot=None):
+    def upload(self, drafts):
         t = time.perf_counter()
-        host = self.host_inputs(context, anchor, start, anchor_slot)
+        host = self.host_inputs(drafts)
         self.last_inputs_s = time.perf_counter() - t
         ttnn.copy_host_to_device_tensor(host, self.inputs["packed"])
 
-    def enqueue(self, context, anchor, start, anchor_slot=None):
-        """Draft after the replica's last decode or verify step (non-blocking): writes ``context`` (see host_inputs)
-        from the taps that step left, then drafts the block after ``anchor`` at ``start``."""
+    def enqueue(self, drafts):
+        """Draft after the replica's last decode or verify step (non-blocking): writes each group's context rows (see
+        host_inputs) from the taps that step left, then drafts its block after its anchor."""
         self._require_trace()
-        self.upload(context, anchor, start, anchor_slot)
+        self.upload(drafts)
         ttnn.execute_trace(self.model.mesh_device, self.trace, cq_id=0, blocking=False)
 
     def enqueue_chained(self):
@@ -608,7 +662,7 @@ class TtDFlash:
         if self.trace is None:
             raise RuntimeError("a DFlash draft before warmup_model_decode captured the draft trace")
 
-    def read_drafts(self):
-        """The drafts (blocks until the draft finished)."""
+    def read_drafts(self, group=0):
+        """Draft group ``group``'s drafts (blocks until the draft finished)."""
         row = ttnn.to_torch(ttnn.get_device_tensors(self.head.next_tokens)[0]).reshape(-1)
-        return [int(t) for t in row[:MAX_DRAFTS]]
+        return [int(t) for t in row[group * MAX_DRAFTS : (group + 1) * MAX_DRAFTS]]

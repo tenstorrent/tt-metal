@@ -579,11 +579,11 @@ class TtMiMoModel:
         return logits
 
     # ------------------------------------------------------------------ prefill
-    def _prefill_chunk(self, tokens, slot, start_pos, hidden, layers=None):
+    def _prefill_chunk(self, tokens, slot, start_pos, hidden, layers=None, draft_group=0):
         """One chunk (``tokens`` 1D torch) at ``start_pos`` through the layers ``layers`` (indices, default all);
         returns the last one's output [1, 1, padded, hidden] and appends (copy, real rows) of every layer's output to
-        ``hidden`` when given. With the DFlash drafter the chunk's last rows also go into its context ring
-        (TtDFlash.prefill_context; a warm-up through a subset of the layers runs the same programs)."""
+        ``hidden`` when given. With the DFlash drafter the chunk's last rows also go into draft group ``draft_group``'s
+        context ring (TtDFlash.prefill_context; a warm-up through a subset of the layers runs the same programs)."""
         n = tokens.numel()
         padded = prefill_padded_len(n)
         assert start_pos + n <= self.max_seq_len, f"chunk ends at {start_pos + n} > {self.max_seq_len}"
@@ -616,7 +616,7 @@ class TtMiMoModel:
         if self.dflash is not None:
             if dflash_acc is None:
                 dflash_acc = self.dflash.prefill_tap(self.dflash.tap_layers[0], x, None)
-            self.dflash.prefill_context(dflash_acc, start_pos, n)
+            self.dflash.prefill_context(dflash_acc, start_pos, n, draft_group)
         # Enqueued: freeing them now is ordered with the work that reads them.
         for setup in self.rope_setups.values():
             setup.end_prefill_chunk()
@@ -627,7 +627,15 @@ class TtMiMoModel:
         return x, padded
 
     def prefill_enqueue(
-        self, tokens, slot, return_hidden=False, start_pos=0, chunk_size=None, layers=None, history_continues=False
+        self,
+        tokens,
+        slot,
+        return_hidden=False,
+        start_pos=0,
+        chunk_size=None,
+        layers=None,
+        history_continues=False,
+        draft_group=0,
     ):
         """Enqueue prefill of one user (``tokens`` 1D torch, positions start_pos ..) into batch ``slot``, in chunks
         of ``chunk_size`` tokens (default ``max_prefill_chunk``; a multiple of the block size, as is ``start_pos``).
@@ -635,14 +643,15 @@ class TtMiMoModel:
         layers (indices; warmup). Nothing is read back; returns a pending handle for ``prefill_read``. With the MTP
         history each chunk also writes its last rows' final normed hidden into the slot's history
         (tt/mtp_backfill.py); ``history_continues``: the first chunk continues the request's earlier chunks (their
-        entries stay), else it is the request's first and the slot's other entries are invalidated."""
+        entries stay), else it is the request's first and the slot's other entries are invalidated.
+        ``draft_group``: the request's draft group (its DFlash context ring)."""
         n = tokens.numel()
         chunk = chunk_size or self.max_prefill_chunk
         assert n > 0 and chunk % self.block_size == 0 and start_pos % self.block_size == 0
         hidden = [[] for _ in (range(len(self.layers)) if layers is None else layers)] if return_hidden else None
         hist = self._history()
         for s in range(0, n, chunk):
-            x, padded = self._prefill_chunk(tokens[s : s + chunk], slot, start_pos + s, hidden, layers)
+            x, padded = self._prefill_chunk(tokens[s : s + chunk], slot, start_pos + s, hidden, layers, draft_group)
             if hist is not None and slot < SPEC_SLOTS:
                 writes = hist.chunk_writes(slot, start_pos + s, tokens[s : s + chunk], 0, history_continues or s > 0)
                 write_list = hist.prefill_list(writes)

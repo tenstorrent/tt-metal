@@ -61,6 +61,7 @@ from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     unpack_result,
 )
 from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
+    DRAFT_GROUPS,
     MAX_DRAFTS,
     SPEC_SLOTS,
     DraftSource,
@@ -92,6 +93,14 @@ from models.experimental.mimo_v2_6_flash.tests.test_spec_decode_host import (
     mtp_drafter,
     tiny_config,
 )
+from models.experimental.mimo_v2_6_flash.reference import spec_decode as spec_layout
+
+# The MTP drafter's 4-slot verify (the draft groups: test_spec_groups_host.py, test_spec_groups_adapter_host.py).
+pytestmark = pytest.mark.skipif(
+    (spec_layout.SPEC_SLOTS, spec_layout.DRAFT_GROUPS) != (4, 1),
+    reason="MTP's 4-slot layouts: run without MIMO_SPEC_SLOTS / MIMO_SPEC_GROUPS",
+)
+
 
 B = 32
 VOCAB = 152576
@@ -296,14 +305,14 @@ def test_no_chained_draft_without_a_source_or_past_the_limit():
 
 
 # ---------------------------------------------------------------------- with DFlash drafting
-DFLASH = DFlashLayout(ring=1024, block=8, heads=8, last=MAX_SEQ_LEN - 1)
+DFLASH = DFlashLayout(ring=1024, block=8, heads=8, last=MAX_SEQ_LEN - 1, groups=DRAFT_GROUPS)
 
 
 def dflash_host_upload(source, committed, positions, m):
     """What generator_vllm._enqueue_dflash uploads for the plugin's commit of m tokens: the committed columns' slots as
     context rows at their committed position - 1, the last committed token at its position from slot slots[m - 1]."""
     context = [(source.slots[c], positions[c] - 1) for c in range(m)]
-    return dflash_inputs(DFLASH, context, committed[m - 1], positions[m - 1], source.slots[m - 1])
+    return dflash_inputs(DFLASH, [(source.group, context, committed[m - 1], positions[m - 1], source.slots[m - 1])])
 
 
 @pytest.mark.parametrize("bonus", [1, 2, 1023, 1024, 1025, 4096, MAX_SEQ_LEN - 1 - MAX_DRAFTS])
@@ -330,7 +339,7 @@ def test_dflash_chain_writes_the_host_planned_upload(bonus):
             mtp_header = chain_step(verify, accept, argmax)[1]
             assert header == mtp_header and header[STATUS_AT : STATUS_AT + 4] == [1, source.slots[m - 1], bonus, 0]
             head = [rng.randrange(VOCAB) for _ in range(B)]
-            result = unpack_result(header + dflash_drafts_step(packed, head))
+            result = unpack_result(header + dflash_drafts_step(packed, head, DFLASH))
             d = chained_draft(result, source, vp.positions)
             assert d.tokens == committed and d.positions == positions[:m] and d.drafts == head[:MAX_DRAFTS]
             assert d.matches(committed + [-1] * (1 + MAX_DRAFTS - m), positions, m)
@@ -339,10 +348,10 @@ def test_dflash_chain_writes_the_host_planned_upload(bonus):
 @pytest.mark.parametrize("k", [1, 3, MAX_DRAFTS])
 def test_dflash_chain_declines_where_propose_does(k):
     """The DFlash chain drafts while bonus + k < max_seq_len, and an idle or declined chain writes the idle upload
-    (dflash_inputs([], 0, 0): no context row written, no drafts reported)."""
+    (dflash_inputs with no drafts: no context row written, no drafts reported)."""
     seq = 4096
     rng = random.Random(k)
-    idle = dflash_inputs(DFLASH, [], 0, 0)
+    idle = dflash_inputs(DFLASH)
     for bonus in range(seq - k - 4, seq - k + 1):
         vp = one_row_pass(bonus - 1, MAX_DRAFTS, rng)
         accept = accept_page([(1, [11])])
@@ -354,7 +363,7 @@ def test_dflash_chain_declines_where_propose_does(k):
         assert (packed == idle) != drafts
     packed, header = dflash_chain_step(upload(vp), accept, [0] * B, DFLASH)
     assert packed == idle and header[STATUS_AT : STATUS_AT + 4] == [0, NO_SLOT, 0, 0]
-    assert dflash_drafts_step(idle, list(range(B)))[: 1 + MAX_DRAFTS] == [NO_SLOT] + [NO_TOKEN] * MAX_DRAFTS
+    assert dflash_drafts_step(idle, list(range(B)), DFLASH)[: 1 + MAX_DRAFTS] == [NO_SLOT] + [NO_TOKEN] * MAX_DRAFTS
     assert idle[DFLASH.RING_ROWS : DFLASH.words] == [DFLASH.ring] * 32
 
 
@@ -370,7 +379,7 @@ def test_dflash_pages_relay_as_the_mtp_pages():
             upload(vp, chain_row(B, source, MAX_SEQ_LEN)), accept_page([(m, committed)]), [0] * B, DFLASH
         )
         head = [rng.randrange(VOCAB) for _ in range(B)]
-        page = header + dflash_drafts_step(packed, head)
+        page = header + dflash_drafts_step(packed, head, DFLASH)
         nxt = one_row_pass(9000, MAX_DRAFTS, rng)  # provisional positions above the real ones
         verify, ctrl = relay_step(
             upload(nxt, chain_row(B, draft_source([nxt]), MAX_SEQ_LEN, relay=True)),

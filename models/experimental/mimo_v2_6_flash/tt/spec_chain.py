@@ -34,6 +34,10 @@ The relay reads the result page in place: everything the next verify needs (the 
 is there, at a fixed address, until the next pass of the lane rewrites it. Steps on a pass the host built leave the
 relay nothing to do, so one verify trace serves both.
 
+With draft groups (MIMO_SPEC_GROUPS=2: two requests of a lane in one pass, reference/spec_decode.py) every step runs per
+group: the chain row and the result page have a block per group, the chain step writes each group's commit, the
+drafts step each group's drafts, the plan and tokens steps each group's slots, and the relay each relayed group.
+
 With DFlash drafting (``dflash``, tt/dflash.py) the chain step writes the DFlash draft's packed upload instead of
 ``mtp_packed`` (reference.spec_chain.dflash_chain_step), and the drafts step, at the end of the DFlash draft trace,
 reads its anchor from that upload and the drafts from the drafter's GreedyHead (dflash_drafts_step). The result page
@@ -64,14 +68,14 @@ from ..reference.spec_chain import (
     STATUS_AT,
     unpack_result,
 )
-from ..reference.spec_decode import MAX_DRAFTS, MTP_RING_TOKENS, SPEC_SLOTS
+from ..reference.spec_decode import DRAFT_GROUPS, GROUP_SLOTS, MAX_DRAFTS, MTP_RING_TOKENS, SPEC_SLOTS
 from ..reference.spec_inputs import DESC_A, DESC_COUNT, DESC_DRAFTING, DESC_SLOTS, DESC_TOKENS, MTP_ROWS, VERIFY_ROWS
 from .device_sampler import CB_SCRATCH, _cb, _is_dram, _kernel, _ranges
 
 # kernels/spec_chain.cpp addresses the chain row's words at these offsets, and the accept page at the result's start.
 assert (CHAIN_SOURCE, CHAIN_COLUMNS, CHAIN_LIMIT, CHAIN_SLOTS) == (0, 1, 2, 3) and ACCEPT_AT == 0
 # ... and the description's and the stash page's words at these.
-assert (DESC_DRAFTING, DESC_COUNT, DESC_A, DESC_SLOTS, DESC_TOKENS) == (0, 1, 2, 3, 3 + SPEC_SLOTS)
+assert (DESC_DRAFTING, DESC_COUNT, DESC_A, DESC_SLOTS, DESC_TOKENS) == (0, 1, 2, 3, 3 + GROUP_SLOTS)
 assert (STASH_POSITIONS, STASH_TOKENS) == (0, SPEC_SLOTS)
 CHAIN, DRAFTS, RELAY, PLAN, TOKENS = 0, 1, 2, 3, 4  # the kernel's modes
 CTRL_WORDS = GROUPS * GROUP_WORDS  # VerifySampler's control page
@@ -144,6 +148,9 @@ class SpecChain:
             self.layer_inputs.table_rows if self.layer_inputs is not None else self.max_batch,
             layer,
             *self._dflash_args(),
+            DRAFT_GROUPS,
+            OUT_WORDS,
+            GROUP_WORDS,
         ]
         kernel = _kernel("spec_chain.cpp", cores, _ranges(cores), compile_args, [args], ttnn.ReaderConfigDescriptor())
         return ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[_cb(CB_SCRATCH, scratch, _ranges(cores))])
@@ -153,6 +160,7 @@ class SpecChain:
         d = self.dflash
         if d is None:
             return [0] * 6
+        assert d.groups == DRAFT_GROUPS
         return [1, d.words, d.ring, d.block, d.heads, d.last]
 
     def _draft_bytes(self):
@@ -200,7 +208,7 @@ class SpecChain:
         outs = [li.pos, li.rope, li.hidden, li.tokens[0], *li.serial]
         args = [self.mtp.buffer_address(), li.stash.buffer_address()] + [t.buffer_address() for t in outs]
         row = _align64(self.max_batch * 4)
-        prog = self._program(PLAN, args, (3 + len(outs)) * row)
+        prog = self._program(PLAN, args, (DRAFT_GROUPS + 2 + len(outs)) * row)
         ttnn.generic_op([self.mtp, li.stash, *outs], prog)
 
     def tokens(self, layer):

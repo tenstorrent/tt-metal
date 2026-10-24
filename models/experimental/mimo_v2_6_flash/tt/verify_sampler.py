@@ -72,7 +72,7 @@ class GreedyVerify:
     def stage(self, slots, groups):
         """Copies a pass's control page (reference.sample_verify.pass_inputs' (slots, groups)); raises for a sampled
         request (the plugin routes one here only when the model offers it ``fused_sample``)."""
-        if slots or any(not g[2] for g in groups):
+        if slots or any(g is not None and not g[2] for g in groups):
             raise ValueError(
                 f"the greedy accept step takes greedy requests only (the device sampler does not serve this "
                 f"replica's {GROUPS}-slot verify); got sampled slots {sorted(slots)}"
