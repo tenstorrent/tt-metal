@@ -37,6 +37,49 @@ const std::unordered_map<std::pair<Topology, std::string>, FabricConfig, tt::tt_
         {{Topology::Torus, "XY"}, FabricConfig::FABRIC_2D_TORUS_XY},
 };
 
+namespace {
+
+// For --fabric-config-from-mgd: the fabric setup this rank's local mesh gets from the MGD's dim_types.
+void apply_mgd_default_fabric_setup(std::vector<ParsedTestConfig>& test_configs) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    TT_FATAL(mesh_graph.has_mesh_graph_descriptor(), "--fabric-config-from-mgd requires a mesh graph descriptor");
+    const auto local_mesh_ids = control_plane.get_local_mesh_id_bindings();
+    TT_FATAL(!local_mesh_ids.empty(), "--fabric-config-from-mgd found no local mesh");
+    const auto fabric_config =
+        mesh_graph.get_mesh_graph_descriptor().default_fabric_config_from_dim_types(local_mesh_ids.front());
+
+    Topology topology = Topology::Mesh;
+    std::optional<std::string> torus_config;
+    switch (fabric_config) {
+        case FabricConfig::FABRIC_2D: break;
+        case FabricConfig::FABRIC_2D_TORUS_X:
+            topology = Topology::Torus;
+            torus_config = "X";
+            break;
+        case FabricConfig::FABRIC_2D_TORUS_Y:
+            topology = Topology::Torus;
+            torus_config = "Y";
+            break;
+        case FabricConfig::FABRIC_2D_TORUS_XY:
+            topology = Topology::Torus;
+            torus_config = "XY";
+            break;
+        default: TT_THROW("Unsupported MGD default fabric config {}", fabric_config);
+    }
+    log_info(
+        tt::LogTest,
+        "--fabric-config-from-mgd: mesh {} uses {} from the MGD; overriding every test's topology",
+        *local_mesh_ids.front(),
+        fabric_config);
+    for (auto& test_config : test_configs) {
+        test_config.fabric_setup.topology = topology;
+        test_config.fabric_setup.torus_config = torus_config;
+    }
+}
+
+}  // namespace
+
 int main(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
 
@@ -175,6 +218,9 @@ int main(int argc, char** argv) {
     // Per-group outcome (name, status) for the end-of-run report, in execution order.
     std::vector<std::pair<std::string, std::string>> group_results;
     group_results.reserve(raw_test_configs.size());
+    if (cmdline_parser.fabric_config_from_mgd()) {
+        apply_mgd_default_fabric_setup(raw_test_configs);
+    }
     for (auto& test_config : raw_test_configs) {
         if (!cmdline_parser.check_filter(test_config, true)) {
             log_info(tt::LogTest, "Skipping Test Group: {} due to filter policy", test_config.name);

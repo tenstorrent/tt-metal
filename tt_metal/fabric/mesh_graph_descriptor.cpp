@@ -679,6 +679,37 @@ FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::Sw
     return infer_declared_fabric_type_from_dim_types(switch_desc);
 }
 
+// Derive a mesh's default FabricConfig from its declared device_topology dim_types (used when no process-wide
+// override is set). ALWAYS 2D-family -- 1D is never auto-derived, only requested explicitly. Torus variant
+// follows the ring axes: dim 0 => TORUS_Y, dim 1 => TORUS_X, both => TORUS_XY.
+FabricConfig MeshGraphDescriptor::default_fabric_config_from_dim_types(MeshId mesh_id) const {
+    const proto::MeshDescriptor* mesh_desc = nullptr;
+    for (const auto global_id : all_meshes()) {
+        const auto& instance = get_instance(global_id);
+        if (MeshId{instance.local_id} == mesh_id) {
+            mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+            break;
+        }
+    }
+    TT_FATAL(mesh_desc != nullptr, "MeshGraphDescriptor: no mesh instance for mesh_id {}", *mesh_id);
+    const auto& dim_types = mesh_desc->device_topology().dim_types();
+    const auto is_ring = [&](int axis) {
+        return axis < dim_types.size() && dim_types[axis] == proto::TorusTopology::RING;
+    };
+    const bool y_ring = is_ring(0);
+    const bool x_ring = is_ring(1);
+    if (y_ring && x_ring) {
+        return FabricConfig::FABRIC_2D_TORUS_XY;
+    }
+    if (y_ring) {
+        return FabricConfig::FABRIC_2D_TORUS_Y;
+    }
+    if (x_ring) {
+        return FabricConfig::FABRIC_2D_TORUS_X;
+    }
+    return FabricConfig::FABRIC_2D;
+}
+
 void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {
     // Set the default for channel policy to strict if not specified
     for (auto& mesh : *proto.mutable_mesh_descriptors()) {

@@ -335,6 +335,8 @@ public:
     void apply_overrides(std::vector<ParsedTestConfig>& test_configs);
     std::optional<uint32_t> get_master_seed();
     bool dump_built_tests();
+    // Ignore each test's fabric_setup topology and use the local mesh's MGD dim_types default instead.
+    bool fabric_config_from_mgd();
     std::string get_built_tests_dump_file_name(const std::string& default_file_name);
     bool has_help_option();
     void print_help();

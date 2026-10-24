@@ -456,25 +456,33 @@ void MeshGraph::initialize_from_mgd(
             }
         }
 
-        // Build intra-mesh connectivity based on FabricConfig override (if provided) or MGD's fabric type
+        // Build intra-mesh connectivity based on FabricConfig override (if provided) or the config derived from
+        // the MGD's dim_types
         FabricType mgd_fabric_type = MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc);
-        FabricType effective_fabric_type;
-
-        if (fabric_config.has_value()) {
-            FabricType requested_fabric_type = get_fabric_type(*fabric_config, is_ubb_galaxy);
-            // Validate that FabricConfig doesn't try to create connections that don't exist
-            if (requires_more_connectivity(requested_fabric_type, mgd_fabric_type, mesh_shape)) {
-                TT_THROW(
-                    "FabricConfig {} requests topology {} which requires more connectivity than MGD provides {}. "
-                    "FabricConfig can only restrict topology (e.g., torus→mesh), not create new connections.",
-                    enchantum::to_string(*fabric_config),
-                    enchantum::to_string(requested_fabric_type),
-                    enchantum::to_string(mgd_fabric_type));
-            }
-            effective_fabric_type = requested_fabric_type;
-        } else {
-            effective_fabric_type = mgd_fabric_type;
+        const FabricConfig mesh_fabric_config =
+            fabric_config.value_or(mgd.default_fabric_config_from_dim_types(mesh_id));
+        FabricType effective_fabric_type = get_fabric_type(mesh_fabric_config, is_ubb_galaxy);
+        // Validate that FabricConfig doesn't try to create connections that don't exist
+        if (requires_more_connectivity(effective_fabric_type, mgd_fabric_type, mesh_shape)) {
+            TT_THROW(
+                "FabricConfig {} requests topology {} which requires more connectivity than MGD provides {}. "
+                "FabricConfig can only restrict topology (e.g., torus→mesh), not create new connections.",
+                enchantum::to_string(mesh_fabric_config),
+                enchantum::to_string(effective_fabric_type),
+                enchantum::to_string(mgd_fabric_type));
         }
+
+        // A 1D fabric config is single-mesh only (1D routing has no inter-mesh story).
+        const bool is_1d = mesh_fabric_config == FabricConfig::FABRIC_1D ||
+                           mesh_fabric_config == FabricConfig::FABRIC_1D_RING ||
+                           mesh_fabric_config == FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE;
+        TT_FATAL(
+            !is_1d || all_meshes.size() <= 1,
+            "A 1D FabricConfig ({}) cannot be used with more than one mesh ({} compute meshes present): mesh M{} "
+            "requested a 1D config. 1D fabric is single-mesh only.",
+            enchantum::to_string(mesh_fabric_config),
+            all_meshes.size(),
+            *mesh_id);
 
         // Build connectivity using effective_fabric_type
         MeshCoordinateRange mesh_coord_range(mesh_shape);

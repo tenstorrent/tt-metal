@@ -940,6 +940,10 @@ std::string CmdlineParser::get_built_tests_dump_file_name(const std::string& def
     return dump_file;
 }
 
+bool CmdlineParser::fabric_config_from_mgd() {
+    return test_args::has_command_option(input_args_, "--fabric-config-from-mgd");
+}
+
 bool CmdlineParser::has_help_option() { return test_args::has_command_option(input_args_, "--help"); }
 
 void CmdlineParser::print_help() {
@@ -994,6 +998,10 @@ void CmdlineParser::print_help() {
         LogTest,
         "  --hung-confirmation-rounds <N>               Consecutive stall rounds before confirming hung (default: "
         "3).");
+    log_info(
+        LogTest,
+        "  --fabric-config-from-mgd                     Ignore each test's fabric_setup topology and use the local "
+        "mesh's MGD dim_types default fabric config.");
     log_info(
         LogTest,
         "  --wait-on-hang                               Block indefinitely on confirmed hang (interactive bringup "
