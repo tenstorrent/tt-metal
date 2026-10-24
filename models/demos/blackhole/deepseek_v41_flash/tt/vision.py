@@ -484,12 +484,15 @@ class DSV41Vision:
         return outs
 
     def warm_pairs(self, n_pad):
-        """The aligner buckets of a patch bucket: the one a normal (near square) aspect ratio gives (n / 9 tokens plus the border of the 3x3 grid), and the next larger one."""
+        """The aligner buckets of a patch bucket: the one a normal (near square) aspect ratio gives (n / 9 tokens plus the border of the 3x3 grid), and the next larger ones (``DSV41_VISION_WARM_ALIGN``, default 2; it was 1: the first image of an unusual aspect ratio compiled its aligner programs at request time)."""
         nt = -(-(n_pad - 1) // self.a.ratio**2) + int(0.7 * n_pad**0.5) + 2
         first = _bucket(
             min(nt, AL_BUCKETS[-1]), AL_BUCKETS, TILE
         )  # (an image has at most max_image_tokens = 1024 tokens)
-        return [first] + [b for b in AL_BUCKETS if b > first][:1]
+        extra = int(
+            os.environ.get("DSV41_VISION_WARM_ALIGN", "2")
+        )  # larger buckets warmed next to the square one: a thin / wide image has a longer border of the 3x3 grid
+        return [first] + [b for b in AL_BUCKETS if b > first][:extra]
 
     def _synthetic_wave(self, n_pad):
         """<= rows images of n_pad - 1 patches (3 x n): every program of the bucket runs on them."""
