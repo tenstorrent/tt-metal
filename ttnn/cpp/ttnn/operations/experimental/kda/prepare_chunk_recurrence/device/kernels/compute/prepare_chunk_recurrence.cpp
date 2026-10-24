@@ -940,8 +940,7 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     DataflowBuffer workspace_2(dfb::workspace_2);
 
     compute_kernel_hw_startup(dfb::q, dfb::k, dfb::workspace_0);
-    // The reader generates each constant with the first batch's input that first needs it: the gate matrices with g,
-    // the L2 norm's ones and the causal mask with q, the inverse's after the batch. Each is awaited before first use.
+    // The writer generates every constant at startup, in order of first use; each is awaited before its first use.
     gate_tril.wait_front(chunk_matrix_tiles);
     gate_ones.wait_front(chunk_matrix_tiles);
 
