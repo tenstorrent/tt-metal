@@ -94,6 +94,58 @@ def small_row_min_tokens() -> int:
     return max(1, int(os.environ.get("GEMMA4_SMALL_ROW_MIN_TOKENS", "32")))
 
 
+# Ring transport payload contract (dispatch_fabric2d): a token travels as ONE fabric packet of its row-major bf16
+# page plus dspf2d::FWD_EXTRA_BYTES (64 B) of forwarding metadata, and the op refuses a token larger than the
+# fabric's max payload (TT_FATAL since #57654; "the bytes past its max overwrite the next channel slot"). The fabric
+# default is 4352 B (4 bfp8 tiles) on every tree, so the 26B's 2816-wide hidden (5632 + 64 B) needs the mesh opened
+# with a larger FabricRouterConfig.max_packet_payload_size_bytes; combine_fabric2d splits a token in two packets and
+# fits the default. The planner reads the live bound and refuses the ring loudly instead of reaching the op.
+RING_FWD_EXTRA_BYTES = 64
+FABRIC_DEFAULT_PAYLOAD_BYTES = 4352
+FABRIC_PAYLOAD_UNIT_BYTES = 1088  # one bfp8 tile: the defaults are multiples of it (4 tiles) and so is the BH max (14)
+FABRIC_MAX_PAYLOAD_BYTES_BLACKHOLE = 14 * FABRIC_PAYLOAD_UNIT_BYTES
+
+
+def ring_token_bytes(hidden: int, elem_bytes: int = 2) -> int:
+    """The row-major token page dispatch_fabric2d sends (bf16 rows: hidden x 2 B; the 26B: 5632 B)."""
+    return int(hidden) * int(elem_bytes)
+
+
+def ring_payload_required_bytes(hidden: int, elem_bytes: int = 2) -> int:
+    """The fabric max payload the ring transport needs for ``hidden``: the token page plus the forwarding tail."""
+    return ring_token_bytes(hidden, elem_bytes) + RING_FWD_EXTRA_BYTES
+
+
+def ring_transport_reason(hidden: int, fabric_payload_bytes: int, elem_bytes: int = 2):
+    """None when the ring transport can carry ``hidden``-wide tokens on a fabric with ``fabric_payload_bytes`` of
+    max payload, else why not (with the router config that would)."""
+    need = ring_payload_required_bytes(hidden, elem_bytes)
+    if need <= int(fabric_payload_bytes):
+        return None
+    return (
+        f"the ring transport (dispatch_fabric2d) sends a {ring_token_bytes(hidden, elem_bytes)} B token page plus "
+        f"{RING_FWD_EXTRA_BYTES} B of forwarding metadata in one fabric packet, {need} B > the fabric max payload "
+        f"{int(fabric_payload_bytes)} B: open the mesh with FabricRouterConfig(max_packet_payload_size_bytes="
+        f"{ring_fabric_payload_bytes(hidden, elem_bytes)}) (ring_fabric_router_config)"
+    )
+
+
+def ring_fabric_payload_bytes(hidden: int, elem_bytes: int = 2) -> int:
+    """The smallest multiple of the fabric payload unit that carries ``hidden``-wide ring tokens (26B: 6528 B),
+    never below the fabric default."""
+    need = ring_payload_required_bytes(hidden, elem_bytes)
+    units = -(-need // FABRIC_PAYLOAD_UNIT_BYTES)
+    return max(FABRIC_DEFAULT_PAYLOAD_BYTES, units * FABRIC_PAYLOAD_UNIT_BYTES)
+
+
+def ring_fabric_router_config(hidden: int, elem_bytes: int = 2):
+    """``ttnn.FabricRouterConfig`` for a mesh that runs the ring transport on ``hidden``-wide tokens (the ring unit
+    tests pass it as the ``fabric_router_config`` device parameter)."""
+    cfg = ttnn.FabricRouterConfig()
+    cfg.max_packet_payload_size_bytes = ring_fabric_payload_bytes(hidden, elem_bytes)
+    return cfg
+
+
 def combine_fwd_reduction() -> int:
     """GEMMA4_MOE_COMBINE_FWD_REDUCTION (default 1 = no reduction): the divisor on combine_fabric2d's forwarding
     region (tt-metal #61858, "no value can deadlock the ring"; it trades DRAM against throughput)."""
@@ -346,6 +398,16 @@ class Gemma4DispatchExperts:
             "the direct dispatch/combine ops only run along mesh axis 0: a single-row mesh needs "
             "GEMMA4_MOE_DISPATCH_RING=1 (dispatch_fabric2d / combine_fabric2d on a FABRIC_1D_RING mesh)"
         )
+        if self.ring:
+            # dispatch_fabric2d sends a whole token page per packet: refuse here, with the router config that
+            # would work, instead of the op's TT_FATAL (tt-metal CI at 1aaff4164cc: 5632 + 64 B > 4352 B)
+            try:
+                live_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
+            except Exception as exc:  # noqa: BLE001 - no fabric context: the op would fail the same way
+                raise ValueError(f"the ring transport needs an initialized fabric: {exc}") from exc
+            reason = ring_transport_reason(self.hidden, live_payload)
+            if reason is not None:
+                raise ValueError(reason)
         table = ExpertMapping.create_dispatch_table(self.num_experts, dgs, ndg)
         self.routing_setup = _RoutingSetupOnAxis(
             mesh_device, table, self.dispatch_axis, num_links=num_links, experts_per_chip=experts_per_chip

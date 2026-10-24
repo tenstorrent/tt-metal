@@ -74,6 +74,19 @@ def test_experts_dispatch_fit(seq_len, sparse, mesh_device, reset_seeds, request
     run_experts(1, seq_len, mesh_device, request, sparse_routing=sparse)
 
 
+def _ring_router_config():
+    """The fabric router config the ring transport needs for this model's hidden size (dispatch_fabric2d sends a
+    whole bf16 token page plus 64 B per packet; the fabric default of 4352 B is below the 26B's 5632 + 64 B): read
+    from the HF config at collection, the 26B width when the config is not readable there."""
+    from models.demos.gemma4.tt.experts.dispatch_prefill import ring_fabric_router_config
+
+    try:
+        hidden = int(TestFactory.create_hf_text_config().hidden_size)
+    except Exception:  # noqa: BLE001 - no model path at collection: size for the 26B
+        hidden = 2816
+    return ring_fabric_router_config(hidden)
+
+
 # single-row meshes (the 4-chip and 8-chip entries) dispatch along their columns over the hop-forwarding
 # dispatch_fabric2d / combine_fabric2d pair, which needs the axis wrap-wired (FABRIC_1D_RING; skipped on the line)
 @skip_if_not_moe
@@ -81,7 +94,8 @@ def test_experts_dispatch_fit(seq_len, sparse, mesh_device, reset_seeds, request
     not is_blackhole(), reason="token-dispatch prefill runs the Blackhole-only unified_routed_expert_ffn"
 )
 @parametrize_mesh_with_fabric(
-    mesh_shapes=[(1, 4), (1, 8)], device_params_extra={"fabric_config": lanes_fabric_config()}
+    mesh_shapes=[(1, 4), (1, 8)],
+    device_params_extra={"fabric_config": lanes_fabric_config(), "fabric_router_config": _ring_router_config()},
 )
 @pytest.mark.parametrize("seq_len", [128, 1024, 4096 + 128], ids=["prefill_128", "prefill_1024", "prefill_4224"])
 def test_experts_dispatch_ring(seq_len, mesh_device, reset_seeds, request, monkeypatch):
