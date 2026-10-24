@@ -18,6 +18,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_p
 from models.demos.deepseek_v3_d_p.tt.kda.config import tuned_projection_matmul_configs
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE, l1_when_it_fits
 from models.tt_transformers.tt.ccl import TT_CCL
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.timeout(900)]
 
@@ -177,7 +178,8 @@ def test_kda_output_projection_mmrs(mesh_device: ttnn.MeshDevice) -> None:
 )
 def test_kda_output_projection_mmrs_balanced_lines(mesh_device: ttnn.MeshDevice) -> None:
     """balance_lines: 9 n-lines with per-block rotating widths (7, 7, 6 x 7) instead of 8 lines of 7. Every output tile
-    keeps its K order and cross-device add order, so the result is bit-identical to the uniform plan. The activation
+    keeps its K order, but the ring's two halves now split the 9 lines 5/4, so some blocks reduce their partials in a
+    different cross-device order than the uniform plan: equal to it within BF16 rounding, not bit-identical. The activation
     in interleaved L1 (the KDA layer's norm output) is read through the same TensorAccessor: bit-identical too."""
     from ttnn.operations import matmul_reduce_scatter as mrs_pkg
 
@@ -239,4 +241,4 @@ def test_kda_output_projection_mmrs_balanced_lines(mesh_device: ttnn.MeshDevice)
     cores = {name: plan["grid"][0] * plan["grid"][1] for name, plan in plans.items()}
     assert cores["balanced"] > cores["uniform"], plans
     for name in ("balanced", "balanced_l1_activation"):
-        assert torch.equal(results["uniform"], results[name]), f"{name} must be bit-identical to the uniform plan"
+        assert_with_pcc(results["uniform"].float(), results[name].float(), 0.99999)

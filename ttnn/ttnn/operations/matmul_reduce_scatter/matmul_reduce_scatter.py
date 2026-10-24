@@ -132,8 +132,8 @@ def matmul_reduce_scatter(
     staging: "exact", "grow" or "ephemeral" (allocated per call and freed once enqueued); default MRS_STAGING.
     balance_lines (scatter_dim -1): the planner may give the n-lines of a block that does not split evenly unequal,
     per-block rotating widths, using every line of the matmul rectangle (the busiest core computes fewer tiles over the
-    call; more matmul cores, so fewer idle cores for extra_program). Same per-tile accumulation, so the output is
-    bit-identical to the uniform split's."""
+    call; more matmul cores, so fewer idle cores for extra_program). Same per-tile K accumulation; the cross-device add
+    order of some blocks can differ from the uniform split's, so the output matches it within BF16 rounding."""
     validate(
         input_tensor,
         weight,

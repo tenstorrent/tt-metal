@@ -317,8 +317,9 @@ the rest `base` (`balanced_line_columns`). The wide set rotates per block, so ov
 than `ceil(G·extra / n_lines)` times. Kimi-K3 o_proj on the Galaxy 12×9 rectangle (block 20×56, G = 4): uniform 10×8
 cores at 2×7 = 56 tile-entries per core; balanced 10×9 cores with widths 7,7,6×7 rotating = 50 (−11% on the busiest
 core). The partition depends only on (line, block), so core `k` holds the same tiles of block `b` on every chip and a
-partial lands on the core that owns them downstream. Each output tile keeps its K order, super-blocks and finish adds:
-bit-identical to the uniform plan. L1 is unchanged (slots and windows stay `P_nom = core_m·(base+1)`).
+partial lands on the core that owns them downstream. Each output tile keeps its K order and super-blocks, but with an
+odd line count the ring's two halves split the lines unevenly, so some blocks add their cross-device partials in a
+different order than the uniform plan: equal within BF16 rounding (KDA layer accuracy unchanged), not bit-identical. L1 is unchanged (slots and windows stay `P_nom = core_m·(base+1)`).
 - *Entry geometry*: every matmul-core kernel reads one geometry word per entry (row/col offset from the core's origin,
   dense rows × cols), the generalization of the per-wave descriptor; the core's column origin is its leftmost entry's.
   A narrow entry reads, computes, sends and stores one column less, and pushes / pops the nominal window and slot.
