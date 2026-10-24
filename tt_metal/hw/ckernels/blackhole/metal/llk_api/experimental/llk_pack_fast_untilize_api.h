@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "llk_pack_common_api.h"
 #include "experimental/llk_pack_fast_untilize.h"
 #include "sanitizer/api.h"
@@ -47,11 +48,30 @@ inline void llk_pack_fast_untilize_block(
     ckernel::_llk_pack_fast_untilize_block_<block_ct_dim>(output_address, unit_dim, prev_unit_dim);
 }
 
+/**
+ * @brief Pack one chunk of a wider row-major output row at an explicit L1 address.
+ *
+ * @tparam block_ct_dim: Largest chunk width in tiles (2, 3 or 4).
+ * @tparam full_ct_dim: Width of the whole output row in tiles; must exceed block_ct_dim.
+ * @param address: L1 address of this chunk's row-0 column, in the 16-byte-word encoding of L1_ADDRESS()
+ *        (byte address / 16 - 1). This is the entry point that takes it raw; the CB-based wrapper derives it.
+ * @param unit_dim: Width of this chunk in tiles, in [2, block_ct_dim].
+ * @param prev_unit_dim: In/out. Chunk width the strided MOP was last built for; pass 0 on the first call after init.
+ * @param output_row_stride_16B: Output row pitch in 16B units that the init programmed, i.e.
+ *        SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * TILE_C_DIM) / 16.
+ * @note Call llk_pack_fast_untilize_init with the same block_ct_dim / full_ct_dim first, and
+ *       llk_pack_fast_untilize_uninit after the last call.
+ * @ref _llk_pack_fast_untilize_block_strided_ for the rest of the contract.
+ */
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
 inline void llk_pack_fast_untilize_block_strided_at_address(
-    const std::uint32_t address, const std::uint32_t unit_dim, std::uint32_t& prev_unit_dim) {
+    const std::uint32_t address,
+    const std::uint32_t unit_dim,
+    std::uint32_t& prev_unit_dim,
+    const std::uint32_t output_row_stride_16B) {
     SAN_HOOK(unsupported());
-    ckernel::_llk_pack_fast_untilize_block_strided_<block_ct_dim, full_ct_dim>(address, unit_dim, prev_unit_dim);
+    ckernel::_llk_pack_fast_untilize_block_strided_<block_ct_dim, full_ct_dim>(
+        address, unit_dim, prev_unit_dim, output_row_stride_16B);
 }
 
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
