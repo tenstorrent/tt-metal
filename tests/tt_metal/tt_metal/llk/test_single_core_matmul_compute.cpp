@@ -1406,6 +1406,42 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixMatmulSingleTileIdFreeGolden) {
     EXPECT_TRUE(check_pcc(result_floats, golden, /*min_pcc=*/0.99));
 }
 
+// Float32 in0 next to a Bfp8 (exp-a) in1, no fp32 Dest. hw_startup programs Float16_b everywhere, so
+// matmul_init alone must set both source formats. Float32 must rebias to the exp-a family (Float16) to match
+// in1; the one-operand rule gives Float16_b and mixes exponent widths. Output is Bfp8 so pack stays exp-a.
+TEST_F(LLKBlackholeSingleCardFixture, TensixMatmulFloat32ExpAIdFreeGolden) {
+    constexpr std::uint32_t num_elements = 32 * 32;
+    std::mt19937 gen(42);
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+    std::vector<float> in0_floats(num_elements), in1_raw(num_elements);
+    std::vector<std::uint32_t> src0(num_elements);
+    for (std::uint32_t i = 0; i < num_elements; ++i) {
+        in0_floats[i] = dist(gen);
+        src0[i] = std::bit_cast<std::uint32_t>(in0_floats[i]);
+        in1_raw[i] = dist(gen);
+    }
+    auto src1 = pack_as_bfp8_tiles<float>(ttsl::make_const_span(in1_raw), /*row_major_input=*/false, /*is_exp_a=*/true);
+    auto in1_floats =
+        unpack_bfp8_tiles_into_float_vec(ttsl::make_const_span(src1), /*row_major_output=*/false, /*is_exp_a=*/true);
+
+    auto golden = unit_tests::compute::matmul::make_matmul_golden(in0_floats, in1_floats, /*M=*/1, /*K=*/1, /*N=*/1);
+    auto result = unit_tests::llk::single_core::run_matmul_single(
+        *this->devices_.at(0),
+        src0,
+        src1,
+        "tests/tt_metal/tt_metal/test_kernels/compute/matmul_idfree.cpp",
+        tt::DataFormat::Float32,
+        tt::DataFormat::Bfp8,
+        tt::DataFormat::Bfp8,
+        {{"STALE_HW_STARTUP", "1"}});
+    auto result_floats =
+        unpack_bfp8_tiles_into_float_vec(ttsl::make_const_span(result), /*row_major_output=*/false, /*is_exp_a=*/true);
+
+    EXPECT_TRUE(is_close_vectors<float>(
+        result_floats, golden, [](float a, float b) { return is_close(a, b, /*rtol=*/0.05f, /*atol=*/0.2f); }));
+    EXPECT_TRUE(check_pcc(result_floats, golden, /*min_pcc=*/0.99));
+}
+
 // Block matmul: one matmul_block call produces the whole rt_dim x ct_dim output block (A[rt x kt] * B[kt x ct]).
 // kt_dim == 1 here so the block is exercised on the output-grid axes (rt x ct) against a real host golden;
 // multi-tile K accumulation is driven by the compute kernel's own K loop (out of this op-level golden's scope).

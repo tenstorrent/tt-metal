@@ -246,35 +246,38 @@ inline vector<std::uint32_t> run_binary(
     return result_vec;
 }
 
-// Run a single-tile matmul: c_0 -> SrcB, c_1 -> SrcA -> c_16. All tiles Float16_b. 7 matmul compile args all 1.
+// Run a single-tile matmul: c_0 -> SrcB, c_1 -> SrcA -> c_16. Tiles default to Float16_b. 7 matmul compile args all 1.
 inline vector<std::uint32_t> run_matmul_single(
     distributed::MeshDevice& mesh_device,
     const vector<std::uint32_t>& src0_vec,
     const vector<std::uint32_t>& src1_vec,
-    const std::string& compute_kernel) {
+    const std::string& compute_kernel,
+    tt::DataFormat in0_fmt = tt::DataFormat::Float16_b,
+    tt::DataFormat in1_fmt = tt::DataFormat::Float16_b,
+    tt::DataFormat out_fmt = tt::DataFormat::Float16_b,
+    const std::map<std::string, std::string>& defines = {}) {
     Program program = CreateProgram();
     CoreCoord core = {0, 0};
 
-    const tt::DataFormat fmt = tt::DataFormat::Float16_b;
-    std::uint32_t tile_bytes = tt::tile_size(fmt);
-
-    auto make_dram = [&]() {
+    auto make_dram = [&](tt::DataFormat fmt) {
+        const std::uint32_t tile_bytes = tt::tile_size(fmt);
         return distributed::MeshBuffer::create(
             distributed::ReplicatedBufferConfig{.size = tile_bytes},
             {.page_size = tile_bytes, .buffer_type = BufferType::DRAM},
             &mesh_device);
     };
-    auto src0_buffer = make_dram();
-    auto src1_buffer = make_dram();
-    auto dst_buffer = make_dram();
+    auto src0_buffer = make_dram(in0_fmt);
+    auto src1_buffer = make_dram(in1_fmt);
+    auto dst_buffer = make_dram(out_fmt);
 
-    auto make_cb = [&](tt::CBIndex idx) {
+    auto make_cb = [&](tt::CBIndex idx, tt::DataFormat fmt) {
+        const std::uint32_t tile_bytes = tt::tile_size(fmt);
         CircularBufferConfig cb_cfg = CircularBufferConfig(tile_bytes, {{idx, fmt}}).set_page_size(idx, tile_bytes);
         CreateCircularBuffer(program, core, cb_cfg);
     };
-    make_cb(tt::CBIndex::c_0);
-    make_cb(tt::CBIndex::c_1);
-    make_cb(tt::CBIndex::c_16);
+    make_cb(tt::CBIndex::c_0, in0_fmt);
+    make_cb(tt::CBIndex::c_1, in1_fmt);
+    make_cb(tt::CBIndex::c_16, out_fmt);
 
     auto reader = CreateKernel(
         program,
@@ -290,7 +293,10 @@ inline vector<std::uint32_t> run_matmul_single(
     // 7 matmul compile args, all 1: block_tile_dim, dst_tile_rows, dst_tile_cols, block_cnt,
     // in0_block_tile_cnt, in1_block_tile_cnt, out_block_tile_cnt.
     CreateKernel(
-        program, compute_kernel, core, ComputeConfig{.fp32_dest_acc_en = false, .compile_args = {1, 1, 1, 1, 1, 1, 1}});
+        program,
+        compute_kernel,
+        core,
+        ComputeConfig{.fp32_dest_acc_en = false, .compile_args = {1, 1, 1, 1, 1, 1, 1}, .defines = defines});
 
     auto& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueWriteMeshBuffer(cq, src0_buffer, src0_vec, /*blocking=*/true);

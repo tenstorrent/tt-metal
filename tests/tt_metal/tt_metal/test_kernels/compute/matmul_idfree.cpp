@@ -39,9 +39,18 @@ void kernel_main() {
     using In1Op = experimental::LLKOperand<static_cast<DataFormat>(d1.format), d1.shape>;
     using OutOp = experimental::LLKOperand<static_cast<DataFormat>(out_desc.format), out_desc.shape>;
 
+#ifdef STALE_HW_STARTUP
+    // hw_startup programs Float16_b everywhere, so matmul_init and pack_init alone must set the real formats.
+    using StaleOp = experimental::LLKOperand<DataFormat::Float16_b, d0.shape>;
+    compute_kernel_hw_startup<SrcOrder::Reverse>(
+        StaleOp(in0_cb.read_address()), StaleOp(in1_cb.read_address()), StaleOp(out_cb.write_address()));
+    experimental::matmul_init(In0Op(in0_cb.read_address()), In1Op(in1_cb.read_address()));
+    experimental::pack_init(OutOp(out_cb.write_address()));
+#else
     compute_kernel_hw_startup<SrcOrder::Reverse>(
         In0Op(in0_cb.read_address()), In1Op(in1_cb.read_address()), OutOp(out_cb.write_address()));
     experimental::matmul_init(In0Op(in0_cb.read_address()), In1Op(in1_cb.read_address()));
+#endif
 
     tile_regs_acquire();
     for (std::uint32_t b = 0; b < block_cnt; ++b) {

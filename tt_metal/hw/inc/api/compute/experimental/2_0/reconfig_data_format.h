@@ -8,7 +8,8 @@
 
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
-#include "data_format_derive.h"  // ckernel::infer_unpack_dst_format -- register-format derivation (BH)
+#include "data_format_derive.h"           // ckernel::infer_unpack_dst_format -- register-format derivation (BH)
+#include "experimental/2_0/llk_config.h"  // config trackers
 
 #ifdef TRISC_UNPACK
 // Raw UNPACK cores (_llk_unpack_reconfig_data_format_srca_impl_/_srcb_impl_); no id-free unpack reconfig LLK
@@ -73,6 +74,8 @@ ALWI void reconfig_data_format_srca(LLKOperand<Format, Shape> /*new_a*/) {
         Shape.face_r_dim,
         Shape.total_num_faces())));
     MATH((_llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false>(static_cast<std::uint32_t>(RegFmt))));
+    UNPACK((detail::unpack_config_state = nullptr));
+    MATH((detail::math_config_state = nullptr));
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -103,6 +106,8 @@ ALWI void reconfig_data_format_srcb(LLKOperand<Format, Shape> /*new_b*/) {
         Shape.face_r_dim,
         Shape.total_num_faces())));
     MATH((_llk_math_reconfig_data_format_srcb_<is_fp32_dest_acc_en, false>(static_cast<std::uint32_t>(RegFmt))));
+    UNPACK((detail::unpack_config_state = nullptr));
+    MATH((detail::math_config_state = nullptr));
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -126,6 +131,7 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorSh
 ALWI void pack_reconfig_data_format(LLKOperand<Format, Shape> /*new_out*/) {
     static_assert(is_legal_tile_shape(Shape), "pack_reconfig_data_format: illegal output tile shape.");
     PACK((llk_pack_reconfig_data_format<LLKOperand<Format, Shape>::descriptor, is_fp32_dest_acc_en>()));
+    PACK((detail::pack_config_state = nullptr));
 }
 
 }  // namespace experimental

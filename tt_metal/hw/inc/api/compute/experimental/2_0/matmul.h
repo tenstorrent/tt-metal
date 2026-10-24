@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
+#include "experimental/2_0/llk_config.h"
 
 #ifdef TRISC_MATH
 #include "experimental/2_0/llk_math_matmul.h"
@@ -42,12 +43,13 @@ template <DataFormat F0, TensorShape S0, DataFormat F1, TensorShape S1>
 ALWI void matmul_init(LLKOperand<F0, S0> /*in0*/, LLKOperand<F1, S1> /*in1*/, std::uint32_t transpose = 0) {
     static_assert(is_legal_tile_shape(S0), "matmul_init: illegal tile shape for in0.");
     static_assert(is_legal_tile_shape(S1), "matmul_init: illegal tile shape for in1.");
-    MATH((llk_math_matmul_init<
-          LLKOperand<F0, S0>::descriptor,
-          LLKOperand<F1, S1>::descriptor,
-          MATH_FIDELITY,
-          MM_THROTTLE>(transpose)));
-    UNPACK((llk_unpack_AB_matmul_init<LLKOperand<F0, S0>::descriptor, LLKOperand<F1, S1>::descriptor>(transpose)));
+    // in0 -> SrcB, in1 -> SrcA.
+    constexpr auto srcb = LLKOperand<F0, S0>::descriptor;
+    constexpr auto srca = LLKOperand<F1, S1>::descriptor;
+    MATH((llk_math_config<DST_ACCUM_MODE, srca, srcb>()));
+    MATH((llk_math_matmul_init<srcb, srca, MATH_FIDELITY, MM_THROTTLE>(transpose)));
+    UNPACK((llk_unpack_config<DST_ACCUM_MODE, srca, srcb>()));
+    UNPACK((llk_unpack_AB_matmul_init<srcb, srca>(transpose)));
 }
 
 // clang-format off
@@ -99,13 +101,13 @@ ALWI void matmul_block_init(
     std::uint32_t kt_dim = 1) {
     static_assert(is_legal_tile_shape(S0), "matmul_block_init: illegal tile shape for in0.");
     static_assert(is_legal_tile_shape(S1), "matmul_block_init: illegal tile shape for in1.");
-    MATH((llk_math_matmul_init<
-          LLKOperand<F0, S0>::descriptor,
-          LLKOperand<F1, S1>::descriptor,
-          MATH_FIDELITY,
-          MM_THROTTLE>(transpose, ct_dim, rt_dim)));
-    UNPACK((llk_unpack_AB_matmul_init<LLKOperand<F0, S0>::descriptor, LLKOperand<F1, S1>::descriptor>(
-        transpose, ct_dim, rt_dim, kt_dim)));
+    // in0 -> SrcB, in1 -> SrcA.
+    constexpr auto srcb = LLKOperand<F0, S0>::descriptor;
+    constexpr auto srca = LLKOperand<F1, S1>::descriptor;
+    MATH((llk_math_config<DST_ACCUM_MODE, srca, srcb>()));
+    MATH((llk_math_matmul_init<srcb, srca, MATH_FIDELITY, MM_THROTTLE>(transpose, ct_dim, rt_dim)));
+    UNPACK((llk_unpack_config<DST_ACCUM_MODE, srca, srcb>()));
+    UNPACK((llk_unpack_AB_matmul_init<srcb, srca>(transpose, ct_dim, rt_dim, kt_dim)));
 }
 
 // clang-format off
