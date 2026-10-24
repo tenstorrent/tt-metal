@@ -96,7 +96,12 @@ cpm_source_cache=""
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
 use_system_sfpi="OFF"
-toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
+# Set default toolchain based on architecture
+if [ "$ARCH" = "aarch64" ]; then
+    toolchain_path="cmake/aarch64-linux-clang-20-libstdcpp-toolchain.cmake"
+else
+    toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
+fi
 host_march="x86-64-v3"
 
 
