@@ -88,6 +88,14 @@ TABLE = {
         (True, False),
         "down_proj partials in fp32 through the TP reduce_scatter, rounded to bf16 once (C.attn_dense.mlp)",
     ),
+    "ROUTER_FIDELITY": Setting(
+        "HiFi4",
+        ("HiFi4", "HiFi3", "HiFi2", "LoFi"),
+        "rule 7 default: HiFi4 for the fp32-out router gate matmul (C.sliding_moe.router)",
+    ),
+    "ROUTER_FP32_ACC": Setting(
+        True, (True, False), "fp32 dest for the router gate matmul: fp32 logits (C.sliding_moe.router)"
+    ),
     "RING_NUM_LINKS": Setting(2, (1, 2), "fabric links of the ring SDPA gather over SP (gemma4_d_p: 2 on Blackhole)"),
 }
 
@@ -104,6 +112,8 @@ MAX_PRECISION = {
     "MLP_FP32_ACC": True,
     "MLP_INTER_FP32": True,
     "MLP_OUT_FP32": True,
+    "ROUTER_FIDELITY": "HiFi4",
+    "ROUTER_FP32_ACC": True,
 }
 
 settings = Settings("MIMO_V26_FLASH_RL_", TABLE, max_precision=MAX_PRECISION)

@@ -140,3 +140,21 @@
   materialises [8, 640, 896] fp32 scores per kv group; P.* can replace both by a fork of the streaming kernel with
   fp32 scores / an fp32 sink term. The scratch dumps used for the diagnosis are not kept.
 - Re-run: `bfw job check --task C.sliding_moe.attention --gate-only`.
+
+## C.sliding_moe.router (layer 1): PASS
+
+- `tt/router.py` `Router`: input is the column's TP-gathered ffn_norm rows [1, 1, 640, 4096] bf16 (every TP column
+  routes the same 640 rows, the input its dispatch group needs). gate [256, 4096] bf16 replicated -> `ttnn.linear`
+  (HiFi4, fp32 dest, fp32 out) -> `sigmoid` fp32 -> `add` fp32 bias -> `topk(k=8, sorted)` -> slice the 8th value
+  -> `ge` mask -> scores x mask -> `sum` (fp32 dest) -> `div`. Output dense [1, 1, 640, 256] fp32, the reference's
+  layout.
+- Bias: rounded to bf16 (config moe_router_dtype, as the reference), then recentred by a bf16 constant near its mean
+  so `bias - c` is exact in fp32 and the choice score sits near 0 instead of 2 (known issues on noaux_tc precision).
+  `moe_grouped_topk` (TF32 keys) not used.
+- Dense output via a mask on the 8th choice value instead of `ttnn.scatter` (no fp32 TILE scatter): no layout
+  round-trip, indices unused. An exact fp32 tie at the 8th value would select 9 (none on the golden / probes).
+- Hook `_router_component`: residual_to_mesh -> `ccl.gather_rows` -> router -> read column 0 of each SP row.
+- Settings: `ROUTER_FIDELITY` HiFi4, `ROUTER_FP32_ACC` True (both in MAX_PRECISION).
+- Gate: PCC 0.999338, overlap vs CPU / golden 0.99868, matched-row rel vs CPU 8.9e-5, auto_margin_min 3.06, 10 ops,
+  host FLOPs 0, deterministic.
+- Re-run: `bfw job check --task C.sliding_moe.router --gate-only`.

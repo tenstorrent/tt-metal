@@ -139,6 +139,34 @@ def _mlp_component(mesh, spec, layer):
     return fn
 
 
+def _router_component(mesh, spec, layer):
+    """Each TP column routes its SP row's 640 gathered rows (the experts' dispatch-group input); the columns agree,
+    so column 0 of every SP row is read back."""
+    import ttnn
+    from models.demos.mimo_v26_flash_rl.tt import ccl
+    from models.demos.mimo_v26_flash_rl.tt.mesh_io import residual_to_mesh
+    from models.demos.mimo_v26_flash_rl.tt.router import Router
+
+    router = Router(mesh, Checkpoint(spec.hf_dir, torch.float32), layer)
+
+    def fn(ctx, x):
+        with _op_hooks():
+            tx = residual_to_mesh(mesh, x)
+            xg = ccl.gather_rows(tx)
+            tx.deallocate(True)
+            ty = router(xg)
+            xg.deallocate(True)
+            out = ttnn.to_torch(
+                ty, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh, mesh_shape=tuple(mesh.shape), dims=(0, 1))
+            )
+            ty.deallocate(True)
+        # [sp, tp, 640, E]: SP row r holds tokens [r * 640, (r + 1) * 640) on every column
+        return out[:, 0].reshape(-1, out.shape[-1]).to(torch.float32)
+
+    fn.module = router
+    return fn
+
+
 def device_component(mesh, spec, layer, step):
     if step == "attn_norm":
         return _norm_component(mesh, spec, layer, "input_layernorm.weight")
@@ -150,6 +178,8 @@ def device_component(mesh, spec, layer, step):
         return _norm_component(mesh, spec, layer, "post_attention_layernorm.weight")
     if step == "mlp":
         return _mlp_component(mesh, spec, layer)
+    if step == "router":
+        return _router_component(mesh, spec, layer)
     raise NotImplementedError(f"implement stage: no device module for {step} yet")
 
 
