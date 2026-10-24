@@ -483,3 +483,27 @@ def test_clone_sharded_dtype_conversion(
         compute_kernel_options=None,
         device=device,
     )
+
+
+# Row sizes that are not a multiple of the 16-byte L1 shard pitch.
+@pytest.mark.parametrize(
+    "shape, shard_shape, strategy, dtype",
+    [
+        ([1, 1, 64, 12], (32, 12), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16),
+        ([1, 1, 64, 3], (32, 3), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.float32),
+        ([1, 1, 64, 16], (64, 4), ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.bfloat16),
+    ],
+)
+def test_clone_sharded_row_major_unaligned_rows(shape, shard_shape, strategy, dtype, device):
+    torch.manual_seed(2024)
+    torch_input = torch.randn(shape, dtype=torch.float32 if dtype == ttnn.float32 else torch.bfloat16)
+    num_cores = (shape[-2] // shard_shape[0]) * (shape[-1] // shard_shape[1])
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    memory_config = ttnn.MemoryConfig(
+        strategy, ttnn.BufferType.L1, ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    )
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+    )
+    tt_output = ttnn.clone(tt_input, memory_config=memory_config)
+    assert torch.equal(ttnn.to_torch(tt_output), torch_input)
