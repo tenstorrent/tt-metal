@@ -45,7 +45,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const MultiInterleavedConfig& 
         test_config.page_size_bytes);
 
     // Program
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
 
     const uint32_t num_cores = test_config.cores.num_cores();
     const size_t per_core_size_bytes = test_config.num_pages * test_config.page_size_bytes;

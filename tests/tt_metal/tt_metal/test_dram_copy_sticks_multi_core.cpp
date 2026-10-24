@@ -49,7 +49,7 @@ TEST_F(UnitMeshFixture, DramCopySticksMultiCore) {
     bool pass = true;
 
     try {
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(this->device());
         auto num_cores_c = 2;
         auto num_cores_r = 2;
         CoreCoord start_core = {0, 0};

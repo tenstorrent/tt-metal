@@ -223,7 +223,7 @@ int main(int argc, char** argv) {
         auto device_id = mesh_device->get_device_ids()[0];
 
         auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
         std::string src_mem;
         uint32_t noc_addr_x, noc_addr_y;

@@ -145,7 +145,7 @@ protected:
     // Create + JIT-compile the RVV vadd kernel; returns the kernel (full name is set by compile).
     std::shared_ptr<Kernel> compile_rvv_kernel(bool enable_trisc2_rvv) {
         distributed::MeshDevice* device = devices_.at(0).get();
-        Program program = CreateProgram();
+        Program program = CreateProgram(*device);
         KernelHandle handle = CreateKernel(
             program,
             kRvvKernelPath,

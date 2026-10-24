@@ -114,7 +114,7 @@ bool single_core_reconfig(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
@@ -1206,7 +1206,7 @@ std::vector<std::uint32_t> run_reconfig_format_and_geometry(
     const std::vector<std::uint32_t>& src_vec,
     std::uint32_t num_tiles) {
     static constexpr std::uint32_t k_dram_bank_id = 0;
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh_device);
     CoreCoord core = {0, 0};
 
     auto tile_bytes = [](tt::DataFormat fmt, const Tile* t) {

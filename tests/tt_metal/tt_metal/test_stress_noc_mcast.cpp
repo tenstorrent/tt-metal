@@ -68,7 +68,7 @@ TEST_F(UnitMeshFixture, DISABLED_StressNocMcast) {
     tt_metal::NOC noc = tt_metal::NOC::NOC_0;
     srand(0);
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(this->device());
 
     CoreRange workers_logical({tlx, tly}, {tlx + width - 1, tly + height - 1});
     CoreCoord mcast_logical(mcast_x, mcast_y);

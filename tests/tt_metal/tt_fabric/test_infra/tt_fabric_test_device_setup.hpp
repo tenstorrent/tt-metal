@@ -293,6 +293,7 @@ struct TestDevice {
 public:
     TestDevice(
         const MeshCoordinate& coord,
+        tt::tt_metal::distributed::MeshDevice& mesh_device,
         std::shared_ptr<IDeviceInfoProvider> device_info_provider,
         std::shared_ptr<IRouteManager> route_manager,
         const SenderMemoryMap* sender_memory_map = nullptr,

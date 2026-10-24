@@ -29,7 +29,7 @@ void run_custom_mm_operands(
     const auto a_bytes = tiny.get_tile_size(activation_format);
     const auto b_bytes = full.get_tile_size(weight_format);
     const CoreCoord core{0, 0};
-    Program program = CreateProgram();
+    Program program = CreateProgram(mesh);
     auto buffer = [&](std::uint32_t bytes) {
         return distributed::MeshBuffer::create(
             distributed::ReplicatedBufferConfig{.size = bytes},

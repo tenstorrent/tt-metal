@@ -1099,7 +1099,7 @@ TEST_F(CommandListTest, RejectsEmptyAndLegacyWorkloadsWithoutChangingTheRecordin
 
     // Command lists accept only ProgramSpec-created Metal 2.0 programs.
     MeshWorkload legacy_workload;
-    legacy_workload.add_program(MeshCoordinateRange(mesh_device_->shape()), CreateProgram());
+    legacy_workload.add_program(MeshCoordinateRange(mesh_device_->shape()), CreateProgram(*this->mesh_device_));
     EXPECT_THAT(
         [&] { builder.add(legacy_workload); },
         ThrowsMessage<std::runtime_error>(HasSubstr("Command lists only support Metal 2.0 programs")));

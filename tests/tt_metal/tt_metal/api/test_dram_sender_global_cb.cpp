@@ -262,7 +262,7 @@ void run_one_sender_smoke(distributed::MeshDevice* mesh_device, const CoreRangeS
 
     // Build a single program with both sender (DRISC) and receiver (worker) kernels.
     distributed::MeshCoordinateRange device_range(distributed::MeshCoordinate(0, 0));
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     std::vector<uint32_t> sender_compile_args = {
         kRemoteCBId,
@@ -405,7 +405,7 @@ TEST_F(DramSenderGCBFixture, SmokeTwoProgramsAsyncSlowDispatch) {
         drisc_l1_noc_addr_base + (data_addr - drisc_l1_unreserved));
 
     // --- Sender program: DRISC kernel only ---
-    Program sender_program = CreateProgram();
+    Program sender_program = CreateProgram(*mesh_device_);
     std::vector<uint32_t> sender_compile_args = {
         kRemoteCBId,
         kNumPages,
@@ -428,7 +428,7 @@ TEST_F(DramSenderGCBFixture, SmokeTwoProgramsAsyncSlowDispatch) {
     SetRuntimeArgs(sender_program, sender_kernel_id, sender_logical, sender_rt_args);
 
     // --- Receiver program: worker kernel only, with c_31 attached to the GCB ---
-    Program receiver_program = CreateProgram();
+    Program receiver_program = CreateProgram(*mesh_device_);
     CircularBufferConfig cb_config(kPageSize);
     cb_config.remote_index(kRemoteCBId).set_page_size(kPageSize).set_data_format(tt::DataFormat::Float16_b);
     experimental::CreateCircularBuffer(receiver_program, receiver_cores, cb_config, gcb);
@@ -548,7 +548,7 @@ TEST_F(DramSenderGCBFixture, MultiGcbDisjointPagesSent) {
             drisc_l1_noc_addr_base + (data_addr - drisc_l1_unreserved));
 
         distributed::MeshCoordinateRange device_range(distributed::MeshCoordinate(0, 0));
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device_);
         std::vector<uint32_t> sender_compile_args = {
             kRemoteCBId,
             kNumPages,

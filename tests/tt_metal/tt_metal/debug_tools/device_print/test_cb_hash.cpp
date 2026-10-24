@@ -94,7 +94,7 @@ struct Setup {
         size_t buf_sz = NUM_TILES * tile_size;
 
         auto device_range = distributed::MeshCoordinateRange(zero, zero);
-        Program prog = CreateProgram();
+        Program prog = CreateProgram(*mesh_device);
         workload.add_program(device_range, std::move(prog));
         program = &workload.get_programs().at(device_range);
 
