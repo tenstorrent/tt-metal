@@ -1,0 +1,16 @@
+# The source op's own tests, run in place against this fork (python -m bringup_fw.testing.fork_source).
+# Best-effort selection: see FORK_OP.md (the bring-up method), "Carry the source op's tests".
+upstream_sha: 473263d9cd7bfa06834955003eff772c38bcf9a3
+swap:
+  ttnn.transformer.chunked_flash_mla_prefill: ttnn.bringup.chunked_flash_mla_prefill
+  ttnn.transformer.chunked_scaled_dot_product_attention: ttnn.bringup.chunked_scaled_dot_product_attention
+  ttnn.transformer.exp_ring_joint_scaled_dot_product_attention: ttnn.bringup.exp_ring_joint_scaled_dot_product_attention
+  ttnn.transformer.flash_mla_prefill: ttnn.bringup.flash_mla_prefill
+  ttnn.transformer.joint_scaled_dot_product_attention: ttnn.bringup.joint_scaled_dot_product_attention
+  ttnn.transformer.ring_distributed_scaled_dot_product_attention: ttnn.bringup.ring_distributed_scaled_dot_product_attention
+  ttnn.transformer.ring_joint_scaled_dot_product_attention: ttnn.bringup.ring_joint_scaled_dot_product_attention
+  ttnn.transformer.ring_mla: ttnn.bringup.ring_mla
+  ttnn.transformer.scaled_dot_product_attention: ttnn.bringup.scaled_dot_product_attention
+  ttnn.transformer.sparse_sdpa: ttnn.bringup.sparse_sdpa
+  ttnn.transformer.sparse_sdpa_msa: ttnn.bringup.sparse_sdpa_msa
+tests: []

@@ -54,9 +54,58 @@ def _norm_component(mesh, spec, layer, weight_name):
     return fn
 
 
+SLOTS = 2  # serving_answers.yaml slots
+
+
+def _attention_component(mesh, spec, layer):
+    from models.demos.mimo_v26_flash_rl.tt.attention import ChunkMeta, FullAttention, RopeTables
+    from models.demos.mimo_v26_flash_rl.tt.ccl import RingResources
+    from models.demos.mimo_v26_flash_rl.tt.mesh_io import residual_to_host, residual_to_mesh
+
+    ck = Checkpoint(spec.hf_dir, torch.float32)
+    cfg = ck.config
+    if cfg["hybrid_layer_pattern"][layer] != 0:
+        raise NotImplementedError(f"layer {layer} is a sliding-window layer: no device module yet")
+    chunk, max_seq = spec.get("target.chunk"), spec.get("target.seq")
+    rope_dim = int(cfg["head_dim"] * cfg["partial_rotary_factor"])  # the reference Layer's inv_freq formula
+    inv_freq = 1.0 / (cfg["rope_theta"] ** (torch.arange(0, rope_dim, 2, dtype=torch.int64).float() / rope_dim))
+    meta = ChunkMeta(mesh, chunk)
+    attn = FullAttention(
+        mesh,
+        ck,
+        layer,
+        cfg,
+        max_seq=max_seq,
+        chunk=chunk,
+        slots=SLOTS,
+        ring=RingResources(mesh),
+        meta=meta,
+        rope=RopeTables(mesh, inv_freq, max_seq),
+    )
+
+    def fn(ctx, x):
+        with _op_hooks():
+            start, length = ctx.start, x.shape[0]
+            assert length == chunk, f"the device attention runs whole {chunk}-token chunks, got {length}"
+            pre = ctx.extra["state_prefix"]
+            attn.load_prefix(0, pre["key"], pre["value"], start)
+            meta.stage(0, start, start + length)
+            tx = residual_to_mesh(mesh, x)
+            ty = attn(tx)
+            tx.deallocate(True)
+            out = residual_to_host(mesh, ty).to(x.dtype)
+            ty.deallocate(True)
+        return out
+
+    fn.module = attn
+    return fn
+
+
 def device_component(mesh, spec, layer, step):
     if step == "attn_norm":
         return _norm_component(mesh, spec, layer, "input_layernorm.weight")
+    if step == "attention":
+        return _attention_component(mesh, spec, layer)
     raise NotImplementedError(f"implement stage: no device module for {step} yet")
 
 

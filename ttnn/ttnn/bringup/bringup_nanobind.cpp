@@ -10,12 +10,16 @@
 namespace nb = nanobind;
 
 // BEGIN FORKED OPS (fork_op.py)
+namespace ttnn::operations::bringup {
+void bind_sdpa(nb::module_& mod);
+}
 // END FORKED OPS (fork_op.py)
 
 namespace ttnn::bringup {
 
 void py_module([[maybe_unused]] nb::module_& mod) {  // unused until the first fork registers
     // BEGIN FORKED OPS (fork_op.py)
+    ::ttnn::operations::bringup::bind_sdpa(mod);
     // END FORKED OPS (fork_op.py)
 }
 

@@ -24,3 +24,4 @@ users are switched back.
 
 | Fork | Source @ SHA | Changes | Used by |
 |---|---|---|---|
+| `sdpa` | `ttnn/cpp/ttnn/operations/transformer/sdpa` @ `473263d9cd7` | ring_joint `exact_exp` (accurate streaming softmax exp, default off) | mimo_v26_flash_rl |
