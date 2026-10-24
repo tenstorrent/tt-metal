@@ -510,3 +510,96 @@ TEST(FreeListOptTest, CPU_AddressesAPIWithNonzeroOffset) {
     ASSERT_EQ(available_addresses[0].first, 3_KiB + offset);
     ASSERT_EQ(available_addresses[0].second, alloc_size - 2_KiB + offset);
 }
+
+// #60243: a caught address-limit OOM must leave the allocator unchanged.
+TEST(FreeListOptTest, CPU_AddressLimitOutOfMemoryDoesNotAllocate) {
+    auto allocator =
+        tt::tt_metal::allocator::FreeListOpt(64 * 1_KiB, /*offset_bytes=*/0, /*min_allocation_size=*/32, /*alignment=*/32);
+
+    EXPECT_THAT(
+        [&]() { allocator.allocate(1_KiB, /*bottom_up=*/true, /*address_limit=*/4 * 1_KiB); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Cannot allocate at an address below")));
+
+    EXPECT_EQ(allocator.get_statistics().total_allocated_bytes, 0);
+    EXPECT_TRUE(allocator.allocated_addresses().empty());
+
+    // The rejected block has to stay free, so the whole region is still allocatable.
+    auto full = allocator.allocate(64 * 1_KiB, /*bottom_up=*/true, /*address_limit=*/0);
+    ASSERT_TRUE(full.has_value());
+    EXPECT_EQ(full.value(), 0);
+    EXPECT_EQ(allocator.get_statistics().total_allocated_bytes, 64 * 1_KiB);
+}
+
+// Top-down placement is at the end of the free block (nonzero in-block offset). The limit check
+// has to use that address, and a rejection must not leave the split block allocated.
+TEST(FreeListOptTest, CPU_AddressLimitTopDownOutOfMemoryDoesNotAllocate) {
+    auto allocator =
+        tt::tt_metal::allocator::FreeListOpt(4 * 1_KiB, /*offset_bytes=*/0, /*min_allocation_size=*/32, /*alignment=*/32);
+
+    EXPECT_THAT(
+        [&]() { allocator.allocate(1_KiB, /*bottom_up=*/false, /*address_limit=*/4 * 1_KiB); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Cannot allocate at an address below")));
+
+    EXPECT_EQ(allocator.get_statistics().total_allocated_bytes, 0);
+    EXPECT_TRUE(allocator.allocated_addresses().empty());
+
+    auto full = allocator.allocate(4 * 1_KiB);
+    ASSERT_TRUE(full.has_value());
+    EXPECT_EQ(full.value(), 0);
+}
+
+// A top-down allocation whose address is above the limit must still succeed. The free block itself
+// starts at 0, which is below the limit.
+TEST(FreeListOptTest, CPU_AddressLimitAllowsTopDownAboveLimit) {
+    auto allocator =
+        tt::tt_metal::allocator::FreeListOpt(8 * 1_KiB, /*offset_bytes=*/0, /*min_allocation_size=*/32, /*alignment=*/32);
+
+    auto top = allocator.allocate(1_KiB, /*bottom_up=*/false, /*address_limit=*/4 * 1_KiB);
+    ASSERT_TRUE(top.has_value());
+    EXPECT_EQ(top.value(), 8 * 1_KiB - 1_KiB);
+    EXPECT_EQ(allocator.get_statistics().total_allocated_bytes, 1_KiB);
+    EXPECT_EQ(allocator.allocated_addresses().size(), 1);
+}
+
+// Interleaved L1 passes a nonzero offset (unreserved base) and an address limit just above it.
+// Bottom-up lands on the offset, which is below the limit.
+TEST(FreeListOptTest, CPU_AddressLimitWithOffsetDoesNotAllocate) {
+    constexpr size_t offset = 100416;
+    constexpr size_t address_limit = 100432;
+    auto allocator =
+        tt::tt_metal::allocator::FreeListOpt(64 * 1_KiB, offset, /*min_allocation_size=*/32, /*alignment=*/32);
+
+    EXPECT_THAT(
+        [&]() { allocator.allocate(1_KiB, /*bottom_up=*/true, address_limit); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Cannot allocate at an address below")));
+
+    EXPECT_EQ(allocator.get_statistics().total_allocated_bytes, 0);
+    EXPECT_TRUE(allocator.allocated_addresses().empty());
+
+    auto top = allocator.allocate(1_KiB, /*bottom_up=*/false, address_limit);
+    ASSERT_TRUE(top.has_value());
+    EXPECT_EQ(top.value(), offset + 64 * 1_KiB - 1_KiB);
+    EXPECT_GE(top.value(), address_limit);
+}
+
+// #60243: clear() must reset lowest_occupied_address_. A later alloc/free above that old address
+// must not resurrect it, because deallocate() refreshes the cache only when the freed address is
+// at or below the cached value.
+TEST(FreeListOptTest, CPU_ClearResetsLowestOccupiedAddress) {
+    auto allocator =
+        tt::tt_metal::allocator::FreeListOpt(64 * 1_KiB, /*offset_bytes=*/0, /*min_allocation_size=*/32, /*alignment=*/32);
+
+    auto bottom = allocator.allocate(1_KiB, /*bottom_up=*/true);
+    ASSERT_TRUE(bottom.has_value());
+    EXPECT_EQ(bottom.value(), 0);
+    EXPECT_THAT(allocator.lowest_occupied_address(), ::testing::Optional(0));
+
+    allocator.clear();
+    EXPECT_FALSE(allocator.lowest_occupied_address().has_value());
+
+    auto top = allocator.allocate(1_KiB, /*bottom_up=*/false);
+    ASSERT_TRUE(top.has_value());
+    EXPECT_EQ(top.value(), 64 * 1_KiB - 1_KiB);
+    allocator.deallocate(top.value());
+    EXPECT_FALSE(allocator.lowest_occupied_address().has_value());
+}
