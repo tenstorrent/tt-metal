@@ -171,10 +171,10 @@ class BatchedQKV:
 
 
 class BatchedOProj:
-    """o_proj of the batched decode as a DRAM-sharded matmul on the unpadded weight (the decode weight carries 64 zero
-    columns of CCL tile padding, which the one-op all-reduce does not need), BF8 out with the bias added, i.e. the
-    all-reduce's input precision, so no typecast / slice follows. Weight and bias are cut from the decode tensors once,
-    on device."""
+    """o_proj of the batched decode as a DRAM-sharded matmul on the unpadded weight (at TP=4 the decode weight carries
+    64 zero columns of CCL tile padding, which the one-op all-reduce does not need; at TP=2 it has none), BF8 out with
+    the bias added, i.e. the all-reduce's input precision, so no typecast / slice follows. Weight and bias are cut from
+    the decode tensors once, on device; the decode tensors stay (prefill uses them)."""
 
     CORES = 8  # divides K = 32 tiles; the measured best for [32, 1024] x [1024, 2880]
     WORKERS = 2
@@ -184,9 +184,14 @@ class BatchedOProj:
         tile = ttnn.TILE_SIZE
         grid = mesh_device.compute_with_storage_grid_size()
         w_shape = list(o_proj.shape)
-        sliced = ttnn.slice(o_proj, [0] * len(w_shape), w_shape[:-1] + [hidden])
-        self.weight = ttnn.to_memory_config(sliced, dram_width_sharded_memory_config(mesh_device, k, hidden))
-        sliced.deallocate(True)
+        weight_memory_config = dram_width_sharded_memory_config(mesh_device, k, hidden)
+        if w_shape[-1] == hidden:
+            # Unpadded: a full-width slice would be o_proj itself, which must not be freed.
+            self.weight = ttnn.to_memory_config(o_proj, weight_memory_config)
+        else:
+            sliced = ttnn.slice(o_proj, [0] * len(w_shape), w_shape[:-1] + [hidden])
+            self.weight = ttnn.to_memory_config(sliced, weight_memory_config)
+            sliced.deallocate(True)
         b_shape = list(o_proj_bias.shape)
         self.bias = ttnn.slice(o_proj_bias, [0] * len(b_shape), b_shape[:-1] + [hidden])
         cores = ttnn.num_cores_to_corerangeset(self.CORES, grid, row_wise=True)
