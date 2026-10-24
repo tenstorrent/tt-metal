@@ -66,6 +66,9 @@ def test_transformer_block_flux1(
 ) -> None:
     torch.manual_seed(0)
 
+    if mesh_id == "1x2sp0tp1" and mesh_device.get_devices()[0].arch() == ttnn.device.Arch.BLACKHOLE:
+        pytest.skip("Fabric Router Sync timeout on Blackhole 1x2 mesh; refs #52940")
+
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     sp_factor = tuple(submesh_device.shape)[sp_axis]
     tp_factor = tuple(submesh_device.shape)[tp_axis]
