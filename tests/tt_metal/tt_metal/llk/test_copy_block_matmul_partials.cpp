@@ -13,7 +13,11 @@
 #include <variant>
 #include <vector>
 
+#include <bit>
+#include <chrono>
 #include <random>
+#include <stdexcept>
+#include <thread>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/tile.hpp>
@@ -23,7 +27,10 @@
 #include "tt_metal/test_utils/comparison.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include "impl/context/metal_context.hpp"
+#include "impl/debug/watcher_server.hpp"
 #include "llk_device_fixture.hpp"
+#include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -461,6 +468,212 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixCopyBlockBfp8IdFree) {
         return tt::test_utils::is_close(a, b, /*rtol=*/0.3f, /*atol=*/0.3f);
     }));
     EXPECT_TRUE(tt::test_utils::check_pcc(src_floats, result_floats, /*min_pcc=*/0.9999));
+}
+
+namespace {
+
+// Packer DEST capacity for 32x32 tiles under fp32 dest-acc + SyncHalf with a Float32 output: half of DEST at a
+// 32-bit datum (the packer W-stride is 4096 B; a 16-bit output would keep a 2048 B stride and a bound of 8).
+constexpr std::uint32_t kFp32HalfSyncDestTiles = 4;
+// Tile count packed from that window to overrun it: twice the capacity, so the first out-of-window tile index
+// (kFp32HalfSyncDestTiles) is reached.
+constexpr std::uint32_t kOverrunTiles = 2 * kFp32HalfSyncDestTiles;
+
+// One DEST window: `copy_tiles` Float16_b tiles copied into DST and `pack_tiles` packed back out as Float32
+// through the id-free pack_block (id_free) or the legacy CB-id pack_tile loop, under fp32 dest-acc + SyncHalf.
+// Returns the packed output; the caller decides whether the program may complete (see run_pack_block_dest_overrun).
+std::vector<std::uint32_t> run_pack_block_dest_capacity(
+    distributed::MeshDevice& mesh,
+    const std::vector<std::uint32_t>& src,
+    std::uint32_t copy_tiles,
+    std::uint32_t pack_tiles,
+    bool id_free,
+    bool& completed) {
+    const auto in_format = tt::DataFormat::Float16_b;
+    const auto out_format = tt::DataFormat::Float32;
+    const std::uint32_t in_tile_bytes = tt::tile_size(in_format);
+    const std::uint32_t out_tile_bytes = tt::tile_size(out_format);
+    const CoreCoord core{0, 0};
+    Program program = CreateProgram();
+    auto buffer = [&](std::uint32_t bytes) {
+        return distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = bytes},
+            {.page_size = bytes, .buffer_type = BufferType::DRAM},
+            &mesh);
+    };
+    auto src_buffer = buffer(copy_tiles * in_tile_bytes);
+    auto dst_buffer = buffer(pack_tiles * out_tile_bytes);
+    auto make_cb = [&](tt::CBIndex index, tt::DataFormat format, std::uint32_t tile_bytes, std::uint32_t depth) {
+        CreateCircularBuffer(
+            program,
+            core,
+            CircularBufferConfig(depth * tile_bytes, {{index, format}}).set_page_size(index, tile_bytes));
+    };
+    make_cb(tt::CBIndex::c_0, in_format, in_tile_bytes, copy_tiles);
+    make_cb(tt::CBIndex::c_16, out_format, out_tile_bytes, pack_tiles);
+    auto reader = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    auto writer = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/pack_block_dest_capacity_2_0.cpp",
+        core,
+        ComputeConfig{
+            .fp32_dest_acc_en = true,
+            .dst_full_sync_en = false,
+            .compile_args = {copy_tiles, pack_tiles, static_cast<std::uint32_t>(id_free)}});
+
+    auto& cq = mesh.mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src, true /*blocking*/);
+    SetRuntimeArgs(program, reader, core, {src_buffer->address(), 0 /*bank_id*/, copy_tiles});
+    SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0 /*bank_id*/, pack_tiles});
+    distributed::MeshWorkload workload;
+    const distributed::MeshCoordinate zero(0, 0);
+    workload.add_program(distributed::MeshCoordinateRange(zero, zero), std::move(program));
+    std::vector<std::uint32_t> result;
+    // The wait aborts once the watcher reports an assert; a program that completes (no guard) is read back.
+    try {
+        distributed::EnqueueMeshWorkload(cq, workload, false /*blocking*/);
+        distributed::Finish(cq);
+        completed = true;
+        distributed::EnqueueReadMeshBuffer(cq, result, dst_buffer, true /*blocking*/);
+    } catch (const std::runtime_error& e) {
+        completed = false;
+        EXPECT_NE(std::string(e.what()).find("Aborting wait due to watcher error"), std::string::npos) << e.what();
+    }
+    return result;
+}
+
+std::string wait_for_pack_watcher_exception() {
+    constexpr auto timeout = std::chrono::milliseconds(5000);
+    constexpr auto poll_interval = std::chrono::milliseconds(100);
+    const auto start = std::chrono::steady_clock::now();
+    std::string exception;
+    while (std::chrono::steady_clock::now() - start < timeout) {
+        exception = MetalContext::instance().watcher_server()->exception_message();
+        if (!exception.empty()) {
+            break;
+        }
+        std::this_thread::sleep_for(poll_interval);
+    }
+    return exception;
+}
+
+// A pack of exactly the capacity must complete and round-trip the input (bf16 -> fp32 DEST -> fp32 is exact); a
+// pack of twice the capacity must trip the packer's DST-capacity LLK assert on TRISC2 (the legacy CB-id pack has
+// it; the id-free pack must keep it).
+void run_pack_block_dest_overrun(distributed::MeshDevice& mesh, bool id_free) {
+    const std::string path = id_free ? "experimental::pack_block" : "pack_tile";
+    auto src = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * kFp32HalfSyncDestTiles,
+        20 /*rand_max_float*/,
+        42 /*seed*/,
+        -10.0f /*offset*/);
+    std::vector<std::uint32_t> golden;
+    for (const auto& value : unpack_uint32_vec_into_bfloat16_vec(src)) {
+        golden.push_back(std::bit_cast<std::uint32_t>(static_cast<float>(value)));
+    }
+
+    bool completed = false;
+    auto result =
+        run_pack_block_dest_capacity(mesh, src, kFp32HalfSyncDestTiles, kFp32HalfSyncDestTiles, id_free, completed);
+    ASSERT_TRUE(completed) << path << ": packing " << kFp32HalfSyncDestTiles << " tiles did not complete";
+    EXPECT_TRUE(MetalContext::instance().watcher_server()->exception_message().empty())
+        << path << ": packing " << kFp32HalfSyncDestTiles
+        << " tiles tripped the watcher: " << MetalContext::instance().watcher_server()->exception_message();
+    EXPECT_EQ(result, golden) << path << ": in-capacity pack does not reproduce the input";
+
+    run_pack_block_dest_capacity(mesh, src, kFp32HalfSyncDestTiles, kOverrunTiles, id_free, completed);
+    EXPECT_FALSE(completed) << path << ": the overrun program completed instead of aborting on the watcher error";
+    const std::string exception = wait_for_pack_watcher_exception();
+    ASSERT_FALSE(exception.empty()) << path << ": packed " << kOverrunTiles << " tiles from a "
+                                    << kFp32HalfSyncDestTiles
+                                    << "-tile DEST window without tripping the DST-capacity assert";
+    EXPECT_NE(exception.find("tripped an assert"), std::string::npos) << exception;
+    EXPECT_NE(exception.find("pack_block_dest_capacity_2_0"), std::string::npos) << exception;
+    EXPECT_NE(exception.find("TRISC2"), std::string::npos) << exception;
+}
+
+}  // namespace
+
+// Opens one Blackhole device per test with the watcher and LLK asserts enabled, so a device-side LLK_ASSERT
+// surfaces as a watcher exception instead of a silent hang. Mirrors MeshWatcherFixture
+// (tests/tt_metal/tt_metal/debug_tools/debug_tools_fixture.hpp); the options must be set before the device
+// opens, and a tripped assert parks a TRISC, so the device is reopened for every test.
+class LLKBlackholePackAssertFixture : public MeshDispatchFixture {
+public:
+    static constexpr int kWatcherIntervalMs = 250;
+
+    // No suite-shared device: the options below change the firmware build, so the device must open after they
+    // are set, once per test.
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
+protected:
+    void SetUp() override {
+        // Capture before any early exit: TearDown still runs after a skip or a failed assertion here, and must
+        // restore the real previous values, not the zero-initialised members.
+        auto& rtoptions = MetalContext::instance().rtoptions();
+        watcher_previous_enabled_ = rtoptions.get_watcher_enabled();
+        watcher_previous_interval_ = rtoptions.get_watcher_interval();
+        test_mode_previous_ = rtoptions.get_test_mode_enabled();
+        llk_asserts_previous_ = rtoptions.get_llk_asserts();
+
+        if (detail::detect_arch() != tt::ARCH::BLACKHOLE) {
+            GTEST_SKIP() << "This test can only be run on Blackhole cards";
+        }
+        rtoptions.set_watcher_enabled(true);
+        rtoptions.set_watcher_interval(kWatcherIntervalMs);
+        // In test mode a watcher error stops the server and fails the wait instead of ending the process.
+        rtoptions.set_test_mode_enabled(true);
+        rtoptions.set_llk_asserts(true);
+
+        const ChipId mmio_device_id = *MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+        auto id_to_device = distributed::MeshDevice::create_unit_meshes(
+            {mmio_device_id},
+            l1_small_size_,
+            trace_region_size_,
+            1 /*num_command_queues*/,
+            MetalContext::instance().resolve_dispatch_core_config());
+        devices_ = {id_to_device.at(mmio_device_id)};
+        arch_ = tt::ARCH::BLACKHOLE;
+        MetalContext::instance().watcher_server()->clear_log();
+    }
+
+    void TearDown() override {
+        for (auto& device : devices_) {
+            device->close();
+        }
+        devices_.clear();
+        auto& rtoptions = MetalContext::instance().rtoptions();
+        rtoptions.set_llk_asserts(llk_asserts_previous_);
+        rtoptions.set_test_mode_enabled(test_mode_previous_);
+        rtoptions.set_watcher_interval(watcher_previous_interval_);
+        rtoptions.set_watcher_enabled(watcher_previous_enabled_);
+    }
+
+private:
+    bool watcher_previous_enabled_{};
+    int watcher_previous_interval_{};
+    bool test_mode_previous_{};
+    bool llk_asserts_previous_{};
+};
+
+// Reference: the legacy CB-id pack_tile keeps the DST-capacity assert.
+TEST_F(LLKBlackholePackAssertFixture, PackTileRejectsDestOverrun) {
+    run_pack_block_dest_overrun(*devices_.at(0), false /*id_free*/);
+}
+
+// The id-free pack_block must trip the same assert instead of silently packing stale DEST rows.
+TEST_F(LLKBlackholePackAssertFixture, PackBlockIdFreeRejectsDestOverrun) {
+    run_pack_block_dest_overrun(*devices_.at(0), true /*id_free*/);
 }
 
 }  // namespace tt::tt_metal

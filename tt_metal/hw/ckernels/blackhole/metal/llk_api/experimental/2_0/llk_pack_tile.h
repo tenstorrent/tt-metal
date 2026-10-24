@@ -59,7 +59,7 @@ template <
     bool skip_packer_strides = false>
 inline void llk_pack_init(const std::uint32_t num_tiles = 1) {
     constexpr std::uint8_t RegFmt = ckernel::infer_pack_reg_fmt(OUT_DESC.format, is_fp32_dest_acc_en);
-    constexpr bool is_input_8bit_format = IS_8BIT_FORMAT(static_cast<std::uint32_t>(IN_DESC.format));
+    constexpr bool is_input_8bit_format = ckernel::experimental::is_8bit_format(IN_DESC.format);
     llk_pack_init_impl<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
         RegFmt,
         OUT_DESC.shape.face_r_dim,
@@ -78,6 +78,12 @@ template <
     PackMode pack_mode = PackMode::Default>
 inline void llk_pack(std::uint32_t tile_index, std::uint32_t base_ptr) {
     SAN_HOOK(unsupported());
+    // Same DST-capacity bound as the CB-id llk_pack and the id-free llk_pack_rows below: a tile index past the
+    // packer's destination half/full window reads stale DEST rows. get_pack_dest_max_tiles reads only the
+    // packer W-stride config, so it needs no CB.
+    LLK_ASSERT(
+        (tile_index < get_pack_dest_max_tiles<DST_SYNC_MODE>()),
+        "Dst tile exceeds packer destination capacity for the configured W-stride.");
     llk_pack_impl<is_fp32_dest_acc_en, pack_mode>(tile_index, base_ptr);
 }
 
