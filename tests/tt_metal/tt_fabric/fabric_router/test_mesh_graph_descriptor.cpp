@@ -8,6 +8,7 @@
 #include <vector>
 #include <string>
 #include <cstdio>
+#include <cstdlib>
 #include <set>
 #include <map>
 #include <optional>
@@ -205,6 +206,96 @@ TEST(MeshGraphDescriptorTests, InfersDeclaredTorusTypeForDegenerateDimensions) {
     const auto& instance = desc.get_instance(desc.instances_by_name("M0").at(0));
     const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
     EXPECT_EQ(MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc), FabricType::TORUS_XY);
+}
+
+TEST(MeshGraphDescriptorTests, HostRankLayoutTilesMeshRowMajor) {
+    // 4x8 mesh over a 2x2 host grid: each host owns a 2x4 board, ranks numbered row-major.
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 4, 8 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 2, 2 ] }
+        }
+        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+    const MeshGraphDescriptor desc(text_proto);
+    const MeshId mesh{0};
+
+    EXPECT_EQ(desc.get_all_mesh_ids(), std::vector<MeshId>{mesh});
+    EXPECT_EQ(desc.get_mesh_shape(mesh), MeshShape(4, 8));
+
+    const auto& host_ranks = desc.get_host_ranks(mesh);
+    EXPECT_EQ(host_ranks.shape(), MeshShape(2, 2));
+    EXPECT_EQ(host_ranks.at(MeshCoordinate(0, 1)), MeshHostRankId{1});
+    EXPECT_EQ(host_ranks.at(MeshCoordinate(1, 0)), MeshHostRankId{2});
+
+    EXPECT_EQ(
+        desc.get_coord_range(mesh, MeshHostRankId{1}), MeshCoordinateRange(MeshCoordinate(0, 4), MeshCoordinate(1, 7)));
+    EXPECT_EQ(
+        desc.get_coord_range(mesh, MeshHostRankId{2}), MeshCoordinateRange(MeshCoordinate(2, 0), MeshCoordinate(3, 3)));
+    EXPECT_EQ(desc.get_mesh_shape(mesh, MeshHostRankId{3}), MeshShape(2, 4));
+
+    std::vector<ChipId> rank1_chips;
+    for (const auto& [coord, chip_id] : desc.get_chip_ids(mesh, MeshHostRankId{1})) {
+        (void)coord;
+        rank1_chips.push_back(chip_id);
+    }
+    EXPECT_EQ(rank1_chips, (std::vector<ChipId>{4, 5, 6, 7, 12, 13, 14, 15}));
+
+    EXPECT_EQ(desc.chip_to_coordinate(mesh, 13), MeshCoordinate(1, 5));
+    EXPECT_EQ(desc.coordinate_to_chip(mesh, MeshCoordinate(1, 5)), 13);
+    EXPECT_EQ(desc.coordinate_to_chip(mesh, MeshCoordinate(1, 1), MeshHostRankId{1}), 13);
+
+    EXPECT_EQ(desc.get_host_rank_for_chip(mesh, 0), MeshHostRankId{0});
+    EXPECT_EQ(desc.get_host_rank_for_chip(mesh, 13), MeshHostRankId{1});
+    EXPECT_EQ(desc.get_host_rank_for_chip(mesh, 18), MeshHostRankId{2});
+    EXPECT_EQ(desc.get_host_rank_for_chip(mesh, 31), MeshHostRankId{3});
+
+    EXPECT_ANY_THROW(desc.get_host_ranks(MeshId{999}));
+    EXPECT_ANY_THROW(desc.get_mesh_shape(MeshId{999}));
+    EXPECT_ANY_THROW(desc.get_coord_range(mesh, MeshHostRankId{4}));
+    EXPECT_ANY_THROW(desc.chip_to_coordinate(mesh, 32));
+    EXPECT_ANY_THROW(desc.coordinate_to_chip(mesh, MeshCoordinate(4, 0)));
+    EXPECT_ANY_THROW(desc.coordinate_to_chip(mesh, MeshCoordinate(2, 0), MeshHostRankId{1}));
+    EXPECT_ANY_THROW(desc.get_host_rank_for_chip(mesh, 32));
+    EXPECT_ANY_THROW(desc.get_host_rank_for_chip(mesh, -1));
+    EXPECT_ANY_THROW(desc.get_host_rank_for_chip(MeshId{999}, 0));
+}
+
+TEST(MeshGraphDescriptorTests, MeshGraphForwardsHostRankLayoutToDescriptor) {
+    const char* home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(home, nullptr) << "TT_METAL_HOME must be set";
+    for (const char* rel :
+         {"tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto",
+          "tt_metal/fabric/mesh_graph_descriptors/16x4_dual_bh_galaxy_2d_mesh_graph_descriptor.textproto",
+          "tt_metal/fabric/mesh_graph_descriptors/16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto",
+          "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_ttswitch_mgd.textproto"}) {
+        const MeshGraphDescriptor desc(std::filesystem::path(home) / rel, /*backwards_compatible=*/true);
+        const MeshGraph mesh_graph(desc);
+        ASSERT_EQ(mesh_graph.get_all_mesh_ids(), desc.get_all_mesh_ids()) << rel;
+        for (const MeshId mesh_id : mesh_graph.get_all_mesh_ids()) {
+            EXPECT_EQ(mesh_graph.get_mesh_shape(mesh_id), desc.get_mesh_shape(mesh_id)) << rel;
+            const auto& host_ranks = mesh_graph.get_host_ranks(mesh_id);
+            for (const auto& [host_coord, host_rank] : host_ranks) {
+                (void)host_coord;
+                const auto range = mesh_graph.get_coord_range(mesh_id, host_rank);
+                for (const auto& coord : range) {
+                    const ChipId chip_id = mesh_graph.coordinate_to_chip(mesh_id, coord);
+                    EXPECT_EQ(mesh_graph.get_host_rank_for_chip(mesh_id, chip_id), host_rank)
+                        << rel << " mesh " << *mesh_id << " chip " << chip_id;
+                }
+            }
+            if (mesh_graph.is_switch_mesh(mesh_id)) {
+                EXPECT_EQ(host_ranks.shape(), MeshShape(1, 1)) << rel;
+            }
+            const auto chip_count = static_cast<ChipId>(mesh_graph.get_chip_ids(mesh_id).size());
+            EXPECT_EQ(mesh_graph.get_host_rank_for_chip(mesh_id, chip_count), std::nullopt) << rel;
+            EXPECT_EQ(mesh_graph.get_host_rank_for_chip(mesh_id, -1), std::nullopt) << rel;
+        }
+        EXPECT_EQ(mesh_graph.get_host_rank_for_chip(MeshId{999}, 0), std::nullopt) << rel;
+    }
 }
 
 TEST(MeshGraphDescriptorTests, InfersDeclaredTorusTypeForDegenerateSwitchDimensions) {

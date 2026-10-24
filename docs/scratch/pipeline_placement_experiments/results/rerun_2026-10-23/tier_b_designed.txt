@@ -1,0 +1,18 @@
+== Designed pipeline: ring of one 1-slice stage per slice (as blaze pads) ==
+  slim PASS    full PASS     : 92
+  slim PASS    full REJECT   : 14
+  slim REJECT  full REJECT   : 5
+  slowest:
+        37.9 ms  PASS      meshes   1 stages  64  quad_bh_galaxy_1x2_mesh_graph_descriptor.textproto
+        19.2 ms  PASS      meshes   7 stages 112  subtorus_sc28_4x32_7bigmesh_ring_mesh_graph_descriptor.textproto
+        14.1 ms  PASS      meshes   6 stages  96  subtorus_sc24_4x32_6bigmesh_ring_mesh_graph_descriptor.textproto
+         6.2 ms  PASS      meshes   1 stages  32  quad_bh_galaxy_2x2_mesh_graph_descriptor.textproto
+         6.0 ms  PASS      meshes   2 stages  40  fabric_cpu_only_blitz_dual_pod_4x16_intermesh_mesh_graph_descriptor.textproto
+         5.9 ms  PASS      meshes   2 stages  40  llama_8b_1x2_pod_mesh_graph_descriptor.textproto
+  full REJECT on designed ring: ['sc4_mgd.textproto', 'pipeline_prefill_4galaxy_connected_fabric2d_mesh_graph_descriptor.textproto', 'pipeline_prefill_8galaxy_connected_mesh_graph_descriptor.textproto', 'blitz_decode_single_galaxy_mesh_graph_descriptor.textproto', 'express_links_24x4_mesh_graph_descriptor.textproto', 'nano_exabox_1x8_mesh_graph_descriptor.textproto', 'nano_exabox_mesh_graph_descriptor.textproto', 'new_nano_exabox_1x8_mesh_graph_descriptor.textproto', 't3k_2x2_disjoint_mesh_graph_descriptor.textproto', 'wh_closetbox_3pod_ttswitch_mgd.textproto', 't3k_2x1x1_mesh_graph_descriptor.textproto', 'mgd.textproto', 'dual_bh_lb_mesh_graph_descriptor.textproto', 'quad_bh_lb_mesh_graph_descriptor.textproto', 'quad_galaxy_mesh_graph_descriptor.textproto']
+
+== Random pipelines on fabrics with <= 8 meshes: does a degree check close the gap? ==
+  slim passes: 576   gap: 120 (20.8%)   caught by degree check: 20 (16.7% of gap)
+    channels/split  caught by degree  : 20
+    channels/split  missed            : 72
+    layout-in-mesh  missed            : 28

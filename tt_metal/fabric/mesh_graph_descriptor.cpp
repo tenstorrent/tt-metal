@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <memory>
+#include <numeric>
 #include <regex>
 #include <map>
 #include <set>
@@ -628,6 +629,198 @@ uint32_t MeshGraphDescriptor::get_switch_chip_count(const InstanceData& switch_i
     return chip_count;
 }
 
+void MeshGraphDescriptor::populate_host_ranks() {
+    chip_ids_by_mesh_id_.clear();
+    host_ranks_by_mesh_id_.clear();
+    host_rank_coord_ranges_.clear();
+
+    // host_dims empty means single host (switches have no host_topology).
+    auto add_layout = [&](const InstanceData& instance,
+                          const ttsl::SmallVector<uint32_t>& device_dims,
+                          ttsl::SmallVector<uint32_t> host_dims) {
+        const MeshId mesh_id(instance.local_id);
+        if (chip_ids_by_mesh_id_.contains(mesh_id)) {
+            return;
+        }
+        if (host_dims.empty()) {
+            host_dims.assign(device_dims.size(), 1);
+        }
+        TT_FATAL(
+            !device_dims.empty() && device_dims.size() == host_dims.size(),
+            "Mesh {} has device_topology rank {} and host_topology rank {}",
+            *mesh_id,
+            device_dims.size(),
+            host_dims.size());
+        ttsl::SmallVector<uint32_t> board_dims(device_dims.size());
+        for (size_t i = 0; i < device_dims.size(); ++i) {
+            TT_FATAL(
+                host_dims[i] > 0 && device_dims[i] % host_dims[i] == 0,
+                "Mesh {} device_topology {} must be divisible by host_topology {}",
+                *mesh_id,
+                MeshShape(device_dims),
+                MeshShape(host_dims));
+            board_dims[i] = device_dims[i] / host_dims[i];
+        }
+
+        const MeshShape mesh_shape(device_dims);
+        const MeshShape host_shape(host_dims);
+
+        std::vector<ChipId> chip_ids(mesh_shape.mesh_size());
+        std::iota(chip_ids.begin(), chip_ids.end(), 0);
+        chip_ids_by_mesh_id_.emplace(mesh_id, MeshContainer<ChipId>(mesh_shape, std::move(chip_ids)));
+
+        std::vector<MeshHostRankId> host_ranks;
+        host_ranks.reserve(host_shape.mesh_size());
+        for (const auto& host_coord : MeshCoordinateRange(host_shape)) {
+            const MeshHostRankId host_rank{static_cast<uint32_t>(host_ranks.size())};
+            host_ranks.push_back(host_rank);
+            ttsl::SmallVector<uint32_t> start(device_dims.size());
+            ttsl::SmallVector<uint32_t> end(device_dims.size());
+            for (size_t i = 0; i < device_dims.size(); ++i) {
+                start[i] = host_coord[i] * board_dims[i];
+                end[i] = start[i] + board_dims[i] - 1;
+            }
+            host_rank_coord_ranges_.emplace(
+                std::make_pair(mesh_id, host_rank), MeshCoordinateRange(MeshCoordinate(start), MeshCoordinate(end)));
+        }
+        host_ranks_by_mesh_id_.emplace(mesh_id, MeshContainer<MeshHostRankId>(host_shape, std::move(host_ranks)));
+    };
+
+    for (const auto& global_id : mesh_instances_) {
+        const auto& instance = get_instance(global_id);
+        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+        TT_FATAL(mesh_desc != nullptr, "Mesh descriptor is null for instance {}", instance.global_id);
+        const auto& device_dims = mesh_desc->device_topology().dims();
+        const auto& host_dims = mesh_desc->host_topology().dims();
+        add_layout(
+            instance,
+            ttsl::SmallVector<uint32_t>(device_dims.begin(), device_dims.end()),
+            ttsl::SmallVector<uint32_t>(host_dims.begin(), host_dims.end()));
+    }
+    for (const auto& global_id : switch_instances_) {
+        const auto& instance = get_instance(global_id);
+        const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(instance.desc);
+        TT_FATAL(switch_desc != nullptr, "Switch descriptor is null for instance {}", instance.global_id);
+        const auto& device_dims = switch_desc->device_topology().dims();
+        add_layout(instance, ttsl::SmallVector<uint32_t>(device_dims.begin(), device_dims.end()), {});
+    }
+}
+
+std::vector<MeshId> MeshGraphDescriptor::get_all_mesh_ids() const {
+    std::vector<MeshId> mesh_ids;
+    mesh_ids.reserve(chip_ids_by_mesh_id_.size());
+    for (const auto& [mesh_id, _] : chip_ids_by_mesh_id_) {
+        mesh_ids.push_back(mesh_id);
+    }
+    return mesh_ids;
+}
+
+const MeshContainer<MeshHostRankId>& MeshGraphDescriptor::get_host_ranks(MeshId mesh_id) const {
+    auto it = host_ranks_by_mesh_id_.find(mesh_id);
+    TT_FATAL(it != host_ranks_by_mesh_id_.end(), "MeshGraphDescriptor: mesh_id {} not found", *mesh_id);
+    return it->second;
+}
+
+MeshShape MeshGraphDescriptor::get_mesh_shape(MeshId mesh_id, std::optional<MeshHostRankId> host_rank) const {
+    if (host_rank.has_value()) {
+        return get_coord_range(mesh_id, host_rank).shape();
+    }
+    auto it = chip_ids_by_mesh_id_.find(mesh_id);
+    TT_FATAL(it != chip_ids_by_mesh_id_.end(), "MeshGraphDescriptor: mesh_id {} not found", *mesh_id);
+    return it->second.shape();
+}
+
+MeshCoordinateRange MeshGraphDescriptor::get_coord_range(
+    MeshId mesh_id, std::optional<MeshHostRankId> host_rank) const {
+    auto chips_it = chip_ids_by_mesh_id_.find(mesh_id);
+    TT_FATAL(chips_it != chip_ids_by_mesh_id_.end(), "MeshGraphDescriptor: mesh_id {} not found", *mesh_id);
+    if (!host_rank.has_value()) {
+        return chips_it->second.coord_range();
+    }
+    auto it = host_rank_coord_ranges_.find(std::make_pair(mesh_id, *host_rank));
+    TT_FATAL(
+        it != host_rank_coord_ranges_.end(),
+        "MeshGraphDescriptor: host_rank {} not found for mesh {}",
+        *host_rank,
+        *mesh_id);
+    return it->second;
+}
+
+MeshContainer<ChipId> MeshGraphDescriptor::get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank) const {
+    auto it = chip_ids_by_mesh_id_.find(mesh_id);
+    TT_FATAL(it != chip_ids_by_mesh_id_.end(), "MeshGraphDescriptor: mesh_id {} not found", *mesh_id);
+    if (!host_rank.has_value()) {
+        return it->second;
+    }
+    const MeshCoordinateRange coord_range = get_coord_range(mesh_id, host_rank);
+    std::vector<ChipId> submesh_chip_ids;
+    submesh_chip_ids.reserve(coord_range.shape().mesh_size());
+    for (const auto& coord : coord_range) {
+        submesh_chip_ids.push_back(it->second.at(coord));
+    }
+    return MeshContainer<ChipId>(coord_range.shape(), std::move(submesh_chip_ids));
+}
+
+MeshCoordinate MeshGraphDescriptor::chip_to_coordinate(MeshId mesh_id, ChipId chip_id) const {
+    const MeshShape mesh_shape = get_mesh_shape(mesh_id);
+    TT_FATAL(
+        chip_id >= 0 && static_cast<size_t>(chip_id) < mesh_shape.mesh_size(),
+        "MeshGraphDescriptor: chip id {} is out of range for mesh {} ({} chips)",
+        chip_id,
+        *mesh_id,
+        mesh_shape.mesh_size());
+    ttsl::SmallVector<uint32_t> coord(mesh_shape.dims());
+    auto remaining = static_cast<uint32_t>(chip_id);
+    for (size_t i = mesh_shape.dims(); i-- > 0;) {
+        coord[i] = remaining % mesh_shape[i];
+        remaining /= mesh_shape[i];
+    }
+    return MeshCoordinate(coord);
+}
+
+ChipId MeshGraphDescriptor::coordinate_to_chip(
+    MeshId mesh_id, const MeshCoordinate& coordinate, std::optional<MeshHostRankId> host_rank) const {
+    const MeshCoordinateRange mesh_range = get_coord_range(mesh_id);
+    MeshCoordinate mesh_coord = coordinate;
+    if (host_rank.has_value()) {
+        const MeshCoordinateRange rank_range = get_coord_range(mesh_id, host_rank);
+        TT_FATAL(
+            coordinate.dims() == rank_range.dims(),
+            "MeshGraphDescriptor: coordinate {} does not match the rank of mesh {}",
+            coordinate,
+            *mesh_id);
+        ttsl::SmallVector<uint32_t> offset(coordinate.dims());
+        for (size_t i = 0; i < coordinate.dims(); ++i) {
+            offset[i] = rank_range.start_coord()[i] + coordinate[i];
+        }
+        mesh_coord = MeshCoordinate(offset);
+        TT_FATAL(
+            rank_range.contains(mesh_coord),
+            "MeshGraphDescriptor: coordinate {} is outside host rank {} of mesh {}",
+            coordinate,
+            *host_rank,
+            *mesh_id);
+    }
+    TT_FATAL(
+        mesh_coord.dims() == mesh_range.dims() && mesh_range.contains(mesh_coord),
+        "MeshGraphDescriptor: coordinate {} is outside mesh {}",
+        mesh_coord,
+        *mesh_id);
+    return static_cast<ChipId>(mesh_coord.to_linear_index(mesh_range.shape()));
+}
+
+MeshHostRankId MeshGraphDescriptor::get_host_rank_for_chip(MeshId mesh_id, ChipId chip_id) const {
+    const MeshCoordinate chip_coord = chip_to_coordinate(mesh_id, chip_id);
+    const auto& host_ranks = get_host_ranks(mesh_id);
+    const MeshShape& mesh_shape = chip_ids_by_mesh_id_.at(mesh_id).shape();
+    const MeshShape& host_shape = host_ranks.shape();
+    ttsl::SmallVector<uint32_t> host_coord(mesh_shape.dims());
+    for (size_t i = 0; i < mesh_shape.dims(); ++i) {
+        host_coord[i] = chip_coord[i] / (mesh_shape[i] / host_shape[i]);
+    }
+    return host_ranks.at(MeshCoordinate(host_coord));
+}
+
 std::unordered_map<std::string, uint32_t> MeshGraphDescriptor::count_instances_by_type(
     const std::vector<std::string>& types) const {
     std::unordered_map<std::string, uint32_t> counts;
@@ -776,6 +969,8 @@ void MeshGraphDescriptor::populate() {
     populate_descriptors();
 
     populate_top_level_instance();
+
+    populate_host_ranks();
 
     pre_populate_connections_lookups();
 

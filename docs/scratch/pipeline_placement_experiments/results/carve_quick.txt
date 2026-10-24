@@ -1,0 +1,14 @@
+4x6: 1x1, 4x 2x2, 1x1                        area 18/24 | dfs yes    0.000s | sat yes    0.003s
+4x8: 1x1, 6x 2x2, 1x1                        area 26/32 | dfs yes    0.001s | sat yes    0.005s
+4x8: 1x1, 2x4, 2x4, 2x2, 1x1                 area 22/32 | dfs yes    0.001s | sat yes    0.003s
+8x8: 1x1, 14x 2x2, 1x1                       area 58/64 | dfs yes    0.002s | sat yes    0.027s
+3x8: 1x1, 5x 2x2 (only 4 fit)                lattice pre-check rejects in 16 us: lattice 2x2: stages need 5 marked cells, grid has 4
+3x8: 1x1, 5x 2x2 (only 4 fit)                area 21/24 | dfs no     0.003s | sat no     0.004s
+5x5: 1x1, 5x 2x2 (only 4 fit)                lattice pre-check rejects in 16 us: lattice 2x2: stages need 5 marked cells, grid has 4
+5x5: 1x1, 5x 2x2 (only 4 fit)                area 21/25 | dfs no     0.009s | sat no     0.009s
+7x7: 1x1, 10x 2x2 (only 9 fit)               lattice pre-check rejects in 17 us: lattice 2x2: stages need 10 marked cells, grid has 9
+7x7: 1x1, 10x 2x2 (only 9 fit)               area 41/49 | dfs no     2.429s | sat no     1.996s
+6x6: 1x1, 8x 2x2, 1x1                        area 34/36 | dfs yes    0.001s | sat yes    0.013s
+6x6: 1x1, 9x 2x2 (area 37 > 36)              lattice pre-check rejects in 16 us: lattice 1x1: stages need 37 marked cells, grid has 36
+6x6: 1x1, 9x 2x2 (area 37 > 36)              area 37/36 | dfs no     0.001s | sat no     0.173s
+8x8: 1x1, 15x 2x2, 3x 1x1 (fills 64)         area 64/64 | dfs yes    0.187s | sat yes    0.396s

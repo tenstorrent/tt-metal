@@ -22,6 +22,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-umd/types/arch.hpp>
+#include <tt-metalium/device_types.hpp>  // ChipId
 
 // Forward declaration
 namespace tt::tt_fabric {
@@ -319,6 +320,38 @@ public:
     uint32_t get_switch_chip_count(GlobalNodeId switch_instance_id) const;
     uint32_t get_switch_chip_count(const InstanceData& switch_instance) const;
 
+    // Chip and host-rank layout of every mesh and switch instance, keyed by the instance local id (MeshId).
+    // Chips are numbered row-major over device_topology. Host ranks tile device_topology by host_topology row-major;
+    // switches are single-host, so all their chips are rank 0. All accessors throw on an unknown mesh id, host rank,
+    // chip id or coordinate.
+
+    // All mesh ids, switches included, in ascending order.
+    std::vector<MeshId> get_all_mesh_ids() const;
+    bool has_mesh_id(MeshId mesh_id) const { return chip_ids_by_mesh_id_.contains(mesh_id); }
+
+    // Host ranks of a mesh, shaped as the host grid (host_topology).
+    const tt::tt_metal::distributed::MeshContainer<MeshHostRankId>& get_host_ranks(MeshId mesh_id) const;
+
+    // Shape / coordinate range of the mesh, or of the submesh owned by host_rank when provided.
+    tt::tt_metal::distributed::MeshShape get_mesh_shape(
+        MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
+    tt::tt_metal::distributed::MeshCoordinateRange get_coord_range(
+        MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
+
+    // Chip ids of the mesh, or of the submesh owned by host_rank when provided.
+    tt::tt_metal::distributed::MeshContainer<ChipId> get_chip_ids(
+        MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
+
+    tt::tt_metal::distributed::MeshCoordinate chip_to_coordinate(MeshId mesh_id, ChipId chip_id) const;
+
+    // When host_rank is provided, coordinate is submesh-local and is offset by that rank's origin in the mesh.
+    ChipId coordinate_to_chip(
+        MeshId mesh_id,
+        const tt::tt_metal::distributed::MeshCoordinate& coordinate,
+        std::optional<MeshHostRankId> host_rank = std::nullopt) const;
+
+    MeshHostRankId get_host_rank_for_chip(MeshId mesh_id, ChipId chip_id) const;
+
     // Count instances by type
     // Returns a map from type name to count of instances with that type
     // Example: count_instances_by_type({"MESH", "POD"}) returns {MESH: 4, POD: 2}
@@ -365,6 +398,12 @@ private:
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_source_device_id_;
 
     std::map<MeshId, std::vector<AsicPinningGroup>> pinnings_;
+
+    // Chip / host-rank layout per mesh and switch (see get_host_ranks)
+    std::map<MeshId, tt::tt_metal::distributed::MeshContainer<ChipId>> chip_ids_by_mesh_id_;
+    std::map<MeshId, tt::tt_metal::distributed::MeshContainer<MeshHostRankId>> host_ranks_by_mesh_id_;
+    std::map<std::pair<MeshId, MeshHostRankId>, tt::tt_metal::distributed::MeshCoordinateRange> host_rank_coord_ranges_;
+
     std::unordered_map<MeshId, bool> intra_mesh_relaxed_policy_;
     bool inter_mesh_relaxed_policy_ = false;
     bool inter_mesh_policy_specified_ = false;
@@ -396,6 +435,9 @@ private:
 
     // Populates the MGD Graph from the proto file
     void populate();
+
+    // Populates chip_ids_by_mesh_id_, host_ranks_by_mesh_id_ and host_rank_coord_ranges_
+    void populate_host_ranks();
 
     // Populate Descriptors
     void populate_descriptors();

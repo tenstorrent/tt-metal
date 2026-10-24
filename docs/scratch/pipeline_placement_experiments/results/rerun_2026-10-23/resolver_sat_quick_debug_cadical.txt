@@ -1,0 +1,10 @@
+one mesh grid 4x4, full ring                 stages= 16 submeshes= 16 feasible   0.006446s
+one mesh grid 4x8, full ring                 stages= 32 submeshes= 32 feasible   0.045361s
+one mesh grid 8x8, full ring                 stages= 64 submeshes= 64 feasible   0.348273s
+odd grid 3x3, full ring                      stages=  9 submeshes=  9 INFEASIBLE 0.001586s
+odd grid 3x5, full ring                      stages= 15 submeshes= 15 INFEASIBLE 0.005914s
+odd grid 5x5, full ring                      stages= 25 submeshes= 25 INFEASIBLE 0.025362s
+odd grid 3x7, full ring                      stages= 21 submeshes= 21 INFEASIBLE 0.015407s
+odd grid 5x7, full ring                      stages= 35 submeshes= 35 INFEASIBLE 0.068613s
+two 2x2 meshes, cables same colour           stages=  8 submeshes=  8 INFEASIBLE 0.013997s
+two 4x4 meshes, cables same colour           stages= 32 submeshes= 32 INFEASIBLE 23.084707s

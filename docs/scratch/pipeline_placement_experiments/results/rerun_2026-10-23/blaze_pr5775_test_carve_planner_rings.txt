@@ -1,0 +1,11 @@
+.......xxx                                                               [100%]
+=============================== warnings summary ===============================
+tests/blaze/infra/test_carve_planner_rings.py:21
+
+tests/blaze/infra/test_carve_planner_rings.py:21
+
+=========================== short test summary info ============================
+XFAIL ../../../dev::test_planner_finds_a_ring_it_misses_today[4x4-odd-total-13] - a ring exists; the planner searches slice cycles
+XFAIL ../../../dev::test_planner_finds_a_ring_it_misses_today[4x6-four-2x2] - a ring exists; the planner searches slice cycles
+XFAIL ../../../dev::test_planner_finds_a_ring_it_misses_today[4x8-six-2x2] - a ring exists; the planner searches slice cycles
+7 passed, 3 xfailed, 2 warnings in 1.37s
