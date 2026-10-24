@@ -297,6 +297,10 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
     return is_packer_to_L1_early_conversion_supported(in_reg, out_l1) || is_packer_to_L1_late_conversion_supported(in_reg, out_l1);
 }
 
+// Channel-1 W stride the closed block pack last wrote; set_packer_strides zeroes the register.
+// Internal linkage lets a kernel without a closed block drop the store.
+static std::uint32_t pack_ch1_w_stride = 0;
+
 template <PackMode pack_mode = PackMode::Default>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
 {
@@ -320,6 +324,7 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     // channel-1 (Y) stride, in its own init.
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
+    pack_ch1_w_stride = 0;
     TTI_NOP;
     TTI_NOP;
 }
@@ -690,6 +695,8 @@ inline void select_packer_dest_registers()
 }
 
 // Program packer destination addresses from GPRs
+// keep_output_addr: leave OUTPUT_ADDR holding the plain address, which fast tilize advances from.
+template <bool keep_output_addr = true>
 inline void program_packer_destination(std::uint32_t addr)
 {
     LLK_ASSERT(is_valid_L1_address(addr), "L1 address must be in valid L1 memory region");
@@ -698,6 +705,15 @@ inline void program_packer_destination(std::uint32_t addr)
     // sampled at PACR start -- before the next call's WRCFG reprograms it, and the Last=1 PACR that ends each
     // pack MOP drains the packer and forces the next pack to re-sample L1_Dest_addr. The STALLWAIT below is
     // only the GPR-producer fence: it ensures the SETDMAREG write to OUTPUT_ADDR retires before WRCFG reads it.
+    if constexpr (!keep_output_addr)
+    {
+        // Byte 3 (bit 31) is the row pack init's; another pack program between two row packs replaces the row pack's MOP,
+        // so the init runs again before the next one.
+        TT_RMWCIB0(0xff, addr & 0xff, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+        TT_RMWCIB1(0xff, (addr >> 8) & 0xff, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+        TT_RMWCIB2(0xff, (addr >> 16) & 0xff, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+        return;
+    }
     std::uint32_t new_l1_addr = (1 << 31) | addr;
     TT_SETDMAREG(0, LOWER_HALFWORD(addr), 0, LO_16(p_gpr_pack::OUTPUT_ADDR));
     TT_SETDMAREG(0, UPPER_HALFWORD(new_l1_addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR));

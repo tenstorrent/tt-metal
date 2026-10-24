@@ -220,6 +220,13 @@ inline void reblock_and_untilize(
     interm_dfb.pop_front(num_tiles_in_row_of_subblocks);
 }
 
+#if defined(ARCH_BLACKHOLE) && defined(TRISC_PACK)
+// The ARC firmware throttle word is odd while block matmuls are throttled, which makes a half sync block math bound and faster per tile.
+ALWI bool mm_pack_per_tile_throttled() { return DST_SYNC_MODE == DstSync::SyncHalf && (*ckernel::throttle_ptr % 2); }
+#else
+ALWI bool mm_pack_per_tile_throttled() { return false; }
+#endif
+
 void kernel_main() {
 // RUNTIME ARGS
 #ifdef MATMUL_DRAM_SHARDED
@@ -374,6 +381,14 @@ void kernel_main() {
     constexpr uint32_t last_subblock_w_valid = out_subblock_w;
 #endif
     constexpr bool last_subblock_padded = last_subblock_w_valid < out_subblock_w;
+#if defined(ARCH_BLACKHOLE) && defined(TRISC_PACK)
+    constexpr bool mm_out_block_pack = llk_matmul_block_pack<MATH_FIDELITY, in0_block_w, mm_out_dfb_id, MM_THROTTLE>();
+    constexpr bool mm_partials_block_pack =
+        llk_matmul_block_pack<MATH_FIDELITY, in0_block_w, mm_partials_dfb_id, MM_THROTTLE>();
+#else
+    constexpr bool mm_out_block_pack = false;
+    constexpr bool mm_partials_block_pack = false;
+#endif
 #ifdef ARCH_QUASAR
     // Quasar's matmul LLK bakes ct_dim/rt_dim into the unpack/math MOPs at matmul_block_init; the
     // narrowed matmul_block call below (effective_subblock_w < out_subblock_w) desynchronizes the
@@ -587,7 +602,16 @@ void kernel_main() {
 #endif
 #endif
                                 uint32_t start_dst_index = 0;
+#ifdef ARCH_BLACKHOLE
+                                if (mm_out_block_pack && !mm_pack_per_tile_throttled()) {
+                                    pack_block(start_dst_index, mm_out_dfb_id, out_subblock_num_tiles);
+                                } else {
+                                    PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(
+                                        start_dst_index, mm_out_dfb_id, out_subblock_num_tiles)));
+                                }
+#else
                                 pack_block(start_dst_index, mm_out_dfb_id, out_subblock_num_tiles);
+#endif
 
                                 tile_regs_release();
                                 mm_out_dfb.push_back(out_subblock_num_tiles);
@@ -610,7 +634,16 @@ void kernel_main() {
 #endif
 
                                 uint32_t start_dst_index = 0;
+#ifdef ARCH_BLACKHOLE
+                                if (mm_partials_block_pack && !mm_pack_per_tile_throttled()) {
+                                    pack_block(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
+                                } else {
+                                    PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(
+                                        start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles)));
+                                }
+#else
                                 pack_block(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
+#endif
 
                                 tile_regs_release();
                                 mm_partials_dfb.push_back(out_subblock_num_tiles);
@@ -770,9 +803,13 @@ void kernel_main() {
 #else
                         tile_regs_wait();
 #endif
+#ifdef ARCH_BLACKHOLE
+                        pack_block_mop(0, untilize_mode_out_dfb_id, out_subblock_num_tiles);
+#else
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             pack_tile(i, untilize_mode_out_dfb_id);
                         }
+#endif
                         tile_regs_release();
                         untilize_mode_out_dfb.push_back(out_subblock_num_tiles);
 
