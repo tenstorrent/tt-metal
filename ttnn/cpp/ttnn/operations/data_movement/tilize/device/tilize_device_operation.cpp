@@ -372,7 +372,9 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
         uint32_t num_blocks_block =
             (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) / (tile_height * tile_width);
         auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
-        if (ncores < ncores_wh.ncores) {
+        const uint32_t block_row_bytes = ncores_wh.single_block_size * tile_width * input_tensor_a.element_size();
+        const bool short_segments = device->arch() == tt::ARCH::BLACKHOLE && block_row_bytes < 1024;
+        if (ncores < ncores_wh.ncores && (ncores < grid_area / 4 || !short_segments)) {
             return ttnn::prim::TilizeMultiCoreBlockProgramFactory{};
         }
     }
