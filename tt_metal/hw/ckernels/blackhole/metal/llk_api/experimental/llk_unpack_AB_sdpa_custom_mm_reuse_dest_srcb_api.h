@@ -51,3 +51,22 @@ inline void llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb(
     _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_(
         base_address_A, tile_index_A, tile_size_A, kt_dim, nt_dim, in1_k_stride);
 }
+
+/**
+ * @brief Unpack one OV K row for the SrcB-reuse matmul.
+ *
+ * @param operand: Circular buffer containing the V tiles.
+ * @param tile_index: Index of the first V tile relative to the buffer read pointer.
+ * @param nt_dim: Number of contiguous V tiles in the row, from 1 to 16.
+ * @note Call @ref llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init with the same nt_dim first;
+ *       do not reload the replay buffer before this call. Call @ref llk_unpack_A_sdpa_set_srcb_dummy_valid
+ *       before unpacking and pair with @ref llk_math_sdpa_custom_mm_reuse_dest_srcb at kt_dim = 1.
+ */
+inline void llk_unpack_A_sdpa_custom_mm_single_row(
+    const std::uint32_t operand, const std::uint32_t tile_index, const std::uint32_t nt_dim) {
+    SAN_HOOK(unsupported());
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t tile_size = get_local_cb_interface(operand_id).fifo_page_size;
+    const std::uint32_t address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1 + tile_index * tile_size;
+    _llk_unpack_A_sdpa_custom_mm_single_row_(address, tile_size, nt_dim);
+}
