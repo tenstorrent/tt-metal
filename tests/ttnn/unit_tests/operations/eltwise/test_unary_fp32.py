@@ -13,6 +13,7 @@ from tests.ttnn.utils_for_testing import (
     flush_subnormal_values_to_zero,
     generate_all_bfloat16_bitpatterns,
 )
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
 pytestmark = pytest.mark.use_module_device
 
@@ -256,4 +257,29 @@ def test_log_signed_zero(device, ttnn_function, dtype):
     assert result[0, 2].item() == 0.0, (
         f"{ttnn_function.__name__}(1.0) returned {result[0, 2].item()!r}, expected 0.0; an "
         "over-wide signed-zero arm is swallowing ordinary inputs."
+    )
+
+
+@pytest.mark.parametrize("ttnn_function", [ttnn.log, ttnn.log2, ttnn.log10], ids=["log", "log2", "log10"])
+@pytest.mark.parametrize("fast_and_approximate_mode", [False, True], ids=["accurate", "fast"])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_log_zero_exponent_inputs(device, ttnn_function, fast_and_approximate_mode, dtype):
+    if fast_and_approximate_mode and not is_blackhole():
+        pytest.skip("fast-mode log normalisation is fixed on Blackhole only")
+    sign = torch.tensor([0, 1], dtype=torch.int64).repeat_interleave(128)
+    if dtype == ttnn.bfloat16:
+        bits = (sign << 15) | torch.arange(128, dtype=torch.int64).repeat(2)
+        x_torch = bits.to(torch.int16).view(torch.bfloat16)
+    else:
+        mantissa = torch.randint(1, 1 << 23, (128,), generator=torch.Generator().manual_seed(0), dtype=torch.int64)
+        mantissa[0], mantissa[1] = 0, (1 << 23) - 1
+        bits = (sign << 31) | mantissa.repeat(2)
+        x_torch = bits.to(torch.int32).view(torch.float32)
+    x_tt = ttnn.from_torch(x_torch.reshape(1, 256), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn_function(x_tt, fast_and_approximate_mode=fast_and_approximate_mode)).float().flatten()
+
+    bad = ~(torch.isinf(result) & (result < 0))
+    assert not bad.any(), (
+        f"{ttnn_function.__name__}(fast_and_approximate_mode={fast_and_approximate_mode}) returned "
+        f"{result[bad][:4].tolist()} for zero-exponent inputs {x_torch[bad][:4].tolist()}, expected -inf."
     )
