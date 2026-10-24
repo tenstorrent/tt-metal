@@ -47,6 +47,10 @@ struct RingJointSDPAParams {
     bool circular_kv_cache = false;
     // Internal structural ratio, derived from Q/KV sequence distributions.
     uint32_t kv_stripe_split = 1;
+    // Sliding halo placement (prototype): 0 runs the neighbor-halo exchange fused into this call; 1 runs only the
+    // exchange (no attention, output is not written); 2 + b runs attention with no CCL, reading a halo already in
+    // batch b of the persistent buffers (put there by an earlier exchange-only call).
+    uint32_t halo_mode = 0;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -71,7 +75,8 @@ struct RingJointSDPAParams {
         uint32_t kv_cache_layer_idx = 0,
         std::optional<uint32_t> sliding_window_size = std::nullopt,
         bool circular_kv_cache = false,
-        uint32_t kv_stripe_split = 1) :
+        uint32_t kv_stripe_split = 1,
+        uint32_t halo_mode = 0) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         is_causal(is_causal),
@@ -93,7 +98,8 @@ struct RingJointSDPAParams {
         kv_cache_layer_idx(kv_cache_layer_idx),
         sliding_window_size(sliding_window_size),
         circular_kv_cache(circular_kv_cache),
-        kv_stripe_split(kv_stripe_split) {}
+        kv_stripe_split(kv_stripe_split),
+        halo_mode(halo_mode) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
@@ -114,6 +120,10 @@ struct RingJointSDPAParams {
 
     bool has_sliding_window() const { return sliding_window_size.value_or(0) > 0; }
 
+    bool halo_exchange_only() const { return halo_mode == 1; }
+    bool halo_pregathered() const { return halo_mode >= 2; }
+    uint32_t halo_batch_idx() const { return halo_pregathered() ? halo_mode - 2 : 0; }
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "joint_strategy",
         "scale",
@@ -132,6 +142,7 @@ struct RingJointSDPAParams {
         "sliding_window_size",
         "circular_kv_cache",
         "kv_stripe_split",
+        "halo_mode",
         "all_gather_operation_attributes",
         "all_gather_tensor_args");
     auto attribute_values() const {
@@ -154,6 +165,7 @@ struct RingJointSDPAParams {
             std::cref(sliding_window_size),
             std::cref(circular_kv_cache),
             std::cref(kv_stripe_split),
+            std::cref(halo_mode),
             std::cref(all_gather_operation_attributes),
             std::cref(all_gather_tensor_args));
     }

@@ -138,7 +138,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
     std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
     // Metadata path only: global real-token count, so attention stops at the tile holding the last real token.
-    const std::optional<ttnn::Tensor>& kv_valid_end_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor = std::nullopt,
+    // Prototype: 0 fused halo exchange, 1 exchange only, 2 + b attention on a halo already in batch b.
+    uint32_t halo_mode = 0);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const ttnn::Tensor& input_tensor_q,

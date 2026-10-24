@@ -479,6 +479,10 @@ inline uint32_t get_end_seq_tile(const QChunkInfo& qi, uint32_t ring_id, uint32_
 }
 
 void kernel_main() {
+    // Exchange only (halo_mode 1): no attention, the output is not written.
+    if constexpr (get_named_compile_time_arg_val("halo_mode") == 1) {
+        return;
+    }
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
     constexpr uint32_t DHt = get_compile_time_arg_val(2);

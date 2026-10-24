@@ -63,7 +63,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
-    const std::optional<ttnn::Tensor>& kv_valid_end_tensor) {
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
+    uint32_t halo_mode) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -105,7 +106,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         kv_actual_isl_tensor,
         kv_cache_num_layers,
         kv_cache_layer_idx,
-        kv_valid_end_tensor);
+        kv_valid_end_tensor,
+        halo_mode);
     return outputs;
 }
 
@@ -803,7 +805,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
         nb::arg("kv_cache_layer_idx").noconvert() = nb::none(),
-        nb::arg("kv_valid_end_tensor").noconvert() = nb::none());
+        nb::arg("kv_valid_end_tensor").noconvert() = nb::none(),
+        nb::arg("halo_mode") = 0);
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

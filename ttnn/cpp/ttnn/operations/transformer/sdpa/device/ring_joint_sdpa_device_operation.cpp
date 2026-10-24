@@ -426,6 +426,21 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     validate_metadata_tensors(tensor_args, args.kv_stripe_split);
 
+    if (args.halo_mode != 0) {
+        TT_FATAL(
+            args.has_sliding_window() && tensor_args.kv_pad_from_metadata(),
+            "halo_mode {} needs chunked sliding attention on the metadata path",
+            args.halo_mode);
+    }
+    if (args.halo_pregathered()) {
+        TT_FATAL(tensor_args.num_lanes() == 1, "A pregathered halo serves one request per call");
+        TT_FATAL(
+            args.halo_batch_idx() < gathered_input_tensor_k.logical_shape()[0],
+            "Halo batch {} is past the persistent buffers' {} batches",
+            args.halo_batch_idx(),
+            gathered_input_tensor_k.logical_shape()[0]);
+    }
+
     if (const uint32_t num_lanes = tensor_args.num_lanes(); num_lanes > 1) {
         // Lanes: num_lanes requests' CP-local Q rows stacked request-major, each with its own cache slot and
         // prefix (slot_id[b], kv_actual_isl[b]), one unit per (lane, head, Q chunk).
@@ -632,7 +647,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         args.all_gather_tensor_args,
         indexed_kv_cache_active(args, tensor_args),
         compact_gather_dim_minimum,
-        tensor_args.num_lanes());
+        // A pregathered call reads one batch of a buffer an exchange-only call filled for several requests.
+        args.halo_pregathered() ? static_cast<uint32_t>(tensor_args.gathered_k.logical_shape()[0])
+                                : tensor_args.num_lanes());
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
@@ -970,12 +987,12 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         // Single-slot gather writes cache slot kv_cache_batch_idx to gathered slot 0: a batch-1 buffer
         // is the efficient shape; a full-batch buffer is also accepted (only slot 0 is used).
         TT_FATAL(
-            k_shape[0] == 1 || k_shape[0] == K_cache_batch || k_shape[0] == tensor_args.num_lanes(),
+            k_shape[0] == 1 || k_shape[0] == K_cache_batch || k_shape[0] == tensor_args.num_lanes() || args.halo_pregathered(),
             "Gathered K batch must be 1 (single-slot gather) or match input K cache batch {}. Got gathered K: {}",
             K_cache_batch,
             k_shape[0]);
         TT_FATAL(
-            v_shape[0] == 1 || v_shape[0] == V_cache_batch || v_shape[0] == tensor_args.num_lanes(),
+            v_shape[0] == 1 || v_shape[0] == V_cache_batch || v_shape[0] == tensor_args.num_lanes() || args.halo_pregathered(),
             "Gathered V batch must be 1 (single-slot gather) or match input V cache batch {}. Got gathered V: {}",
             V_cache_batch,
             v_shape[0]);
@@ -1286,6 +1303,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         tensor_args.v_num_heads(),
         tensor_args.v_head_dim(args.latent_v_head_dim),
         args.sliding_window_size,
+        args.halo_mode,
         args.all_gather_operation_attributes,
         args.all_gather_tensor_args);
 }
@@ -1423,7 +1441,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const bool circular_kv_cache,
     const std::optional<ttnn::Tensor>& logical_n_tensor,
     const std::optional<ttnn::Tensor>& logical_l_tensor,
-    const std::optional<ttnn::Tensor>& kv_valid_end_tensor) {
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
+    const uint32_t halo_mode) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -1646,7 +1665,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         kv_cache_layer_idx,
         sliding_window_size,
         circular_kv_cache,
-        resolved_kv_stripe_split);
+        resolved_kv_stripe_split,
+        halo_mode);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

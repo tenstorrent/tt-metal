@@ -35,6 +35,10 @@ constexpr void assert_kv_pad_rotation_streaming_only() {
 
 void kernel_main() {
     constexpr uint32_t num_lanes = get_named_compile_time_arg_val("num_lanes");
+    // Exchange only (halo_mode 1): no attention.
+    if constexpr (get_named_compile_time_arg_val("halo_mode") == 1) {
+        return;
+    }
     constexpr uint32_t NH = get_compile_time_arg_val(0);
     constexpr uint32_t DHt = get_compile_time_arg_val(1);
     constexpr uint32_t vDHt = get_compile_time_arg_val(2);

@@ -817,7 +817,10 @@ void kernel_main() {
     }
     // The fused all-gather wrote the active slot to gathered slot 0 (lanes: lane b's to slot b). That is batch B
     // either way: an indexed cache forces Q batch 1, and lanes set B = num_lanes.
-    const uint32_t gathered_kv_batch_dim = B;
+    // halo_mode 2: an earlier exchange-only call left this request's halo in batch halo_batch_idx.
+    constexpr uint32_t halo_mode = get_named_compile_time_arg_val("halo_mode");
+    constexpr uint32_t halo_batch_idx = get_named_compile_time_arg_val("halo_batch_idx");
+    const uint32_t gathered_kv_batch_dim = halo_mode == 2 ? halo_batch_idx + 1 : B;
     // Lanes: Q is [1, NH, num_lanes * q_local_padded_Nt rows, DH], lane b's rows at b * q_local_padded_Nt.
     const auto input_q_tile_logical = num_lanes > 1 ? TensorTileShape(1, NH, num_lanes * q_local_padded_Nt, DHt)
                                                     : TensorTileShape(B, NH, q_local_padded_Nt, DHt);
@@ -868,7 +871,8 @@ void kernel_main() {
     // Sliding consumes local and halo ranges in one logical Q pass. Without a K split the plan puts the local K chunks
     // first, so the halo is waited for only before the first halo chunk; a core that reads none waits at the end, so a
     // cached program cannot observe the previous invocation's token.
-    bool halo_synchronized = !has_sliding_window;
+    // A pregathered halo (halo_mode 2) is in the buffers before this call starts: nothing to wait for.
+    bool halo_synchronized = !has_sliding_window || halo_mode == 2;
     auto synchronize_halo = [&]() {
         if (halo_synchronized) {
             return;
@@ -883,6 +887,11 @@ void kernel_main() {
             fused_op_receiver.get_next_ring_id_and_consume_one_signal();
         }
     };
+    // Exchange only (halo_mode 1): consume the halo's signal and do no attention.
+    if constexpr (halo_mode == 1) {
+        synchronize_halo();
+        return;
+    }
     // K chunks past this device's last Q row are fully masked; compute skips the same ones.
     const uint32_t causal_end_nt = dense_causal_skip
                                        ? chunked_q_global_end_tile<kv_pad_rotation_enabled, q_local_padded_Nt>(
@@ -1235,7 +1244,8 @@ void kernel_main() {
                 }
                 // Local KV reads the indexed cache slot; gathered KV is at slot 0 of the scratch buffer (lanes: nb).
                 const uint32_t kv_batch = indexed_kv_cache ? kv_cache_batch_idx : nb;
-                const uint32_t gathered_kv_batch = (indexed_kv_cache && num_lanes == 1) ? 0 : nb;
+                const uint32_t gathered_kv_batch =
+                    halo_mode == 2 ? halo_batch_idx : ((indexed_kv_cache && num_lanes == 1) ? 0 : nb);
                 const bool source_is_local = source_ring_id == ring_index;
                 if (source_is_local) {
                     const uint32_t local_k_start_tile = source_k_chunk * Sk_chunk_t;

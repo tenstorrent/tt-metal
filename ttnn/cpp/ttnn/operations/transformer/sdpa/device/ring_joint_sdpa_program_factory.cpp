@@ -670,9 +670,11 @@ void apply_ring_joint_scalar_runtime_args(
                                            : std::nullopt);
         TT_FATAL(runtime_halo_layout->uses_neighbor_halo(), "Sliding attention requires a neighbor halo");
     }
+    // A pregathered-halo call has no halo kernels to patch.
     const std::vector<ring_joint::ChunkedSlidingHaloExchange> halo_exchanges =
-        runtime_halo_layout ? plan_halo_exchanges(args, *runtime_halo_layout, ring_write_plan.transport_rank)
-                            : std::vector<ring_joint::ChunkedSlidingHaloExchange>{};
+        runtime_halo_layout && !args.halo_pregathered()
+            ? plan_halo_exchanges(args, *runtime_halo_layout, ring_write_plan.transport_rank)
+            : std::vector<ring_joint::ChunkedSlidingHaloExchange>{};
     const uint32_t tensor_descriptor_field_count =
         tensor_args.has_metadata() ? ag_rt::kMetadataTensorDescriptorFieldCount : ag_rt::kTensorDescriptorFieldCount;
     const uint32_t neighbor_reader_tensor_descriptor_field_count =
@@ -3189,6 +3191,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         {"seg_accum", seg_accum ? 1u : 0u},
         {"kv_stripe_split", args.kv_stripe_split},
         {"num_lanes", num_lanes},
+        // Prototype halo placement: 0 fused exchange, 1 exchange only, 2 attention on a halo already gathered.
+        {"halo_mode", std::min(args.halo_mode, 2u)},
+        {"halo_batch_idx", args.halo_batch_idx()},
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = ksplit_named_args;
@@ -3462,6 +3467,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         all_gather_output_tensors.push_back(tensor_args.gathered_joint_k.value());
         all_gather_input_tensors.push_back(*joint_tensor_v);
         all_gather_output_tensors.push_back(tensor_args.gathered_joint_v.value());
+    }
+    if (has_sliding_window && args.halo_pregathered()) {
+        // An earlier exchange-only call already put this call's halo in the persistent buffers: no CCL kernels.
+        return desc;
     }
     if (has_sliding_window) {
         // A halo that fits in one Q slab is a single exchange with the +1 neighbour. A wider one reaches
