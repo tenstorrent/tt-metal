@@ -37,6 +37,12 @@ from ttexalens.tt_exalens_lib import read_word_from_device, write_words_to_devic
 _SKIPPED = (pytest.skip.Exception, pytest.xfail.Exception)
 _FAILED = pytest.fail.Exception
 
+# Test files whose result depends on timing by design, so any added delay fails
+# them with no bug behind it.
+_EXCLUDED = {
+    "test_fp32_dest_acc_cfg_occupancy.py": "measures its own race window",
+}
+
 _writer = None
 # Set once a hang has asked the supervisor for recovery, so the worker stops
 # after the case it is reporting rather than in the middle of it.
@@ -418,6 +424,9 @@ def pytest_runtest_setup(item):
     root = heartbeat.state_dir()
     if root is not None and item.nodeid in heartbeat.completed(root):
         pytest.skip("already recorded")
+    reason = _EXCLUDED.get(item.nodeid.partition("::")[0])
+    if reason is not None:
+        pytest.skip(f"ttnop skipped: excluded: {reason}")
     marker = item.get_closest_marker("xfail")
     if marker is not None:
         reason = marker.kwargs.get("reason", "pre-marked xfail")
