@@ -30,11 +30,15 @@ constexpr std::uint32_t matmul_max_row_tiles = 8;
 #elif defined(ARCH_BLACKHOLE)
 constexpr std::uint32_t matmul_max_row_tiles = get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
 #endif
-#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+#if defined(MATMUL_FORCE_FORM)
+// math MOP kind (0 tile, 1 rows, 2 row) and hoisted unpack of the cell, whatever the forms table says: MATMUL_FORCE_FORM = 2 * kind + hoist
+constexpr bool matmul_hoist_rows = (MATMUL_FORCE_FORM % 2) == 1;
+#elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
 constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_KT_PER_SECTION, MATMUL_OUT_FORMAT>();
 #elif defined(ARCH_BLACKHOLE)
 constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync>();
 #endif
+#line 38
 #include "llk_unpack_common.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -198,12 +202,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_math_common.h"
 #include "llk_math_matmul.h"
-#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+#if defined(MATMUL_FORCE_FORM)
+constexpr bool matmul_tile_mop = (MATMUL_FORCE_FORM / 2) == 0;
+#elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
 constexpr bool matmul_tile_mop = !matmul_math_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_KT_PER_SECTION, MATMUL_OUT_FORMAT>();
 #else
 constexpr bool matmul_tile_mop = false;
 #endif
 
+// keys production selects the forms by (partials format, its row MOP rule) and no fused post flip: see matmul_prod_keys.py
+#ifdef MATMUL_PROD_KEYS
+constexpr bool matmul_prod_keys = true;
+#else
+constexpr bool matmul_prod_keys = false;
+#endif
+#line 176
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_ROW_MOP)
 #define MATMUL_MATH_TEMPLATE_ARGS MATH_FIDELITY, THROTTLE_LEVEL, true
 #else
@@ -277,12 +290,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
                 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
                 #ifdef MATMUL_UNFUSED_POST
-                constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3;
+                constexpr bool fused_post_flip = !matmul_prod_keys && (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3);
                 #else
-                constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b;
+                constexpr bool fused_post_flip = !matmul_prod_keys && (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b);
                 #endif
                 #else
-                constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3;
+                constexpr bool fused_post_flip = !matmul_prod_keys && (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3);
                 #endif
                 _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en, fused_post_flip>();
             }
@@ -296,6 +309,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifdef LLK_TRISC_PACK
+#line 264
 
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"

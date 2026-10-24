@@ -101,6 +101,20 @@ class MATMUL_ROW_MOP(TemplateParameter):
     def convert_to_cpp(self) -> str:
         return "#define MATMUL_ROW_MOP"
 
+    @staticmethod
+    def for_block(formats, dest_acc, math_fidelity, dest_sync, ct_dim: int, rt_dim: int, kt_dim: int) -> list:
+        """[MATMUL_ROW_MOP()] where the ttnn matmul kernels run the opt-in row MOP for a half-sync block of the sweep (one inner block, so
+        the section packs to the output format): helpers/matmul_prod_keys.py m2_row_mop, less the cells that keep main's form."""
+        from helpers.matmul_prod_keys import main_form_cell, m2_row_mop
+
+        if get_chip_architecture() != ChipArchitecture.BLACKHOLE or dest_sync != DestSync.Half:
+            return []
+        fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
+        out_format = formats.output_format
+        if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format):
+            return []
+        return [MATMUL_ROW_MOP()] if m2_row_mop(math_fidelity, rt_dim, ct_dim, kt_dim, fp32_dest, out_format, out_format) else []
+
 
 # Operand formats of 8 bits per datum or less (_llk_unpack_AB_matmul_narrow_format_).
 MATMUL_NARROW_STREAM_FORMATS = (
@@ -325,6 +339,13 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             )
         ):
             return [MATMUL_FORM_KEYS(0, formats.output_format, True)]
+        # cells where the keyed forms read slower than main's keep main's form (the unknown key), as the ttnn kernels do
+        if math_fidelity is not None and dest_sync == DestSync.Half and dest_acc is not None:
+            from helpers.matmul_prod_keys import main_form_cell
+
+            fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
+            if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format):
+                return [MATMUL_FORM_KEYS(0, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8)]
         # the forms depend on k only as 1, 2 to 4 or 5 and more; one representative keeps the variant count down
         return [
             MATMUL_FORM_KEYS(
@@ -340,6 +361,32 @@ class MATMUL_FORM_KEYS(TemplateParameter):
                 and formats.output_format == DataFormat.Float32,
             )
         ]
+
+
+@dataclass
+class MATMUL_PROD_KEYS(TemplateParameter):
+    """The forms of a cell are the ones the ttnn kernels select (helpers/matmul_prod_keys.py): no fused post flip, which ttnn does not run."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_PROD_KEYS"
+
+
+@dataclass(init=False, repr=False, eq=False)
+class MATMUL_FORCE_FORM(TemplateParameter):
+    """The math MOP kind (0 tile MOP, 1 rows MOP of the default form, 2 row MOP: also pass MATMUL_ROW_MOP) and the hoisted unpack
+    of a cell, whatever the forms table says. Measures every form of a cell so any key can be judged without another run.
+
+    No report column (the fields stay out of the dataclass); the repr holds them, as the variant hash reads it."""
+
+    def __init__(self, kind: int = 0, hoist: bool = False):
+        self.kind = kind
+        self.hoist = hoist
+
+    def __repr__(self) -> str:
+        return f"MATMUL_FORCE_FORM({self.kind}, {self.hoist})"
+
+    def convert_to_cpp(self) -> str:
+        return f"#define MATMUL_FORCE_FORM {2 * self.kind + int(self.hoist)}"
 
 
 @dataclass

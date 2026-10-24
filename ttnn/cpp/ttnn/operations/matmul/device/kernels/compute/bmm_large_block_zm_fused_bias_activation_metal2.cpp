@@ -341,8 +341,31 @@ void kernel_main() {
 #else
     constexpr bool row_mop_tail = true;
 #endif
+    // cells where the keyed forms read slower than main's on the tt-llk sweep keep main's form (llk_matmul_forms.h)
+#ifdef FUSE_BIAS
+    constexpr uint32_t bmm_section_out_dfb_id = mm_partials_dfb_id;
+#else
+    constexpr uint32_t bmm_section_out_dfb_id = untilize_out ? mm_partials_dfb_id : out_dfb_id;
+#endif
+#if defined(UCK_CHLKC_PACK)
+    constexpr bool bmm_main_cell = false;
+#else
+    // one tile in one section for the whole kernel: the row MOP's init is not repaid (HiFi4 bf16 1x1 reads 6 to 14 ns slower than main)
+    constexpr bool bmm_single_tile_kernel =
+        out_subblock_num_tiles == 1 && !get_batch_from_reader &&
+        batch * num_blocks_h_dim * num_blocks_w_dim * in0_num_subblocks * in1_num_subblocks * num_blocks_inner_dim == 1;
+    constexpr bool bmm_main_cell = bmm_single_tile_kernel || ckernel::matmul_main_form_cell_selected<
+        MATH_FIDELITY,
+        in0_block_w,
+        DST_ACCUM_MODE,
+        static_cast<DataFormat>(unpack_src_format[in0_dfb_id]),
+        static_cast<DataFormat>(unpack_src_format[in1_dfb_id]),
+        static_cast<DataFormat>(unpack_src_format[out_dfb_id]),
+        static_cast<DataFormat>(unpack_src_format[num_blocks_inner_dim > 1 ? mm_partials_dfb_id : bmm_section_out_dfb_id]),
+        (num_blocks_inner_dim > 1)>();
+#endif
     constexpr bool row_mop =
-        !bmm_main_form && row_mop_tail &&
+        !bmm_main_form && !bmm_main_cell && row_mop_tail &&
         (row_mop_fidelity || out_subblock_w >= 6 || (out_subblock_num_tiles >= 8 && in0_block_w > 1)) &&
         (DST_ACCUM_MODE || (unpack_src_format[out_dfb_id] != (uint8_t)DataFormat::Float32 &&
                             unpack_src_format[mm_partials_dfb_id] != (uint8_t)DataFormat::Float32));
@@ -408,7 +431,7 @@ void kernel_main() {
 #ifdef ARCH_BLACKHOLE
     // the format each DEST section is packed to: the partials until the last inner block
     constexpr DataFormat mm_pack_format =
-        bmm_main_form ? DataFormat::Invalid
+        (bmm_main_form || bmm_main_cell) ? DataFormat::Invalid
                       : static_cast<DataFormat>(
                             unpack_src_format[num_blocks_inner_dim > 1 ? mm_partials_dfb_id : mm_out_dfb_id]);
 #else
