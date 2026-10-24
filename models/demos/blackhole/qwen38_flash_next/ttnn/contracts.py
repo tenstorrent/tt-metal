@@ -860,6 +860,27 @@ class Qwen38TTNNDevicePositionRow:
         self.shifts[lane] = shift
         self._write_mirror()
 
+    def park(self, lanes: Iterable[int]) -> None:
+        """Residue-free rows: park the given (idle) lanes at position 0 with shift 0 and write the mirror once.  The
+        trace advances every lane each replay, so a host that runs idle lanes (no request, scratch page, warm token)
+        calls this before a step whenever an idle lane's mirror is off 0 (the vLLM contract: an inactive row sits at
+        a fixed start position with an all-zero page-table row).  Nothing is written when ``lanes`` is empty."""
+
+        if not self.residue_free:
+            raise RuntimeError(
+                "only a residue-free position row parks lanes (the residue rule keeps all lanes in one class)"
+            )
+        parked = [_exact_integer(lane, label="parked lane", error_type=ValueError) for lane in lanes]
+        for lane in parked:
+            if not 0 <= lane < self.lanes:
+                raise ValueError(f"parked lane must be in [0,{self.lanes}), got {lane}")
+        if not parked:
+            return
+        for lane in parked:
+            self.positions[lane] = 0
+            self.shifts[lane] = 0
+        self._write_mirror()
+
     def advance(self) -> None:
         """In-trace ``P_u += 1`` for every lane; must be the last op of the model body."""
 

@@ -12,7 +12,7 @@ canonical fixed-phase order and re-admitted into a lane (``admit``); ``step`` re
 one new greedy token per lane.
 
 Residue-free: the lanes sit at any positions (the GDN lane state keeps a per-lane conv shift register, see
-``Qwen38TTNNGDNState.fixed_phase``).  Not a scheduler, no MTP, no mid-batch admission.
+``Qwen38TTNNGDNState.fixed_phase``).  No MTP.  ``Qwen38ContinuousBatch`` (host-only, below) is the continuous-batching policy over this decoder (P1d).
 
 Paged KV (P1c-B, ``paging=Qwen38LanePaging(...)``): the lanes' QSA KV is one page pool per layer plus one page table
 (``model.write_lane_page_table``).  ``Qwen38PageAllocator`` hands a lane ``ceil((P + decode_steps + 1) / page_size)``
@@ -27,8 +27,9 @@ from __future__ import annotations
 import random
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Any, Sequence
+from typing import Any, Iterable, Sequence
 
 import torch
 from loguru import logger
@@ -140,6 +141,8 @@ class Qwen38PlainLaneDecoder:
         self.trace_ids: list[int] = []
         self.timing: dict[str, Any] = {}
         self.released = False
+        self.page_table_dirty = False  # a page row changed since the last table write (grow, release)
+        self.last_admit: dict[str, float] = {}
 
     # -- the two build phases ----------------------------------------------------------------------
 
@@ -239,9 +242,22 @@ class Qwen38PlainLaneDecoder:
 
     # -- admission ---------------------------------------------------------------------------------
 
-    def admit(self, lane: int, prompt_ids: Sequence[int]) -> int:
+    @property
+    def paged(self) -> bool:
+        return self.paging is not None
+
+    @property
+    def page_size(self) -> int:
+        return 0 if self.paging is None else self.paging.page_size
+
+    def free_pages(self) -> int:
+        return 0 if self.allocator is None else len(self.allocator.free)
+
+    def admit(self, lane: int, prompt_ids: Sequence[int], page_count: int | None = None) -> int:
         """Prefill ``prompt_ids`` on the B=1 chain, move its state into lane ``lane``; returns the first token t0
-        (the greedy token after the prompt, to be consumed by the lane's first step)."""
+        (the greedy token after the prompt, to be consumed by the lane's first step).  Paged: ``page_count`` pages are
+        allocated (default: the whole ``decode_steps`` run, ``lane_page_count``; the continuous batch passes the
+        prompt's pages and grows the lane later with ``grow_lane``)."""
 
         vm, model, ls = self.vm, self.model, self.ls
         length = len(prompt_ids)
@@ -265,10 +281,11 @@ class Qwen38PlainLaneDecoder:
         if self.paging is not None:
             if self.page_rows[lane]:
                 raise RuntimeError(f"lane {lane} still holds pages: release_lane first")
-            self.page_rows[lane] = self.allocator.allocate(
-                lane_page_count(length, self.decode_steps, self.paging.page_size)
-            )
+            if page_count is None:
+                page_count = lane_page_count(length, self.decode_steps, self.paging.page_size)
+            self.page_rows[lane] = self.allocator.allocate(page_count)
             model.write_lane_page_table(ls, page_table_rows(self.page_rows, self.lanes))
+            self.page_table_dirty = False  # the whole table, other lanes' pending changes included
         self.pager_g.evict(0, slot)
         self.pager_g.rotate_ring_canonical(slot, length)
         slot.position = length
@@ -277,24 +294,60 @@ class Qwen38PlainLaneDecoder:
             model.admit_lane_kv_paged(ls, self.chain.state, lane, length)
         self.pager_l.readmit(slot, lane, position_row=None)
         ttnn.synchronize_device(self.mesh)
-        self.timing.setdefault("admit_s", []).append(time.perf_counter() - prefilled)
-        self.timing.setdefault("admit_with_prefill_s", []).append(time.perf_counter() - started)
+        finished = time.perf_counter()
+        self.timing.setdefault("admit_s", []).append(finished - prefilled)
+        self.timing.setdefault("admit_with_prefill_s", []).append(finished - started)
+        self.last_admit = {"prefill_s": prefilled - started, "import_s": finished - prefilled}
         vm.release_request(0)
         self.positions[lane] = length
         self.contexts[lane] = context
         return first_token
 
-    def release_lane(self, lane: int) -> None:
-        """Free lane ``lane``'s pages (paged mode) and zero its page-table row; the lane then writes to the scratch
-        page until it is admitted again."""
+    def release_lane(self, lane: int, write_table: bool = True) -> None:
+        """Free lane ``lane``: paged, its pages go back to the allocator and its page-table row is zeroed (the lane then
+        reads and writes the scratch page until it is admitted again; ``write_table=False`` defers the upload to
+        ``sync_page_table``); unpaged, only the host state is cleared.  The lane's device state stays as it is:
+        ``admit`` resets it at the next admission."""
 
-        if self.paging is None:
-            raise RuntimeError("release_lane frees pages: the decoder is not paged")
-        self.allocator.release(self.page_rows[lane])
-        self.page_rows[lane] = []
-        self.model.write_lane_page_table(self.ls, page_table_rows(self.page_rows, self.lanes))
+        if self.paging is not None:
+            self.allocator.release(self.page_rows[lane])
+            self.page_rows[lane] = []
+            self.page_table_dirty = True
+            if write_table:
+                self.sync_page_table()
         self.positions[lane] = None
         self.contexts[lane] = None
+
+    def grow_lane(self, lane: int) -> None:
+        """Allocate one more page for lane ``lane`` (its next step writes into a page it does not hold yet); the table
+        upload is left to ``sync_page_table``."""
+
+        if self.paging is None:
+            raise RuntimeError("grow_lane allocates pages: the decoder is not paged")
+        if len(self.page_rows[lane]) >= self.paging.max_blocks:
+            raise RuntimeError(f"lane {lane} already fills its page table ({self.paging.max_blocks} blocks)")
+        self.page_rows[lane] += self.allocator.allocate(1)
+        self.page_table_dirty = True
+
+    def sync_page_table(self) -> bool:
+        """Upload the whole page table if a row changed since the last upload; returns whether it wrote."""
+
+        if self.paging is None or not self.page_table_dirty:
+            return False
+        self.model.write_lane_page_table(self.ls, page_table_rows(self.page_rows, self.lanes))
+        self.page_table_dirty = False
+        return True
+
+    def park_idle(self, lanes: Iterable[int]) -> bool:
+        """Park idle lanes at position 0 before a step (the trace advanced them): one position-row write, only when an
+        idle lane's mirror is off 0; returns whether it wrote."""
+
+        lanes = list(lanes)
+        position = self.ls.position
+        if not any(position.positions[lane] or position.shifts[lane] for lane in lanes):
+            return False
+        position.park(lanes)
+        return True
 
     # -- decode ------------------------------------------------------------------------------------
 
@@ -302,7 +355,12 @@ class Qwen38PlainLaneDecoder:
         """One lane-body replay consuming ``tokens`` (one per lane); returns the lanes' next greedy tokens."""
 
         model, ls, mesh = self.model, self.ls, self.mesh
+        idle = [u for u in range(self.lanes) if self.positions[u] is None]  # no request: PLE context None
+        for u in idle:
+            self.contexts[u] = None
         self.contexts = list(model.write_lane_ple_rows(ls, tokens, self.contexts))
+        for u in idle:
+            self.contexts[u] = None
         model.write_lane_tokens(ls, tokens)
         ttnn._ttnn_execute_trace(mesh, self.trace_ids[0], cq_id=0, blocking=True)
         ls.position.advance_replayed()
@@ -333,3 +391,217 @@ class Qwen38PlainLaneDecoder:
             self.captures.clear()
         finally:
             mesh.set_program_cache_misses_allowed(False)
+
+
+# -- P1d: continuous batching -----------------------------------------------------------------------
+
+
+@dataclass
+class Qwen38Request:
+    """One request of a continuous batch: arrives at replay step ``arrival_step`` and wants ``max_new_tokens`` tokens
+    (the prefill's t0 counts as the first)."""
+
+    request_id: Any
+    prompt_ids: Sequence[int]
+    max_new_tokens: int
+    arrival_step: int = 0
+
+
+@dataclass
+class _ActiveLane:
+    request: Qwen38Request
+    tokens: list[int]
+    budget: int  # pages reserved for the whole request (0 unpaged)
+    record: dict[str, Any]
+
+    @property
+    def done(self) -> bool:
+        return len(self.tokens) >= self.request.max_new_tokens
+
+    @property
+    def next_row(self) -> int:
+        """The cache row the next step writes: the prompt rows plus the steps taken so far."""
+
+        return len(self.request.prompt_ids) + len(self.tokens) - 1
+
+
+class Qwen38ContinuousBatch:
+    """Host-only vLLM-style continuous batching over a lane decoder (``Qwen38PlainLaneDecoder`` or a stand-in).
+
+    Loop per iteration: release finished lanes, admit arrived requests into free lanes (lowest lane first, FIFO, no
+    skipping), grow the page rows that reach a page boundary, park idle lanes, replay one step when a lane is active,
+    record the tokens.  Paged mode admits a request only when ``free pages - outstanding reservations`` covers the
+    request's full budget ``ceil((P + max_new_tokens + 1) / page_size)``; the pages themselves are allocated
+    lazily (``ceil((P + 1) / page_size)`` at admission, one more when a step first writes into a new page).
+
+    The decoder interface used: ``lanes``, ``paged``, ``page_size``, ``page_rows``, ``free_pages()``, ``admit(lane,
+    prompt_ids, page_count)``, ``last_admit`` (dict ``prefill_s``/``import_s``), ``grow_lane(lane)``,
+    ``release_lane(lane, write_table=False)``, ``sync_page_table()``, ``park_idle(lanes)``, ``step(tokens)``.
+    """
+
+    def __init__(self, decoder: Any, requests: Sequence[Qwen38Request | tuple], clock=time.perf_counter) -> None:
+        self.decoder = decoder
+        self.clock = clock
+        parsed = [r if isinstance(r, Qwen38Request) else Qwen38Request(*r) for r in requests]
+        ids = [r.request_id for r in parsed]
+        if len(set(ids)) != len(ids):
+            raise ValueError("request ids must be unique")
+        for r in parsed:
+            if r.max_new_tokens < 1 or len(r.prompt_ids) < 1 or r.arrival_step < 0:
+                raise ValueError(f"bad request {r.request_id}: need a prompt, max_new_tokens >= 1, arrival_step >= 0")
+        self.waiting: list[Qwen38Request] = sorted(parsed, key=lambda r: r.arrival_step)  # stable: FIFO per arrival
+        self.paged = bool(decoder.paged)
+        self.page_size = decoder.page_size if self.paged else 0
+        self.capacity_pages = decoder.free_pages() if self.paged else 0
+        if self.paged:
+            for r in parsed:
+                if self.budget(r) > self.capacity_pages:
+                    raise ValueError(
+                        f"request {r.request_id} needs {self.budget(r)} pages, the pool {self.capacity_pages}"
+                    )
+        self.active: dict[int, _ActiveLane] = {}
+        self.step_no = 0
+        self.records: dict[Any, dict[str, Any]] = {}
+        self.step_log: list[dict[str, Any]] = []
+        self.page_owners: dict[int, set] = {}
+        self.max_pages_in_use = 0
+        self.admission_order: list[tuple[Any, int]] = []  # (request id, lane)
+
+    # -- policy pieces -----------------------------------------------------------------------------
+
+    def budget(self, request: Qwen38Request) -> int:
+        return lane_page_count(len(request.prompt_ids), request.max_new_tokens, self.page_size) if self.paged else 0
+
+    def outstanding_reservation(self) -> int:
+        return sum(a.budget - len(self.decoder.page_rows[lane]) for lane, a in self.active.items())
+
+    def free_lanes(self) -> list[int]:
+        return [lane for lane in range(self.decoder.lanes) if lane not in self.active]
+
+    def _note_pages(self, lane: int, request_id: Any) -> None:
+        for page in self.decoder.page_rows[lane]:
+            self.page_owners.setdefault(page, set()).add(request_id)
+        in_use = sum(len(rows) for rows in self.decoder.page_rows)
+        self.max_pages_in_use = max(self.max_pages_in_use, in_use)
+
+    def _release_finished(self) -> bool:
+        released = False
+        for lane in sorted(self.active):
+            a = self.active[lane]
+            if not a.done:
+                continue
+            a.record["pages_used"] = a.record["pages_peak"]
+            a.record["tokens"] = list(a.tokens)
+            a.record["finish_step"] = self.step_no
+            self.decoder.release_lane(lane, write_table=False)
+            del self.active[lane]
+            released = True
+        return released
+
+    def _admit_arrived(self) -> bool:
+        admitted = False
+        while self.waiting and self.waiting[0].arrival_step <= self.step_no:
+            free = self.free_lanes()
+            request = self.waiting[0]
+            if not free:
+                break
+            budget = self.budget(request)
+            if self.paged and self.decoder.free_pages() - self.outstanding_reservation() < budget:
+                break
+            self.waiting.pop(0)
+            lane = free[0]
+            prompt_len = len(request.prompt_ids)
+            count = lane_page_count(prompt_len, 0, self.page_size) if self.paged else None
+            t0 = self.decoder.admit(lane, request.prompt_ids, count)
+            timing = dict(getattr(self.decoder, "last_admit", {}))
+            record = {
+                "request_id": request.request_id,
+                "lane": lane,
+                "prompt_len": prompt_len,
+                "max_new_tokens": request.max_new_tokens,
+                "arrival_step": request.arrival_step,
+                "admit_step": self.step_no,
+                "prefill_s": timing.get("prefill_s"),
+                "import_s": timing.get("import_s"),
+                "budget_pages": budget,
+                "pages_peak": len(self.decoder.page_rows[lane]) if self.paged else 0,
+            }
+            self.records[request.request_id] = record
+            self.active[lane] = _ActiveLane(request, [int(t0)], budget, record)
+            self.admission_order.append((request.request_id, lane))
+            if self.paged:
+                self._note_pages(lane, request.request_id)
+            admitted = True
+        return admitted
+
+    def _grow_pages(self) -> None:
+        if not self.paged:
+            return
+        shift = self.page_size.bit_length() - 1
+        for lane in sorted(self.active):
+            a = self.active[lane]
+            while a.next_row >> shift >= len(self.decoder.page_rows[lane]):
+                self.decoder.grow_lane(lane)
+            a.record["pages_peak"] = max(a.record["pages_peak"], len(self.decoder.page_rows[lane]))
+            self._note_pages(lane, a.request.request_id)
+
+    # -- the loop ----------------------------------------------------------------------------------
+
+    def run(self) -> dict[str, Any]:
+        decoder = self.decoder
+        started = self.clock()
+        while True:
+            while True:  # a request with max_new_tokens == 1 finishes at admission: free its lane before the step
+                self._release_finished()
+                self._admit_arrived()
+                if not any(a.done for a in self.active.values()):
+                    break
+            if not self.active:
+                if not self.waiting:
+                    break
+                if self.waiting[0].arrival_step > self.step_no:
+                    self.step_no = self.waiting[0].arrival_step  # nothing to replay: jump to the next arrival
+                    continue
+                raise RuntimeError(f"request {self.waiting[0].request_id} cannot be admitted into an empty batch")
+            step_started = self.clock()
+            self._grow_pages()
+            wrote_table = bool(decoder.sync_page_table()) if self.paged else False
+            idle = [lane for lane in range(decoder.lanes) if lane not in self.active]
+            parked = bool(decoder.park_idle(idle)) if idle else False
+            tokens = [
+                self.active[lane].tokens[-1] if lane in self.active else WARM_TOKEN_ID for lane in range(decoder.lanes)
+            ]
+            out = decoder.step(tokens)
+            for lane, a in self.active.items():
+                a.tokens.append(int(out[lane]))
+            self.step_log.append(
+                {
+                    "step": self.step_no,
+                    "ms": 1000.0 * (self.clock() - step_started),
+                    "active": len(self.active),
+                    "table_write": wrote_table,
+                    "parked": parked,
+                }
+            )
+            self.step_no += 1
+        wall = self.clock() - started
+        return self.report(wall)
+
+    def report(self, wall_s: float) -> dict[str, Any]:
+        generated = sum(len(r["tokens"]) for r in self.records.values())
+        peak = max((s["active"] for s in self.step_log), default=0)
+        steady = [s["ms"] for s in self.step_log if s["active"] == peak]
+        reuse = sum(1 for owners in self.page_owners.values() if len(owners) >= 2)
+        return {
+            "wall_s": wall_s,
+            "generated_tokens": generated,
+            "effective_tok_s": generated / wall_s if wall_s > 0 else 0.0,
+            "steps": len(self.step_log),
+            "steady_step_ms": sum(steady) / len(steady) if steady else None,
+            "peak_active_lanes": peak,
+            "max_pages_in_use": self.max_pages_in_use,
+            "page_reuses": reuse,
+            "table_writes_in_steps": sum(1 for s in self.step_log if s["table_write"]),
+            "requests": list(self.records.values()),
+            "step_log": self.step_log,
+        }
