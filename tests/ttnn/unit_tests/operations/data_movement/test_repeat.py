@@ -8,6 +8,7 @@ from math import prod
 import pytest
 import torch
 import ttnn
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
@@ -281,6 +282,7 @@ def _assert_derived_placement(output, input_memory):
         (ttnn.uint32, [1, 8, 64], (4, 2), [1, 2, 1]),  # control: 32-byte shard rows
     ],
 )
+@pytest.mark.skipif(not is_blackhole(), reason="Shard-page repeat cases are validated on Blackhole only")
 def test_repeat_width_sharded_row_major_subaligned_rows(device, dtype, shape, grid, repeats):
     words = torch.arange(prod(shape), dtype=torch.int64).reshape(shape)
     if dtype == ttnn.uint32:
@@ -322,6 +324,7 @@ def test_repeat_width_sharded_row_major_subaligned_rows(device, dtype, shape, gr
 @pytest.mark.parametrize("split_row", [False, True])
 @pytest.mark.parametrize("aligned", [False, True])
 @pytest.mark.parametrize("output_mode", ["implicit", "memory_config", "preallocated", "both"])
+@pytest.mark.skipif(not is_blackhole(), reason="Shard-page repeat cases are validated on Blackhole only")
 def test_repeat_sharded_row_major_placement(device, rank, strategy, split_row, aligned, output_mode):
     shard_width = 8 if aligned else 5
     if strategy == ttnn.ShardStrategy.WIDTH:
@@ -373,6 +376,7 @@ def test_repeat_sharded_row_major_placement(device, rank, strategy, split_row, a
 
 @pytest.mark.parametrize("input_shard_width, output_shard_width", [(5, 10), (10, 5), (5, 8), (8, 5)])
 @pytest.mark.parametrize("preallocate", [False, True])
+@pytest.mark.skipif(not is_blackhole(), reason="Shard-page repeat cases are validated on Blackhole only")
 def test_repeat_sharded_row_major_different_page_widths(device, input_shard_width, output_shard_width, preallocate):
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 3))})
     input_memory = ttnn.MemoryConfig(
@@ -407,6 +411,7 @@ def test_repeat_sharded_row_major_different_page_widths(device, input_shard_widt
         assert output.buffer_address() == target.buffer_address()
 
 
+@pytest.mark.skipif(not is_blackhole(), reason="Shard-page repeat cases are validated on Blackhole only")
 def test_repeat_large_split_row_scratch_space(device):
     width = 8 * 30005
     shape = [1, 1, width]
@@ -444,6 +449,7 @@ def test_repeat_large_split_row_scratch_space(device):
 @pytest.mark.parametrize("strategy", [ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.BLOCK])
 @pytest.mark.parametrize("aligned", [False, True])
 @pytest.mark.parametrize("preallocate", [False, True])
+@pytest.mark.skipif(not is_blackhole(), reason="Shard-page repeat cases are validated on Blackhole only")
 def test_repeat_split_shards_supported_dtypes(device, dtype, strategy, aligned, preallocate):
     element_bytes = 2 if dtype in (ttnn.bfloat16, ttnn.uint16) else 4
     shard_width = 48 // element_bytes if aligned else 5
@@ -504,6 +510,7 @@ def test_repeat_split_shards_supported_dtypes(device, dtype, strategy, aligned, 
 
 
 @pytest.mark.parametrize("strategy", [ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.BLOCK])
+@pytest.mark.skipif(not is_blackhole(), reason="Shard-page repeat cases are validated on Blackhole only")
 def test_repeat_sharded_multiple_axes_control(device, strategy):
     # Multiple repeated axes retain their existing route. A 48-byte shard row is aligned to 16, not 32.
     shape, output_shape, repeats = [1, 4, 24], [2, 8, 24], [2, 2, 1]

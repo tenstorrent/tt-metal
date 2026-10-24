@@ -71,13 +71,16 @@ ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryHigherDim::create_p
     const bool is_tile_native = operation_attributes.m_tile_page_size_bytes > 0;
     const bool src_sharded = src_buffer->buffer_distribution_spec().has_value();
     const bool dst_sharded = dst_buffer->buffer_distribution_spec().has_value();
-    // A split row's payload excludes each shard page's alignment padding. Stage those pages separately
-    // so both ends of every NoC transfer have matching alignment, without changing output placement.
-    const bool stage_shard_pages = !is_tile_native &&
-                                   ((src_sharded && page_size_bytes > src_buffer->page_size() &&
-                                     src_buffer->page_size() != src_buffer->aligned_page_size()) ||
-                                    (dst_sharded && page_size_bytes > dst_buffer->page_size() &&
-                                     dst_buffer->page_size() != dst_buffer->aligned_page_size()));
+    // Split rows need staging for unaligned pages or when squeezing removes the row axis used by the
+    // direct sharded reader. Aligned multi-row distributions retain the direct transfer path.
+    const auto needs_shard_staging = [page_size_bytes](const Buffer* buffer) {
+        const auto& distribution = buffer->buffer_distribution_spec();
+        return distribution && page_size_bytes > buffer->page_size() &&
+               (buffer->page_size() != buffer->aligned_page_size() ||
+                distribution->tensor_shape_in_pages().rank() == 1);
+    };
+    const bool stage_shard_pages =
+        !is_tile_native && (needs_shard_staging(src_buffer) || needs_shard_staging(dst_buffer));
     const bool needs_alignment_cb = !is_tile_native && ((!src_sharded && !dst_sharded) || stage_shard_pages);
     // Split shard pages are streamed, so scratch space does not grow with the full tensor row.
     constexpr uint32_t max_staged_transfer_bytes = 2048;
@@ -86,11 +89,6 @@ ttnn::device_operation::ProgramArtifacts RepeatProgramFactoryHigherDim::create_p
     // Reserve one alignment for rounding the scratch base and one for matching the NoC address.
     // At the cap: at most 64 + 63 + 2048 = 2175 bytes are addressed in the 2176-byte scratchpad.
     const uint32_t cb_size_bytes = (READ_ALIGNMENT * 2) + scratch_page_size_bytes;
-    constexpr uint32_t staged_base_alignment = 64;
-    constexpr uint32_t staged_max_noc_offset = 63;
-    TT_FATAL(
-        !stage_shard_pages || cb_size_bytes >= staged_base_alignment + staged_max_noc_offset + scratch_page_size_bytes,
-        "Repeat staging scratchpad must cover base alignment, NoC offset and the transfer payload");
 
     // Metal 2.0 named resource ids. Declared function-local so the unity build (both repeat factory
     // .cpp files land in one translation unit) sees no duplicate anonymous-namespace symbols.

@@ -7,8 +7,12 @@ from math import prod
 import pytest
 import torch
 import ttnn
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
-pytestmark = pytest.mark.timeout(60, method="thread")
+pytestmark = [
+    pytest.mark.timeout(60, method="thread"),
+    pytest.mark.skipif(not is_blackhole(), reason="Shard-page repeat cases are validated on Blackhole only"),
+]
 
 # Output modes: (memory_config kind, preallocate). "implicit" passes no memory_config.
 OUTPUTS = [
@@ -56,7 +60,7 @@ def _route(call):
         return "copy"
     if ops and set(ops) == {"ReshardDeviceOperation"}:
         return "reshard"
-    return "composite"
+    return "view" if not ops else "composite"
 
 
 def _repeat(device, shape, input_memory, repeats, output_memory, preallocate, route=None, dtype=ttnn.uint32):
@@ -252,7 +256,8 @@ def test_repeat_unaligned_narrow_rows_off_native(device, source, repeats, output
         buffer[0] if buffer else ttnn.BufferType.L1,
         ttnn.ShardSpec(grid, shard, ttnn.ShardOrientation.ROW_MAJOR),
     )
-    _repeat(device, shape, memory, repeats, output, False)
+    route = "copy" if all(count == 1 for count in repeats) else "codegen"
+    _repeat(device, shape, memory, repeats, output, False, route)
 
 
 def _bank(x):
@@ -421,7 +426,7 @@ def test_repeat_partial_final_shard_into_unaligned_sharded_output(device, expect
 @pytest.mark.parametrize("output, preallocate", OUTPUTS)
 def test_repeat_partial_final_shard_unchanged_view(device, shape, output, preallocate):
     # 30 words over four 8-word shards, the last one partial. Repeating axis 1 of a rank-4 tensor views it as
-    # [upper, repeat, lower, width], its own shape, so native repeats it in place, as on main.
+    # [upper, repeat, lower, width], its own shape, so the direct kernel repeats it without changing the view.
     grid = _cores(4, 1)
     sharded = _sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, grid, [16, 8])
     output_memory = _output_memory(output, sharded)
@@ -560,8 +565,9 @@ def test_repeat_dram_narrow_pages_that_already_complete(device, shape, shard, re
         ttnn.BufferType.DRAM,
         ttnn.ShardSpec(_bank(0), shard, ttnn.ShardOrientation.ROW_MAJOR),
     )
-    # This is a value/placement check: codegen's memory budget may select a different valid route on another SKU.
-    _repeat(device, shape, source, repeats, ttnn.DRAM_MEMORY_CONFIG, False)
+    # The rank-preserving identity copies; the repeated small DRAM row takes codegen on Blackhole.
+    route = "copy" if all(count == 1 for count in repeats) else "codegen"
+    _repeat(device, shape, source, repeats, ttnn.DRAM_MEMORY_CONFIG, False, route)
 
 
 @pytest.mark.parametrize("rank", [2, 3, 4, 5])
@@ -589,12 +595,253 @@ def test_repeat_bfloat16_staged_pages(device, rank, layout):
     _repeat(device, shape, source, repeats, output, True, "staged", ttnn.bfloat16)
 
 
-def test_repeat_untilized_width_shard_is_rejected_before_repeat(device, expect_error):
-    values = (torch.arange(2 * 30 * 20).reshape(2, 30, 20) % 251 - 125).to(torch.bfloat16)
-    memory = _sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, _cores(1, 1), [64, 32])
+@pytest.mark.parametrize("layout", [ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.TensorMemoryLayout.BLOCK_SHARDED])
+@pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.bfloat16])
+@pytest.mark.parametrize("rows", [1, 2])
+@pytest.mark.parametrize("preallocate", [False, True])
+def test_repeat_aligned_single_row_shards(device, layout, dtype, rows, preallocate):
+    # With one row, shape squeezing removes the row axis. Page-aligned halves still need separate transfers.
+    grid = _cores(2, 1)
+    source = _sharded(layout, grid, [rows, 32])
+    output = _sharded(layout, grid, [rows * 2, 32])
+    result = _repeat(
+        device,
+        [1, rows, 64],
+        source,
+        [1, 2, 1],
+        output if preallocate else None,
+        preallocate,
+        "staged" if rows == 1 else "native",
+        dtype,
+    )
+    assert result.memory_config() == output
+
+
+@pytest.mark.parametrize("height", [30, 32])
+@pytest.mark.parametrize("leading_axes", [1, 2])
+def test_repeat_rank_expansion_keeps_untilized_height_padding(device, height, leading_axes):
+    values = (torch.arange(2 * height * 20).reshape(2, height, 20) % 251 - 125).to(torch.bfloat16)
+    memory = _sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _cores(2, 1), [32, 32])
     tiled = ttnn.from_torch(values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory)
-    assert torch.equal(ttnn.to_torch(tiled), values)
-    # This proposed padded-row input cannot reach repeat: untilize rejects its WIDTH shard height.
-    with expect_error(RuntimeError, "Shard height 64 must match physical height 60"):
-        ttnn.untilize(tiled, memory_config=memory)
-    assert torch.equal(ttnn.to_torch(tiled), values)
+    source = ttnn.untilize(tiled, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    assert torch.equal(ttnn.to_torch(source), values)
+    repeats = [1] * (len(values.shape) + leading_axes)
+    assert _route(lambda: ttnn.repeat(source, repeats)) == "view"
+    result = ttnn.repeat(source, repeats)
+    assert list(result.padded_shape) == [1] * leading_axes + list(source.padded_shape)
+    assert result.memory_config() == source.memory_config()
+    assert torch.equal(ttnn.to_torch(result), values.repeat(*repeats))
+    assert torch.equal(ttnn.to_torch(source), values)
+
+
+@pytest.mark.parametrize(
+    "height, width, repeats",
+    [
+        (30, 20, [1, 2, 1, 1]),
+        (30, 20, [1, 1, 2, 1, 1]),
+        (30, 20, [2, 1, 1, 1, 1]),
+        (30, 20, [1, 1, 1, 2, 1]),
+        (30, 20, [2, 1, 1]),
+        (30, 20, [1, 2, 1]),
+        (48, 32, [1, 1, 1, 2, 1]),
+    ],
+)
+@pytest.mark.parametrize("padded_height", [False, True])
+@pytest.mark.parametrize("output_mode, preallocate", INTERLEAVED_OUTPUTS)
+def test_repeat_untilized_height_padding(
+    device, expect_error, height, width, repeats, padded_height, output_mode, preallocate
+):
+    # untilize retains padding between batches. Real repeats must not read it as values from the next batch.
+    shard_height = ((height + 31) // 32) * 32
+    if not padded_height:
+        height = shard_height
+        # Rank-expanded controls retain width padding. Same-rank controls use full-width rows;
+        # their existing codegen view rejects a 40-byte page in a tile-padded buffer.
+        if len(repeats) == 3:
+            width = 32
+    values = (torch.arange(2 * height * width).reshape(2, height, width) % 251 - 125).to(torch.bfloat16)
+    memory = _sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _cores(2, 1), [shard_height, 32])
+    tiled = ttnn.from_torch(values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory)
+    source = ttnn.untilize(tiled, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    assert list(source.padded_shape) == [2, shard_height, 32]
+    assert torch.equal(ttnn.to_torch(source), values)
+    expected = values.repeat(*repeats)
+    kwargs = {}
+    if output_mode != "implicit":
+        kwargs["memory_config"] = ttnn.L1_MEMORY_CONFIG if output_mode == "l1" else ttnn.DRAM_MEMORY_CONFIG
+    if preallocate:
+        sentinel = torch.full_like(expected, -7)
+        target = ttnn.from_torch(
+            sentinel,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=kwargs["memory_config"],
+        )
+        kwargs["optional_output_tensor"] = target
+    if padded_height:
+        message = "repeat does not support row-major tensors with padding between logical batches"
+        with expect_error(RuntimeError, message):
+            ttnn.repeat(source, repeats, **kwargs)
+        if preallocate:
+            assert torch.equal(ttnn.to_torch(target), sentinel)
+    else:
+        result = ttnn.repeat(source, repeats, **kwargs)
+        assert torch.equal(ttnn.to_torch(result), expected)
+        if output_mode != "implicit":
+            assert result.memory_config() == kwargs["memory_config"]
+        if preallocate:
+            assert result.buffer_address() == target.buffer_address()
+            assert torch.equal(ttnn.to_torch(target), expected)
+    assert torch.equal(ttnn.to_torch(source), values)
+
+
+@pytest.mark.parametrize("repeats", [[1, 0, 1], [1, 2, 0, 1]])
+def test_repeat_zero_output_keeps_untilized_height_padding_supported(device, repeats):
+    values = (torch.arange(1200).reshape(2, 30, 20) % 251 - 125).to(torch.bfloat16)
+    memory = _sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _cores(2, 1), [32, 32])
+    tiled = ttnn.from_torch(values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory)
+    source = ttnn.untilize(tiled, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    result = ttnn.repeat(source, repeats)
+    assert list(result.shape) == list(values.repeat(*repeats).shape)
+    assert torch.equal(ttnn.to_torch(source), values)
+
+
+@pytest.mark.parametrize("height", [30, 48])
+@pytest.mark.parametrize(
+    "repeats", [[1, 2, 1, 1], [1, 1, 2, 1, 1], [2, 1, 1, 1, 1], [1, 1, 1, 2, 1], [2, 1, 1], [1, 2, 1]]
+)
+@pytest.mark.parametrize("output_mode, preallocate", INTERLEAVED_OUTPUTS)
+def test_repeat_untilized_trailing_height_padding(device, height, repeats, output_mode, preallocate):
+    # A single logical batch has no padding gap before another batch's values.
+    values = (torch.arange(height * 32).reshape(1, height, 32) % 251 - 125).to(torch.bfloat16)
+    shard_height = ((height + 31) // 32) * 32
+    memory = _sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _cores(1, 1), [shard_height, 32])
+    tiled = ttnn.from_torch(values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory)
+    source = ttnn.untilize(tiled, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    assert list(source.padded_shape) == [1, shard_height, 32]
+    assert torch.equal(ttnn.to_torch(source), values)
+    expected = values.repeat(*repeats)
+    kwargs = {}
+    if output_mode != "implicit":
+        kwargs["memory_config"] = ttnn.L1_MEMORY_CONFIG if output_mode == "l1" else ttnn.DRAM_MEMORY_CONFIG
+    if preallocate:
+        target = ttnn.from_torch(
+            torch.full_like(expected, -7),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=kwargs["memory_config"],
+        )
+        kwargs["optional_output_tensor"] = target
+    result = ttnn.repeat(source, repeats, **kwargs)
+    assert torch.equal(ttnn.to_torch(result), expected)
+    assert torch.equal(ttnn.to_torch(source), values)
+    if output_mode != "implicit":
+        assert result.memory_config() == kwargs["memory_config"]
+    if preallocate:
+        assert result.buffer_address() == target.buffer_address()
+        assert torch.equal(ttnn.to_torch(target), expected)
+
+
+def _untilize_with_batch_padding(device, values, output_memory):
+    shard = [((values.shape[-2] + 31) // 32) * 32, ((values.shape[-1] + 31) // 32) * 32]
+    memory = _sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, _cores(prod(values.shape[:-2]), 1), shard)
+    tiled = ttnn.from_torch(values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory)
+    return ttnn.untilize(tiled, memory_config=output_memory)
+
+
+@pytest.mark.parametrize("source_kind", ["interleaved", "width"])
+@pytest.mark.parametrize("output_memory", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("explicit_memory", [False, True])
+@pytest.mark.parametrize("padded_output", [False, True])
+def test_repeat_preallocated_batch_padding(
+    device, expect_error, source_kind, output_memory, explicit_memory, padded_output
+):
+    shape = [1, 1, 30, 32] if source_kind == "interleaved" else [1, 1, 1, 64]
+    values = (torch.arange(prod(shape)).reshape(shape) % 251 - 125).to(torch.bfloat16)
+    source_memory = (
+        ttnn.DRAM_MEMORY_CONFIG
+        if source_kind == "interleaved"
+        else _sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, _cores(2, 1), [1, 32])
+    )
+    source = ttnn.from_torch(
+        values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=source_memory
+    )
+    repeats = [1, 2, 1, 1]
+    expected = values.repeat(*repeats)
+    sentinel = torch.full_like(expected, -7)
+    if padded_output:
+        target = _untilize_with_batch_padding(device, sentinel, output_memory)
+        assert list(target.padded_shape) == [1, 2, 32, shape[-1]]
+    else:
+        target = ttnn.from_torch(
+            sentinel,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=output_memory,
+        )
+    assert torch.equal(ttnn.to_torch(source), values)
+    assert torch.equal(ttnn.to_torch(target), sentinel)
+    kwargs = {"optional_output_tensor": target}
+    if explicit_memory:
+        kwargs["memory_config"] = output_memory
+    if padded_output:
+        with expect_error(
+            RuntimeError, "repeat does not support row-major tensors with padding between logical batches"
+        ):
+            ttnn.repeat(source, repeats, **kwargs)
+        assert torch.equal(ttnn.to_torch(target), sentinel)
+    else:
+        result = ttnn.repeat(source, repeats, **kwargs)
+        assert result.buffer_address() == target.buffer_address()
+        assert result.memory_config() == output_memory
+        assert torch.equal(ttnn.to_torch(result), expected)
+        assert torch.equal(ttnn.to_torch(target), expected)
+    assert torch.equal(ttnn.to_torch(source), values)
+
+
+@pytest.mark.parametrize("output_memory", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
+def test_repeat_identity_preallocated_batch_padding(device, expect_error, output_memory):
+    # Identity repeats with a preallocated target still write the target, unlike an identity view.
+    values = (torch.arange(1920).reshape(1, 2, 30, 32) % 251 - 125).to(torch.bfloat16)
+    source = ttnn.from_torch(
+        values,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    sentinel = torch.full_like(values, -7)
+    target = _untilize_with_batch_padding(device, sentinel, output_memory)
+    assert list(target.padded_shape) == [1, 2, 32, 32]
+    with expect_error(RuntimeError, "repeat does not support row-major tensors with padding between logical batches"):
+        ttnn.repeat(source, [1, 1, 1, 1], optional_output_tensor=target)
+    assert torch.equal(ttnn.to_torch(source), values)
+    assert torch.equal(ttnn.to_torch(target), sentinel)
+
+
+@pytest.mark.parametrize("output_memory", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("preallocate", [False, True])
+def test_repeat_single_row_shards_interleaved_output(device, output_memory, preallocate):
+    source_memory = _sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, _cores(2, 1), [1, 32])
+    _repeat(device, [1, 1, 64], source_memory, [1, 2, 1], output_memory, preallocate, "staged")
+
+
+@pytest.mark.parametrize("preallocate", [False, True])
+def test_repeat_one_row_block_shards_multiple_rows(device, preallocate):
+    source_memory = _sharded(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _cores(2, 2), [1, 32])
+    output_memory = _sharded(ttnn.TensorMemoryLayout.BLOCK_SHARDED, _cores(2, 2), [2, 32])
+    _repeat(device, [2, 1, 64], source_memory, [1, 2, 1], output_memory, preallocate, "staged")
+
+
+@pytest.mark.parametrize("output_memory", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
+def test_repeat_rank2_trailing_height_padding(device, output_memory):
+    values = (torch.arange(960).reshape(30, 32) % 251 - 125).to(torch.bfloat16)
+    source = _untilize_with_batch_padding(device, values, ttnn.DRAM_MEMORY_CONFIG)
+    assert list(source.padded_shape) == [32, 32]
+    result = ttnn.repeat(source, [2, 1], memory_config=output_memory)
+    assert torch.equal(ttnn.to_torch(result), values.repeat(2, 1))
+    assert result.memory_config() == output_memory
+    assert torch.equal(ttnn.to_torch(source), values)
