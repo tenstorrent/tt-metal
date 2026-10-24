@@ -23,6 +23,8 @@ struct UpdateKVCacheOperation {
     using operation_attributes_t = KvCacheParams;
     using tensor_args_t = KvCacheInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
+    // The device-operation topology hook currently accepts this exact vector type.
+    using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<UpdateCacheMultiCoreProgramFactory, FillCacheMultiCoreProgramFactory>;
 
@@ -32,6 +34,8 @@ struct UpdateKVCacheOperation {
     static spec_return_value_t compute_output_specs(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static tensor_return_value_t create_output_tensors(
+        const operation_attributes_t& args, const tensor_args_t& tensor_args);
+    static topology_return_value_t compute_output_topologies(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
