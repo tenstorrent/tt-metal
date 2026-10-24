@@ -43,6 +43,25 @@ TABLE = {
     ),
     "MLP_FIDELITY": Setting("HiFi4", ("HiFi4", "HiFi2", "LoFi"), "ENGINEER rule 7: gate/up/down matmuls at HiFi4"),
     "MLP_FP32_ACC": Setting(True, None, "ENGINEER rule 7: fp32 accumulation by default"),
+    "ATTN_FIDELITY": Setting(
+        "HiFi4", ("HiFi4", "HiFi2", "LoFi"), "ENGINEER rule 7: full-attention projections, q/k norms and RoPE at HiFi4"
+    ),
+    "ATTN_FP32_ACC": Setting(True, None, "ENGINEER rule 7: fp32 accumulation by default"),
+    "ATTN_SDPA_FIDELITY": Setting("HiFi4", ("HiFi4", "HiFi2", "LoFi"), "ring SDPA matmuls (QK^T, PV)"),
+    "ATTN_SDPA_FP32_ACC": Setting(
+        True,
+        None,
+        "ring SDPA fp32 DEST (the op's legacy compute path). False selects its streaming kernel (faster, bf16 DEST; "
+        "the only path that takes kv_actual_isl, i.e. a chunk start that is not a multiple of the chunk)",
+    ),
+    "ATTN_SDPA_Q_CHUNK": Setting(
+        64,
+        (64, 128, 256),
+        "ring SDPA q chunk (rows of the 640-row local Q slab). At fp32 DEST and head_dim 256, q128/k128 does not "
+        "build: the kernels' text is 73.9 KB of a 70.6 KB kernel-config buffer (C.attn.attention); q64/k64 does",
+    ),
+    "ATTN_SDPA_K_CHUNK": Setting(64, (64, 128, 256), "ring SDPA k chunk; see ATTN_SDPA_Q_CHUNK"),
+    "ATTN_RING_LINKS": Setting(1, (1, 2), "fabric links of the ring SDPA's KV all-gather over axis 0"),
 }
 
 MAX_PRECISION = {
@@ -55,6 +74,10 @@ MAX_PRECISION = {
     "GDN_FP32_ACC": True,
     "GDN_CHAIN_FIDELITY": "HiFi4",
     "GDN_DELTA_CHUNK": 64,
+    "ATTN_FIDELITY": "HiFi4",
+    "ATTN_FP32_ACC": True,
+    "ATTN_SDPA_FIDELITY": "HiFi4",
+    "ATTN_SDPA_FP32_ACC": True,
 }
 
 settings = Settings("QWEN38_27B_", TABLE, max_precision=MAX_PRECISION)

@@ -67,3 +67,28 @@
 - Gate: PCC 0.999985, rel vs CPU 0.0054 (limit 0.0113), vs golden 0.0056, ratio [0.9959, 1.0033], worst column
   0.010 (col 3812), auto_margin_min 2.11, 7 device ops, host flops 0. Re-run:
   `bfw job check --task C.linear.mlp --gate-only`.
+
+## C.attn.attention (layer 3)
+
+- `tt/attention.py:TtGatedAttention`: no prior; composed from gpt_oss_d_p `dense_sp.py` / `kv_cache.py` (ring SDPA
+  over a block-cyclic served cache) and qwen36 `rope_tp.py` (partial RoPE). Per chip 6 q heads (+ 6 gates) and 1 kv
+  head (TP column), 640 local rows (SP row). Ops: one fused q|k|v|gate `ttnn.linear` (per column q 1536 | k 256 |
+  v 256 | gate 1536, the checkpoint's per-head [q | gate] rows split at load; weight [K, N] bfp8) ->
+  `nlp_create_qkv_heads` -> per-head `rms_norm` with a (1 + w) fp32 gamma -> `rotary_embedding_hf` on the first 64
+  dims + concat -> K/V typecast bfp8 and `update_padded_kv_cache` (kv_actual_global = start, cluster_axis 0) ->
+  `ring_joint_scaled_dot_product_attention` (cluster_axis 0, Linear, causal, logical_n = start + 5120,
+  kv_cache_batch_idx / num_layers / layer_idx) -> `nlp_concat_heads` * sigmoid(gate) -> o_proj (weight [N, K], read
+  with transpose_b) -> fp32 `all_reduce` axis 1 -> bf16.
+- RoPE: cos/sin are built at load in each SP row's cache order (`blockcyclic_positions`, equal to deepseek's helper),
+  sharded over axis 0, so the forward takes one device slice at rows [start / 8, start / 8 + 640) on every chip.
+- Cache: the served layout from the start (bfp8, ND-sharded [1, 1, 32, 256] ROUND_ROBIN_1D, user-major batch
+  slot * layers + layer, capacity rounded up to whole chunks). The hook loads the golden prefix [0, start) into it
+  once per call at the harness boundary (`cache_from_host`) and passes `start` as a host int.
+- Ring SDPA at fp32 DEST (max precision, `ATTN_SDPA_FP32_ACC`): q128/k128 fails to build ("Program size (73904) too
+  large for kernel config buffer (70656)", kernel text of ring_joint reader/writer/compute); q64/k64 builds
+  (`ATTN_SDPA_Q_CHUNK` / `ATTN_SDPA_K_CHUNK` default 64). fp32 DEST runs the op's legacy compute, which refuses
+  `kv_actual_isl` (a start that is not a whole chunk); the module asserts start % chunk == 0. The serving contract's
+  pad tail (actual_end, zeroing the last record) is not built here yet.
+- Gate: PCC 0.999982; vs CPU rel 0.0042 (limit 0.0142); vs golden rel 0.0059 (limit 0.0183); chunk0 / layer0 /
+  mixed / small / big all pass; auto_margin_min 1.21; 27 device ops, host FLOPs 0; bit-identical determinism.
+  Re-run: `bfw job check --task C.attn.attention --gate-only`.

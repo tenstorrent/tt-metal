@@ -62,6 +62,8 @@ def device_component(mesh, spec, layer, step):
         mod = TtMlp(mesh, _layer_weights(spec, layer, names))
     elif step == "attention" and cfg.is_linear(layer):
         return _linear_attention_component(mesh, spec, cfg, layer)
+    elif step == "attention":
+        return _full_attention_component(mesh, spec, cfg, layer)
     elif step in ("attn_residual", "mlp_residual"):
         from models.demos.qwen38_27b.tt.residual import TtResidualAdd
 
@@ -109,6 +111,35 @@ def _linear_attention_component(mesh, spec, cfg, layer):
             "conv": _conv_to_host(mesh, mod, new.conv),
             "recurrent": _rec_to_host(mesh, new.recurrent),
         }
+        return _rows_to_host(mesh, out)
+
+    return fn
+
+
+def _full_attention_component(mesh, spec, cfg, layer):
+    """Gated full attention on device. The KV prefix [0, start) comes from the context (the golden ``state_prefix``,
+    none at start 0) and goes into the served block-cyclic cache once per call at the harness boundary; the module
+    writes this chunk's K/V into that cache and attends over [0, start + chunk)."""
+    from models.demos.qwen38_27b.reference.model import ATTN_NAMES
+    from models.demos.qwen38_27b.tt.attention import TtGatedAttention
+
+    mods, weights = {}, {}
+
+    def fn(ctx, x):
+        S = x.shape[-2]
+        extra = ctx.extra or {}
+        capacity = -(-max(int(extra.get("max_seq") or 0), ctx.start + S) // S) * S
+        if (S, capacity) not in mods:
+            if not weights:
+                weights.update(_layer_weights(spec, layer, ATTN_NAMES))
+            mods[(S, capacity)] = TtGatedAttention(mesh, weights, cfg, S, capacity)
+        mod = mods[(S, capacity)]
+        prefix = extra.get("state_prefix") if ctx.start else None
+        cache = mod.cache_from_host(
+            None if prefix is None else prefix["key"], None if prefix is None else prefix["value"], ctx.start
+        )
+        with _ops_visible():
+            out = mod(_rows_to_device(mesh, x), cache, ctx.start)
         return _rows_to_host(mesh, out)
 
     return fn
