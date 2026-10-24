@@ -324,7 +324,7 @@ extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsign
 
 #define TT_OP_MVMULDI(clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst) \
     TT_OP(0x25, (((clear_dvalid) << 22) + ((ins_mod) << 19) + ((srcb_addr) << 15) + ((srca_addr) << 11) + ((addr_mode) << 8) + ((dst) << 0)))
-#define TT_MVMULDI(IP, clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst) \
+#define TT_IP_MVMULDI(IP, clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst) \
     TT_IP_INSN(IP, TT_OP_MVMULDI(clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst))
 #define TT_MVMULDI(clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst) \
     TT_IP_MVMULDI(::ckernel::instrn_buffer, clear_dvalid, ins_mod, srcb_addr, srca_addr, addr_mode, dst)
@@ -333,7 +333,7 @@ extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsign
 
 #define TT_OP_NOP     TT_OP(0x02, 0)
 #define TT_IP_NOP(IP) TT_IP_INSN(IP, TT_OP_NOP)
-#define TT_NOP        TT_OP_NOP(::ckernel::instrn_buffer)
+#define TT_NOP        TT_IP_NOP(::ckernel::instrn_buffer)
 #define TTI_NOP       TT_IP_NOP(nullptr)
 
 #define TT_OP_PACR0_FACE(Dst_Face_Idx, Src_Face_Idx, Dst_Tile_Offset_Idx_Inc, Src_Tile_Offset_Idx_Inc, Buffer_Descriptor_Table_Sel, ClrDatValid) \
@@ -761,13 +761,13 @@ extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsign
 #define TTI_RESOURCEDECL(linger_time, resources, op_class)       TT_IP_RESOURCEDECL(nullptr, linger_time, resources, op_class)
 
 #define TT_OP_RMWCIB0(CfgRegAddr, Mask, Data) TT_OP(0xb2, (((CfgRegAddr) << 16) + ((Mask) << 8) + ((Data) << 0)))
-#define TT_IP_RMWCIB0(CfgRegAddr, Mask, Data) TT_IP_INSN(IP, TT_OP_RMWCIB0(CfgRegAddr, Mask, Data))
+#define TT_IP_RMWCIB0(IP, CfgRegAddr, Mask, Data) TT_IP_INSN(IP, TT_OP_RMWCIB0(CfgRegAddr, Mask, Data))
 #define TT_RMWCIB0(CfgRegAddr, Mask, Data)    TT_IP_RMWCIB0(::ckernel::instrn_buffer, CfgRegAddr, Mask, Data)
 #define TTI_RMWCIB0(CfgRegAddr, Mask, Data)   TT_IP_RMWCIB0(nullptr, CfgRegAddr, Mask, Data)
 
 #define TT_OP_RMWCIB0_BUT_ALIAS_BIT_8_OF_CFG_REG_ADDR_WITH_LSB_OF_OPCODE(CfgRegAddr, Mask, Data) \
     TT_OP(0xb3, (((CfgRegAddr) << 16) + ((Mask) << 8) + ((Data) << 0)))
-#define TT_IP_RMWCIB0_BUT_ALIAS_BIT_8_OF_CFG_REG_ADDR_WITH_LSB_OF_OPCODE(CfgRegAddr, Mask, Data) \
+#define TT_IP_RMWCIB0_BUT_ALIAS_BIT_8_OF_CFG_REG_ADDR_WITH_LSB_OF_OPCODE(IP, CfgRegAddr, Mask, Data) \
     TT_IP_INSN(IP, TT_OP_RMWCIB0_BUT_ALIAS_BIT_8_OF_CFG_REG_ADDR_WITH_LSB_OF_OPCODE(CfgRegAddr, Mask, Data))
 #define TT_RMWCIB0_BUT_ALIAS_BIT_8_OF_CFG_REG_ADDR_WITH_LSB_OF_OPCODE(CfgRegAddr, Mask, Data) \
     TT_IP_RMWCIB0_BUT_ALIAS_BIT_8_OF_CFG_REG_ADDR_WITH_LSB_OF_OPCODE(::ckernel::instrn_buffer, CfgRegAddr, Mask, Data)
@@ -781,7 +781,7 @@ extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsign
 
 #define TT_OP_RMWCIB1_BUT_ALIAS_BIT_8_OF_CFG_REG_ADDR_WITH_LSB_OF_OPCODE(CfgRegAddr, Mask, Data) \
     TT_OP(0xb5, (((CfgRegAddr) << 16) + ((Mask) << 8) + ((Data) << 0)))
-#define TT_IP_RMWCIB1_BUT_ALIAS_BIT_8_OF_CFG_REG_ADDR_WITH_LSB_OF_OPCODE(CfgRegAddr, Mask, Data) \
+#define TT_IP_RMWCIB1_BUT_ALIAS_BIT_8_OF_CFG_REG_ADDR_WITH_LSB_OF_OPCODE(IP, CfgRegAddr, Mask, Data) \
     TT_IP_INSN(IP, TT_OP_RMWCIB1_BUT_ALIAS_BIT_8_OF_CFG_REG_ADDR_WITH_LSB_OF_OPCODE(CfgRegAddr, Mask, Data))
 #define TT_RMWCIB1_BUT_ALIAS_BIT_8_OF_CFG_REG_ADDR_WITH_LSB_OF_OPCODE(CfgRegAddr, Mask, Data) \
     TT_IP_RMWCIB1_BUT_ALIAS_BIT_8_OF_CFG_REG_ADDR_WITH_LSB_OF_OPCODE(::ckernel::instrn_buffer, CfgRegAddr, Mask, Data)

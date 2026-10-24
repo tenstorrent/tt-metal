@@ -650,9 +650,9 @@ extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsign
 #define TT_IP_SETDMAREG(IP, Payload_SigSelSize, Payload_SigSel, SetSignalsMode, RegIndex16b) \
     TT_IP_INSN(IP, TT_OP_SETDMAREG(Payload_SigSelSize, Payload_SigSel, SetSignalsMode, RegIndex16b))
 #define TT_SETDMAREG(Payload_SigSelSize, Payload_SigSel, SetSignalsMode, RegIndex16b) \
-    TT_IP_SETDMAREG(::ckernel::instrn_buffer, Payload_SigSelSize, Payload_SigSel, SetSignalsMode, RegIndex16b))
+    TT_IP_SETDMAREG(::ckernel::instrn_buffer, Payload_SigSelSize, Payload_SigSel, SetSignalsMode, RegIndex16b)
 #define TTI_SETDMAREG(Payload_SigSelSize, Payload_SigSel, SetSignalsMode, RegIndex16b) \
-    TT_IP_SETDMAREG(nullptr, Payload_SigSelSize, Payload_SigSel, SetSignalsMode, RegIndex16b))
+    TT_IP_SETDMAREG(nullptr, Payload_SigSelSize, Payload_SigSel, SetSignalsMode, RegIndex16b)
 
 #define TT_OP_SETDVALID(setvalid)     TT_OP(0x57, (((setvalid) << 0)))
 #define TT_SETDVALID_VALID(setvalid)  (ckernel::is_valid(setvalid, 24))
