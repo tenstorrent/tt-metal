@@ -182,10 +182,10 @@ So:
 
 | piece | what it does |
 |---|---|
-| [utils/profiler_utils.py](../../utils/profiler_utils.py) | `zone(name, level)` context manager: emits `M3_ZONE_START/END <name>` Tracy signposts (+ a host Tracy zone). No-op unless `M3_PROFILE_ZONES=1` and `level <= M3_PROFILE_LEVEL`. |
+| [utils/profiler_utils.py](../../utils/profiler_utils.py) | the M3 `ZoneSpec` (signpost prefix, env vars, `dense`/`sparse` classes, comm/memory keys) and the `zone(name, level)` context manager from [common/prefill/profiling/zones.py](../../../common/prefill/profiling/zones.py): emits `M3_ZONE_START/END <name>` Tracy signposts (+ a host Tracy zone). No-op unless `M3_PROFILE_ZONES=1` and `level <= M3_PROFILE_LEVEL`. |
 | [profile_prefill.py](profile_prefill.py) | warmup → fill cache to N tokens (un-profiled) → run ONE chunk inside a `profiled_chunk` zone, with the profiler drained per layer BEFORE the chunk and flushed once after it. |
-| [parse_zone_perf.py](parse_zone_perf.py) | streams the ops CSV, rebuilds the zone hierarchy from the signpost rows, rolls up ns / ops / bytes / GB/s per zone per device. Also a library. |
-| [visualize_zones.py](visualize_zones.py) | the render step: text table + standalone HTML with the per-layer breakdown, per-chip spread, op-level detail and device-busy accounting. |
+| [parse_zone_perf.py](parse_zone_perf.py) | shim over [common/prefill/profiling/parse_zone_perf.py](../../../common/prefill/profiling/parse_zone_perf.py) (shared with GPT-OSS): streams the ops CSV once, rebuilds the zone hierarchy from the signpost rows, rolls up ns / ops / bytes / GB/s per zone per device and per layer class (each layer read on one device, parent-only ops in a `(self)` bucket), flags truncated captures and profiler-buffer overflow. |
+| [visualize_zones.py](visualize_zones.py) | shim over [common/prefill/profiling/visualize_zones.py](../../../common/prefill/profiling/visualize_zones.py): text table + standalone HTML with the per-layer breakdown, per-chip spread, op-level detail, device-busy accounting and capture warnings. |
 
 Attribution: CSV rows are in host-enqueue order, so the ops between a zone's START and END signposts
 are exactly the ops that zone enqueued. Each op is charged to the innermost open zone and every

@@ -106,29 +106,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_sfpu/ckernel_sfpu_fill.h"
 #include "params.h"
-
-// NOTE: we deliberately do NOT include "sfpu/ckernel_sfpu_fill.h" here. In this
-// environment the installed SFPI predates the sfpi::DataLayout enum, so the
-// header's _calculate_fill_int_ template body fails to parse under
-// -Wtemplate-body -Werror (sfpi::DataLayout::I32 / ::U16 are unknown), which
-// breaks the whole translation unit even though this kernel only needs the
-// float fill. We redeclare just the float _calculate_fill_ (identical to the
-// header's lines 16-27) in the same namespace; it depends only on sfpi::vFloat
-// and sfpi::dst_reg and never touches DataLayout.
-namespace ckernel::sfpu
-{
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_fill_(const float value)
-{
-    sfpi::vFloat fill_val = value;
-    for (int d = 0; d < ITERATIONS; d++)
-    {
-        sfpi::dst_reg[0] = fill_val;
-        sfpi::dst_reg++;
-    }
-}
-} // namespace ckernel::sfpu
 
 // Scaler multiplier applied to the reduction (matches the Compute API default).
 // scaler == 1.0 => scaler^2 == 1.0, so the golden is a plain sum(A).
