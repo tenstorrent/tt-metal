@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <experimental/type_traits>
 #include <map>
 #include <memory>
@@ -1369,6 +1370,12 @@ inline hash_t hash_object(const T& object) noexcept {
             fmt::print("Hashing integer of type {}: {}\n", get_type_name<T>(), object);
         }
         return object;
+    } else if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing floating point of type {}: {}\n", get_type_name<T>(), object);
+        }
+        // By bit pattern: std::hash gives -0.0 and +0.0 one key, but a program built with either keeps its sign.
+        return std::bit_cast<std::conditional_t<sizeof(T) == 4, std::uint32_t, std::uint64_t>>(object);
     } else if constexpr (ttsl::reflection::detail::is_reflective_shared_ptr_v<T>) {
         // Ahead of the std::hash branch on purpose: std::hash<std::shared_ptr<T>> exists and hashes
         // the address, which would key a reflective handle on where it was allocated. Null hashes to

@@ -90,18 +90,12 @@ Accuracy criteria (FTZ = flush-to-zero, SNB = smallest normal bfloat16)
 |                          | [RELU, TYPECAST(bfloat16)]     | exact                          |
 
 Scalar parameters reach the float32 kernel at full float32 precision, so
-goldens are given the same Python floats. A -0.0 scalar comes back as +0.0
-from threshold and clamp; the select ops are compared by bit pattern so the
-sign of zero is part of the check.
+goldens are given the same Python floats. The select ops are compared by bit
+pattern so the sign of zero is part of the check.
 """
 
 
 FLT_MAX = torch.finfo(torch.float32).max
-
-
-def _canonicalize_negative_zero(tensor):
-    """Map -0.0 to +0.0, which is what the device does to a -0.0 scalar parameter."""
-    return torch.where(tensor == 0, torch.zeros_like(tensor), tensor)
 
 
 def _assert_bitwise_equal(result, golden, label):
@@ -219,8 +213,7 @@ def test_clamp_clip_scalar(device, ttnn_op, min_val, max_val):
 
     | Input range | Check               | Reason                                    |
     |-------------|---------------------|-------------------------------------------|
-    | all         | exact (bit pattern) | every output is x or a bound; a -0.0      |
-    |             |                     | bound comes back as +0.0                  |
+    | all         | exact (bit pattern) | every output is x or a bound              |
 
     degenerate (min > max) collapses to a constant. inexact_* bounds are not
     bfloat16 values. max_bounds and tiny_bounds are the ends of the normal range.
@@ -233,7 +226,7 @@ def test_clamp_clip_scalar(device, ttnn_op, min_val, max_val):
 
     result = ttnn.to_torch(ttnn_op(tt_in, min_val, max_val))
 
-    _assert_bitwise_equal(result, _canonicalize_negative_zero(golden), f"{ttnn_op.__name__}({min_val}, {max_val})")
+    _assert_bitwise_equal(result, golden, f"{ttnn_op.__name__}({min_val}, {max_val})")
 
 
 @pytest.mark.parametrize("ttnn_op", [ttnn.clamp, ttnn.clip])
@@ -273,8 +266,7 @@ def test_threshold(device, threshold_val, value):
 
     | Input range | Check               | Reason                                   |
     |-------------|---------------------|------------------------------------------|
-    | all         | exact (bit pattern) | every output is x or value; value = -0.0 |
-    |             |                     | comes back as +0.0                       |
+    | all         | exact (bit pattern) | every output is x or value               |
     """
     input_tensor = generate_float32_bits()
 
@@ -284,7 +276,7 @@ def test_threshold(device, threshold_val, value):
 
     result = ttnn.to_torch(ttnn.threshold(tt_in, threshold_val, value))
 
-    _assert_bitwise_equal(result, _canonicalize_negative_zero(golden), f"threshold({threshold_val}, {value})")
+    _assert_bitwise_equal(result, golden, f"threshold({threshold_val}, {value})")
 
 
 def _tril_triu_input():
