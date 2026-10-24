@@ -14,6 +14,9 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/op_params.hpp"  // Approx
+#ifndef ARCH_QUASAR
+#include "sfpu_mode.h"  // ckernel::SfpuMode
+#endif
 
 namespace compute_kernel_lib {
 
@@ -32,6 +35,11 @@ struct Sqrt;
 // ---- Recip (1/x) ----
 template <Dst Slot = Dst::D0>
 struct Recip;
+#ifndef ARCH_QUASAR
+// Recip with an explicit SFPU instruction sequence; see recip_tile<SfpuMode> for the per-mode contract.
+template <ckernel::SfpuMode MODE, Dst Slot = Dst::D0>
+struct RecipMode;
+#endif
 
 // ---- Rsqrt ----
 template <Approx fast = Approx::Exact, Dst Slot = Dst::D0>

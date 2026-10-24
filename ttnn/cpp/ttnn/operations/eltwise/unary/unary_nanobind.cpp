@@ -212,6 +212,12 @@ void bind_unary_operation_overload_complex_return_complex(
             input_tensor (ttnn.Tensor or ComplexTensor): the input tensor.
 
         Keyword Args:
+            sfpu_mode (ttnn.SfpuMode, optional): SFPU instruction sequence to run (``ttnn.Tensor`` input only). When
+                omitted, the legacy sequence runs (`PreciseRelaxed` under the default compute configuration).
+                `Approximate*` runs a cheaper reciprocal (Blackhole: SFPARECIP alone, ~7 bits; Wormhole: one Newton
+                step); `Precise*` the accurate one. All modes: +-0 -> +-inf, +-inf -> +-0, abs(x) >= 2**126 -> +-0.
+                `*Strict` also returns NaN for NaN; `*Relaxed` returns 0 for NaN, so its input must not contain NaN
+                (on Blackhole, Relaxed keeps the fast fixed-schedule pipelines). Supported on Wormhole and Blackhole.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`. When ``input_tensor`` is a ``ComplexTensor``, this argument is not supported.
@@ -256,7 +262,21 @@ void bind_unary_operation_overload_complex_return_complex(
             nb::overload_cast<const ComplexTensor&, const ttnn::MemoryConfig&>(&ttnn::reciprocal),
             nb::arg("input_tensor"),
             nb::kw_only(),
-            nb::arg("memory_config")});
+            nb::arg("memory_config")},
+        // SFPU instruction-sequence selector; see bind_unary_operation_with_sfpu_mode.
+        ttnn::overload_t{
+            nb::overload_cast<
+                const Tensor&,
+                tt::tt_metal::SfpuMode,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&,
+                const std::optional<CoreRangeSet>&>(&ttnn::reciprocal),
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("sfpu_mode").noconvert(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()});
 }
 
 template <ttnn::unique_string OpName, auto Func>
@@ -989,6 +1009,126 @@ void bind_gelu(nb::module_& mod) {
             nb::arg("sub_core_grids") = nb::none()));
 }
 
+using UnaryLegacyFn = Tensor (*)(
+    const Tensor&,
+    const std::optional<tt::tt_metal::MemoryConfig>&,
+    const std::optional<Tensor>&,
+    const std::optional<CoreRangeSet>&);
+using UnarySfpuModeFn = Tensor (*)(
+    const Tensor&,
+    tt::tt_metal::SfpuMode,
+    const std::optional<tt::tt_metal::MemoryConfig>&,
+    const std::optional<Tensor>&,
+    const std::optional<CoreRangeSet>&);
+
+// Binds a unary op that takes an optional SFPU instruction-sequence selector (utils::supports_sfpu_mode). The two
+// overloads keep the legacy call unchanged: without sfpu_mode, nanobind resolves to the first, which emits the
+// plain <op>_tile(); with it, to the second, which emits <op>_tile<SfpuMode>(). sfpu_mode is noconvert, so an int
+// or bool is never taken for a mode.
+template <ttnn::unique_string OpName, UnaryLegacyFn LegacyFunc, UnarySfpuModeFn ModeFunc>
+void bind_unary_operation_with_sfpu_mode(nb::module_& mod, const char* doc) {
+    ttnn::bind_function<OpName>(
+        mod,
+        doc,
+        ttnn::overload_t(
+            LegacyFunc,
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()),
+        ttnn::overload_t(
+            ModeFunc,
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("sfpu_mode").noconvert(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()));
+}
+
+constexpr const char* SOFTSIGN_DOC = R"doc(
+        Applies softsign to :attr:`input_tensor` element-wise.
+
+        .. math::
+            \mathrm{output\_tensor}_i = \frac{\mathrm{input\_tensor}_i}{1 + |\mathrm{input\_tensor}_i|}
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword Args:
+            sfpu_mode (ttnn.SfpuMode, optional): SFPU instruction sequence to run. When omitted, the legacy
+                sequence runs (equivalent to `PreciseRelaxed` under the default compute configuration).
+
+                - `PreciseStrict`: two Newton steps for 1 / (1 + |x|); special values follow
+                  torch.nn.functional.softsign: +-0 -> +-0, NaN -> NaN, +-inf -> NaN, finite |x| >= 2**126 -> +-1.
+                - `ApproximateStrict`: a cheaper reciprocal (Blackhole: none, Wormhole: one Newton step);
+                  special values as `PreciseStrict`.
+                - `PreciseRelaxed`: as `PreciseStrict` without the special-value guard; the caller guarantees
+                  |x| < 2**126, and results outside that range are unspecified.
+                - `ApproximateRelaxed`: the fastest sequence; same input guarantee as `PreciseRelaxed`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, BFLOAT8_B, FLOAT32
+                 - TILE, ROW_MAJOR
+
+            `sfpu_mode` is supported on Wormhole and Blackhole.
+        )doc";
+
+constexpr const char* EXP2_DOC = R"doc(
+        Applies exp2 to :attr:`input_tensor` element-wise.
+
+        .. math::
+            \mathrm{output\_tensor}_i = 2^{\mathrm{input\_tensor}_i}
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword Args:
+            sfpu_mode (ttnn.SfpuMode, optional): SFPU instruction sequence to run. When omitted, `PreciseStrict` runs
+                (the legacy sequence).
+
+                - `PreciseStrict`: FLOAT32: degree-6 polynomial (~2 ulp); BFLOAT16: exp_21f in base 2. Special values:
+                  NaN -> NaN, x >= 128 or +inf -> +inf, x < -126 or -inf -> 0.
+                - `ApproximateStrict`: FLOAT32: degree-4 polynomial (max relative error ~2.9e-6); BFLOAT16: as
+                  `PreciseStrict`. Special values as `PreciseStrict`.
+                - `PreciseRelaxed`: as `PreciseStrict` without the special-value guards; the caller guarantees
+                  -126 <= x < 128, and results outside that range are unspecified.
+                - `ApproximateRelaxed`: the fastest sequence; same input guarantee as `PreciseRelaxed`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, BFLOAT8_B, FLOAT32
+                 - TILE, ROW_MAJOR
+
+            `sfpu_mode` is supported on Wormhole and Blackhole.
+        )doc";
+
 // geglu is bound separately from the other GLU-family ops (glu/reglu/swiglu use
 // bind_unary_operation_with_dim_parameter) because it exposes the GELU variant selector.
 void bind_geglu(nb::module_& mod) {
@@ -1496,12 +1636,7 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}}_i = \verb|erfinv|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation_subcoregrids<"exp2">(
-        mod,
-        &ttnn::exp2,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|exp2|(\mathrm{{input\_tensor}}_i))doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation_with_sfpu_mode<"exp2", &ttnn::exp2, &ttnn::exp2>(mod, EXP2_DOC);
     bind_unary_operation_subcoregrids<"expm1">(
         mod,
         &ttnn::expm1,
@@ -1740,12 +1875,7 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}}_i = \verb|hardswish|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation_subcoregrids<"softsign">(
-        mod,
-        &ttnn::softsign,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|softsign|(\mathrm{{input\_tensor}}_i))doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation_with_sfpu_mode<"softsign", &ttnn::softsign, &ttnn::softsign>(mod, SOFTSIGN_DOC);
     bind_unary_operation_subcoregrids<"cbrt">(
         mod,
         &ttnn::cbrt,

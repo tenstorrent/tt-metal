@@ -57,6 +57,14 @@ struct Recip : UnaryOp<Recip<Slot>, Slot> {
     static ALWI void exec_impl(uint32_t slot_offset) { recip_tile(to_u32(Slot) + slot_offset); }
 };
 
+#ifndef ARCH_QUASAR
+template <ckernel::SfpuMode MODE, Dst Slot>
+struct RecipMode : UnaryOp<RecipMode<MODE, Slot>, Slot> {
+    static ALWI void init() { recip_tile_init<MODE>(); }
+    static ALWI void exec_impl(uint32_t slot_offset) { recip_tile<MODE>(to_u32(Slot) + slot_offset); }
+};
+#endif
+
 // ---- Rsqrt ----
 template <Approx fast, Dst Slot>
 struct Rsqrt : UnaryOp<Rsqrt<fast, Slot>, Slot> {

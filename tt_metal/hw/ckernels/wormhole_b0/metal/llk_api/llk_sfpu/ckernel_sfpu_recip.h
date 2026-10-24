@@ -9,6 +9,7 @@
 #include "ckernel_defs.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
+#include "sfpu_mode.h"
 using namespace sfpi;
 
 namespace ckernel {
@@ -104,7 +105,9 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     return y;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
+// STRICT adds the one special value the scaled Newton sequence gets wrong: for NaN the scale factor is 0, so the
+// result would be +-0. With STRICT, NaN passes through.
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en, bool STRICT = false>
 inline void _calculate_reciprocal_internal_(const int iterations) {
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++) {
@@ -117,6 +120,10 @@ inline void _calculate_reciprocal_internal_(const int iterations) {
             out = sfpu_reciprocal_iter<2>(in);
         } else {
             out = sfpu_reciprocal_iter<1 /*max_iter*/, true /*round_to_bf16*/>(in);
+        }
+        if constexpr (STRICT) {
+            v_if(sfpi::is_nan(in)) { out = in; }
+            v_endif;
         }
         sfpi::dst_reg[0] = out;
         sfpi::dst_reg++;
@@ -156,6 +163,15 @@ inline void calculate_reciprocal() {
     _calculate_reciprocal_internal_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
 }
 
+// Full-tile reciprocal per SfpuMode (Wormhole): Approximate* runs one Newton step, Precise* two (fp32 Dest)
+// or one with BF16 rounding (bf16 Dest). +-0 -> +-inf and +-inf -> +-0 come from the power-of-two scale factor
+// every input needs. Strict adds NaN -> NaN; Relaxed returns +-0 for NaN and the caller vouches for no NaN input.
+// The legacy APPROXIMATION_MODE entry point is the Relaxed sequence.
+template <SfpuMode MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+inline void calculate_reciprocal() {
+    _calculate_reciprocal_internal_<is_approximate(MODE), ITERATIONS, is_fp32_dest_acc_en, is_strict(MODE)>(ITERATIONS);
+}
+
 // BF16 rounding is an explicit opt-in: compound callers may pass false for
 // is_fp32_dest_acc_en even when their reciprocal intermediate is FP32.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en /*maybe_unused*/, bool round_to_bf16 = false>
@@ -168,6 +184,13 @@ void recip_init() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<APPROXIMATION_MODE, round_to_bf16>();
+}
+
+// Full-tile init per SfpuMode. Matches what recip_tile_init passes the legacy init: the precise bf16 path
+// rounds its result to BF16 and needs the matching seed.
+template <SfpuMode MODE, bool is_fp32_dest_acc_en>
+void recip_init() {
+    recip_init<is_approximate(MODE), is_fp32_dest_acc_en, !is_approximate(MODE) && !is_fp32_dest_acc_en>();
 }
 
 }  // namespace sfpu

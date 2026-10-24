@@ -130,6 +130,24 @@ const char* bitwise_shift_data_format_str(UnaryOpType op_type, std::optional<Dat
     TT_THROW("Unsupported input dtype for bitwise/shift op_type {}: expected Int32, UInt32, or UInt16.", op_type);
 }
 
+// The kernel spelling of an SfpuMode carried as an op's params[0] (see supports_sfpu_mode). The host
+// tt::tt_metal::SfpuMode and the kernel-side ckernel::SfpuMode share enumerator names and values.
+template <typename T>
+const char* sfpu_mode_kernel_name(UnaryOpType op_type, T param) {
+    static constexpr const char* sfpu_mode_strs[] = {
+        "ckernel::SfpuMode::PreciseStrict",
+        "ckernel::SfpuMode::ApproximateStrict",
+        "ckernel::SfpuMode::PreciseRelaxed",
+        "ckernel::SfpuMode::ApproximateRelaxed"};
+    // Compare before converting, as RDIV does: it also rejects NaN and out-of-range values.
+    TT_FATAL(
+        param == T{0} || param == T{1} || param == T{2} || param == T{3},
+        "Invalid SfpuMode {} for {} (expected 0..3)",
+        param,
+        op_type);
+    return sfpu_mode_strs[static_cast<uint32_t>(param)];
+}
+
 template <typename T>
 std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     UnaryOpType op_type, std::span<const T> params, const std::string& idst, std::optional<DataType> input_dtype) {
@@ -299,6 +317,19 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             return {
                 fmt::format("tanh_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("tanh_tile<{1}u>({0});", idst, (uint32_t)param0)};
+        case UnaryOpType::SOFTSIGN: {
+            const char* mode = sfpu_mode_kernel_name(op_type, param0_raw);
+            return {
+                fmt::format("softsign_tile_init<{}>();", mode), fmt::format("softsign_tile<{1}>({0});", idst, mode)};
+        }
+        case UnaryOpType::EXP2: {
+            const char* mode = sfpu_mode_kernel_name(op_type, param0_raw);
+            return {fmt::format("exp2_tile_init<{}>();", mode), fmt::format("exp2_tile<{1}>({0});", idst, mode)};
+        }
+        case UnaryOpType::RECIP: {
+            const char* mode = sfpu_mode_kernel_name(op_type, param0_raw);
+            return {fmt::format("recip_tile_init<{}>();", mode), fmt::format("recip_tile<{1}>({0});", idst, mode)};
+        }
         case UnaryOpType::HEAVISIDE:
             return {
                 "heaviside_tile_init();",

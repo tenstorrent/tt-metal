@@ -39,6 +39,18 @@ std::map<std::string, std::string> get_block_defines(
     const std::string& idst = "0",
     std::optional<DataType> input_dtype = std::nullopt);
 
+// Ops whose kernel API takes an SFPU instruction-sequence selector. For these, params[0] -- when present --
+// is a tt::tt_metal::SfpuMode and lowers to <op>_tile<ckernel::SfpuMode::X>; without a parameter the op keeps
+// its legacy APPROX-driven call. Wormhole and Blackhole only.
+inline bool supports_sfpu_mode(UnaryOpType op_type) {
+    switch (op_type) {
+        case UnaryOpType::SOFTSIGN:
+        case UnaryOpType::EXP2:
+        case UnaryOpType::RECIP: return true;
+        default: return false;
+    }
+}
+
 template <typename T>
 bool is_parametrized_type(T val) {
     switch (val) {
@@ -90,6 +102,9 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::LOG2:
         case UnaryOpType::LOG1P:
         case UnaryOpType::TANH:
+        case UnaryOpType::SOFTSIGN:
+        case UnaryOpType::EXP2:
+        case UnaryOpType::RECIP:
         case UnaryOpType::SOFTSHRINK:
         case UnaryOpType::HARDSHRINK:
         case UnaryOpType::WHERE_TSS:
