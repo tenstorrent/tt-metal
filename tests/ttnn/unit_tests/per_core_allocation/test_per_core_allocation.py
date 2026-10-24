@@ -674,3 +674,18 @@ def test_triangle_allocation_then_uniform_sharded(device):
     for i in range(num_cores):
         assert triangle_tensors[i].is_allocated()
     assert sharded_tensor.is_allocated()
+
+
+@requires_hybrid_allocator
+def test_per_core_view_is_rejected(device):
+    core = ttnn.CoreCoord(0, 0)
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet([ttnn.CoreRange(core, core)]), [64, 64], ttnn.ShardOrientation.ROW_MAJOR
+    )
+    config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    config.experimental_set_per_core_allocation(True)
+    owner = ttnn.from_torch(
+        torch.randn(64, 64, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=config
+    )
+    with pytest.raises(RuntimeError, match="per-core allocated tensor"):
+        ttnn.experimental.view(owner, [128, 32])
