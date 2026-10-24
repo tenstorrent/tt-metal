@@ -23,6 +23,10 @@ void kernel_main() {
     // vs the FPU (tf32).
     constexpr auto fp32_mode = get_arg(args::enable_fp32_sfpu) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
 
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_scaler(dfb::scaler);
+    DataflowBuffer dfb_out(dfb::out);
+
     compute_kernel_hw_startup(dfb::in0, dfb::scaler, dfb::out);
 
     compute_kernel_lib::reduce<
@@ -34,6 +38,9 @@ void kernel_main() {
         compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT,
         fp32_mode>(
+        dfb_in0,
+        dfb_scaler,
+        dfb_out,
         compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC),
         compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
         compute_kernel_lib::NoAccumulation{},
@@ -60,6 +67,5 @@ void kernel_main() {
 
     // The reduce helper waits on the scaler buffer but never pops it (the single scaler tile is
     // reused for the whole reduction). Pop it here so the buffer is left balanced.
-    DataflowBuffer dfb_scaler(dfb::scaler);
     dfb_scaler.pop_front(1);
 }
