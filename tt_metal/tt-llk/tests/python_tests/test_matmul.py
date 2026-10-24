@@ -178,12 +178,14 @@ def test_matmul(
             *MATMUL_STREAM_Z.for_block(
                 formats, dest_acc, dest_sync, matmul_dims.ct_dim, matmul_dims.rt_dim,
                 math_fidelity=math_fidelity,
+                kt_dim=matmul_dims.kt_dim,
             ),
             *MATMUL_K_LOOP.for_block(
                 formats, dest_acc, math_fidelity, matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim
             ),
             *MATMUL_FORM_KEYS.for_block(
-                formats, matmul_dims.kt_dim, matmul_dims.ct_dim, matmul_dims.rt_dim
+                formats, matmul_dims.kt_dim, matmul_dims.ct_dim, matmul_dims.rt_dim,
+                math_fidelity=math_fidelity, dest_sync=dest_sync, dest_acc=dest_acc,
             ),
         ],
         runtimes=[
