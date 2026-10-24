@@ -16,7 +16,12 @@ import ttnn
 from conftest import reset_fabric, set_fabric
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from tests.scripts.common import get_updated_device_params
-from models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine import COMBINE_MODELS, _model_scaledown
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_combine import (
+    COMBINE_MODELS,
+    SINGLE_GLX_AND_PROXY_MESHES,
+    _model_scaledown,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     combine_overlap_payload_size,
     compute_constants,
@@ -32,6 +37,9 @@ _SEQ_LEN = 640
 _CAPACITY_FACTOR = 2
 _NUM_LINKS = 2
 _TRACE_REGION = 330000
+# kimi_k3 is not in COMBINE_MODELS: that list also parametrizes test_prefill_combine, and widening it
+# there is a change to that test rather than to this sweep.
+_MODELS = COMBINE_MODELS + [("kimi_k3", KimiK3Config, SINGLE_GLX_AND_PROXY_MESHES)]
 _TRAFFIC = {"balanced": None, "hot_expert": 0}
 _LAYOUTS = {"row_major": ttnn.ROW_MAJOR_LAYOUT, "tile": ttnn.TILE_LAYOUT}
 
@@ -102,7 +110,7 @@ def _shard(tensor, dims, dtype, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT):
     )
 
 
-def _check(output, payload, holder, page, kept, H, G, topk, emb_dim, label):
+def _check(output, payload, holder, page, kept, H, G, topk, token_dim, label):
     shards = ttnn.get_device_tensors(output)
     assert len(shards) == H * G, f"{label}: {len(shards)} shards for {H * G} chips"
     checked = 0
@@ -111,7 +119,7 @@ def _check(output, payload, holder, page, kept, H, G, topk, emb_dim, label):
         mask = kept[g, s]
         if not mask.any():
             continue
-        got = ttnn.to_torch(shard).reshape(_SEQ_LEN, topk, emb_dim)[mask]
+        got = ttnn.to_torch(shard).reshape(_SEQ_LEN, topk, token_dim)[mask]
         want = payload[holder[g, s][mask], g, page[g, s][mask]]
         assert torch.equal(
             got.view(torch.int16), want.view(torch.int16)
@@ -183,10 +191,13 @@ def _open_mesh(device_params, payload_size):
 )
 def test_ttnn_combine_sweep(device_params):
     failed = []
-    for model_name, config_class, test_meshes in (m for m in COMBINE_MODELS if m[0] in _axis("MODELS")):
+    for model_name, config_class, test_meshes in (m for m in _MODELS if m[0] in _axis("MODELS")):
         config = _model_scaledown(config_class(), test_meshes.full_model_mesh, _MESH, False)
+        # The routed side is what combine carries. K3 runs it in a latent space half the embedding
+        # width; tt_moe reads the same attribute the same way.
+        token_dim = getattr(config, "ROUTED_EXPERT_HIDDEN_SIZE", config.EMB_SIZE)
         mesh_device, fabric_config = _open_mesh(
-            device_params, max(moe_fabric_payload_size(config), combine_overlap_payload_size(config.EMB_SIZE))
+            device_params, max(moe_fabric_payload_size(config), combine_overlap_payload_size(token_dim))
         )
         try:
             cfg = extract_mesh_config(mesh_device)
@@ -205,7 +216,7 @@ def test_ttnn_combine_sweep(device_params):
                 "topk": config.NUM_EXPERTS_PER_TOKEN,
                 "fwd_reduction": config.COMBINE_FWD_REDUCTION,
             }
-            payload = torch.randn(H, G, capacity, config.EMB_SIZE, generator=torch.Generator().manual_seed(0)).to(
+            payload = torch.randn(H, G, capacity, token_dim, generator=torch.Generator().manual_seed(0)).to(
                 torch.bfloat16
             )
             routing = {
@@ -248,7 +259,7 @@ def test_ttnn_combine_sweep(device_params):
                                 H,
                                 G,
                                 config.NUM_EXPERTS_PER_TOKEN,
-                                config.EMB_SIZE,
+                                token_dim,
                                 name,
                             )
                             ttnn.deallocate(output)
