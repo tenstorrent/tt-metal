@@ -103,7 +103,6 @@ struct RingJointRuntimeArgLayout {
     uint32_t reader_scalars = 0;
     uint32_t writer_scalars = 0;
     uint32_t compute_scalars = 0;
-    CoreCoord grid_size = {0, 0};
 };
 
 // The runtime args that change between dispatches of one cached program (logical length, ring work masks, KV-pad Q
@@ -525,8 +524,6 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
     const bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
 
     RingJointRuntimeArgLayout layout;
-    layout.grid_size = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
-                                                       : tensor_args.input_q.device()->compute_with_storage_grid_size();
 
     const uint32_t joint_buffer_args = (joint_input_params.L != 0) ? kReaderJointBufferArgCount : 0;
     // 2 extra buffer slots for gathered_joint_k/v when the sharded-joint path is active
@@ -631,11 +628,13 @@ RingJointScalarBlocks ring_joint_scalar_blocks(
     };
 }
 
+// floaters: the program runs the floaters' kernel group (it has their scratch output).
 void apply_ring_joint_scalar_runtime_args(
     Program& program,
     const ttnn::prim::RingJointSDPAParams& args,
     const ttnn::prim::RingJointSDPAInputs& tensor_args,
-    const ttnn::MeshCoordinate& mesh_dispatch_coordinate) {
+    const ttnn::MeshCoordinate& mesh_dispatch_coordinate,
+    bool floaters) {
     const bool patch_indexed_kv_cache = args.has_indexed_kv_cache();
     const bool patch_kv_pad_rotation = args.has_kv_pad_rotation();
     if (!patch_indexed_kv_cache && !patch_kv_pad_rotation) {
@@ -856,11 +855,10 @@ void apply_ring_joint_scalar_runtime_args(
 
     // Written as whole blocks on every core, including inactive receivers.
     const RingJointScalarBlocks scalars = ring_joint_scalar_blocks(args, tensor_args, runtime_plan);
-    // The SDPA kernels, and with floaters (ring_joint_floaters.hpp) their kernel group after the
-    // dense gather's four kernels. A floater program's home kernels leave out the last grid column (all floaters), so
-    // their argument grid is narrower than the SDPA grid.
+    // The SDPA kernels, and with floaters (ring_joint_floaters.hpp) their kernel group after the dense gather's four
+    // kernels.
     std::vector<std::array<uint32_t, 3>> kernel_sets = {{kReaderKernelIndex, kWriterKernelIndex, kComputeKernelIndex}};
-    if (GetRuntimeArgs(program, kReaderKernelIndex).size() < layout.grid_size.x) {
+    if (floaters) {
         kernel_sets.push_back(
             {kFloaterReaderKernelIndex, kFloaterReaderKernelIndex + 1, kFloaterReaderKernelIndex + 2});
     }
@@ -1437,10 +1435,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         ring_joint_plan::floater_eligibility(args, tensor_args, ksplit);
     const bool floaters = floater_plan.has_value();
     const ring_joint::FloaterSchedule floater_schedule = floater_plan.value_or(ring_joint::FloaterSchedule{});
-    // The device operation allocates the scratch on a looser gate (ring_joint_floaters_may_run), which must cover this.
+    // The device operation allocates the scratch on the same eligibility, and cache hits tell floater programs by it.
     TT_FATAL(
-        !floaters || output_tensors.size() > RING_JOINT_SDPA_FLOATER_SCRATCH_IDX,
-        "ring_joint floaters: no scratch output; ring_joint_floaters_may_run must admit every floater program");
+        floaters == (output_tensors.size() > RING_JOINT_SDPA_FLOATER_SCRATCH_IDX),
+        "ring_joint floaters: the scratch output must exist exactly when floaters run");
     if (floaters) {
         // Homes merge the partials in the order of their pieces' iterations; every piece donates something, and a
         // home keeps part of every non-empty band (so a partial with state always has the home's own to merge into).
@@ -3401,11 +3399,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         std::vector<CoreRange> floater_ranges;
         std::vector<CoreRange> home_ranges;
         for (uint32_t c = 0; c < num_cores_all; ++c) {
-            const bool floater = floater_group_of[c] != kNoGroup;
-            // The cache-hit patch tells a floater program by its home kernels' narrower argument grid.
-            TT_FATAL(
-                floater || logical_core(c).x + 1 < grid_size.x, "ring_joint floaters: home core in the last column");
-            (floater ? floater_ranges : home_ranges).emplace_back(logical_core(c));
+            (floater_group_of[c] != kNoGroup ? floater_ranges : home_ranges).emplace_back(logical_core(c));
         }
         floater_reader_kernel = reader_kernel;
         floater_writer_kernel = writer_kernel;
@@ -4038,7 +4032,8 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
             "Expected RingJointSDPA cached programs to cover a single coordinate, got range {} to {}",
             coord,
             coordinate_range.end_coord());
-        apply_ring_joint_scalar_runtime_args(program, args, tensor_args, coord);
+        apply_ring_joint_scalar_runtime_args(
+            program, args, tensor_args, coord, output_tensors.size() > RING_JOINT_SDPA_FLOATER_SCRATCH_IDX);
     }
 }
 

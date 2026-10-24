@@ -4169,6 +4169,29 @@ def test_ring_joint_attention_chunked_expanded_k_short_prompt_accuracy(model_nam
 
 
 @pytest.mark.timeout(1800)
+def test_ring_joint_attention_chunked_expanded_k_linear_without_floaters_accuracy():
+    """Kimi K3 expanded K on a linear fabric: no slice readiness, so no floaters, and no floater scratch output (the
+    factory checks the scratch exists exactly when floaters run)."""
+    q_chunk, k_chunk, k_splits = expanded_k_production_chunks("kimi_k3_expanded_k")
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, topology=Topology.Linear)
+    try:
+        run_ring_joint_sdpa_chunked(
+            MESH_CONFIG,
+            EXPANDED_K_CHUNKED_MODEL_CONFIGS["kimi_k3_expanded_k"],
+            chunk_size=CHUNKED_PREFILL_CHUNK_SIZE,
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+            k_splits=k_splits,
+            reuse_kv_buffer=True,
+            persistent_buffer_mode="reuse_max",
+            chunk_indices=[0, 1],
+            runtime=runtime,
+        )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
+@pytest.mark.timeout(1800)
 def test_ring_joint_attention_chunked_unrolled_v_ksplit2_accuracy():
     """K split in two bands (24 heads in q320: 48 units on 5 of 10 rows), beside the production three-band split."""
     model = UNROLLED_V_CHUNKED_MODEL_CONFIGS["kimi_k3_unrolled_v"]
