@@ -48,6 +48,29 @@ constexpr bool bmm_main_form =
       unpack_src_format[dfb::in0] != (uint8_t)DataFormat::Bfp4_b && unpack_src_format[dfb::in1] != (uint8_t)DataFormat::Bfp4_b));
 #endif
 #if defined(UCK_CHLKC_PACK)
+constexpr bool bmm_k_loop_format = false;
+constexpr bool bmm_k_loop_cell = false;
+#else
+// k loop: one unpack and math call for the whole inner block where the unpack call per k step bounds the sub block (the
+// harness key MATMUL_K_LOOP, test_variant_parameters.py): 32x32 tiles of one 16-bit, Bfp8_b (16-bit DEST) or Float32
+// (32-bit DEST) format, LoFi and HiFi2 on one-tile sub blocks from in0_block_w 4; LoFi on 2x1 from 8 and on 1x2 and 2x2 from 16
+// over a single inner block (with several the partials reload dominates and the k loop reads equal). The cells the ttsync form
+// takes (bmm_ttsync_form) stay on it: it reads faster at one tile row of in0 and at LoFi from k 16 (ttnn, ABBA).
+constexpr bool bmm_k_loop_format =
+    unpack_src_format[dfb::in0] == unpack_src_format[dfb::in1] && unpack_src_format[dfb::in0] == unpack_src_format[dfb::out] &&
+    unpack_tile_r_dim[dfb::in0] == 32 && unpack_tile_c_dim[dfb::in0] == 32 && unpack_tile_r_dim[dfb::in1] == 32 &&
+    unpack_tile_c_dim[dfb::in1] == 32 &&
+    ((unpack_src_format[dfb::in0] == (uint8_t)DataFormat::Float16_b) ||
+     (unpack_src_format[dfb::in0] == (uint8_t)DataFormat::Bfp8_b && !DST_ACCUM_MODE) ||
+     (unpack_src_format[dfb::in0] == (uint8_t)DataFormat::Float32 && DST_ACCUM_MODE));
+constexpr bool bmm_k_loop_cell =
+    (get_arg(args::out_subblock_h) == 1 && get_arg(args::out_subblock_w) == 1 && get_arg(args::in0_block_w) >= 4 &&
+     (MATH_FIDELITY == ckernel::MathFidelity::LoFi || MATH_FIDELITY == ckernel::MathFidelity::HiFi2)) ||
+    (MATH_FIDELITY == ckernel::MathFidelity::LoFi && get_arg(args::num_blocks_inner_dim) == 1 &&
+     ((get_arg(args::out_subblock_h) == 2 && get_arg(args::out_subblock_w) == 1 && get_arg(args::in0_block_w) >= 8) ||
+      (get_arg(args::out_subblock_w) == 2 && get_arg(args::out_subblock_h) <= 2 && get_arg(args::in0_block_w) >= 16)));
+#endif
+#if defined(UCK_CHLKC_PACK)
 constexpr int bmm_in1_order = 0;
 #else
 // in1 32x16 tiles write the DEST row groups in turn; LoFi with a 32-bit DEST is pack bound and keeps the pair order
@@ -88,11 +111,13 @@ constexpr bool bmm_ttsync_cells = []() constexpr {
 }();
 #endif
 // not when the partials are reloaded every block: the matmul init after each reload drains the unpack thread; not for
-// one tile row of in0 either (decode), except one-tile sub blocks, where the call is the whole block and the form reads faster
-constexpr bool bmm_unpack_auto_ttsync = !bmm_main_form && bmm_ttsync_cells && get_arg(args::out_subblock_w) <= 2 &&
+// one tile row of in0 either (decode), except one-tile sub blocks, where the call is the whole block and the form reads faster;
+constexpr bool bmm_ttsync_form = !bmm_main_form && bmm_ttsync_cells && get_arg(args::out_subblock_w) <= 2 &&
                                         get_arg(args::out_subblock_h) <= 2 && !bmm_reload_every_block &&
                                         (get_arg(args::in0_block_num_tiles) > get_arg(args::in0_block_w) ||
                                          (get_arg(args::out_subblock_w) == 1 && get_arg(args::out_subblock_h) == 1));
+constexpr bool bmm_k_loop = !bmm_main_form && bmm_k_loop_format && bmm_k_loop_cell && !bmm_ttsync_form;
+constexpr bool bmm_unpack_auto_ttsync = bmm_ttsync_form;
 // 2: no other unpack call in the kernel (bias add, in0 transpose, untilize copy, partials reload), so the ttsync matmul rows
 // skip the context-count post and get that only feed another unpack call's context poll; half sync from four k steps, where
 // the shorter row read 0 cycles slower in the harness (Half kt 1 rows read up to 0.78 cycles slower and stay on 1)
@@ -619,12 +644,8 @@ void kernel_main() {
                             uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
                             uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
                             // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
-                            for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
-                                // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
-                                // accumulation is done by iterating matmul_block across inner dim
-                                // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
-                                // in0
-                                matmul_block<row_mop, unpack_auto_ttsync, in0_block_w, mm_pack_format, bmm_in1_order>(
+                            if constexpr (bmm_k_loop && !last_subblock_padded) {
+                                matmul_block_k<row_mop, unpack_auto_ttsync, in0_block_w, mm_pack_format, bmm_in1_order>(
                                     in0_dfb_id,
                                     in1_dfb_id,
                                     in0_index,
@@ -633,12 +654,32 @@ void kernel_main() {
                                     in1_transpose_tile,
                                     effective_subblock_w,
                                     out_subblock_h,
-                                    in0_block_w);
-                                in0_index++;               // stride right by 1
-                                in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w
-                                                           // (should be called in1_block_w)
-                            }
+                                    in0_block_w,
+                                    in0_block_w,
+                                    in1_block_w);
+                            } else {
+                                for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
+                                    // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
+                                    // accumulation is done by iterating matmul_block across inner dim
+                                    // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
+                                    // in0
+                                    matmul_block<row_mop, unpack_auto_ttsync, in0_block_w, mm_pack_format, bmm_in1_order>(
+                                        in0_dfb_id,
+                                        in1_dfb_id,
+                                        in0_index,
+                                        in1_index,
+                                        dst_index,
+                                        in1_transpose_tile,
+                                        effective_subblock_w,
+                                        out_subblock_h,
+                                        in0_block_w);
+                                    in0_index++;               // stride right by 1
+                                    in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w
+                                                               // (should be called in1_block_w)
+                                }
 
+
+                            }
 #endif  // SKIP_COMPUTE
 
                             if (last_out) {
