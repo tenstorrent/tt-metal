@@ -133,6 +133,18 @@ def test_gelu_variant_accuracy(device, variant_name, dtype_name, torch_dtype, tt
     # Reference: compute in FP32 from the dtype-quantised input, then round to the
     # input dtype. For both BF16 and FP32 we use torch's FP32 path as the reference.
     expected = torch.nn.functional.gelu(input_tensor.float(), approximate=torch_approximate).to(torch_dtype)
+    if (
+        variant_name == "accurate"
+        and dtype_name == "bf16"
+        and (ttnn.device.is_blackhole(device) or ttnn.device.is_wormhole_b0(device))
+    ):
+        # Torch's 1 + erf cancels to 0 below x = -5.5; 0.5 x erfc(-x / sqrt 2) in float64 is the exact value.
+        lanes = input_tensor.float() < -5.5
+        x64 = input_tensor.float()[lanes].double()
+        exact = (0.5 * x64 * torch.special.erfc(-x64 / math.sqrt(2))).to(torch.bfloat16)
+        expected[lanes] = torch.where(
+            exact.abs() < torch.finfo(torch.bfloat16).smallest_normal, torch.zeros_like(exact), exact
+        ).to(expected.dtype)
 
     tt_input = ttnn.from_torch(input_tensor, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tt_output = ttnn.gelu(tt_input, variant=variant_enum)
@@ -306,7 +318,10 @@ def test_gelu_nan_payloads_propagate(device, request, variant_name, dtype_name):
     """gelu(NaN) must never be finite, whatever the NaN's sign or payload.
     FP32 must return NaN. BF16 has no NaN on the SFPU convert/pack path, so a
     non-finite (+-inf) output is accepted there."""
-    if variant_name == "accurate" and dtype_name == "bf16":
+    # Blackhole and Wormhole's generated BF16 kernel stores NaN (as an infinity) for every NaN input.
+    if (variant_name == "accurate" and dtype_name == "bf16") and not (
+        ttnn.device.is_blackhole(device) or ttnn.device.is_wormhole_b0(device)
+    ):
         # The BF16 piecewise branch still saturates a negative NaN to 0; a guard there
         # costs ~7% on this hot path, so it is tracked separately in #60224.
         request.applymarker(
