@@ -110,7 +110,9 @@ def test_decode_roofline_lanes(mesh_device, users_per_lane, monkeypatch):
     prompt = tokenizer.encode("It was the best of times, it was the worst of times, " * 12, add_special_tokens=True)
     tok1 = torch.tensor(prompt[:PREFILL_LEN], dtype=torch.long).unsqueeze(0)
     cur_tok, positions = {}, {}
+    prefill_ms = []
     for row in rows:
+        t0 = time.perf_counter()
         out = generator.prefill_forward_text(
             tok1,
             page_table=page_rows[row].unsqueeze(0),
@@ -122,9 +124,17 @@ def test_decode_roofline_lanes(mesh_device, users_per_lane, monkeypatch):
             warmup_prefill=False,
         )
         lg = out[0] if isinstance(out, (list, tuple)) else out
-        cur_tok[row] = int(torch.argmax(lg.reshape(-1)).item())
+        cur_tok[row] = int(torch.argmax(lg.reshape(-1)).item())  # the host read-back ends the call, as serving's does
+        prefill_ms.append((time.perf_counter() - t0) * 1e3)
         positions[row] = PREFILL_LEN
     logger.info(f"prefilled {len(rows)} users ({users_per_lane} per lane x {lanes} lanes) of the {B_g}-row batch")
+    # Same-run TTFT component: the eager single-user 128-token prefill call (first call = cold JIT), host logits
+    # read back; the served c1 TTFT adds the scheduler and tokenizer around this.
+    warm = sorted(prefill_ms[1:]) or prefill_ms
+    logger.info(
+        f"PREFILL ctx={PREFILL_LEN} eager single-user lanes={lanes} mesh={shape[0]}x{shape[1]}: first {prefill_ms[0]:.1f} ms, "
+        f"warm median {warm[len(warm) // 2]:.1f} ms, warm min {warm[0]:.1f} ms over {len(prefill_ms)} calls"
+    )
     # Distinct tokens per active row for the timed traced steps (the same token on every row routes every user to
     # the same experts; the served step touches ~100 experts per layer): seeded, so runs are comparable.
     rand_tokens = torch.Generator().manual_seed(1234)
