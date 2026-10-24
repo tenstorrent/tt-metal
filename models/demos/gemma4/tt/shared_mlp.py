@@ -318,10 +318,14 @@ class SharedMLP:
             return output
         gate_up = self.gate_up_proj(hidden_states)
         s = gate_up.shape[-2]
-        if flag("GEMMA4_MLP_GEGLU_FUSED") and _geglu_fused_rows(gate_up) and shard % TILE_SIZE == 0:
+        geglu_prefill = os.environ.get("GEMMA4_MLP_GEGLU_PREFILL", "0") == "1" and int(s) % TILE_SIZE == 0
+        if (
+            (flag("GEMMA4_MLP_GEGLU_FUSED") and _geglu_fused_rows(gate_up)) or geglu_prefill
+        ) and shard % TILE_SIZE == 0:
             # GEMMA4_MLP_GEGLU_FUSED=1: up * gelu(gate) over the fused [up | gate] output as one program
             # (custom_ops/geglu_decode) instead of slice, slice, gelu, mul on the decode rows (one row tile on the
-            # tp shapes, lanes x 32 rows on the lane engine).
+            # tp shapes, lanes x 32 rows on the lane engine). GEMMA4_MLP_GEGLU_PREFILL=1 (step 4 A/B, opt-in): the
+            # same program over prefill rows (one work unit per output tile, split over the grid).
             from models.demos.gemma4.custom_ops.geglu_decode import GegluDecode
 
             hidden = GegluDecode.op(gate_up)
