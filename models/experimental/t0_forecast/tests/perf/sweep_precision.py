@@ -33,16 +33,25 @@ VARIANTS = {
     "fp32res": {"fp32_residual": True},
     "fp32res_ff": {"fp32_residual": True, "roles": ("ff1", "ff2")},
     "fp32res_all": {"fp32_residual": True, "roles": ROLES_ALL},
+    # The performance precision (bfp8 weights, LoFi) and per-role exceptions to it (PLAN 9 v1.2 F4).
+    "perf": {"base": "performance"},
+    "perf_ff_bf16": {"base": "performance", "bf16_roles": ("ff1", "ff2")},
+    "perf_attn_bf16": {"base": "performance", "bf16_roles": ("qkv", "wv", "wo")},
 }
 
 
 def precision_for(name: str):
     from models.experimental.t0_forecast.tt.common import TtT0Precision
 
-    base = TtT0Precision.accuracy()
     spec = VARIANTS[name]
+    base = TtT0Precision.named(spec.get("base", "accuracy"))
     roles = frozenset(base.hifi4_roles) | frozenset(spec.get("roles", ()))
-    return base.replaced(name=f"accuracy+{name}", hifi4_roles=roles, fp32_residual=spec.get("fp32_residual", False))
+    return base.replaced(
+        name=f"{base.name}+{name}",
+        hifi4_roles=roles,
+        fp32_residual=spec.get("fp32_residual", False),
+        bf16_roles=frozenset(spec.get("bf16_roles", ())),
+    )
 
 
 def main():
@@ -76,11 +85,21 @@ def main():
     try:
         for name in args.variants.split(","):
             tt = TtT0(device, weights(), precision_for(name))
-            record = {"variant": name, "hifi4_roles": sorted(tt.precision.hifi4_roles)}
+            record = {"variant": name, "precision": tt.precision.name, "hifi4_roles": sorted(tt.precision.hifi4_roles)}
+            record["bf16_roles"] = sorted(tt.precision.bf16_roles)
             record["fp32_residual"] = tt.precision.fp32_residual
             for case, (context, horizon, ref) in cases.items():
                 got = tt.network(tt.prepare_inputs(context, horizon))
                 record[case] = quantile_metrics(ref, got)
+                kinds = (
+                    golden(f"bench_{case}.pt").get("kinds")
+                    if case in ("paper", "long_context", "multivariate")
+                    else None
+                )
+                if kinds:
+                    record[case]["pcc_row_min_kind"] = kinds[
+                        record[case]["pcc_row_min_row"] // (8 if case == "multivariate" else 1)
+                    ]
             prepared = tt.prepare_inputs(timing_context, 64)
             inputs = tt.upload_inputs(prepared)
             ttnn.deallocate(tt.forward_device(inputs))

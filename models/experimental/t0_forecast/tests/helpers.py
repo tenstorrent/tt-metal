@@ -40,49 +40,79 @@ def pcc(expected: torch.Tensor, got: torch.Tensor) -> float:
     return float((a @ b) / (a.norm() * b.norm()))
 
 
+def _centre(t: torch.Tensor) -> torch.Tensor:
+    return t - t.mean(dim=-1, keepdim=True)
+
+
 def quantile_metrics(expected: torch.Tensor, got: torch.Tensor) -> dict:
-    """Gate metrics on read-out quantiles ``[rows, n, ps, Q]`` (asinh space):
+    """Metrics on read-out quantiles ``[rows, n, ps, Q]`` (asinh space), the golden first:
 
     ``pcc_normalized``  PCC over everything (dominated by each row's level)
     ``pcc_spread``      PCC of ``h - mean_q(h)``: the quantile spread around each step's centre
-    ``pcc_row_p01``, ``pcc_row_min``  per-row PCC of ``h``, 1st percentile and minimum over rows
+    ``pcc_row_p01``, ``pcc_row_min``  per-row PCC of ``h`` (1st percentile, minimum); ``pcc_row_min_row`` is the row
+    ``*_active``        the same over the active rows: golden row std >= 5 % of the golden's global std (the set comes
+                        from the golden only; ``rows_excluded`` is fixed per golden)
+    ``spread_ratio_p01`` / ``_p99``  per active row, ``|h_dev - mean_q| / |h_ref - mean_q|`` (band amplitude; 0 for a
+                        collapsed output)
     """
     e, g = expected.double(), got.double()
-    centre = lambda t: t - t.mean(dim=-1, keepdim=True)
-    rows = torch.tensor([pcc(e[r], g[r]) for r in range(e.shape[0])], dtype=torch.float64)
-    rows = torch.nan_to_num(rows, nan=-1.0)
+    n = e.shape[0]
+    rows = torch.nan_to_num(torch.tensor([pcc(e[r], g[r]) for r in range(n)], dtype=torch.float64), nan=-1.0)
+    flat = e.reshape(n, -1)
+    active = flat.std(dim=1) >= 0.05 * flat.std()
+    ce, cg = _centre(e).reshape(n, -1), _centre(g).reshape(n, -1)
+    ratio = (cg.norm(dim=1) / ce.norm(dim=1).clamp(min=1e-30))[active]
+    rows_active = rows[active]
+    q = lambda t, p: float(torch.quantile(t, p)) if t.numel() else float("nan")
     return {
         "pcc_normalized": pcc(e, g),
-        "pcc_spread": pcc(centre(e), centre(g)),
-        "pcc_row_p01": float(torch.quantile(rows, 0.01)),
+        "pcc_spread": pcc(_centre(e), _centre(g)),
+        "pcc_row_p01": q(rows, 0.01),
         "pcc_row_min": float(rows.min()),
+        "pcc_row_min_row": int(rows.argmin()),
+        "pcc_row_p01_active": q(rows_active, 0.01),
+        "pcc_row_min_active": float(rows_active.min()) if rows_active.numel() else float("nan"),
+        "rows_excluded": int((~active).sum()),
+        "spread_ratio_p01": q(ratio, 0.01),
+        "spread_ratio_p99": q(ratio, 0.99),
     }
 
 
-# Gate floors per case class (proposed at the G1 re-raise; the orchestrator sets the final values). Shared by the
-# PCC suite (tests/pcc/test_model.py) and the bench records (``floor_ok``).
+def final_metrics(expected: torch.Tensor, got: torch.Tensor) -> dict:
+    """Data-space quantiles ``[..., Q]``: ``pcc_final`` and ``pcc_final_spread`` (PCC of the quantiles minus their
+    mean over the quantile axis; ``pcc_final`` alone scores a collapsed forecast near 1)."""
+    return {"pcc_final": pcc(expected, got), "pcc_final_spread": pcc(_centre(expected.double()), _centre(got.double()))}
+
+
+# Gate floors per case class, set by the orchestrator in D3 (/home/andy/avan/fleet/t0-gamma/DECISIONS.md). They change
+# only through a decision. Shared by the PCC suite (tests/pcc/test_model.py), the bench records (``floor_ok``) and
+# tests/perf/check_gates.py, which also applies D3's drift margins against round 0.
 FLOORS = {
     "accuracy": {
         "pcc_normalized": 0.999,
         "pcc_spread": 0.998,
         "pcc_row_p01": 0.995,
-        "pcc_row_min": 0.98,
+        "pcc_row_min": 0.99,
         "pcc_final": 0.99,
     },
     "performance": {
         "pcc_normalized": 0.995,
         "pcc_spread": 0.99,
         "pcc_row_p01": 0.97,
-        "pcc_row_min": 0.90,
+        "pcc_row_min": 0.93,
         "pcc_final": 0.98,
     },
-    # Branch-coverage inputs (e2e: the smooth generator plus counts and gaps; paths). Per-row PCC is reported, not
-    # gated: it is ill-conditioned on rows whose quantiles span ~1 % of their level (e2e row 9: std 0.013 in asinh
-    # space, so a 0.002 absolute error reads 0.979).
+    # Branch-coverage inputs (e2e: the smooth generator plus counts and gaps; paths). Per-row PCC is reported every
+    # round, not gated: it is ill-conditioned on rows whose quantiles span ~1 % of their level (e2e row 9: std 0.013
+    # in asinh space, so a 0.002 absolute error reads 0.979).
     "coverage": {"pcc_normalized": 0.999, "pcc_spread": 0.998, "pcc_final": 0.99},
     "single": {"pcc_normalized": 0.999, "pcc_spread": 0.999, "pcc_final": 0.99},
-    "single_long": {"pcc_normalized": 0.9975, "pcc_spread": 0.998, "pcc_final": 0.99},
+    "single_long": {"pcc_normalized": 0.9975, "pcc_spread": 0.998, "pcc_final": 0.9975},
+    # Reported only (D3: the orchestrator sets floors at G2-r2), e.g. the single-series cases at performance precision.
+    "report": {},
 }
+# Drift margins against round 0 (D3): on the target (paper-accuracy); twice these on every other bench record.
+DRIFT = {"pcc_normalized": 0.0005, "pcc_spread": 0.002, "pcc_row_p01": 0.002, "pcc_row_min": 0.005, "pcc_final": 0.0005}
 
 
 def meets(metrics: dict, floors: dict) -> bool:

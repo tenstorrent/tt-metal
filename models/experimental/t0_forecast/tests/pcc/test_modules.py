@@ -108,6 +108,29 @@ def test_group_layer(device, case):
     assert min(a, o) >= FLOOR
 
 
+def test_group_layer_g8_masked(device):
+    """F1 (PLAN 9 v1.2): with a user mask and G = 8 keys (not a multiple of 32), the tile-padding keys must stay
+    masked. Two series of 8 variates; rows 1 and 10 have three all-PAD patches (the group mask path). Device against
+    the fp32 dataflow (which matches the reference at 1e-7 on the masked G = 4 golden), real tokens only."""
+    g = torch.Generator().manual_seed(8)
+    x = 4.0 * torch.randn(16, 66, 1024, generator=g)
+    groups, vtype, mask = clean_fields(16, 66, group_size=8)
+    for r in (1, 10):
+        mask[r, :3] = host.PAD
+        groups[r, :3] = -1
+        vtype[r, :3] = -1
+    prepared = module_inputs(x, groups, vtype, mask)
+    assert prepared.group_size == 8 and prepared.group_mask is not None
+    flow = Dataflow(weights())
+    a = weights().layers[2].attention
+    ref = x + flow.group_attention(a, x, prepared, prepared.group_mask)
+    attn, _ = _run_layer(_model(device, [2]), 0, x, prepared)
+    real = prepared.real_tokens
+    value = pcc(ref[real], attn[real])
+    print(f"\n[pcc] group_layer_g8_masked (vs fp32 dataflow): attention {value:.6f}")
+    assert value >= FLOOR
+
+
 def test_mlp(device):
     import ttnn
 

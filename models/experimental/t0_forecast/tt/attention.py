@@ -61,16 +61,15 @@ class TtAttention:
         self.head_dim = weights.head_dim
         self.d = weights.num_heads * weights.head_dim
         self.eps = 1e-8
-        dtype = precision.weight_dtype()
         self._norm = upload_norm(device, weights.norm)
-        self._wqkv = upload_linear(device, weights.wqkv, dtype)
+        self._wqkv = upload_linear(device, weights.wqkv, precision.weight_dtype("qkv"))
         self._bqkv = upload_bias(device, weights.bqkv)
         wv, bv = weights.part(2)
-        self._wv = upload_linear(device, wv, dtype)
+        self._wv = upload_linear(device, wv, precision.weight_dtype("wv"))
         self._bv = upload_bias(device, bv)
         self._q_norm = upload_norm(device, weights.q_norm)
         self._k_norm = upload_norm(device, weights.k_norm)
-        self._wo = upload_linear(device, weights.wo, dtype)
+        self._wo = upload_linear(device, weights.wo, precision.weight_dtype("wo"))
         self._bo = upload_bias(device, weights.bo)
         if weights.kind == TIME:
             self._trans = upload(device, pair_rotation(32).reshape(1, 1, 32, 32))

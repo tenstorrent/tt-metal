@@ -30,7 +30,14 @@ from pathlib import Path
 import pytest
 
 from models.experimental.t0_forecast.tests.helpers import FLOORS as GATE_FLOORS
-from models.experimental.t0_forecast.tests.helpers import collapsed, golden, meets, pcc, quantile_metrics, weights
+from models.experimental.t0_forecast.tests.helpers import (
+    collapsed,
+    final_metrics,
+    golden,
+    meets,
+    quantile_metrics,
+    weights,
+)
 
 STEADY_ITERS = 5
 DEVICE_SETTLE_S = 0.3
@@ -40,7 +47,6 @@ SHAPES = {
     "long_context": ("bench_long_context.pt", 32, 1, 8192, 1024),
     "multivariate": ("bench_multivariate.pt", 128, 8, 2048, 64),
 }
-FLOORS = {"accuracy": (0.999, 0.99), "performance": (0.995, 0.98)}  # (pcc_normalized, pcc_final)
 CASES = [
     "paper-accuracy",
     "long_context-accuracy",
@@ -136,11 +142,16 @@ def test_forward_perf(device, case):
         splits.append((prepare_s, upload_s, device_s, postprocess_s))
     prepare_s, upload_s, device_s, postprocess_s = (statistics.median(c) for c in zip(*splits))
 
-    metrics = quantile_metrics(g["head_readout"], normalized)
-    collapsed_metrics = quantile_metrics(g["head_readout"], collapsed(g["head_readout"]))
-    pcc_norm = metrics["pcc_normalized"]
-    pcc_final = pcc(g["raw21"], final)
-    floor_norm, floor_final = FLOORS[precision_name]
+    metrics = {**quantile_metrics(g["head_readout"], normalized), **final_metrics(g["raw21"], final)}
+    collapsed_metrics = {
+        **quantile_metrics(g["head_readout"], collapsed(g["head_readout"])),
+        **final_metrics(g["raw21"], collapsed(g["raw21"])),
+    }
+    kinds = g.get("kinds")
+    if kinds is not None:
+        metrics["pcc_row_min_kind"] = kinds[metrics["pcc_row_min_row"] // variates]
+    pcc_norm, pcc_final = metrics["pcc_normalized"], metrics["pcc_final"]
+    floors = GATE_FLOORS[precision_name]
     rows = series * variates
     print(
         f"\n[PERF] forward {shape_name} / {precision_name}"
@@ -151,10 +162,15 @@ def test_forward_perf(device, case):
         f"\n  device_s:     {device_s:.4f}  ({DEVICE_SETTLE_S} s idle before each)"
         f"\n  split:        prepare {prepare_s:.4f}  upload {upload_s:.4f}  postprocess {postprocess_s:.4f}"
         f"\n  cpu_s:        {g['cpu_s']:.2f}  (fp32 reference, 8 threads)  speedup {g['cpu_s'] / steady_s:.1f}x"
-        f"\n  pcc:          {pcc_norm:.6f} normalized, {pcc_final:.6f} final (floors {floor_norm}, {floor_final})"
+        f"\n  pcc:          {pcc_norm:.6f} normalized, {pcc_final:.6f} final, {metrics['pcc_final_spread']:.6f} final spread"
+        f" (floors {floors})"
         f"\n  spread / row: {metrics['pcc_spread']:.6f} spread, {metrics['pcc_row_p01']:.6f} row p01, "
         f"{metrics['pcc_row_min']:.6f} row min (collapsed output: {collapsed_metrics['pcc_normalized']:.6f} / "
-        f"{collapsed_metrics['pcc_spread']:.6f} / {collapsed_metrics['pcc_row_p01']:.6f} / {collapsed_metrics['pcc_row_min']:.6f})"
+        f"{collapsed_metrics['pcc_spread']:.6f} / {collapsed_metrics['pcc_row_p01']:.6f} / {collapsed_metrics['pcc_row_min']:.6f}; final "
+        f"{collapsed_metrics['pcc_final']:.6f}, final spread {collapsed_metrics['pcc_final_spread']:.6f})"
+        f"\n  row min:      row {metrics['pcc_row_min_row']} ({metrics.get('pcc_row_min_kind')}); active rows: p01 "
+        f"{metrics['pcc_row_p01_active']:.6f}, min {metrics['pcc_row_min_active']:.6f} ({metrics['rows_excluded']} excluded); "
+        f"spread ratio p01 {metrics['spread_ratio_p01']:.4f} p99 {metrics['spread_ratio_p99']:.4f}"
     )
     _record(
         {
@@ -177,12 +193,9 @@ def test_forward_perf(device, case):
             "postprocess_s": postprocess_s,
             "split_runs": [dict(zip(("prepare_s", "upload_s", "device_s", "postprocess_s"), s)) for s in splits],
             "pcc_normalized": pcc_norm,
-            "pcc_spread": metrics["pcc_spread"],
-            "pcc_row_p01": metrics["pcc_row_p01"],
-            "pcc_row_min": metrics["pcc_row_min"],
-            "pcc_final": pcc_final,
+            **{k: v for k, v in metrics.items() if k != "pcc_normalized"},
             "collapsed": collapsed_metrics,
-            "floor_ok": meets({**metrics, "pcc_final": pcc_final}, GATE_FLOORS[precision_name]),
+            "floor_ok": meets(metrics, floors),
             "cpu_s": g["cpu_s"],
             "speedup": g["cpu_s"] / steady_s,
             "chip": os.environ.get("TTQ_CHIP_SERIAL"),

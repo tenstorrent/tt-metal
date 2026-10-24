@@ -34,7 +34,7 @@ class TtResidualBlock:
         self.role = role
         self.precision = precision
         self.out_dtype = out_dtype
-        dtype = precision.weight_dtype()
+        dtype = precision.weight_dtype(role)
         self._hidden_w = upload_linear(device, weights.hidden_w, dtype)
         self._hidden_b = upload_bias(device, weights.hidden_b)
         self._output_w = upload_linear(device, weights.output_w, dtype)

@@ -9,7 +9,8 @@ Metrics on the read-out patches ``[rows, n, 32, 21]`` in asinh space, against a 
     pcc_spread       PCC of ``h - mean_q(h)``, the quantile spread around each step's centre: catches a collapse
                      of the quantiles that pcc_normalized cannot see on trending series
     pcc_row_p01 / pcc_row_min   per-row PCC of ``h`` (1st percentile / minimum over rows)
-    pcc_final        data-space quantiles after the host post-processing (raw21: the 21 trained levels)
+    pcc_final        data-space quantiles after the host post-processing (raw21: the 21 trained levels);
+                     pcc_final_spread the same minus their mean over the quantile axis
 Each case also prints the collapsed output's metrics (every quantile = its mean over the quantile axis), which
 every gate floor must reject.
 
@@ -28,7 +29,15 @@ from __future__ import annotations
 
 import pytest
 
-from models.experimental.t0_forecast.tests.helpers import FLOORS, collapsed, golden, pcc, quantile_metrics, weights
+from models.experimental.t0_forecast.tests.helpers import (
+    FLOORS,
+    collapsed,
+    final_metrics,
+    golden,
+    pcc,
+    quantile_metrics,
+    weights,
+)
 from models.experimental.t0_forecast.tt.common import TtT0Precision
 from models.experimental.t0_forecast.tt.model import TtT0
 
@@ -61,20 +70,23 @@ def _forward(tt: TtT0, context, horizon, **kwargs):
 
 def check(case: str, floors: dict, head_ref, normalized, raw_ref=None, final=None, strict: bool = True) -> dict:
     """Score, print (with the collapsed output's scores) and assert ``floors``; returns the metrics. ``strict``: every
-    gate metric alone must reject the collapsed output (the realistic bench inputs); otherwise the floors together
-    must (smooth coverage inputs, where pcc_normalized alone cannot see a collapse)."""
+    asinh-space gate metric alone must reject the collapsed output (the realistic bench inputs); otherwise the floors
+    together must (smooth coverage inputs, where pcc_normalized alone cannot see a collapse). ``pcc_final`` is never
+    required to reject it alone (a collapsed forecast scores near 1 in data space; ``pcc_final_spread`` does)."""
     got = quantile_metrics(head_ref, normalized)
     bad = quantile_metrics(head_ref, collapsed(head_ref))
     if raw_ref is not None:
-        got["pcc_final"] = pcc(raw_ref, final)
-    show = lambda m: ", ".join(f"{k} {v:.6f}" for k, v in m.items())
+        got.update(final_metrics(raw_ref, final))
+        bad.update(final_metrics(raw_ref, collapsed(raw_ref)))
+    show = lambda m: ", ".join(f"{k} {v:.6f}" if isinstance(v, float) else f"{k} {v}" for k, v in m.items())
     print(f"\n[pcc] {case}: {show(got)}\n[pcc] {case} collapsed: {show(bad)}")
     for key, floor in floors.items():
         if key in got:
             assert got[key] >= floor, f"{case}: {key} {got[key]:.6f} < {floor}"
-        if strict and key in bad:
+        if strict and key in bad and key != "pcc_final":
             assert bad[key] < floor, f"{case}: the collapsed output passes {key} ({bad[key]:.6f} >= {floor})"
-    assert any(bad[k] < f for k, f in floors.items() if k in bad), f"{case}: the collapsed output passes the gate"
+    if floors:
+        assert any(bad[k] < f for k, f in floors.items() if k in bad), f"{case}: the collapsed output passes the gate"
     return got
 
 
@@ -86,6 +98,9 @@ CASES = {
     "multivariate": ("bench_multivariate.pt", 4, "accuracy", "accuracy", None),
     "long2": ("bench_long_context.pt", 2, "accuracy", "accuracy", None),
     "paper16_performance": ("bench_paper.pt", 16, "performance", "performance", None),
+    # Reported only (D3 condition 4; floors at G2-r2).
+    "single_performance": ("single.pt", None, "performance", "report", (63, 2)),
+    "single_long_performance": ("single_long.pt", None, "performance", "report", (255, 32)),
 }
 
 
@@ -119,7 +134,8 @@ def test_e2e_masked_paths(device):
     """PAD patches from trimming (explicit time mask), MISSING gaps, counts: plain raw21 and its head."""
     g = golden("e2e.pt")
     tt = _tt(device, "accuracy")
-    _, normalized, final = _forward(tt, g["context"], g["horizon"])
+    prepared, normalized, final = _forward(tt, g["context"], g["horizon"])
+    assert prepared.time_mask is None  # untrimmed NaN are MISSING, not PAD: the causal path
     check("e2e", FLOORS["coverage"], g["head_readout"], normalized, g["raw21"], final, strict=False)
 
 

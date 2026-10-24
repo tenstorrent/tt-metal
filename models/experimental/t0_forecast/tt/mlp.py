@@ -26,14 +26,14 @@ class TtSwiGLU:
     def __init__(self, device, weights: MlpWeights, precision: TtT0Precision):
         self.precision = precision
         self.eps = 1e-8
-        dtype = precision.weight_dtype()
+        dtype, dtype_down = precision.weight_dtype("ff1"), precision.weight_dtype("ff2")
         h = weights.hidden
         self._norm = upload_norm(device, weights.norm)
         self._w_gate = upload_linear(device, weights.w1[:h], dtype)
         self._b_gate = upload_bias(device, weights.b1[:h])
         self._w_up = upload_linear(device, weights.w1[h:], dtype)
         self._b_up = upload_bias(device, weights.b1[h:])
-        self._w_down = upload_linear(device, weights.w2, dtype)
+        self._w_down = upload_linear(device, weights.w2, dtype_down)
         self._b_down = upload_bias(device, weights.b2)
 
     def __call__(self, x):

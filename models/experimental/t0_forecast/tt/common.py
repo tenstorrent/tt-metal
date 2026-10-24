@@ -30,7 +30,16 @@ class TtT0Precision:
     accumulation was also faster at the paper shape (1.056 vs 1.166 s device; jobs 395, 398).
     Per-role exception in both: the patch encoder (``embed``) runs at HiFi4. At HiFi2 the far read-out patches
     of the long-context shape drift (pcc_normalized 0.99870, last patch 0.9966); HiFi4 on ``embed`` alone gives
-    0.99987, and HiFi4 on any other role changes nothing (job 417). The patch encoder is ~0.7 % of the forward."""
+    0.99987, and HiFi4 on any other role changes nothing (job 417). The patch encoder is ~0.7 % of the forward.
+
+    Fidelity and accumulation per role (accuracy / performance; every matmul and SDPA has fp32 dest accumulation):
+        embed (patch encoder)            HiFi4 / HiFi4, fp32 acc
+        qkv, wv, wo, ff1, ff2            HiFi2 / LoFi,  fp32 acc
+        decoder                          HiFi2 / LoFi,  fp32 acc, fp32 output
+        SDPA (time and group)            HiFi2 / LoFi,  fp32 acc
+        RMSNorm, QK-norm, out_norm       HiFi4, fp32 acc
+        RoPE rotation, head cumsum       HiFi4, fp32 acc (exact 0 / +-1 matrices); softplus on fp32
+    Measured: bf16 against fp32 accumulation on every matmul, jobs 395 and 398 (above)."""
 
     name: str = "accuracy"
     bf8_weights: bool = False
@@ -39,6 +48,7 @@ class TtT0Precision:
     fp32_acc: bool = True  # fp32 dest accumulation in matmuls
     hifi4_roles: frozenset = frozenset()  # matmul roles at HiFi4: embed, qkv, wv, wo, ff1, ff2, decoder
     fp32_residual: bool = False  # keep the residual stream in fp32 (norms emit bf16 for the matmuls)
+    bf16_roles: frozenset = frozenset()  # matmul roles whose weights stay bf16 when ``bf8_weights`` (sweep variant)
 
     @classmethod
     def accuracy(cls) -> "TtT0Precision":
@@ -64,10 +74,10 @@ class TtT0Precision:
             return variants[name]
         return {"accuracy": cls.accuracy, "performance": cls.performance}[name]()
 
-    def weight_dtype(self):
+    def weight_dtype(self, role: str | None = None):
         import ttnn
 
-        return ttnn.bfloat8_b if self.bf8_weights else ttnn.bfloat16
+        return ttnn.bfloat8_b if self.bf8_weights and role not in self.bf16_roles else ttnn.bfloat16
 
     def compute_kernel_config(self, *, math_fidelity=None, fp32_acc: bool = False, role: str | None = None):
         import ttnn
