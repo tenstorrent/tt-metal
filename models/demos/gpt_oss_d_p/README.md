@@ -209,11 +209,11 @@ Unit tests: `pytest models/demos/gpt_oss_d_p/tests/unit` (the CPU-only ones run 
 | `tests/galaxy_prefill_kv_pcc.py` | galaxy | full model, real weights, throughput + per-layer PCC |
 | `tests/variable_chunk_smoke.py` | galaxy | one runtime prefilling the same tokens as a 1k and an 8k chunk (no PCC) |
 
-Galaxy CI (`tests/pipeline_reorg/blaze_models_prefill_tests.yaml`, "Blaze Models Prefill tests") runs
-one job, `(GPT-OSS-120B) prefill runner accuracy longbook 55k@5k + chunked prefill KV accuracy longbook 5k@1k + variable-chunk smoke 1k vs 8k`
-(`-f test-type=gpt_oss_prefill_suite`), with three time-bounded sections on one allocation: the
-producer/runner e2e through the common runner, the harness with the PCC gate at 5k@1k, then the
-variable-chunk smoke. The job stops at the first failed section. Op-level coverage for the sliding ring read lives in
+Galaxy CI (`tests/pipeline_reorg/blaze_models_prefill_tests.yaml`, "Blaze Models Prefill tests") runs two
+GPT-OSS jobs. The runner gate (`-f test-type=gpt_oss_prefill_runner`) runs the KV-table tests, then the common
+launcher's all-layer K/V PCC over two 1K chunks per slot. The suite (`-f test-type=gpt_oss_prefill_suite`) runs two
+time-bounded sections on one allocation: the harness with the PCC gate at 5k@1k plus the mid-chunk resume pass,
+then the variable-chunk smoke; it stops at the first failed section. Op-level coverage for the sliding ring read lives in
 `tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py` (production and circular-cache accuracy,
 metadata-path rejection) and the header gtest
 `tests/ttnn/unit_tests/gtests/sdpa/test_sliding_window_work_plan.cpp`.
