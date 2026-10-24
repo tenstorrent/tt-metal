@@ -76,7 +76,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "sfpu/ckernel_sfpu_rounding_ops.h"
-#include "sfpu/experimental/ckernel_sfpu_sinkhorn.h"
+
+// The compute-API wrapper is written against the tt-metal JIT build, which defines
+// DST_ACCUM_MODE; the harness exposes the same value as is_fp32_dest_acc_en.
+#define DST_ACCUM_MODE is_fp32_dest_acc_en
+#include "experimental/llk_sfpu/llk_math_sinkhorn.h"
+#undef DST_ACCUM_MODE
 
 using namespace ckernel;
 
@@ -100,16 +105,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         1 /* dst_index */, formats.math, formats.math);
     _llk_math_eltwise_unary_datacopy_uninit_<BroadcastType::NONE, unpack_to_dest>();
 
-    // Run sinkhorn exactly as the compute API dispatches it. One iteration and one face
-    // are enough: this test is about the constant register it leaves behind, not its
-    // numerics, and a short run keeps the driver fast.
-    // Same dispatch llk_math_sinkhorn.h performs for sinkhorn_4x4(); the wrapper header
-    // itself is not included because its unused init helper does not resolve here.
-    _llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::
-            _sinkhorn_4x4_<1 /* NUM_FACES_USED */, 1 /* ITERS */, 0x35890000 /* EPS_BITS */, false /* SINGLE_SUBMAT */, 32 /* VALID_H */, 32 /* VALID_W */>,
-        0 /* dst_index */,
-        VectorMode::RC_custom);
+    // Run sinkhorn exactly as the compute API dispatches it: sinkhorn_4x4() forwards to
+    // this wrapper entry point. One iteration and one face are enough: this test is about
+    // the constant register it leaves behind, not its numerics, and a short run keeps the
+    // driver fast.
+    _llk_math_sinkhorn_4x4_<1 /* NUM_FACES_USED */, 1 /* ITERS */, 0x35890000 /* EPS_BITS */, false /* SINGLE_SUBMAT */, 32 /* VALID_H */, 32 /* VALID_W */>(
+        0 /* input_index */);
 
     // floor on the untouched second tile. ITERATIONS=8 at VectorMode::RC is what
     // floor_tile dispatches.
