@@ -293,6 +293,19 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             and formats.output_format == DataFormat.Float32
         ):
             return [MATMUL_FORM_KEYS(0, formats.output_format, True)]
+        # 32-bit input at LoFi and full sync with four k steps: the 1x2 block with a 32-bit DEST and 16-bit or bfp8 output, and the 2x1 block
+        # with a Float16_b output and a 16-bit DEST, read slower with the row forms: the unknown-k key, which is the tile form
+        if (
+            kt_dim == 4
+            and math_fidelity == MathFidelity.LoFi
+            and dest_sync == DestSync.Full
+            and formats.input_format == DataFormat.Float32
+            and (
+                ((ct_dim, rt_dim) == (1, 2) and dest_acc == DestAccumulation.Yes and formats.output_format in (DataFormat.Float16_b, DataFormat.Bfp8_b))
+                or ((ct_dim, rt_dim) == (2, 1) and dest_acc == DestAccumulation.No and formats.output_format == DataFormat.Float16_b)
+            )
+        ):
+            return [MATMUL_FORM_KEYS(0, formats.output_format, True)]
         # the forms depend on k only as 1, 2 to 4 or 5 and more; one representative keeps the variant count down
         return [
             MATMUL_FORM_KEYS(
