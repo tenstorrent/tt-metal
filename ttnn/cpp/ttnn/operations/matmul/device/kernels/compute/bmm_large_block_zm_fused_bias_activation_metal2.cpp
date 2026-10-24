@@ -35,15 +35,17 @@ constexpr bool bmm_reload_every_block = get_arg(args::num_blocks_inner_dim) > 1;
 #if defined(UCK_CHLKC_PACK)
 constexpr bool bmm_main_form = false;
 #else
-// HiFi2 on one-tile sub blocks of 16-bit and Float32 operands over many inner blocks reads slower on the row MOP and
-// the unpack forms than on main's per-row path; with 8-bit operands or few inner blocks the forms gain
+// HiFi2 on one-tile sub blocks of 16-bit and Float32 operands, and HiFi4 on sub blocks of up to four tiles, over many inner
+// blocks read slower on the row MOP and the unpack forms than on main's per-row path (the partials reload re-inits the
+// matmul every block); with 8-bit operands at HiFi2 or few inner blocks the forms gain
 constexpr bool bmm_main_form =
-    MATH_FIDELITY == ckernel::MathFidelity::HiFi2 &&
-    get_arg(args::out_subblock_w) * get_arg(args::out_subblock_h) == 1 && get_arg(args::num_blocks_inner_dim) >= 32 &&
-    unpack_src_format[dfb::in0] != (uint8_t)DataFormat::Bfp8_b &&
-    unpack_src_format[dfb::in1] != (uint8_t)DataFormat::Bfp8_b &&
-    unpack_src_format[dfb::in0] != (uint8_t)DataFormat::Bfp4_b &&
-    unpack_src_format[dfb::in1] != (uint8_t)DataFormat::Bfp4_b;
+    get_arg(args::num_blocks_inner_dim) >= 32 &&
+    ((MATH_FIDELITY == ckernel::MathFidelity::HiFi4 && get_arg(args::out_subblock_w) * get_arg(args::out_subblock_h) <= 4) ||
+     (MATH_FIDELITY == ckernel::MathFidelity::HiFi2 &&
+      (get_arg(args::out_subblock_w) * get_arg(args::out_subblock_h) == 1 ||
+       (get_arg(args::out_subblock_h) == 1 && get_arg(args::out_subblock_w) == 4)) &&
+      unpack_src_format[dfb::in0] != (uint8_t)DataFormat::Bfp8_b && unpack_src_format[dfb::in1] != (uint8_t)DataFormat::Bfp8_b &&
+      unpack_src_format[dfb::in0] != (uint8_t)DataFormat::Bfp4_b && unpack_src_format[dfb::in1] != (uint8_t)DataFormat::Bfp4_b));
 #endif
 #if defined(UCK_CHLKC_PACK)
 constexpr int bmm_in1_order = 0;
