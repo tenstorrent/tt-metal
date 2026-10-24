@@ -117,6 +117,11 @@ class Gemma4DecoderLayer:
         # closing reduce-scatter returns 1/TP again.
         residual = hidden_states
         normed = self.input_layernorm.forward(hidden_states)
+        if prefill_metadata.spill_residual and residual.is_sharded():
+            # Held in DRAM across attention (PrefillLanes.spill_residual); the reshard below brings it back.
+            spilled = ttnn.sharded_to_interleaved(residual, ttnn.DRAM_MEMORY_CONFIG)
+            residual.deallocate(True)
+            residual = spilled
         normed = self._gather_rows(normed)
         attn_output = self.self_attn(
             normed,
