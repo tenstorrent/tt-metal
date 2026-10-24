@@ -14,20 +14,35 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
+// Tiles per destination-register acquire: each stage packs a whole block of tiles per acquire, so its unpack, math and
+// pack pipeline across the halves of DST instead of handing over one tile at a time.
+constexpr uint32_t max_block_tiles = DST_ACCUM_MODE ? 4 : 8;
+
+// Run `stage(tile, dst)` for tiles [0, n) in blocks of up to max_block_tiles per acquire and pack each block to `o`.
+template <typename Stage>
+void blocked(uint32_t n, uint32_t o, Stage stage) {
+    for (uint32_t first = 0; first < n; first += max_block_tiles) {
+        const uint32_t count = n - first < max_block_tiles ? n - first : max_block_tiles;
+        tile_regs_acquire();
+        for (uint32_t t = 0; t < count; t++) {
+            stage(first + t, t);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t t = 0; t < count; t++) {
+            pack_tile(t, o, first + t);
+        }
+        tile_regs_release();
+    }
+}
+
 template <typename DFB>
 void square(uint32_t n, DFB& tmp) {
     tmp.reserve_back(n);
     pack_reconfig_data_format(dfb::tmp);
     reconfig_data_format(dfb::x, dfb::x);
     mul_init(dfb::x, dfb::x, false);
-    for (uint32_t i = 0; i < n; i++) {
-        tile_regs_acquire();
-        mul_tiles(dfb::x, dfb::x, i, i, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, dfb::tmp, i);
-        tile_regs_release();
-    }
+    blocked(n, dfb::tmp, [](uint32_t i, uint32_t dst) { mul_tiles(dfb::x, dfb::x, i, i, dst); });
     tmp.push_back(n);
 }
 
@@ -39,8 +54,9 @@ void inverse_rms(DFB& inv) {
     add_init(dfb::stats, dfb::epsilon);
     tile_regs_acquire();
     add_tiles(dfb::stats, dfb::epsilon, 0, 0, 0);
+    // The row reduction leaves the mean square in column 0, the only column the broadcast reads.
     rsqrt_tile_init();
-    rsqrt_tile(0);
+    rsqrt_tile(0, VectorMode::C);
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(0, dfb::inv, 0);
@@ -54,14 +70,7 @@ void scale_by_inverse_rms(uint32_t Vt, DFB& norm) {
     pack_reconfig_data_format(dfb::norm);
     reconfig_data_format(dfb::x, dfb::inv);
     mul_bcast_cols_init(dfb::x, dfb::inv);
-    for (uint32_t i = 0; i < Vt; i++) {
-        tile_regs_acquire();
-        mul_tiles_bcast_cols(dfb::x, dfb::inv, i, 0, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, dfb::norm, i);
-        tile_regs_release();
-    }
+    blocked(Vt, dfb::norm, [](uint32_t i, uint32_t dst) { mul_tiles_bcast_cols(dfb::x, dfb::inv, i, 0, dst); });
     norm.push_back(Vt);
 }
 
@@ -71,14 +80,7 @@ void apply_weight(uint32_t Vt, DFB& tmp) {
     pack_reconfig_data_format(dfb::tmp);
     reconfig_data_format(dfb::norm, dfb::weight);
     mul_bcast_rows_init(dfb::norm, dfb::weight);
-    for (uint32_t i = 0; i < Vt; i++) {
-        tile_regs_acquire();
-        mul_tiles_bcast_rows(dfb::norm, dfb::weight, i, i, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, dfb::tmp, i);
-        tile_regs_release();
-    }
+    blocked(Vt, dfb::tmp, [](uint32_t i, uint32_t dst) { mul_tiles_bcast_rows(dfb::norm, dfb::weight, i, i, dst); });
     tmp.push_back(Vt);
 }
 
@@ -89,15 +91,10 @@ void activate_gate(uint32_t Vt, DFB& norm) {
     reconfig_data_format_srca(dfb::gate);
     copy_init(dfb::gate);
     sigmoid_tile_init();
-    for (uint32_t i = 0; i < Vt; i++) {
-        tile_regs_acquire();
-        copy_tile(dfb::gate, i, 0);
-        sigmoid_tile(0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, dfb::norm, i);
-        tile_regs_release();
-    }
+    blocked(Vt, dfb::norm, [](uint32_t i, uint32_t dst) {
+        copy_tile(dfb::gate, i, dst);
+        sigmoid_tile(dst);
+    });
     norm.push_back(Vt);
 }
 
@@ -107,14 +104,7 @@ void multiply_output(uint32_t Vt, DFB& out) {
     pack_reconfig_data_format(dfb::out);
     reconfig_data_format(dfb::tmp, dfb::norm);
     mul_init(dfb::tmp, dfb::norm);
-    for (uint32_t i = 0; i < Vt; i++) {
-        tile_regs_acquire();
-        mul_tiles(dfb::tmp, dfb::norm, i, i, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, dfb::out, i);
-        tile_regs_release();
-    }
+    blocked(Vt, dfb::out, [](uint32_t i, uint32_t dst) { mul_tiles(dfb::tmp, dfb::norm, i, i, dst); });
     out.push_back(Vt);
 }
 
