@@ -30,10 +30,11 @@ constexpr uint32_t kDonationIters = 8;
 constexpr uint32_t kFloaterMaxVisitsPerIter = 8;
 // A scratch slot holds one partial's max, sum and out tiles, one float32-tile page each.
 constexpr uint32_t kFloaterSlotPageBytes = 4096;
-// Floater cores (five groups of four), and the scratch slots each cycles through: floater core c owns slots
-// [c kFloaterRingSlots, (c + 1) kFloaterRingSlots). Two keep a floater from waiting on homes that merge at their next
-// ring step.
-constexpr uint32_t kFloaterCores = 20;
+// Floater groups of four cores (a 2x2 block's worth), and the scratch slots each floater core cycles through: core c
+// owns slots [c kFloaterRingSlots, (c + 1) kFloaterRingSlots). Two let a floater save a visit while its home still
+// lands the one before.
+constexpr uint32_t kFloaterGroups = 5;
+constexpr uint32_t kFloaterCores = 4 * kFloaterGroups;
 constexpr uint32_t kFloaterRingSlots = 2;
 // Runtime args per floater visit: reader / compute [iteration, unit, band, frac]; writer [iteration, slot, home x,
 // home y, home semaphore ordinal]. A visit's index v in the floater's list is its own semaphore ordinal v + 1, which
@@ -46,8 +47,8 @@ constexpr uint32_t kFloaterHomePieceArgs = 5;
 
 // Home blocks of the rotation layout: 2x2 blocks of (2 heads x 2 Q chunks) per K-split band on a 10x10 sub-grid.
 constexpr uint32_t kFloaterHomeBlocks = 24;
-// First-piece visits a floater group runs (kFloaterHomeBlocks over five groups).
-constexpr uint32_t kFloaterFirstPieceVisits = 5;
+// First-piece visits a floater group runs, at most (the home blocks go round-robin over the groups).
+constexpr uint32_t kFloaterFirstPieceVisits = (kFloaterHomeBlocks + kFloaterGroups - 1) / kFloaterGroups;
 
 // A shape's schedule: the ring iterations a home donates in, the fraction of its band donated in each, which end of
 // the band it donates, and the ring iteration after which a home merges its first piece, by that piece's position in

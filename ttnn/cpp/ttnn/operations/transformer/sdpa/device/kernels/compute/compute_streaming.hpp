@@ -186,7 +186,7 @@ static __attribute__((noinline, noclone)) void sdpa_cb_reserve_back_out_of_line(
  * This eliminates the need for separate row buffers.
  */
 ALWI void cb_push_back_hold_wr_ptr(uint32_t cb_id, uint32_t num_tiles) {
-    sdpa_cb_push_back_out_of_line(cb_id, num_tiles);
+    CircularBuffer(cb_id).push_back(num_tiles);
     PACK(({
         auto& intf = get_local_cb_interface(cb_id);
         intf.fifo_wr_ptr -= num_tiles * intf.fifo_page_size;
@@ -1685,7 +1685,7 @@ static void sdpa_inner_loop_step(
 
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
         MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)");
-        sdpa_cb_wait_front_out_of_line(cb_q_in, q_wait_tiles);
+        CircularBuffer(cb_q_in).wait_front(q_wait_tiles);
         kt_index_offset = 0;
 
         sdpa_maybe_pack_reconfig_data_format<cb_normalized_out, cb_qkt_im>();

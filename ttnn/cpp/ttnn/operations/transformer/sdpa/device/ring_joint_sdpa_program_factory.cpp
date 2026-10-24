@@ -1566,6 +1566,22 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
     log_debug(tt::LogOp, "ring_joint K split: {}", ksplit_count);
 
+    // Progressive readiness (RingAttentionSliceReadiness): the gather sends every full slice, its own and the ones it
+    // relays, in parts that each hold a share of every K-split band, with a marker after each, so a remote ring step
+    // starts on the first part instead of waiting for the whole slice. Limited to the plain chunked dense path, where
+    // the gather's slice is the valid prefix of local K chunks the reader iterates. The SDPA reader recomputes the
+    // gather's on-device extent only when both run the metadata path.
+    const auto& ag_attrs_readiness = args.all_gather_operation_attributes;
+    const auto [readiness_gather_inputs, readiness_gather_outputs] = fused_gather_kv_tensors(tensor_args);
+    const bool slice_readiness =
+        ag_attrs_readiness.topology == ttnn::ccl::Topology::Ring && ag_attrs_readiness.ring_size > 2 &&
+        kernel_chunked && !has_sliding_window && !joint_is_sharded && L == 0 && !args.is_balanced &&
+        args.kv_stripe_split == 1 && !v_shares_k_buffer &&
+        input_tensor_v.padded_shape()[2] == input_tensor_k.padded_shape()[2] &&
+        tensor_args.kv_actual_isl.has_value() == tensor_args.kv_pad_from_metadata(args.kv_stripe_split) &&
+        ring_attention_all_gather_async_detail::uses_output_bank_owned_schedule(
+            readiness_gather_inputs, readiness_gather_outputs, ag_attrs_readiness.dim);
+    sdpa_fused_op_signaler->slice_readiness = slice_readiness;
     // Floaters (kernels/ring_joint_floaters.hpp). On the validated expanded-K shapes the K split's 24 home blocks
     // of 2x2 cores fill a 10x10 sub-grid, leaving the 25th block, the last grid column and the gather column below its
     // workers idle: 20 cores, five floater groups of 4 that take over pieces of the homes' bands. The gather's workers
@@ -1578,7 +1594,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                           ring_size == 8 && args.ccl_core_grid_offset == CoreCoord(grid_size.x, 0) &&
                           floater_ag_attrs.num_links == 2 &&
                           floater_ag_attrs.core_allocation_strategy == ttnn::ccl::CoreAllocationStrategy::COL_MAJOR &&
-                          output_tensors.size() > RING_JOINT_SDPA_FLOATER_SCRATCH_IDX;
+                          // The homes merge at interleaved ring steps (merge_step_after), which need progressive
+                          // readiness; the K split's own conditions give the rest of the interleave gate.
+                          slice_readiness && output_tensors.size() > RING_JOINT_SDPA_FLOATER_SCRATCH_IDX;
     if (floaters) {
         // Homes merge the partials in the order of their pieces' iterations; every piece donates something, and a
         // home keeps part of every non-empty band (so a partial with state always has the home's own to merge into).
@@ -1616,22 +1634,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                              : CoreCoord{grid_size.x, gather_workers + (i - num_cores)};
     };
 
-    // Progressive readiness (RingAttentionSliceReadiness): the gather sends every full slice, its own and the ones it
-    // relays, in parts that each hold a share of every K-split band, with a marker after each, so a remote ring step
-    // starts on the first part instead of waiting for the whole slice. Limited to the plain chunked dense path, where
-    // the gather's slice is the valid prefix of local K chunks the reader iterates. The SDPA reader recomputes the
-    // gather's on-device extent only when both run the metadata path.
-    const auto& ag_attrs_readiness = args.all_gather_operation_attributes;
-    const auto [readiness_gather_inputs, readiness_gather_outputs] = fused_gather_kv_tensors(tensor_args);
-    const bool slice_readiness =
-        ag_attrs_readiness.topology == ttnn::ccl::Topology::Ring && ag_attrs_readiness.ring_size > 2 &&
-        kernel_chunked && !has_sliding_window && !joint_is_sharded && L == 0 && !args.is_balanced &&
-        args.kv_stripe_split == 1 && !v_shares_k_buffer &&
-        input_tensor_v.padded_shape()[2] == input_tensor_k.padded_shape()[2] &&
-        tensor_args.kv_actual_isl.has_value() == tensor_args.kv_pad_from_metadata(args.kv_stripe_split) &&
-        ring_attention_all_gather_async_detail::uses_output_bank_owned_schedule(
-            readiness_gather_inputs, readiness_gather_outputs, ag_attrs_readiness.dim);
-    sdpa_fused_op_signaler->slice_readiness = slice_readiness;
     // Segmented accumulation (kernels/compute/ring_joint_sdpa.cpp): per-ring-iteration accumulators merged into the
     // restore CBs, so no bf16 running sum spans the whole prefix.
     const bool seg_accum =
@@ -2526,6 +2528,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                     const auto& visit = floater_visits[f][v];
                     home_pieces[block_core(visit.block, k)][visit.piece] = {
                         floater_slot(f, k, v), floater_groups[f][k], v + 1};
+                    TT_FATAL(
+                        v == 0 || floater_visits[f][v - 1].piece <= visit.piece,
+                        "ring_joint floaters: group {} runs its visits out of piece order",
+                        f);
                     if (visit.piece == 0) {
                         // A group runs its first-piece visits first, so v is the visit's place in that queue.
                         TT_FATAL(
@@ -2541,10 +2547,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             }
         }
         TT_FATAL(
-            floater_groups.size() * 4 == ring_joint::kFloaterCores,
-            "ring_joint floaters: {} groups for {} scratch cores",
+            floater_groups.size() == ring_joint::kFloaterGroups,
+            "ring_joint floaters: {} groups, the scratch and schedules assume {}",
             floater_groups.size(),
-            ring_joint::kFloaterCores);
+            ring_joint::kFloaterGroups);
     }
     // K split: core (x, y) is in band y / rows_per_split and owns unit (y % rows_per_split) * grid.x + x (with
     // floaters: its home block's band and unit). Idle cores report band 0; they own no unit.
@@ -3454,8 +3460,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // K-split slice, so each direction's progressively signaled slice is used at half rate. Reader and compute walk the
     // steps; the writer keeps whole ring iterations, which it can only where it has no per-iteration exchange with
     // compute: single-Q K-split cores (and idle ones) on the streaming path.
-    const bool ring_interleave = slice_readiness && ksplit_count > 1 && max_q_per_core == 1 && !use_rotated_q_split &&
-                                 grouped_sources == 1 && !has_sliding_window && !seg_accum && use_streaming_compute;
+    // No core holds two Q chunks (balanced zigzag hands them out in pairs, so max_q_per_core alone is not enough):
+    // accumulators stay in L1 across ring iterations, and the kernels leave out the DRAM save / restore paths.
+    const bool single_q = !use_rotated_q_split && std::all_of(core_work.begin(), core_work.end(), [](const auto& work) {
+        return work.global_q_count <= 1;
+    });
+    const bool ring_interleave = slice_readiness && ksplit_count > 1 && single_q && grouped_sources == 1 &&
+                                 !has_sliding_window && !seg_accum && use_streaming_compute;
     // A home merges its first floater piece before the step after its merge iteration's last (in interleaved order).
     TT_FATAL(!floaters || ring_interleave, "ring_joint floaters: need interleaved ring steps");
     auto merge_step_after = [&](uint32_t iter) {
@@ -3566,9 +3577,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         {"ksplit_sem_id", ksplit_sem_id},
         {"dense_causal_skip", dense_causal_skip ? 1u : 0u},
         {"seg_accum", seg_accum ? 1u : 0u},
-        // Every core holds at most one Q chunk: its accumulators stay in L1 across ring iterations, so the kernels
-        // leave out the DRAM save / restore paths (code size).
-        {"single_q", max_q_per_core == 1 && !use_rotated_q_split ? 1u : 0u},
+        {"single_q", single_q ? 1u : 0u},
         {"ring_interleave", ring_interleave ? 1u : 0u},
         // Expanded-K floaters (kernels/ring_joint_floaters.hpp): the program runs them, and whether its homes donate
         // their bands' tails. floater_core marks the floaters' own kernel group, set on those copies below.
