@@ -42,7 +42,9 @@ void kernel_main() {
     constexpr uint32_t gamma_batch_stride_tiles = get_compile_time_arg_val(11);
     constexpr uint32_t beta_batch_stride_tiles = get_compile_time_arg_val(12);
     constexpr uint32_t Ht = get_compile_time_arg_val(13);
-    constexpr auto src_args = TensorAccessorArgs<14>();
+    // Batched gamma/beta hold one row per dim[-3] entry and broadcast over the outer dims.
+    constexpr uint32_t num_affine_batches = get_compile_time_arg_val(14);
+    constexpr auto src_args = TensorAccessorArgs<15>();
     constexpr auto stats_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
@@ -139,7 +141,8 @@ void kernel_main() {
                 DPRINT("reserve_back gamma on tile_row: {} col_tile: {} batch: {}\n", tile_row, col_tile, batch_idx);
                 uint32_t l1_write_addr_g = get_write_ptr(cb_gamma);
                 // Calculate tile offset for this batch
-                uint32_t gamma_batch_offset = gamma_is_batched ? (batch_idx * gamma_batch_stride_tiles) : 0;
+                uint32_t gamma_batch_offset =
+                    gamma_is_batched ? ((batch_idx % num_affine_batches) * gamma_batch_stride_tiles) : 0;
                 for (uint32_t i = 0; i < block_size && col_tile + i < Wt; i++) {
                     uint64_t gamma_noc_addr = addrg.get_noc_addr(gamma_batch_offset + col_tile + i);
                     async_read_row_to_tile<gamma_is_row_major, gamma_element_size>(gamma_noc_addr, l1_write_addr_g);
@@ -156,7 +159,8 @@ void kernel_main() {
                 DPRINT("reserve_back beta on tile_row: {} col_tile: {} batch: {}\n", tile_row, col_tile, batch_idx);
                 uint32_t l1_write_addr_b = get_write_ptr(cb_beta);
                 // Calculate tile offset for this batch
-                uint32_t beta_batch_offset = beta_is_batched ? (batch_idx * beta_batch_stride_tiles) : 0;
+                uint32_t beta_batch_offset =
+                    beta_is_batched ? ((batch_idx % num_affine_batches) * beta_batch_stride_tiles) : 0;
                 for (uint32_t i = 0; i < block_size && col_tile + i < Wt; i++) {
                     uint64_t beta_noc_addr = addrb.get_noc_addr(beta_batch_offset + col_tile + i);
                     async_read_row_to_tile<beta_is_row_major, beta_element_size>(beta_noc_addr, l1_write_addr_b);
