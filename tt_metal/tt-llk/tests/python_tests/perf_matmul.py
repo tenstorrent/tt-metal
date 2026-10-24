@@ -169,6 +169,7 @@ def test_perf_matmul(
             *MATMUL_STREAM_Z.for_block(
                 formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim,
                 math_fidelity=math_fidelity,
+                kt_dim=dims.kt_dim,
             ),
             *MATMUL_UNPACK_TTSYNC.for_block(
                 formats, dest_acc, math_fidelity, dims.ct_dim, dims.rt_dim, dims.kt_dim, dest_sync
@@ -177,7 +178,8 @@ def test_perf_matmul(
                 formats, dest_acc, math_fidelity, dims.ct_dim, dims.rt_dim, dims.kt_dim
             ),
             *MATMUL_FORM_KEYS.for_block(
-                formats, dims.kt_dim, dims.ct_dim, dims.rt_dim
+                formats, dims.kt_dim, dims.ct_dim, dims.rt_dim,
+                math_fidelity=math_fidelity, dest_sync=dest_sync, dest_acc=dest_acc,
             ),
         ],
         runtimes=[

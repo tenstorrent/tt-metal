@@ -151,7 +151,7 @@ class MATMUL_STREAM_Z(TemplateParameter):
         return "#define MATMUL_STREAM_Z"
 
     @staticmethod
-    def for_block(formats, dest_acc, dest_sync, ct_dim: int, rt_dim: int, in0_r_dim: int = 32, math_fidelity=None, in1_faces: int = 4, in1_partial: bool = False) -> list:
+    def for_block(formats, dest_acc, dest_sync, ct_dim: int, rt_dim: int, in0_r_dim: int = 32, math_fidelity=None, in1_faces: int = 4, in1_partial: bool = False, kt_dim: int = 0, throttle: int = 0) -> list:
         """[MATMUL_STREAM_Z()] at LoFi where in1 streams (ct_dim >= rt_dim, 4 or more output tiles), is a dense 4-face format and the narrow stream is off, else []."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
             return []
@@ -162,6 +162,11 @@ class MATMUL_STREAM_Z(TemplateParameter):
             return []
         # 32-bit input at half sync loses 1 percent on 1x4 with 4 blocks
         if formats.input_format == DataFormat.Float32 and dest_sync == DestSync.Half:
+            return []
+        # at half sync the Z step loses where the unpack is not the bound: k 4 on a single row, a 2 wide block at k 1, and k 1 under a static throttle
+        if dest_sync == DestSync.Half and (
+            (kt_dim == 4 and rt_dim == 1) or (kt_dim == 1 and ct_dim == 2) or (kt_dim == 1 and throttle == 5)
+        ):
             return []
         if MATMUL_STREAM_NARROW.for_block(formats, dest_acc, dest_sync, ct_dim, rt_dim, in0_r_dim, math_fidelity):
             return []
@@ -267,10 +272,19 @@ class MATMUL_FORM_KEYS(TemplateParameter):
         )
 
     @staticmethod
-    def for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0) -> list:
+    def for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0, math_fidelity=None, dest_sync=None, dest_acc=None) -> list:
         """[MATMUL_FORM_KEYS(...)] on Blackhole, else []; row_le_8 when the block's row (the larger of ct_dim and rt_dim) has 8 tiles or fewer."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
             return []
+        # a single Float32 tile at HiFi3 and half sync with a 32-bit DEST reads slower with the row MOP: the unknown-k key, which is the tile form
+        if (
+            (kt_dim, ct_dim, rt_dim) == (1, 1, 1)
+            and math_fidelity == MathFidelity.HiFi3
+            and dest_sync == DestSync.Half
+            and dest_acc == DestAccumulation.Yes
+            and formats.output_format == DataFormat.Float32
+        ):
+            return [MATMUL_FORM_KEYS(0, formats.output_format, True)]
         # the forms depend on k only as 1, 2 to 4 or 5 and more; one representative keeps the variant count down
         return [
             MATMUL_FORM_KEYS(

@@ -272,6 +272,8 @@ def test_perf_math_matmul(
                 math_fidelity=math_fidelity,
                 in1_faces=num_faces_in1,
                 in1_partial=matmul_config.face_layout_config.partial_face_in1,
+                kt_dim=matmul_config.tile_dimensions.kt_dim,
+                throttle=throttle,
             ),
             *MATMUL_K_LOOP.for_block(
                 formats,
@@ -290,6 +292,9 @@ def test_perf_math_matmul(
                 matmul_config.tile_dimensions.kt_dim,
                 matmul_config.tile_dimensions.ct_dim,
                 matmul_config.tile_dimensions.rt_dim,
+                math_fidelity=math_fidelity,
+                dest_sync=matmul_config.dest_sync,
+                dest_acc=matmul_config.dest_acc,
             ),
             *MATMUL_IN1_ALT.for_tiles(
                 formats,
