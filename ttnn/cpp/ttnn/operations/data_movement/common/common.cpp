@@ -11,7 +11,9 @@
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
+#include <bit>
 #include <numeric>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
@@ -661,38 +663,52 @@ ttnn::Tensor pad_to_tile_vol(
 }
 uint32_t wrap_index(int index, int size) { return index < 0 ? size + index : index; }
 
-// not unit tested, use with caution
-uint16_t float_to_uint16(float f) {
-    // For positive infinity, return the maximum uint16_t value
-    // For negative infinity, return the minimum uint16_t value
-    if (std::isinf(f)) {
-        return (f > 0) ? std::numeric_limits<uint16_t>::max() : std::numeric_limits<uint16_t>::min();
-    }
-
-    // For Not-a-Number (NaN), return 0
+namespace {
+// Rounds to nearest and clamps to Int's range; NaN gives 0.
+template <typename Int>
+Int saturating_float_to_int(float f) {
     if (std::isnan(f)) {
         return 0;
     }
-
-    // Handle overflow and underflow
-    const float max_uint16 = static_cast<float>(std::numeric_limits<uint16_t>::max());
-    const float min_uint16 = static_cast<float>(std::numeric_limits<uint16_t>::min());
-    if (f >= max_uint16) {
-        return std::numeric_limits<uint16_t>::max();
+    if (f >= static_cast<float>(std::numeric_limits<Int>::max())) {
+        return std::numeric_limits<Int>::max();
     }
-    if (f <= min_uint16) {
-        return std::numeric_limits<uint16_t>::min();
+    if (f <= static_cast<float>(std::numeric_limits<Int>::min())) {
+        return std::numeric_limits<Int>::min();
     }
-
-    // For all other finite values, safely cast after rounding
-    return static_cast<uint16_t>(std::round(f));
+    return static_cast<Int>(std::round(f));
 }
+}  // namespace
+
+uint16_t float_to_uint16(float f) { return saturating_float_to_int<uint16_t>(f); }
 
 // based off pack_two_bfloat16_into_uint32
 uint32_t pack_two_uint16_into_uint32(std::pair<uint16_t, uint16_t> two_uint16s) {
     // first -> lower 16
     // second -> upper 16
     return (uint32_t)two_uint16s.first | ((uint32_t)two_uint16s.second << 16);
+}
+
+uint32_t pack_scalar_into_uint32(DataType dtype, float value) {
+    // No default, so -Wswitch rejects a new DataType without a case here.
+    switch (dtype) {
+        case DataType::FLOAT32: return std::bit_cast<uint32_t>(value);
+        case DataType::BFLOAT16: return pack_two_bfloat16_into_uint32({bfloat16(value), bfloat16(value)});
+        case DataType::UINT16: {
+            const uint16_t v = float_to_uint16(value);
+            return pack_two_uint16_into_uint32({v, v});
+        }
+        // 32-bit integers truncate, matching fill_pad and the single-core tile pad.
+        case DataType::INT32: return std::bit_cast<uint32_t>(saturating_float_to_int<int32_t>(std::trunc(value)));
+        case DataType::UINT32: return saturating_float_to_int<uint32_t>(std::trunc(value));
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B:
+        case DataType::FP8_E4M3:
+        case DataType::UINT8:
+        case DataType::INT8:
+        case DataType::INVALID: break;
+    }
+    TT_THROW("Cannot pack a scalar value for dtype {}", dtype);
 }
 
 ttnn::Shape compute_padded_shape(
