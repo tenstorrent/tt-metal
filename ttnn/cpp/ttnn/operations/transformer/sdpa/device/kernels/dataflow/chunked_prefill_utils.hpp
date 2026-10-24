@@ -141,7 +141,7 @@ constexpr uint32_t dummy_kv_chunks_for_phase_alignment(uint32_t processed_chunks
     // counts need one dummy K/V pair; odd counts already leave the next writer
     // on the expected phase.
     //
-    // Deeper K/V CBs (kv_pages > 2, the TT_SOL_KV_PAGES experiment): the chain only
+    // Deeper K/V CBs (kv_pages > 2, selected by TT_SOL_KV_PAGES): the chain only
     // needs every core's write pointer at the same page when a ring iteration starts,
     // so any common residue works; pad to a whole number of cycles.
     if constexpr (kv_pages != 2) {

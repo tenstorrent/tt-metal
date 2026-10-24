@@ -4,7 +4,7 @@
 
 // Sol-Attn routing pre-pass, compute. Unit (compile-time arg 20 UNITS_PER_SHARD):
 //   0: (head h, Q-chunk tile row it), u = h*NQCT + it: the routing of the 32 local Q chunks [32*it, 32*it+32) of head
-//      h against every shard's pooled K blocks (the committed mapping; H*NQCT units).
+//      h against every shard's pooled K blocks (the default mapping; H*NQCT units).
 //   1: (head h, column shard sp), u = h*S + sp: the routing of every Q chunk of head h against shard sp's pooled K
 //      blocks only (H*S units, so the grid is filled at NQCT = 1); cb_kc holds only shard sp's tiles, the head's
 //      moments come from a partial exchange: phases A/B sum the unit's own tiles into 8 partial tiles (cb_part),
@@ -58,9 +58,9 @@ constexpr uint32_t cb_kc = 0, cb_q = 1, cb_ones = 2, cb_qsel = 3, cb_ksel = 4, c
                    cb_recv = 23, cb_pl = 24, cb_mask2 = 26, cb_shsel = 29;
 constexpr uint32_t PART_T = 8;  // partial-moment tiles: DT sums + DT sums of squares (DST 0..3 and 4..7)
 constexpr uint32_t HALF_NEG = 0xBF000000u;  // -0.5f
-// Measured on device (tau scan, 2026-10-16): SFPU unary ops (binop-with-scalar, sqrt, relu, gtz) applied to fp32 DST
-// tiles >= 4 do not take effect, while matmul/copy/mul and the SFPU binary ops work on tiles 0..7. Every unary SFPU op
-// below therefore targets DST tiles 0..3 only: column slabs of SLAB tiles with the scratch tile at index SLAB.
+// SFPU unary ops (binop-with-scalar, sqrt, relu, gtz) applied to fp32 DST tiles >= 4 do not take effect on device,
+// while matmul/copy/mul and the SFPU binary ops work on tiles 0..7. Every unary SFPU op below therefore targets DST
+// tiles 0..3 only: column slabs of SLAB tiles with the scratch tile at index SLAB.
 constexpr uint32_t SLAB = 3;        // DST tiles 0..2 hold a column slab, 3 is scratch
 constexpr uint32_t QUAD = 4;        // batch size for sections that apply unary SFPU ops
 constexpr uint32_t BIAS_BATCH = 8;  // bias tiles per DST batch; always reserved/pushed in full

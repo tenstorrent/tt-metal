@@ -26,14 +26,14 @@ from ....utils.tensor import bf16_tensor, from_torch
 from .common import GALAXY_RING
 from .test_transformer_minimax_h3 import logical_length_tensor
 
-sys.path.insert(0, os.environ.get("SOL_ATTN_WORK", "/home/losullivan/sol_attn_work"))  # /data copy on Slurm nodes
+sys.path.insert(0, os.environ.get("SOL_ATTN_WORK", "/home/losullivan/sol_attn_work"))  # SOL_ATTN_WORK holds sol_ref
 import sol_ref as R  # noqa: E402
 
 _SOL_MODE_LINE = "RingJointSDPA sol mode resolved: "
 
 
 def _sol_mode_guard(capfd, mode, state):
-    """Fail when a requested Sol mode did not reach the kernels (lead's request after the docstring-gate incident).
+    """Fail when a requested Sol mode did not reach the kernels.
 
     The program factory logs "RingJointSDPA sol mode resolved: <mode> ..." once per program creation, i.e. exactly when
     the kernels are created with that mode's named compile-time args. Read it back from the captured stderr after the
@@ -65,7 +65,7 @@ def _sol_mode_kwargs(mode):
 
     The op's docstring never lists keyword names (a check on it is always False), so probe the raw nanobind function:
     its argument error text carries the full signature. "compact" cannot be inferred, so a binding without the keyword
-    is an error there instead of a silent gather run (that silently happened once; see DESIGN_BLOCK_COMPACT.md).
+    is an error there instead of a silent gather run.
     """
     if mode in (None, "auto"):
         return {}
@@ -106,9 +106,9 @@ def _structured_qkv(S, H, rows, D, seed=1):
         pytest.param(1024, 8192, 256, 512, 1.0, id="tau1"),
         pytest.param(1184, 9000, 256, 512, 1.0, id="tau1_ragged"),
         pytest.param(1184, 9472, 256, 256, 1.5, id="tau1.5_k256"),
-        # the 5 s production geometry (4736 rows per chip, 37888 padded tokens, module chunks 320x384: 6 blocks per K chunk)
+        # the 5 s production geometry (4736 rows per chip, 37888 padded tokens, chunks 320x384: 6 blocks per K chunk)
         pytest.param(4736, 37800, 320, 384, 1.0, id="geo5s_tau1"),
-        # the 10 s production geometry (rows 9184, logical_n 73425, sink 849) that the e2e runs use
+        # the 10 s production geometry (rows 9184, logical_n 73425, sink 849)
         pytest.param(
             9184,
             73425,
@@ -225,7 +225,7 @@ def test_sol_ring_sdpa(
         return host[0, :H].float()  # [H, S*rows, D] (TP replicas identical)
 
     dense = run_ring()
-    if os.environ.get("SOL_DENSE_ONLY", "0") == "1":  # fresh-launch stress of the dense ring op (DESIGN.md 9.8)
+    if os.environ.get("SOL_DENSE_ONLY", "0") == "1":  # dense ring op only: a fresh-launch stress of the dense path
         logger.info(f"[dense-only] dense op ran; output abs mean {dense.abs().mean().item():.4f}")
         return
     sol_common = dict(

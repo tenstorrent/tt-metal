@@ -6,11 +6,11 @@
 
 Configs come from SOL_E2E_CONFIGS, ';'-separated: `dense` or
 `sol:<tau>:<dense_steps>:<dense_layers>[:<end_step>[:dp0[:<mode>[:fused[:maskreuse<N>]]]]]`
-(`dp0` = prefix query rows sparse like kijai's default instead of dense like NVlabs; `maskreuse<N>` = E10, each layer
-reuses its block mask from the previous sparse step for N-1 steps, fused pre-pass only).
-`dense_steps` = number of leading denoising forwards run dense (paper: first 20 % of steps -> 10 of 49),
+(`dp0` = route the prefix query rows sparse instead of keeping them dense as the NVlabs reference does;
+`maskreuse<N>` = each layer reuses its block mask from the previous sparse step for N-1 steps, fused pre-pass only).
+`dense_steps` = number of leading denoising forwards run dense (the paper's policy: the first 20 % of steps),
 `dense_layers` = number of leading transformer layers kept dense at every step (NVlabs H3 policy: 2),
-`end_step` = first forward after which attention is dense again (kijai end_percent; default: never).
+`end_step` = first forward after which attention is dense again (default: never).
 Frames are saved as .npy next to the mp4 so later runs can be compared without regenerating; every sol
 config reports PSNR against the dense frames of this run (or SOL_E2E_DENSE_NPY).
 
@@ -108,7 +108,7 @@ def _parse(cfg: str) -> dict:
     end_step = int(parts[4]) if len(parts) > 4 and parts[4] else 10**9
     dense_prefix = parts[5] != "dp0" if len(parts) > 5 and parts[5] else True
     mode = parts[6] if len(parts) > 6 and parts[6] else "gather"
-    fused = len(parts) > 7 and parts[7] == "fused"  # sol-video's fused scoring step instead of the ttnn pre-pass
+    fused = len(parts) > 7 and parts[7] == "fused"  # fused scoring programs instead of the ttnn-op pre-pass
     mask_reuse = int(parts[8][len("maskreuse") :]) if len(parts) > 8 and parts[8].startswith("maskreuse") else 1
     label = (
         f"sol_tau{tau:g}_ds{dense_steps}_dl{dense_layers}"
@@ -160,7 +160,7 @@ def test_sol_e2e(mesh_device, reset_seeds):
         sparse = False
         if cfg is not None and cfg["sol"]:
             # Warm-up pass: force sparse forwards so kernels compile, pre-pass constants upload and the
-            # program cache fills before the timed run (with dense_steps=10 a 3-step warm-up never got there).
+            # program cache fills before the timed run (otherwise a short warm-up stays within the dense_steps).
             step_on = state["warm"] or (cfg["dense_steps"] <= state["step"] < cfg["end_step"])
             for i, attn in enumerate(attns):
                 attn.sol_active = bool(step_on and i >= cfg["dense_layers"])
@@ -215,7 +215,7 @@ def test_sol_e2e(mesh_device, reset_seeds):
         for attn in attns:
             attn.sol_logical_n = int(layout.sequence_length)
             attn.sol_sink_tokens = video_start
-            attn.sol_reset_mask_reuse()  # E10: a new generation never reuses the previous one's mask
+            attn.sol_reset_mask_reuse()  # a new generation never reuses the previous one's mask
         state["step"] = -1
         return orig_denoise(self, transformer, layout, *args, **kwargs)
 
@@ -231,10 +231,10 @@ def test_sol_e2e(mesh_device, reset_seeds):
 
     drop_held = os.environ.get("SOL_E2E_DROP_HELD_POOLED", "0") == "1"
     post_check = os.environ.get("SOL_E2E_POSTOP_CHECK", "0") == "1"
-    # E10 retry: on these forwards, read back every layer's block mask after the pre-pass. A fresh (routed) call records
-    # (sum, hash, kept bits) per layer; a reused call is compared against the record of its layer, so a held mask whose
-    # DRAM was handed out again (the TTNN_SHARDED_UPLOAD_BUG pattern) shows up as a checksum mismatch and a different
-    # kept-bit count. Logged per forward as REUSECHECK. Costs host time on those steps only.
+    # Mask-reuse check: on these forwards, read back every layer's block mask after the pre-pass. A fresh (routed) call
+    # records (sum, hash, kept bits) per layer; a reused call is compared against the record of its layer, so a held
+    # mask whose DRAM was reallocated underneath it shows up as a checksum mismatch and a different kept-bit count.
+    # Logged per forward as REUSECHECK. Costs host time on those steps only.
     reuse_check_steps = {int(x) for x in os.environ.get("SOL_E2E_REUSE_CHECK_STEPS", "").split(",") if x}
 
     def _mask_stats(t):
@@ -259,8 +259,8 @@ def test_sol_e2e(mesh_device, reset_seeds):
         )
 
     def sol_tensors(self, q, k, v):
-        # E2 (sol-vid2): free the pooled K/V held from the previous call before the pre-pass reallocates them,
-        # restoring the generation-1 DRAM placement without recreating the instance.
+        # SOL_E2E_DROP_HELD_POOLED: free the pooled K/V held from the previous call before the pre-pass reallocates
+        # them, so every generation sees the same DRAM placement without recreating the instance.
         if drop_held and self._sol_prepass is not None:
             self._sol_prepass._pooled_k = None
             self._sol_prepass._pooled_v = None
@@ -305,7 +305,7 @@ def test_sol_e2e(mesh_device, reset_seeds):
 
     A.MiniMaxH3Attention._sol_tensors = sol_tensors
 
-    # E1 (sol-vid2): checksum the mask again after the ring op completes; a difference means its DRAM was
+    # SOL_E2E_POSTOP_CHECK: checksum the mask again after the ring op completes; a difference means its DRAM was
     # overwritten while the op was still reading it.
     orig_ring = ttnn.transformer.ring_joint_scaled_dot_product_attention
 
@@ -316,7 +316,7 @@ def test_sol_e2e(mesh_device, reset_seeds):
             sems = kw.get("multi_device_global_semaphore")
             addr = ttnn.get_global_semaphore_address(sems[0]) if sems else -1
             state.setdefault("sem_log", []).append(("s" if "sol_block_mask" in kw else "d") + f"{addr:x}")
-            if state["gen"] >= 1:  # this forward may hang before the batched line prints: log each call immediately
+            if state["gen"] >= 1:  # log each call at once so the record survives a hang before the batched line
                 logger.info(
                     f"SEMCALL gen={state['gen']} step={state['step']} call={len(state['sem_log']) - 1} {state['sem_log'][-1]}"
                 )
@@ -353,11 +353,11 @@ def test_sol_e2e(mesh_device, reset_seeds):
                     attn.sol_mask_reuse = cfg.get("mask_reuse", 1)
                     attn.sol_report_density = False
             state["cfg"] = cfg
-            state["warm"] = os.environ.get("SOL_E2E_WARM_SPARSE", "1") == "1"  # 0 = old behaviour (warm-up stays dense)
+            state["warm"] = os.environ.get("SOL_E2E_WARM_SPARSE", "1") == "1"  # 0: warm-up forwards stay dense
             with pipeline.quiet():
                 pipeline(
                     CALIBRATED_FOX_PROMPT, num_inference_steps=3, **gen_kwargs
-                )  # warm/compile this config (sparse forwards forced)
+                )  # warm-up/compile run for this config
             state["warm"] = False
             ttnn.synchronize_device(mesh_device)
             state["time_steps"] = os.environ.get("SOL_E2E_STEP_TIMES", "1") == "1"
@@ -373,8 +373,8 @@ def test_sol_e2e(mesh_device, reset_seeds):
                 t_total = time.perf_counter() - t0
                 if gen + 1 < n_gens:
                     logger.info(f"GEN {gen} of {cfg['label']} done in {t_total:.1f} s; steps {state['step'] + 1}")
-                    # Bisect knobs for the cross-generation hang: drop the pre-pass instances (fresh constants) and/or
-                    # clear the program cache (fresh ring program + workload-scoped resources) between generations.
+                    # Between generations, optionally drop the pre-pass instances (fresh constants) and/or clear the
+                    # program cache (fresh ring program + workload-scoped resources) to isolate state carried over.
                     if os.environ.get("SOL_E2E_GEN_RESET_PREPASS", "0") == "1":
                         for attn in attns:
                             attn._sol_prepass = None

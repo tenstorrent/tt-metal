@@ -9,10 +9,10 @@
 // The pooled correction feeds the per-64-token-block mean K / mean V through the normal flash step with an
 // additive column bias on the QK^T tile: ln(len_j) / scale for a block the Q chunk approximates (so the
 // kernel's exp((QK + bias - max) * scale) weights the pooled column by its token count) and a large negative
-// for blocks it computes exactly (no double counting) or padding. The pre-pass used to upload these as a
-// [1, NH, nqc_pad*32, n_blocks_pad] bf16 tensor (~100 MB/layer at 15 s); every row of a Q chunk's tile row
-// is identical and fully determined by (mask row, block geometry, logical_n), so the reader builds them in
-// L1 instead. Contract: models/tt_dit/models/transformers/minimax_h3/SOL_ATTN_INTERFACE.md.
+// for blocks it computes exactly (no double counting) or padding. Every row of a Q chunk's bias tile row is
+// identical and fully determined by (mask row, block geometry, logical_n), so the reader builds the tiles in
+// L1 instead of reading a precomputed [1, NH, nqc_pad*32, n_blocks_pad] bf16 bias tensor.
+// Contract: models/tt_dit/models/transformers/minimax_h3/SOL_ATTN_INTERFACE.md.
 //
 // Tile format: Float16_b, 4 row-major 16x16 faces (face 0: rows 0-15 x cols 0-15, face 1: rows 0-15 x
 // cols 16-31, faces 2/3 the same for rows 16-31). Faces 0/1 are written by the RISC (16 identical rows),
@@ -46,8 +46,8 @@ struct Geometry {
     // 4-tile matmul subblock) and runs at full width. Pure function of the row, applied identically by the
     // reader's counts / compaction / chain union and by the bias generator (that block is exact: bias NEG).
     bool even_up = false;
-    // Debug probe (TT_SOL_EVENUP_ALL=1): the even-up branch accepts EVERY unset full block, so the exact set becomes
-    // "all full blocks" and the output must match dense; tells whether the branch is reached on device at all.
+    // Debug knob (TT_SOL_EVENUP_ALL=1): the even-up rule accepts EVERY unset full block, so the exact set becomes
+    // "all full blocks" and the output must match dense attention.
     bool even_up_all = false;
 };
 
@@ -78,9 +78,8 @@ inline bool block_bit_full(
 // Compact mode even-up rule, applied ONCE per row (or window-aligned slice) read into L1: for every K-chunk window of
 // bpc blocks whose count of set full blocks is odd and below bpc, set the bit of the lowest unset full block. After
 // this every consumer (counts, chain union, compaction, bias generator) is a plain bit test (block_bit_full), which
-// keeps the reader's critical path O(1) per block query; the per-query window rescans of the first version cost
-// 8-14 ms per op at 15 s (DESIGN_BLOCK_COMPACT.md 11.3). Idempotent: an evened window has an even count or is full.
-// even_up_all (debug probe) sets every full block instead.
+// keeps the reader's critical path O(1) per block query instead of rescanning the window on every query.
+// Idempotent: an evened window has an even count or is full. even_up_all (debug knob) sets every full block instead.
 inline void even_up_row(
     const Geometry& geo, CoreLocalMem<volatile uint32_t> mask_row, uint32_t base, uint32_t g0, uint32_t n) {
     // mask_row[g - base] holds padded global block g (g = s * nb_pad + b) for g in [g0, g0 + n). nb_pad is a tile

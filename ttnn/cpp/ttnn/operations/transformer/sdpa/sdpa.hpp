@@ -135,8 +135,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
     std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
     // Sol-Attn block-sparse mode (see RingJointSDPAInputs); mask + pooled K + pooled V together, or none.
-    // sol_row_max is DEPRECATED: accepted (resident mode only, validated) but ignored; resident compute runs its own
-    // running row max. Callers should omit it.
+    // sol_row_max is accepted (resident mode only, shape-validated) but ignored; resident compute runs its own
+    // running row max. Omit it.
     const std::optional<ttnn::Tensor>& sol_block_mask = std::nullopt,
     const std::optional<ttnn::Tensor>& sol_pooled_k = std::nullopt,
     const std::optional<ttnn::Tensor>& sol_pooled_v = std::nullopt,

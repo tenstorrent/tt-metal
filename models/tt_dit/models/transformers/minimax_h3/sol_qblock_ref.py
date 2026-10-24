@@ -2,22 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Torch reference for the Q-block-granular Sol-Attn (Q1-Q3), and the golden attention output for either granularity.
+"""Torch reference for Q-block-granular Sol-Attn routing, and the golden attention output for either granularity.
 
 Background. Routing scores at (Q block 64 x K block 64) and then OR-reduces to the Q chunk before the kernel sees it
 (`sol_prepass.torch_reference`: `m2 = exact.transpose @ qc_pool_t`). Every Q row of the chunk is then computed against
-the union of what its TQ = q_chunk/64 Q blocks wanted, so Q-axis sparsity is discarded. Q1 removes that reduction.
+the union of what its TQ = q_chunk/64 Q blocks wanted, so Q-axis sparsity is discarded. The Q-block-granular mask
+removes that reduction.
 
 This module is the device-free half of that work:
 
-  qblock_mask()      the Q1 mask -- `exact` with the band/sink/full-block rules applied, no OR.
-  chunk_mask()       the mask as built today, for side-by-side comparison.
+  qblock_mask()      the Q-block-granular mask -- `exact` with the band/sink/full-block rules applied, no OR.
+  chunk_mask()       the Q-chunk-granular mask, for side-by-side comparison.
   sol_attention()    golden output for EITHER granularity, including the pooled correction, so the same function
-                     scores today's kernel and tomorrow's.
-  mask_density()     s (per Q-block-K-block pair) vs s' (post-OR) -- the ratio Q1 is trying to recover.
+                     scores both mask forms.
+  mask_density()     s (per Q-block-K-block pair) vs s' (post-OR) -- the ratio the Q-block form recovers.
 
-Everything is fp32 torch and runs on a laptop. Shapes follow sol_prepass: q/k/v are [S, H, rows, D], one shard per
-leading index; masks are [S, H, NQ, nbg] where NQ is geo.nb_pad for Q-block form or geo.nqc_pad for Q-chunk form.
+Everything is fp32 torch and runs without a device. Shapes follow sol_prepass: q/k/v are [S, H, rows, D], one shard
+per leading index; masks are [S, H, NQ, nbg] where NQ is geo.nb_pad for Q-block form or geo.nqc_pad for Q-chunk form.
 """
 
 from __future__ import annotations
@@ -50,7 +51,7 @@ def _pool(x, pool_t):
 def score_blocks(q, k, v, geo: SolGeometry, consts: dict, *, tau: float, scale: float, thresh_type: str = "diag"):
     """Shared front half of both granularities: pooled K/V, per-Q-block threshold, and the raw 64x64 selection.
 
-    Returns `exact` [S,H,nb_pad,nbg] AFTER the band / sink / full-block rules, which is exactly the Q1 mask.
+    Returns `exact` [S,H,nb_pad,nbg] AFTER the band / sink / full-block rules, which is the Q-block-granular mask.
     """
     log2_scale = scale * LOG2E
     q_bar, _ = _pool(q, consts["pool_t"])  # [S,H,nbp,D]
@@ -74,13 +75,12 @@ def score_blocks(q, k, v, geo: SolGeometry, consts: dict, *, tau: float, scale: 
 def spec_constants(geo: SolGeometry, *, scale: float):
     """Constants with every non-paper forcing rule disabled, for the conformant path.
 
-    Algorithm 1 defines S_i purely by the threshold. Our production constants additionally force a diagonal band,
-    sink columns, dense prefix rows and the first chunk of every shard -- all conservative (they only ADD blocks),
-    none of them in the paper. Conformance needs them off.
+    Algorithm 1 of the paper defines S_i purely by the threshold. The production constants additionally force a
+    diagonal band, sink columns, dense prefix rows and the first chunk of every shard -- all conservative (they only
+    ADD blocks), none of them in the paper. Conformance needs them off.
 
-    `force_first_chunk=False` is the one with a kernel consequence: compute_streaming documents that "an iteration
-    with zero computed chunks is not a supported state", so the device path needs to tolerate an empty ring
-    iteration before this can be used there. It is free here in torch.
+    `force_first_chunk=False` is the one with a kernel consequence: the device kernel does not support a ring
+    iteration with zero computed chunks, so this setting is usable only in torch.
 
     Note band=-1, not 0: the rule is |q_block - k_block| <= band, so band=0 still forces the diagonal block. -1
     makes the predicate unsatisfiable, which is the only way to disable it.
@@ -94,7 +94,7 @@ def spec_mask(q, k, v, geo: SolGeometry, consts: dict, *, tau: float, scale: flo
     """Sol-Attn exactly as published: S_i = {j : s_ij > tau_i}, tau_i = mu_i + beta*sigma_i, per QUERY BLOCK.
 
     Requires consts from spec_constants() (no forcing) and uses the full d x d second moment, which is what the
-    paper's O(d^2) auxiliary storage buys -- the diagonal form our device kernel implements is an approximation of
+    paper's O(d^2) auxiliary storage buys -- the diagonal form the device kernel implements is an approximation of
     sigma_i, so it selects a different set even at the same beta.
     """
     out = score_blocks(q, k, v, geo, consts, tau=tau, scale=scale, thresh_type="full")
@@ -103,14 +103,14 @@ def spec_mask(q, k, v, geo: SolGeometry, consts: dict, *, tau: float, scale: flo
 
 
 def qblock_mask(q, k, v, geo: SolGeometry, consts: dict, **kw):
-    """Q1 alone: no OR, but keeping today's diagonal threshold and forcing rules. The intermediate step, not the spec."""
+    """Q-block-granular mask: no OR, but with the production diagonal threshold and forcing rules (not the spec)."""
     out = score_blocks(q, k, v, geo, consts, **kw)
     out["block_mask"] = out["exact"]
     return out
 
 
 def chunk_mask(q, k, v, geo: SolGeometry, consts: dict, **kw):
-    """Today's mask: `exact` OR-reduced onto Q chunks. [S,H,nqc_pad,nbg]. Mirrors sol_prepass.torch_reference."""
+    """Q-chunk-granular mask: `exact` OR-reduced onto Q chunks, [S,H,nqc_pad,nbg] (as sol_prepass.torch_reference)."""
     out = score_blocks(q, k, v, geo, consts, **kw)
     m2 = (out["exact"].transpose(2, 3) @ consts["qc_pool_t"]).transpose(2, 3)  # any Q block of the chunk
     out["block_mask"] = ((m2 + consts["force_row"]) > 0.5).float() * consts["full_row"]
@@ -118,7 +118,7 @@ def chunk_mask(q, k, v, geo: SolGeometry, consts: dict, **kw):
 
 
 def mask_density(exact, chunk, consts):
-    """s vs s'. The gap between them is what Q1 recovers; under independence s' = 1-(1-s)^TQ."""
+    """s vs s'. The gap between them is what the Q-block form recovers; under independence s' = 1-(1-s)^TQ."""
     valid = consts["full_row"].reshape(-1) > 0.5  # only full blocks are exact-eligible
     return {
         "s_qblock": exact[..., valid].mean().item(),
@@ -128,18 +128,18 @@ def mask_density(exact, chunk, consts):
 
 
 def build_pages(mask, geo: SolGeometry, *, page_blocks: int):
-    """Q2's packing, as a reference. Returns pages[(s_q, h, q_unit)] = list of (ring_iter, [global block ids]).
+    """Cross-chunk page packing reference. Returns pages[(s_q, h, q_unit)] = list of (ring_iter, [global block ids]).
 
-    Two constraints shape this, and together they make the plan much cheaper than it first looks:
+    Two constraints shape this:
 
     1. A page may NOT span shards. The ring delivers shard r's K/V only during ring iteration r, so blocks from
        different shards are never co-resident. Packing is therefore within a ring iteration, across K-chunk
-       boundaries -- which is where the win is anyway (today a page is confined to ONE chunk).
+       boundaries (without packing, a page is confined to ONE chunk).
 
     2. Within a shard, blocks arrive in chunk order down the chain. So the kernel does not need a precomputed page
        layout at all: it accumulates kept blocks into a page buffer as they stream past, fires the matmul when the
        buffer reaches page_blocks, and flushes a partial page at the end of the shard. The "plan" is then just the
-       Q-block mask that Q1 already produces -- no new addressing format, no (chunk, block) indirection.
+       Q-block mask -- no new addressing format, no (chunk, block) indirection.
 
     This function models exactly that streaming accumulation, so the kernel can be diffed against it.
     """
@@ -166,11 +166,11 @@ def build_pages(mask, geo: SolGeometry, *, page_blocks: int):
 
 
 def l1_budget(*, q_rows: int, k_keys: int, head_dim: int, v_shares_k: bool = False, apply_mask: bool = True):
-    """Circular-buffer tile counts, mirroring ring_joint_sdpa_program_factory.cpp:1418-1431.
+    """Circular-buffer tile counts, mirroring the ring_joint_sdpa program factory's CB sizing.
 
-    Used to answer: how large can a Q2 page be once Q1 shrinks the compute unit? Every Sq-dependent CB scales with
-    the Q rows, and the K/V buffers -- the ones a larger page grows -- do not. Dropping from a 256-row Q chunk to a
-    64-row Q block therefore frees L1 that can be spent on a bigger page, which is what recovers the visit win.
+    Used to answer: how large can a page be once the Q-block form shrinks the compute unit? Every Sq-dependent CB
+    scales with the Q rows, and the K/V buffers -- the ones a larger page grows -- do not. Dropping from a 256-row Q
+    chunk to a 64-row Q block therefore frees L1 that can be spent on a bigger page.
 
     Tile COUNTS only; the formats differ per CB (qk is fp32 when fp32_dest_acc_en, mask is bf16), so convert with
     the real per-CB widths before trusting a byte figure.
@@ -194,7 +194,7 @@ def l1_budget(*, q_rows: int, k_keys: int, head_dim: int, v_shares_k: bool = Fal
 def max_page_blocks(*, q_rows: int, head_dim: int, budget_tiles: int, block: int = 64, **kw):
     """Largest page (in 64-key blocks) whose CBs fit a tile budget, for a given Q unit size.
 
-    Call it twice -- once at today's Q chunk, once at a 64-row Q block -- to see what Q1 buys for Q2.
+    Call it twice -- once at the Q chunk size, once at a 64-row Q block -- to compare the two granularities.
     """
     best = 0
     for nb in range(1, 65):
@@ -204,7 +204,7 @@ def max_page_blocks(*, q_rows: int, head_dim: int, budget_tiles: int, block: int
 
 
 def page_stats(pages, *, page_blocks: int):
-    """Visit count and mean page occupancy -- the two numbers Q2 is trying to move."""
+    """Visit count and mean page occupancy of a page plan."""
     allp = [p for v in pages.values() for p in v]
     if not allp:
         return {"visits": 0, "fill": 0.0, "blocks": 0}

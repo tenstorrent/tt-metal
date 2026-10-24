@@ -196,7 +196,7 @@ public:
      * wait_data() -- and "link" means the ChainLink object: when K and V travel over the same object (MHA's
      * head chain), their handshakes form one sequence, K(p), V(p), K(p+1), ..., and only the next one in that
      * sequence may be signalled early. Signalling K(p+1) before V(p)'s wait_data() hands the upstream's V(p)
-     * forward a second ready count, and its equality wait never returns (M8's first run hung that way).
+     * forward a second ready count, and its equality wait never returns.
      */
     void signal_ready(Noc noc) const {
         Semaphore<>(receiver_sem_id_).set(INVALID);

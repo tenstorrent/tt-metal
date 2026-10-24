@@ -7,13 +7,13 @@
 Same outputs and semantics as :class:`sol_prepass.SolPrepass` (its ``torch_reference`` is the reference for both):
 
 * ``sol_block_pool`` (kernels ``sol_kernels/sol_pool_*.cpp``): per-64-token-block means of the local Q/K/V shards,
-  one program for the three tensors, every core busy; replaces the three [R x NBP] pooling matmuls (8.8 ms at 10 s).
+  one program for the three tensors, every core busy; replaces the three [R x NBP] pooling matmuls.
 * ``sol_route`` (``sol_kernels/sol_route_*.cpp``): moments, thresholds, proxy scores, Q-chunk union, K-chunk union,
-  uint32 mask and the column-bias tiles in one program; replaces ~56 small ttnn ops.
+  uint32 mask and the column-bias tiles in one program; replaces the chain of small ttnn ops in SolPrepass.
 
 Geometry constants are built on host once per geometry (cached per mesh, like SolPrepass) and the program
 descriptors are cached with them; per call only the buffer addresses are patched (generic_op re-applies runtime
-args on a program-cache hit). Plan and measurements: ~/sol_attn_work/PREPASS_FUSED_PLAN.md.
+args on a program-cache hit).
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ from .sol_prepass import (
 
 KERNEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sol_kernels")
 TILE_BYTES = 2048
-L1_CB_BUDGET = 1_200_000  # bytes of circular buffers per core we allow (Blackhole L1 = 1.5 MB)
+L1_CB_BUDGET = 1_200_000  # circular-buffer bytes per core the route program may use (Blackhole L1 = 1.5 MB)
 SCRATCH_PAGES = 8
 
 
@@ -137,11 +137,9 @@ class SolPrepassFused:
     def new_generation(cls) -> None:
         """Drop the shared per-geometry state (uploaded constants, program descriptors) so the next call re-uploads it.
 
-        E13 (2026-10-20): constants uploaded once and kept across generations lose their device contents between two
-        generations (the VAE decode / prompt encoder run in between; see TTNN_SHARDED_UPLOAD_BUG.md), which made every
-        sparse generation after the first of a process wrong at 5 s / 15 s (E12: PSNR 23.5 -> 16.6, mask 70 % denser).
-        Re-uploading per generation restores the first generation bit for bit at no measurable cost. Called by
-        MiniMaxH3Attention when the caller sets `sol_logical_n` for a request.
+        The device contents of constants uploaded once are not preserved across generations (other models, such as
+        the VAE decoder and the prompt encoder, run in between), so the constants are re-uploaded per generation.
+        Called by MiniMaxH3Attention when the caller sets `sol_logical_n` for a request.
         """
         cls._shared.clear()
         cls._generation += 1
@@ -166,9 +164,9 @@ class SolPrepassFused:
         units_per_shard: bool | None = None,
         mask_reuse: int = 1,
     ):
-        # "compact" (tier 3, DESIGN_BLOCK_COMPACT.md) consumes the gather-form block mask: same outputs as "gather".
-        # emit_chunk_union=True additionally writes the (Q chunk x K chunk) union row as "chunk_union" (dormant option).
-        # "pack" is compact plus the ring op's Q2 cross-chunk packing; the pre-pass output is identical to compact.
+        # "compact" consumes the gather-form block mask: same outputs as "gather".
+        # emit_chunk_union=True additionally writes the (Q chunk x K chunk) union row as "chunk_union" (optional).
+        # "pack" is compact plus the ring op's cross-chunk packing; the pre-pass output is identical to compact.
         assert mode in ("gather", "chunk", "compact", "pack"), mode
         assert thresh_type == "diag", "fused pre-pass implements the diag threshold (H3 policy)"
         self.mode = mode
@@ -179,16 +177,16 @@ class SolPrepassFused:
         self.thresh_type = thresh_type
         self.band = band
         # compact mode keeps the gather-mode convention: block 0 of every shard is forced (a Q chunk computing zero
-        # chunks in a ring iteration deadlocks the accumulator staging protocol; sol-vid2, 2026-10-16).
+        # chunks in a ring iteration deadlocks the ring op's accumulator staging protocol).
         self.force_first_chunk = force_first_chunk
         self.dense_prefix_queries = dense_prefix_queries
-        # Same convention as SolPrepass: None -> TT_SOL_EMIT_BIAS (default 1 until the ring op generates the bias).
+        # Same convention as SolPrepass: None -> TT_SOL_EMIT_BIAS (default 1).
         self.emit_bias = (os.environ.get("TT_SOL_EMIT_BIAS", "1") == "1") if emit_bias is None else bool(emit_bias)
         self.emit_chunk_union = bool(emit_chunk_union) and mode != "chunk"
         self.debug_moments = bool(debug_moments)  # route program writes mean/E2/var tiles into the bias tensor (tests)
-        # E1 (sol_attn_next_optimizations item 2): route-program unit = (head, shard) instead of (head, Q-chunk tile row),
-        # H*S units instead of H*NQCT (14 at NQCT = 1) over the 120-core grid. None -> SOL_ROUTE_UNITS_PER_SHARD (default
-        # 1); 0 reproduces the committed program. Applies to the gather-form mask (MODE 1) only, see _route_program.
+        # Route-program unit = (head, shard) instead of (head, Q-chunk tile row): H*S units instead of H*NQCT, which
+        # keeps the core grid filled when NQCT is small. None -> SOL_ROUTE_UNITS_PER_SHARD (default 1); 0 selects the
+        # (head, Q-chunk tile row) unit. Applies to the gather-form mask (MODE 1) only, see _route_program.
         self.route_units_per_shard = (
             (os.environ.get("SOL_ROUTE_UNITS_PER_SHARD", "1") == "1")
             if units_per_shard is None
@@ -196,7 +194,7 @@ class SolPrepassFused:
         )
         self.route_units: tuple[int, int] | None = None  # (unit count, units_per_shard) of the last built route program
         self.math_fidelity = math_fidelity if math_fidelity is not None else ttnn.MathFidelity.HiFi4
-        # row_max=True (resident mode, M4): also return "row_max" from sol_prepass.compute_row_max, the same ttnn-op
+        # row_max=True (resident mode): also return "row_max" from sol_prepass.compute_row_max, the same ttnn-op
         # chain SolPrepass uses (not fused; it is a handful of small ops on top of one tile-sized all-gather).
         self.row_max = bool(row_max)
         self._row_max_consts: dict | None = None
@@ -207,9 +205,9 @@ class SolPrepassFused:
             if self.row_max
             else None
         )
-        # E10 mask reuse: N > 1 keeps the route outputs (block mask, bias, union) of a call and reuses them for the next
+        # Mask reuse: N > 1 keeps the route outputs (block mask, bias, union) of a call and reuses them for the next
         # N-1 calls, skipping the route program; the pool program and the two gathers still run every call because the
-        # ring op's correction term needs the current block means. 1 (default) = route every call (committed behaviour).
+        # ring op's correction term needs the current block means. 1 (default) = route every call.
         self.mask_reuse = int(mask_reuse)
         self._held_route: tuple | None = None  # (mask, bias, union) of the last routed call, while mask_reuse > 1
         self._reuse_left = 0  # calls the held route may still serve
@@ -336,9 +334,9 @@ class SolPrepassFused:
         )
 
     def _compute_config(self, full_sync: bool):
-        # fp32 DST holds 4 tiles per section in half-sync mode and 8 in full-sync mode (tests/ttnn/unit_tests/kernel_lib/
-        # test_chain_oob.py). The route kernel addresses DST tiles 0..7, so it must run full-sync; the pool kernel
-        # uses DT (<= 4) tiles and keeps the math/pack overlap of half-sync.
+        # fp32 DST holds 4 tiles per section in half-sync mode and 8 in full-sync mode
+        # (tests/ttnn/unit_tests/kernel_lib/test_chain_oob.py). The route kernel addresses DST tiles 0..7, so it must
+        # run full-sync; the pool kernel uses DT (<= 4) tiles and keeps the math/pack overlap of half-sync.
         return ttnn.ComputeConfigDescriptor(
             math_fidelity=self.math_fidelity, math_approx_mode=False, fp32_dest_acc_en=True, dst_full_sync_en=full_sync
         )
@@ -446,9 +444,9 @@ class SolPrepassFused:
         acc_in = [a for t in ins for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
         acc_out = [a for t in (mask, bias, union) for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
         nx, ny, cores = self._cores()
-        # Unit = (head, shard): H*S units. The chunk-form outputs (MODE 0 mask, MODE 2 union row) assemble whole rows from
-        # every shard in the writer's L1 row buffer (their per-shard word ranges are not NoC-aligned), so those modes keep
-        # the (head, Q-chunk tile row) unit with H*NQCT units; the kernels static_assert the same rule.
+        # Unit = (head, shard): H*S units. The chunk-form outputs (MODE 0 mask, MODE 2 union row) assemble whole rows
+        # from every shard in the writer's L1 row buffer (their per-shard word ranges are not NoC-aligned), so those
+        # modes keep the (head, Q-chunk tile row) unit with H*NQCT units; the kernels static_assert the same rule.
         units_per_shard = 1 if (self.route_units_per_shard and mode == 1) else 0
         units = H * S if units_per_shard else H * NQCT
         self.route_units = (units, units_per_shard)
@@ -456,7 +454,8 @@ class SolPrepassFused:
         mask_t = NKCLT if mode == 0 else NBPT  # per shard
         # (head, shard) units read only their shard's pooled K and exchange partial moments between the S cores of
         # a head (sol_route_reader.cpp): the reader needs every logical core's NoC coordinates (common runtime args
-        # 8..) and a semaphore; cb 23 receives the peers' partials (S slots), 24 ships this unit's, 25 the head totals.
+        # 10..) and a semaphore; cb 23 receives the peers' partial moments (gather tiles), 24 ships this unit's,
+        # 26 holds the reader's copy of the mask tiles and 29 the shard-row selectors.
         core_xy = self._core_noc_xy(nx, ny) if units_per_shard else []
         st["route_core_xy"] = core_xy
         sizes = {

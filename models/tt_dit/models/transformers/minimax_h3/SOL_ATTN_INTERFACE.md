@@ -1,8 +1,8 @@
 # Sol-Attn on the MiniMax-H3 ring-joint SDPA: interface between the routing pre-pass and the attention kernel
 
-Status: 2026-10-15. Owners: attention kernel + this contract: Sol-Attn attention port (session `sol-vid2`);
-routing pre-pass producer: today `sol_prepass.py` (`SolPrepass`), being replaced by the fused proxy-scoring
-kernel (`sol_prepass_fused.py`, session `sol-video`). Changing anything in sections 2-4 requires both owners.
+Two components share this contract: the attention kernel (the ring-joint SDPA op and its Sol-Attn modes) and
+the routing pre-pass producer (`sol_prepass.py`, `SolPrepass`, built from ttnn ops, or the fused proxy-scoring
+kernel in `sol_prepass_fused.py`, `SolPrepassFused`). Sections 2-4 are the interface between them.
 
 ## 1. Where the boundary sits
 
@@ -47,7 +47,7 @@ Geometry (`sol_prepass.SolGeometry`): `S` = SP shards (ring size), `rows` = padd
 | `sol_pooled_k` | `[1, H, n_blocks_pad, D]` | `bf16`, TILE | row `s*nb_pad + b` = **mean** over the valid tokens of block `b` of shard `s` (the ragged tail block divides by its true length). Padding rows (`b >= nb`, or blocks with no valid token) are zero. |
 | `sol_pooled_v` | `[1, H, n_blocks_pad, D]` | `bf16`, TILE | same blocking, **mean** V (not the paper's sum: the kernel multiplies by the token count through the bias, see section 3). |
 | `sol_bias` (optional, legacy) | `[1, H, nqc_pad*32, n_blocks_pad]` | `bf16`, TILE | tile row `qc` (rows `32*qc .. 32*qc+31`, all identical) = column bias per padded block, section 3. Omit it: the kernel generates it. Kept only so the generator can be A/B-validated against it. |
-| `sol_row_max` (deprecated, ignored) | `[1, H, q_rows_pad, 32]` | `bf16`, TILE | Optional, accepted by `sol_mode="resident"` only and shape-validated, but no longer read: resident compute runs its own (lazy) running row max. Omit it (`sol_prepass.compute_row_max` is not needed). |
+| `sol_row_max` (deprecated, ignored) | `[1, H, q_rows_pad, 32]` | `bf16`, TILE | Optional, accepted by `sol_mode="resident"` only and shape-validated, but not read: resident compute runs its own (lazy) running row max. Omit it (`sol_prepass.compute_row_max` is not needed). |
 
 Rules the kernel relies on:
 
@@ -58,8 +58,8 @@ Rules the kernel relies on:
   chunk, global padded block) in gather/compact mode; non-zero = exact. No bit packing, no extra flags. Padding
   words are ignored.
 * **At least one exact chunk per (Q chunk, shard), in every mode.** A ring iteration in which a Q chunk computes
-  nothing is not a supported state of the accumulator staging protocol (compute never reaches its last-chunk save,
-  the writer waits: deadlock, found 2026-10-16). Producers therefore force chunk 0 of every shard (chunk mode) or
+  nothing is not a supported state of the accumulator staging protocol (compute never reaches its last-chunk save
+  and the writer waits for it: deadlock). Producers therefore force chunk 0 of every shard (chunk mode) or
   block 0 of every shard (gather and compact modes; `force_first_chunk=True` in `SolPrepass`, same in the fused
   producer). The reader forces block 0 itself on an all-zero compact-mode row slice as a fallback, but then that
   block is both computed and pooled (a small numerical deviation), so the producer rule is the contract. The forced
@@ -67,7 +67,7 @@ Rules the kernel relies on:
 * **Lifetime**: the tensors must stay allocated until the op has executed. Because ttnn executes
   asynchronously, the caller keeps the Python references at least until the next op that synchronises;
   `MiniMaxH3Attention._sol_tensors` returns them as the op's kwargs, which keeps them alive through the
-  enqueue (see the open question in section 6).
+  enqueue (see section 6).
 * **Program cache**: the op's program hash covers the mask shape, pooled shape, chunk/gather mode and whether
   `sol_bias` is present. Values do not affect the hash; addresses are re-bound on every call.
 
@@ -118,7 +118,7 @@ libm and torch before rounding, which the A/B test (`SOL_GEN_BIAS=ab`) checks fo
   `test_sol_realdata_minimax_h3.py` (captured activations, timing per tau, `SOL_GEN_BIAS=1`),
   `test_sol_prepass_minimax_h3.py` (pre-pass vs its torch mirror; a fused producer should pass the same check).
 
-## 6. Open questions / assumptions recorded for the reviewer
+## 6. Assumptions
 
 1. The generated-bias path assumes `k_chunk` is a multiple of 64 and at most 64 K chunks per shard (both
    already validated by the op for chunk mode).
@@ -127,6 +127,5 @@ libm and torch before rounding, which the A/B test (`SOL_GEN_BIAS=ab`) checks fo
    row-major uint32 with one row per page) breaks this.
 3. The fused producer may want to emit the mask directly in the kernel's `[1, H, nqc_pad, nkc_pad]` form
    without the block-level intermediate; nothing in the kernel depends on how the row was built.
-4. Tensor lifetime vs asynchronous execution (section 2) is the attention side's responsibility; if the
-   cross-generation hang (DESIGN.md 8.6) turns out to be a lifetime/placement effect, the fix lands in
-   `MiniMaxH3Attention`, not in the producer.
+4. Tensor lifetime vs asynchronous execution (section 2) is the attention side's responsibility: any
+   lifetime/placement fix lands in `MiniMaxH3Attention`, not in the producer.

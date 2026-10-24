@@ -140,27 +140,26 @@ class MiniMaxH3Attention(Module):
         self.sol_thresh_type = sol_thresh_type
         self.sol_band = sol_band
         # How the prefix (text + condition) QUERY rows -- the 64-token blocks whose first token lies before
-        # `sol_sink_tokens` -- get their exact (dense) attention, as the NVlabs reference recomputes them:
+        # `sol_sink_tokens` -- get their exact (dense) attention, as the reference implementation recomputes them:
         #   "separate": the sparse op treats them like every other row and `_sol_prefix_dense_rows` recomputes
         #               them exactly afterwards, spread over the ring (default; see that method).
-        #   "fused":    the pre-pass marks them dense inside the sparse op. Measured 2026-10-21: that puts fully
-        #               dense query chunks on a few cores of the ring's first chip, and the chain lockstep drags
-        #               every core of that chip to dense pace (26.6 ms of the 27 ms op at 10 s while the other
-        #               28 chips finish in 9 ms).
+        #   "fused":    the pre-pass marks them dense inside the sparse op. That puts fully dense query chunks on
+        #               a few cores of the ring's first chip, and the chain lockstep drags every core of that chip
+        #               to dense pace.
         #   "off":      no exact recompute; the prefix rows get the ordinary kept/pooled treatment.
         assert sol_prefix_mode in ("separate", "fused", "off"), sol_prefix_mode
         self.sol_prefix_mode = sol_prefix_mode
         if sol_dense_prefix is not None:  # back-compat: the old boolean (True = fused rule, False = off)
             self.sol_dense_prefix = sol_dense_prefix
         # Use ttnn.experimental.broadcast_ring (when the build has it) to hand the prefix queries around the
-        # ring, instead of an all-gather; SOL_PREFIX_BROADCAST=0 forces the all-gather for an A/B.
+        # ring, instead of an all-gather; SOL_PREFIX_BROADCAST=0 forces the all-gather.
         self.sol_prefix_broadcast = os.environ.get("SOL_PREFIX_BROADCAST", "1") != "0"
         self._sol_prefix_cache: dict = {}
         self.sol_mode = sol_mode  # "gather" (block gathering, chains off) or "chunk" (compute skip, chains on)
         self.sol_fused = (
             sol_fused  # fused pre-pass (sol_prepass_fused.SolPrepassFused) instead of the ttnn-op SolPrepass
         )
-        # E10: reuse each layer's block mask from its previous sparse call for N-1 calls (fused pre-pass only; 1 = off).
+        # Reuse each layer's block mask from its previous sparse call for N-1 calls (fused pre-pass only; 1 = off).
         self.sol_mask_reuse = sol_mask_reuse
         self.sol_active = False
         self._sol_logical_n: int | None = None
@@ -517,8 +516,7 @@ class MiniMaxH3Attention(Module):
             compute_with_storage_grid_size=ttnn.CoreCoord(cols + 1, self.full_grid.y),
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
-            # False is more correct. SOL_EXP_APPROX=1 switches the ring op's exp to the approximate SFPU mode for
-            # an A/B (the sparse step's cost is now dominated by the exp on the pack thread, 2026-10-22).
+            # False is more correct. SOL_EXP_APPROX=1 switches the ring op's exp to the approximate SFPU mode.
             exp_approx_mode=os.environ.get("SOL_EXP_APPROX", "0") == "1",
         )
 
@@ -530,9 +528,9 @@ class MiniMaxH3Attention(Module):
 
     @sol_logical_n.setter
     def sol_logical_n(self, value: int | None) -> None:
-        # The caller sets the logical sequence length once per request: that is the generation boundary. E13: drop
-        # this module's pre-pass instance and the shared uploaded constants so the request re-uploads them (the
-        # constants kept across generations lose their device contents; see SolPrepassFused.new_generation).
+        # The caller sets the logical sequence length once per request: that is the generation boundary. Drop this
+        # module's pre-pass instance and the shared uploaded constants so the request re-uploads them (the device
+        # contents of the constants are not preserved across generations; see SolPrepassFused.new_generation).
         self._sol_logical_n = value
         self._sol_prepass = None
         SolPrepassFused.new_generation()
@@ -561,7 +559,7 @@ class MiniMaxH3Attention(Module):
                 band=self.sol_band,
                 dense_prefix_queries=self.sol_prefix_mode == "fused",
                 mode=self._sol_prepass_mode,
-                # compact / pack / resident generate the pooled-column bias on device: skip the ~87 MB bias write
+                # compact / pack / resident generate the pooled-column bias on device: skip the bias tensor
                 emit_bias=not (self._sol_compact_family or self.sol_mode == "resident"),
                 # resident runs its own (lazy) running row max on device; the pre-pass's a-priori per-row bound
                 # (row_max=True -> sol_row_max) is deprecated: accepted by the op but ignored.
@@ -589,10 +587,10 @@ class MiniMaxH3Attention(Module):
         if self.sol_mode == "resident" and out.get("row_max") is not None:
             kwargs["sol_row_max"] = out["row_max"]  # deprecated: resident only, accepted but ignored by the op
         if self._sol_compact_family or self.sol_mode == "resident":
-            # Explicit op mode (sol-vid2's `sol_mode` keyword). The docstring never lists keyword names, so probe the raw
+            # Explicit op mode (the op's `sol_mode` keyword). The docstring never lists keyword names, so probe the raw
             # binding: calling it with no arguments raises a TypeError whose text lists the accepted keywords. Compact
-            # must not silently fall back to gather (2026-10-16: every "compact" measurement before this fix was gather).
-            # "pack" is compact plus the op's Q2 cross-chunk packing (needs the 64-row Q chunk).
+            # must not silently fall back to gather when the binding lacks the keyword.
+            # "pack" is compact plus the op's cross-chunk packing (needs the 64-row Q chunk).
             if not _binding_has_sol_mode():
                 raise RuntimeError(
                     f"sol_mode={self.sol_mode!r} requested but the installed ring_joint SDPA binding has no sol_mode keyword"
@@ -672,17 +670,15 @@ class MiniMaxH3Attention(Module):
         """Exact attention for the prefix query rows, as a separate op after the sparse ring op.
 
         The prefix rows live on the ring's first chip. Every chip gets a copy of them (one all-gather), runs
-        a plain dense SDPA of those rows against its OWN K/V shard, and the eight partial results are merged
+        a plain dense SDPA of those rows against its OWN K/V shard, and the per-chip partial results are merged
         the way ring attention merges them -- which needs each chip's softmax normalizer Z_r. The plain SDPA
         does not output it, so the inputs carry a marker: 32 spare channels are appended to Q/K/V; one probe
         key (K = 0, V = unit vector in the spare channel) is appended to each shard, so the spare channel of
         the output is exactly 1 / (Z_r + 1); pad keys get a -1 in the spare channel of K against a +4096 in
         Q, which masks them (logit -362) without an attn_mask tensor. One all-reduce then sums the
         renormalized numerators and the Z_r, and the first chip's rows are overwritten with the quotient.
-
-        Cost at 10 s (estimate): 0.6 ms of SDPA (every chip attends only its 9184 keys, 140 work items over
-        130 cores) plus the three CCLs on a 4.6 MB tensor; the data prep (pads and adds) is ~250 MB of DRAM
-        traffic. Against the fused rule's 17 ms straggler.
+        Every chip attends only its own keys, so the dense work is spread over the ring instead of landing
+        on the first chip's cores (the "fused" prefix mode).
         """
         rows, H, D, X = q_BHNE.shape[2], self.n_local_heads, self.head_dim, self._SOL_PREFIX_EXTRA
         n_pre = self._sol_prefix_rows(rows)
@@ -692,8 +688,8 @@ class MiniMaxH3Attention(Module):
         ccl, sp_axis = self.ccl_manager, self.sp_mesh_axis
 
         # 1. the prefix queries, from the ring's first chip to every chip. The one-sender ring broadcast
-        # (branch sosborne/bcast_ring; per ring line, so the TP-sharded heads are fine) moves the 4.6 MB
-        # once around the ring; without it, an all-gather moves eight copies and we keep the first.
+        # (per ring line, so the TP-sharded heads are fine) moves the prefix once around the ring; without it,
+        # an all-gather moves one copy per chip and the first chip's copy is kept.
         q_pre = ttnn.slice(q_BHNE, [0, 0, 0, 0], [1, H, n_pre, D])
         if self.sol_prefix_broadcast and hasattr(ttnn.experimental, "broadcast_ring"):
             q_bc = ttnn.experimental.broadcast_ring(
@@ -770,11 +766,10 @@ class MiniMaxH3Attention(Module):
         ttnn.deallocate(out_BHNE)
         return new_out
 
-    # Resident mode (sol_attn_status_2026-10-21.md 4a, M1 + M2): the op streams each K/V piece once per core and
-    # applies it to every resident 64-row query chunk, so the query chunk is the 64-token block (no union over
-    # blocks). Since M2 the exact set is per 64-token block: the mask is the block-form one the "compact" pre-pass
-    # produces (block 0 of every shard forced), and the bias is generated on device.
-    # SOL_RESIDENT_Q_CHUNK overrides it (128 while the base kernel's 64-row path is under investigation, 2026-10-21).
+    # Resident mode: the op streams each K/V piece once per core and applies it to every resident 64-row query
+    # chunk, so the query chunk is the 64-token block (no union over blocks). The exact set is per 64-token block:
+    # the mask is the block-form one the "compact" pre-pass produces (block 0 of every shard forced), and the bias
+    # is generated on device. SOL_RESIDENT_Q_CHUNK overrides the resident query chunk size (default 64).
     _SOL_RESIDENT_Q_CHUNK = int(os.environ.get("SOL_RESIDENT_Q_CHUNK", "64"))
 
     @property

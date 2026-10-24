@@ -4,9 +4,9 @@
 
 """CPU-only validation of the Q-block Sol-Attn reference (sol_qblock_ref). No device, no mesh -- plain torch.
 
-This is the gate the Q1-Q3 kernel work is built on: if the reference is wrong, every golden output it later produces
-is wrong too. It also quantifies the trade Q1 actually makes, which is not purely a win -- see
-test_qblock_is_a_compute_accuracy_retrade.
+The reference is the gate the Q-block kernel work is built on: if it is wrong, every golden output it produces is
+wrong too. The file also quantifies the trade the Q-block compute unit makes, which is not purely a win -- see
+test_chunk_mask_is_an_unspecified_superset.
 
 Run:  pytest models/tt_dit/tests/models/minimax_h3/test_sol_qblock_ref_minimax_h3.py -s
 """
@@ -84,7 +84,7 @@ def test_qblock_mask_is_a_subset_of_the_chunk_mask():
 
 
 def test_density_gap_is_what_q1_recovers():
-    """Reports s (Q-block) vs s' (post-OR). s' >= s always; the ratio is Q1's compute headroom."""
+    """Reports s (Q-block) vs s' (post-OR). s' >= s always; the ratio is the Q-block unit's compute headroom."""
     geo, consts, q, k, v = _setup()
     e = qblock_mask(q, k, v, geo, consts, tau=1.0, scale=SCALE)["block_mask"]
     c = chunk_mask(q, k, v, geo, consts, tau=1.0, scale=SCALE)["block_mask"]
@@ -100,13 +100,13 @@ def test_chunk_mask_is_an_unspecified_superset():
     S_i = {j : s_ij > tau_i}, with the kernel's outer loop running over query blocks of size B and staging tau_i per
     block. The only union in the paper is S_i = U_t S_i^(t), over K chunks for a fixed i.
 
-    Our kernel's compute unit is a Q chunk (256-320 rows), coarser than B = 64, so it ORs TQ query blocks together and
+    The kernel's compute unit is a Q chunk (256-320 rows), coarser than B = 64, so it ORs TQ query blocks together and
     computes a strict SUPERSET of S_i. That is conservative -- extra blocks are computed exactly rather than pooled,
-    so the output moves toward dense -- but it is not the specified algorithm, and it is what Q1 removes.
+    so the output moves toward dense -- but it is not the specified algorithm, and it is what the Q-block unit removes.
 
     Hence the assertion: at matched tau the Q-block mask (the spec) must show error >= the Q-chunk mask (the superset).
     This is expected and correct, NOT a regression. The printed pair gives the beta offset needed to recalibrate the
-    spec-conformant path to today's density.
+    spec-conformant path to the Q-chunk density.
     """
     geo, consts, q, k, v = _setup()
     ref = _dense(q, k, v)
@@ -148,7 +148,7 @@ def test_spec_selection_is_exactly_the_threshold_rule():
 
 
 def test_diagonal_threshold_is_not_the_papers_threshold():
-    """Deviation 2, pinned: the device kernel's diag variance drops every cross-dimension covariance term.
+    """Pinned deviation from the paper: the device kernel's diag variance drops every cross-dimension covariance term.
 
     The paper's O(d^2) auxiliary storage is the full second moment M, giving sigma_i^2 = q_i^T M q_i - mu_i^2. The
     diagonal form keeps only diag(M) -- 128 of 16384 entries at D=128 -- so it selects a different set at the same
@@ -165,9 +165,9 @@ def test_diagonal_threshold_is_not_the_papers_threshold():
     assert full.shape == diag.shape
 
 
-# Production operating point: density 0.10-0.15 (lead, 2026-10-20), NOT the 0.33 earlier notes assumed.
-# The OR ratio is bounded by 1/density, so at the small test geometry's 0.58 it cannot exceed 1.76x however
-# independent the Q blocks are -- the device's 1.03x was measured against a ceiling, not against 3.4x.
+# Production operating point: block density 0.10-0.15. The OR ratio is bounded by 1/density, so at the small test
+# geometry's density (~0.58) it cannot exceed 1.76x however independent the Q blocks are; _big_setup reaches the
+# production band instead.
 PROD_DENSITY = (0.10, 0.15)
 
 
@@ -194,8 +194,8 @@ def _or_ratio(q, k, v, geo, consts, *, tau, scale, thresh_type):
     """Densities over REAL rows only.
 
     e has nb_pad Q-block rows and c has nqc_pad Q-chunk rows, and the two pad to 32 independently: at
-    rows=2048/q_chunk=256 that is 32 real blocks but only 8 real chunks in 32 slots. Averaging c over all 32
-    diluted it 4x and produced an "OR cost" below 1.0 -- impossible, since an OR can only add blocks.
+    rows=2048/q_chunk=256 that is 32 real blocks but only 8 real chunks in 32 slots. Averaging c over all 32 slots
+    would dilute it 4x and report an "OR cost" below 1.0, which an OR cannot produce since it can only add blocks.
     """
     e = score_blocks(q, k, v, geo, consts, tau=tau, scale=scale, thresh_type=thresh_type)["exact"]
     c = ((e.transpose(2, 3) @ consts["qc_pool_t"]).transpose(2, 3) > 0.5).float() * consts["full_row"]
@@ -207,19 +207,19 @@ def _or_ratio(q, k, v, geo, consts, *, tau, scale, thresh_type):
 
 @pytest.mark.parametrize("thresh_type", ["diag", "full"])
 def test_or_cost_at_production_density(thresh_type):
-    """THE decision measurement for Q1-Q3: what does the Q-OR cost where the model actually runs?
+    """What does the Q-OR cost at the density where the model runs?
 
     Sweeps tau to find the production band (density 0.10-0.15) and reports the OR ratio there, under both the
-    device's diagonal threshold and the paper's full-covariance one. Three confounds are removed versus the
-    device run that produced 1.03x:
+    device's diagonal threshold and the paper's full-covariance one. Three confounds of a small-geometry device
+    run are removed:
 
-    * density -- 1.03x was measured at 0.58, where the ratio cannot exceed 1/0.58 = 1.76x by arithmetic;
+    * density -- at 0.58 the ratio cannot exceed 1/0.58 = 1.76x by arithmetic;
     * geometry -- 4 blocks per shard forces agreement, this uses 32;
     * forcing rules -- band/sink/prefix/force-block-0 floor density and compress the ratio; off here.
 
-    If the ratio is still near 1 at density 0.10-0.15 with 32 blocks per shard, the Q blocks genuinely agree and
-    Q1-Q3 buys nothing. If it approaches the independence bound 1/(1-(1-s)^TQ)/s, the OR is expensive and the
-    rewrite is justified. This test reports; it does not judge.
+    If the ratio is near 1 at density 0.10-0.15 with 32 blocks per shard, the Q blocks genuinely agree and the
+    Q-block unit buys nothing. If it approaches the independence bound 1/(1-(1-s)^TQ)/s, the OR is expensive and
+    the rewrite is justified. This test reports; it does not judge.
     """
     geo, consts, q, k, v = _big_setup()
     scale = q.shape[-1] ** -0.5
@@ -243,7 +243,7 @@ def test_or_cost_at_production_density(thresh_type):
 
 
 def test_forcing_rules_only_add_blocks():
-    """Deviation 3, pinned: band / sink / dense-prefix / force_first_chunk are a conservative superset of the spec."""
+    """Pinned deviation: band / sink / dense-prefix / force_first_chunk are a conservative superset of the spec."""
     geo, prod_consts, q, k, v = _setup()
     spec = spec_mask(q, k, v, geo, spec_constants(geo, scale=SCALE), tau=1.0, scale=SCALE)["block_mask"]
     forced = qblock_mask(q, k, v, geo, prod_consts, tau=1.0, scale=SCALE, thresh_type="full")["block_mask"]
@@ -263,7 +263,7 @@ def test_pages_conserve_every_kept_block():
 
 
 def test_pages_never_span_shards_and_fill_greedily():
-    """Constraint 1: a page is confined to one ring iteration. Only the last page of a shard may be partial."""
+    """A page is confined to one ring iteration. Only the last page of a shard may be partial."""
     geo, consts, q, k, v = _setup()
     m = qblock_mask(q, k, v, geo, consts, tau=1.0, scale=SCALE)["block_mask"]
     PAGE = 4
@@ -276,7 +276,7 @@ def test_pages_never_span_shards_and_fill_greedily():
 
 
 def test_packing_does_not_change_the_math():
-    """The point of Q2: regrouping blocks into full pages is a no-op on the output, only on the visit count."""
+    """The point of packing: regrouping blocks into full pages is a no-op on the output, only on the visit count."""
     geo, consts, q, k, v = _setup()
     r = qblock_mask(q, k, v, geo, consts, tau=1.0, scale=SCALE)
     out = sol_attention(q, k, v, r["block_mask"], r["pooled_k"], r["pooled_v"], geo, scale=SCALE)
@@ -293,7 +293,7 @@ def test_packing_does_not_change_the_math():
 
 @pytest.mark.parametrize("page_blocks", [2, 4, 8])
 def test_page_occupancy_report(page_blocks):
-    """Reports what Q2 buys: visits and mean fill against today's within-chunk packing."""
+    """Reports what page packing buys: visits and mean fill at each page size."""
     geo, consts, q, k, v = _setup()
     m = qblock_mask(q, k, v, geo, consts, tau=1.0, scale=SCALE)["block_mask"]
     st = page_stats(build_pages(m, geo, page_blocks=page_blocks), page_blocks=page_blocks)
@@ -302,12 +302,11 @@ def test_page_occupancy_report(page_blocks):
 
 
 def test_q1_frees_l1_for_a_larger_page():
-    """The mechanism that recovers Q2's visit win: a 64-row compute unit frees the L1 a bigger page needs.
+    """The mechanism that recovers packing's visit win: a 64-row compute unit frees the L1 a bigger page needs.
 
-    Q1 creates TQ x more Q units, so visits per Q-chunk-equivalent only improve ~2.1x on their own. But every
-    Sq-dependent CB shrinks by TQ, while the K/V buffers a larger page grows do not depend on Sq. Larger steps were
-    dropped from the optimization list solely for lack of L1 (gated behind bf8, which is off the table) -- this
-    checks the headroom is actually there.
+    The 64-row unit creates TQ x more Q units, so visits per Q-chunk-equivalent improve only modestly on their own.
+    But every Sq-dependent CB shrinks by TQ, while the K/V buffers a larger page grows do not depend on Sq. A larger
+    page is only possible with that L1 headroom -- this checks it is actually there.
     """
     today = l1_budget(q_rows=256, k_keys=512, head_dim=128)
     q1 = l1_budget(q_rows=64, k_keys=512, head_dim=128)
@@ -345,17 +344,14 @@ def test_ragged_tail_blocks_stay_pooled():
 
 @pytest.mark.parametrize("rows,label", [(1152, "aligned (18 full blocks)"), (1184, "partial tail (18 full + 32)")])
 def test_partial_tail_block_accuracy(rows, label):
-    """Is the device's PCC 0.855 at rows=1184 an algorithmic limit or an implementation bug?
+    """Is the accuracy cost of a partial tail block inherent to pooling, or a device bug?
 
-    On device (2026-10-20, packing OFF, pre-existing) test_ragged_logical_n and test_small_k_chunk both sit at
-    ~0.855 for gather and compact, while chunk mode passes. Both use rows=1184, which is not a multiple of the
-    64-token block: the last block of every shard holds 32 tokens, is never exact-eligible (full_row gates on
-    length >= block), and goes through the pooled correction.
+    rows=1184 is not a multiple of the 64-token block: the last block of every shard holds 32 tokens, is never
+    exact-eligible (full_row gates on length >= block), and goes through the pooled correction. That is
+    32/1184 = 2.7 % of keys approximated.
 
-    That is 32/1184 = 2.7 % of keys approximated. If the reference -- which shares no device code -- shows the
-    same collapse against the aligned geometry, the cost is inherent to pooling a partial block. If the
-    reference holds up, the device has a bug in partial-block handling and the xfail in
-    test_sol_compact_minimax_h3.py is hiding it.
+    The reference shares no device code. If it shows the same accuracy drop against the aligned geometry, the cost
+    is inherent to pooling a partial block; if it holds up, the device's partial-block handling is at fault.
     """
     geo = SolGeometry(shards=2, rows=rows, logical_n=2 * rows, q_chunk=128, k_chunk=256)
     consts = build_constants(geo, band=1, sink_tokens=0, force_first_chunk=True, scale=SCALE)

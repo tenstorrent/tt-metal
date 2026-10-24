@@ -9,7 +9,7 @@ mode with the three prefix modes and checks, on the host:
   - rows outside the prefix are bit-identical across the three prefix modes (same sparse op, same mask there);
   - the prefix rows from "separate" match the dense output as well as "fused" does (both are exact, bf16 noise
     apart), and both beat "off";
-  - module wall time per mode, so the recompute's cost is visible next to the fused rule's straggler.
+  - module wall time per mode, so the cost of the recompute can be compared with the fused rule.
 
     SOL_PREFIX_SEQ=4736|9184|13664 (default 4736), SOL_TAU (default 2.0), SOL_SINK_TOKENS (default 1245).
 """

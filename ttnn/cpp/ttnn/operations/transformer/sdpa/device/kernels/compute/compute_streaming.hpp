@@ -144,7 +144,7 @@ constexpr bool kRingStepProfiling = true;
 #else
 constexpr bool kRingStepProfiling = false;
 #endif
-// Fine zones (per key subblock: Q@KT, SUB/EXP, QKT@V, rescale, normalize) add ~6 KB of TRISC code and push the
+// Fine zones (per key subblock: Q@KT, SUB/EXP, QKT@V, rescale, normalize) add enough TRISC code to push the
 // sparse build past the kernel config buffer; TT_SOL_STEP_PROFILE=2 (SOL_STEP_PROFILE_FINE) enables them. The
 // default (=1) keeps only the two phase zones, Softmax(Q@KT) and Softmax(Q@KT)@V, one each per Q subblock / row
 // group, which is enough to see step length against the gaps between steps.
@@ -1505,7 +1505,7 @@ static void sdpa_inner_loop_step(
     [[maybe_unused]] const bool apply_col_bias = false,
     // Resident mode: several Q chunks consume the same K/V entry in turn, so only the last of them pops it.
     const bool hold_kv = false,
-    // Sol-Attn resident mode (M2): block-run addressing. When set, K^T sub-block `s` (actual_sbw tiles wide) is
+    // Sol-Attn resident mode: block-run addressing. When set, K^T sub-block `s` (actual_sbw tiles wide) is
     // read from physical K^T column tile run_cols[s] of the entry instead of column s * actual_sbw, and the
     // matching V rows from row run_cols[s]; the scores stay packed at the compacted columns [0, active_Sk), so
     // the max / exp / sum / correction work unchanged on the kept blocks only. active_Sk = kept sub-blocks x
@@ -1874,7 +1874,7 @@ static void sdpa_inner_loop_step(
                             UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
                             UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
                         }
-                        // Block-run addressing (resident M2): this sub-block's V rows start at run_cols[kt_sub].
+                        // Block-run addressing (resident mode): this sub-block's V rows start at run_cols[kt_sub].
                         const uint32_t v_row0 =
                             run_cols != nullptr ? static_cast<uint32_t>(run_cols[kt_sub]) : kt_sub * matmul_inner;
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
@@ -2083,7 +2083,7 @@ static void sdpa_inner_loop_step(
                         v_index_offset += qktv_subblock_w;
                     }
                 } else {
-                    // Block-run addressing (resident M2): the inner dimension is split per kept sub-block, each
+                    // Block-run addressing (resident mode): the inner dimension is split per kept sub-block, each
                     // read from its own V rows; partial products accumulate in L1 as the drain loop above does.
                     for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
                         if (kt_sub > 0) {
@@ -2664,14 +2664,14 @@ template <
     // Compact mode: streamed chunks hold this core's kept blocks left-justified; plan words 8..23 carry the per-chunk
     // kept-block counts (one byte each) and the step runs on the first 2 * count tile columns, no mask.
     bool sol_compact = false,
-    // Q2 cross-chunk packing. Compact mode compacts within a chunk, so a visited page carries only that chunk's
-    // kept blocks (~2.6 of 8 at 33 % density) while the ~8 us per-step cost is paid in full. Under sol_pack the
-    // reader appends kept blocks across K-chunk boundaries and pushes a page once it holds sol_blocks_per_page
-    // of them, flushing a partial page at the end of each ring iteration (a page cannot span iterations -- shard
-    // r's K/V is resident only while iteration r streams).
+    // Cross-chunk packing. Compact mode compacts within a chunk, so a visited page carries only that chunk's
+    // kept blocks (a fraction of the page at low density) while the fixed per-step cost is paid in full. Under
+    // sol_pack the reader appends kept blocks across K-chunk boundaries and pushes a page once it holds
+    // sol_blocks_per_page of them, flushing a partial page at the end of each ring iteration (a page cannot span
+    // iterations -- shard r's K/V is resident only while iteration r streams).
     //
-    // Packed pages arrive on cb_k_in / cb_v_in, the same CBs chunks used to, so the inner-step call below is
-    // unchanged and compute never sees -- or drains -- a raw chunk: the reader stages those privately. No plan
+    // Packed pages arrive on cb_k_in / cb_v_in, the same CBs that carry chunks, so the inner-step call below is
+    // the same and compute never sees -- or drains -- a raw chunk: the reader stages those privately. No plan
     // words are added either; reader and compute walk the same kept bitmask and derive identical page
     // boundaries. The loop's unit becomes the page, so k_chunk is a page ordinal under sol_pack.
     bool sol_pack = false,
@@ -2949,7 +2949,7 @@ void sdpa_ring_v2(
         const auto sliding_band = ttnn::operations::transformer::sdpa::ring_joint::sliding_ksplit_range(
             sliding_q_plan.total_k_chunk_count, sliding_split_idx, sliding_split_count);
         // Sol chunk mode: plan words [kept bitmask lo, hi, do_pooled] for this (ring iter, Q chunk).
-        // Q2 page accounting, both from plan word 5 (see the read below).
+        // Packing page accounting, both from plan word 5 (see the read below).
         [[maybe_unused]] uint32_t sol_total_kept_blocks = 0, sol_n_pages = 0;
         [[maybe_unused]] uint32_t sol_kept_lo = 0, sol_kept_hi = 0, sol_do_pooled = 0;
         [[maybe_unused]] uint32_t sol_union_lo = 0xffffffffu, sol_union_hi = 0xffffffffu;
@@ -2962,10 +2962,10 @@ void sdpa_ring_v2(
             sol_union_lo = ckernel::read_tile_value(cb_sol_plan, 0, 3);
             sol_union_hi = ckernel::read_tile_value(cb_sol_plan, 0, 4);
             if constexpr (sol_pack) {
-                // Q2: the reader publishes the kept-block TOTAL (word 5), computed from the same per-chunk counts
-                // it wrote into words 8..23. Both the page count and the trailing page's fill come from it, so
-                // they agree with each other and with the reader. Re-deriving it here diverged and deadlocked --
-                // see the note in ring_joint_reader.cpp.
+                // The reader publishes the kept-block TOTAL (word 5), computed from the same per-chunk counts it
+                // wrote into words 8..23. Both the page count and the trailing page's fill come from it, so they
+                // agree with each other and with the reader; re-deriving the total here can disagree with the
+                // reader's page boundaries and deadlock (see the note in ring_joint_reader.cpp).
                 sol_total_kept_blocks = ckernel::read_tile_value(cb_sol_plan, 0, 5);
                 sol_n_pages = (sol_total_kept_blocks + sol_blocks_per_page - 1) / sol_blocks_per_page;
             }
@@ -3069,16 +3069,15 @@ void sdpa_ring_v2(
         if constexpr (sol_chunk_mode) {
             q_k_loop_count = num_kv_chunks + (sol_do_pooled ? sol_pooled_chunks : 0);
         }
-        // Q2: under packing the loop's unit is a PAGE, not a K chunk. The reader pushed one page per
+        // Under packing the loop's unit is a PAGE, not a K chunk. The reader pushed one page per
         // sol_blocks_per_page kept blocks plus a partial at the end of the iteration, and nothing else -- raw
         // chunks never reach compute, so there is nothing to skip and nothing to drain. Pooled chunks follow the
-        // pages exactly as they used to follow the chunks.
+        // pages in the same way they follow the chunks in chunk mode.
         if constexpr (sol_pack) {
             q_k_loop_count = sol_n_pages + (sol_do_pooled ? sol_pooled_chunks : 0);
         }
         if constexpr (sol_enabled && !sol_chunk_mode) {
-            // ---- Sol-Attn chunk loop (DESIGN.md §3.1b). Plan words from the reader: [n_gather, last_tiles,
-            // do_pooled].
+            // ---- Sol-Attn gathered-chunk loop. Plan words from the reader: [n_gather, last_tiles, do_pooled].
             CircularBuffer(cb_sol_plan).wait_front(1);
             const uint32_t sol_n_gather = ckernel::read_tile_value(cb_sol_plan, 0, 0);
             const uint32_t sol_last_tiles = ckernel::read_tile_value(cb_sol_plan, 0, 1);
@@ -3213,7 +3212,7 @@ void sdpa_ring_v2(
                 if constexpr (sol_chunk_mode) {
                     sol_is_pooled = k_chunk >= num_kv_chunks;
                 }
-                // Q2: k_chunk indexes pages, so the pooled chunks start after the last page, not after the last
+                // Packing: k_chunk indexes pages, so the pooled chunks start after the last page, not after the last
                 // K chunk. Its blocks are all kept by construction -- the reader only packed kept ones -- so the
                 // streamed/kept/causal/OOB gating below is skipped entirely for a page.
                 [[maybe_unused]] uint32_t sol_page_blocks = 0;
@@ -3225,7 +3224,7 @@ void sdpa_ring_v2(
                             remaining < sol_blocks_per_page ? remaining : sol_blocks_per_page;  // tail page
                     }
                 }
-                // Q2: a page is not a K chunk, so none of the chunk-indexed gating applies to it. Every block in
+                // Packing: a page is not a K chunk, so none of the chunk-indexed gating applies to it. Every block in
                 // a page was selected by this core, the reader already resolved out-of-range and joint chunks
                 // before packing, and k_chunk is a page ordinal that these predicates would misread.
                 const bool kv_chunk_is_joint = !sol_pack && !sol_is_pooled && !packed_sources && !has_sliding_window &&
@@ -3475,10 +3474,10 @@ void sdpa_ring_v2(
                         // Compacted chunk: the first 2 * kept tile columns (K^T) / rows (V) are full valid blocks; the
                         // ragged tail never reaches here (partial blocks are pooled), so no mask is applied.
                         //
-                        // Q2: same shape, but the count is the PAGE's fill rather than one chunk's. Every page but
-                        // the last is full, so active_Sk_param == Sk_chunk_t and the subblock width is the optimal
-                        // one -- the awkward factorisations that per-chunk compaction hit on every visit now occur
-                        // at most once per ring iteration. The tail page's slack is never computed and is NOT
+                        // Packing: same shape, but the count is the PAGE's fill rather than one chunk's. Every page
+                        // but the last is full, so active_Sk_param == Sk_chunk_t and the subblock width is the optimal
+                        // one -- the awkward factorisations of a partial width occur at most once per ring iteration
+                        // instead of on every visit. The tail page's slack is never computed and is NOT
                         // zero-filled: a zero K tile would give QK = 0, hence exp(0) = 1, a full-weight softmax
                         // term against a zero V, inflating the denominator.
                         apply_mask = false;
@@ -3657,8 +3656,8 @@ void sdpa_ring_v2(
 
 // ============ Sol-Attn resident mode: in-place slot state, lazy running max, fused per-piece steps ============
 
-// ---- M9 (Tier 2) helpers, outlined: each is reached from several sites on every TRISC, and the kernel config
-// buffer at 5 s has ~3 KB of margin (M9's first build overflowed it). ----
+// ---- Outlined helpers: each is reached from several sites on every TRISC, and the kernel config buffer has
+// little margin left for the resident build. ----
 
 // Packs a DEST batch of units into the compact score scratch: unit u = member unit_g[u], score column unit_c0[u],
 // width unit_cw[u]; row r of member g is at off[g] + r * W[g]. Blocked (one call per row) when the unit is at least
@@ -3745,16 +3744,15 @@ static __attribute__((noinline, noclone)) void sol_res_run_groups(
     }
 }
 
-// ---- M9 (Tier 2) compact per-piece step ----
+// ---- Compact per-piece step ----
 /**
- * The M5 step with three changes to how the work is issued (the M6 profile: ~1 us per score tile against the dense
- * kernel's 0.28 us, with the cost spread over per-tile matmul calls, per-tile address-programmed packs and
- * per-stage round trips):
+ * One step over a group of resident chunks for one piece (or pooled entry). The per-tile overheads (matmul calls,
+ * address-programmed packs, per-stage round trips) dominate a sparse step, so the work is issued as follows:
  *  1. Compact score layout. Member g's scores occupy Sq_chunk_t rows of exactly W_g tiles (its kept width) at
  *     offset off[g] = sum of the earlier members' Sq_chunk_t x W; the row stride is W_g, not the piece width. A
  *     step can then hold every chunk of the head that keeps a block of the piece (the capacity is the scratch's
- *     tile count, qk_cap), so there is one step per piece instead of one per sub-group of four, and each stage
- *     runs several DEST batches back to back (half-sync DEST overlaps math and pack across them).
+ *     tile count, qk_cap), so one step covers the piece, and each stage runs several DEST batches back to back
+ *     (half-sync DEST overlaps math and pack across them).
  *  2. Runs of adjacent kept blocks are one run of 2, 4, ... tiles (run_ws[g * kMaxRuns + s]); a unit of up to
  *     qk_cw_cap columns is one matmul call and, when it is >= MIN_BLOCKED_PACK_TILES wide, one pack call per row
  *     instead of one per tile. The same for the exp stage.
@@ -3762,8 +3760,8 @@ static __attribute__((noinline, noclone)) void sol_res_run_groups(
  *     member and blocked output packs.
  * Members with equal widths should be adjacent in the group (the caller sorts by width): the row-max reduce, the
  * subtract and the two P@V setups are configured per width and re-issued only when it changes.
- * Everything else (the lazy running max of M7 in S2-S4, the row sum as P x e0, the pooled bias, the state
- * contract, the PACK_DONE tokens) is the M5-M7 step's. run_cols / run_ws / n_runs are per member; a pooled entry
+ * S2-S4 hold the lazy running max; the row sum is P x e0; the pooled bias, the in-place slot state contract and
+ * the PACK_DONE tokens are described at their stages. run_cols / run_ws / n_runs are per member; a pooled entry
  * is one run of its active width from column 0 with apply_col_bias.
  */
 template <
@@ -4320,7 +4318,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
 }
 
 /**
- * Sol-Attn resident mode (sol_attn_status_2026-10-21.md 4a, milestone M3): one ring iteration.
+ * Sol-Attn resident mode: one ring iteration.
  *
  * Every K/V entry the reader pushes is consumed by the steps that need it and popped once, after the last of them.
  * The per-chunk flash state (running sum, running max, output accumulator) lives in the restore CBs {cb_sum_in,
@@ -4329,11 +4327,11 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
  * (exactly full, write pointer held at the base), and are neither pushed nor popped until the last ring iteration,
  * where normalize_row_streaming consumes the n_res slots from the front in order and the unused slots are popped.
  *
- * Steps are per piece (M5): per streamed piece, one step per sub-group of up to kGroupCap resident chunks of the
- * head that keep a block of it, each chunk with its own run table of kept 64-token blocks (its Q rows against those
- * blocks' K^T columns / V rows, addressed in place in the staged entry). A piece streamed only for another chain
- * member is drained. The reader forces block 0 of every shard kept for every chunk, so the first step of a head
- * on piece 0 creates every slot's state before any other piece.
+ * Steps are per piece: per streamed piece, one step per group of resident chunks of the head that keep a block of
+ * it (grouped up to the score scratch capacity), each chunk with its own run table of kept 64-token blocks (its Q
+ * rows against those blocks' K^T columns / V rows, addressed in place in the staged entry). A piece streamed only
+ * for another chain member is drained. The reader forces block 0 of every shard kept for every chunk, so the first
+ * step of a head on piece 0 creates every slot's state before any other piece.
  * Dropped blocks are pooled by the column bias of the pooled chunks that follow the local pieces on the first
  * active ring iteration: one full-width step per resident chunk of the head, each with its own bias row (pushed by
  * the reader in Q-chunk order after the pooled K/V entry).
@@ -4425,7 +4423,7 @@ void sdpa_ring_resident(
     constexpr uint32_t v_entry_tiles = Sk_chunk_t * v_cb_physical_width_t;
     constexpr uint32_t norm_dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
 
-    // M2/M3: 64-token blocks of 2 tiles; a piece holds kBlocksPerPiece of them. The plan page carries this shard's
+    // 64-token blocks of 2 tiles; a piece holds kBlocksPerPiece of them. The plan page carries this shard's
     // kept-block bits per resident chunk (block b: word b/32, bit b%32; only full blocks, block 0 forced).
     constexpr uint32_t kBlockTiles = 2;
     constexpr uint32_t kBlocksPerPiece = Sk_chunk_t / kBlockTiles;
@@ -4434,11 +4432,11 @@ void sdpa_ring_resident(
     static_assert(kBW >= 1 && kBW + 3 <= 16, "the plan header holds the block words, the union bits and the flag");
     static_assert(kBlocksPerPiece <= 255 && Sk_chunk_t <= 255, "run tables are byte-indexed");
 
-    // CB capacities, as the program factory allocates them in resident mode ("Resident mode (M3"): the score
+    // CB capacities, as the program factory allocates them in resident mode: the score
     // scratch holds max(qk_tiles, slots x Sq_chunk_t x kBlockTiles); the max/alpha scratches and the max/sum slot
     // CBs hold Sq_chunk_t per slot; the out slot CB holds Sq_chunk_t x vDHt per slot. The step pushes and pops the
     // scratches at full capacity and the slot CBs are filled at full capacity, so the counts must match exactly.
-    // M5: a step covers one piece for a sub-group of up to kGroupCap resident chunks at the full piece width
+    // kGroupCap sizes the score scratch: one piece for up to kGroupCap resident chunks at the full piece width
     // (the factory's kSolResidentGroup).
     constexpr uint32_t kGroupCap = sol_resident_slots < 4 ? sol_resident_slots : 4;
     constexpr uint32_t kQkTiles = Sq_chunk_t * Sk_chunk_t;
@@ -4504,7 +4502,7 @@ void sdpa_ring_resident(
 
     uint32_t KV_chunks_processed_in_iter = 0;
 
-    // One piece (or pooled entry) for a group of resident chunks (M9: every chunk of the head that keeps a block,
+    // One piece (or pooled entry) for a group of resident chunks (every chunk of the head that keeps a block,
     // up to the scratch capacity): run_cols[g * kBlocksPerPiece + s] is the K^T column tile where run s of member
     // g starts, run_ws[...] its width in tiles (adjacent kept blocks merged), n_runs[g] the run count.
     const auto run_step = [&](const uint8_t* slots,
@@ -4600,7 +4598,7 @@ void sdpa_ring_resident(
                 continue;  // nobody on this head's chain needs the piece: nothing was pushed
             }
             // The piece's group: every chunk of the head that keeps a block of it, with its run table (adjacent
-            // kept blocks merged into one run; M9 steps the whole group up to the scratch capacity).
+            // kept blocks merged into one run; the whole group is stepped up to the scratch capacity).
             uint8_t group[sol_resident_slots];
             uint8_t gwidth[sol_resident_slots];
             uint8_t runs[sol_resident_slots * kBlocksPerPiece];

@@ -6,8 +6,8 @@
 
 Same recipe as `test_minimax_h3_transformer_block_perf` (compile run, then one warm run between the
 `start`/`stop` signposts), at the packed 10 s / 768p geometry with the 39-token calibrated prompt, random
-block weights/inputs. Sol config from env: SOL_BP_MODE (dense | gather | chunk), SOL_BP_TAU (1.0),
-SOL_BP_DENSE_PREFIX (0/1, default 0), SOL_BP_DURATION (10).
+block weights/inputs. Sol config from env: SOL_BP_MODE (dense | gather | chunk | compact | resident), SOL_BP_TAU (1.0),
+SOL_BP_DENSE_PREFIX (0/1, default 0), SOL_BP_DURATION (10), SOL_BP_FUSED (0/1, default 1: fused pre-pass).
 
     python -m tracy -r -p --no-web-server -m pytest \
         models/tt_dit/tests/models/minimax_h3/test_sol_block_perf_minimax_h3.py -s -k 4x8
@@ -106,6 +106,9 @@ def test_sol_block_perf(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, topol
         attn.sol_band = 1
         attn.sol_dense_prefix = dense_prefix
         attn.sol_mode = mode
+        # SOL_BP_FUSED (default 1): the fused pre-pass (SolPrepassFused), as the e2e test and the pipeline run it;
+        # 0 = the ttnn-op SolPrepass (the module default).
+        attn.sol_fused = os.environ.get("SOL_BP_FUSED", "1") == "1"
         attn.sol_logical_n = seq_len
         attn.sol_sink_tokens = sink_tokens
         attn._sol_prepass = None

@@ -281,7 +281,7 @@ void kernel_main() {
     constexpr bool use_attention_sink = get_compile_time_arg_val(28) == 1;
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(29);
     constexpr bool has_sliding_window = sliding_window_size > 0;
-    // Sol-Attn block gathering (DESIGN.md §3.1b): per-Q-chunk K/V content, so no K/V chains.
+    // Sol-Attn block gathering: per-Q-chunk K/V content, so no K/V chains.
     constexpr bool sol_enabled = get_named_compile_time_arg_val("sol_enabled") == 1;
     // Chunk mode streams every chunk through the chains; only compute skips.
     constexpr bool sol_chunk_mode = get_named_compile_time_arg_val("sol_chunk_mode") == 1;
@@ -289,11 +289,10 @@ void kernel_main() {
     // No sol_bias tensor: the pooled-chunk column-bias tiles are generated here (sol_bias_gen.hpp).
     constexpr bool sol_gen_bias = get_named_compile_time_arg_val("sol_gen_bias") == 1;
     constexpr uint32_t sol_logical_n_ct = get_named_compile_time_arg_val("sol_logical_n");
-    // Compact mode (DESIGN_BLOCK_COMPACT.md): block mask, streamed like chunk mode, own kept blocks left-justified in
-    // L1.
+    // Compact mode: block mask, streamed like chunk mode, own kept blocks left-justified in L1.
     constexpr bool sol_compact = get_named_compile_time_arg_val("sol_compact") == 1;
-    constexpr bool sol_even_up = get_named_compile_time_arg_val("sol_even_up") == 1;  // compact even-up rule (A/B knob)
-    constexpr bool sol_even_up_all = get_named_compile_time_arg_val("sol_even_up_all") == 1;  // debug probe
+    constexpr bool sol_even_up = get_named_compile_time_arg_val("sol_even_up") == 1;  // compact even-up rule
+    constexpr bool sol_even_up_all = get_named_compile_time_arg_val("sol_even_up_all") == 1;  // debug knob
     constexpr bool enable_kv_chains = !has_sliding_window && !(sol_enabled && !sol_chunk_mode);
     constexpr uint32_t gathered_padded_Nt = get_compile_time_arg_val(30);
     // Slots 31/32 are trace-safe metadata controls. Attention-sink and sliding-window
@@ -398,8 +397,8 @@ void kernel_main() {
     constexpr uint32_t sol_pv_args_offset =
         sol_enabled ? sol_pk_args.next_compile_time_args_offset() : kFirstAccessorArgOffset;
     constexpr auto sol_pv_args = TensorAccessorArgs<sol_pv_args_offset>();
-    // M4 (resident static max): the per-row max bound tensor's accessor follows pooled V's iff sol_static_max; the
-    // bias accessor and the chain args continue after it (the factory's "Sol-Attn accessors" comment).
+    // Resident static max: the per-row max bound tensor's accessor follows pooled V's iff sol_static_max; the bias
+    // accessor and the chain args continue after it (see the factory's Sol-Attn accessor layout).
     constexpr bool sol_static_max = get_named_compile_time_arg_val("sol_static_max") == 1;
     constexpr uint32_t sol_rm_args_offset =
         (sol_enabled && sol_static_max) ? sol_pv_args.next_compile_time_args_offset() : kFirstAccessorArgOffset;
@@ -569,7 +568,7 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t sol_mask_addr = sol_enabled ? get_arg_val<uint32_t>(rotated_args_base + 0) : 0;
     [[maybe_unused]] const uint32_t sol_pk_addr = sol_enabled ? get_arg_val<uint32_t>(rotated_args_base + 1) : 0;
     [[maybe_unused]] const uint32_t sol_pv_addr = sol_enabled ? get_arg_val<uint32_t>(rotated_args_base + 2) : 0;
-    // M4: the row-max bound's address sits at +3 iff sol_static_max; everything after it shifts by one word.
+    // The row-max bound's address sits at +3 iff sol_static_max; everything after it shifts by one word.
     constexpr uint32_t kSolRM = sol_static_max ? 1u : 0u;
     [[maybe_unused]] const uint32_t sol_rm_addr =
         (sol_enabled && sol_static_max) ? get_arg_val<uint32_t>(rotated_args_base + 3) : 0;
@@ -581,7 +580,7 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t sol_my_start =
         sol_enabled ? get_arg_val<uint32_t>(rotated_args_base + 5 + kSolRM) : 0;
     // Generated bias only: packed bf16 bias-per-token-count table (sol_bias_gen::kTableWords words) precedes the
-    // chain members; with a sol_bias tensor the members follow my_start directly (unchanged layout).
+    // chain members; with a sol_bias tensor the members follow my_start directly.
     [[maybe_unused]] const uint32_t sol_len_bias_table_base = rotated_args_base + 6 + kSolRM;
     [[maybe_unused]] const uint32_t sol_members_base =
         rotated_args_base + 6 + kSolRM + (sol_gen_bias ? sol_bias_gen::kTableWords : 0u);
@@ -595,18 +594,18 @@ void kernel_main() {
     constexpr uint32_t sol_mask_row_bytes = get_named_compile_time_arg_val("sol_mask_row_bytes");
     constexpr uint32_t cb_sol_plan = get_named_compile_time_arg_val("cb_sol_plan");
     constexpr uint32_t cb_sol_bias = get_named_compile_time_arg_val("cb_sol_bias");
-    // Q2 cross-chunk packing: kept blocks are appended into full pages instead of compacted inside their own
+    // Cross-chunk packing: kept blocks are appended into full pages instead of compacted inside their own
     // chunk, so compute pays one visit per PAGE rather than one per kept chunk.
     //
     // Roles invert under sol_pack. Raw chunks are downloaded into cb_k_stage / cb_v_stage and forwarded to the
     // chain from there; those CBs are never pushed, so compute never sees a raw chunk and never drains one. The
-    // packed pages go out on cb_k_in / cb_v_in exactly as chunks used to, which leaves compute's inner-step call
-    // site untouched.
+    // packed pages go out on cb_k_in / cb_v_in in place of chunks, so compute's inner-step call site is the same
+    // as in the dense path.
     constexpr bool sol_pack = get_named_compile_time_arg_val("sol_pack") == 1;
-    // Resident mode (sol_attn_status_2026-10-21.md 4a, M1): chunk-mode semantics, one pass of each K/V piece per
-    // ring iteration shared by every Q chunk the core owns. See the branch in the ring loop below.
+    // Resident mode: chunk-mode semantics, one pass of each K/V piece per ring iteration shared by every Q chunk
+    // the core owns. See the branch in the ring loop below.
     constexpr bool sol_resident = get_named_compile_time_arg_val("sol_resident") == 1;
-    // M2: words of per-shard kept-block bits in every resident plan page (block-form mask, as compact).
+    // Words of per-shard kept-block bits in every resident plan page (block-form mask, as in compact mode).
     constexpr uint32_t sol_res_block_words = get_named_compile_time_arg_val("sol_res_block_words");
     static_assert(!sol_resident || (sol_chunk_mode && !sol_compact && !sol_pack), "resident mode is a chunk mode");
     static_assert(!sol_resident || sol_res_block_words * 32 >= sol_nb, "resident: block words cover the shard");
@@ -898,7 +897,7 @@ void kernel_main() {
         TensorAccessor(sol_pk_args, sol_pk_addr), TensorTileShape(1, NH, sol_n_blocks_pad / 32, DHt));
     [[maybe_unused]] const auto sol_pv_generator = PaddedAddrGenerator(
         TensorAccessor(sol_pv_args, sol_pv_addr), TensorTileShape(1, NH, sol_n_blocks_pad / 32, vDHt));
-    // M4: the per-row max bound, bf16 tile [1, NH, Q padded rows, 32] (one tile column, value in column 0).
+    // The per-row max bound, bf16 tile [1, NH, Q padded rows, 32] (one tile column, value in column 0).
     [[maybe_unused]] const auto sol_rm_generator =
         PaddedAddrGenerator(TensorAccessor(sol_rm_args, sol_rm_addr), TensorTileShape(1, NH, q_local_padded_Nt, 1));
     [[maybe_unused]] const auto sol_bias_generator = PaddedAddrGenerator(
@@ -928,10 +927,9 @@ void kernel_main() {
     [[maybe_unused]] uint32_t sol_row_addr = 0;
     // Left-justify the kept blocks of local chunk k_chunk inside a chunk page in place. The page is `rows` rows of
     // `row_stride` bytes (K^T: DHt rows of Sk_chunk_t tiles; V: one row), block j at row offset j * block_bytes.
-    // Move-order rule (DESIGN_BLOCK_COMPACT.md 3.4 / lead review MUST 1): moves are local NoC reads and NoC ordering
-    // across different (src, dst) pairs is not guaranteed, so a move whose destination slot is <= an earlier move's
-    // source block waits for the earlier reads first. Called after the chain forward (its writes are flushed), before
-    // the push.
+    // Move-order rule: moves are local NoC reads and NoC ordering across different (src, dst) pairs is not
+    // guaranteed, so a move whose destination slot is <= an earlier move's source block waits for the earlier reads
+    // first. Called after the chain forward (its writes are flushed), before the push.
     [[maybe_unused]] const auto sol_compact_blocks =
         [&](uint32_t s, uint32_t k_chunk, uint32_t base, uint32_t rows, uint32_t row_stride, uint32_t block_bytes) {
             if constexpr (sol_compact) {
@@ -949,10 +947,9 @@ void kernel_main() {
                     }
                     if (slot != j) {
                         if (!moved) {
-                            // Belt and braces (lead review): the chain forward above waited for its writes to be
-                            // flushed (source page fully read by the NoC); a full write barrier before the first
-                            // in-place move costs ~1 us per compacted chunk and removes any dependence on that
-                            // semantic.
+                            // The chain forward above waited for its writes to be flushed (source page fully read
+                            // by the NoC); a full write barrier before the first in-place move removes any
+                            // dependence on that semantic.
                             noc.async_write_barrier();
                         }
                         if (moved && slot <= last_src) {
@@ -978,14 +975,11 @@ void kernel_main() {
                 }
             }
         };
-    // Q2: pack one chunk's kept blocks into the packed pages, flushing whenever a page fills.
+    // Pack one chunk's kept blocks into the packed pages, flushing whenever a page fills.
     //
-    // K and V are packed together in one pass so a page boundary can fall INSIDE a chunk. The first version
-    // packed them at two call sites and only tested `fill == blocks_per_page` after a whole chunk, so with
-    // fill=6 and a 5-block chunk the index ran to 10 and wrote slots 8..10 past the end of the page. The flush
-    // then never fired (== against an overshot counter), fill grew without bound, and every later block landed
-    // further into neighbouring L1. That is unbounded NoC corruption, not a stall -- it took a machine down on
-    // 2026-10-20. sol_qblock_ref.build_pages() always flushed inside the per-block loop; this now matches it.
+    // K and V are packed together in one pass and the full-page test runs after every block, because a page
+    // boundary can fall INSIDE a chunk: testing only after a whole chunk would let the fill overrun the page and
+    // write past its end into neighbouring L1.
     //
     // Returns the new fill. Source and destination are disjoint (staging -> packed), so the in-place overlap
     // ordering rule that sol_compact_blocks needs does not apply here.
@@ -1386,12 +1380,12 @@ void kernel_main() {
 
         [[maybe_unused]] const uint32_t do_pooled = (sol_pooled_pending && !sol_pooled_off) ? 1u : 0u;
         if constexpr (sol_resident) {
-            // ---- Sol-Attn resident mode (sol_attn_status_2026-10-21.md 4a, M1 + M2). One pass of each K/V piece
-            // per ring iteration, applied by compute to every resident Q chunk (sdpa_ring_resident). This reader:
+            // ---- Sol-Attn resident mode. One pass of each K/V piece per ring iteration, applied by compute to
+            // every resident Q chunk (sdpa_ring_resident). This reader:
             //   1. on the first active iteration reads every resident Q chunk into cb_q_in, once for the whole op;
             //   2. per head the core's chunks fall in: the chain-wide kept union (per piece) over every chunk of
             //      every chain member, then one plan page per resident chunk [this shard's kept-block words,
-            //      union piece bits lo, hi, do_pooled]; the mask is the block-form one (M2), a piece is kept by a
+            //      union piece bits lo, hi, do_pooled]; the mask is the block-form one, a piece is kept by a
             //      chunk when the chunk keeps any 64-token block of it, and compute steps only on those blocks;
             //   3. streams the shard's pieces once each, heads interleaved per k in head order, skipping a piece
             //      no member of the head's chain needs (compute mirrors both rules);
@@ -1419,9 +1413,8 @@ void kernel_main() {
                     read_block(
                         q_generator, q_slice, q_local_padded_Nt, cb_q_in, q_tile_bytes, false, q_barrier_threshold);
                 }
-                // (M4's first form loaded a per-row logit bound from sol_row_max into the max slots here; the frozen
-                // max that replaced it is set by compute from each slot's first step, so the tensor, when given, is
-                // accepted but unused.)
+                // The frozen per-slot max is set by compute from each slot's first step, so the sol_row_max tensor,
+                // when given, is accepted but unused.
                 q_pushed = true;
             }
             // 2. Kept bits and plans. The plan page's scratch (past the 64-byte header) holds one chunk row at a time:
@@ -1439,7 +1432,7 @@ void kernel_main() {
                 noc.async_read_barrier();
             };
             // This shard's slice of a row (nb_pad words from block ring_id * nb_pad) into the scratch: all the bit
-            // extraction needs, and 8x less than the whole row for every member row on the chain's critical path.
+            // extraction needs, and a fraction of the whole row for every member row on the chain's critical path.
             const auto read_shard_slice = [&](uint32_t nq, uint32_t qc) {
                 noc.async_read(
                     sol_mask_reader,
@@ -1577,13 +1570,12 @@ void kernel_main() {
                 logical_nt > source_start_tile ? std::min(logical_nt - source_start_tile, kv_local_padded_Nt) : 0;
             const uint32_t end_seq_tile =
                 source_is_local ? source_valid_kv_tiles : source_start_tile + source_valid_kv_tiles;
-            // Chain overlap (M8). The chain protocol allows one outstanding transfer per LINK: a member signals
+            // Chain overlap. The chain protocol allows one outstanding transfer per LINK: a member signals
             // "ready", the upstream writes and flags valid. In MHA the K and V transfers of a piece go over the
             // same link (k_chain and v_chain are the same head_chain, one semaphore set), so the link's handshakes
-            // form one sequence: K(p), V(p), K(p+1), ... Signalling each only when the previous forward was done
-            // made the chain a bucket brigade, every hop idle while its neighbours moved: the M6 profile measured
-            // 25-28 us per piece against ~13 us for a core fetching from DRAM on its own. Now a member signals the
-            // link's NEXT handshake before forwarding the current chunk, whenever that chunk's page is already
+            // form one sequence: K(p), V(p), K(p+1), ... Signalling each only after the previous forward completes
+            // would make the chain a bucket brigade, every hop idle while its neighbours move. Instead a member
+            // signals the link's NEXT handshake before forwarding the current chunk, whenever that chunk's page is
             // free: V(p)'s ready before forwarding K(p), K(p+1)'s ready before forwarding V(p). The upstream's
             // write then overlaps this core's forward, and the link never has more than one transfer outstanding
             // (the next signal always follows the wait for the previous data). An armed K page carries to the
@@ -1634,7 +1626,7 @@ void kernel_main() {
                 // forward(), and the page is not reused before piece p+2's reserve.
                 cb_k.push_back(k_chunk_tiles);
                 // The link's next handshake is V(p)'s: arm it (reserve V's page, signal ready) before forwarding
-                // K(p) when the page is free now; otherwise reserve it after the forward, as before.
+                // K(p) when the page is free now; otherwise reserve it after the forward.
                 const Slice v_slice(src_batch, nv, row0, row0 + Sk_chunk_t, v_col_offset_t, v_col_offset_t + vDHt);
                 CircularBuffer cb_v(cb_v_in);
                 uint32_t v_addr = 0;
@@ -1772,7 +1764,7 @@ void kernel_main() {
                                 }
                                 CircularBuffer cb_bias(cb_sol_bias);
                                 cb_bias.reserve_back(Sk_chunk_t);
-                                // Block-form row: exact iff the block's own bit is set on a full block (M2).
+                                // Block-form row: exact iff the block's own bit is set on a full block.
                                 sol_bias_gen::generate_tiles<false, sol_bias_tile_bytes>(
                                     noc,
                                     cb_bias.get_write_ptr(),
@@ -1809,7 +1801,7 @@ void kernel_main() {
             // ---- Sol-Attn block gathering: per Q chunk, gather this shard's kept 64-token blocks into dense
             // Sk-sized K/V chunks (8 blocks each); on the first active ring iteration also stream the pooled
             // K/V chunks with their per-Q-chunk column bias. Compute reads the plan words (n_gather,
-            // last_active_tiles, do_pooled) from cb_sol_plan and runs its unchanged dense chunk step.
+            // last_active_tiles, do_pooled) from cb_sol_plan and runs its dense chunk step.
             const bool source_is_local = ring_id == ring_index;
             const uint32_t source_start_tile = ring_id * kv_local_padded_Nt;
             const uint32_t source_valid_kv_tiles =
@@ -2157,21 +2149,16 @@ void kernel_main() {
                             }
                         }
                         if constexpr (sol_pack) {
-                            // Q2: publish the page count instead of letting compute re-derive it.
+                            // Packing: publish the kept-block total so compute does not re-derive it. Compute
+                            // accumulates after try_skip_oob_kv, the causal skip and `k < num_kv_chunks`, while
+                            // the packing walk below applies none of those and runs to q_k_loop_count, so two
+                            // independent counts can drift (joint chunks, out-of-range chunks, padded
+                            // iterations), the reader out-produces compute and parks in cb_reserve_back.
                             //
-                            // The first version had both sides walk the kept bitmask and compute
-                            // ceil(total / blocks_per_page) independently. They disagreed: compute accumulates
-                            // after try_skip_oob_kv, the causal skip and `k < num_kv_chunks`, while the packing
-                            // walk below applies none of those and runs to q_k_loop_count. Any asymmetry --
-                            // joint chunks, out-of-range chunks, padded iterations -- shifts the count, the
-                            // reader out-produces compute, and it parks in cb_reserve_back. Measured 2026-10-20:
-                            // 51,720 CRBW waypoints against 1,400 CWFW.
-                            //
-                            // This loop is the authority: the same `cnt` values that drive the per-chunk counts
-                            // compute already trusts. One producer, one consumer, nothing to drift.
-                            // Publish the BLOCK total, not the page count: compute needs both the number of
-                            // pages and the fill of the trailing partial page, and deriving both from one
-                            // published number keeps them consistent with each other too.
+                            // This loop is the single producer of the count: the same `cnt` values that drive
+                            // the per-chunk counts compute already trusts. Publish the BLOCK total, not the page
+                            // count: compute needs both the number of pages and the fill of the trailing partial
+                            // page, and deriving both from one published number keeps them consistent.
                             plan_words[5] = sol_total_kept;
 #ifdef SOL_PACK_DEBUG
                             DPRINT(
@@ -2184,13 +2171,12 @@ void kernel_main() {
                         }
                         uint32_t ulo = lo, uhi = hi;
                         if constexpr (sol_pack) {
-                            // Q2 streams every in-range chunk through the chain and drops the chain-wide union.
-                            // Compute never sees a raw chunk under packing (pages only), so nothing on its side
-                            // depends on which chunks were streamed, and the reader packs from its own row
-                            // regardless. What the union bought was skipping chunks no member needs; at the
-                            // densities this path targets (~0.15 per block, 8 blocks per chunk, 9-12 members)
-                            // the union is ~1.0 anyway, while computing it cost one DRAM read and a bitmask scan
-                            // per member per (ring iter, Q chunk) -- 4x more of them at the 64-row Q chunk.
+                            // Packing streams every in-range chunk through the chain and drops the chain-wide
+                            // union. Compute never sees a raw chunk under packing (pages only), so nothing on its
+                            // side depends on which chunks were streamed, and the reader packs from its own row
+                            // regardless. The union would only skip chunks no member needs, which is rare at the
+                            // block densities this path targets, while computing it costs one DRAM read and a
+                            // bitmask scan per member per (ring iter, Q chunk).
                             ulo = 0xffffffffu;
                             uhi = 0xffffffffu;
                         } else if (sol_n_members > 0 && head_chain.is_participant && nq == head_chain.chain_head) {
@@ -2308,18 +2294,17 @@ void kernel_main() {
                 // anchoring Q to k_chunk == 0 would never push Q while compute still waits on it
                 // (q_per_core > 1) -> deadlock. Reads Q exactly once per q_iter, so no extra work.
                 bool first_k_for_q = true;
-                // Q2 packed-page state. A page is filled across K chunks and flushed when full; a partial page is
-                // flushed after the loop, because shard `ring_id`'s K/V is only resident for this iteration and a
-                // page may not span iterations. K and V share one fill so their slots stay aligned: the K site
-                // appends at `sol_pack_fill` and discards its return, the V site appends at the same value and
-                // commits it.
+                // Packed-page state (sol_pack). A page is filled across K chunks and flushed when full; a partial
+                // page is flushed after the loop, because shard `ring_id`'s K/V is only resident for this iteration
+                // and a page may not span iterations. K and V share one fill so their slots stay aligned: the K
+                // site records the staging address, the V site packs both and commits the fill.
                 [[maybe_unused]] uint32_t sol_pack_fill = 0;
                 [[maybe_unused]] uint32_t sol_pack_k_src = 0;  // K staging address, carried to the V site
                 [[maybe_unused]] uint32_t sol_pages_pushed = 0;  // SOL_PACK_DEBUG: pages handed to compute
                 [[maybe_unused]] uint32_t sol_packed_k_addr = 0;
                 [[maybe_unused]] uint32_t sol_packed_v_addr = 0;
                 if constexpr (sol_pack) {
-                    // Packed pages go out on the ordinary K/V CBs, so compute's inner-step call is unchanged.
+                    // Packed pages go out on the ordinary K/V CBs, so compute's inner-step call is the dense one.
                     //
                     // Guarded on !is_padded_iter to match the plan block and the packing sites: a padded
                     // iteration writes no plan and packs nothing, so compute processes nothing for it. An
@@ -2474,9 +2459,8 @@ void kernel_main() {
                         //
                         // Do NOT reserve cb_k_in here. A per-chunk reserve contends with that outstanding
                         // packed-page reserve, and the mcast branch below asks for 2 * k_chunk_tiles from a
-                        // 2-page CB -- unsatisfiable the moment one page is in flight, which is the permanent
-                        // cb_reserve_back stall measured on 2026-10-20 (160k CRBW waypoints, zero CWFW:
-                        // the reader could not get space while compute was never waiting for data).
+                        // 2-page CB -- unsatisfiable the moment one page is in flight, so the reader would stall
+                        // in cb_reserve_back for ever while compute never waits for data.
                         CircularBuffer cb_ks(cb_k_stage);
                         cb_ks.reserve_back(k_chunk_tiles);
                         cb_k_start_address = cb_ks.get_write_ptr();
@@ -2598,7 +2582,7 @@ void kernel_main() {
 
                     if constexpr (sol_pack) {
                         if (!is_padded_iter) {
-                            // Q2: nothing to do here. K stays in staging until the V site below, which packs
+                            // Packing: nothing to do here. K stays in staging until the V site below, which packs
                             // both together in one bounded pass -- a page boundary can fall inside a chunk, so
                             // the two cannot be packed independently without the fill overrunning the page.
                             sol_pack_k_src = cb_k_start_address;
@@ -2730,10 +2714,10 @@ void kernel_main() {
 
                         if constexpr (sol_pack) {
                             if (!is_padded_iter) {
-                                // Q2: same blocks, same slots as the K append above; this one commits the fill.
-                                // V page is [Sk_chunk_t][vDHt] tiles: block j = tile rows [2j, 2j+2), one run.
-                                // Q2: pack K and V together, flushing whenever a page fills mid-chunk. The
-                                // routine owns the push/reserve so the fill can never exceed the page.
+                                // Pack K (from staging) and V together, flushing whenever a page fills mid-chunk;
+                                // this call commits the fill. V page is [Sk_chunk_t][vDHt] tiles: block j = tile
+                                // rows [2j, 2j+2), one run. The routine owns the push/reserve so the fill can never
+                                // exceed the page.
                                 sol_pack_fill = sol_pack_chunk(
                                     ring_id,
                                     k_chunk,
@@ -2759,7 +2743,7 @@ void kernel_main() {
                         }
                     }
                 }
-                // Q2: flush the partial page. A page cannot span ring iterations (shard `ring_id` is resident only
+                // Flush the partial page. A page cannot span ring iterations (shard `ring_id` is resident only
                 // now), so whatever is in it goes out here. The slack slots are NOT zero-filled and must never be
                 // computed: compute derives the same fill from the kept bitmask and sets its matmul extent to
                 // exactly `fill` blocks. Zero-filling would be worse than useless -- a zero K tile gives QK = 0,

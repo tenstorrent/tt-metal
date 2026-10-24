@@ -227,7 +227,7 @@ void kernel_main() {
     // long-term state), merged into the long-term state (the restore CBs) afterwards, so no bf16 running sum spans
     // more than one shard's K chunks. A single running sum over a long prefix loses the late chunks' contribution.
     constexpr bool seg_accum_enabled = get_named_compile_time_arg_val("seg_accum") == 1;
-    // Sol-Attn block gathering (DESIGN.md §3.1b).
+    // Sol-Attn block gathering.
     constexpr bool sol_enabled = get_named_compile_time_arg_val("sol_enabled") == 1;
     constexpr bool sol_chunk_mode = get_named_compile_time_arg_val("sol_chunk_mode") == 1;
     constexpr uint32_t cb_sol_plan = get_named_compile_time_arg_val("cb_sol_plan");
@@ -236,8 +236,8 @@ void kernel_main() {
     constexpr uint32_t sol_pooled_last_tiles = get_named_compile_time_arg_val("sol_pooled_last_tiles");
     constexpr bool sol_drain_all = get_named_compile_time_arg_val("sol_drain_all") == 1;
     constexpr bool sol_compact = get_named_compile_time_arg_val("sol_compact") == 1;
-    // Q2: kept blocks arrive packed across K-chunk boundaries on the ordinary K/V CBs, so compute pays one visit
-    // per full page instead of one per kept chunk. Raw chunks are staged privately by the reader and never
+    // Packing: kept blocks arrive packed across K-chunk boundaries on the ordinary K/V CBs, so compute pays one
+    // visit per full page instead of one per kept chunk. Raw chunks are staged privately by the reader and never
     // reach compute, so there is nothing here to drain and no extra CB to name.
     constexpr bool sol_pack = get_named_compile_time_arg_val("sol_pack") == 1;
     constexpr uint32_t sol_blocks_per_page = get_named_compile_time_arg_val("sol_blocks_per_page");
@@ -252,7 +252,7 @@ void kernel_main() {
         !sol_resident || (use_streaming_compute && !v_shares_k_buffer && !kt_inplace_v && !has_joint_k &&
                           !rotated_q_split_enabled && !ksplit_enabled && !seg_accum_enabled),
         "resident mode: streaming compute, separate V entries, no joint K, no Q rotation or K split");
-    static_assert(!sol_pack || sol_compact, "Q2 packing builds on compact-mode block selection");
+    static_assert(!sol_pack || sol_compact, "packing builds on compact-mode block selection");
     static_assert(!sol_enabled || (!ksplit_enabled && !seg_accum_enabled), "Sol-Attn excludes the K split");
     static_assert(!(ksplit_enabled && seg_accum_enabled));
     static_assert(

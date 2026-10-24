@@ -5,7 +5,7 @@
 """Fused Sol-Attn pre-pass (sol_prepass_fused.SolPrepassFused): pooling and routing vs the torch mirror
 (sol_prepass.torch_reference) and vs the ttnn-op pre-pass (SolPrepass), plus a timing comparison.
 
-Run (Galaxy, under ~/sol_attn_work/union_env.sh):
+Run (Galaxy):
   pytest models/tt_dit/tests/models/minimax_h3/test_sol_prepass_fused_minimax_h3.py -k 4x8 -s --tb=short
 Env: SOL_FUSED_REPS (bench reps, default 5), SOL_FUSED_RESULTS (jsonl path for the bench rows).
 """
@@ -243,7 +243,7 @@ def test_sol_prepass_fused_bench(
     S = tuple(mesh_device.shape)[sp_axis]
     geo = SolGeometry(shards=S, rows=rows, logical_n=logical_n, q_chunk=q_chunk, k_chunk=k_chunk)
     scale = D**-0.5
-    sink_tokens = {13664: 1245, 9184: 849, 4736: 453}[rows]  # real prefix lengths (5 s: 453 per the 2026-10-16 capture)
+    sink_tokens = {13664: 1245, 9184: 849, 4736: 453}[rows]  # real t2va prefix lengths (text + audio) per working point
     torch.manual_seed(0)
     q, k, v = (torch.randn(S, H, rows, D).bfloat16().float() for _ in range(3))
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)

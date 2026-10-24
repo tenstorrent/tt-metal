@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Capture real MiniMax-H3 attention activations and Sol-Attn routing statistics from a 50-step
-t2va generation (Sol-Attn port, DESIGN.md step 2/3). Dense output is kept as the quality reference.
+t2va generation. Dense output is kept as the quality reference.
 
 Run (4x8 Blackhole Galaxy):
 
-    MINIMAX_H3_MODEL_PATH=/data/nwoodall/MiniMax-H3-diffusers TT_DIT_CACHE_DIR=/data/losullivan/tt_dit_cache \
-    SOL_CAPTURE_DIR=/data/losullivan/sol_attn_captures \
+    MINIMAX_H3_MODEL_PATH=<diffusers weights> TT_DIT_CACHE_DIR=<weight cache> \
+    SOL_CAPTURE_DIR=<output dir, default ~/sol_attn_captures> \
     pytest models/tt_dit/tests/models/minimax_h3/test_sol_capture_minimax_h3.py -k "15s" -s
 
 Per (step, layer) in STAT_STEPS x all layers: pooled Q/K (on device, 1/64 readback) -> host routing
@@ -40,7 +40,7 @@ from ....pipelines.minimax_h3.policy import get_num_frames
 from .common import MESH_4X8_RING
 from .common_av import CALIBRATED_FOX_PROMPT, to_uint8_frames, weights_dir, write_artifacts
 
-sys.path.insert(0, os.environ.get("SOL_ATTN_WORK", "/home/losullivan/sol_attn_work"))  # /data copy on Slurm nodes
+sys.path.insert(0, os.environ.get("SOL_ATTN_WORK", "/home/losullivan/sol_attn_work"))  # SOL_ATTN_WORK holds sol_ref
 import sol_ref as R  # noqa: E402
 
 NUM_INFERENCE_STEPS = 50
@@ -48,10 +48,10 @@ SEED = 0
 TAUS = (0.5, 0.75, 1.0, 1.25, 1.5, 2.0)
 CHUNK_SIZES = ((256, 512), (256, 256), (128, 512), (128, 256), (64, 64))
 # The scheduler runs num_inference_steps - 1 model evaluations (grid points incl. terminal 0): steps 0..48.
-STAT_STEPS = ()  # inline host stats are off: offline_stats.py computes them from the saved pooled tensors
+STAT_STEPS = ()  # empty: no inline host stats; they can be computed offline from the saved pooled tensors
 POOLED_STEPS = (0, 3, 6, 9, 10, 12, 15, 20, 25, 30, 35, 40, 44, 48)
 FULL_PAIRS = {(s, l) for s in (10, 25, 48) for l in (0, 2, 12, 25, 40, 49)}
-# bucket rung per working point with the 39-token calibrated prompt (matches ~/h3_attn_timing)
+# bucket rung per working point with the 39-token calibrated prompt
 RUNG = {5: 37888, 10: 73472, 15: 109312}
 
 

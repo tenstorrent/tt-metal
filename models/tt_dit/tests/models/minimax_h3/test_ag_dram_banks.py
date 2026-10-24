@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Is the ring-attention all-gather delivering the right pages to the right place on this machine?
+"""Is the ring-attention all-gather delivering the right pages to the right place?
 
 Standalone: no SDPA, no sparse path. Dumps every chip's DRAM harvesting mask and DRAM bank -> NOC0 table, then
 runs `ring_attention_all_gather_async` on K-shaped tensors whose content encodes (shard, head, row), reads each

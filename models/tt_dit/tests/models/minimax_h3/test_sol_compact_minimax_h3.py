@@ -10,7 +10,7 @@ and the reference is the dense ring op on the same inputs, so the file is standa
 
 Run everything:      pytest models/tt_dit/tests/models/minimax_h3/test_sol_compact_minimax_h3.py
 One mode:            ... -k compact
-Skip the slow shapes: they are already opt-in via SOL_COMPACT_FULL=1.
+Slow shapes:         opt-in via SOL_COMPACT_FULL=1.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from ....parallel.manager import CCLManager
 from ....utils.tensor import bf16_tensor, from_torch
 from .common import GALAXY_RING
 
-MODES = ["gather", "chunk", "compact", "resident"]  # resident: chunk semantics, K/V-once loop order (M1)
+MODES = ["gather", "chunk", "compact", "resident"]  # resident: chunk semantics, K/V-once loop order
 
 
 def logical_length_tensor(mesh_device: ttnn.MeshDevice, value: int) -> ttnn.Tensor:
@@ -56,9 +56,9 @@ _MODE_LINE = "RingJointSDPA sol mode resolved: "
 # Default geometry: small enough to run every parameter in one sitting, large enough that a K chunk holds
 # TK = k_chunk / 64 = 8 routing blocks, which is the ratio that makes the sparse path interesting at all.
 ROWS, LOGICAL_N, Q_CHUNK, K_CHUNK = 1024, 8192, 256, 512
-# Q1 compute unit = the 64-token query block. Q2's staging CBs (~256 KB) only fit L1 at this size: measured
-# 2026-10-20, packing at q_chunk=256 overflows by 105 KB (1,680,896 B vs 1,572,864 B). Dropping Sq from 8 to 2
-# tiles shrinks every Sq-dependent CB 4x, freeing ~222 tiles. Q2 therefore REQUIRES Q1 -- they ship together.
+# The 64-token query block is the compute unit of the pack and resident modes. Packing's staging CBs (~256 KB) only
+# fit L1 at this chunk size: at q_chunk=256 they overflow, and dropping Sq from 8 to 2 tiles shrinks every
+# Sq-dependent CB 4x. Pack mode therefore requires the 64-row Q chunk.
 Q1_CHUNK = 64
 H, D = 14, 128
 SLOW = pytest.mark.skipif(os.environ.get("SOL_COMPACT_FULL") != "1", reason="set SOL_COMPACT_FULL=1")
@@ -76,9 +76,8 @@ def _pcc(a, b, logical_n=None):
     """PCC over the LOGICAL rows only.
 
     Rows at or beyond logical_n are padding: the op leaves them undefined, and dense and sparse leave different
-    garbage there. Comparing them made test_ragged_logical_n and test_small_k_chunk read 0.84 when the real
-    sequence agreed closely -- at rows=1184 on 8 shards the padded extent is 9472, so a default logical_n of
-    8192 makes 13.5 % of the compared rows meaningless.
+    garbage there. Including them drags the PCC down even when the real sequence agrees closely: at rows=1184 on
+    8 shards the padded extent is 9472, so a logical_n of 8192 makes 13.5 % of the compared rows meaningless.
     """
     if logical_n is not None:
         a, b = a[:, :logical_n], b[:, :logical_n]
@@ -138,9 +137,8 @@ def _run(
     scale = D**-0.5
     sink_tokens = 300 if rows < 4096 else 849
     if mode == "resident" and q_chunk == Q_CHUNK:
-        # Resident mode's compute unit is the 64-row query block (SOL_RESIDENT_Q_CHUNK overrides, e.g. 128 while the
-        # base kernel's 64-row path is under investigation), and its L1 FIFO of per-chunk accumulators does not fit
-        # next to a 256-row chunk's CBs (static CB region clashes with the L1 buffers at 1,504,000 B).
+        # Resident mode's compute unit is the 64-row query block (SOL_RESIDENT_Q_CHUNK overrides it, e.g. 128), and
+        # its L1 FIFO of per-chunk accumulators does not fit next to a 256-row chunk's CBs.
         q_chunk = int(os.environ.get("SOL_RESIDENT_Q_CHUNK", str(Q1_CHUNK)))
     geo = SolGeometry(shards=S, rows=rows, logical_n=logical_n, q_chunk=q_chunk, k_chunk=k_chunk)
 
@@ -152,15 +150,15 @@ def _run(
         for x in (q, k, v)
     )
 
-    # "resident" (M2) takes the block-form mask with the bias generated on device, exactly like "compact", plus
-    # (M4) the static per-row logit bound.
+    # "resident" takes the block-form mask with the bias generated on device, exactly like "compact", plus the
+    # static per-row logit bound.
     pre = SolPrepass(
         mesh_device=mesh_device,
         ccl_manager=ccl,
         sp_axis=sp_axis,
         tau=tau,
         mode="compact" if mode == "resident" else mode,
-        row_max=False,  # the resident op freezes its max on device (M4); the a-priori bound is unused
+        row_max=False,  # the resident op freezes its max on device; the a-priori bound is unused
     )
     pre.prepare(geo, sink_tokens, scale)
     sol = pre(tq, tk, tv, scale=scale, report_density=True)
@@ -170,7 +168,7 @@ def _run(
         compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),
         q_chunk_size=q_chunk,
         k_chunk_size=k_chunk,
-        exp_approx_mode=os.environ.get("SOL_EXP_APPROX", "0") == "1",  # A/B of the approximate SFPU exp
+        exp_approx_mode=os.environ.get("SOL_EXP_APPROX", "0") == "1",  # 1: use the approximate SFPU exp
     )
     ckc = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
@@ -331,11 +329,11 @@ def test_density_falls_as_tau_rises(
 ):
     """tau is the sparsity knob; if it stops biting, every perf number taken with it is meaningless.
 
-    Non-increasing, not strictly decreasing. Measured 2026-10-20: tau 0.5 and 1.0 give identical density
-    (0.5835 gather/compact) because the forcing rules -- band, sink columns, dense-prefix rows, forced block 0 --
-    keep a floor of blocks no threshold can drop, and low tau sits on that floor. Chunk mode is flat across the
-    whole range (0.8086) because its density is CHUNK occupancy: a chunk survives if any of its 8 blocks does,
-    which saturates long before the block mask does. The wide end of the range is where tau has to bite.
+    Non-increasing, not strictly decreasing. Low tau values can give identical density because the forcing rules
+    -- band, sink columns, dense-prefix rows, forced block 0 -- keep a floor of blocks no threshold can drop, and
+    low tau sits on that floor. Chunk mode is flat across the whole range because its density is CHUNK occupancy:
+    a chunk survives if any of its 8 blocks does, which saturates long before the block mask does. The wide end
+    of the range is where tau has to bite.
     """
     d = [
         _run(mesh_device, sp_axis, num_links, topology, capfd, mode=mode, tau=t, want_dense=False).density
@@ -345,8 +343,8 @@ def test_density_falls_as_tau_rises(
     assert d[0] >= d[1] >= d[2] - 1e-9, f"densities {d} increase with tau"
     if mode != "chunk":
         # Chunk mode is exempt by construction, as the docstring above says: its density is CHUNK occupancy,
-        # and a chunk survives if any of its 8 blocks does, so it pins at 0.8086 across the whole tau range.
-        # Only the block-form modes expose the knob. Asserting otherwise here was my error, not the kernel's.
+        # and a chunk survives if any of its 8 blocks does, so it stays flat across the whole tau range.
+        # Only the block-form modes expose the knob.
         assert d[0] > d[2], f"tau has no effect between 0.5 and 4.0 in {mode} mode: {d}"
 
 
@@ -360,14 +358,13 @@ def _pooled_tail_reference(S, rows, logical_n, seed=0, pool_partial=True):
     pool_partial=False attends every valid token exactly (an fp32 dense reference on the same inputs).
 
     This is what block-form modes compute at tau = -1e4, where nothing else is approximated. On this file's ramp
-    data the tail block carries ~88 % of the softmax mass for the tail queries, so pooling it alone costs PCC
-    ~0.14 against dense (measured 0.855 on device, 0.864 in a numpy model). That is the correction working as
-    designed on adversarial data, not a kernel defect; the reference below is the right yardstick.
+    data the tail block carries most of the softmax mass for the tail queries, so pooling it alone costs a large
+    PCC drop against dense. That is the correction working as designed on adversarial data, not a kernel defect;
+    this reference is the right yardstick.
 
-    Device vs this reference reads 0.9897 (gather and compact, both logical_n values, 2026-10-20). bf16 storage
-    of QK^T and P, and the bf16 bias add, model to 0.9988 in numpy, so ~0.009 is unexplained; with one column
-    carrying 88 % of the mass every rounding on it shows, where in production the pooled columns are the
-    low-weight ones. The gate is 0.98; the pinning test logs the device's own bf16 floor next to it.
+    The device's remaining distance from this reference comes from bf16 storage of QK^T and P and the bf16 bias
+    add; with one column carrying most of the mass every rounding on it shows, where in production the pooled
+    columns are the low-weight ones. The gate is 0.98; the pinning test logs the device's own bf16 floor next to it.
     """
     q, k, v = _qkv(S, rows, seed)
     Hh = q.shape[1]
@@ -418,7 +415,7 @@ def _check_partial_tail(r: Result, mode, S, rows, logical_n):
     if mode == "chunk":
         assert pcc_dense > 0.999, f"{mode} mode computes the tail chunk exactly; pcc vs dense {pcc_dense:.5f}"
     else:
-        # Block-form exact sets (gather, compact, resident since M2): partial tail blocks are pooled.
+        # Block-form exact sets (gather, compact, resident): partial tail blocks are pooled.
         assert pcc_ref > 0.98, f"{mode}: pcc vs pooled-tail reference {pcc_ref:.5f}"
 
 
@@ -447,16 +444,16 @@ def test_small_k_chunk(mesh_device, sp_axis, tp_axis, num_links, topology, is_fs
 @GALAXY_RING
 @pytest.mark.parametrize("mode", ["gather", "compact"])
 def test_qblock_granularity(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, mode, reset_seeds, capfd):
-    """Q1 without a kernel change: q_chunk = 64 makes the Q chunk BE the query block.
+    """q_chunk = 64 makes the Q chunk BE the query block, with no kernel change.
 
-    Sol-Attn (arXiv 2607.24027 Alg. 1) selects per query block, but our route program ORs TQ = q_chunk/64 query
+    Sol-Attn (arXiv 2607.24027 Alg. 1) selects per query block, but the route program ORs TQ = q_chunk/64 query
     blocks together because the op's compute unit is a Q chunk, so modes 0-2 compute a strict superset of S_i.
     At q_chunk = 64, TQ = 1 and `qc_pool_t[b, (b*64)//64] = qc_pool_t[b,b]` is the identity -- the OR is over one
     element, block01 == exact, and the emitted mask is already the spec-conformant per-query-block mask. nqc_pad
     collapses onto nb_pad too, so the op's existing `sol_nqc_pad` addressing still works.
 
-    Feasible only on the plain ring-joint path: it spreads B*NH*num_q_chunks over the grid with div_up
-    (ring_joint_sdpa_program_factory.cpp:1403). The exp path binds Q chunk x to core column x and could not do this.
+    Feasible only on the plain ring-joint path, which spreads B*NH*num_q_chunks over the grid with div_up
+    (ring_joint_sdpa_program_factory.cpp). The exp path binds Q chunk x to core column x and could not do this.
     """
     r = _run(mesh_device, sp_axis, num_links, topology, capfd, mode=mode, tau=1.0, q_chunk=64)
     logger.info(f"[q1] q_chunk=64 ({mode}): density {r.density:.4f}, pcc {_pcc(r.dense, r.sol):.5f}")
@@ -466,11 +463,10 @@ def test_qblock_granularity(mesh_device, sp_axis, tp_axis, num_links, topology, 
 
 @GALAXY_RING
 def test_qblock_is_sparser_than_qchunk(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds, capfd):
-    """The OR's cost, measured: same tau, same inputs, only the Q granularity differs.
+    """The OR's cost: same tau, same inputs, only the Q granularity differs.
 
     q_chunk=256 ORs 4 query blocks per chunk, so its density is the union of 4 rows and must exceed the
-    per-query-block density. The ratio is what Q1 recovers in math -- and it is the number the ~3.4x estimate
-    in sol_attn_next_optimizations.md was inferred from rather than measured.
+    per-query-block density. The ratio is the math that the 64-row query block recovers.
     """
     kw = dict(mode="compact", tau=1.0, want_dense=False)
     fine = _run(mesh_device, sp_axis, num_links, topology, capfd, q_chunk=64, **kw).density
@@ -481,9 +477,9 @@ def test_qblock_is_sparser_than_qchunk(mesh_device, sp_axis, tp_axis, num_links,
 
 @GALAXY_RING
 def test_q2_packing_matches_unpacked(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds, capfd):
-    """Q2's correctness gate: packing regroups blocks into full pages and must not change the math.
+    """Packing's correctness gate: packing regroups blocks into full pages and must not change the math.
 
-    Same inputs, same mask, same tau -- only the delivery unit differs (kept chunks vs packed pages). Q2 is
+    Same inputs, same mask, same tau -- only the delivery unit differs (kept chunks vs packed pages). Packing is
     selected with sol_mode="pack" (compact plus packing), which is part of the program hash, so the two runs
     below compile and cache separate programs without clearing the cache. The pre-pass output for "pack" is
     identical to "compact", so the densities must match exactly.
@@ -507,9 +503,9 @@ def test_q2_packing_matches_unpacked(mesh_device, sp_axis, tp_axis, num_links, t
 def test_resident_matches_compact(
     mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, rows, logical_n, k_chunk, tau, reset_seeds, capfd
 ):
-    """The correctness gate of resident mode (sol_attn_status_2026-10-21.md 4a, M1 + M2): the K/V-once loop order --
-    each piece streamed once per core and applied to every resident 64-row query chunk from L1 -- with, since M2,
-    the per-64-token-block exact set of compact mode: a chunk multiplies only its kept blocks of a piece, in place.
+    """The correctness gate of resident mode: the K/V-once loop order -- each piece streamed once per core and
+    applied to every resident 64-row query chunk from L1 -- with the per-64-token-block exact set of compact mode:
+    a chunk multiplies only its kept blocks of a piece, in place.
 
     Same inputs and the same block-form mask at 64-row query chunks as compact mode (even-up off, so compact's
     exact set is the mask's full blocks plus the forced block 0 of every shard, exactly resident's); only the loop
@@ -614,7 +610,7 @@ def test_resident_matches_compact(
 
 @GALAXY_RING
 def test_sol_row_max_bound(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds):
-    """Resident mode's static row max (M4) must bound every raw logit of its query row.
+    """Resident mode's static row max must bound every raw logit of its query row.
 
     The pre-pass's ||q_row|| * max ||k|| + ln(64)/scale (bf16, read back from the device) is checked on host
     against the row's true max of q.k over ALL keys of the sequence plus the same ln(64)/scale margin, on the
@@ -668,9 +664,8 @@ def test_base_determinism(
     mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, q_chunk, rows, logical_n, reset_seeds, capfd
 ):
     """Is the base kernel deterministic and sane at this query chunk, WITHOUT resident mode? The dense ring op and
-    chunk mode, each run twice with identical inputs. Measured 2026-10-21 at q_chunk=64: the dense op differs between
-    runs by up to 0.36 (outputs of std ~0.1) at rows 1024, and at rows 1184 every mode returns values of order 1e33.
-    Every 64-row-chunk measurement (pack mode, resident mode) sits on that, so this finds the smallest clean chunk."""
+    chunk mode, each run twice with identical inputs. Every 64-row-chunk mode (pack, resident) sits on the base
+    kernel's behaviour at that chunk, so this finds the smallest clean chunk."""
     kw = dict(mode="chunk", tau=-1e4, q_chunk=q_chunk, rows=rows, logical_n=logical_n)
     a = _run(mesh_device, sp_axis, num_links, topology, capfd, **kw)
     b = _run(mesh_device, sp_axis, num_links, topology, capfd, **kw)
@@ -780,14 +775,12 @@ def test_production_5s_geometry(mesh_device, sp_axis, tp_axis, num_links, topolo
 def test_partial_tail_block_is_pooled_not_dropped(
     mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, mode, reset_seeds, capfd
 ):
-    """Closes the rows=1184 investigation (2026-10-20).
+    """Block-form modes pool the partial tail block rather than drop it.
 
-    Block-form modes read PCC ~0.855 against dense at rows=1184 regardless of tau. The bisection tests that used
-    to live here ruled out the bias generator, the partial Q chunk, nb parity and a dropped block. The cause is
-    the data: this file's positional ramp makes the 32-token tail block of every shard carry ~88 % of the softmax
-    mass for the tail queries, so the zeroth-order correction on that one block costs ~0.14 PCC by itself (0.864
-    in a numpy model of the kernel's correction, 0.999 on randn -- which is where the CPU suite's "0.007" came
-    from). The kernel does what the algorithm specifies; the right yardstick is _pooled_tail_reference.
+    This file's positional ramp makes the 32-token tail block of every shard carry most of the softmax mass for
+    the tail queries, so the zeroth-order correction on that one block costs a visible PCC drop against dense by
+    itself, where the same correction on randn data is nearly free. The kernel does what the algorithm specifies;
+    the right yardstick is _pooled_tail_reference.
 
     Pinned here: sol matches that reference, and sits closer to dense than to the tail-dropped reference, which
     is the signature of a pooled, not dropped, block.
@@ -840,9 +833,9 @@ def test_sol_op_timing(
     host sync, launch, host sync, one warm-up then TIMING_REPS timed launches, median reported. The pre-pass is
     timed separately -- it is the route program's cost and is paid once per layer alongside the op.
 
-    Reads: `[timing] ... dense X ms, sol Y ms, speedup Z x` at the tau whose density is nearest 0.15. Note that a
-    130 W part shrinks the compute-bound dense op more than the data-movement-bound sparse path when moved to a
-    190 W part, so a ratio measured at 130 W is optimistic for production; leave margin above 2x.
+    Reads: `[timing] ... dense X ms, sol Y ms, speedup Z x` at the tau whose density is nearest 0.15. The dense op
+    is compute-bound and the sparse path data-movement-bound, so a higher power limit shrinks dense more than sol;
+    a ratio taken on a lower-power part is optimistic for production.
     """
     import time
 
@@ -872,7 +865,7 @@ def test_sol_op_timing(
             compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),
             q_chunk_size=qc,
             k_chunk_size=kc,
-            exp_approx_mode=os.environ.get("SOL_EXP_APPROX", "0") == "1",  # A/B of the approximate SFPU exp
+            exp_approx_mode=os.environ.get("SOL_EXP_APPROX", "0") == "1",  # 1: use the approximate SFPU exp
         )
         outs = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             tq,
@@ -943,7 +936,7 @@ def test_sol_op_timing(
 @SLOW
 @GALAXY_RING
 def test_production_5s_pack(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds, capfd):
-    """Q1 + Q2 at the 5 s shape: 64-row Q chunks (TQ = 1, no OR) with kept blocks packed across the 384-token K
+    """Pack mode at the 5 s shape: 64-row Q chunks (TQ = 1, no OR) with kept blocks packed across the 384-token K
     chunks (6 blocks per page). The correctness gate for the production geometry; perf comes from the profiler.
     logical_n is the full padded extent so no shard has a partial tail block and the dense comparison is clean.
     """
@@ -969,11 +962,11 @@ def test_production_5s_pack(mesh_device, sp_axis, tp_axis, num_links, topology, 
 def _run_sequence(
     mesh_device, sp_axis, num_links, topology, capfd, *, mode, tau, seeds, rows, logical_n, q_chunk, k_chunk
 ):
-    """`mode` launched once per seed on ONE CCLManager, fresh Q/K/V each call; returns [(output, op ms)].
+    """`mode` launched once per seed on ONE CCLManager, fresh Q/K/V each call; returns [(output, op ms, density)].
 
-    The bench's resident calls alternate 11.9 / 4.3 ms. A call that skipped an all-gather wait would compute on the
-    previous call's K/V and still pass on repeated inputs, so every call here gets new inputs and is judged on its
-    own. Prepass + launch per call, nothing else, so two sequences on the same seeds see the same device history.
+    A call that skipped an all-gather wait would compute on the previous call's K/V and still pass on repeated
+    inputs, so every call here gets new inputs and is judged on its own. Prepass + launch per call, nothing else,
+    so two sequences on the same seeds see the same device history.
     """
     S = tuple(mesh_device.shape)[sp_axis]
     scale = D**-0.5
@@ -989,7 +982,7 @@ def _run_sequence(
         sp_axis=sp_axis,
         tau=tau,
         mode="compact" if mode == "resident" else mode,
-        row_max=False,  # the resident op freezes its max on device (M4)
+        row_max=False,  # the resident op freezes its max on device
     )
     pre.prepare(geo, sink_tokens, scale)
     grid = mesh_device.compute_with_storage_grid_size()
@@ -997,7 +990,7 @@ def _run_sequence(
         compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),
         q_chunk_size=q_chunk,
         k_chunk_size=k_chunk,
-        exp_approx_mode=os.environ.get("SOL_EXP_APPROX", "0") == "1",  # A/B of the approximate SFPU exp
+        exp_approx_mode=os.environ.get("SOL_EXP_APPROX", "0") == "1",  # 1: use the approximate SFPU exp
     )
     ckc = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
@@ -1069,10 +1062,8 @@ def test_resident_call_parity(
     """Four resident calls in a row, fresh inputs each, each checked against compact mode run the same way (the
     same block-form mask and exact set; see test_resident_matches_compact).
 
-    Resident at 5 s (4736 rows per shard, 384-key pieces: the bench's geometry) alternated 11.9 / 4.3 ms by call
-    on the first machine (two different masks, 2026-10-21). Fresh inputs per call make a skipped wait visible as a
-    wrong answer (the previous call's K/V), and per-call timing ties the parity to it. The per-call ms are also the
-    first M2 timing at the real shape (tau 2, random inputs: block density ~0.07).
+    Fresh inputs per call make a skipped all-gather wait visible as a wrong answer (the previous call's K/V), and
+    per-call timing ties the parity to it. The 4736-row case is the 5 s production geometry with 384-key pieces.
     """
     kw = dict(tau=2.0, seeds=[11, 12, 13, 14], rows=rows, logical_n=logical_n, q_chunk=Q1_CHUNK, k_chunk=k_chunk)
     res = _run_sequence(mesh_device, sp_axis, num_links, topology, capfd, mode="resident", **kw)

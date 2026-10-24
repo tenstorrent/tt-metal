@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sol-Attn routing pre-pass for the ring-joint SDPA path (DESIGN.md §3.2 / §3.4).
+"""Sol-Attn routing pre-pass for the ring-joint SDPA path.
 
 Runs as plain ttnn ops between the fused QK-norm/RoPE and the ring SDPA. Per device it produces,
 from the local Q/K/V shards [1, H_local, R, D]:
@@ -12,22 +12,21 @@ from the local Q/K/V shards [1, H_local, R, D]:
   block goes through the pooled correction. Only full 64-token blocks inside logical_n are ever exact;
   block 0 of every shard is forced exact (one gathered chunk per ring iteration).
 * ``pooled_k`` / ``pooled_v``  bf16 tile [1, H, n_blocks_pad, D]: per-64-token block mean K / mean V
-  for the WHOLE sequence (all-gathered along SP), per-shard blocking (DESIGN.md §3.1).
+  for the WHOLE sequence (all-gathered along SP), per-shard blocking.
 * ``bias``  OPTIONAL (``emit_bias``; default from ``TT_SOL_EMIT_BIAS``) bf16 tile
   [1, H, n_q_chunks_pad * 32, n_blocks_pad]: per Q chunk, one 32-row tile row holding the additive
   column bias for the pooled logits: ln(block token count) / scale for blocks the Q chunk approximates
   (the kernel evaluates exp((QK + bias - max) * scale), so this weights the pooled column by its token
   count), a large negative value for blocks it computes exactly (no double counting) and for padding
   blocks. When not emitted (``bias`` is None) the ring op's reader generates the identical tile rows on
-  device from the mask row and the block geometry (sol_bias_gen.hpp), saving ~100 MB/layer of DRAM
-  traffic and two pre-pass ops. Interface contract: SOL_ATTN_INTERFACE.md next to this file.
+  device from the mask row and the block geometry (sol_bias_gen.hpp), which removes the bias upload and
+  two pre-pass ops. Interface contract: SOL_ATTN_INTERFACE.md next to this file.
 
 Geometry: blocks are 64 tokens inside each SP shard (the last block of a shard may be 32 tokens);
 K chunks are ``k_chunk`` tokens inside each shard; global K chunk index = shard * k_chunks_per_shard
 + local index. Every tensor dimension is padded to a tile multiple.
 
-``torch_reference(...)`` is the same arithmetic in fp32 torch on host (for unit tests against
-``sol_attn_work/sol_ref.py``).
+``torch_reference(...)`` is the same arithmetic in fp32 torch on host (for unit tests).
 """
 
 from __future__ import annotations
@@ -140,8 +139,9 @@ def build_constants(
         qg[:nb] = torch.arange(nb) + s * nb
         band_m[s, 0] = ((qg[:, None] - gidx[None, :]).abs() <= band).float() * valid_row[None, :]
         if dense_prefix_queries:
-            # Prefix (text + condition) QUERY rows attend densely, as NVlabs recomputes them outside the sparse
-            # kernel: every Q block whose first token lies before sink_tokens keeps all valid K blocks. Folded
+            # Prefix (text + condition) QUERY rows attend densely, as the reference implementation recomputes them
+            # outside the sparse kernel: every Q block whose first token lies before sink_tokens keeps all valid K
+            # blocks. Folded
             # into the band constant so it costs no extra op. (The ragged last block stays pooled: the kernel
             # only gathers full blocks.)
             for b in range(nb):
@@ -163,7 +163,7 @@ def build_constants(
     qc_pool_t = torch.zeros(1, 1, nbp, geo.nqc_pad)
     for b in range(nb):
         qc_pool_t[0, 0, b, (b * geo.block) // geo.q_chunk] = 1.0
-    # Forced columns: block 0 of every shard (one gathered chunk per ring iteration, see DESIGN.md §3.1b)
+    # Forced columns: block 0 of every shard (one gathered chunk per ring iteration)
     force_row = torch.zeros(1, 1, 1, nbg)
     if force_first_chunk:
         for s in range(S):
@@ -193,7 +193,7 @@ def build_constants(
     }
 
 
-# ----------------------------------------------------------------------------- static row max (M4, resident mode)
+# ----------------------------------------------------------------------------- static row max (resident mode)
 
 
 def row_max_constants(head_dim: int, scale: float) -> dict:
@@ -219,7 +219,7 @@ def compute_row_max(
     Column 0 of row r holds ``||q_r|| * max_over_all_keys ||k|| + ln(64) / scale`` in RAW (unscaled) logit units
     (the ring op applies the softmax scale inside its exp); columns 1..31 are zero. By Cauchy-Schwarz it bounds
     every raw logit of the row plus the largest pooled-column bias, so flash attention with this fixed max is exact
-    up to rounding and the kernel drops its running-max bookkeeping (sol_attn_status_2026-10-21.md, M4).
+    up to rounding and the kernel drops its running-max bookkeeping.
 
     The key-norm max is per head over the WHOLE sequence: the local max is all-gathered along SP on a tile-shaped
     [1, H, 32, 32] tensor (whole tiles per device, so the gather concatenates cleanly) and max-reduced, so every
@@ -314,12 +314,12 @@ class SolPrepass:
         #          approximated by the pooled chunks.
         # "compact": the gather-form block mask (full blocks only; block 0 of every shard forced kept so every
         #          (Q chunk, shard) computes at least one block), streamed through the chains like chunk mode; the
-        #          reader compacts each core's kept blocks in L1 (DESIGN_BLOCK_COMPACT.md). Pass sol_mode="compact".
-        # "pack" is compact plus the ring op's Q2 cross-chunk packing; the pre-pass output is identical to compact.
+        #          reader compacts each core's kept blocks in L1. Pass sol_mode="compact".
+        # "pack" is compact plus the ring op's cross-chunk packing; the pre-pass output is identical to compact.
         assert mode in ("gather", "chunk", "compact", "pack"), mode
         self.mode = mode
-        # emit_bias=False: the ring op generates the pooled-column bias on device (production path once the
-        # kernel build carries sol_bias_gen.hpp). TT_SOL_EMIT_BIAS flips the default for A/B runs.
+        # emit_bias=False: the ring op generates the pooled-column bias on device. TT_SOL_EMIT_BIAS sets the default
+        # (1 = emit the bias tensor, 0 = let the op generate it).
         self.emit_bias = (os.environ.get("TT_SOL_EMIT_BIAS", "1") == "1") if emit_bias is None else bool(emit_bias)
         # row_max=True: also return "row_max", the static per-query-row logit bound (compute_row_max) the ring op's
         # resident mode accepts as the deprecated sol_row_max input. The op ignores it; the model leaves it off.
@@ -355,9 +355,8 @@ class SolPrepass:
             mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
         return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh_device, mesh_mapper=mapper)
 
-    # Uploaded constants shared by every SolPrepass on the same mesh (all 48 layers use identical geometry, sink and
-    # scale): one build + upload per process instead of one per layer (~0.5 s and ~3 MB/device instead of ~22 s and
-    # ~140 MB/device for 48 layers).
+    # Uploaded constants shared by every SolPrepass on the same mesh (all layers use identical geometry, sink and
+    # scale): one build + upload per process instead of one per layer.
     _shared_consts: dict = {}
 
     def prepare(self, geo: SolGeometry, sink_tokens: int, scale: float) -> None:
@@ -478,7 +477,7 @@ class SolPrepass:
         c = self._consts
         geo = self.geo
         log2_scale = scale * LOG2E
-        row_max = self._row_max(q, k, scale) if self.row_max else None  # [1,H,R,32] (resident mode, M4)
+        row_max = self._row_max(q, k, scale) if self.row_max else None  # [1,H,R,32] (resident mode)
         q_bar = self._pool(q)  # [1,H,nbp,D]
         kc_local = self._pool(k)
         vc_local = self._pool(v)

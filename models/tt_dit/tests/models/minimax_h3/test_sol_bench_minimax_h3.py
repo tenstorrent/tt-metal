@@ -2,9 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Attention-op benchmark for the Sol-Attn port, reproducing `~/h3_attn_timing` exactly.
+"""Attention-op benchmark for the Sol-Attn port.
 
-Method (from h3_attention_timing_main_4x8.md): one `MiniMaxH3Attention` layer with random norm
+Method: one `MiniMaxH3Attention` layer with random norm
 weights, 4x8 Blackhole Galaxy, TP=4 / SP=8, `CCLManager(num_links=2, topology=Ring)`, `seq_local` in
 {4736, 9184, 13664}; wall clock with `ttnn.synchronize_device` before/after; 1 compile run then
 REPS timed runs; the module time covers QKV projection + fused norm/RoPE + ring-joint SDPA (incl. the
@@ -52,11 +52,11 @@ from .common import ROPE_FREQ_DIM, ROPE_THETA  # noqa: E402
 REPS = int(os.environ.get("SOL_BENCH_REPS", "3"))
 WORKING_POINTS = {4736: "768p_5s", 9184: "768p_10s", 13664: "768p_15s"}
 
-# SOL_BENCH_TRACE=1 (2026-10-23): open the 4x8 mesh with a trace region and time the attention op as a captured
-# trace replayed REPS times, so the measurement is the device time plus one synchronize, with no per-call host
-# dispatch (the production model runs under trace; the untraced "op" time carries ~1.3 ms of dispatch for the
-# fused op against ~0.5 ms for the plain all-gather). The module time is then one captured run and meaningless;
-# the per-rep density readback is from that run. Not combinable with SOL_BENCH_PROFILE.
+# SOL_BENCH_TRACE=1: open the 4x8 mesh with a trace region and time the attention op as a captured trace replayed
+# REPS times, so the measurement is the device time plus one synchronize, with no per-call host dispatch (the
+# production model runs under trace; the untraced "op" time includes the host dispatch of the fused op). The module
+# time is then one captured run and meaningless; the per-rep density readback is from that run. Not combinable with
+# SOL_BENCH_PROFILE.
 TRACE = os.environ.get("SOL_BENCH_TRACE") == "1"
 _BENCH_RING = (
     pytest.mark.parametrize(
@@ -157,20 +157,18 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
             tt_model.sol_logical_n = seq_len
             tt_model.sol_sink_tokens = int(os.environ.get("SOL_SINK_TOKENS", "1245"))
             tt_model.sol_report_density = True
-            # SOL_BENCH_MODE: gather | chunk | compact | pack (pack = compact + Q2 packing; pair it with
-            # SOL_BENCH_CHUNKS=64xK, the 64-row Q chunk Q1 needs and the only size whose L1 fits the staging).
+            # SOL_BENCH_MODE: gather | chunk | compact | pack (pack = compact + page packing; pair it with
+            # SOL_BENCH_CHUNKS=64xK: packing needs the 64-row Q chunk, the only size whose L1 fits the staging).
             tt_model.sol_mode = os.environ.get("SOL_BENCH_MODE", "compact")
             # SOL_BENCH_PREFIX: how the prefix (text + condition) query rows get their exact attention.
-            #   separate (default): the sparse op treats them like any row; a separate dense op recomputes them
-            #                       (MiniMaxH3Attention._sol_prefix_dense_rows). Its cost is in the module time
-            #                       and in the "op" time below (which wraps the ring op + that recompute).
-            #   fused:              the pre-pass marks them dense inside the sparse op. Profiled 2026-10-21: fully
-            #                       dense query chunks on a few cores of each shard-0 chip, and the chain lockstep
-            #                       drags those 4 chips to dense pace (26.6 ms at 10 s; the other 28 chips: 9 ms).
-            #   off:                no exact recompute (the floor: the sparse op alone).
+            #   separate: the sparse op treats them like any row; a separate dense op recomputes them
+            #             (MiniMaxH3Attention._sol_prefix_dense_rows). Its cost is in the module time and in the
+            #             "op" time below (which wraps the ring op + that recompute).
+            #   fused:    the pre-pass marks them dense inside the sparse op. The fully dense query chunks land on
+            #             a few cores of each shard-0 chip, and the chain lockstep drags those chips to dense pace.
+            #   off:      no exact recompute (the floor: the sparse op alone). The default, so the number isolates
+            #             the sparse kernel; pass SOL_BENCH_PREFIX=separate to include the prefix recompute.
             # SOL_BENCH_DENSE_PREFIX=0 is the old spelling of "off".
-            # Default "off" while the kernel work is measured (2026-10-21 decision: the prefix recompute waits
-            # until the other optimizations are done); pass SOL_BENCH_PREFIX=separate to include it.
             prefix = os.environ.get("SOL_BENCH_PREFIX", "off")
             if os.environ.get("SOL_BENCH_DENSE_PREFIX", "1") == "0":
                 prefix = "off"
@@ -256,9 +254,9 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
             # 64x64-block density of the same mask (resident / chunk modes skip at the coarser K-chunk level, so
             # the two differ there; identical in the block-form modes). This is the sparsity the model requires.
             block_density = getattr(tt_model, "sol_last_block_density", None)
-            # Keep the per-call density readback on during the timed reps (2026-10-21): the resident op's time
-            # tracks the mask density call by call, and on a machine whose pre-pass gathers are corrupted the mask
-            # changes between calls. The readback sits in the module time, never in the op time.
+            # The per-call density readback stays on during the timed reps: the resident op's time tracks the mask
+            # density call by call, and a mask that changes between calls on identical inputs points at a corrupted
+            # pre-pass gather. The readback sits in the module time, never in the op time.
             densities = []
             block_densities = []
             profile = os.environ.get("SOL_BENCH_PROFILE") == "1" and not TRACE

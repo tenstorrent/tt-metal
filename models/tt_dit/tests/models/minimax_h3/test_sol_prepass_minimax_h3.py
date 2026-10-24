@@ -26,7 +26,7 @@ from ....parallel.manager import CCLManager
 from ....utils.tensor import from_torch
 from .common import GALAXY_RING
 
-sys.path.insert(0, os.environ.get("SOL_ATTN_WORK", "/home/losullivan/sol_attn_work"))  # /data copy on Slurm nodes
+sys.path.insert(0, os.environ.get("SOL_ATTN_WORK", "/home/losullivan/sol_attn_work"))  # sol_ref reference location
 import sol_ref as R  # noqa: E402
 
 

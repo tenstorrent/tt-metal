@@ -4,16 +4,16 @@
 
 """Microbenchmark for the one number that decides the Q-block rewrite's shape.
 
-Q1-Q3 move the SDPA compute unit from a Q chunk (256-320 rows, 8-10 tile rows) to a Q block (64 rows, 2 tile rows),
-because selection happens at 64 and the OR up to the chunk throws the sparsity away. Under random sparsity no two
-Q blocks share a page, so M cannot be batched back up -- M = 2 tile rows is forced. If the matmul is badly inefficient
-there, Q2's shape is wrong and the rewrite needs a different decomposition.
+The Q-block rewrite moves the SDPA compute unit from a Q chunk (256-320 rows, 8-10 tile rows) to a Q block (64 rows,
+2 tile rows), because selection happens at 64 and the OR up to the chunk throws the sparsity away. Under random
+sparsity no two Q blocks share a page, so M cannot be batched back up -- M = 2 tile rows is forced. If the matmul is
+badly inefficient there, the packed path's shape is wrong and the rewrite needs a different decomposition.
 
 Everything here runs dense on ONE device. Total FLOPs are identical across a sweep, so a time difference is the
 per-shape efficiency difference and nothing else.
 
   A. q_chunk sweep  -> the small-M penalty.          Is M = 64 rows affordable?
-  B. k_chunk sweep  -> the fixed per-visit cost.     Independently measures the ~8 us/visit the plan rests on.
+  B. k_chunk sweep  -> the fixed per-visit cost.     Measures the per-visit overhead the packing plan rests on.
 
 Run:   pytest models/tt_dit/tests/models/minimax_h3/test_sol_qblock_microbench_minimax_h3.py -s
        (-s so the tables print; they are the point of the file)
@@ -34,7 +34,7 @@ B, NH, D = 1, 8, 128
 SEQ = 4096  # one device, no ring: big enough for the chunk sweeps to be meaningful, small enough to iterate
 WARMUP, ITERS = 3, 20
 
-Q_CHUNKS = [64, 128, 256, 320]  # 2, 4, 8, 10 tile rows. 64 is what Q2 would use; 256/320 are production today.
+Q_CHUNKS = [64, 128, 256, 320]  # 2, 4, 8, 10 tile rows. 64 is the packed path's chunk; 256/320 are production.
 K_CHUNKS = [128, 256, 512, 1024]  # fixed math, 4x spread in visit count -> slope gives cost per visit
 
 
@@ -93,27 +93,27 @@ def test_q_chunk_sweep(device):
 
 
 def test_m64_is_affordable(device):
-    """The decision gate for Q2's shape.
+    """The decision gate for the Q-block shape.
 
-    Q1-Q3 predicts ~3.4x less math. If M = 64 runs slower than ~1.7x of M = 256 per FLOP, half the predicted gain is
-    eaten by matmul inefficiency alone and the Q block is the wrong compute unit -- revisit before building the plan
-    format around it. The threshold is deliberately loose: this is a go/no-go on the shape, not a perf gate.
+    If M = 64 runs slower than ~1.7x of M = 256 per FLOP, matmul inefficiency alone eats a large share of the math the
+    Q block saves and the Q block is the wrong compute unit -- revisit before building the plan format around it.
+    The threshold is deliberately loose: this is a go/no-go on the shape, not a perf gate.
     """
     slow = _time_sdpa(device, 64, 512)
     fast = _time_sdpa(device, 256, 512)
     ratio = slow / fast
     logger.info(f"[gate] M=64 vs M=256 for identical math: {ratio:.2f}x")
     assert ratio < 1.7, (
-        f"M=64 rows costs {ratio:.2f}x the time of M=256 for the same FLOPs. Q2 assumes a 64-row compute unit "
+        f"M=64 rows costs {ratio:.2f}x the time of M=256 for the same FLOPs. The packed path assumes a 64-row compute unit "
         f"is affordable; at this ratio it is not, and the Q-block decomposition needs rethinking."
     )
 
 
 def test_k_chunk_sweep(device):
-    """B. Cost per visit, measured rather than taken from the profile.
+    """B. Cost per visit.
 
     Math is fixed; halving k_chunk doubles the number of loop iterations. Fitting time against visit count gives the
-    fixed per-visit cost directly -- the ~8 us/visit figure that the whole 'visits do not scale' argument rests on.
+    fixed per-visit cost directly -- the figure the 'visits do not scale' argument rests on.
     """
     ms = {k: _time_sdpa(device, 256, k) for k in K_CHUNKS}
     visits = {k: (SEQ // k) for k in K_CHUNKS}  # per Q chunk, per head
@@ -128,11 +128,11 @@ def test_k_chunk_sweep(device):
 
 @pytest.mark.parametrize("n_tiles", [12, 14, 16])
 def test_awkward_n_factorization(device, n_tiles):
-    """Q5: the kernel picks its sub-block width as largest_factor_le(N, max_sbw).
+    """The kernel picks its sub-block width as largest_factor_le(N, max_sbw).
 
     After compaction N = 2 x kept tiles, so kept = 7 gives N = 14, whose largest factor <= 4 is 2 -- half the usual
     sub-block width. This drives SDPA at k_chunk = N*32 so the awkward widths are exercised end to end; compare 14
-    against its neighbours 12 and 16 to see what the collapse actually costs before Q5 pads it away.
+    against its neighbours 12 and 16 to see what the collapse costs before padding it away.
     """
     ms = _time_sdpa(device, 256, n_tiles * 32)
     logger.info(f"[sbw] N = {n_tiles} tiles (k_chunk {n_tiles * 32}): {ms:.3f} ms")

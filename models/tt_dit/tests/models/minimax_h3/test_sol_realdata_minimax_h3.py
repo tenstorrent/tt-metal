@@ -7,7 +7,7 @@ and error vs the fp32 torch reference, per tau.
 
 Inputs: `/data/losullivan/sol_attn_captures/15s/full/s{step}_l{layer}.pt` ({q,k,v} [56, 109312, 128] bf16),
 one TP shard's 14 heads (SOL_HEADS=0 -> heads 0..13) sharded over SP exactly as the model does
-(8 x 13664 rows). Timing follows ~/h3_attn_timing: synchronize_device before/after, 1 compile run then
+(8 x 13664 rows). Timing: synchronize_device before/after, 1 compile run then
 REPS timed runs; the pre-pass and the ring op are timed separately. The reference is evaluated on
 SOL_REF_ROWS query rows chosen to cover the prefix, the video start, a middle shard and the ragged tail.
 
@@ -35,11 +35,11 @@ from ....utils.tensor import bf16_tensor, from_torch
 from .common import GALAXY_RING
 from .test_transformer_minimax_h3 import logical_length_tensor
 
-sys.path.insert(0, os.environ.get("SOL_ATTN_WORK", "/home/losullivan/sol_attn_work"))  # /data copy on Slurm nodes
+sys.path.insert(0, os.environ.get("SOL_ATTN_WORK", "/home/losullivan/sol_attn_work"))  # SOL_ATTN_WORK holds sol_ref
 import sol_ref as R  # noqa: E402
 
-# Workload geometry (sol-vid3, 2026-10-16): SOL_GEOM=5s|10s|15s selects the capture set; rows/logical_n/video_start come
-# from that capture's stats.jsonl; the chunk sizes default to the module's measured point for that clip length.
+# Workload geometry: SOL_GEOM=5s|10s|15s selects the capture set; rows/logical_n/video_start come from that
+# capture's stats.jsonl; the chunk sizes default to the module's measured point for that clip length.
 GEOM = os.environ.get("SOL_GEOM", "15s")
 CAPTURES = Path(f"/data/losullivan/sol_attn_captures/{GEOM}/full")
 RESULTS = Path(os.environ.get("SOL_RESULTS", "/home/losullivan/sol_attn_work/bench/results_realdata.jsonl"))
@@ -58,7 +58,7 @@ _SOL_MODE_LINE = "RingJointSDPA sol mode resolved: "
 
 
 def _sol_mode_guard(capfd, mode, state):
-    """Fail when a requested Sol mode did not reach the kernels (lead's request after the docstring-gate incident).
+    """Fail when a requested Sol mode did not reach the kernels.
 
     The program factory logs "RingJointSDPA sol mode resolved: <mode> ..." once per program creation, i.e. exactly when
     the kernels are created with that mode's named compile-time args. Read it back from the captured stderr after the
@@ -90,7 +90,7 @@ def _sol_mode_kwargs(mode):
 
     The op's docstring never lists keyword names (a check on it is always False), so probe the raw nanobind function:
     its argument error text carries the full signature. "compact" cannot be inferred, so a binding without the keyword
-    is an error there instead of a silent gather run (that silently happened once; see DESIGN_BLOCK_COMPACT.md).
+    is an error there instead of a silent gather run.
     """
     if mode in (None, "auto"):
         return {}
@@ -141,7 +141,7 @@ def test_sol_realdata(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsd
     gen_bias = os.environ.get("SOL_GEN_BIAS", "0") == "1"  # ring op generates the pooled-column bias on device
     fused = (
         os.environ.get("SOL_FUSED", "0") == "1"
-    )  # sol-video: fused generic_op pre-pass (SolPrepassFused) instead of the ttnn ops
+    )  # fused generic_op pre-pass (SolPrepassFused) instead of the ttnn ops
 
     blob = torch.load(CAPTURES / f"{cap}.pt", map_location="cpu", mmap=True)
     assert blob["q"].shape == (56, S * ROWS, D), blob["q"].shape

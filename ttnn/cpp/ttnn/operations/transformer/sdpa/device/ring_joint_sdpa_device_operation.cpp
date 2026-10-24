@@ -551,8 +551,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "RingJointSDPA attention_sink requires streaming compute; set fp32_dest_acc_en=false");
     }
 
-    // Deprecated sol_row_max: still accepted by resident mode only (and ignored by compute); no other mode (and no
-    // non-Sol run: sol_resident_mode is false without the sol tensors) takes it.
+    // sol_row_max is accepted by resident mode only and ignored by compute. sol_resident_mode is false without the
+    // sol tensors, so a non-Sol run cannot pass it either.
     TT_FATAL(
         !tensor_args.sol_row_max.has_value() || tensor_args.sol_resident_mode(args.sol_mode),
         "sol_row_max is accepted by sol_mode=resident only (got {} for sol_mode {})",
@@ -625,7 +625,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "sol_pooled_k must be [1, NH, n_blocks_pad, DH]");
         const uint32_t nkc_local = tt::div_up(k_shape[2], args.get_k_chunk_size());
         const uint32_t nkc_pad = tt::round_up(nkc_local * args.ring_size, 32u);
-        // Resident mode (M2) takes the block-form mask: its exact set is per 64-token block, like compact.
+        // Resident mode takes the block-form mask: its exact set is per 64-token block, like compact.
         const bool chunk_width_mask =
             tensor_args.sol_chunk_mode(args.sol_mode) && !tensor_args.sol_resident_mode(args.sol_mode);
         const uint32_t mask_width = chunk_width_mask ? nkc_pad : n_blocks_pad;

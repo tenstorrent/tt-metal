@@ -763,8 +763,8 @@ void kernel_main() {
     generate_bcast_unary_scalar(CircularBuffer(cb_scale_in), scale_val);
     {
         // Zero the identity tile first: generate_bcast_col_scalar writes column 0 only, and the Sol resident step
-        // (M5) multiplies its probabilities by this tile to get row sums, which reads every column of it. The
-        // dense path only ever reduced against column 0, so the other columns were never relied on before.
+        // multiplies its probabilities by this tile to get row sums, which reads every column of it. The dense
+        // path only reduces against column 0, so it does not depend on the other columns.
         Noc noc_zero;
         fill_tile_zeros<get_tile_size(cb_col_identity)>(noc_zero, cb_col_identity, 0);
     }

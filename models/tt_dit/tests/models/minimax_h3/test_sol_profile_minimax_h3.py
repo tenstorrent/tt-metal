@@ -1,16 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Device-profiler split of the Sol-Attn path on real captured activations (sol-coordination's task of 2026-10-16):
-for one clip length, dense ring op and sparse (pre-pass + ring op) at one tau, record every device program with the
-device profiler (TT_METAL_DEVICE_PROFILER=1) phase by phase, so the op wall can be split into attention-kernel time,
-all-gathers, pre-pass programs and launch gaps. Writes <SOL_PROFILE_DIR>/phases.json (host timing + program counts
-per phase) next to the profiler's own generated/profiler/.logs/profile_log_device.csv (TT_METAL_PROFILER_DIR).
+"""Device-profiler split of the Sol-Attn path on real captured activations: for one clip length, dense ring op and
+sparse (pre-pass + ring op) at one tau, record every device program with the device profiler
+(TT_METAL_DEVICE_PROFILER=1) phase by phase, so the op wall can be split into attention-kernel time, all-gathers,
+pre-pass programs and launch gaps. Writes <SOL_PROFILE_DIR>/phases.json (host timing + program counts per phase)
+next to the profiler's own generated/profiler/.logs/profile_log_device.csv (TT_METAL_PROFILER_DIR).
 Env: SOL_GEOM 5s|10s|15s, SOL_CAPTURE (s10_l12), SOL_TAU (1.0), SOL_REPS (5), SOL_MODE (compact), SOL_PROFILE_DIR,
 SOL_PROFILE_SAVE (1: also write <SOL_PROFILE_DIR>/sol_outputs.pt = the pre-pass outputs of the first sparse call, for
-bit-identity checks between variants; see sol_attn_work/exp/e1/compare_outputs.py).
+bit-identity checks between variants).
 Phases: dense_warm, dense x REPS, sparse_warm (pre-pass + op), prepass x REPS, sparse_op x REPS, sparse_full x REPS.
-E1 copy: the committed driver (9bdf5634a87) has no stacked pooled all-gather (stack_kv), so the prepass_stacked phases of
-the lead's version are not run here; the driver's route unit kind (SOL_ROUTE_UNITS_PER_SHARD) is logged and saved.
+The pre-pass's route unit kind (SOL_ROUTE_UNITS_PER_SHARD) is logged and saved with the results.
 """
 
 from __future__ import annotations
@@ -160,7 +159,7 @@ def test_sol_profile(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp
         )
         logger.info(f"[profile] {name} x{n}: wall ms {' / '.join(f'{w:.2f}' for w in wall)}")
 
-    # ---- dense (first, lead's rule)
+    # ---- dense phases first
     phase("dense_warm", lambda: run_ring(), 1)
     phase("dense", lambda: run_ring(), reps)
 
