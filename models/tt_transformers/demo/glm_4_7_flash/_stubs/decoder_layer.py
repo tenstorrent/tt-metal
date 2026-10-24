@@ -160,16 +160,16 @@ class TtDecoderLayer:
         self._w_kv_a = rep(Wkv_a)
 
         if shard:
-            self._w_q_b = shd(Wq_b, 1)
-            self._w_kv_b = shd(Wkv_b, 1)
-            self._w_o = shd(Wo, 0)
+            self._w_q_b = shd_bf8(Wq_b, 1)
+            self._w_kv_b = shd_bf8(Wkv_b, 1)
+            self._w_o = shd_bf8(Wo, 0)
             self._w_gate = shd_bf8(Wgate, 1)
             self._w_up = shd_bf8(Wup, 1)
             self._w_down = shd_bf8(Wdown, 0)
         else:
-            self._w_q_b = rep(Wq_b)
-            self._w_kv_b = rep(Wkv_b)
-            self._w_o = rep(Wo)
+            self._w_q_b = rep_bf8(Wq_b)
+            self._w_kv_b = rep_bf8(Wkv_b)
+            self._w_o = rep_bf8(Wo)
             self._w_gate = rep_bf8(Wgate)
             self._w_up = rep_bf8(Wup)
             self._w_down = rep_bf8(Wdown)
