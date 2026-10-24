@@ -9,12 +9,12 @@
 #include <unordered_set>
 #include <fstream>
 #include <climits>
+#include <unistd.h>  // gethostname
 
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
-#include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
+#include "serialization/physical_system_descriptor_serialization.hpp"
 #include <tt_stl/assert.hpp>
 #include "llrt/tt_target_device.hpp"
-#include "tt_metal/fabric/fabric_host_utils.hpp"
 
 namespace tt::tt_metal {
 
@@ -479,7 +479,10 @@ std::string PhysicalSystemDescriptor::my_host_name() const {
     if (!local_hostname_.empty()) {
         return local_hostname_;
     }
-    return get_host_name();
+    // Fallback for file-based PSD (no discovery) - assume hostnames are unique
+    char hostname[HOST_NAME_MAX + 1] = {};
+    ::gethostname(hostname, sizeof(hostname) - 1);
+    return std::string(hostname);
 }
 
 uint32_t PhysicalSystemDescriptor::get_rank_for_hostname(const std::string& host_name) const {

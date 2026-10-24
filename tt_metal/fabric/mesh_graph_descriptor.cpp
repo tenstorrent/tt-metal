@@ -18,7 +18,6 @@
 #include <tt_stl/assert.hpp>
 
 #include "protobuf/mesh_graph_descriptor.pb.h"
-#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -35,22 +34,6 @@ using namespace tt::tt_metal::distributed;
 namespace tt::tt_fabric {
 
 namespace {
-
-// When DistributedContext is initialized (MPI / tt-run split layout), prefix instance names with mgd{id}_ using
-// subcontext_id() so split-job ranks load disjoint logical names.
-std::optional<int> subcontext_id_for_instance_name_uniquify() {
-    using tt::tt_metal::distributed::multihost::DistributedContext;
-    if (DistributedContext::is_initialized()) {
-        const auto& world = DistributedContext::get_current_world();
-        if (world != nullptr) {
-            const auto sc = world->subcontext_id();
-            if (sc.has_value()) {
-                return *sc.value();
-            }
-        }
-    }
-    return std::nullopt;
-}
 
 std::string read_file_to_string(const std::filesystem::path& file_path) {
     std::ifstream input(file_path);
@@ -177,17 +160,6 @@ MeshGraphDescriptor::MeshGraphDescriptor(
     TT_FATAL(errors.empty(), "Failed to validate MeshGraphDescriptor textproto: \n{}", get_validation_report(errors));
     proto_ = std::move(proto);
     populate();
-
-    if (const auto sid = subcontext_id_for_instance_name_uniquify(); sid.has_value()) {
-        const std::string prefix = "mgd" + std::to_string(*sid) + "_";
-        instances_by_name_.clear();
-        for (auto& [_, inst] : instances_) {
-            inst.name = prefix + inst.name;
-        }
-        for (const auto& [gid, inst] : instances_) {
-            instances_by_name_[inst.name].push_back(gid);
-        }
-    }
 }
 
 MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) :
@@ -626,6 +598,70 @@ uint32_t MeshGraphDescriptor::get_switch_chip_count(const InstanceData& switch_i
     }
 
     return chip_count;
+}
+
+std::optional<MeshHostRankId> MeshGraphDescriptor::get_host_rank_for_chip(MeshId mesh_id, ChipId chip_id) const {
+    // Switch instances are single-host (MeshGraph assigns rank 0 to every switch chip).
+    for (const auto& global_id : switch_instances_) {
+        const auto& instance = get_instance(global_id);
+        if (instance.local_id == static_cast<LocalNodeId>(*mesh_id)) {
+            if (chip_id < 0 || static_cast<uint32_t>(chip_id) >= get_switch_chip_count(instance)) {
+                return std::nullopt;
+            }
+            return MeshHostRankId{0};
+        }
+    }
+
+    // Locate the mesh instance whose local id matches mesh_id.
+    const InstanceData* mesh_instance = nullptr;
+    for (const auto& global_id : mesh_instances_) {
+        const auto& instance = get_instance(global_id);
+        if (instance.local_id == static_cast<LocalNodeId>(*mesh_id)) {
+            mesh_instance = &instance;
+            break;
+        }
+    }
+    if (mesh_instance == nullptr) {
+        return std::nullopt;
+    }
+
+    const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(mesh_instance->desc);
+    TT_FATAL(mesh_desc != nullptr, "Mesh descriptor is null for instance {}", mesh_instance->global_id);
+
+    const auto& device_dims = mesh_desc->device_topology().dims();
+    const auto& host_dims = mesh_desc->host_topology().dims();
+    // static_validate guarantees equal-length dims with each device dim a positive multiple of the host dim; guard
+    // anyway so a malformed descriptor cannot index out of range.
+    if (device_dims.size() != host_dims.size() || device_dims.empty()) {
+        return std::nullopt;
+    }
+
+    uint32_t chip_count = 1;
+    for (const auto& dim : device_dims) {
+        chip_count *= static_cast<uint32_t>(dim);
+    }
+    if (chip_id < 0 || static_cast<uint32_t>(chip_id) >= chip_count) {
+        return std::nullopt;
+    }
+
+    // Decode chip_id row-major (last dim fastest), map each device coordinate to its host-grid coordinate, then
+    // fold the host coordinates row-major over host_dims. This is MeshGraph's host-rank enumeration order.
+    auto remaining = static_cast<uint32_t>(chip_id);
+    const int num_dims = device_dims.size();
+    std::vector<uint32_t> device_coord(num_dims);
+    for (int i = num_dims - 1; i >= 0; --i) {
+        const auto device_dim = static_cast<uint32_t>(device_dims[i]);
+        device_coord[i] = remaining % device_dim;
+        remaining /= device_dim;
+    }
+    uint32_t host_rank = 0;
+    for (int i = 0; i < num_dims; ++i) {
+        const auto device_dim = static_cast<uint32_t>(device_dims[i]);
+        const auto host_dim = static_cast<uint32_t>(host_dims[i]);
+        const uint32_t board_size = device_dim / host_dim;  // > 0 per static_validate
+        host_rank = host_rank * host_dim + device_coord[i] / board_size;
+    }
+    return MeshHostRankId{host_rank};
 }
 
 std::unordered_map<std::string, uint32_t> MeshGraphDescriptor::count_instances_by_type(

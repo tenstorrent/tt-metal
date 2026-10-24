@@ -576,7 +576,11 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
         }
 
         auto pgd = ::tt::tt_fabric::PhysicalGroupingDescriptor::find_and_load(
-            cluster, /*pgd_path=*/std::nullopt, &physical_system_descriptor_);
+            cluster.get_cluster_type(),
+            cluster.arch(),
+            cluster.is_ubb_galaxy(),
+            /*pgd_path=*/std::nullopt,
+            &physical_system_descriptor_);
         const auto asic_ranks =
             config.disable_rank_bindings ? decltype(physical_node_id_to_mesh_rank){} : physical_node_id_to_mesh_rank;
         const auto fabric_ranks =
@@ -1714,12 +1718,10 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     const MeshId mesh_id{0};
 
     auto try_map_shape = [&](FabricType fabric_type, const MeshShape& mesh_shape) -> std::optional<MeshGraph> {
-        MeshGraph mesh_graph(
-            MeshGraphDescriptor::generate_mesh_graph_descriptor_of_shape(
-                mesh_shape, fabric_type, reliability_mode, cluster.arch(), number_of_connections),
-            /*fabric_config=*/std::nullopt,
-            cluster.is_ubb_galaxy());
-        auto logical_adjacency_matrix = tt::tt_fabric::build_adjacency_graph_logical(mesh_graph);
+        const auto mesh_graph_descriptor = MeshGraphDescriptor::generate_mesh_graph_descriptor_of_shape(
+            mesh_shape, fabric_type, reliability_mode, cluster.arch(), number_of_connections);
+        MeshGraph mesh_graph(mesh_graph_descriptor, /*fabric_config=*/std::nullopt, cluster.is_ubb_galaxy());
+        auto logical_adjacency_matrix = tt::tt_fabric::build_adjacency_graph_logical(mesh_graph_descriptor);
 
         if (!logical_adjacency_matrix.contains(mesh_id) || !physical_adjacency_matrix.contains(mesh_id)) {
             return std::nullopt;

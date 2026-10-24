@@ -8,6 +8,7 @@
 #include <vector>
 #include <string>
 #include <cstdio>
+#include <cstdlib>
 #include <set>
 #include <map>
 #include <optional>
@@ -205,6 +206,29 @@ TEST(MeshGraphDescriptorTests, InfersDeclaredTorusTypeForDegenerateDimensions) {
     const auto& instance = desc.get_instance(desc.instances_by_name("M0").at(0));
     const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
     EXPECT_EQ(MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc), FabricType::TORUS_XY);
+}
+
+TEST(MeshGraphDescriptorTests, GetHostRankForChipMatchesMeshGraph) {
+    const char* home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(home, nullptr) << "TT_METAL_HOME must be set";
+    for (const char* rel :
+         {"tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto",
+          "tt_metal/fabric/mesh_graph_descriptors/16x4_dual_bh_galaxy_2d_mesh_graph_descriptor.textproto",
+          "tt_metal/fabric/mesh_graph_descriptors/16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto",
+          "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_ttswitch_mgd.textproto"}) {
+        const MeshGraphDescriptor desc(std::filesystem::path(home) / rel, /*backwards_compatible=*/true);
+        const MeshGraph mesh_graph(desc);
+        for (const MeshId mesh_id : mesh_graph.get_all_mesh_ids()) {
+            for (const auto& [coord, chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
+                (void)coord;
+                EXPECT_EQ(
+                    desc.get_host_rank_for_chip(mesh_id, chip_id), mesh_graph.get_host_rank_for_chip(mesh_id, chip_id))
+                    << rel << " mesh " << *mesh_id << " chip " << chip_id;
+            }
+            EXPECT_EQ(desc.get_host_rank_for_chip(mesh_id, mesh_graph.get_chip_ids(mesh_id).size()), std::nullopt);
+        }
+        EXPECT_EQ(desc.get_host_rank_for_chip(MeshId{999}, 0), std::nullopt);
+    }
 }
 
 TEST(MeshGraphDescriptorTests, InfersDeclaredTorusTypeForDegenerateSwitchDimensions) {

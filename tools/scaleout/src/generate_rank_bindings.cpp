@@ -625,8 +625,11 @@ int main(int argc, char** argv) {
             mgds.emplace_back(MeshGraphDescriptor(mgd_path, /*backwards_compatible=*/true));
             mgd_paths_in_order.push_back(mgd_path);
         }
+        const auto& cluster = MetalContext::instance().get_cluster();
         std::optional<PhysicalGroupingDescriptor> pgd = PhysicalGroupingDescriptor::find_and_load(
-            MetalContext::instance().get_cluster(),
+            cluster.get_cluster_type(),
+            cluster.arch(),
+            cluster.is_ubb_galaxy(),
             args.physical_grouping_descriptor_path.has_value()
                 ? std::optional<std::filesystem::path>(*args.physical_grouping_descriptor_path)
                 : std::nullopt,

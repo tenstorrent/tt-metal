@@ -31,7 +31,6 @@
 
 #include "protobuf/physical_grouping_descriptor.pb.h"
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
-#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
@@ -1319,21 +1318,32 @@ std::optional<GroupingInfo> build_mgd_mesh_placement_fallback(
     return std::nullopt;
 }
 
-// MeshGraph is the source of host ranks (get_host_rank_for_chip). Used when the caller did not pass a
+// The MGD host_topology tiling is the source of host ranks (MeshGraphDescriptor::get_host_rank_for_chip, the same
+// per-chip answer as MeshGraph::get_host_rank_for_chip). Used when the caller did not pass a
 // fabric_node_id_to_mesh_rank map, so get_valid_groupings / MGD fallbacks still enforce host_topology.
 std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank_from_mesh_graph(
     const MeshGraphDescriptor& mesh_graph_descriptor) {
-    const MeshGraph mesh_graph(mesh_graph_descriptor);
     std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> mapping;
-    for (const MeshId mesh_id : mesh_graph.get_all_mesh_ids()) {
-        for (const auto& [unused_coord, chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
-            (void)unused_coord;
-            const std::optional<MeshHostRankId> host_rank = mesh_graph.get_host_rank_for_chip(mesh_id, chip_id);
-            if (host_rank.has_value()) {
-                mapping[mesh_id][FabricNodeId(mesh_id, chip_id)] = *host_rank;
+    auto add_instances = [&](const std::vector<GlobalNodeId>& instances, const auto& chip_count_of) {
+        for (const GlobalNodeId global_id : instances) {
+            const auto& instance = mesh_graph_descriptor.get_instance(global_id);
+            const MeshId mesh_id{instance.local_id};
+            const uint32_t chip_count = chip_count_of(instance);
+            for (uint32_t chip_id = 0; chip_id < chip_count; ++chip_id) {
+                const std::optional<MeshHostRankId> host_rank =
+                    mesh_graph_descriptor.get_host_rank_for_chip(mesh_id, static_cast<ChipId>(chip_id));
+                if (host_rank.has_value()) {
+                    mapping[mesh_id][FabricNodeId(mesh_id, chip_id)] = *host_rank;
+                }
             }
         }
-    }
+    };
+    add_instances(mesh_graph_descriptor.all_meshes(), [&](const auto& instance) {
+        return mesh_graph_descriptor.get_chip_count(instance);
+    });
+    add_instances(mesh_graph_descriptor.all_switches(), [&](const auto& instance) {
+        return mesh_graph_descriptor.get_switch_chip_count(instance);
+    });
     return mapping;
 }
 

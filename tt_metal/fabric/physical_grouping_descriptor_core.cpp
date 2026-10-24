@@ -19,7 +19,7 @@
 #include <cstring>
 #include <optional>
 #include <vector>
-#include <llrt/tt_cluster.hpp>
+#include <tt-metalium/cluster.hpp>  // ClusterType
 #include <tt_stl/assert.hpp>
 #include <fmt/format.h>
 
@@ -38,7 +38,7 @@ using namespace tt::tt_fabric;
 
 namespace {
 
-std::string read_file_to_string(const std::filesystem::path& file_path) {
+std::string read_pgd_file_to_string(const std::filesystem::path& file_path) {
     std::ifstream input(file_path);
     if (!input.is_open()) {
         throw std::runtime_error("Failed to open file: " + file_path.string());
@@ -131,12 +131,12 @@ PhysicalGroupingDescriptor::PhysicalGroupingDescriptor(const std::string& text_p
 }
 
 PhysicalGroupingDescriptor::PhysicalGroupingDescriptor(const std::filesystem::path& text_proto_file_path) :
-    PhysicalGroupingDescriptor(read_file_to_string(text_proto_file_path)) {}
+    PhysicalGroupingDescriptor(read_pgd_file_to_string(text_proto_file_path)) {}
 
 PhysicalGroupingDescriptor::~PhysicalGroupingDescriptor() = default;
 
 std::string PhysicalGroupingDescriptor::read_file_to_string(const std::filesystem::path& file_path) {
-    return ::read_file_to_string(file_path);
+    return ::read_pgd_file_to_string(file_path);
 }
 
 bool PhysicalGroupingDescriptor::has_grouping(const std::string& grouping_name) const {
@@ -789,7 +789,9 @@ void PhysicalGroupingDescriptor::validate_grouping_structure(
 }
 
 std::optional<PhysicalGroupingDescriptor> PhysicalGroupingDescriptor::find_and_load(
-    const tt::Cluster& cluster,
+    const tt::tt_metal::ClusterType cluster_type,
+    const tt::ARCH arch,
+    const bool is_ubb_galaxy,
     const std::optional<std::filesystem::path>& pgd_path,
     const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) {
     // Physical grouping descriptor textprotos ship in two different trees depending on how tt-metal is
@@ -866,14 +868,11 @@ std::optional<PhysicalGroupingDescriptor> PhysicalGroupingDescriptor::find_and_l
     }
 
     // 2. Arch / cluster-type-specific.
-    const tt::tt_metal::ClusterType cluster_type = cluster.get_cluster_type();
-    const tt::ARCH arch = cluster.arch();
     std::optional<std::string> arch_cluster_filename;
     if (cluster_type == tt::tt_metal::ClusterType::GALAXY && arch == tt::ARCH::WORMHOLE_B0) {
         arch_cluster_filename = "wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
     } else if (
-        (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY || cluster.is_ubb_galaxy()) &&
-        arch == tt::ARCH::BLACKHOLE) {
+        (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY || is_ubb_galaxy) && arch == tt::ARCH::BLACKHOLE) {
         if (physical_system_descriptor != nullptr && physical_system_descriptor->is_bh_galaxy_rev_c()) {
             arch_cluster_filename = "wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
         } else {

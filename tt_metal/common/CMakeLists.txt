@@ -8,6 +8,7 @@ TT_ENABLE_UNITY_BUILD(common)
 tt_reuse_precompile_headers(common metal_common_pch)
 
 target_sources(common PRIVATE ${COMMON_SOURCES})
+target_sources(tt_metalium_types PRIVATE ${COMMON_TYPES_SOURCES})
 
 target_include_directories(
     common
