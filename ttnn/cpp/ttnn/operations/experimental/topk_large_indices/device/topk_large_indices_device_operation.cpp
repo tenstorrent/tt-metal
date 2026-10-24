@@ -37,8 +37,8 @@ void validate_static_args(const operation_attributes_t& attrs, const tensor_args
 void validate_runtime_args(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;
 
-    // Shape is intentionally omitted from the program hash and patched through runtime args, so keep
-    // these checks on both cache miss and cache hit.
+    // Shape is patched through runtime args (hashed only through the program classes of compute_program_hash), so check
+    // on both cache miss and hit.
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "topk_large_indices input must be on device");
     TT_FATAL(input.buffer() != nullptr, "topk_large_indices input must have an allocated buffer");
 
@@ -172,6 +172,9 @@ void TopkLargeIndicesDeviceOperation::validate_on_program_cache_miss(
 ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;
+    const uint32_t num_rows = flattened_rows_excluding_last_dim(input.logical_shape());
+    const uint32_t input_last_dim = input.logical_shape()[-1];
+    const uint32_t num_cores = attrs.resolved_worker_core_grid.num_cores();
     return tt::tt_metal::operation::hash_operation<TopkLargeIndicesDeviceOperation>(
         // Metadata presence changes the reader/compute binaries (extra CBs + accessor args + the on-device
         // derivation) and the offset is baked in as a compile arg, so both must be hashed. The per-chunk
@@ -189,7 +192,12 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
         input.layout(),
         input.memory_config().memory_layout(),
         input.memory_config().buffer_type(),
-        static_cast<uint32_t>(program::compute_body_mode(attrs.k, input.logical_shape()[-1])));
+        // The row count and width enter the key only through these classes of program.
+        static_cast<uint32_t>(
+            program::compute_body_mode(attrs.k, num_rows, input_last_dim, num_cores, attrs.valid_length)),
+        program::multi_chunk_rows(attrs.k, input_last_dim),
+        program::split_whole_rows(attrs.k, num_rows, input_last_dim, num_cores),
+        program::row_split_possible(num_rows, num_cores));
 }
 
 spec_return_value_t TopkLargeIndicesDeviceOperation::compute_output_specs(
