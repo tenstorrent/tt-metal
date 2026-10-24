@@ -2944,20 +2944,53 @@ def _grow_trace_region_and_retry(cmd, repo, env, out, r):
     the same overflow evidence the build phase grows on (the device's byte count, or the bare mesh
     assertion), so a run that measured nothing for another reason (an L1 overflow, a bad shard) is
     still reported as it was, not re-run into the ceiling.
+
+    AND A POSITIVE NUMBER IS NOT THE SAME AS A WHOLE PIPELINE. Stopping on any positive reading made
+    PARTIAL SUCCESS a terminal state: at a region big enough for the small stages and too small for
+    the big ones, the surviving stages produce a headline, the loop stops, and the stages that
+    overflowed are stranded at that size for the rest of the run -- permanently, because the next
+    step starts from the same env. That is what left Qwen-Image-Edit with a three-stage reading for
+    nineteen days: the two stages holding 77% of the pipeline were missing from the ranking input,
+    so the attempts went to the encoders. A stage that got no row FOR WANT OF TRACE ROOM says so on
+    its own line (stage_seams.UNMEASURED_MARK), and this grows while any stage is saying it, however
+    well the others did. Names come off the run's own lines; nothing here knows a model's stages.
+
+    Each re-run is also RANKED, and the best attempt is what comes back: growing can only add rows,
+    never cost the caller ones an earlier attempt already had.
     """
     try:
         from agent.perf_test_gen import _MESH_TRACE_OVERFLOW_RE, _needed_trace_region, _TRACE_REGION_GROW_ROUNDS
+        from agent.stage_seams import parse_unmeasured
         from agent.tracy_tool import per_token_readings
     except Exception:  # noqa: BLE001
         return out, r
+
+    def _lost_to_trace_room(text):
+        """{stage: why} for each stage the run declared and could not time FOR WANT OF TRACE ROOM."""
+        lost = {}
+        for line in (text or "").splitlines():
+            got = parse_unmeasured(line)
+            if got and _MESH_TRACE_OVERFLOW_RE.search(got[1]):
+                lost[got[0]] = got[1]
+        return lost
+
+    def _carries(text):
+        """How much of the pipeline an attempt's output holds: (it measured something, fewer stages
+        short of room). Compared between attempts so a grow never returns less than it was given."""
+        return (1 if any(v > 0 for v in per_token_readings(text or "")) else 0, -len(_lost_to_trace_room(text)))
+
+    best, best_carries = (out, r), _carries(out)
     for _ in range(int(_TRACE_REGION_GROW_ROUNDS or 0)):
         text = out or ""
         readings = per_token_readings(text)
-        if any(v > 0 for v in readings) or "TRACE_NOT_TRACE_CAPABLE" in text:
-            break  # a real trace ran, or the pipeline genuinely cannot trace -- nothing to grow
+        if "TRACE_NOT_TRACE_CAPABLE" in text:
+            break  # the pipeline genuinely cannot trace -- nothing to grow
+        lost = _lost_to_trace_room(text)
+        if any(v > 0 for v in readings) and not lost:
+            break  # a real trace ran and every stage had the room it asked for -- nothing to grow
         cur = int(env.get("TT_PERF_TRACE_REGION") or os.environ.get("TT_PERF_TRACE_REGION") or _TRACE_REGION_DEFAULT)
         need = _needed_trace_region(text)
-        if readings and need is None and not _MESH_TRACE_OVERFLOW_RE.search(text):
+        if readings and need is None and not lost and not _MESH_TRACE_OVERFLOW_RE.search(text):
             break  # it finished and measured nothing, but not for want of trace space
         # silent = the run printed no headline at all: a hung overflow, the only case that wedges the mesh
         silent = need is None and not readings
@@ -2966,13 +2999,16 @@ def _grow_trace_region_and_retry(cmd, repo, env, out, r):
             break  # already at the DRAM ceiling -> the trace genuinely does not fit
         env["TT_PERF_TRACE_REGION"] = str(target)
         sys.stderr.write(
-            "[perf-mcp] trace region too small (%s); growing to %d B%s and re-running\n"
+            "[perf-mcp] trace region too small (%s)%s; growing to %d B%s and re-running\n"
             % (
                 (
                     "silent overflow / mesh hang -- no size reported"
                     if silent
                     else ("device reports %d B" % need if need is not None else "mesh overflow -- no size reported")
                 ),
+                (" -- %d stage(s) got no row for want of room: %s" % (len(lost), ", ".join(sorted(lost))))
+                if lost
+                else "",
                 target,
                 " + resetting the wedged device" if silent else "",
             )
@@ -2990,7 +3026,10 @@ def _grow_trace_region_and_retry(cmd, repo, env, out, r):
         except Exception:  # noqa: BLE001
             break
         out = (r.stdout or "") + "\n" + (r.stderr or "")
-    return out, r
+        carries = _carries(out)
+        if carries >= best_carries:
+            best, best_carries = (out, r), carries
+    return best
 
 
 def _workload_failure_tail(out: str, keep: int = 12) -> str:

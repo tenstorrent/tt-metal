@@ -62,6 +62,35 @@ def test_other_lines_are_not_the_marker(line):
     assert S.parse_unmeasured(line) is None
 
 
+_REGION_FATAL = (
+    "TT_FATAL @ /x/tt_metal/distributed/mesh_trace.cpp:82: "
+    "mesh_cq.device()->get_trace_buffers_size() <= trace_region_size\n"
+    "info:\n"
+    "Creating trace buffers of size 1073741824B on MeshDevice 0, but only 41943040B is allocated "
+    "for trace region."
+)
+
+
+def test_a_shortened_reason_keeps_the_size_the_device_reported():
+    """THE SIZING SURVIVES THE CLIP. The reason is shortened for the log, but the sentence naming the
+    bytes sits several lines into a TT_FATAL -- clipped away, the loops that grow the region off these
+    lines had nothing to size with and fell back to doubling (three re-runs of a 25-minute
+    measurement, on Qwen-Image-Edit, to reach a size the first failure had already named)."""
+    why = S.unmeasured_why(RuntimeError(_REGION_FATAL))
+    assert "1073741824B" in why and "41943040B" in why
+    assert len(why) < len(_REGION_FATAL)
+    from agent.perf_test_gen import _needed_trace_region
+
+    line = S.unmeasured_line("enc", "RuntimeError: %s" % why)
+    assert _needed_trace_region(line) >= 1073741824, "the grow loop can size itself off the marker"
+
+
+def test_an_ordinary_reason_is_just_shortened():
+    why = S.unmeasured_why(RuntimeError("boom " * 200))
+    assert len(why) == S.UNMEASURED_WHY_HEAD
+    assert S.unmeasured_why(RuntimeError("short one")) == "short one"
+
+
 # --------------------------------------------------------------------------------------------------
 # the run states every stage that got no row
 # --------------------------------------------------------------------------------------------------

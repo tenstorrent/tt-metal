@@ -214,6 +214,58 @@ def resolve_seq_parallel(default_sp: int = 1) -> int:
     return int(default_sp)
 
 
+# THE TRACE REGION, IN BYTES, that the tool asks a run to reserve: optimize exports a size derived
+# from the board's DRAM (environment.default_trace_region_bytes), and both grow loops raise it when a
+# capture overflows. Every writer of it only ever wants MORE room -- which is why resolve_trace_region
+# below reads it as a floor rather than as the value.
+TRACE_REGION_ENV = "TT_PERF_TRACE_REGION"
+# ROOM FOR EVERY STAGE'S TRACE, NOT JUST ONE, when nothing else states a size. 23887872 fit a decode
+# trace alone; a pipeline that also traces its prefill needs both to co-reside (gemma-3 asks for
+# 24420352) and the shortfall does not degrade, it TT_FATALs inside end_trace_capture. 40 MiB so a
+# second stage's trace is covered without anyone passing an env var. Stated here, once, because the
+# generated test and its generator both need it and the test cannot import the generator.
+DEFAULT_TRACE_REGION_BYTES = 41943040
+
+
+def resolve_trace_region(declared: int = 0) -> int:
+    """How many bytes of trace region to reserve: the LARGEST of what the model itself declares, what
+    the tool asks for through TRACE_REGION_ENV, and the shared default -- never the smallest.
+
+    THE ASK IS A FLOOR, NOT AN OVERRIDE. A generated perf test used to pass the env value straight
+    into the model's own device-open, which silently LOWERED a region the model had sized from its own
+    largest trace. Qwen-Image-Edit declares 1 GiB; its perf test handed the open 40 MiB; all five
+    stages then died in mesh_trace.cpp's region assertion -- and the test still reported a pass,
+    because a stage that cannot be timed costs only its own row. The run ranked the three stages that
+    happened to survive at a middling size as if they were the whole pipeline, and spent its attempts
+    on the two encoders while the stage holding 75% of the runtime was invisible to it.
+
+    Taking the max keeps the planner able to raise the region (that is what the grow loops do) and
+    makes it unable to shrink one the model has already measured. `declared` is whatever the model
+    states -- its open's own default, its device_params -- read from the model, never typed here; 0
+    means it states none. To RESERVE LESS than the model asks for, change the model.
+    """
+    try:
+        asked = int((os.environ.get(TRACE_REGION_ENV) or "").strip() or 0)
+    except (TypeError, ValueError):
+        print(
+            "  [perf_adapter] WARNING: %s set but unparseable (%r); ignoring it -- the run reserves "
+            "what the model declares" % (TRACE_REGION_ENV, os.environ.get(TRACE_REGION_ENV)),
+            file=sys.stderr,
+            flush=True,
+        )
+        asked = 0
+    declared = int(declared or 0)
+    if declared > asked > 0:
+        print(
+            "  [perf_adapter] %s asks for %d B of trace region; this model declares %d B, so the run "
+            "reserves the larger. The ask raises the region, it never lowers one the model sized for "
+            "its own traces." % (TRACE_REGION_ENV, asked, declared),
+            file=sys.stderr,
+            flush=True,
+        )
+    return max(declared, asked, 0) or DEFAULT_TRACE_REGION_BYTES
+
+
 def stated_workload() -> tuple:
     """(requests, seq_len) the run states through BATCH_ENV and SEQ_LEN_ENV, each None when unset or not
     a positive integer. The planner splits the spare chips by these two facts; either missing means the
@@ -585,7 +637,10 @@ class PipelineStageAdapter:
                         file=sys.stderr,
                         flush=True,
                     )
-                    self.unmeasured[name] = "cannot prepare its inputs (%s: %s)" % (type(exc).__name__, str(exc)[:120])
+                    self.unmeasured[name] = "cannot prepare its inputs (%s: %s)" % (
+                        type(exc).__name__,
+                        _seams.unmeasured_why(exc),
+                    )
                     continue
             # Propagate self_traced: a pipeline that OWNS its capture must be timed natively, never
             # wrapped in a second begin_trace_capture. The decode fallback below already does this;

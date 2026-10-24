@@ -14,9 +14,9 @@ from __future__ import annotations
 # (spec_from_file_location, no parent package) by the generator tests, where the relative form
 # cannot resolve; those loaders put perf_automation on sys.path, so the flat spelling answers.
 try:
-    from . import stage_seams as _seams
+    from . import perf_adapter as _adapter, stage_seams as _seams
 except ImportError:  # loaded as a bare module, with perf_automation on sys.path
-    from agent import stage_seams as _seams
+    from agent import perf_adapter as _adapter, stage_seams as _seams
 
 import json
 import os
@@ -106,7 +106,11 @@ PERF_LAYERS = int(_pl) if (_pl.isdigit() and int(_pl) > 0) else None
 # unset env behaves exactly as the demo does. If the source uses a `mesh_device` FIXTURE, keep that
 # fixture + its parametrize and feed this tuple in; if it SELF-OPENS, pass it to MeshShape().
 # A copied MESH_DEVICE board table on its own cannot see --devices/--mesh.
-from models.experimental.perf_automation.agent.perf_adapter import resolve_batch, resolve_mesh_shape
+from models.experimental.perf_automation.agent.perf_adapter import (
+    resolve_batch,
+    resolve_mesh_shape,
+    resolve_trace_region,
+)
 _MESH_SHAPE = resolve_mesh_shape(default_rows=<source rows>, default_cols=<source cols>)
 
 _PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
@@ -120,7 +124,11 @@ if _MESH_SHAPE[0] * _MESH_SHAPE[1] > 1:
 if _PERF_TRACE:
     # Reserve the trace region at device-open, ONCE, for baseline and every candidate. The tool
     # measures trace+1cq end to end, so the device opens with a single command queue.
-    _DEV_PARAMS["trace_region_size"] = int(os.environ.get("TT_PERF_TRACE_REGION", "41943040"))
+    # THE REGION IS THE MODEL'S TO SIZE. resolve_trace_region takes the LARGER of the source's own
+    # trace_region_size (copy it in; 0 if the source states none) and what the tool asks for, so the
+    # tool can give a capture more room and can never hand the model's open LESS than it reserved for
+    # its own traces -- which fatals every stage in mesh_trace.cpp while the test still reports a pass.
+    _DEV_PARAMS["trace_region_size"] = resolve_trace_region(<source trace_region_size or 0>)
     _DEV_PARAMS["num_command_queues"] = 1
 
 @pytest.mark.parametrize("device_params", [_DEV_PARAMS], indirect=True)
@@ -216,7 +224,11 @@ import ttnn
 # unset env behaves exactly as the demo does. If the source uses a `mesh_device` FIXTURE, keep that
 # fixture + its parametrize and feed this tuple in; if it SELF-OPENS, pass it to MeshShape().
 # A copied MESH_DEVICE board table on its own cannot see --devices/--mesh.
-from models.experimental.perf_automation.agent.perf_adapter import resolve_batch, resolve_mesh_shape
+from models.experimental.perf_automation.agent.perf_adapter import (
+    resolve_batch,
+    resolve_mesh_shape,
+    resolve_trace_region,
+)
 _MESH_SHAPE = resolve_mesh_shape(default_rows=<source rows>, default_cols=<source cols>)
 
 _PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
@@ -228,7 +240,11 @@ _DEV_PARAMS = {"l1_small_size": 24576}
 if _MESH_SHAPE[0] * _MESH_SHAPE[1] > 1:
     _DEV_PARAMS["fabric_config"] = True   # only if the SOURCE sets it
 if _PERF_TRACE:
-    _DEV_PARAMS["trace_region_size"] = int(os.environ.get("TT_PERF_TRACE_REGION", "41943040"))
+    # THE REGION IS THE MODEL'S TO SIZE. resolve_trace_region takes the LARGER of the source's own
+    # trace_region_size (copy it in; 0 if the source states none) and what the tool asks for, so the
+    # tool can give a capture more room and can never hand the model's open LESS than it reserved for
+    # its own traces -- which fatals every stage in mesh_trace.cpp while the test still reports a pass.
+    _DEV_PARAMS["trace_region_size"] = resolve_trace_region(<source trace_region_size or 0>)
     _DEV_PARAMS["num_command_queues"] = 1
 
 @pytest.mark.parametrize("device_params", [_DEV_PARAMS], indirect=True)
@@ -362,7 +378,9 @@ def _parse_trace_path(text: str) -> str | None:
     return val
 
 
-_TRACE_REGION_NEED_RE = re.compile(r"Creating trace buffers of size (\d+)B.*?only (\d+)B is allocated")
+# The device's own sizing sentence, stated once beside the marker field that has to carry it
+# (stage_seams.TRACE_REGION_NEED_RE) and read back here by _needed_trace_region.
+_TRACE_REGION_NEED_RE = _seams.TRACE_REGION_NEED_RE
 _TRACE_REGION_GROW_ROUNDS = 6
 # A single-device overflow reports the exact bytes (parsed above). A MeshDevice overflow is a BARE
 # assertion (get_trace_buffers_size() <= trace_region_size, mesh_trace.cpp) with NO byte count, so the
@@ -390,15 +408,10 @@ def _skeleton_default(var: str) -> int:
 DEFAULT_ISL_TOKENS = _skeleton_default("TT_PERF_ISL_TOKENS")
 DEFAULT_OSL_TOKENS = _skeleton_default("TT_PERF_OSL_TOKENS")
 
-# ROOM FOR EVERY STAGE'S TRACE, NOT JUST ONE. 23887872 fit a decode trace alone. A pipeline that
-# also traces its prefill needs both to co-reside -- gemma-3 asks for 24420352 -- and the shortfall
-# does not degrade, it TT_FATALs inside end_trace_capture. The failure reads as "tracing this stage
-# does not work" and is really "the region was sized for one trace", which is how traced prefill came
-# to be disabled in a model config rather than given room.
-#
-# 40 MiB, so a second stage trace is covered without anyone passing an env var. Still overridable;
-# the perf test prints what it reserved.
-_DEFAULT_TRACE_REGION_BYTES = 41943040
+# The size a run falls back to when neither the model nor the tool states one. Stated once, in
+# perf_adapter, because the GENERATED TEST needs it too and cannot import this generator
+# (perf_adapter.DEFAULT_TRACE_REGION_BYTES, beside resolve_trace_region which the skeletons call).
+_DEFAULT_TRACE_REGION_BYTES = _adapter.DEFAULT_TRACE_REGION_BYTES
 
 
 def _needed_trace_region(text: str):
@@ -1349,9 +1362,13 @@ import time
 import pytest
 import ttnn
 
+from models.experimental.perf_automation.agent.perf_adapter import resolve_trace_region
+
 PERF_ITERS = int(os.environ.get("TT_PERF_ITERS", "5"))
 PERF_FLUSH_EVERY = int(os.environ.get("TT_PERF_FLUSH_EVERY", "32"))
-_TRACE_REGION = int(os.environ.get("TT_PERF_TRACE_REGION", "41943040"))
+# The larger of what the SOURCE reserves (copy its own trace_region_size in; 0 if it states none)
+# and what the tool asks for: the ask raises the region, it never lowers the source's own.
+_TRACE_REGION = resolve_trace_region(<source trace_region_size or 0>)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": _TRACE_REGION}], indirect=True)
@@ -1781,6 +1798,13 @@ def generate_perf_test(
         "`trace_region_size`/`num_command_queues` on that self-open call when TT_PERF_TRACE (drop the "
         "`_DEV_PARAMS`/`device_params` fixture entirely). Keep `_build_for_perf(dev)` building the pipeline "
         "on the passed-in `dev` so both the eager forward and the trace run the SAME sharded topology.\n"
+        "- TRACE REGION — the model's own size is a FLOOR. The bytes you pass as `trace_region_size` MUST "
+        "come from `resolve_trace_region(<the source's own trace_region_size, 0 if it states none>)` "
+        '(same perf_adapter import), NEVER from a bare `os.environ.get("TT_PERF_TRACE_REGION", ...)`. '
+        "A bare env read LOWERS a region the model sized for its own traces: every stage then dies in "
+        "mesh_trace.cpp's region assertion while the test still reports a pass, because an untimed stage "
+        "costs only its own row. Where the source's open already defaults the argument, read that default "
+        "off its signature rather than copying the number.\n"
         "- MESH SHAPE — honor the tool's topology, HOWEVER this test obtains its device. The shape MUST come "
         "from `from models.experimental.perf_automation.agent.perf_adapter import resolve_batch, resolve_mesh_shape` / "
         "`rows, cols = resolve_mesh_shape(default_rows=<source rows>, default_cols=<source cols>)`. That is "

@@ -16,6 +16,8 @@ whatever stage names the model itself declares. Nothing here names a stage, a co
 
 from __future__ import annotations
 
+import re
+
 SETUP = "_trace_setup"
 STEP = "_trace_step"
 INPUTS = "_trace_inputs"
@@ -93,6 +95,32 @@ def parse_unmeasured(line: str):
     stage, why = rest.split("]=", 1)
     stage = stage.strip()
     return (stage, why.strip()) if stage else None
+
+
+# WHAT A `why` MUST STILL SAY AFTER IT IS SHORTENED. The two writers of that field (the adapter for a
+# stage that cannot prepare its inputs, trace_replay for one that cannot be timed) kept the first 120
+# characters of the exception, which is the right length for a log line and the wrong one for this
+# failure: a trace region too small for a stage raises a TT_FATAL whose head is the region assertion
+# and whose SIZING sentence -- the only place the device says how many bytes the capture wanted --
+# comes several lines later. Clipped to the head alone, the marker said a stage overflowed but never
+# by how much, so the loops that grow the region off these lines (perf_test_gen._settle_perf_node,
+# perf_mcp._grow_trace_region_and_retry) had nothing to size with and fell back to blind doubling:
+# on Qwen-Image-Edit that is three re-runs of a 25-minute measurement to reach a size the first
+# failure had already named. The pattern lives here, beside the field it has to survive in, and the
+# region code reads it from here rather than keeping a second copy.
+UNMEASURED_WHY_HEAD = 120
+TRACE_REGION_NEED_RE = re.compile(r"Creating trace buffers of size (\d+)B.*?only (\d+)B is allocated")
+
+
+def unmeasured_why(exc, head: int = UNMEASURED_WHY_HEAD) -> str:
+    """`exc` folded to one line for `unmeasured_line`: its first `head` characters, plus whatever
+    sizing the device reported past them. Nothing model-specific: the sentence is the device's."""
+    text = " ".join(str(exc).split())
+    short = text[:head]
+    m = TRACE_REGION_NEED_RE.search(text)
+    if m and m.end() > len(short):
+        short = "%s ... %s" % (short.rstrip(), m.group(0))
+    return short
 
 
 def hook(stage: str, seam: str) -> str:

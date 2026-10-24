@@ -875,6 +875,8 @@ def measure_adapter(adapter, device) -> float:
     # re-run from a cool board, and a stage already measured is replayed from its own lines rather than
     # measured again -- otherwise every attempt re-heats the board on the same stages and is stopped at
     # the same place.
+    from .stage_seams import unmeasured_line as _unmeasured_line, unmeasured_why as _unmeasured_why
+
     _node = os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" (", 1)[0]
     try:
         from .probes import keep_stage, kept_stages
@@ -909,13 +911,17 @@ def measure_adapter(adapter, device) -> float:
             try:
                 ms, path = _measure_stage(device, st, _stage_budget, tables=_tables)
             except Exception as exc:  # noqa: BLE001
+                # SHORTENED THE ONE WAY THAT KEEPS THE DEVICE'S OWN SIZING (stage_seams.unmeasured_why):
+                # a region too small reports the bytes it wanted well past a fixed head clip, and the
+                # grow loops size themselves off this line.
+                _why = _unmeasured_why(exc)
                 print(
                     "  [trace-replay] stage %r could not be measured (%s: %s); it gets no row, the "
-                    "others are unaffected" % (st.name, type(exc).__name__, str(exc)[:120]),
+                    "others are unaffected" % (st.name, type(exc).__name__, _why),
                     file=sys.stderr,
                     flush=True,
                 )
-                _unmeasured[st.name] = "%s: %s" % (type(exc).__name__, str(exc)[:120])
+                _unmeasured[st.name] = "%s: %s" % (type(exc).__name__, _why)
                 continue
             results.append((st.name, ms, path))
             print("TRACE_STAGE_MS[%s]=%.4f path=%s" % (st.name, ms, path), flush=True)
@@ -951,8 +957,6 @@ def measure_adapter(adapter, device) -> float:
 
     # A STAGE WITHOUT A ROW IS STATED, so the whole-pipeline sum below is never read as the whole
     # pipeline when it is not (stage_seams.UNMEASURED_MARK).
-    from .stage_seams import unmeasured_line as _unmeasured_line
-
     for _un, _uw in _unmeasured.items():
         print(_unmeasured_line(_un, _uw), flush=True)
 
