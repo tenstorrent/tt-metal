@@ -93,6 +93,12 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     reshape_view/device/reshape_rm_program_factory.cpp
     reshape_view/device/reshape_tiled_program_factory.cpp
     reshape_view/device/reshape_device_operation.cpp
+    reshape_view/codegen/reshape_codegen_device_operation.cpp
+    reshape_view/codegen/reshape_codegen_plan.cpp
+    reshape_view/codegen/reshape_codegen_program_factory.cpp
+    reshape_view/codegen/reshape_codegen_supported.cpp
+    reshape_view/codegen/reshape_codegen_tile_mapped_plan.cpp
+    reshape_view/codegen/reshape_codegen_tile_rows_plan.cpp
     reshape_view/reshape.cpp
     roll/device/roll_device_operation.cpp
     roll/device/roll_program_factory.cpp
