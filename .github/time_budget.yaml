@@ -327,6 +327,10 @@ llk:
   perf:
     wh_n150_civ2: 1200
     bh_p150b_civ2: 1200
+  # Stage 2 of the LLK perf gate (llk-perf-gate.yaml): runs only when stage 1 finds a regression.
+  perf_placement:
+    wh_n150_civ2: 60
+    bh_p150b_civ2: 60
   bit_exact:
     wh_n150_civ2: 90
     bh_p150b_civ2: 180
