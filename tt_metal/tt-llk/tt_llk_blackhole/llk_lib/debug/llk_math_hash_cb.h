@@ -18,8 +18,12 @@
 //   A 32x32 INT32 tile is walked in 32 SFPLOAD/SFPSTORE steps (one per SFPU row
 //   of 32 lanes). SFPLOAD/SFPSTORE auto-advance the DEST row counter by the
 //   addr_mod's Dst increment, so each step's offset operand is a constant 0 and
-//   the whole sequence is compile-time — no TT_ (runtime) or sfpi (dst_reg++)
-//   forms. DEST_ROW_STRIDE = 2 is the per-step Dst-row increment for 32-bit DEST
+//   the walk itself is compile-time — no TT_ (runtime) or sfpi (dst_reg++)
+//   forms; the only runtime instruction is the TT_SETC16 that pins the math
+//   DEST offset (DEST_TARGET_REG_CFG_MATH_Offset) to the bank base before each
+//   walk, since SFPLOAD/SFPSTORE add that offset to their immediate and a
+//   preceding op in the same DEST window may have left it on another slot.
+//   DEST_ROW_STRIDE = 2 is the per-step Dst-row increment for 32-bit DEST
 //   (same value the standard INT32 SFPU ops use, e.g. ckernel_sfpu_typecast).
 //
 //   We use ADDR_MOD_1. Blackhole SFPLOAD/SFPSTORE encode a 3-bit addr_mod field
@@ -107,9 +111,16 @@ inline void _llk_math_hash_cb_init_()
  *
  * @param dst_tile_idx: Unused — the orchestration always folds DEST slot 0.
  * @pre @ref _llk_math_hash_cb_init_, and the tile's data already in DEST slot 0.
+ * @note Sets DEST_TARGET_REG_CFG_MATH_Offset to the bank base and leaves it there.
  */
 inline void _llk_math_hash_cb_tile_(std::uint32_t /*dst_tile_idx*/)
 {
+    // Guard: SFPLOAD addresses Imm + DEST_TARGET_REG_CFG_MATH_Offset + RWC.Dst, and the RWC reset
+    // below leaves the Offset alone. A preceding op in this DEST window that targeted another slot
+    // (an SFPU op at dst_index N leaves it at base + 64 * N) would make the walk fold that slot,
+    // while the unpack-to-dest datacopy wrote slot 0 at an absolute address. Pin the Offset to
+    // the bank base so the walk reads slot 0 regardless of what else ran in the window.
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
     math::reset_counters(p_setrwc::SET_ABD_F);
 
 #pragma GCC unroll 0
@@ -136,12 +147,20 @@ inline void _llk_math_hash_cb_tile_(std::uint32_t /*dst_tile_idx*/)
  *
  * @pre @ref _llk_math_hash_cb_tile_ has folded all input tiles.
  * @post Caller packs DEST and the host XOR-folds the result tile.
- * @note Clobbers all of DEST slot 0 and LREG_ZERO.
+ * @note Clobbers all of DEST slot 0 and LREG_ZERO; sets DEST_TARGET_REG_CFG_MATH_Offset to the
+ *       bank base and leaves it there.
  */
 inline void _llk_math_hash_cb_store_to_dest_()
 {
     TTI_SFPLOADI(LREG_ZERO, sfpi::SFPLOADI_MOD0_LOWER, 0u);
     TTI_SFPLOADI(LREG_ZERO, sfpi::SFPLOADI_MOD0_UPPER, 0u);
+
+    // Guard for standalone calls: SFPSTORE adds the Offset too. In the hash_cb_sfpu orchestration
+    // the last _llk_math_hash_cb_tile_ has already pinned it and nothing on math runs in between,
+    // so this write is redundant there; a caller that issues another SFPU op between the fold and
+    // this store would otherwise zero that op's slot, store the accumulators into it, and pack the
+    // untouched input as slot 0.
+    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
 
     // Zero every row of the tile (ADDR_MOD_1 auto-advances the Dst row).
     math::reset_counters(p_setrwc::SET_ABD_F);
