@@ -203,6 +203,14 @@ inline void reblock_and_untilize(
     interm_dfb.pop_front(num_tiles_in_row_of_subblocks);
 }
 
+#ifdef ARCH_BLACKHOLE
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void pack_block_per_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
+    LLK_SAN_FUNCTION();
+    PACK((llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
+}
+#endif
+
 void kernel_main() {
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);        // inner block size in tiles
     constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);  // outer row block size (in inner row blocks)
@@ -245,11 +253,34 @@ void kernel_main() {
     constexpr uint32_t tilized_cb_row_offset = get_compile_time_arg_val(35);
     constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(36);
     constexpr bool split_reader_cb_shared = get_compile_time_arg_val(37) == 1;
+#if defined(ARCH_BLACKHOLE) && !defined(SFPU_OP_INIT_ACTIVATION)
+    // not with a fused activation: its SFPU init runs once, before the matmul re-inits that rewrite the math thread's
+    // ADDR_MOD_3, 6 and 7
+    constexpr bool row_mop =
+        out_subblock_h * out_subblock_w >= 8 && in0_block_w > 1 &&
+        (DST_ACCUM_MODE || (unpack_src_format[out_cb_id] != (uint8_t)DataFormat::Float32 &&
+                            unpack_src_format[matmul_partials_cb] != (uint8_t)DataFormat::Float32));
+#else
+    constexpr bool row_mop = false;
+#endif
 
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
+#ifdef ARCH_BLACKHOLE
+    // Block pack only where it helps; relu keeps the per-tile pack.
+    constexpr bool block_pack_subblocks =
+        !pack_relu && ((!height_sharded && packer_l1_acc && out_subblock_h == 2 && out_subblock_w == 4) ||
+                       (!height_sharded && !packer_l1_acc && out_subblock_h == 2 && out_subblock_w == 2 &&
+                        in0_block_w == 6 && in0_num_blocks_w == 30) ||
+                       (height_sharded && !packer_l1_acc && in0_block_w >= 12 &&
+                        ((out_subblock_h == 1 && out_subblock_w == 4 && in0_num_blocks_h > 1 &&
+                          in0_num_subblocks * in1_num_subblocks > 1) ||
+                         (out_subblock_h == 4 && out_subblock_w == 1))) ||
+                       (height_sharded && !packer_l1_acc && in0_block_w == 3 && in0_num_blocks_w == 3 &&
+                        in0_num_blocks_h == 1 && out_subblock_h == 1 && (out_subblock_w == 4 || out_subblock_w == 5)));
+#endif
 
     uint32_t bias_block_offset = 0;
     constexpr uint32_t bias_ntiles_w = get_compile_time_arg_val(16);
@@ -293,7 +324,7 @@ void kernel_main() {
     DataflowBuffer dfb_untilize_mode_out(untilize_mode_out_cb_id);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(mm_in0_cb_id, in1_cb_id, out_cb_id);
-    matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+    matmul_block_init<row_mop>(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
@@ -340,7 +371,8 @@ void kernel_main() {
                                 in0_num_subblocks_read_last);
                         }
                         reconfig_data_format(in0_pretilize_cb_id, in1_cb_id, in0_pretilize_cb_id, in0_cb_id);
-                        matmul_block_init(in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+                        matmul_block_init<row_mop>(
+                            in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                     }
                 } else {
                     if constexpr (pack_relu && !fuse_bias) {
@@ -392,7 +424,8 @@ void kernel_main() {
                     }
 
                     reconfig_data_format(in0_cb_id, in1_cb_id, in0_cb_id, mm_in0_cb_id);
-                    matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+                    matmul_block_init<row_mop>(
+                        mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                 }
 
                 dfb_mm_in0.wait_front(in0_block_num_tiles);
@@ -437,7 +470,7 @@ void kernel_main() {
                             dfb_matmul_partials.pop_front(out_subblock_num_tiles);
                             // Reconfigure srcA back
                             reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
-                            matmul_block_init(
+                            matmul_block_init<row_mop>(
                                 mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                         } else {
                             // just acquire
@@ -454,7 +487,7 @@ void kernel_main() {
                             // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                             // accumulation is done by iterating matmul_block across inner dim
                             // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride in0
-                            matmul_block(
+                            matmul_block<row_mop>(
                                 mm_in0_cb_id,
                                 in1_cb_id,
                                 in0_index,
@@ -488,7 +521,15 @@ void kernel_main() {
                         }
 
                         uint32_t start_dst_index = 0;
+#ifdef ARCH_BLACKHOLE
+                        if constexpr (block_pack_subblocks) {
+                            pack_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
+                        } else {
+                            pack_block_per_tile(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
+                        }
+#else
                         pack_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
+#endif
 
                         tile_regs_release();
                         curr_out_dfb.push_back(out_subblock_num_tiles);
@@ -555,9 +596,19 @@ void kernel_main() {
 
                         dfb_untilize_mode_out.reserve_back(out_subblock_num_tiles);
                         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                        if constexpr (block_pack_subblocks) {
+                            pack_block_mop(0, untilize_mode_out_cb_id, out_subblock_num_tiles);
+                        } else {
+                            for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                                pack_tile(i, untilize_mode_out_cb_id);
+                            }
+                        }
+#else
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             pack_tile(i, untilize_mode_out_cb_id);
                         }
+#endif
                         tile_regs_release();
                         dfb_untilize_mode_out.push_back(out_subblock_num_tiles);
 

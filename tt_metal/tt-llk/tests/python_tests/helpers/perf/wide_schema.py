@@ -138,6 +138,7 @@ DB_SCHEMA = [
     Column("partial_b", "bool", True, "configuration"),
     Column("partial_face_math", "bool", True, "configuration"),
     Column("partial_face_pack", "bool", True, "configuration"),
+    Column("pack_block", "string", True, "configuration"),
     Column("pool_type", "string", True, "configuration"),
     Column("r_dimm", "int64", True, "configuration"),
     Column("reduce_block_ct_dim", "int64", True, "configuration"),
