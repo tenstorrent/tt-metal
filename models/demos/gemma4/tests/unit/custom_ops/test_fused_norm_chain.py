@@ -13,12 +13,22 @@ from models.demos.gemma4.custom_ops.fused_norm_decode import FusedNormDecode
 
 SINGLE_CHIP = [pytest.param(1, {"fabric_config": ttnn.FabricConfig.DISABLED}, id="single-chip")]
 EPS = 1e-6
-# Blackhole: the chain is bit-identical to the two programs (its h is packed to bf16 before the second norm, as the
-# two programs round it). Wormhole: the scalar case (stage A ends with the SFPU scalar multiply, then stage B's
-# squares / reduce / rsqrt run in the same kernel) lands y within one bf16 ulp of the two programs on a few
-# elements (CI wh_llmbox: max |diff| 0.0156 at |y| ~ 2-4, h exact, PCC vs golden 0.999993) -- the planner split is
-# the same on both grids (plan_norm_cores: 21 cores at W 5376), so the bar there is one bf16 ulp with the golden PCC.
+# The chain packs h to bf16 before the second norm, as the two programs round it, so h is bit-identical everywhere.
+# y is bit-identical on the Galaxy's unharvested 13x10 P150 grid (the device grid and the forced 8x8 split alike);
+# the scalar case (stage A ends with the SFPU scalar multiply, then stage B's squares / reduce / rsqrt run in the
+# same kernel) lands y one bf16 ulp off the two programs on a few elements on the other grids: CI wh_llmbox
+# (max |diff| 0.0156 at |y| ~ 2-4, PCC vs golden 0.999993) and CI bh_quietbox_2's harvested P300c (the
+# 31b_scalar_l1 case under its device grid: max |diff| 0.0312, PCC vs golden 0.999999; its forced 8x8 split is
+# exact). The planner split is the same at W 5376 on all of them (plan_norm_cores: 21 cores), the differing
+# elements are rounding ties that depend on the core placement, so the bar is one bf16 ulp plus the golden PCC on
+# every arch and grid, and bit-exactness is asserted only where it was measured: Blackhole on the full 13x10 grid.
 BF16_ULP_REL = 2.0**-7
+BIT_EXACT_GRID = (13, 10)
+
+
+def _bit_exact(mesh_device):
+    g = mesh_device.compute_with_storage_grid_size()
+    return is_blackhole() and (int(g.x), int(g.y)) == BIT_EXACT_GRID
 
 
 def _pcc(a, b):
@@ -73,12 +83,11 @@ def test_fused_norm_chain_matches_two_programs(mesh_device, device_params, R, W,
             f"[R{R} W{W} s{scalar} {mem} {name}] pcc vs golden {p:.6f} max|diff| vs two programs {(r - o).abs().max():.4f}"
         )
         assert p > 0.9999, (name, p)
-        if is_blackhole():
-            assert torch.equal(o, r), f"{name} differs from the two FusedNormDecode programs"
-        else:
-            assert torch.allclose(
-                o, r, rtol=BF16_ULP_REL, atol=0.0
-            ), f"{name} differs from the two FusedNormDecode programs by more than one bf16 ulp"
+        assert torch.allclose(
+            o, r, rtol=BF16_ULP_REL, atol=0.0
+        ), f"{name} differs from the two FusedNormDecode programs by more than one bf16 ulp"
+        if _bit_exact(mesh_device):
+            assert torch.equal(o, r), f"{name} differs from the two FusedNormDecode programs on the 13x10 grid"
     assert h.memory_config() == tx2.memory_config() and y.memory_config() == tx2.memory_config()
     # program-cache hits on fresh buffers, twice (the semaphore must be reset between runs)
     for _ in range(2):

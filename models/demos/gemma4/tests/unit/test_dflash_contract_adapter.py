@@ -13,11 +13,17 @@ computes on the device is not something a host test can attest.
 import ast
 import dataclasses
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import torch
+
+# dFlash serves on Blackhole; this 120-case host suite runs on every Blackhole unit job (12B / 26B / 31B / E4B on
+# bh_quietbox_2, E2B on bh_p150) and is skipped on the Wormhole N150 tier-3 leg, whose 10-min step it was pushing over.
+if os.environ.get("ARCH_NAME", "").startswith("wormhole"):
+    pytest.skip("dFlash contract host suite runs on the Blackhole unit jobs", allow_module_level=True)
 
 from models.demos.gemma4.tests.unit.conftest import build_model, import_adapter
 from models.demos.gemma4.tests.unit.dflash_contract_harness import (

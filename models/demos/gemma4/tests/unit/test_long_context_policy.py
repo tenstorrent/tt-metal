@@ -12,7 +12,14 @@ Expectations come from isl_sweep_logs (full_matrix + QB2 coherent bounded path):
 
 from __future__ import annotations
 
+import os
+
 import pytest
+
+# The cutovers pinned here are the P150x8 / QB2 (Blackhole) serving policy; the 65-case suite runs on every Blackhole
+# unit job and is skipped on the Wormhole N150 tier-3 leg, whose 10-min step it was pushing over.
+if os.environ.get("ARCH_NAME", "").startswith("wormhole"):
+    pytest.skip("long-context policy host suite runs on the Blackhole unit jobs", allow_module_level=True)
 
 from models.demos.gemma4.tt.generator_trace import (
     get_gemma4_long_context_policy,

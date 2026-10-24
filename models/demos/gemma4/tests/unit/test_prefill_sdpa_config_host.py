@@ -22,7 +22,9 @@ KNOBS = (
     "GEMMA4_PREFILL_SDPA_PROGCFG",
     "GEMMA4_TEST_GRID",
 )
-GRIDS = ((13, 10), (12, 10), (11, 10), (10, 10), (8, 8), (7, 8))
+# The wide / clamped grids are a Blackhole matter (the wide config only forms there); on a Wormhole runner every grid
+# collapses to the 8x8 class, so the unit job there runs the two grids that can differ (wh_n150 tier-3 step budget).
+GRIDS = ((13, 10), (12, 10), (11, 10), (10, 10), (8, 8), (7, 8)) if is_blackhole() else ((8, 8), (7, 8))
 
 
 def _grid(pc):
