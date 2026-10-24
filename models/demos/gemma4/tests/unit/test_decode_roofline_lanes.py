@@ -93,7 +93,8 @@ def test_decode_roofline_lanes(mesh_device, users_per_lane, monkeypatch):
     assert getattr(mesh_cfg, "lane_sharded", False), "lanes gate did not engage"
     # The caches hold the heads the attention writes (init_kv_cache from mesh_config.tp): the paged ops then address
     # them at the declared block size and the per-user page rows below hold BLOCKS_PER_USER x 64 tokens.
-    eff_bs = generator._effective_paged_block_size(tt_kv_cache)
+    model_kv = tt_kv_cache if hasattr(tt_kv_cache[0][0], "shape") else tt_kv_cache[0]  # [model][layer][k, v] nesting
+    eff_bs = generator._effective_paged_block_size(model_kv)
     assert eff_bs == 64, f"effective paged block size {eff_bs} != declared 64 (cache heads vs the attention's view)"
     lanes = mesh_cfg.lanes
     B_g = lanes * SLOTS_PER_LANE
