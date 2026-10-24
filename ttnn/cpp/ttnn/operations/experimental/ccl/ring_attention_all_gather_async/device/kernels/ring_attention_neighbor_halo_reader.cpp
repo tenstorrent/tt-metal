@@ -119,6 +119,7 @@ void kernel_main() {
         const uint32_t halo_tile_rows = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t cache_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t halo_slot_count = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t circular_kv_slab_count = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t source_device = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t num_links = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t hop = get_arg_val<uint32_t>(arg_idx++);
@@ -141,6 +142,7 @@ void kernel_main() {
             source_device,
             cache_local_tile_rows,
             halo_slot_count,
+            circular_kv_slab_count,
             hop);
         for (uint32_t input = 0; input < num_inputs; ++input) {
             const uint32_t input_Wt = get_arg_val<uint32_t>(arg_idx++);
@@ -160,6 +162,7 @@ void kernel_main() {
                 source_device,
                 cache_local_tile_rows,
                 halo_slot_count,
+                circular_kv_slab_count,
                 hop,
                 sources.first_start_tile,
                 mc_hop_count,

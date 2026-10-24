@@ -98,6 +98,7 @@ void kernel_main() {
         const uint32_t halo_tile_rows = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t cache_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t halo_slot_count = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t circular_kv_slab_count = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t source_device = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t ring_size_rt = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t num_links = get_arg_val<uint32_t>(arg_idx++);
@@ -114,6 +115,7 @@ void kernel_main() {
             source_device,
             cache_local_tile_rows,
             halo_slot_count,
+            circular_kv_slab_count,
             hop);
         const uint32_t tail_tile_rows = ttnn::operations::transformer::sdpa::ring_joint::chunked_sliding_halo_hop_rows(
             halo_tile_rows, q_local_tile_rows, hop);
@@ -134,6 +136,7 @@ void kernel_main() {
                 source_device,
                 cache_local_tile_rows,
                 halo_slot_count,
+                circular_kv_slab_count,
                 hop,
                 sources.first_start_tile,
                 mc_hop_count,

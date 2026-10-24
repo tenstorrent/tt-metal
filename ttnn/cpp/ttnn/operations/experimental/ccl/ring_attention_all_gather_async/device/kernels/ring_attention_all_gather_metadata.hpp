@@ -134,16 +134,18 @@ inline ttnn::operations::transformer::sdpa::ring_joint::SlidingHaloSources compu
     uint32_t source_device,
     uint32_t cache_local_tile_rows,
     uint32_t halo_slot_count,
+    uint32_t circular_kv_slab_count,
     uint32_t hop = 1) {
     namespace sliding = ttnn::operations::transformer::sdpa::ring_joint;
     const uint32_t group_rows = q_local_tile_rows * ring_size;
     kv_actual_isl = trace_metadata::bounded_sliding_kv_actual_isl(
-        kv_actual_isl, q_local_tile_rows, ring_size, cache_local_tile_rows, halo_slot_count);
+        kv_actual_isl, q_local_tile_rows, ring_size, cache_local_tile_rows, halo_slot_count, circular_kv_slab_count);
     const uint32_t end = trace_metadata::logical_tile_rows_clamped_to_cache(
-        kv_actual_isl, group_rows, cache_local_tile_rows * ring_size);
+        kv_actual_isl, group_rows, cache_local_tile_rows * ring_size, circular_kv_slab_count);
     const auto mapping = sliding::build_chunked_q_mapping(
         kv_actual_isl / 32, end, q_local_tile_rows, ring_size, (source_device + hop) % ring_size);
-    return sliding::sliding_halo_sources(mapping, q_local_tile_rows, ring_size, halo_tile_rows, 0, hop);
+    return sliding::sliding_halo_sources(
+        mapping, q_local_tile_rows, ring_size, halo_tile_rows, circular_kv_slab_count, hop);
 }
 
 constexpr uint32_t kMaxMulticastHaloHops = ttnn::operations::transformer::sdpa::ring_joint::sliding_max_halo_hops;
@@ -158,6 +160,7 @@ inline void compute_multicast_origin_rows(
     uint32_t source_device,
     uint32_t cache_local_tile_rows,
     uint32_t halo_slot_count,
+    uint32_t circular_kv_slab_count,
     uint32_t first_hop,
     uint32_t first_origin_row,
     uint32_t hop_count,
@@ -172,6 +175,7 @@ inline void compute_multicast_origin_rows(
                              source_device,
                              cache_local_tile_rows,
                              halo_slot_count,
+                             circular_kv_slab_count,
                              first_hop + i)
                              .first_start_tile;
     }
