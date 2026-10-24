@@ -1504,6 +1504,23 @@ class BLOCK_MAX8_PARAMS(RuntimeParameter):
         return "unsigned VALID_SCORES; unsigned INJECT_NEGATIVE_ZERO;", "II"
 
 
+@dataclass
+class BLOCK_MAX8_FPU_PARAMS(RuntimeParameter):
+    """Number of FPU block-max calls per DST acquire and the optional DST denormal probe."""
+
+    calls: int
+    inject_denormal: int
+
+    def convert_to_cpp(self):
+        return (
+            f"constexpr unsigned FPU_CALLS = {self.calls};"
+            f"constexpr unsigned INJECT_DENORMAL = {self.inject_denormal};"
+        )
+
+    def convert_to_struct_fields(self):
+        return "unsigned FPU_CALLS; unsigned INJECT_DENORMAL;", "II"
+
+
 def generate_input_dim(
     srcA: tuple[int],
     srcB: tuple[int],
