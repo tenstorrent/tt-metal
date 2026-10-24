@@ -245,8 +245,25 @@ class DSV41PrefillAttention:
                 ttnn.linear(h, a.c_wkv, compute_kernel_config=self.cckc), weight=a.c_norm, epsilon=a.eps
             )
         else:
+            _cwcat_pc = (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(12, 10),
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=3,
+                    out_block_h=2,
+                    out_block_w=3,
+                    per_core_M=2,
+                    per_core_N=3,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                    fuse_batch=True,
+                )
+                if (int(h.shape[-2]) == 512 and int(h.shape[-1]) == 5120 and int(a.c_wcat.shape[-1]) == 1024)
+                else None
+            )
             cs = ttnn.linear(
-                h, a.c_wcat, compute_kernel_config=self.cckc, dtype=ttnn.float32
+                h, a.c_wcat, compute_kernel_config=self.cckc, dtype=ttnn.float32, program_config=_cwcat_pc
             )  # [1,1,R,1024] = [kv | score]
             pairs = ttnn.to_layout(
                 ttnn.reshape(ttnn.to_layout(cs, ttnn.ROW_MAJOR_LAYOUT), [1, 1, R // 2, 2 * 2 * HEAD_DIM]),
