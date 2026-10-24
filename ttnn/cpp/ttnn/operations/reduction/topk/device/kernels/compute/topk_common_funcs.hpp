@@ -113,7 +113,9 @@ void process_and_sort_tiles(
 template <
     bool stable_sort = false,
     bool fused = false,
-    ckernel::TopkTieOrder tie_order = ckernel::TopkTieOrder::Unset>
+    ckernel::TopkTieOrder tie_order = ckernel::TopkTieOrder::Unset,
+    std::uint32_t K,
+    std::uint32_t logk>
 void process_tile_pair(
     std::uint32_t left_ind,
     std::uint32_t right_ind,
@@ -125,8 +127,6 @@ void process_tile_pair(
     std::uint32_t index_dest_end,
     bool ascending,
     std::uint32_t m_iter,
-    std::uint32_t K,
-    std::uint32_t logk,
     bool target_tiles_is_one) {
     tile_regs_acquire();
 
@@ -186,10 +186,10 @@ void process_tile_pair(
 template <
     bool stable_sort = false,
     bool fused = false,
-    ckernel::TopkTieOrder tie_order = ckernel::TopkTieOrder::Unset>
+    ckernel::TopkTieOrder tie_order = ckernel::TopkTieOrder::Unset,
+    std::uint32_t K>
 void process_tiles(
     std::uint32_t m_iter,
-    std::uint32_t K,
     std::uint32_t Wt,
     std::uint32_t num_k_sequences,
     std::uint32_t tiles_per_seq,
@@ -237,12 +237,12 @@ void process_tiles(
             // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
             if (largest) {
                 ckernel::
-                    topk_merge</*idir=*/false, stable_sort, DST_ACCUM_MODE, fused, /*rank_stamped=*/false, tie_order>(
-                        0, m_iter, K);
+                    topk_merge<K, /*idir=*/false, stable_sort, DST_ACCUM_MODE, fused, /*rank_stamped=*/false, tie_order>(
+                        0, m_iter);
             } else {
                 ckernel::
-                    topk_merge</*idir=*/true, stable_sort, DST_ACCUM_MODE, fused, /*rank_stamped=*/false, tie_order>(
-                        0, m_iter, K);
+                    topk_merge<K, /*idir=*/true, stable_sort, DST_ACCUM_MODE, fused, /*rank_stamped=*/false, tie_order>(
+                        0, m_iter);
             }
 
             tile_regs_commit();
@@ -268,10 +268,11 @@ void process_tiles(
 template <
     bool stable_sort = false,
     bool fused = false,
-    ckernel::TopkTieOrder tie_order = ckernel::TopkTieOrder::Unset>
+    ckernel::TopkTieOrder tie_order = ckernel::TopkTieOrder::Unset,
+    std::uint32_t K,
+    std::uint32_t logk>
 void process_iteration(
     std::uint32_t m_iter,
-    std::uint32_t K,
     std::uint32_t Wt,
     std::uint32_t& num_k_sequences,
     std::uint32_t tiles_per_seq,
@@ -283,7 +284,6 @@ void process_iteration(
     std::uint32_t index_dest_end,
     bool largest,
     bool switch_dir,
-    std::uint32_t logk,
     uint32_t& seq_per_2tiles,
     bool largest_param) {
     DataflowBuffer input_transposed_dfb(static_cast<uint16_t>(input_transposed_dfb_index));
@@ -294,9 +294,8 @@ void process_iteration(
         index_transposed_dfb.wait_front(Wt);
     }
 
-    process_tiles<stable_sort, fused, tie_order>(
+    process_tiles<stable_sort, fused, tie_order, K>(
         m_iter,
-        K,
         Wt,
         num_k_sequences,
         tiles_per_seq,
@@ -341,7 +340,7 @@ void process_iteration(
             sel_tile_id[sel_tile_id_ptr] = left_ind;
             sel_tile_id_ptr++;
             if (sel_tile_id_ptr == target_tiles) {
-                process_tile_pair<stable_sort, fused, tie_order>(
+                process_tile_pair<stable_sort, fused, tie_order, K, logk>(
                     sel_tile_id[0],
                     sel_tile_id[1],
                     input_transposed_dfb_index,
@@ -352,8 +351,6 @@ void process_iteration(
                     index_dest_end,
                     ascending,
                     m_iter,
-                    K,
-                    logk,
                     target_tiles == 1);
                 sel_tile_id_ptr = 0;
                 ascending = switch_dir ? !ascending : ascending;
