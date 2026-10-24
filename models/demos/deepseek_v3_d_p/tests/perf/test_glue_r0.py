@@ -843,4 +843,89 @@ def test_glue_r0(mesh_device, variant, config_only):
             timer(f"G6 RS wk [640,128] workers={w}", lambda w=w: rs(wk_p, workers=w))
         _free([o_full, r_l1, r_d, wk_p, qn_l1, qn_dram])
 
+    # ======================= H. in-place RoPE into the padded wkv_b1 output (C++ output_tensor mode) =======
+    if want("h"):
+        from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+
+        hf = copy.deepcopy(config_only)
+        hf.max_seq_len = S * SP
+        rope_t = RotarySetup(hf, mesh, sp_axis=0).get_rope_tensors_indexed(S * SP, S * SP)
+        qb_cfg, b1_cfg = glm_cfg("q_b_proj"), glm_cfg("wkv_b1")
+        qn_in = mk(mesh, torch.randn(1, 1, S * SP, Q_LORA), mem=qb_cfg["act_mem_config"], dims=(2, None))
+        tw_qb = mk(mesh, torch.randn(Q_LORA, 64 * (NOPE + ROPE)) * (1 / Q_LORA**0.5), ttnn.bfloat8_b, dims=(None, 1))
+        tw_b1 = mk(mesh, torch.randn(1, 64, NOPE, KV_LORA) * (1 / NOPE**0.5), ttnn.bfloat8_b, dims=(None, 1))
+        wb = ttnn.typecast(tw_b1, ttnn.bfloat16)
+        zr = mk(mesh, torch.zeros(1, HEADS_L, NOPE, ROPE))
+        cat = ttnn.concat([wb, zr], dim=-1)
+        tw_b1p = ttnn.typecast(cat, ttnn.bfloat8_b)
+        for t in (wb, zr, cat):
+            ttnn.deallocate(t)
+        b1pc = b1_cfg["program_config"]
+        pcs = {
+            "sw6": ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=(11, 10), in0_block_w=6, out_subblock_h=1, out_subblock_w=6, per_core_M=5, per_core_N=18
+            ),
+            "sw3": ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=(11, 10), in0_block_w=6, out_subblock_h=1, out_subblock_w=3, per_core_M=5, per_core_N=18
+            ),
+        }
+
+        def qb():
+            return ttnn.linear(
+                qn_in, tw_qb, program_config=qb_cfg["program_config"], memory_config=qb_cfg["out_mem_config"],
+                dtype=ttnn.bfloat16, compute_kernel_config=hifi2,
+            )
+
+        def heads(t):
+            return ttnn.experimental.nlp_create_q_heads_split(t, num_heads=HEADS_L, split_head_dim=NOPE, memory_config=DRAM)
+
+        def rope(t, prefix=None, out=None):
+            return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                t, rope_t["cos_matrix"], rope_t["sin_matrix"], rope_t["trans_matrix"], kv_actual_global=0,
+                cluster_axis=0, concat_prefix=prefix, **({"output_tensor": out} if out is not None else {}),
+            )
+
+        def base_chain():
+            q = qb()
+            qnope, qrope = heads(q)
+            ttnn.deallocate(q)
+            qa = ttnn.linear(qnope, tw_b1, program_config=b1pc, memory_config=L1, dtype=ttnn.bfloat16, compute_kernel_config=hifi2)
+            ttnn.deallocate(qnope)
+            out = rope(qrope, prefix=qa)
+            ttnn.deallocate(qa)
+            ttnn.deallocate(qrope)
+            return out
+
+        def inplace_chain(pc, mem=DRAM):
+            q = qb()
+            qnope, qrope = heads(q)
+            ttnn.deallocate(q)
+            out = ttnn.linear(qnope, tw_b1p, program_config=pc, memory_config=mem, dtype=ttnn.bfloat16, compute_kernel_config=hifi2)
+            ttnn.deallocate(qnope)
+            rope(qrope, out=out)
+            ttnn.deallocate(qrope)
+            return out
+
+        ref = base_chain()
+        for tag, pc in pcs.items():
+            try:
+                o = inplace_chain(pc)
+                cmp(f"H inplace [{tag}] vs base chain", o, ref)
+                _free(o)
+            except Exception as e:
+                log(f"FAIL H inplace[{tag}] pcc: {type(e).__name__}: {str(e)[:400]}")
+                traceback.print_exc()
+        _free(ref)
+        timer("H0 q chain base (q_b, heads, wkv_b1 L1, rope+concat512)", base_chain)
+        for tag, pc in pcs.items():
+            timer(f"H1 q chain in-place [{tag}] (q_b, heads, wkv_b1 N576 DRAM, rope in place)", lambda pc=pc: inplace_chain(pc))
+        q = qb()
+        qnope, qrope = heads(q)
+        timer("H2 wkv_b1 base L1 out", lambda: ttnn.linear(qnope, tw_b1, program_config=b1pc, memory_config=L1, dtype=ttnn.bfloat16, compute_kernel_config=hifi2))
+        for tag, pc in pcs.items():
+            timer(f"H2 wkv_b1 N576 [{tag}] DRAM out", lambda pc=pc: ttnn.linear(qnope, tw_b1p, program_config=pc, memory_config=DRAM, dtype=ttnn.bfloat16, compute_kernel_config=hifi2))
+        buf = ttnn.linear(qnope, tw_b1p, program_config=pcs["sw6"], memory_config=DRAM, dtype=ttnn.bfloat16, compute_kernel_config=hifi2)
+        timer("H3 rope in place into [16,640,576]", lambda: [rope(qrope, out=buf)] and None)
+        _free([q, qnope, qrope, buf])
+
     log("DONE")
