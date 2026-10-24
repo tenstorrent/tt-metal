@@ -427,13 +427,96 @@ def _resolve_local_lora_file_path(path_input):
     return str(resolved_path)
 
 
-@pytest.fixture(scope="function")
-def lora_path(request, is_ci_env, is_ci_v2_env):
+# Same large-file cache endpoint the rest of the SDXL suite fetches from in CIv2
+# (see test_lora_perf.py and the root conftest's CIv2ModelDownloadUtils_). The env
+# override exists so the fetch path can be exercised outside the CI cluster.
+_LORA_CI_V2_CACHE_ENDPOINT = os.environ.get(
+    "SDXL_LORA_CACHE_ENDPOINT",
+    "http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface",
+)
+
+
+def _endpoint_is_permitted(endpoint):
+    """Whether the CIv2 cache endpoint may be fetched from.
+
+    https anywhere; http only for the cluster-internal cache service. Everything else,
+    including file:// and plaintext to an external host, is refused.
     """
-    Resolve LoRA weights path.
+    import urllib.parse
+
+    parsed = urllib.parse.urlparse(endpoint)
+    if parsed.scheme == "https":
+        return True
+    if parsed.scheme != "http":
+        return False
+    host = parsed.hostname or ""
+    return host.endswith(".svc.cluster.local") or host in ("localhost", "127.0.0.1")
+
+
+def _fetch_lora_from_ci_v2_cache(cache_dir, filename):
+    """Fetch a single adapter file from the CIv2 large-file cache.
+
+    Returns the local path on success, None on any failure (caller falls back to
+    HF). CIv2 runners have no HF egress, so for adapters that are not already in
+    the baked HF cache this is the only route that works there.
+    """
+    import shutil
+    import urllib.request
+
+    target_dir = Path("/tmp/ttnn_model_cache/lora") / cache_dir
+    target = target_dir / filename
+    if target.is_file() and target.stat().st_size > 0:
+        return str(target)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    endpoint = f"{_LORA_CI_V2_CACHE_ENDPOINT}/{cache_dir}/{filename}"
+    # Fetched in-process rather than by shelling out to wget: no OS command means
+    # nothing for the endpoint override to be injected into, and no dependency on
+    # wget being installed on the runner.
+    #
+    # The endpoint is checked rather than trusted. urlopen would otherwise honour
+    # file://, turning the override into a local file read, and plaintext to an
+    # arbitrary host would be a real exposure. Cleartext is allowed only for the
+    # in-cluster cache service, whose traffic never leaves the cluster and which is
+    # the reason this fetch path exists at all; anything else must be TLS.
+    if not _endpoint_is_permitted(endpoint):
+        logger.warning(f"Refusing CIv2 LoRA cache endpoint {endpoint}: use https, or the in-cluster cache over http")
+        return None
+    try:
+        with urllib.request.urlopen(endpoint, timeout=300) as response, open(target, "wb") as out:  # noqa: S310
+            shutil.copyfileobj(response, out)
+    except Exception as e:
+        logger.warning(f"CIv2 LoRA cache fetch failed for {endpoint}: {e}")
+        target.unlink(missing_ok=True)
+        return None
+    if not (target.is_file() and target.stat().st_size > 0):
+        target.unlink(missing_ok=True)
+        return None
+    return str(target)
+
+
+def _resolve_lora_weights_path(
+    request, is_ci_env, is_ci_v2_env, default_repo_id, default_filename, default_revision=None, ci_v2_cache_dir=None
+):
+    """Resolve a LoRA weights path.
+
     1) --lora-weights: full path to a local .safetensors file.
     2) --lora-hf-repo and --lora-hf-filename: download from Hugging Face.
-    3) If nothing provided: use default weights (HF download).
+    3) If nothing provided: use the supplied default weights, pinned to
+       `default_revision` so an upstream re-upload cannot silently change what
+       the PCC references are compared against. The pin is best-effort: where it
+       cannot be resolved (a baked HF cache holding a different snapshot) the
+       fetch falls back to the default branch with a warning, rather than
+       skipping the test and reporting green on no coverage. In CI (v1 or v2),
+       adapters with a `ci_v2_cache_dir` are fetched from the large-file cache
+       first: CIv2 runners have no HF egress, and CIv1 runners call
+       hf_hub_download with local_files_only=True, so an adapter absent from
+       the baked HF cache is unreachable on both without this. A runner outside
+       the cluster fails the fetch instantly on DNS and falls through to HF, so
+       the attempt is harmless where the cache is unreachable. Elsewhere, and
+       as the CI fallback, adapters come from HF.
+
+    Shared by the LoRA fixtures below, which differ only in which adapter they
+    default to; resolution order and download behaviour are identical.
     """
     lora_weights_cli_path = request.config.getoption("--lora-weights", default=None)
     hf_repo_id = request.config.getoption("--lora-hf-repo", default=None)
@@ -450,22 +533,104 @@ def lora_path(request, is_ci_env, is_ci_v2_env):
         )
         return
 
+    tried_ci_cache = False
+    hf_revision = None
     if not (hf_repo_id and hf_filename):
         logger.warning(
-            f"No LoRA weights provided. Using default weights. Repo: {TEST_LORA_REPO_ID}, File: {TEST_LORA_FILENAME}"
+            f"No LoRA weights provided. Using default weights. Repo: {default_repo_id}, File: {default_filename}"
         )
-        hf_repo_id = TEST_LORA_REPO_ID
-        hf_filename = TEST_LORA_FILENAME
+        hf_repo_id = default_repo_id
+        hf_filename = default_filename
+        # Only the built-in defaults are pinned. A caller-supplied repo/filename
+        # keeps HF's default branch, since this revision does not describe it.
+        hf_revision = default_revision
 
-    try:
+        if (is_ci_env or is_ci_v2_env) and ci_v2_cache_dir:
+            tried_ci_cache = True
+            cached = _fetch_lora_from_ci_v2_cache(ci_v2_cache_dir, default_filename)
+            if cached:
+                return cached
+
+    def _download(revision):
         from huggingface_hub import hf_hub_download
 
         return hf_hub_download(
-            repo_id=hf_repo_id, filename=hf_filename, local_files_only=is_ci_env and not is_ci_v2_env
+            repo_id=hf_repo_id,
+            filename=hf_filename,
+            revision=revision,
+            local_files_only=is_ci_env and not is_ci_v2_env,
         )
+
+    if hf_revision:
+        try:
+            return _download(hf_revision)
+        except Exception as e:
+            # The pin guards against an upstream re-upload; it is not worth losing
+            # coverage over. A runner whose baked HF cache holds this adapter under a
+            # different snapshot cannot resolve the pinned revision offline, and giving
+            # up here would drop the whole suite to skips while still reporting green.
+            # Fall back to whatever is reachable, but say so: the bytes under test are
+            # then not the ones the pin describes, which is worth seeing in the log.
+            logger.warning(
+                f"Pinned revision {hf_revision} for {hf_repo_id}/{hf_filename} could not be resolved ({e}). "
+                f"Falling back to the default branch: the adapter under test may differ from the pinned one, "
+                f"so treat a PCC change here as a possible fixture change rather than a model regression."
+            )
+
+    try:
+        return _download(None)
     except Exception as _:
+        ci_cache_note = (
+            f" Also tried the CIv2 large-file cache ({ci_v2_cache_dir}/{hf_filename}) without success."
+            if tried_ci_cache
+            else ""
+        )
+        revision_note = f" (pinned revision {hf_revision} was unresolvable too)" if hf_revision else ""
         pytest.skip(
-            f"LoRA weights not available from HF ({hf_repo_id}, {hf_filename}). "
+            f"LoRA weights not available from HF ({hf_repo_id}, {hf_filename}){revision_note}.{ci_cache_note} "
             f"Use --lora-weights for a local file path, or ensure network/cache for HF."
         )
         return
+
+
+@pytest.fixture(scope="function")
+def lora_path(request, is_ci_env, is_ci_v2_env):
+    """LoRA weights path, defaulting to the UNet-only test adapter."""
+    from models.demos.stable_diffusion_xl_base.lora.config import TEST_LORA_REVISION
+
+    return _resolve_lora_weights_path(
+        request,
+        is_ci_env,
+        is_ci_v2_env,
+        TEST_LORA_REPO_ID,
+        TEST_LORA_FILENAME,
+        default_revision=TEST_LORA_REVISION,
+    )
+
+
+@pytest.fixture(scope="function")
+def te_lora_path(request, is_ci_env, is_ci_v2_env):
+    """LoRA weights path, defaulting to a text-encoder-impacting adapter.
+
+    That default trains both CLIP encoders plus the UNet, so it is the adapter used
+    to exercise the text-encoder fuse/rollback path. Resolution is identical to
+    `lora_path` except that in CI the adapter comes from the large-file cache,
+    where it was staged on 2026-07-21 (this adapter is not in the runners' baked
+    HF cache, and hf_hub_download cannot fetch it there on either CI flavour).
+    """
+    from models.demos.stable_diffusion_xl_base.lora.config import (
+        TE_TEST_LORA_CI_CACHE_DIR,
+        TE_TEST_LORA_FILENAME,
+        TE_TEST_LORA_REPO_ID,
+        TE_TEST_LORA_REVISION,
+    )
+
+    return _resolve_lora_weights_path(
+        request,
+        is_ci_env,
+        is_ci_v2_env,
+        TE_TEST_LORA_REPO_ID,
+        TE_TEST_LORA_FILENAME,
+        default_revision=TE_TEST_LORA_REVISION,
+        ci_v2_cache_dir=TE_TEST_LORA_CI_CACHE_DIR,
+    )
