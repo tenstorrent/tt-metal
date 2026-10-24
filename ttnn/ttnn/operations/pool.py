@@ -119,7 +119,7 @@ def global_avg_pool2d(input_tensor, *, memory_config=None, dtype=None):
 ttnn.global_avg_pool2d = global_avg_pool2d
 
 
-def golden_global_avg_pool2d(input_tensor):
+def golden_global_avg_pool2d(input_tensor, *, dtype=None, **_):
     import torch
 
     # ttnn operates on NHWC. torch.nn.functional.adaptive_avg_pool2d expects NCHW.
@@ -129,16 +129,19 @@ def golden_global_avg_pool2d(input_tensor):
         # [H, W] -> [1, 1, H, W] (NCHW with N=C=1)
         input_nchw = input_tensor.unsqueeze(0).unsqueeze(0)
         output_nchw = torch.nn.functional.adaptive_avg_pool2d(input_nchw, output_size=(1, 1))
-        return output_nchw.squeeze(0).squeeze(0)
-    if rank == 3:
+        out = output_nchw.squeeze(0).squeeze(0)
+    elif rank == 3:
         # [H, W, C] (NHWC with N=1) -> [1, C, H, W] (NCHW)
         input_nchw = input_tensor.permute(2, 0, 1).unsqueeze(0)
         output_nchw = torch.nn.functional.adaptive_avg_pool2d(input_nchw, output_size=(1, 1))
-        return output_nchw.squeeze(0).permute(1, 2, 0)
-    # rank 4: [N, H, W, C] -> [N, C, H, W]
-    input_nchw = input_tensor.permute(0, 3, 1, 2)
-    output_nchw = torch.nn.functional.adaptive_avg_pool2d(input_nchw, output_size=(1, 1))
-    return output_nchw.permute(0, 2, 3, 1)
+        out = output_nchw.squeeze(0).permute(1, 2, 0)
+    else:
+        # rank 4: [N, H, W, C] -> [N, C, H, W]
+        input_nchw = input_tensor.permute(0, 3, 1, 2)
+        output_nchw = torch.nn.functional.adaptive_avg_pool2d(input_nchw, output_size=(1, 1))
+        out = output_nchw.permute(0, 2, 3, 1)
+
+    return golden_to_output_dtype(out, dtype)
 
 
 ttnn.attach_golden_function(ttnn.global_avg_pool2d, golden_global_avg_pool2d)
