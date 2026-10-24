@@ -2029,7 +2029,8 @@ class Gemma4Model:
             # prefill form per column (its [k, blocks] page table rows, per-user valid lengths, deferred lm_head).
             assert getattr(self.mesh_config, "lane_sharded", False), "lane_parallel requires GEMMA4_GALAXY_LANES"
             assert batch_size >= 1, "lane_parallel runs one user or a batched stream per column"
-            assert not trace_enabled, "lane_parallel prefill is eager-only"
+            # ``trace_enabled``: the traced lane frame (generator._g4_capture_lane_prefill_trace) takes the host-staged
+            # token ids and page table this returns as its persistent trace inputs; the trace embeds the tokens.
             if self.hidden_size_per_layer_input:
                 raise NotImplementedError("lane_parallel prefill does not support PLI models")
             lanes = self.mesh_config.lanes

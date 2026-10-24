@@ -1792,16 +1792,7 @@ class ChunkedPrefillPageTableGuardMixin:
         plens = [int(p) for p in prompt_lens]
         if len(plens) != lanes * k:
             raise ValueError(f"lane-batched prefill needs {lanes * k} prompt lengths (lane-major), got {len(plens)}")
-        last_r = []
-        for r in range(k):
-            row = [plens[ln * k + r] - 1 for ln in range(lanes)]
-            if len(set(row)) != 1:
-                raise ValueError(
-                    f"lane prefill round {r} needs equal prompt lengths across lanes, got {[i + 1 for i in row]}"
-                )
-            if not 0 <= row[0] < seq_len:
-                raise ValueError(f"lane prefill round {r}: prompt length {row[0] + 1} outside [1, {seq_len}]")
-            last_r.append(row[0])
+        last_r = self._lane_round_last_indices(plens, lanes, k, seq_len)
         max_chunk = int(self.model_args[0].max_prefill_chunk_size)
         if k * seq_len > max_chunk:
             raise ValueError(
@@ -1855,6 +1846,15 @@ class ChunkedPrefillPageTableGuardMixin:
         )
         # The batched form returns post-norm hidden states [1, 1, k * S, hidden] per column (lm_head deferred):
         # project each user's last-token tile and read the lane's row from its first chip.
+        return self._lane_logits_from_hidden(model, hidden, k, seq_len, last_r, deallocate=True)
+
+    @staticmethod
+    def _lane_logits_from_hidden(model, hidden, k, seq_len, last_r, *, deallocate):
+        """Host logits ``[lanes * k, vocab]`` (lane-major) from a lane frame's post-norm hidden states
+        ``[1, 1, k * S, hidden]`` per column: each round's last-token tile projected by lm_head outside the forward
+        (as the traced single-user prefill does) and the lane's row read from its first chip. ``deallocate`` frees
+        the hidden states afterwards (never for a trace's persistent output)."""
+        lanes = int(model.mesh_config.lanes)
         out = torch.zeros(lanes * k, model.vocab_size, dtype=torch.float32)
         lane_devs = model.lane_device_indices()
         for r in range(k):
@@ -1866,7 +1866,187 @@ class ChunkedPrefillPageTableGuardMixin:
                 host = ttnn.to_torch(shards[dev]).float()
                 out[ln * k + r] = host[0, 0, last_r[r] % 32, : model.vocab_size]
             logits.deallocate(True)
-        hidden.deallocate(True)
+        if deallocate:
+            hidden.deallocate(True)
+        return out
+
+    @staticmethod
+    def _lane_round_last_indices(plens, lanes, k, seq_len):
+        """Per-round last-token indices of a lane frame (``plens`` lane-major, equal across lanes per round)."""
+        last_r = []
+        for r in range(k):
+            row = [int(plens[ln * k + r]) - 1 for ln in range(lanes)]
+            if len(set(row)) != 1:
+                raise ValueError(
+                    f"lane prefill round {r} needs equal prompt lengths across lanes, got {[i + 1 for i in row]}"
+                )
+            if not 0 <= row[0] < seq_len:
+                raise ValueError(f"lane prefill round {r}: prompt length {row[0] + 1} outside [1, {seq_len}]")
+            last_r.append(row[0])
+        return last_r
+
+    # ── the traced lane prefill: the lane frame captured at boot, replayed for every matching call ────────────
+    # (tt/lane_prefill_trace.py names the buckets and the replay decision)
+
+    def _g4_lane_trace_registry(self):
+        reg = getattr(self, "_g4_lane_prefill_traces", None)
+        if reg is None:
+            reg = self._g4_lane_prefill_traces = {}
+        return reg
+
+    def _g4_lane_frame_page_tables(self, model, page_tables, slots, block_size):
+        """Per-layer host tables of a lane frame whose users sit at ``slots`` (lane-major), in the layout the
+        frame's persistent buffers use: one row per lane for k == 1, the lanes' decode frame for k > 1; bounded
+        sliding layers get ring-local rows, the others the global rows."""
+        lanes, k = int(page_tables.shape[0]), int(page_tables.shape[1])
+        lane_slots = int(getattr(model, "lane_slots", 0) or 32)
+        if k == 1:
+            g_rows = page_tables.reshape(lanes, -1).to(torch.int32)
+            per_layer = self._lane_prefill_ring_tables(model, g_rows, [int(x) for x in slots], block_size)
+            return per_layer if per_layer is not None else [g_rows] * len(getattr(model, "layers", []))
+        g_frame = torch.zeros(lanes * lane_slots, int(page_tables.shape[-1]), dtype=torch.int32)
+        frame_slots = [0] * (lanes * lane_slots)
+        for ln in range(lanes):
+            for r in range(k):
+                g_frame[ln * lane_slots + r] = page_tables[ln, r]
+                frame_slots[ln * lane_slots + r] = int(slots[ln * k + r])
+        per_layer = self._lane_prefill_ring_tables(model, g_frame, frame_slots, block_size)
+        return per_layer if per_layer is not None else [g_frame] * len(getattr(model, "layers", []))
+
+    def _g4_capture_lane_prefill_trace(self, bucket, kv_cache):
+        """Capture the lane-frame prefill trace of ``bucket = (k, S)``: k rounds of S tokens per column, the mock
+        users at slot r of every lane. The persistent trace inputs are the host-staged token ids ``[lanes, k * S]``
+        and the legacy page table ``[lanes, k, blocks]`` that ``prepare_inputs_prefill(lane_parallel=True,
+        trace_enabled=True)`` returns; the per-layer tables are the frame's persistent buffers (installed before the
+        capture and refreshed before every replay; the key's buffers never grow: ``fit_table_width``); the trace
+        embeds the tokens and returns post-norm hidden states (lm_head runs outside, per round). A compile pass over
+        the persistent inputs precedes the capture (no program may load inside it). The capture is an allocation
+        event for the decode-trace guard. Returns True when the bucket is (now) captured."""
+        from models.demos.gemma4.tt.lane_prefill_trace import TRACE_SEQ_LENS
+        from models.tt_transformers.tt.common import copy_host_to_device
+
+        reg = self._g4_lane_trace_registry()
+        k, S = int(bucket[0]), int(bucket[1])
+        if (k, S) in reg:
+            return True
+        model = self.model[0]
+        mesh = model.mesh_device
+        mesh_cfg = model.mesh_config
+        if mesh_cfg is None or not getattr(mesh_cfg, "lane_sharded", False):
+            raise ValueError("the traced lane prefill needs the lane engine")
+        lanes = int(mesh_cfg.lanes)
+        lane_slots = int(getattr(model, "lane_slots", 0) or 32)
+        max_chunk = int(self.model_args[0].max_prefill_chunk_size)
+        if S not in TRACE_SEQ_LENS or k < 1 or k > lane_slots or k * S > max_chunk:
+            raise ValueError(f"lane prefill trace bucket {k}x{S} outside the chunk {max_chunk} / slots {lane_slots}")
+        model_kv = kv_cache[0] if isinstance(kv_cache, (list, tuple)) else kv_cache
+        block_size = self._effective_paged_block_size(model_kv)
+        needed = num_blocks_in_seq(S, block_size)
+        slots = [ln * lane_slots + r for ln in range(lanes) for r in range(k)]
+        tokens = torch.zeros(lanes, k * S, dtype=torch.long)
+        page_tables = torch.zeros(lanes, k, needed, dtype=torch.int32)  # global rows: null block 0 (scratch writes)
+        per_layer = self._g4_lane_frame_page_tables(model, page_tables, slots, block_size)
+        widths = [None if t is None else int(t.shape[-1]) for t in per_layer]
+        model._active_page_tables_per_layer = per_layer
+        self._install_per_layer_page_tables(model, per_layer, writer="prefill")
+        host = model.prepare_prefill_inputs_trace(
+            tokens, page_table=page_tables, batch_size=k, user_id=0, lane_parallel=True
+        )
+        device_inputs = copy_host_to_device((host[0], host[3]), mesh_device=mesh)
+        self._refresh_prefill_valid_seq_len(model_id=0, last_token_idx=S - 1)
+        if k == 1:
+            self._release_all_sliding_prefill_tails(0, clear_persistent=True)  # the sp0 no-tail branch, as captured
+
+        def forward():
+            return model.ttnn_prefill_forward(
+                device_inputs[0],
+                rot_mats_global=None,
+                rot_mats_local=None,
+                user_id=0,
+                page_table=device_inputs[1],
+                get_last_token=-1,
+                kv_cache=model_kv,
+                batch_size=k,
+                valid_seq_lens=None,
+            )
+
+        model._prefill_trace_mode = True
+        t0 = time.perf_counter()
+        try:
+            out = forward()  # compile pass over the persistent inputs
+            ttnn.synchronize_device(mesh)
+            out.deallocate(True)
+            trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
+            out_trace = forward()
+            ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
+            ttnn.synchronize_device(mesh)
+        finally:
+            model._prefill_trace_mode = False
+            if hasattr(model, "_active_page_tables_per_layer"):
+                del model._active_page_tables_per_layer
+        reg[(k, S)] = {
+            "trace_id": trace_id,
+            "inputs": list(device_inputs),
+            "output": out_trace,
+            "widths": widths,
+            "needed_blocks": needed,
+        }
+        self._g4_arm_alloc_check("lane prefill trace capture")
+        logger.info(
+            "Gemma4: captured the lane prefill trace {}x{} ({} lanes, {} rounds of {} tokens per column) in {:.1f} s",
+            k,
+            S,
+            lanes,
+            k,
+            S,
+            time.perf_counter() - t0,
+        )
+        return True
+
+    def _g4_lane_prefill_trace_replay(self, bucket, tokens, page_tables, per_layer, kv_cache, prompt_lens):
+        """Replay the captured lane-frame trace of ``bucket`` for a call: ``tokens`` [lanes, k, S] (or [lanes, S]),
+        ``page_tables`` [lanes, k, blocks], ``per_layer`` the call's host per-layer tables (fitted to the captured
+        widths and uploaded before the replay), ``prompt_lens`` lane-major. Returns host logits ``[lanes * k, vocab]``,
+        or None when the call must stay eager (a persistent buffer would have changed under the trace)."""
+        from models.demos.gemma4.tt.lane_prefill_trace import fit_table_width
+        from models.tt_transformers.tt.common import copy_host_to_device
+
+        entry = self._g4_lane_trace_registry().get((int(bucket[0]), int(bucket[1])))
+        if entry is None:
+            return None
+        k, S = int(bucket[0]), int(bucket[1])
+        model = self.model[0]
+        mesh = model.mesh_device
+        lanes = int(model.mesh_config.lanes)
+        if tokens.dim() == 2:
+            tokens = tokens.reshape(lanes, 1, -1)
+        assert tuple(int(x) for x in tokens.shape) == (lanes, k, S), f"tokens {tuple(tokens.shape)} vs bucket {k}x{S}"
+        plens = [int(p) for p in prompt_lens]
+        last_r = self._lane_round_last_indices(plens, lanes, k, S)
+        fitted = [fit_table_width(pt, w) if w is not None else pt for pt, w in zip(per_layer, entry["widths"])]
+        model._active_page_tables_per_layer = fitted
+        model._g4_persistent_alloc_event = None
+        self._install_per_layer_page_tables(model, fitted, writer="prefill")
+        if getattr(model, "_g4_persistent_alloc_event", None):
+            logger.warning(
+                "Gemma4: lane prefill trace {}x{} not replayed: the per-layer page-table buffers changed ({}); eager",
+                k,
+                S,
+                model._g4_persistent_alloc_event,
+            )
+            del model._active_page_tables_per_layer
+            return None
+        legacy = fit_table_width(page_tables.to(torch.int32), entry["needed_blocks"])
+        host = model.prepare_prefill_inputs_trace(
+            tokens.reshape(lanes, k * S), page_table=legacy, batch_size=k, user_id=0, lane_parallel=True
+        )
+        copy_host_to_device((host[0], host[3]), device_tensors=entry["inputs"], mesh_device=mesh)
+        # the bounded ring fill's device cap: one length per device = the round's length (k > 1 buckets exist
+        # only without bounded sliding)
+        self._refresh_prefill_valid_seq_len(model_id=0, last_token_idx=last_r[0])
+        ttnn.execute_trace(mesh, entry["trace_id"], cq_id=0, blocking=False)
+        out = self._lane_logits_from_hidden(model, entry["output"], k, S, last_r, deallocate=False)
+        del model._active_page_tables_per_layer
         return out
 
     def _prefill_single_user_with_embeds(

@@ -58,6 +58,11 @@ from models.demos.gemma4.tt.generator_utils import (  # noqa: F401
     merge_soft_tokens,
 )
 from models.demos.gemma4.tt.lane_prefill_knobs import lane_prefill_batched_enabled, lane_prefill_table_upload_enabled
+from models.demos.gemma4.tt.lane_prefill_trace import (
+    lane_prefill_trace_buckets,
+    lane_prefill_trace_choice,
+    lane_trace_rounds_for_call,
+)
 from models.demos.gemma4.tt.mesh_orientation import should_reshape_to_column
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.demos.gemma4.tt.vision.multimodal_embedder import Gemma4MultimodalEmbedder
@@ -1030,6 +1035,30 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 finally:
                     if hasattr(model, "_active_page_tables_per_layer"):
                         del model._active_page_tables_per_layer
+        # The traced lane frames (GEMMA4_LANE_PREFILL_TRACE=1): captured here, inside the boot window and before
+        # the decode traces, so their buffers and programs sit below every decode capture; a failed capture leaves
+        # that frame eager.
+        buckets, dropped = lane_prefill_trace_buckets(
+            max_chunk=seq_len,
+            lane_slots=lane_slots,
+            bounded_sliding=bool(getattr(self, "_bounded_sliding_kv_cache", False)),
+        )
+        if dropped:
+            logger.warning(
+                "Gemma4 vLLM: lane prefill trace buckets dropped (chunk {}, slots {}): {}", seq_len, lane_slots, dropped
+            )
+        for bucket in sorted(buckets):
+            try:
+                self._g4_capture_lane_prefill_trace(bucket, kv_cache)
+            except Exception as e:  # noqa: BLE001 - the frame stays eager; the served c1 row says so
+                logger.warning(
+                    "Gemma4 vLLM: lane prefill trace {}x{} capture failed ({}); the frame stays eager",
+                    bucket[0],
+                    bucket[1],
+                    e,
+                )
+                if hasattr(model, "_active_page_tables_per_layer"):
+                    del model._active_page_tables_per_layer
         logger.info("Gemma4 vLLM: lane-group prefill warmup done in {:.1f} s", time.perf_counter() - t0)
 
     # ── Multimodal (vision) path ───────────────────────────────────────────
@@ -2143,7 +2172,16 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         B = int(tokens.shape[0])
         lanes = mesh_cfg.lanes
         lane_slots = int(getattr(model, "lane_slots", 0) or 32)
-        if B < lanes:
+        # The group walk gets raw-width tokens (the serial path pads inside prepare);
+        # pad here or the sliding fill hands SDPA a sub-tile V.
+        S = int(tokens.shape[-1])
+        S_pad = int(get_padded_prefill_len(S))
+        # The lane-frame traces captured at boot ((k, S) buckets): a call whose rounds x padded length match one
+        # replays it; with a one-round bucket at this length a single prompt (B < lanes) routes through the frame
+        # as one real lane plus scratch lanes instead of the owner-lane eager path (the served c1 row).
+        captured = set(getattr(self, "_g4_lane_prefill_traces", None) or {})
+        traced_single = (1, S_pad) in captured
+        if B < lanes and not traced_single:
             return self._g4_router_reject(f"B={B} < lanes={lanes}")
         if not full_page_tables:
             return self._g4_router_reject("no per-layer page tables")
@@ -2159,21 +2197,19 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         plens = [int(p) for p in torch.as_tensor(prompt_lens).reshape(-1)][:B]
         lane_of = [int(s) // lane_slots for s in slots]
         buckets = [[q for q in range(B) if lane_of[q] == ln] for ln in range(lanes)]
-        # The group walk gets raw-width tokens (the serial path pads inside prepare);
-        # pad here or the sliding fill hands SDPA a sub-tile V.
-        S = int(tokens.shape[-1])
-        S_pad = int(get_padded_prefill_len(S))
         # k prompts per lane per gathered step (``lane_prefill_group`` as a count): every request of the step is
         # routed, lanes short of a round compute on scratch rows, and as many rounds as fit the prefill chunk
         # (and the lane's slots) prefill as one lane-batched walk: the rounds' users as one stream per column.
         # k == 1 keeps the one-prompt-per-lane groups: full rounds only, the rest serial.
         k = max(1, int(self._lane_prefill_prompts()))
+        max_chunk = int(getattr(self.model_args[0], "max_prefill_chunk_size", 0) or 0)
         rounds_per_call = 1
         if k > 1 and lane_prefill_batched_enabled():
-            max_chunk = int(getattr(self.model_args[0], "max_prefill_chunk_size", 0) or 0)
             if max_chunk >= S_pad:
                 rounds_per_call = max(1, min(lane_slots, max_chunk // S_pad))
-        rounds = lane_prefill_rounds(buckets, plens, allow_scratch=k > 1)
+        # a traced call size at this length wins over a larger eager one (replays cost a fraction of a walk)
+        rounds_per_call = lane_trace_rounds_for_call(captured, S_pad, rounds_per_call)
+        rounds = lane_prefill_rounds(buckets, plens, allow_scratch=k > 1 or traced_single)
         if not rounds:
             return self._g4_router_reject(
                 f"no full round: B={B} slots={[int(x) for x in slots][:8]} lane_slots={lane_slots} "
@@ -2212,6 +2248,26 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                     # i = request i), not slot-indexed.
                     tables[ln, r] = gpt[q].to(torch.int32)
             per_layer = lane_prefill_frame_tables(full_page_tables, call, lane_slots, model._lane_scratch_block_for)
+            bucket = lane_prefill_trace_choice(captured, kc, S_pad, single_chunk=S_pad <= max_chunk)
+            if bucket is not None:
+                # the replay uploads the fitted per-layer tables itself and reads the trace's output
+                out_rows = self._g4_lane_prefill_trace_replay(
+                    bucket, toks, tables, per_layer, kwargs.get("kv_cache"), plens_call
+                )
+                if out_rows is not None:
+                    self._g4_lane_trace_replays = int(getattr(self, "_g4_lane_trace_replays", 0)) + 1
+                    (logger.info if self._g4_lane_trace_replays == 1 else logger.debug)(
+                        "Gemma4 vLLM: lane prefill trace replay {}x{} (call {} of this process)",
+                        bucket[0],
+                        bucket[1],
+                        self._g4_lane_trace_replays,
+                    )
+                    out_rows = out_rows.reshape(lanes, kc, -1)
+                    for r, rnd in enumerate(call):
+                        for ln, q in enumerate(rnd):
+                            if q is not None:
+                                out[q] = out_rows[ln, r, : model.vocab_size].reshape(1, -1)
+                    continue
             model._active_page_tables_per_layer = per_layer
             # Upload the call's tables: ``ttnn_prefill_forward`` resolves the stash through
             # ``_page_tables_to_ttnn``, which hands back a key's existing device buffers without refreshing
